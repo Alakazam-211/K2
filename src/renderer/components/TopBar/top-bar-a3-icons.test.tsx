@@ -54,6 +54,7 @@ import {
   TOP_BAR_ICON_ACTIVE_CLASS,
   TOP_BAR_ICON_REST_CLASS,
   RunIcon,
+  SERVER_LED,
   ServerIcon,
   SettingsIcon,
   TicketsIcon,
@@ -119,17 +120,35 @@ describe('K2Icons (A3)', () => {
     ])
   })
 
-  it('a plain ServerIcon draws Lucide\'s dots; with ledColor they become the coloured LEDs', () => {
+  it('ServerIcon LEDs are bars 3x the old square\'s width, inside the frame; status colour or currentColor', () => {
+    // The old LED was a 3.5 square at x 4.25; the bar keeps x, y and height.
+    expect(SERVER_LED).toEqual({ x: 4.25, width: 3 * 3.5, height: 3.5, y: [4.25, 16.25] })
     const plain = render(<ServerIcon />)
     const a = svgIn(plain.container)
-    expect(Array.from(a.querySelectorAll('path')).map((p) => p.getAttribute('d'))).toEqual(['M6 6h.01', 'M6 18h.01'])
-    expect(a.querySelectorAll('[data-led]')).toHaveLength(0)
+    const bars = Array.from(a.querySelectorAll('[data-led]'))
+    expect(bars.map((l) => [l.getAttribute('x'), l.getAttribute('y'), l.getAttribute('width'), l.getAttribute('height')])).toEqual([
+      ['4.25', '4.25', '10.5', '3.5'],
+      ['4.25', '16.25', '10.5', '3.5'],
+    ])
+    expect(bars.map((l) => [l.getAttribute('fill'), l.getAttribute('stroke')])).toEqual([
+      ['currentColor', 'none'],
+      ['currentColor', 'none'],
+    ])
+    // Inside the frames' inner edge (x 2 + half the 1.75 stroke to 22 - it).
+    for (const l of bars) {
+      const x = Number(l.getAttribute('x'))
+      const right = x + Number(l.getAttribute('width'))
+      expect(x > 2 + 1.75 / 2 && right < 22 - 1.75 / 2).toBe(true)
+    }
+    expect(a.querySelectorAll('path')).toHaveLength(0)
     expect(a.getAttribute('data-testid')).toBeNull()
     cleanup()
     const lit = render(<ServerIcon ledColor="#3fb950" label="Connection: connected" />)
     const b = svgIn(lit.container)
-    expect(b.querySelectorAll('path')).toHaveLength(0)
-    expect(Array.from(b.querySelectorAll('[data-led]')).map((l) => l.getAttribute('fill'))).toEqual(['#3fb950', '#3fb950'])
+    expect(Array.from(b.querySelectorAll('[data-led]')).map((l) => [l.getAttribute('fill'), l.getAttribute('width')])).toEqual([
+      ['#3fb950', '10.5'],
+      ['#3fb950', '10.5'],
+    ])
     expect([b.getAttribute('role'), b.getAttribute('aria-label'), b.getAttribute('aria-hidden')]).toEqual([
       'img',
       'Connection: connected',

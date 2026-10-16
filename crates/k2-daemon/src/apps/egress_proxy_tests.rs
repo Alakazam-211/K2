@@ -48,8 +48,11 @@ fn upstream() -> (u16, std::sync::mpsc::Receiver<Vec<u8>>) {
                         Ok(0) => break,
                         Ok(n) => {
                             got.extend_from_slice(&buf[..n]);
-                            let _ = s.write_all(b"echo:");
-                            let _ = s.write_all(&buf[..n]);
+                            // One write: two writes may reach the client as
+                            // two reads, leaving the echoed bytes behind.
+                            let mut reply = b"echo:".to_vec();
+                            reply.extend_from_slice(&buf[..n]);
+                            let _ = s.write_all(&reply);
                         }
                         Err(_) => break,
                     }
@@ -254,9 +257,10 @@ fn connect_tunnels_allowed_hosts_and_refuses_the_rest() {
     let (mut c, a) = connect(px, &format!("up.example.test:{up}"));
     assert_eq!(a, "HTTP/1.1 200 Connection Established\r\n\r\n");
     c.write_all(b"hello").unwrap();
-    let mut buf = [0u8; 64];
-    let n = c.read(&mut buf).unwrap();
-    assert_eq!(&buf[..n], b"echo:hello");
+    // read_exact: the echo may arrive in more than one read.
+    let mut buf = [0u8; 10];
+    c.read_exact(&mut buf).unwrap();
+    assert_eq!(&buf, b"echo:hello");
     drop(c);
     assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), b"hello");
 
@@ -387,8 +391,12 @@ fn narrowing_and_stopping_cut_open_tunnels_and_idle_ones_close() {
     let (mut c, a) = connect(px, &target);
     assert!(a.starts_with("HTTP/1.1 200"));
     c.write_all(b"x").unwrap();
+    // Read the whole echo: a byte left unread would make the "cut" read
+    // below return data instead of the close.
+    let mut echo = [0u8; 6];
+    c.read_exact(&mut echo).unwrap();
+    assert_eq!(&echo, b"echo:x");
     let mut buf = [0u8; 16];
-    assert!(c.read(&mut buf).unwrap() > 0);
     // Narrow: the host is gone from the list; the open tunnel is cut now.
     let p = Policy::default();
     set_policy(app, p.clone());

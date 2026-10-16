@@ -51,6 +51,8 @@ import {
   K2_ICON_PX,
   K2_ICON_STROKE,
   ProjectsIcon,
+  TOP_BAR_ICON_ACTIVE_CLASS,
+  TOP_BAR_ICON_REST_CLASS,
   RunIcon,
   ServerIcon,
   SettingsIcon,
@@ -216,9 +218,23 @@ describe('the clock, mug and cheat sheet draw A3 icons', () => {
       'timer-icon',
       '16',
     ])
-    for (const cls of ['h-6', 'w-5', 'text-[var(--color-text-muted)]', 'hover:text-[var(--color-text-primary)]']) {
+    for (const cls of ['h-6', 'w-5', ...TOP_BAR_ICON_REST_CLASS.split(' ')]) {
       expect([cls, start.classList.contains(cls)]).toEqual([cls, true])
     }
+  })
+
+  it('a running timer shows the brighter active colour; paused rests', () => {
+    useTimerStore.setState({ visible: true, status: 'running', showMemoDialog: false, pausedElapsed: 0, resumeTime: Date.now() })
+    const { rerender } = render(<TimerButton />)
+    const pause = screen.getByTitle('Pause timer')
+    for (const cls of TOP_BAR_ICON_ACTIVE_CLASS.split(' ')) expect([cls, pause.classList.contains(cls)]).toEqual([cls, true])
+    expect(screen.getByTestId('timer-elapsed').classList.contains('text-[var(--color-text-primary)]')).toBe(true)
+    useTimerStore.setState({ status: 'paused', resumeTime: null, pausedElapsed: 5000 })
+    rerender(<TimerButton />)
+    const resume = screen.getByTitle('Resume timer')
+    for (const cls of TOP_BAR_ICON_REST_CLASS.split(' ')) expect([cls, resume.classList.contains(cls)]).toEqual([cls, true])
+    expect(screen.getByTestId('timer-elapsed').classList.contains('text-[var(--color-text-muted)]')).toBe(true)
+    useTimerStore.setState({ status: 'idle', pausedElapsed: 0, resumeTime: null })
   })
 
   it('the cheat sheet button draws the A3 file-text; same label, tooltip and size', () => {
@@ -231,8 +247,14 @@ describe('the clock, mug and cheat sheet draw A3 icons', () => {
       '16',
       'true',
     ])
-    for (const cls of ['h-6', 'w-6', 'text-[var(--color-text-muted)]', 'hover:text-[var(--color-text-primary)]']) {
+    for (const cls of ['h-6', 'w-6', ...TOP_BAR_ICON_REST_CLASS.split(' ')]) {
       expect([cls, button.classList.contains(cls)]).toEqual([cls, true])
     }
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+    // Open: the brighter active colour while the sheet is up.
+    fireEvent.click(button)
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+    for (const cls of TOP_BAR_ICON_ACTIVE_CLASS.split(' ')) expect([cls, button.classList.contains(cls)]).toEqual([cls, true])
+    expect(button.classList.contains('text-[var(--color-text-secondary)]')).toBe(false)
   })
 })

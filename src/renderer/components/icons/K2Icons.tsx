@@ -24,6 +24,15 @@ export const K2_ICON_PX = 16
 /** The one stroke width (24-unit grid). */
 export const K2_ICON_STROKE = 1.75
 
+/** A top-bar icon button at rest: the page tabs' slightly brighter
+ *  secondary text, and their hover (Rosson 2026-10-16). */
+export const TOP_BAR_ICON_REST_CLASS =
+  'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]'
+/** A top-bar icon button that is on (timer running, Keep awake on, the
+ *  help sheet open): the active page tab's brighter primary text. */
+export const TOP_BAR_ICON_ACTIVE_CLASS =
+  'text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]'
+
 export interface K2IconProps {
   size?: number
   className?: string

@@ -100,8 +100,33 @@ fn caps_claim_is_optional_closed_and_verifies() {
     // Empty caps → no claim; an unknown cap is refused.
     assert_eq!(plain.clone().with_caps(vec![]).expect("empty").caps, None);
     assert!(plain.clone().with_caps(vec!["thread:read".into()]).is_err());
-    assert!(plain.with_caps(vec!["admin".into()]).is_err());
+    assert!(plain.clone().with_caps(vec!["admin".into()]).is_err());
     assert_eq!(CHAT_CAPS, ["chat:read", "chat:post", "chat:respond", "voice:join"]);
+}
+
+#[test]
+fn present_caps_always_carry_chat_read() {
+    let r = ring("k7-sw3");
+    let plain = ChatPassClaims::new(INSTALL, "k2:principal:0f8fad5b-d9cb-469f-a165-70867728950e", "skn_x", T0).expect("claims");
+    // with_caps adds chat:read to any non-empty set (a voice-only role).
+    let voice = plain.clone().with_caps(vec!["voice:join".into()]).expect("voice only");
+    assert_eq!(voice.caps.as_deref(), Some(&["chat:read".to_string(), "voice:join".to_string()][..]));
+    let post = plain.clone().with_caps(vec!["chat:post".into(), "chat:post".into()]).expect("dup");
+    assert_eq!(post.caps.as_deref(), Some(&["chat:read".to_string(), "chat:post".to_string()][..]));
+    let jwks = r.ring.public_jwks(T0).expect("jwks");
+    let got = verify_with_jwks(&r.ring.sign(&voice, T0).expect("sign"), &jwks, AUD, T0).expect("verifies");
+    assert!(got.caps.expect("caps").iter().any(|c| c == "chat:read"));
+    // validate refuses a present caps without chat:read (built by hand) …
+    let mut bad = plain.clone();
+    bad.caps = Some(vec!["voice:join".into()]);
+    let e = bad.validate().expect_err("no chat:read");
+    assert!(e.contains("chat:read"), "{e}");
+    // … so the keyring never signs one, and the verifier refuses one.
+    assert!(r.ring.sign(&bad, T0).is_err(), "signing re-validates");
+    bad.caps = Some(vec![]);
+    assert!(bad.validate().is_err(), "present but empty");
+    // Empty input → no claim (Sew's omitted-caps form).
+    assert_eq!(plain.with_caps(vec![]).expect("none").caps, None);
 }
 
 #[test]
@@ -121,7 +146,8 @@ fn owner_role_connect_is_its_own_admin_member_by_ruling() {
     let tok = "a".repeat(64);
     let own = identity::connect_identity("olga", k2_core::connect_users::Role::Owner, uuid, &tok, false);
     assert_eq!(own.sub, format!("k2:connect:{uuid}"));
-    assert_eq!(own.sew_role, SewRole::Admin);
+    assert_eq!(own.sew_role, SewRole::Member, "Connect Owner is server control, not Sew admin");
+    assert_eq!(own.sew_role.as_str(), "member");
     assert_eq!(own.provenance, Provenance::ConnectLogin);
     assert_eq!(own.sid, k2_core::connect_users::session_sid(&tok));
     assert!(own.sid.starts_with("cu_") && own.sid.len() == 35);

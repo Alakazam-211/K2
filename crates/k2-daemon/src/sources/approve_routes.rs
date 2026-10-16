@@ -299,11 +299,11 @@ fn vault() -> Result<std::sync::Arc<k2_vault::LocalVault>, SourceErr> {
     crate::vault::get().map_err(|e| SourceErr::new("vault_unavailable", 503, format!("the vault isn't open ({})", e.code)))
 }
 
-/// 403 `confirm_required` without a token (checked before the root-key
+/// 403 `vault_confirm_required` without a token (checked before the root-key
 /// warning, so a warning never burns a token).
 fn need_token(token: Option<&str>) -> Result<&str, SourceErr> {
     token.filter(|t| !t.is_empty()).ok_or_else(|| {
-        SourceErr::new("confirm_required", 403, "binding a secret needs a vault confirm (Touch ID, your login or vault password)")
+        SourceErr::new("vault_confirm_required", 403, "binding a secret needs a vault confirm (Touch ID, your login or vault password)")
     })
 }
 
@@ -522,7 +522,7 @@ fn batch_approve(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
         None
     } else {
         let token = b.confirm_token.as_deref().filter(|t| !t.is_empty()).ok_or_else(|| {
-            SourceErr::new("confirm_required", 403, "approving sources that use secrets needs one vault confirm").with("batchHash", batch_hash(&pairs))
+            SourceErr::new("vault_confirm_required", 403, "approving sources that use secrets needs one vault confirm").with("batchHash", batch_hash(&pairs))
         })?;
         let stamp = confirm_stamp(who).ok_or_else(person_only)?;
         let v = vault()?;
@@ -910,7 +910,7 @@ pub(crate) mod tests {
         assert_eq!(p["sources"][0]["approval"], "needs_confirm");
         assert_eq!(p["sources"][0]["id"], id.as_str());
         let e = call("/cli/sources/approve", &admin(), json!({"name": "deploys", "specHash": hash()})).unwrap_err();
-        assert_eq!((e.code, e.status), ("confirm_required", 403));
+        assert_eq!((e.code, e.status), ("vault_confirm_required", 403));
         // A token for another source, another action or another person is refused.
         for (action, sid, stamp) in
             [("source-secret", "some-other-id", "connect:ada"), ("reveal", id.as_str(), "connect:ada"), ("source-secret", id.as_str(), "owner")]
@@ -986,7 +986,7 @@ pub(crate) mod tests {
             {"name": "fleet", "specHash": hash()},
         ]);
         let e = call("/cli/sources/batch-approve", &admin(), json!({"items": items, "triggers": [trig.id]})).unwrap_err();
-        assert_eq!(e.code, "confirm_required");
+        assert_eq!(e.code, "vault_confirm_required");
         let want = batch_hash(&[(a.clone(), "VERCEL_RO".into()), (b.clone(), "STRIPE_RK".into())]);
         assert_eq!(e.extra["batchHash"], want.as_str());
         // A confirm for a different list (one item) is refused; nothing changes.
@@ -1016,7 +1016,7 @@ pub(crate) mod tests {
         let _e = env();
         let id = insert_source("deploys", "active", None, false, "admin");
         let e = call("/cli/sources/secret", &admin(), json!({"name": "deploys", "secret": "VERCEL_RO"})).unwrap_err();
-        assert_eq!(e.code, "confirm_required");
+        assert_eq!(e.code, "vault_confirm_required");
         let t = mint("source-secret", &id, "connect:ada");
         let r = call("/cli/sources/secret", &admin(), json!({"name": "deploys", "secret": "VERCEL_RO", "confirmToken": t}))
             .unwrap();

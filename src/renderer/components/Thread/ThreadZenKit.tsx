@@ -82,7 +82,7 @@ export type ChamferCorners = readonly [number, number, number, number]
 
 /** The cut sizes the Thread uses: big surfaces 4px, a 32px button 3px. */
 /** Send reads at 5px (Rosson 2026-10-16: 3px was too subtle). */
-export const CHAMFER_CUT = { surface: 4, button: 3, send: 5 } as const
+export const CHAMFER_CUT = { surface: 4, button: 3, send: 5, drawer: 5 } as const
 
 export function chamferVars(o: {
   /** One cut for every corner, or one per corner (TL, TR, BR, BL). */
@@ -127,6 +127,7 @@ ${CHAMFER_SCOPE} [data-chamfer]::before, ${CHAMFER_SCOPE} [data-chamfer]::after 
 ${CHAMFER_SCOPE} [data-chamfer]::before { inset: var(--ch-outset, calc(-1 * var(--ch-bw, 0px))); background: var(--ch-edge, var(--ch-fill)); clip-path: ${chamferPolygon('0px')}; }
 ${CHAMFER_SCOPE} [data-chamfer]::after { inset: 0; background: var(--ch-fill); clip-path: ${chamferPolygon('calc(var(--ch-bw, 0px) * 0.586)')}; }
 ${CHAMFER_SCOPE} [data-zen-drawer-tile][data-chamfer]:hover { --ch-fill: var(--zen-surface) !important; }
+${CHAMFER_SCOPE} [data-zen-drawer-tile][data-chamfer] { overflow: visible !important; }
 `
 
 /** Where the shared rules apply: a Zen root, or the desktop Thread's box. */

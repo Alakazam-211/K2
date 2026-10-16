@@ -516,7 +516,7 @@ describe('chamfered corners in K2\'s square Style', () => {
     ]) {
       expect(small.hasAttribute('data-chamfer')).toBe(false)
     }
-    // The cuts: 4px on surfaces (a bubble tail corner stays sharp), Send 4px (5px at 32px, scaled to its 26px), 3px on the drawer.
+    // The cuts: 4px on surfaces (a bubble tail corner stays sharp), Send 4px (5px at 32px, scaled to its 26px), the drawer 5px (its 32px tab, like Send at 32px).
     const mine = el('[data-zen-bubble="me"]')
     expect(['tl', 'tr', 'br', 'bl'].map((k) => mine.style.getPropertyValue(`--ch-${k}`))).toEqual(['4px', '4px', '0px', '4px'])
     expect(el('[data-zen-bubble="agent"]').style.getPropertyValue('--ch-bl')).toBe('0px')
@@ -525,7 +525,7 @@ describe('chamfered corners in K2\'s square Style', () => {
     expect(el('[data-zen-send]').style.getPropertyValue('--ch-tl')).toBe('4px')
     // On the box's top edge: top corners cut, the bottom runs into the field.
     const tile = el('[data-zen-drawer-tile]')
-    expect(['tl', 'tr', 'br', 'bl'].map((k) => tile.style.getPropertyValue(`--ch-${k}`))).toEqual(['3px', '3px', '0px', '0px'])
+    expect(['tl', 'tr', 'br', 'bl'].map((k) => tile.style.getPropertyValue(`--ch-${k}`))).toEqual(['5px', '5px', '0px', '0px'])
   })
 
   it('square Style: the four lose their round corners (pseudo layers draw the cut shape)', () => {
@@ -543,6 +543,10 @@ describe('chamfered corners in K2\'s square Style', () => {
     // The rule flattens the radius and paints the cut shape behind the content.
     expect(THREAD_CHAMFER_CSS).toMatch(/\[data-chamfer\] \{ border-radius: 0 !important;/)
     expect(THREAD_CHAMFER_CSS).toContain('[data-chamfer]::after { inset: 0; background: var(--ch-fill); clip-path: polygon(')
+    // The drawer's tab clips its own overflow (for the round corners); in the
+    // square Style it must not, or its edge layer (on the border) is cut off.
+    expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} [data-zen-drawer-tile][data-chamfer] { overflow: visible !important; }`)
+    expect(el('[data-zen-drawer-tile]').style.overflow).toBe('hidden')
   })
 
   it('Bezel and Glass keep the round look', () => {

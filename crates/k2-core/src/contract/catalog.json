@@ -126,7 +126,9 @@
     {"code": "card_not_pending", "doc": "The card was already answered, voided or expired."},
     {"code": "guest_required", "doc": "Server SDK: a call with no guest bound; bind one (asGuest, withGuest) or write asApp()."},
     {"code": "no_app_pass", "doc": "Server SDK: asApp() where this App has no pass file (K2_PASS_FILE)."},
-    {"code": "no_app_key", "doc": "Server SDK: users and rooms need the App key ($K2_SECRETS_DIR/K2_APP_KEY; the owner mints it with k2 app key mint)."}
+    {"code": "no_app_key", "doc": "Server SDK: users and rooms need the App key ($K2_SECRETS_DIR/K2_APP_KEY; the owner mints it with k2 app key mint)."},
+    {"code": "no_chat_grant", "doc": "Sew: this guest has no chat access (a grant of kind chat)."},
+    {"code": "chat_unavailable", "doc": "Sew is not enabled or not reachable on this server, or its chat-pass keys are unavailable."}
   ],
   "bannedFields": [
     "projectPath",
@@ -10176,6 +10178,99 @@
       ],
       "doc": "Change the room's agent's handle (its address).",
       "example": "await k2.agentIdentity.setHandle({workspace, handle: 'sales-desk'})"
+    },
+    {
+      "verb": "chat.pass",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/sew/pass",
+          "door": "link"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "AppChatPass",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "pass": {
+            "type": "string",
+            "description": "The Sew chat pass (a signed JWT) for this guest; hand it to Sew, never to K2."
+          },
+          "sub": {
+            "type": "string",
+            "description": "k2:principal:<id> for an App guest."
+          },
+          "sid": {
+            "type": "string"
+          },
+          "jti": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "RFC 3339."
+          },
+          "expiresInMs": {
+            "type": "integer",
+            "description": "Milliseconds the pass lives (a duration)."
+          },
+          "provenance": {
+            "type": "string"
+          },
+          "personProof": {
+            "type": "boolean",
+            "description": "Always false: a chat pass never proves a person is present."
+          },
+          "sewRole": {
+            "type": "string"
+          },
+          "caps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "app": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "pass",
+          "sub",
+          "sid",
+          "jti",
+          "expiresAt",
+          "expiresInMs",
+          "provenance",
+          "personProof",
+          "sewRole"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "no_chat_grant",
+        "chat_unavailable",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "Mint a Sew chat pass for the guest of this request (a login with a chat grant; server only, never a handoff code).",
+      "example": "const {pass} = await k2.withGuest(guestPass, () => k2.chat.pass())"
     }
   ]
 }

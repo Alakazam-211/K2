@@ -27408,6 +27408,7 @@ no cap (your own rooms)
   guests.login             POST /cli/skin/login (server only)             Log a guest in through this App; the answer carries the guest's session pass.
   password.change          POST /cli/skin/password/change (browser only)  A guest changes their own password (browser only: it ends every session of theirs).
   agentIdentity.get        GET  /cli/agent/identity                       The room's agent: name, color, picture, handle, and what the pass may change.
+  chat.pass                POST /cli/sew/pass (server only)               Mint a Sew chat pass for the guest of this request (a login with a chat grant; server only, never a handoff code).
 thread:read (Read the Thread)
   thread.page              GET  /cli/thread                               A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back.
   thread.latest            GET  /cli/thread/latest                        The newest Thread item per room, for list previews; a room the pass can't read is an item with error.

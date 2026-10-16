@@ -125,6 +125,9 @@ export const CATALOG_ERROR_CODES = [
   'guest_required',
   'no_app_pass',
   'no_app_key',
+  // Sew's chat pass (S28 §9) through the App transport.
+  'no_chat_grant',
+  'chat_unavailable',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

@@ -1,0 +1,178 @@
+From d03cb27a62f3e757266c3e43abde3ecee3cd5bd7 Mon Sep 17 00:00:00 2001
+From: z3thon <rosson.long@lztek.io>
+Date: Fri, 16 Oct 2026 13:20:04 -0600
+Subject: [PATCH] fix(windows): round child bounds by edges and move the HWND
+ synchronously
+
+`set_bounds` rounded the physical origin and size separately, so the
+right or bottom edge could land a pixel off `x + width` (a seam against
+the layout around it, worse at 125/150%). New `Rect::to_physical_edges`
+rounds the four edges instead (unit tests included).
+
+`set_bounds_inner` sized the WebView2 controller at once but moved its
+host HWND with `SWP_ASYNCWINDOWPOS`, a message later, so the page drew at
+the old offset for a frame. `WebView` is `!Send`, so this always runs on
+the HWND's own thread: move the HWND synchronously first, then size the
+controller.
+---
+ .changes/fix-windows-child-bounds-edges.md |  5 ++
+ src/lib.rs                                 | 79 ++++++++++++++++++++++
+ src/webview2/mod.rs                        | 25 ++++---
+ 3 files changed, 99 insertions(+), 10 deletions(-)
+ create mode 100644 .changes/fix-windows-child-bounds-edges.md
+
+diff --git a/.changes/fix-windows-child-bounds-edges.md b/.changes/fix-windows-child-bounds-edges.md
+new file mode 100644
+index 00000000..ab99b9fb
+--- /dev/null
++++ b/.changes/fix-windows-child-bounds-edges.md
+@@ -0,0 +1,5 @@
++---
++"wry": patch
++---
++
++On Windows, child webview bounds are rounded by their edges (no 1px seam at fractional scale factors) and the host window moves synchronously with the controller.
+diff --git a/src/lib.rs b/src/lib.rs
+index 9835e3f6..b5b66895 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -433,6 +433,85 @@ impl Default for Rect {
+   }
+ }
+ 
++impl Rect {
++  /// Whole device pixels for this rect, rounding its four *edges* rather
++  /// than its origin and size separately. Rounding `x` and `width` on their
++  /// own can move the right edge a pixel off where `x + width` lands, which
++  /// opens a 1px seam (or overlap) against content laid out around it.
++  #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
++  pub(crate) fn to_physical_edges(
++    &self,
++    scale_factor: f64,
++  ) -> (dpi::PhysicalPosition<i32>, dpi::PhysicalSize<i32>) {
++    let position = self.position.to_physical::<f64>(scale_factor);
++    let size = self.size.to_physical::<f64>(scale_factor);
++    let left = position.x.round();
++    let top = position.y.round();
++    let right = (position.x + size.width).round();
++    let bottom = (position.y + size.height).round();
++    (
++      dpi::PhysicalPosition::new(left as i32, top as i32),
++      dpi::PhysicalSize::new((right - left).max(0.) as i32, (bottom - top).max(0.) as i32),
++    )
++  }
++}
++
++#[cfg(test)]
++mod rect_edge_tests {
++  use super::Rect;
++
++  #[test]
++  fn edges_round_not_origin_and_size() {
++    // 100.4 + 50.4 = 150.8: right edge 151. Rounding each alone gives
++    // 100 + 50 = 150, a pixel short.
++    let rect = Rect {
++      position: dpi::LogicalPosition::new(100.4, 10.0).into(),
++      size: dpi::LogicalSize::new(50.4, 20.0).into(),
++    };
++    let (pos, size) = rect.to_physical_edges(1.0);
++    assert_eq!((pos.x, pos.y), (100, 10));
++    assert_eq!((size.width, size.height), (51, 20));
++  }
++
++  #[test]
++  fn adjacent_rects_share_an_edge_at_fractional_scale() {
++    // Two panes side by side at 150%: the left one's right edge must be the
++    // right one's left edge, in device pixels.
++    let scale = 1.5;
++    let left = Rect {
++      position: dpi::LogicalPosition::new(0.0, 0.0).into(),
++      size: dpi::LogicalSize::new(333.3, 100.0).into(),
++    };
++    let right = Rect {
++      position: dpi::LogicalPosition::new(333.3, 0.0).into(),
++      size: dpi::LogicalSize::new(200.0, 100.0).into(),
++    };
++    let (lp, ls) = left.to_physical_edges(scale);
++    let (rp, _) = right.to_physical_edges(scale);
++    assert_eq!(lp.x + ls.width, rp.x);
++  }
++
++  #[test]
++  fn physical_rects_pass_through() {
++    let rect = Rect {
++      position: dpi::PhysicalPosition::new(7, 9).into(),
++      size: dpi::PhysicalSize::new(640u32, 480u32).into(),
++    };
++    let (pos, size) = rect.to_physical_edges(2.0);
++    assert_eq!((pos.x, pos.y, size.width, size.height), (7, 9, 640, 480));
++  }
++
++  #[test]
++  fn negative_sizes_clamp_to_zero() {
++    let rect = Rect {
++      position: dpi::LogicalPosition::new(10.0, 10.0).into(),
++      size: dpi::LogicalSize::new(-5.0, 0.2).into(),
++    };
++    let (_, size) = rect.to_physical_edges(1.0);
++    assert_eq!((size.width, size.height), (0, 0));
++  }
++}
++
+ /// Resolves a custom protocol [`Request`] asynchronously.
+ ///
+ /// See [`WebViewBuilder::with_asynchronous_custom_protocol`] for more information.
+diff --git a/src/webview2/mod.rs b/src/webview2/mod.rs
+index 485bb4ed..36760fa4 100644
+--- a/src/webview2/mod.rs
++++ b/src/webview2/mod.rs
+@@ -1615,13 +1615,12 @@ impl InnerWebView {
+     position: PhysicalPosition<i32>,
+   ) -> Result<()> {
+     unsafe {
+-      self.controller.SetBounds(RECT {
+-        top: 0,
+-        left: 0,
+-        right: size.width,
+-        bottom: size.height,
+-      })?;
+-
++      // Move the host HWND first and synchronously, then size the
++      // controller inside it: both land before the next paint. With
++      // SWP_ASYNCWINDOWPOS the controller took its new size at once while
++      // the HWND moved a message later, so the page drew at the old offset
++      // for a frame. `WebView` is !Send, so this always runs on the thread
++      // that owns `self.hwnd`; the async flag bought nothing.
+       SetWindowPos(
+         self.hwnd,
+         None,
+@@ -1629,8 +1628,15 @@ impl InnerWebView {
+         position.y,
+         size.width,
+         size.height,
+-        SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOZORDER,
++        SWP_NOACTIVATE | SWP_NOZORDER,
+       )?;
++
++      self.controller.SetBounds(RECT {
++        top: 0,
++        left: 0,
++        right: size.width,
++        bottom: size.height,
++      })?;
+     }
+ 
+     Ok(())
+@@ -1639,8 +1645,7 @@ impl InnerWebView {
+   pub fn set_bounds(&self, bounds: Rect) -> Result<()> {
+     let dpi = unsafe { util::hwnd_dpi(self.hwnd) };
+     let scale_factor = util::dpi_to_scale_factor(dpi);
+-    let size = bounds.size.to_physical::<i32>(scale_factor);
+-    let position = bounds.position.to_physical(scale_factor);
++    let (position, size) = bounds.to_physical_edges(scale_factor);
+     self.set_bounds_inner(size, position)?;
+     Ok(())
+   }
+-- 
+2.50.0
+

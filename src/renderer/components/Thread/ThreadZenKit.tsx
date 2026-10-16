@@ -62,6 +62,72 @@ export const THREAD_CARD_TOKENS = {
   '--thread-card-radius': 'calc(var(--zen-radius) / 2)',
 } as CSSProperties
 
+// ── Chamfered corners in K2's square style ──────────────────────────────
+//
+// Rosson 2026-10-16: in K2's square Style the Thread doesn't go round; the
+// bubbles, the message field, Send and the activity drawer get the
+// chamfered corners of the presence chips (mockup-activity-status-v1
+// §Presence: small 45° corner cuts). Bezel and Glass (rounded Styles) and
+// Zen's own themes keep the rounded look.
+//
+// An element opts in with `data-chamfer` and `chamferVars(...)`. Under
+// `html[data-style="square"]` inside the desktop Thread box, its own fill,
+// border and radius go transparent/0 and two pseudo layers draw it instead:
+// `::before` the edge (border colour) and `::after` the fill, each clipped
+// to the cut polygon. The element itself is never clipped, so focus rings
+// and children stay whole.
+
+/** Corner cuts (px): top-left, top-right, bottom-right, bottom-left. */
+export type ChamferCorners = readonly [number, number, number, number]
+
+/** The cut sizes the Thread uses: big surfaces 4px, a 32px button 3px. */
+export const CHAMFER_CUT = { surface: 4, button: 3 } as const
+
+export function chamferVars(o: {
+  /** One cut for every corner, or one per corner (TL, TR, BR, BL). */
+  cut: number | ChamferCorners
+  /** The element's fill. */
+  fill: string
+  /** Its border colour and width (none by default). */
+  edge?: string
+  border?: number
+  /** `::before`'s inset when the border isn't on every side (CSS inset). */
+  outset?: string
+}): CSSProperties {
+  const [tl, tr, br, bl] = typeof o.cut === 'number' ? [o.cut, o.cut, o.cut, o.cut] : o.cut
+  const v: Record<string, string> = {
+    '--ch-tl': `${tl}px`,
+    '--ch-tr': `${tr}px`,
+    '--ch-br': `${br}px`,
+    '--ch-bl': `${bl}px`,
+    '--ch-fill': o.fill,
+    '--ch-edge': o.edge ?? o.fill,
+    '--ch-bw': `${o.border ?? 0}px`,
+  }
+  if (o.outset) v['--ch-outset'] = o.outset
+  return v as CSSProperties
+}
+
+/** The cut polygon, each corner's cut less `less` (the inner fill's). */
+function chamferPolygon(less: string): string {
+  const c = (k: string): string => `max(0px, calc(var(--ch-${k}) - ${less}))`
+  return (
+    `polygon(${c('tl')} 0, calc(100% - ${c('tr')}) 0, 100% ${c('tr')}, 100% calc(100% - ${c('br')}), ` +
+    `calc(100% - ${c('br')}) 100%, ${c('bl')} 100%, 0 calc(100% - ${c('bl')}), 0 ${c('tl')})`
+  )
+}
+
+/** Where chamfers apply: the desktop Thread box under K2's square Style. */
+export const CHAMFER_SCOPE = `html[data-style="square"] [${THREAD_ZEN_SCOPE_ATTR}]`
+
+export const THREAD_CHAMFER_CSS = `
+${CHAMFER_SCOPE} [data-chamfer] { border-radius: 0 !important; border-color: transparent !important; background: transparent !important; position: relative; isolation: isolate; }
+${CHAMFER_SCOPE} [data-chamfer]::before, ${CHAMFER_SCOPE} [data-chamfer]::after { content: ''; position: absolute; pointer-events: none; z-index: -1; }
+${CHAMFER_SCOPE} [data-chamfer]::before { inset: var(--ch-outset, calc(-1 * var(--ch-bw, 0px))); background: var(--ch-edge, var(--ch-fill)); clip-path: ${chamferPolygon('0px')}; }
+${CHAMFER_SCOPE} [data-chamfer]::after { inset: 0; background: var(--ch-fill); clip-path: ${chamferPolygon('calc(var(--ch-bw, 0px) * 0.586)')}; }
+${CHAMFER_SCOPE} [data-zen-drawer-tile][data-chamfer]:hover { --ch-fill: var(--zen-surface) !important; }
+`
+
 /** Where the shared rules apply: a Zen root, or the desktop Thread's box. */
 const SCOPE = `:is([data-zen-root], [${THREAD_ZEN_SCOPE_ATTR}])`
 
@@ -94,7 +160,7 @@ ${SCOPE} [data-zen-compose-input]:focus { outline: none; }
 `
 
 export function ThreadZenStyles(): JSX.Element {
-  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS}</style>
+  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS}</style>
 }
 
 /** The empty Thread's line (Zen and the desktop Thread). */
@@ -159,6 +225,7 @@ export function ThreadBubble({
       <div
         className="selectable-copy"
         data-zen-bubble={mine ? 'me' : 'agent'}
+        data-chamfer=""
         style={{
           padding: '9px 14px',
           borderRadius: 'var(--zen-bubble-radius)',
@@ -171,6 +238,11 @@ export function ThreadBubble({
           // Markdown inside reads Styles variables; here they are this bubble's text.
           ...zenBubbleShield(mine ? 'me' : 'agent'),
           ...THREAD_CARD_TOKENS,
+          // Square Style: cut corners; the tail corner stays sharp.
+          ...chamferVars({
+            cut: mine ? [4, 4, 0, 4] : [4, 4, 4, 0],
+            fill: mine ? 'var(--zen-bubble-me)' : 'var(--zen-bubble-agent)',
+          }),
         }}
       >
         {text && <ChatMessageBody text={text} style={{ color: 'inherit', fontSize: 'inherit' }} />}
@@ -303,6 +375,7 @@ export function ThreadComposeBox({
       {drawer}
       <div
         data-zen-compose-box=""
+        data-chamfer=""
         className="flex items-end gap-2"
         style={{
           position: 'relative',
@@ -311,6 +384,7 @@ export function ThreadComposeBox({
           background: 'var(--zen-surface-raised)',
           border: '1px solid var(--zen-border)',
           minWidth: 0,
+          ...chamferVars({ cut: CHAMFER_CUT.surface, fill: 'var(--zen-surface-raised)', edge: 'var(--zen-border)', border: 1 }),
         }}
       >
         {children}
@@ -389,6 +463,7 @@ export function ThreadSendButton({
       aria-label={label}
       title={title}
       data-zen-send=""
+      data-chamfer=""
       disabled={!canSend}
       onClick={onClick}
       className="flex flex-shrink-0 items-center justify-center cursor-pointer disabled:cursor-default"
@@ -399,6 +474,7 @@ export function ThreadSendButton({
         background: canSend ? 'var(--zen-accent)' : 'var(--zen-surface)',
         color: canSend ? 'var(--zen-accent-text)' : 'var(--zen-text-muted)',
         transition: 'background-color 140ms ease',
+        ...chamferVars({ cut: CHAMFER_CUT.button, fill: canSend ? 'var(--zen-accent)' : 'var(--zen-surface)' }),
       }}
     >
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

@@ -729,6 +729,12 @@ mod unix_impl {
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::apps::routes::handle(p, who, body, params))
             }
+            // Usage v2: this cell's passport reads its own workspace's
+            // tokens / turns and the limits (the handler scopes it).
+            p if crate::usage_routes::is_route(p) => {
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::usage_routes::handle(p, &who, is_post, body, params))
+            }
             p if crate::compute_routes::is_route(p) && !crate::compute_routes::is_socket(p) => {
                 if crate::compute_routes::is_post_route(p) && !is_post {
                     return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());

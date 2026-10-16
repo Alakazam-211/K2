@@ -502,6 +502,17 @@ export interface TokenUsageChangedEvent {
   kind: 'token_usage_changed'
 }
 
+/** APP-LEVEL — subscription limits were written (Usage v2): a probe of the
+ *  shared cache or of one login, or a live feed from a running session
+ *  (`source`: probe · live_statusline · live_rollout). Refetch signal for
+ *  the top-bar chip, Subs / Tokens, and the Usage limits strip. */
+export interface SubscriptionUsageChangedEvent {
+  kind: 'subscription_usage_changed'
+  tool?: string | null
+  account_id?: string | null
+  source: string
+}
+
 /** APP-LEVEL — the LLM login wallet changed (add, sign-in state, switch,
  *  rename, remove, keep-warm refresh). Refetch signal for Settings → LLMs → Tokens;
  *  `tool` names the tool when the daemon knows it. */
@@ -689,6 +700,7 @@ export type SessionEventMessage =
   | TicketChangedEvent
   | ChatHistoryChangedEvent
   | TokenUsageChangedEvent
+  | SubscriptionUsageChangedEvent
   | LlmAccountsChangedEvent
   | FsChangedEvent
   | GitChangedEvent
@@ -1164,6 +1176,8 @@ type FeedbackChangedHandler = (reason: string) => void
 type ChatHistoryChangedHandler = () => void
 type TokenUsageChangedHandler = () => void
 type LlmAccountsChangedHandler = (tool: string | null) => void
+/** Usage v2: limits were written (`source`: probe · live_statusline · live_rollout). */
+export type SubscriptionUsageChangedHandler = (ev: SubscriptionUsageChangedEvent) => void
 type ZenChangedHandler = () => void
 type SourcesChangedHandler = (rev: number) => void
 type GardenDataChangedHandler = (space: string, rev: number) => void
@@ -1220,6 +1234,7 @@ interface AppBusHandlers {
   chatHistoryChanged: Set<ChatHistoryChangedHandler>
   tokenUsageChanged: Set<TokenUsageChangedHandler>
   llmAccountsChanged: Set<LlmAccountsChangedHandler>
+  subscriptionUsageChanged: Set<SubscriptionUsageChangedHandler>
   fsChanged: Set<FsChangedHandler>
   gitChanged: Set<GitChangedHandler>
   mailChanged: Set<MailChangedHandler>
@@ -1267,6 +1282,7 @@ function createBusState(scopeId: string): BusState {
       chatHistoryChanged: new Set(),
       tokenUsageChanged: new Set(),
       llmAccountsChanged: new Set(),
+      subscriptionUsageChanged: new Set(),
       fsChanged: new Set(),
       gitChanged: new Set(),
       mailChanged: new Set(),
@@ -1477,6 +1493,16 @@ export function onLlmAccountsChanged(
   fn: LlmAccountsChangedHandler,
 ): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.llmAccountsChanged, fn)
+}
+
+/** Usage v2 — subscribe to APP-LEVEL `subscription_usage_changed` (limits
+ *  were written on that server: a probe, or a live feed from a running
+ *  session). Refetch `/cli/usage/limits` or the chip's GET. */
+export function onSubscriptionUsageChanged(
+  scope: ServerScope,
+  fn: SubscriptionUsageChangedHandler,
+): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.subscriptionUsageChanged, fn)
 }
 
 /** prd-zen-mode-v1 Z12 — subscribe to APP-LEVEL `zen_changed` (this
@@ -1704,6 +1730,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   llm_accounts_changed: (h, m) => {
     for (const fn of h.llmAccountsChanged) fn(m.tool ?? null)
   },
+  subscription_usage_changed: (h, m) => {
+    for (const fn of h.subscriptionUsageChanged) fn(m)
+  },
   fs_changed: (h, m) => {
     for (const fn of h.fsChanged) fn(m)
   },
@@ -1778,6 +1807,7 @@ export interface AppBus {
   onChatHistoryChanged(fn: ChatHistoryChangedHandler): UnsubscribeFn
   onTokenUsageChanged(fn: TokenUsageChangedHandler): UnsubscribeFn
   onLlmAccountsChanged(fn: LlmAccountsChangedHandler): UnsubscribeFn
+  onSubscriptionUsageChanged(fn: SubscriptionUsageChangedHandler): UnsubscribeFn
   onFsChanged(fn: FsChangedHandler): UnsubscribeFn
   onGitChanged(fn: GitChangedHandler): UnsubscribeFn
   onMailChanged(fn: MailChangedHandler): UnsubscribeFn
@@ -1827,6 +1857,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onChatHistoryChanged: (fn) => onChatHistoryChanged(scope, fn),
     onTokenUsageChanged: (fn) => onTokenUsageChanged(scope, fn),
     onLlmAccountsChanged: (fn) => onLlmAccountsChanged(scope, fn),
+    onSubscriptionUsageChanged: (fn) => onSubscriptionUsageChanged(scope, fn),
     onFsChanged: (fn) => onFsChanged(scope, fn),
     onGitChanged: (fn) => onGitChanged(scope, fn),
     onMailChanged: (fn) => onMailChanged(scope, fn),

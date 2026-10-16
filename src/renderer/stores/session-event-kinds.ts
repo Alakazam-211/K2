@@ -89,6 +89,7 @@ export const SESSION_EVENT_ROUTES = {
   projects_changed: { class: 'app', app: true, carried: true },
   chat_history_changed: { class: 'app', app: true, carried: true },
   token_usage_changed: { class: 'app', app: true },
+  subscription_usage_changed: { class: 'app', app: true },
   // Settings → LLMs → Tokens (logins wallet) refetch signal (onLlmAccountsChanged).
   llm_accounts_changed: { class: 'app', app: true },
   presence_changed: { class: 'app', app: true, carried: true },

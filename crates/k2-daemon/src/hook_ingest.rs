@@ -170,6 +170,14 @@ pub fn live_pane_facts(pane: &str) -> Option<PaneFacts> {
 
 /// Ingest one `POST /hook/event` (both transports). Never fails the agent.
 pub fn ingest(headers: &HookHeaders, body: &[u8]) -> IngestVerdict {
+    // Usage v2 (Q5): K2's Claude statusLine feed rides this transport (the
+    // session passport for this pane is already proven). It is a usage
+    // reading, not a lifecycle event: it never touches the pane's owner
+    // claim or activity rows.
+    if is_statusline(headers) {
+        crate::usage_live::ingest_statusline_hook(body);
+        return IngestVerdict::Accepted;
+    }
     ingest_with(
         headers,
         body,
@@ -179,6 +187,12 @@ pub fn ingest(headers: &HookHeaders, body: &[u8]) -> IngestVerdict {
         now_ms(),
     )
     .0
+}
+
+/// `statusline.sh` (event `StatusLine`, source `claude`).
+pub fn is_statusline(headers: &HookHeaders) -> bool {
+    headers.source == envelope::HookSource::Claude
+        && headers.event_hint.as_deref() == Some(crate::usage_live::STATUSLINE_EVENT)
 }
 
 /// [`ingest`] with the process table, pane lookup, mode and clock

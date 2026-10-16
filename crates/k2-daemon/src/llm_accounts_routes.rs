@@ -247,7 +247,7 @@ fn usage_refresh_allowed() -> bool {
     true
 }
 
-fn pin_json(conn: &rusqlite::Connection, p: &k2_core::llm_accounts::pins::Pin) -> Value {
+pub(crate) fn pin_json(conn: &rusqlite::Connection, p: &k2_core::llm_accounts::pins::Pin) -> Value {
     let label = if p.scope_kind == "workspace" {
         conn.query_row(
             "SELECT COALESCE(NULLIF(handle, ''), name) FROM projects WHERE id = ?1",

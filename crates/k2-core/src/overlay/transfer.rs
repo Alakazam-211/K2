@@ -593,7 +593,13 @@ pub fn import_threads(conn: &Connection, export: &ThreadsExport, ctx: &ImportCon
     }
     // A pin may already be known (the clone launched in between): settle now.
     if report.pending {
-        settle_pending(conn, project_id)?;
+        for s in settle_pending(conn, project_id)? {
+            for c in report.conversations.iter_mut().filter(|c| c.local_conversation_id == s.from) {
+                c.local_conversation_id = s.pin.clone();
+                c.role = ROLE_CANONICAL.to_string();
+            }
+        }
+        report.pending = report.conversations.iter().any(|c| c.role == ROLE_PENDING);
     }
     Ok(report)
 }

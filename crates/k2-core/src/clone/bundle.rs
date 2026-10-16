@@ -13,7 +13,7 @@
 //! re-deriving the class from path heuristics.
 
 use super::{
-    ChatPinEntry, CloneInventory, CloneManifest, CloneOptions, DestinationClass,
+    BundleExtras, ChatPinEntry, CloneInventory, CloneManifest, CloneOptions, DestinationClass,
     PinnedChatIdentity, WorkspaceSettings,
 };
 use flate2::write::GzEncoder;
@@ -51,7 +51,36 @@ pub fn build_bundle(
     chat_pins: Vec<ChatPinEntry>,
     out_path: &Path,
 ) -> Result<PathBuf, String> {
-    let manifest = inventory.manifest(opts, created_at, settings, pinned_chat, chat_pins);
+    build_bundle_with_extras(
+        inventory,
+        opts,
+        created_at,
+        settings,
+        pinned_chat,
+        chat_pins,
+        BundleExtras::default(),
+        out_path,
+    )
+}
+
+/// [`build_bundle`] plus the 0.46.0 parts: `clone_id` and the Threads
+/// summary in the manifest, and `threads/threads.json` in the archive
+/// (prd-clone-carries-threads-and-vault-v1 §7.2, §8). Never a vault value:
+/// the carry travels beside the tar, not in it.
+#[allow(clippy::too_many_arguments)]
+pub fn build_bundle_with_extras(
+    inventory: &CloneInventory,
+    opts: &CloneOptions,
+    created_at: String,
+    settings: Option<WorkspaceSettings>,
+    pinned_chat: Option<PinnedChatIdentity>,
+    chat_pins: Vec<ChatPinEntry>,
+    extras: BundleExtras,
+    out_path: &Path,
+) -> Result<PathBuf, String> {
+    let mut manifest = inventory.manifest(opts, created_at, settings, pinned_chat, chat_pins);
+    manifest.clone_id = extras.clone_id.clone();
+    manifest.threads = extras.threads_json.as_ref().and(extras.threads);
     let manifest_json = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| format!("serialize manifest: {e}"))?;
 
@@ -67,6 +96,12 @@ pub fn build_bundle(
 
     // manifest.json at the root.
     append_bytes(&mut tar, Path::new("manifest.json"), &manifest_json)?;
+
+    // threads/threads.json (optional). Older destinations skip the
+    // unknown `threads/` prefix.
+    if let Some(json) = &extras.threads_json {
+        append_bytes(&mut tar, Path::new(crate::overlay::transfer::THREADS_ARCHIVE_PATH), json)?;
+    }
 
     // Files, under their class prefix.
     for entry in &inventory.entries {

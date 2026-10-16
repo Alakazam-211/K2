@@ -814,6 +814,8 @@ fn manual_manifest(source_project_path: &str) -> CloneManifest {
         settings: None,
         pinned_chat: None,
         chat_pins: vec![],
+        clone_id: None,
+        threads: None,
     }
 }
 
@@ -1924,4 +1926,140 @@ fn llm_wallet_never_travels_even_when_carrying_secrets() {
         );
         assert!(ws.contains("notes/llm-accounts/readme.md"), "only the wallet under .k2 is excluded");
     }
+}
+
+// ── 0.46.0: a clone carries its Threads (slice B) ──────────────────────
+
+/// A clone id + `threads/threads.json` ride the bundle; a bundle built the
+/// old way writes neither (so its manifest is the old shape).
+#[test]
+fn bundle_with_extras_writes_threads_file_and_manifest_fields() {
+    let fx = build_fixture();
+    let inv = inventory(&fx.project.to_string_lossy(), opts(&fx.home)).unwrap();
+    let json = br#"{"format":"k2-threads-export/1"}"#.to_vec();
+    let summary = crate::overlay::transfer::ThreadsSummary { conversations: 1, docs: 3, bytes: json.len(), dropped: 0 };
+    let out = fx._root.path().join("ct-extras.tar.gz");
+    build_bundle_with_extras(
+        &inv,
+        &opts(&fx.home),
+        "2026-10-16T00:00:00Z".to_string(),
+        None,
+        None,
+        vec![],
+        BundleExtras { clone_id: Some("clone-ct-1".into()), threads_json: Some(json.clone()), threads: Some(summary) },
+        &out,
+    )
+    .unwrap();
+    let m = read_manifest_from_bundle(&out).unwrap();
+    assert_eq!(m.version, 1, "additive: the manifest version stays 1");
+    assert_eq!(m.clone_id.as_deref(), Some("clone-ct-1"));
+    assert_eq!(m.threads, Some(summary));
+    let extract = fx._root.path().join("ct-extract");
+    fs::create_dir_all(&extract).unwrap();
+    let names = untar(&out, &extract);
+    assert!(names.contains("threads/threads.json"), "threads file in the tar: {names:?}");
+    assert_eq!(fs::read(extract.join("threads/threads.json")).unwrap(), json);
+
+    let plain = fx._root.path().join("ct-plain.tar.gz");
+    build_bundle(&inv, &opts(&fx.home), "2026-10-16T00:00:00Z".to_string(), None, None, vec![], &plain).unwrap();
+    let raw = serde_json::to_string(&read_manifest_from_bundle(&plain).unwrap()).unwrap();
+    assert!(!raw.contains("clone_id") && !raw.contains("\"threads\""), "old-shape manifest: {raw}");
+    let plain_x = fx._root.path().join("ct-plain-x");
+    fs::create_dir_all(&plain_x).unwrap();
+    let plain_names = untar(&plain, &plain_x);
+    assert!(!plain_names.iter().any(|n| n.starts_with("threads/")), "{plain_names:?}");
+}
+
+/// The destination keeps `threads/threads.json` in memory for the import
+/// (the bundle is deleted before registration) and writes nothing for it
+/// on disk; any other `threads/` file is skipped like an unknown prefix
+/// (the same branch a 0.45.x destination takes for the whole prefix).
+#[test]
+fn unpack_captures_threads_json_and_skips_other_threads_files() {
+    let root = TempDir::new("ct-unpack-threads");
+    let dest_parent = root.path().join("parent");
+    let home = root.path().join("home");
+    fs::create_dir_all(&dest_parent).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    let source = "/Users/src/AI/sales";
+    let mut manifest = manual_manifest(source);
+    manifest.clone_id = Some("clone-ct-2".into());
+    let json = r#"{"format":"k2-threads-export/1","conversations":[]}"#;
+    let bundle = root.path().join("b.tar.gz");
+    let slug = claude_project_hash(source);
+    let session_rel = format!("sessions/{slug}/s.jsonl");
+    build_manual_bundle(
+        &bundle,
+        &manifest,
+        &[
+            ("threads/threads.json", json),
+            ("threads/future-part.bin", "later format"),
+            ("threads2/x.txt", "unknown prefix"),
+            (&session_rel, "{}"),
+        ],
+    );
+    let (res, m) = unpack_bundle(&bundle, &dest_parent, &home).unwrap();
+    assert_eq!(m.clone_id.as_deref(), Some("clone-ct-2"));
+    assert_eq!(res.threads_json.as_deref(), Some(json.as_bytes()), "threads.json captured");
+    let mut stray = Vec::new();
+    for base in [&dest_parent, &home] {
+        let mut stack = vec![base.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    let n = p.file_name().unwrap().to_string_lossy().to_string();
+                    if n == "threads.json" || n == "future-part.bin" || n == "x.txt" {
+                        stray.push(p);
+                    }
+                }
+            }
+        }
+    }
+    assert!(stray.is_empty(), "no threads file written to disk: {stray:?}");
+    assert!(
+        home.join(".claude").join("projects").join(&res.remote_slug).join("s.jsonl").exists(),
+        "the session still lands"
+    );
+
+    // A bundle without Threads (any older source) still unpacks: None.
+    let old = root.path().join("old.tar.gz");
+    let old_rel = format!("sessions/{slug}/t.jsonl");
+    build_manual_bundle(&old, &manual_manifest(source), &[(&old_rel, "{}")]);
+    let (res_old, m_old) = unpack_bundle(&old, &dest_parent, &home).unwrap();
+    assert_eq!((res_old.threads_json, m_old.clone_id, m_old.threads), (None, None, None));
+}
+
+/// An older destination (0.45.x) reads a 0.46.0 manifest: the new fields
+/// are unknown to it and ignored (its manifest struct has no
+/// `deny_unknown_fields`). Frozen copy of the 0.45.7 shape.
+#[test]
+fn older_destination_manifest_ignores_new_fields() {
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct ManifestV0457 {
+        version: u32,
+        source_slug: String,
+        source_project_path: String,
+        created_at: String,
+        carry_secrets: bool,
+        include_all_history: bool,
+        entries: Vec<ManifestEntry>,
+        reauth: ReauthChecklist,
+        #[serde(default)]
+        settings: Option<WorkspaceSettings>,
+        #[serde(default)]
+        pinned_chat: Option<PinnedChatIdentity>,
+        #[serde(default)]
+        chat_pins: Vec<ChatPinEntry>,
+    }
+    let mut m = manual_manifest("/x/sales");
+    m.clone_id = Some("c".into());
+    m.threads = Some(crate::overlay::transfer::ThreadsSummary { conversations: 2, docs: 9, bytes: 10, dropped: 1 });
+    let json = serde_json::to_string(&m).unwrap();
+    assert!(json.contains("\"clone_id\"") && json.contains("\"threads\""), "{json}");
+    let old: ManifestV0457 = serde_json::from_str(&json).expect("a 0.45.7 destination parses a 0.46.0 manifest");
+    assert_eq!(old.version, 1);
 }

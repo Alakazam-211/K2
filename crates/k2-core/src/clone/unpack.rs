@@ -37,6 +37,10 @@ pub struct UnpackResult {
     pub remote_slug: String,
     /// Source workspace name (the basename used for the dest folder).
     pub source_name: String,
+    /// `threads/threads.json` bytes, captured during extraction (the
+    /// bundle is deleted before the project is registered, CL10). `None`
+    /// when the bundle carries no Threads.
+    pub threads_json: Option<Vec<u8>>,
 }
 
 /// Extract a clone bundle at `<dest_parent>/<source-name>` (collision-safe)
@@ -111,6 +115,7 @@ pub fn unpack_bundle(
         .map_err(|e| format!("open bundle {}: {e}", bundle_path.display()))?;
     let dec = flate2::read::GzDecoder::new(file);
     let mut ar = tar::Archive::new(dec);
+    let mut threads_json: Option<Vec<u8>> = None;
 
     for entry in ar.entries().map_err(|e| format!("read bundle: {e}"))? {
         let mut entry = entry.map_err(|e| format!("read bundle entry: {e}"))?;
@@ -121,6 +126,14 @@ pub fn unpack_bundle(
 
         // manifest.json lives at the root — already parsed above.
         if archive_path == Path::new("manifest.json") {
+            continue;
+        }
+
+        // threads/threads.json: kept in memory for the Threads import (the
+        // caller imports after registration). Capped; anything else under
+        // `threads/` is an unknown file and skipped like any other prefix.
+        if archive_path == Path::new(crate::overlay::transfer::THREADS_ARCHIVE_PATH) {
+            threads_json = Some(read_threads_entry(&mut entry)?);
             continue;
         }
 
@@ -220,9 +233,27 @@ pub fn unpack_bundle(
             dest_path,
             remote_slug,
             source_name,
+            threads_json,
         },
         manifest,
     ))
+}
+
+/// Read `threads/threads.json` from the archive, refusing more than the
+/// export cap (bounds memory on unpack).
+fn read_threads_entry<R: std::io::Read>(entry: &mut tar::Entry<'_, R>) -> Result<Vec<u8>, String> {
+    let cap = crate::overlay::transfer::MAX_EXPORT_BYTES as u64;
+    let size = entry.header().size().map_err(|e| format!("threads entry size: {e}"))?;
+    if size > cap {
+        return Err(format!("threads/threads.json is {size} bytes, over the {cap} cap"));
+    }
+    let mut buf = Vec::with_capacity(size as usize);
+    std::io::Read::read_to_end(&mut std::io::Read::take(entry, cap + 1), &mut buf)
+        .map_err(|e| format!("read threads/threads.json: {e}"))?;
+    if buf.len() as u64 > cap {
+        return Err(format!("threads/threads.json is over the {cap} cap"));
+    }
+    Ok(buf)
 }
 
 /// Map a bundle archive path to its on-disk destination, by class prefix.

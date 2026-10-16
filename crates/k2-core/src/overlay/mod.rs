@@ -9,14 +9,16 @@ pub mod catalog;
 pub mod doc;
 pub mod options;
 pub mod store;
+pub mod transfer;
 pub mod vault;
 
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-pub use doc::{ChoiceBody, ChoiceOption, CollectedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin};
+pub use doc::{ChoiceBody, ChoiceOption, CollectedMeta, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin};
 pub use options::{parse_options_value, split_options_csv};
 pub use store::{ExtTxn, OverlayPage};
+pub use transfer::IMPORTED_READ_ONLY;
 
 static WRITE: Mutex<()> = Mutex::new(());
 
@@ -396,6 +398,9 @@ pub fn answer_card(
     let _guard = WRITE.lock();
     let item = thread_item(conversation_id, card_id)?;
     let mut doc = item.doc;
+    if doc.imported.is_some() {
+        return Err(IMPORTED_READ_ONLY.to_string());
+    }
     if doc.is_due(doc::now_secs()) {
         // Past its time: the sweep (or [`expire_if_due`]) closes it.
         return Err(CARD_NOT_PENDING.to_string());
@@ -480,6 +485,9 @@ pub fn void_card(
     let item = thread_item(conversation_id, card_id)?;
     let mut doc = item.doc;
     let at = Some(doc::now_secs());
+    if doc.imported.is_some() {
+        return Err(IMPORTED_READ_ONLY.to_string());
+    }
     if doc.is_due(doc::now_secs()) {
         return Err(CARD_NOT_PENDING.to_string());
     }

@@ -28,6 +28,13 @@ import {
 } from '@/lib/zen/zen-compose-drafts'
 import { takeZenComposeFocus, useZenComposeFocusStore } from '@/lib/zen/zen-compose-focus'
 import { useZenRecentFirstStore } from '@/lib/zen/zen-recent-first'
+import {
+  ThreadAttachmentChip,
+  ThreadAttachmentChips,
+  ThreadComposeBox,
+  ThreadRoundButton,
+  ThreadSendButton,
+} from '@/components/Thread/ThreadZenKit'
 
 type Attachment = { kind: 'path'; path: string; name: string } | { kind: 'file'; file: File; name: string }
 
@@ -185,62 +192,33 @@ export function ZenCompose({
       }}
       onDrop={onDrop}
     >
-      {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-1.5" style={{ marginBottom: 6 }} data-zen-attachments="">
-          {attachments.map((a, i) => (
-            <span
-              key={`${a.name}-${i}`}
-              data-zen-attachment={a.name}
-              className="inline-flex max-w-[16rem] items-center gap-1.5"
-              style={{
-                fontSize: '0.8em',
-                padding: '3px 4px 3px 10px',
-                borderRadius: 999,
-                background: 'var(--zen-surface-raised)',
-                border: '1px solid var(--zen-border)',
-                color: 'var(--zen-text)',
-              }}
-            >
-              <span className="truncate">{a.name}</span>
-              <button
-                type="button"
-                aria-label={`Remove ${a.name}`}
-                data-zen-soft-button=""
-                onClick={() => setAttachments((cur) => cur.filter((_, j) => j !== i))}
-                className="flex items-center justify-center cursor-pointer disabled:cursor-default"
-                style={{ width: 18, height: 18, borderRadius: 999, color: 'var(--zen-text-muted)' }}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      {drawer}
-      <div
-        className="flex items-end gap-2"
-        style={{
-          position: 'relative',
-          padding: 6,
-          borderRadius: 'calc(var(--zen-radius) + 4px)',
-          background: 'var(--zen-surface-raised)',
-          border: '1px solid var(--zen-border)',
-        }}
+      <ThreadComposeBox
+        chips={
+          attachments.length > 0 ? (
+            <ThreadAttachmentChips>
+              {attachments.map((a, i) => (
+                <ThreadAttachmentChip
+                  key={`${a.name}-${i}`}
+                  name={a.name}
+                  onRemove={() => setAttachments((cur) => cur.filter((_, j) => j !== i))}
+                />
+              ))}
+            </ThreadAttachmentChips>
+          ) : undefined
+        }
+        drawer={drawer}
+        error={
+          error ? (
+            <div data-zen-compose-error="" style={{ marginTop: 6, fontSize: '0.8em', color: 'var(--zen-danger)' }}>
+              {error}
+            </div>
+          ) : undefined
+        }
       >
         {allowAttachments && (
-        <button
-          type="button"
-          aria-label="Attach files"
-          title="Attach files"
-          data-zen-attach=""
-          data-zen-soft-button=""
-          disabled={disabled}
-          onClick={pick}
-          className="flex flex-shrink-0 items-center justify-center cursor-pointer disabled:cursor-default"
-          style={{ width: 32, height: 32, borderRadius: 999, color: 'var(--zen-text-muted)', fontSize: 20, lineHeight: 1 }}
-        >
-          +
-        </button>
+          <ThreadRoundButton label="Attach files" disabled={disabled} onClick={pick} data={{ 'data-zen-attach': '' }}>
+            +
+          </ThreadRoundButton>
         )}
         <textarea
           ref={ref}
@@ -275,34 +253,8 @@ export function ZenCompose({
             border: 'none',
           }}
         />
-        <button
-          type="button"
-          aria-label="Send"
-          title="Send (Enter)"
-          data-zen-send=""
-          disabled={!canSend}
-          onClick={() => void send()}
-          className="flex flex-shrink-0 items-center justify-center cursor-pointer disabled:cursor-default"
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: 999,
-            background: canSend ? 'var(--zen-accent)' : 'var(--zen-surface)',
-            color: canSend ? 'var(--zen-accent-text)' : 'var(--zen-text-muted)',
-            transition: 'background-color 140ms ease',
-          }}
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M8 13V3" />
-            <path d="M3.5 7.5 8 3l4.5 4.5" />
-          </svg>
-        </button>
-      </div>
-      {error && (
-        <div data-zen-compose-error="" style={{ marginTop: 6, fontSize: '0.8em', color: 'var(--zen-danger)' }}>
-          {error}
-        </div>
-      )}
+        <ThreadSendButton canSend={canSend} onClick={() => void send()} />
+      </ThreadComposeBox>
     </div>
   )
 }

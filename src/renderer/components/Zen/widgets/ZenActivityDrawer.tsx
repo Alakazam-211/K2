@@ -13,10 +13,15 @@
 // doesn't re-render every second. The Conversation widget draws it with its
 // `activity-drawer` prop (on in Garden 1); off, the three dots stay.
 //
-// No Stop: a Garden can't type into the agent's session.
+// No Stop in a Garden: it can't type into the agent's session. The desktop
+// Thread draws this same drawer on its message box (2026-10-16, "match
+// mobile/the zen garden") and passes `onStop`: the Thread working strip's
+// Stop, which sends Esc to the agent's PTY, shows while the turn can be
+// stopped (`threadStripView(...).stoppable`, the strip's own rule).
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ThreadTurn } from '@/components/SessionView/overlayThread'
+import { THREAD_ZEN_SCOPE_ATTR } from '@/components/Thread/ThreadZenKit'
 import {
   COUNTER_CHECK_PX,
   COUNTER_GAP_PX,
@@ -30,6 +35,7 @@ import {
   estimateStripTextPx,
   fitStripCounters,
   threadDrawerLine,
+  threadStripView,
   type StripCounter,
   type StripCounterKey,
   type ThreadDrawerLine,
@@ -49,6 +55,9 @@ const TONE: Record<ThreadStripTone, string> = {
 export const ZEN_DRAWER_MS = 200
 /** Collapsed tile height (px) above the box. */
 export const ZEN_DRAWER_TILE_PX = 32
+/** The desktop's Stop on the tile: its height and the room it keeps. */
+const ZEN_DRAWER_STOP_H_PX = 20
+export const ZEN_DRAWER_STOP_ROOM_PX = 48
 /** Room the step keeps before counters start dropping. */
 const STEP_MIN_PX = 72
 const COUNTER_FONT_PX = 12
@@ -90,6 +99,9 @@ function writeZenDrawerExpanded(on: boolean): void {
 /** Braille spinner frames (the desktop `.braille-spinner`), 80ms each. */
 const BRAILLE_FRAMES = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 
+/** A Zen root, or the desktop Thread's box (it draws this drawer too). */
+const DRAWER_SCOPE = `:is([data-zen-root], [${THREAD_ZEN_SCOPE_ATTR}])`
+
 // Tags tint by kind: the fill is the hue at ~16%, the ink the hue mixed
 // toward the text colour. Zen tokens, so every theme keeps its look.
 export const ZEN_DRAWER_CSS = `
@@ -99,26 +111,26 @@ export const ZEN_DRAWER_CSS = `
 @keyframes zen-drawer-fade-out { to { opacity: 0; } }
 @keyframes zen-braille-spin { to { transform: translateY(-10em); } }
 @keyframes zen-drawer-shimmer { 0% { opacity: 1; } 50% { opacity: 0.55; } 100% { opacity: 1; } }
-[data-zen-root] [data-zen-drawer][data-phase="in"] { animation: zen-drawer-in ${ZEN_DRAWER_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1.12) both; }
-[data-zen-root] [data-zen-drawer][data-phase="out"] { animation: zen-drawer-out ${ZEN_DRAWER_MS}ms cubic-bezier(0.4, 0, 0.8, 0.4) both; }
-[data-zen-root] [data-zen-drawer-tile] { transition: background-color 140ms ease; }
-[data-zen-root] [data-zen-drawer-tile]:hover { background: var(--zen-surface); }
-[data-zen-root] .zen-braille { display: inline-block; overflow: hidden; height: 1em; line-height: 1em; text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-[data-zen-root] .zen-braille > span { display: block; animation: zen-braille-spin 800ms steps(10) infinite; }
-[data-zen-root] .zen-drawer-shimmer { animation: zen-drawer-shimmer 1.6s ease-in-out infinite; }
-[data-zen-root] .zen-drawer-tag { border-radius: 9999px; background: color-mix(in srgb, var(--zen-tag-hue) 16%, transparent); color: color-mix(in srgb, var(--zen-tag-hue) 70%, var(--zen-text)); }
-[data-zen-root] .zen-drawer-count { display: inline-flex; align-items: center; flex: none; white-space: nowrap; line-height: 18px; }
-[data-zen-root] .zen-drawer-code { --zen-tag-hue: var(--zen-text-muted); color: inherit; padding: 1px 5px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
-[data-zen-root] .zen-drawer-tag-subagents { --zen-tag-hue: var(--zen-accent); }
-[data-zen-root] .zen-drawer-tag-cmd { --zen-tag-hue: var(--zen-working); }
-[data-zen-root] .zen-drawer-tag-edit { --zen-tag-hue: var(--zen-needs-you); }
-[data-zen-root] .zen-drawer-tag-read { --zen-tag-hue: #2dd4bf; }
-[data-zen-root] .zen-drawer-tag-search { --zen-tag-hue: #a855f7; }
-[data-zen-root] .zen-drawer-tag-background { --zen-tag-hue: var(--zen-text-muted); }
+${DRAWER_SCOPE} [data-zen-drawer][data-phase="in"] { animation: zen-drawer-in ${ZEN_DRAWER_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1.12) both; }
+${DRAWER_SCOPE} [data-zen-drawer][data-phase="out"] { animation: zen-drawer-out ${ZEN_DRAWER_MS}ms cubic-bezier(0.4, 0, 0.8, 0.4) both; }
+${DRAWER_SCOPE} [data-zen-drawer-tile] { transition: background-color 140ms ease; }
+${DRAWER_SCOPE} [data-zen-drawer-tile]:hover { background: var(--zen-surface); }
+${DRAWER_SCOPE} .zen-braille { display: inline-block; overflow: hidden; height: 1em; line-height: 1em; text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+${DRAWER_SCOPE} .zen-braille > span { display: block; animation: zen-braille-spin 800ms steps(10) infinite; }
+${DRAWER_SCOPE} .zen-drawer-shimmer { animation: zen-drawer-shimmer 1.6s ease-in-out infinite; }
+${DRAWER_SCOPE} .zen-drawer-tag { border-radius: 9999px; background: color-mix(in srgb, var(--zen-tag-hue) 16%, transparent); color: color-mix(in srgb, var(--zen-tag-hue) 70%, var(--zen-text)); }
+${DRAWER_SCOPE} .zen-drawer-count { display: inline-flex; align-items: center; flex: none; white-space: nowrap; line-height: 18px; }
+${DRAWER_SCOPE} .zen-drawer-code { --zen-tag-hue: var(--zen-text-muted); color: inherit; padding: 1px 5px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+${DRAWER_SCOPE} .zen-drawer-tag-subagents { --zen-tag-hue: var(--zen-accent); }
+${DRAWER_SCOPE} .zen-drawer-tag-cmd { --zen-tag-hue: var(--zen-working); }
+${DRAWER_SCOPE} .zen-drawer-tag-edit { --zen-tag-hue: var(--zen-needs-you); }
+${DRAWER_SCOPE} .zen-drawer-tag-read { --zen-tag-hue: #2dd4bf; }
+${DRAWER_SCOPE} .zen-drawer-tag-search { --zen-tag-hue: #a855f7; }
+${DRAWER_SCOPE} .zen-drawer-tag-background { --zen-tag-hue: var(--zen-text-muted); }
 @media (prefers-reduced-motion: reduce) {
-  [data-zen-root] [data-zen-drawer][data-phase="in"] { animation: zen-drawer-fade-in 160ms ease-out both; }
-  [data-zen-root] [data-zen-drawer][data-phase="out"] { animation: zen-drawer-fade-out 160ms ease-in both; }
-  [data-zen-root] .zen-braille > span, [data-zen-root] .zen-drawer-shimmer, [data-zen-root] [data-zen-pulse] { animation: none !important; }
+  ${DRAWER_SCOPE} [data-zen-drawer][data-phase="in"] { animation: zen-drawer-fade-in 160ms ease-out both; }
+  ${DRAWER_SCOPE} [data-zen-drawer][data-phase="out"] { animation: zen-drawer-fade-out 160ms ease-in both; }
+  ${DRAWER_SCOPE} .zen-braille > span, ${DRAWER_SCOPE} .zen-drawer-shimmer, ${DRAWER_SCOPE} [data-zen-pulse] { animation: none !important; }
 }
 `
 
@@ -299,9 +311,21 @@ export function zenDrawerShows(turn: ThreadTurn | null | undefined, now = Date.n
   return !!turn && threadDrawerLine(turn, now) !== null
 }
 
-export function ZenActivityDrawer({ turn }: { turn: ThreadTurn | null }): React.JSX.Element | null {
+export function ZenActivityDrawer({
+  turn,
+  onStop,
+  attached = true,
+}: {
+  turn: ThreadTurn | null
+  /** Sends Esc to the agent's session (the desktop Thread). Absent: no Stop. */
+  onStop?: () => void
+  /** On a message box's top edge (default). False: a free tile (a Thread
+   *  with no message box, e.g. a view-only room). */
+  attached?: boolean
+}): React.JSX.Element | null {
   const now = useDrawerNow(turn)
   const line = turn ? threadDrawerLine(turn, now) : null
+  const stoppable = !!onStop && !!turn && threadStripView(turn, now)?.stoppable === true
   const shown = line !== null
   const last = useRef<ThreadDrawerLine | null>(line)
   if (line) last.current = line
@@ -341,7 +365,12 @@ export function ZenActivityDrawer({ turn }: { turn: ThreadTurn | null }): React.
   if (!display) return null
   const still = prefersReducedMotion()
   const color = TONE[display.tone]
-  const counters = fitStripCounters(display.counters, zenDrawerCounterBudget(width, display.clock), (c) => zenCounterTagWidthPx(c))
+  const counters = fitStripCounters(
+    display.counters,
+    zenDrawerCounterBudget(width, display.clock) - (stoppable ? ZEN_DRAWER_STOP_ROOM_PX : 0),
+    (c) => zenCounterTagWidthPx(c),
+  )
+  const padRight = stoppable ? 12 + ZEN_DRAWER_STOP_ROOM_PX : 12
   const hollow = display.tone === 'monitoring' || display.tone === 'stopped' || display.tone === 'unverifiable'
   const dot = (
     <span
@@ -363,10 +392,12 @@ export function ZenActivityDrawer({ turn }: { turn: ThreadTurn | null }): React.
 
   return (
     // The clip box: the tile slides up out of the message box's top edge.
-    <div data-zen-drawer-clip="" style={{ overflow: 'hidden', margin: '0 14px -1px' }}>
+    <div data-zen-drawer-clip="" style={{ overflow: 'hidden', margin: attached ? '0 14px -1px' : '0 var(--zen-gap, 12px) 8px' }}>
       <style data-zen-drawer-styles="">{ZEN_DRAWER_CSS}</style>
       <div
         role="status"
+        data-zen-drawer-attached={attached ? 'true' : 'false'}
+        style={{ position: 'relative' }}
         data-zen-drawer=""
         data-phase={phase}
         data-tone={display.tone}
@@ -393,12 +424,13 @@ export function ZenActivityDrawer({ turn }: { turn: ThreadTurn | null }): React.
             background: 'var(--zen-surface-raised)',
             border: '1px solid var(--zen-border)',
             borderStyle: display.tone === 'unverifiable' ? 'dashed' : 'solid',
-            borderBottom: 'none',
-            borderRadius: 'calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0',
+            ...(attached
+              ? { borderBottom: 'none', borderRadius: 'calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0' }
+              : { borderRadius: 'calc(var(--zen-radius) + 2px)' }),
           }}
         >
           {expanded ? (
-            <span data-zen-drawer-detail="" className="flex min-w-0 flex-col" style={{ gap: 1, padding: '6px 12px' }}>
+            <span data-zen-drawer-detail="" className="flex min-w-0 flex-col" style={{ gap: 1, padding: `6px ${padRight}px 6px 12px` }}>
               <span className="flex min-w-0 items-center" style={{ gap: 8, fontSize: 13, lineHeight: '18px' }}>
                 {dot}
                 <span data-zen-drawer-head="" className="min-w-0 break-words" style={{ color, fontWeight: 600 }}>
@@ -435,7 +467,7 @@ export function ZenActivityDrawer({ turn }: { turn: ThreadTurn | null }): React.
             <span
               data-zen-drawer-line=""
               className="flex min-w-0 items-center whitespace-nowrap"
-              style={{ gap: 8, padding: '0 12px', height: ZEN_DRAWER_TILE_PX - 1 }}
+              style={{ gap: 8, padding: `0 ${padRight}px 0 12px`, height: ZEN_DRAWER_TILE_PX - 1 }}
             >
               {dot}
               <span
@@ -470,6 +502,33 @@ export function ZenActivityDrawer({ turn }: { turn: ThreadTurn | null }): React.
             </span>
           )}
         </button>
+        {stoppable && (
+          <button
+            type="button"
+            data-testid="thread-strip-stop"
+            data-zen-drawer-stop=""
+            title="Sends Esc to the agent"
+            // Keep the caret in the message box.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onStop}
+            className="cursor-pointer"
+            style={{
+              position: 'absolute',
+              top: 6,
+              right: 8,
+              height: ZEN_DRAWER_STOP_H_PX,
+              padding: '0 9px',
+              borderRadius: 999,
+              fontSize: 11,
+              lineHeight: `${ZEN_DRAWER_STOP_H_PX - 2}px`,
+              color: 'var(--zen-text)',
+              background: 'var(--zen-surface)',
+              border: '1px solid var(--zen-border)',
+            }}
+          >
+            Stop
+          </button>
+        )}
       </div>
     </div>
   )

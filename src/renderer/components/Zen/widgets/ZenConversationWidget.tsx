@@ -23,13 +23,17 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
-import { ChatMessageBody } from '@/components/common/ChatMessage'
-import { ChoiceCard, SecretCard } from '@/components/SessionView/ThreadOverlayPane'
 import { formatRelativeTime } from '@/lib/format-relative-time'
-import { cardAnswererLabel, isOwnThreadPost, type ThreadViewer } from '@/lib/thread-viewer'
+import { isOwnThreadPost, type ThreadViewer } from '@/lib/thread-viewer'
 import type { OverlayThreadItem, ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
+import {
+  THREAD_CARD_TOKENS,
+  ThreadBubble,
+  ThreadLoadOlder,
+  ThreadTypingIndicator,
+  zenEmptyThreadText,
+} from '@/components/Thread/ThreadZenKit'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
-import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenCompose } from './ZenCompose'
@@ -37,27 +41,13 @@ import { ZenActivityDrawer, zenDrawerShows } from './ZenActivityDrawer'
 import { ZenStatusDot } from './ZenAgentsWidget'
 import { ZenAgentAvatar, ZenWidgetStyles, initials, useNowSec, useZenRows, useZenThread } from './zen-widget-kit'
 
-/** The Thread cards take their look from these (Styles values otherwise). */
-const CARD_TOKENS = {
-  '--thread-card-border': 'var(--zen-border)',
-  '--thread-card-bg': 'var(--zen-surface)',
-  '--thread-card-accent': 'var(--zen-accent)',
-  '--thread-card-text': 'var(--zen-text)',
-  '--thread-card-text-secondary': 'var(--zen-text)',
-  '--thread-card-muted': 'var(--zen-text-muted)',
-  '--thread-card-radius': 'calc(var(--zen-radius) / 2)',
-} as React.CSSProperties
+// The bubbles, cards, dots and "Earlier messages" are the shared Thread
+// pieces (`components/Thread/ThreadZenKit`), which the desktop Thread draws
+// too, so the two stay the same.
+export { zenEmptyThreadText }
+const CARD_TOKENS = THREAD_CARD_TOKENS
 
-export const zenEmptyThreadText = (label: string): string => `Message ${label}. It reads this like a text.`
 export const zenPermissionText = (label: string): string => `${label} is stuck on a permission prompt.`
-
-function itemText(item: OverlayThreadItem): string {
-  const d = item.doc
-  if (d.kind === 'choice') return d.choice?.prompt || d.body || ''
-  // The secret card shows the agent's prompt itself, as plain text (VS13).
-  if (d.kind === 'secret') return d.secret ? '' : d.body || ''
-  return d.body || ''
-}
 
 function Bubble({
   item,
@@ -80,97 +70,24 @@ function Bubble({
   onMoreOptions(): void
 }): React.JSX.Element {
   const mine = isOwnThreadPost(item.doc, viewer)
-  const kind = item.doc.kind
-  const text = itemText(item)
   return (
-    <div
-      data-zen-message={item.id}
-      data-kind={kind}
-      data-mine={mine ? '' : undefined}
-      className="flex flex-col"
-      style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: 'min(78%, 46rem)', gap: 3 }}
-    >
-      <div
-        className="selectable-copy"
-        data-zen-bubble={mine ? 'me' : 'agent'}
-        style={{
-          padding: '9px 14px',
-          borderRadius: 'var(--zen-bubble-radius)',
-          borderBottomRightRadius: mine ? 6 : 'var(--zen-bubble-radius)',
-          borderBottomLeftRadius: mine ? 'var(--zen-bubble-radius)' : 6,
-          background: mine ? 'var(--zen-bubble-me)' : 'var(--zen-bubble-agent)',
-          color: mine ? 'var(--zen-bubble-me-text)' : 'var(--zen-bubble-agent-text)',
-          // Markdown inside reads Styles variables; here they are this bubble's text.
-          ...zenBubbleShield(mine ? 'me' : 'agent'),
-          ...CARD_TOKENS,
-        }}
-      >
-        {text && <ChatMessageBody text={text} style={{ color: 'inherit', fontSize: 'inherit' }} />}
-        {kind === 'choice' && item.doc.choice && (
-          <ChoiceCard
-            options={item.doc.choice.options}
-            allowCustom={item.doc.choice.allow_custom}
-            status={item.doc.choice.status}
-            answer={item.doc.choice.answer}
-            answeredBy={cardAnswererLabel(item.doc.choice.answeredBy, viewer)}
-            expiresAt={item.doc.choice.expiresAt}
-            nowSec={nowSec}
-            onPick={(label) => {
-              onAnswer({ answer: label }).catch((err: unknown) => console.warn('[zen] answer failed:', err))
-            }}
-          />
-        )}
-        {kind === 'secret' && item.doc.secret && (
-          <div style={{ marginTop: 6 }}>
-            {/* prd-k2-vault-v1 KV9: the compact card (the proposal's
-                defaults), same answer body; More options opens the full one. */}
-            <SecretCard
-              compact
-              secret={item.doc.secret}
-              answeredBy={cardAnswererLabel(item.doc.secret.answeredBy, viewer)}
-              agent={item.doc.from || ''}
-              server={server}
-              onSubmit={onAnswer}
-              onDismiss={onVoid}
-              onMoreOptions={onMoreOptions}
-            />
-          </div>
-        )}
-      </div>
-      <span
-        data-zen-message-meta=""
-        style={{
-          alignSelf: mine ? 'flex-end' : 'flex-start',
-          padding: '0 6px',
-          fontSize: '0.72em',
-          color: 'var(--zen-text-muted)',
-        }}
-      >
-        {mine ? 'You' : item.doc.from || 'agent'} · {formatRelativeTime(item.doc.created_at, nowSec)}
-      </span>
-    </div>
+    <ThreadBubble
+      item={item}
+      mine={mine}
+      author={mine ? 'You' : item.doc.from || 'agent'}
+      timeLabel={formatRelativeTime(item.doc.created_at, nowSec)}
+      viewer={viewer}
+      nowSec={nowSec}
+      onAnswer={onAnswer}
+      onVoid={onVoid}
+      // prd-k2-vault-v1 KV9: the compact card (the proposal's defaults),
+      // same answer body; More options opens the full one.
+      secret={{ compact: true, server, onMoreOptions }}
+    />
   )
 }
 
-function TypingIndicator(): React.JSX.Element {
-  return (
-    <div
-      data-zen-typing=""
-      aria-label="Working"
-      className="flex items-center gap-1"
-      style={{
-        alignSelf: 'flex-start',
-        padding: '10px 14px',
-        borderRadius: 'var(--zen-bubble-radius)',
-        background: 'var(--zen-bubble-agent)',
-      }}
-    >
-      {[0, 1, 2].map((i) => (
-        <span key={i} style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--zen-working)', display: 'inline-block' }} />
-      ))}
-    </div>
-  )
-}
+const TypingIndicator = ThreadTypingIndicator
 
 /** One agent's conversation (also the empty Garden's Ask my agent). */
 export interface ZenConversationOptions {
@@ -357,19 +274,7 @@ export function ZenConversation({
             {note}
           </div>
         )}
-        {ready && view.hasMore && options.loadOlder && (
-          <button
-            className="cursor-pointer disabled:cursor-default"
-            type="button"
-            data-zen-load-older=""
-            data-zen-soft-button=""
-            disabled={view.loadingOlder}
-            onClick={loadOlder}
-            style={{ alignSelf: 'center', padding: '3px 12px', borderRadius: 999, fontSize: '0.8em', color: 'var(--zen-text-muted)' }}
-          >
-            {view.loadingOlder ? 'Loading…' : 'Earlier messages'}
-          </button>
-        )}
+        {ready && view.hasMore && options.loadOlder && <ThreadLoadOlder loading={view.loadingOlder} onClick={loadOlder} />}
         {ready && view.error && !note && (
           <div style={{ color: 'var(--zen-text-muted)', fontSize: '0.85em', textAlign: 'center' }}>{view.error}</div>
         )}

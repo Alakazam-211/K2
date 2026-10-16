@@ -846,6 +846,31 @@ fn drill_status(sew_status: Option<&Value>) -> Value {
     })
 }
 
+/// Sew's alarm for a keyring mirror that is stale or missing.
+pub const ALARM_KEYS_MIRROR_STALE: &str = "keys_mirror_stale";
+
+/// Setup warnings: Sew alarms that describe a choice not made yet rather
+/// than something broken, so they never make the verdict `degraded`.
+/// Today one: `keys_mirror_stale` while `keys.mirror.kind` is `none`
+/// (Sew, intended: the keyring is never inside bundles, so with no
+/// off-box key copy the bundles are unreadable after a disk loss). A dir
+/// mirror that went stale (kind != none) stays an alarm. Removes the
+/// warned alarms from `alarms` and returns `[{code, alarm, message}]`.
+pub fn split_setup_warnings(alarms: &mut Vec<String>, sew_status: Option<&Value>) -> Vec<Value> {
+    let kind = sew_status.and_then(|s| s.pointer("/keys/mirror/kind")).and_then(Value::as_str);
+    let mut w = Vec::new();
+    if kind == Some("none") && alarms.iter().any(|a| a == ALARM_KEYS_MIRROR_STALE) {
+        alarms.retain(|a| a != ALARM_KEYS_MIRROR_STALE);
+        w.push(json!({
+            "code": "no_offbox_key_copy",
+            "alarm": ALARM_KEYS_MIRROR_STALE,
+            "message": "no off-box key copy: backups can't be read after a disk loss without one; \
+                        set a keyring mirror (keys.mirror) or keep the recovery key off the box",
+        }));
+    }
+    w
+}
+
 /// The subset of Sew's alarms named in `which`.
 fn sew_alarms(sew_status: Option<&Value>, which: &[&str]) -> Vec<String> {
     debug_assert!(which.iter().all(|w| wire::BACKUP_ALARMS.contains(w)));
@@ -899,6 +924,7 @@ pub fn status(env: &Env, with_health: bool) -> Value {
         .and_then(Value::as_array)
         .map(|a| a.iter().map(|x| x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string())).collect())
         .unwrap_or_default();
+    let warnings = split_setup_warnings(&mut alarms, sew_status.as_ref());
     if up && (health_err.is_some() || !health_ok) {
         alarms.push("k2_mgmt_unreachable".into());
     }
@@ -922,6 +948,7 @@ pub fn status(env: &Env, with_health: bool) -> Value {
         "provider": sew_status.as_ref().and_then(|s| s.get("provider")).cloned(),
         "units": {"sewDb": db.json(), "sew": sew.json()},
         "alarms": alarms,
+        "warnings": warnings,
         "recoveryKeySaved": row.recovery_shown_at.is_some(),
         "masterKeyAgeDays": row.master_key_created_at.map(|t| (now - t) / 86_400),
         "rotationInProgress": row.master_prev_ref.is_some(),

@@ -382,6 +382,8 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // (no workspace scope; the live log is machine-wide).
         SessionEvent::TokenUsageChanged {} => None,
         SessionEvent::LlmAccountsChanged { .. } => None,
+        // Usage v2 — limits written: app-level refetch signal.
+        SessionEvent::SubscriptionUsageChanged { .. } => None,
         // Zen v1 — `~/.k2/zen` changed: app-level, payload-free refetch.
         SessionEvent::ZenChanged {} => None,
         // Garden v3 — a source changed: app-level, payload-free but `rev`.
@@ -792,6 +794,7 @@ mod tests {
             SessionEvent::ChatHistoryChanged {},
             SessionEvent::TokenUsageChanged {},
             SessionEvent::LlmAccountsChanged { tool: Some("claude".into()) },
+            SessionEvent::SubscriptionUsageChanged { tool: Some("claude".into()), account_id: None, source: "probe".into() },
             SessionEvent::ZenChanged {},
             SessionEvent::SourcesChanged { rev: 1 },
             SessionEvent::GardenDataChanged { space: "data:board".into(), rev: 1 },

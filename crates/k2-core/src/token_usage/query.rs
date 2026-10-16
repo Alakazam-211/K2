@@ -64,6 +64,15 @@ pub struct ReportOpts {
     pub cost: bool,
 }
 
+/// An IANA zone name (`America/Denver`, `UTC`) for [`ReportOpts::tz`].
+pub fn parse_tz(name: &str) -> Result<chrono_tz::Tz, String> {
+    let n = name.trim();
+    if n.is_empty() {
+        return Ok(chrono_tz::UTC);
+    }
+    n.parse::<chrono_tz::Tz>().map_err(|_| format!("unknown time zone {n:?} (an IANA name like America/Denver)"))
+}
+
 impl Default for ReportOpts {
     fn default() -> Self {
         ReportOpts { tz: chrono_tz::UTC, group_by: None, cost: true }

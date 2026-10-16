@@ -583,6 +583,12 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/llm/accounts/list",
         "/cli/llm/accounts/status",
         "/cli/llm/accounts/usage",
+        // Usage v2 (prd-usage-v2 §1): an agent reads its OWN workspace's
+        // tokens and turns, and the limits; the handler forces the
+        // workspace. `/cli/usage/limits/refresh` is NOT here (people only).
+        "/cli/usage/tokens",
+        "/cli/usage/turns",
+        "/cli/usage/limits",
         // K2 vault (prd-k2-vault-v1 KV14): agents use and manage their own
         // workspace's secrets; the handler applies §8.2/§11.2. Confirm,
         // reveal, recovery and key routes are absent on purpose (DENY).

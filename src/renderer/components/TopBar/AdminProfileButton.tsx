@@ -5,13 +5,24 @@
 // links, account dates and recent sign-ins. Every value comes from an
 // existing daemon route (`admin-profile-api.ts`); the full controls live in
 // Settings → User Access.
+//
+// A Connect login can change its own password here (Rosson 2026-10-16):
+// the SAME step as the first-password flow (`PasswordRotationStep`,
+// `POST /cli/auth/change-password`, then a re-login with the new password
+// because the daemon revokes every session of that user). Hidden for the
+// owner key on this computer, which has no password of its own.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DialogScrim, Surface } from '@/components/ui'
-import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
+import { windowTopBarTarget } from './top-bar-scope'
 import { useSettingsStore } from '@/stores/settings'
 import type { AuthAuditEvent } from '@/components/Settings/sections/access-audit-api'
 import { OWNER_LINK_LABEL } from '@/components/Settings/sections/OwnerAccountToggle'
+import { PasswordRotationStep } from '@/components/PasswordRotationStep'
+import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
+import { saveRememberedPassword, useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
+import { useToastStore } from '@/stores/toast'
 import { loadAdminProfile, type AdminProfile, type ProfileRole, type Read } from './admin-profile-api'
 
 const noDrag = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
@@ -107,7 +118,27 @@ function SignInRow({ ev, showUser }: { ev: AuthAuditEvent; showUser: boolean }):
   )
 }
 
-function ProfileBody({ profile, scope }: { profile: AdminProfile; scope: ServerScope }): React.JSX.Element {
+/** The saved server this window signed in to with `profile`'s Connect
+ *  login, ready for the password step; null for the owner key (or no
+ *  saved server), where there is no self-service password. */
+export function passwordChangeHost(profile: AdminProfile, scope: ServerScope): ConnectHost | null {
+  if (profile.ownerToken || !profile.username) return null
+  const host = scope.connectHost()
+  return host ? { ...host, username: profile.username } : null
+}
+
+export const PASSWORD_CHANGED_NOTICE =
+  'Password changed. This device is signed in with the new one; other devices signed in with this login must sign in again.'
+
+function ProfileBody({
+  profile,
+  scope,
+  onChangePassword,
+}: {
+  profile: AdminProfile
+  scope: ServerScope
+  onChangePassword: (() => void) | null
+}): React.JSX.Element {
   const ownerDisplayName = useSettingsStore((s) => s.ownerDisplayName)
   const host = scope.connectHost()
   const name = profile.ownerToken ? ownerDisplayName.trim() || 'owner' : (profile.username ?? 'unknown')
@@ -175,6 +206,18 @@ function ProfileBody({ profile, scope }: { profile: AdminProfile; scope: ServerS
             </Row>
           ))
         )}
+        {onChangePassword ? (
+          <div className="mt-1.5">
+            <button
+              type="button"
+              data-testid="admin-profile-change-password"
+              onClick={onChangePassword}
+              className="px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer"
+            >
+              Change password
+            </button>
+          </div>
+        ) : null}
       </Section>
 
       <Section title="Recent sign-ins" testId="admin-profile-sign-ins">
@@ -201,11 +244,15 @@ function ProfileBody({ profile, scope }: { profile: AdminProfile; scope: ServerS
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 export function AdminProfileModal({ onClose }: { onClose: () => void }): React.JSX.Element {
-  const scope = primaryScope()
+  // The window's own server (like the timer): a focused remote room
+  // doesn't change who you are signed in as here.
+  const scope = windowTopBarTarget().scope
   const openSettings = useSettingsStore((s) => s.openSettings)
   const [state, setState] = useState<{ kind: 'loading' } | { kind: 'ok'; profile: AdminProfile } | { kind: 'error'; message: string }>({
     kind: 'loading',
   })
+  const [changing, setChanging] = useState<ConnectHost | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
 
@@ -312,8 +359,46 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
             <p role="alert" className="m-0 text-[12px] text-[var(--color-status-error-soft)]">
               Couldn’t read who you are on {scope.label}: {state.message}
             </p>
+          ) : changing ? (
+            <PasswordRotationStep
+              host={changing}
+              variant="inline"
+              copy={CHANGE_PASSWORD_COPY}
+              onCancel={() => setChanging(null)}
+              onDone={async ({ newPassword }) => {
+                // The step already re-logged in and stored the new session
+                // token, so this window keeps working. A remembered password
+                // must follow, or the next silent sign-in would use the old one.
+                const saved = useConnectHostStore.getState().hosts.find((h) => h.id === changing.id)
+                if (saved?.remember ?? changing.remember) {
+                  const failure = await saveRememberedPassword(changing.id, newPassword)
+                  if (failure) useToastStore.getState().addToast(failure, 'error', 12000)
+                }
+                setChanging(null)
+                setNotice(PASSWORD_CHANGED_NOTICE)
+              }}
+            />
           ) : (
-            <ProfileBody profile={state.profile} scope={scope} />
+            <>
+              {notice ? (
+                <p role="status" data-testid="admin-profile-notice" className="m-0 mb-3 text-[12px] text-[var(--color-text-primary)]">
+                  {notice}
+                </p>
+              ) : null}
+              <ProfileBody
+                profile={state.profile}
+                scope={scope}
+                onChangePassword={(() => {
+                  const host = passwordChangeHost(state.profile, scope)
+                  return host
+                    ? () => {
+                        setNotice(null)
+                        setChanging(host)
+                      }
+                    : null
+                })()}
+              />
+            </>
           )}
         </div>
         <div

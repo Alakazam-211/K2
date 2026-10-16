@@ -27,7 +27,7 @@ import {
 /** The picker's value for the server-wide map. Workspace values are paths
  *  (absolute), so it cannot collide. */
 export const WIKI_ALL_WORKSPACES = 'all'
-export const WIKI_ALL_WORKSPACES_LABEL = 'All workspaces'
+export const WIKI_ALL_WORKSPACES_LABEL = 'All of K2'
 
 export interface WikiPickerWorkspace extends FilterableWorkspace {
   /** Worktree paths under this workspace (the nav's View Wiki opens those). */

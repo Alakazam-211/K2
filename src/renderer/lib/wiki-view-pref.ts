@@ -11,8 +11,8 @@ export type WikiView = 'wiki' | '2d' | '3d'
 
 export const WIKI_VIEWS: readonly WikiView[] = ['wiki', '2d', '3d']
 
-/** Every new window opens the standard reading view. */
-export const DEFAULT_WIKI_VIEW: WikiView = 'wiki'
+/** Every new window opens the 2D graph (Rosson 2026-10-16); a window's own pick wins after that. */
+export const DEFAULT_WIKI_VIEW: WikiView = '2d'
 
 export const WIKI_VIEW_KEY_PREFIX = 'k2.wikiView.'
 

@@ -48,7 +48,7 @@ function homeFirst(a: WikiNode, b: WikiNode): number {
 
 /**
  * The notes the list shows: real articles in the same visible set as the
- * graphs (mode, Local depth, K2 lens + filters). While searching, only the
+ * graphs (mode, Local neighbourhood, K2 lens + filters). While searching, only the
  * matches (not their graph neighbours), like the Articles count.
  */
 export function wikiListNotes(index: WikiIndex, opts: WikiGraphOpts): WikiNode[] {

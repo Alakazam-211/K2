@@ -46,34 +46,34 @@ afterEach(() => {
 })
 
 describe('wiki view pref', () => {
-  it('defaults to the standard Wiki view', () => {
-    expect(DEFAULT_WIKI_VIEW).toBe('wiki')
-    expect(readWikiViewPref()).toBe('wiki')
+  it('defaults to the 2D graph', () => {
+    expect(DEFAULT_WIKI_VIEW).toBe('2d')
+    expect(readWikiViewPref()).toBe('2d')
   })
 
   it('round-trips per window label', () => {
     writeWikiViewPref('3d')
     windowLabel.value = 'win-2'
-    expect(readWikiViewPref()).toBe('wiki')
-    writeWikiViewPref('2d')
     expect(readWikiViewPref()).toBe('2d')
+    writeWikiViewPref('wiki')
+    expect(readWikiViewPref()).toBe('wiki')
     windowLabel.value = 'main'
     expect(readWikiViewPref()).toBe('3d')
     expect(localMem.getItem(wikiViewKey('main'))).toBe('3d')
-    expect(localMem.getItem('k2.wikiView.win-2')).toBe('2d')
+    expect(localMem.getItem('k2.wikiView.win-2')).toBe('wiki')
   })
 
   it('a bad stored value reads as the default', () => {
     localMem.setItem(wikiViewKey('main'), 'vr')
-    expect(readWikiViewPref()).toBe('wiki')
+    expect(readWikiViewPref()).toBe('2d')
   })
 
   it('the web client uses sessionStorage', () => {
     webFlag.value = true
-    writeWikiViewPref('2d', 'main')
-    expect(sessionMem.getItem('k2.wikiView.main')).toBe('2d')
+    writeWikiViewPref('3d', 'main')
+    expect(sessionMem.getItem('k2.wikiView.main')).toBe('3d')
     expect(localMem.getItem('k2.wikiView.main')).toBeNull()
-    expect(readWikiViewPref('main')).toBe('2d')
+    expect(readWikiViewPref('main')).toBe('3d')
   })
 
   it('a throwing storage reads the default and the write does not throw', () => {
@@ -86,7 +86,7 @@ describe('wiki view pref', () => {
       },
     }
     vi.stubGlobal('localStorage', boom)
-    expect(readWikiViewPref()).toBe('wiki')
+    expect(readWikiViewPref()).toBe('2d')
     expect(() => writeWikiViewPref('3d')).not.toThrow()
   })
 })

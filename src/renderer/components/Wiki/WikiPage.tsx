@@ -5,8 +5,8 @@
 // its own top bar (ServerSwitcher + PageTabs). Opened from the top bar's
 // Wiki tab (the wiki of the workspace on screen, `lib/wiki-open.ts`), the
 // drawer's View Wiki, or the nav menus. The header's workspace picker
-// switches the wiki shown (its "All workspaces" row is the server-wide
-// `k2` map). Esc goes back to Home, then a second Esc closes and returns
+// switches the wiki shown; its "All of K2" row, and the "All of K2" toggle
+// next to it, show the server-wide `k2` map (every wiki on this server). Esc goes back to Home, then a second Esc closes and returns
 // to the page it was opened from (W6).
 //
 // Three views (prd-wiki-3d-view-v1 §3.1, §12), switched in the header and
@@ -37,7 +37,12 @@ import { localCenterIdFor, type WikiGraphOpts } from './wiki-graph-data'
 import { wikiBacklinks } from './wiki-standard'
 import type { WikiView } from '@/lib/wiki-view-pref'
 import { FocusGroupFilterDropdown } from './FocusGroupFilterDropdown'
-import { WikiWorkspacePicker, WIKI_ALL_WORKSPACES, type WikiPickerWorkspace } from './WikiWorkspacePicker'
+import {
+  WikiWorkspacePicker,
+  WIKI_ALL_WORKSPACES,
+  WIKI_ALL_WORKSPACES_LABEL,
+  type WikiPickerWorkspace,
+} from './WikiWorkspacePicker'
 import {
   WorkspaceFilterDropdown,
   type FilterableWorkspace,
@@ -88,7 +93,6 @@ export default function WikiPage(): React.JSX.Element | null {
   const [mode, setMode] = useState<'k2' | 'local' | 'global'>('global')
   /** K2 sub-tab: Projects (V1) vs Focus Groups map. */
   const [k2Lens, setK2Lens] = useState<'projects' | 'groups'>('projects')
-  const [depth, setDepth] = useState<1 | 2>(2)
   /** K2 Groups lens: `all` | `ungrouped` | focus group id. */
   const [focusGroupFilter, setFocusGroupFilter] = useState<string>('all')
   /** K2 Projects lens: same values as Feedback WorkspaceFilterDropdown. */
@@ -292,7 +296,6 @@ export default function WikiPage(): React.JSX.Element | null {
       setSearch('')
       setMode('global')
       setK2Lens('projects')
-      setDepth(2)
       setFocusGroupFilter('all')
       setProjectFilter('all')
       setServe(null)
@@ -447,8 +450,8 @@ export default function WikiPage(): React.JSX.Element | null {
   /** Same visible-set inputs for the note list and both graphs. */
   const localCenterId = localCenterIdFor(mode, selectedId)
   const graphOpts = useMemo(
-    (): WikiGraphOpts => ({ mode, depth, k2Lens, focusGroupFilter, projectFilter, search, localCenterId }),
-    [mode, depth, k2Lens, focusGroupFilter, projectFilter, search, localCenterId],
+    (): WikiGraphOpts => ({ mode, k2Lens, focusGroupFilter, projectFilter, search, localCenterId }),
+    [mode, k2Lens, focusGroupFilter, projectFilter, search, localCenterId],
   )
 
   const onPickView = (next: WikiView): void => {
@@ -461,13 +464,12 @@ export default function WikiPage(): React.JSX.Element | null {
     return countVisibleWikiArticles(index, {
       search,
       mode,
-      depth,
       selectedId,
       focusGroupFilter,
       k2Lens,
       projectFilter,
     })
-  }, [index, search, mode, depth, selectedId, focusGroupFilter, k2Lens, projectFilter])
+  }, [index, search, mode, selectedId, focusGroupFilter, k2Lens, projectFilter])
 
   const fleetGroups = index?.groups ?? []
   const showFocusGroupFilter = mode === 'k2' && k2Lens === 'groups' && fleetGroups.length > 0
@@ -543,6 +545,24 @@ export default function WikiPage(): React.JSX.Element | null {
             value={allWorkspaces ? WIKI_ALL_WORKSPACES : projectPath}
             onChange={onPickWorkspace}
           />
+          <button
+            type="button"
+            aria-pressed={allWorkspaces}
+            data-wiki-all-k2
+            onClick={() => setMode(allWorkspaces ? 'global' : 'k2')}
+            title={
+              allWorkspaces
+                ? 'Showing every wiki on this server. Click to go back to one workspace.'
+                : 'Show every wiki on this server in one map'
+            }
+            className={`no-drag px-2 py-1 text-[10px] font-medium border transition-colors cursor-pointer ${
+              allWorkspaces
+                ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+                : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+            }`}
+          >
+            {WIKI_ALL_WORKSPACES_LABEL}
+          </button>
           <WikiViewToggle value={view} onChange={onPickView} views={['wiki', '2d']} />
         </div>
 
@@ -652,25 +672,6 @@ export default function WikiPage(): React.JSX.Element | null {
           </div>
         )}
 
-        {mode === 'local' && (
-          <div className="flex items-center gap-1 text-[10px] text-[var(--color-text-muted)]">
-            <span>Depth</span>
-            {([1, 2] as const).map((d) => (
-              <button
-                key={d}
-                type="button"
-                onClick={() => setDepth(d)}
-                className={`w-6 h-6 border transition-colors cursor-pointer ${
-                  depth === d
-                    ? 'border-[var(--color-accent)] text-[var(--color-text-primary)] bg-[var(--color-accent)]/15'
-                    : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)]'
-                }`}
-              >
-                {d}
-              </button>
-            ))}
-          </div>
-        )}
 
         {showProjectFilter && (
           <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)] flex-shrink-0">
@@ -856,7 +857,6 @@ export default function WikiPage(): React.JSX.Element | null {
               selectedId={selectedId}
               search={search}
               mode={mode}
-              depth={depth}
               k2Lens={k2Lens}
               focusGroupFilter={focusGroupFilter}
               projectFilter={projectFilter}

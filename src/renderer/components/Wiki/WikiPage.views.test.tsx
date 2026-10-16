@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
   noteCalls: [] as string[],
+  indexCalls: [] as { project: string; scope: string | undefined }[],
   graphProps: null as null | { selectedId: string | null; search: string; mode: string; onSelect: (id: string | null) => void },
 }))
 
@@ -35,30 +36,44 @@ const BODIES: Record<string, string> = {
 
 vi.mock('./wiki-api', async (importOriginal) => {
   const real = await importOriginal<typeof import('./wiki-api')>()
-  const n = (id: string, title: string) => ({ id, title, aliases: [], tags: [], path: id, exists: true })
   return {
     ...real,
-    fetchWikiIndex: vi.fn(async (project: string) => ({
-      workspacePath: project,
-      generatedAt: '2026-10-16T00:00:00Z',
-      nodes: [
-        n('Home.md', 'Home'),
-        n('Feature - Alpha.md', 'Feature - Alpha'),
-        n('Feature - Beta.md', 'Feature - Beta'),
-        n('Notes.md', 'Notes'),
-      ],
-      links: [
-        { source: 'Home.md', target: 'Feature - Alpha.md' },
-        { source: 'Feature - Alpha.md', target: 'Feature - Beta.md' },
-        { source: 'Notes.md', target: 'Feature - Beta.md' },
-      ],
-      noteCount: 4,
-      scope: 'workspace',
-    })),
+    fetchWikiIndex: vi.fn(async (project: string, opts?: { scope?: 'workspace' | 'k2' }) => {
+      h.indexCalls.push({ project, scope: opts?.scope })
+      // The server-wide map prefixes ids with the workspace (`alpha::Home.md`).
+      const fleet = opts?.scope === 'k2'
+      const id = (bare: string) => (fleet ? `alpha::${bare}` : bare)
+      const n = (bare: string, title: string) => ({
+        id: id(bare),
+        title,
+        aliases: [],
+        tags: [],
+        path: bare,
+        exists: true,
+        ...(fleet ? { workspaceId: 'alpha', workspaceName: 'alpha', workspacePath: '/w/alpha' } : {}),
+      })
+      return {
+        workspacePath: project,
+        generatedAt: '2026-10-16T00:00:00Z',
+        nodes: [
+          n('Home.md', 'Home'),
+          n('Feature - Alpha.md', 'Feature - Alpha'),
+          n('Feature - Beta.md', 'Feature - Beta'),
+          n('Notes.md', 'Notes'),
+        ],
+        links: [
+          { source: id('Home.md'), target: id('Feature - Alpha.md') },
+          { source: id('Feature - Alpha.md'), target: id('Feature - Beta.md') },
+          { source: id('Notes.md'), target: id('Feature - Beta.md') },
+        ],
+        noteCount: 4,
+        scope: fleet ? 'k2' : 'workspace',
+      }
+    }),
     fetchWikiServeStatus: vi.fn(async () => ({ enabled: false })),
     fetchWikiNote: vi.fn(async (_project: string | null, id: string) => {
       h.noteCalls.push(id)
-      const body = BODIES[id]
+      const body = BODIES[id.replace(/^alpha::/, '')]
       if (body === undefined) throw new Error(`no note ${id}`)
       return { id, title: id.replace(/\.md$/, ''), aliases: [], tags: [], body, path: id, workspacePath: '/w/alpha' }
     }),
@@ -91,6 +106,7 @@ import { useProjectsStore } from '@/stores/projects'
 
 beforeEach(() => {
   h.noteCalls = []
+  h.indexCalls = []
   h.graphProps = null
   localStorage.clear()
   useProjectsStore.setState({
@@ -136,21 +152,52 @@ async function openPopulated(): Promise<void> {
 }
 
 describe('Wiki header view switch', () => {
-  it('sits right after the workspace picker, labelled, Wiki pressed by default', async () => {
+  it('sits right after the picker and its All of K2 toggle, labelled, showing the window\'s view', async () => {
     await openPopulated()
     const picker = document.querySelector('[data-wiki-picker-trigger]')
     const group = screen.getByRole('group', { name: 'Wiki view' })
     if (!picker) throw new Error('no picker')
-    // The toggle follows the picker's wrapper in the header's left cluster.
-    const pickerTop = picker.closest('[data-wiki-picker-trigger]')?.parentElement
+    // Header left cluster: … picker, All of K2, then the view switch.
     const cluster = group.parentElement
-    if (!cluster || !pickerTop) throw new Error('no header cluster')
+    if (!cluster) throw new Error('no header cluster')
     const kids = Array.from(cluster.children)
-    expect(kids.indexOf(group)).toBe(kids.findIndex((k) => k.contains(picker)) + 1)
+    const pickerAt = kids.findIndex((k) => k.contains(picker))
+    expect(kids[pickerAt + 1]?.hasAttribute('data-wiki-all-k2')).toBe(true)
+    expect(kids.indexOf(group)).toBe(pickerAt + 2)
     expect(group.className).toContain('no-drag')
     expect(viewButton('wiki').getAttribute('aria-pressed')).toBe('true')
     expect(viewButton('2d').getAttribute('aria-pressed')).toBe('false')
     expect(document.querySelector('[data-wiki-body]')?.getAttribute('data-wiki-body')).toBe('wiki')
+  })
+})
+
+describe('All of K2 toggle', () => {
+  it('switches to the server-wide map and back to the workspace, in every view', async () => {
+    for (const v of ['wiki', '2d'] as const) {
+      cleanup()
+      usePageViewStore.setState({ wikiView: v })
+      h.indexCalls = []
+      await openPopulated()
+      const all = document.querySelector('[data-wiki-all-k2]')
+      if (!(all instanceof HTMLButtonElement)) throw new Error('no All of K2 toggle')
+      expect([all.textContent, all.getAttribute('aria-pressed')]).toEqual(['All of K2', 'false'])
+      fireEvent.click(all)
+      await waitFor(() => expect(h.indexCalls).toContainEqual({ project: '/w/alpha', scope: 'k2' }))
+      expect(all.getAttribute('aria-pressed')).toBe('true')
+      expect(document.querySelector('[data-wiki-picker-trigger]')?.getAttribute('aria-label')).toBe('Wiki workspace: All of K2')
+      if (v === 'wiki') {
+        await waitFor(() => expect(row('alpha::Home.md').getAttribute('aria-current')).toBe('true'))
+        expect(list().querySelector('[data-wiki-note-group="ws:alpha"]')?.getAttribute('aria-label')).toBe('alpha')
+      } else {
+        expect(h.graphProps?.mode).toBe('k2')
+      }
+      h.indexCalls = []
+      fireEvent.click(all)
+      await waitFor(() => expect(h.indexCalls).toContainEqual({ project: '/w/alpha', scope: undefined }))
+      expect(all.getAttribute('aria-pressed')).toBe('false')
+      expect(document.querySelector('[data-wiki-picker-trigger]')?.getAttribute('aria-label')).toBe('Wiki workspace: alpha')
+      expect(usePageViewStore.getState().wikiProjectPath).toBe('/w/alpha')
+    }
   })
 })
 

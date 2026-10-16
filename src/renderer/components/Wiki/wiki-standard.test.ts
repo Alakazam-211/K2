@@ -19,7 +19,6 @@ function note(id: string, title: string, extra: Partial<WikiNode> = {}): WikiNod
 
 const OPTS: WikiGraphOpts = {
   mode: 'global',
-  depth: 2,
   k2Lens: 'projects',
   focusGroupFilter: 'all',
   projectFilter: 'all',
@@ -108,8 +107,9 @@ describe('wikiListNotes', () => {
     expect(wikiListNotes(idx, { ...OPTS, search: 'infra' }).map((n) => n.id)).toEqual(['A.md'])
   })
 
-  it('Local follows the neighbourhood of the centre', () => {
-    expect(wikiListNotes(idx, { ...OPTS, mode: 'local', depth: 1, localCenterId: 'C.md' }).map((n) => n.id)).toEqual([
+  it('Local follows the neighbourhood of the centre (2 hops)', () => {
+    expect(wikiListNotes(idx, { ...OPTS, mode: 'local', localCenterId: 'C.md' }).map((n) => n.id)).toEqual([
+      'A.md',
       'B.md',
       'C.md',
     ])

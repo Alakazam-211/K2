@@ -46,6 +46,7 @@ import { useZenShown } from '@/lib/zen/zen-view'
 import { useHomeAvatarSync } from '@/lib/home-avatars'
 import { grokBotIdFromAddress, grokRowStatus } from '@/lib/grokbots'
 import { useGrokBotsStore, type GrokHostState } from '@/stores/grokbots'
+import { useSelectTopHomeRowOnEnter } from './home-auto-select'
 
 /** True when Home is the page and the window's active workspace is a row
  *  of the selected Home on the connected server — the room is shown. */
@@ -335,6 +336,8 @@ export function HomeShellEffects(): null {
   // Pictures for rows on other servers, from this computer's cache
   // (prd-home-picker-and-remote-avatars-v1 S4).
   useHomeAvatarSync()
+  // Entering Home with nothing selected opens the top row, as a click would.
+  useSelectTopHomeRowOnEnter()
   useEffect(() => () => useHomeAddPickerStore.getState().setOpen(false), [])
   // vs-live P31, prd-zen-gardens-v1 G6: Zen shown (the top-bar toggle,
   // the chord, the app menu) closes Home's Add Agent picker, so it never

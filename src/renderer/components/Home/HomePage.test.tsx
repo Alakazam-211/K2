@@ -375,7 +375,9 @@ describe('Home — the Agents page shell', () => {
 
   it('clicking a row on the connected server selects it and stays on Home', () => {
     render(<Shell />)
-    // Nothing selected yet: Agents empty state, Home wording, no drawers.
+    // Entering Home opened the top row; clear it to click one.
+    act(() => useProjectsStore.setState({ activeProjectId: null, activeWorkspaceId: null }))
+    // Nothing selected: Agents empty state, Home wording, no drawers.
     expect(screen.getByText('Pick an agent on this Home')).toBeTruthy()
     expect(screen.queryByTestId('drawer-files')).toBeNull()
 
@@ -391,8 +393,10 @@ describe('Home — the Agents page shell', () => {
   })
 
   it('the active workspace not on this Home shows the empty state, room hidden', () => {
-    useProjectsStore.getState().setActiveProject('pn')
     render(<Shell />)
+    // After entry (which opened the top row), the Agents page's pick moves
+    // to an agent not on this Home.
+    act(() => useProjectsStore.getState().setActiveProject('pn'))
     expect(screen.getByText('Pick an agent on this Home')).toBeTruthy()
     expect(roomArea().style.display).toBe('none')
     expect(screen.getByText('No workspace selected')).toBeTruthy()
@@ -720,6 +724,57 @@ describe('Home — the Agents page shell', () => {
     expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toContain('quill::b.k2.dev')
     // No request for C's agents: it has no login.
     expect(fetchMock.mock.calls.map((c) => c[0]).filter((u) => u.startsWith('https://c.k2.dev/cli/'))).toEqual([])
+  })
+})
+
+// Rosson 2026-10-16: "When going to home, if there is no agent selected,
+// select the top-most one." Each mount of HomeShellEffects is an entry.
+describe('entering Home selects the top row when nothing is selected', () => {
+  it('no selection: the top row opens, as a click on it would', () => {
+    expect(useProjectsStore.getState().activeProjectId).toBeNull()
+    render(<Shell />)
+    expect(useProjectsStore.getState().activeProjectId).toBe('pl')
+    expect(useProjectsStore.getState().activeWorkspaceId).toBe('wl')
+    expect(rowOf('Cortana').getAttribute('aria-current')).toBe('true')
+    expect(within(roomArea()).getByTestId('terminal-area').getAttribute('data-cwd')).toBe('/w/cortana')
+    expect(usePageViewStore.getState().page).toBe('home')
+  })
+
+  it('a selection that is not on this Home (stale) gives way to the top row', () => {
+    useProjectsStore.getState().setActiveProject('pn')
+    render(<Shell />)
+    expect(useProjectsStore.getState().activeProjectId).toBe('pl')
+    expect(rowOf('Cortana').getAttribute('aria-current')).toBe('true')
+  })
+
+  it('a selected row of this Home is kept, even when it is not the top one', () => {
+    const home = useHomesStore.getState().homes[0]
+    useHomesStore.getState().addRow(home.id, { address: 'nova::local', workspaceId: 'pn', label: 'Nova' })
+    useProjectsStore.getState().setActiveProject('pn')
+    render(<Shell />)
+    expect(useProjectsStore.getState().activeProjectId).toBe('pn')
+    expect(rowOf('Nova').getAttribute('aria-current')).toBe('true')
+    expect(rowOf('Cortana').getAttribute('aria-current')).toBeNull()
+  })
+
+  it('an empty Home selects nothing', () => {
+    const home = useHomesStore.getState().homes[0]
+    for (const r of [...home.rows]) useHomesStore.getState().removeRow(home.id, r.address)
+    render(<Shell />)
+    expect(useProjectsStore.getState().activeProjectId).toBeNull()
+  })
+
+  it('on a window opening before the server list lands, it waits and opens the top row once it does', () => {
+    const loaded = useProjectsStore.getState().projects
+    useProjectsStore.setState({ projects: [] })
+    render(<Shell />)
+    expect(useProjectsStore.getState().activeProjectId).toBeNull()
+    act(() => useProjectsStore.setState({ projects: loaded }))
+    expect(useProjectsStore.getState().activeProjectId).toBe('pl')
+    // Once settled, a later change of selection is the user's: no re-pick.
+    act(() => useProjectsStore.setState({ activeProjectId: null, activeWorkspaceId: null }))
+    act(() => useProjectsStore.setState({ projects: [...loaded] }))
+    expect(useProjectsStore.getState().activeProjectId).toBeNull()
   })
 })
 

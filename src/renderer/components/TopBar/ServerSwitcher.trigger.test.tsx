@@ -19,8 +19,10 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 import type { ConnectionStatus } from '@/stores/connect-host'
 import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 import ServerSwitcher, {
+  SERVER_CHIP_MARGIN_RIGHT_PX,
   SERVER_ICON_PX,
   SERVER_SWITCHER_WIDTH_CLASS,
+  serverChipClass,
   SERVER_SWITCHER_WIDTH_PX,
   THIS_COMPUTER_LABEL,
 } from './ServerSwitcher'
@@ -72,9 +74,50 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
     })
   })
 
-  it('the width class is the 160px constant and does not shrink', () => {
-    expect(SERVER_SWITCHER_WIDTH_PX).toBe(160)
+  it('the width class is the 150px constant and does not shrink', () => {
+    expect(SERVER_SWITCHER_WIDTH_PX).toBe(150)
     expect(SERVER_SWITCHER_WIDTH_CLASS).toBe(`w-[${SERVER_SWITCHER_WIDTH_PX}px] shrink-0`)
+  })
+
+  it('the trigger is a chip: theme wash, 1px border all round, field radius, same 24px height', () => {
+    const t = renderOn(host('rosson', 'rosson.k2.dev'))
+    const cls = t.className.split(/\s+/)
+    for (const c of [
+      'border',
+      'rounded-[var(--radius-field)]',
+      'bg-[var(--color-overlay-soft-bg)]',
+      'border-[var(--color-overlay-soft-border)]',
+      'text-[var(--color-text-secondary)]',
+      'hover:bg-[var(--color-bg-elevated)]',
+      'hover:border-[var(--color-border-strong)]',
+      'h-6',
+    ]) {
+      expect(cls).toContain(c)
+    }
+    expect(cls).not.toContain('border-dashed')
+    expect(t.getAttribute('aria-expanded')).toBe('false')
+    // Tokens only: no hard-coded colour in the chip's classes.
+    expect(t.className).not.toMatch(/#[0-9a-f]{3,8}|rgba?\(/i)
+    // Air before the cog tab: -8 against the cluster's 14px gap.
+    expect(SERVER_CHIP_MARGIN_RIGHT_PX).toBe(-8)
+    expect(t.parentElement?.style.marginRight).toBe('-8px')
+  })
+
+  it('open lifts the chip a step (stronger fill + border) and drops the rest wash', () => {
+    const t = renderOn(host('rosson', 'rosson.k2.dev'))
+    fireEvent.click(t)
+    const cls = screen.getByTestId('server-switcher-trigger').className.split(/\s+/)
+    expect(cls).toContain('bg-[var(--color-bg-elevated)]')
+    expect(cls).toContain('border-[var(--color-border-strong)]')
+    expect(cls).toContain('text-[var(--color-text-primary)]')
+    expect(cls).not.toContain('bg-[var(--color-overlay-soft-bg)]')
+    expect(screen.getByTestId('server-switcher-trigger').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('serverChipClass: following a remote room keeps the chip with a dashed border', () => {
+    expect(serverChipClass({ open: false, followsRoom: true }).split(' ')).toContain('border-dashed')
+    expect(serverChipClass({ open: true, followsRoom: true }).split(' ')).toContain('border-dashed')
+    expect(serverChipClass({ open: false, followsRoom: false }).split(' ')).not.toContain('border-dashed')
   })
 
   it('a short and a long name get the same fixed-width trigger', () => {

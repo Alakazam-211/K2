@@ -190,14 +190,46 @@ export const THIS_COMPUTER_LABEL = LOCAL_SCOPE_LABEL
 
 /** 0.46.0 experiment (Rosson 2026-10-16): the trigger is one fixed width so
  *  the top bar never shifts when the server changes; a longer name ends in
- *  an ellipsis (the full name is in the tooltip). 160px leaves ~120px for
- *  the name at 11px — `rosson.k2.dev`, `z3thon.k2.dev`, `This computer` and
- *  most box names (~20 characters) fit whole. Exported for tests. */
-export const SERVER_SWITCHER_WIDTH_PX = 160
-export const SERVER_SWITCHER_WIDTH_CLASS = 'w-[160px] shrink-0'
+ *  an ellipsis (the full name is in the tooltip). 150px (Rosson: 10px
+ *  narrower than the first 160) leaves ~100px for the name at 11px after
+ *  the icon, chevron and border — `rosson.k2.dev`, `z3thon.k2.dev` and
+ *  `This computer` fit whole. Exported for tests. */
+export const SERVER_SWITCHER_WIDTH_PX = 150
+export const SERVER_SWITCHER_WIDTH_CLASS = 'w-[150px] shrink-0'
 /** The server icon at the trigger's left (its LEDs are the status light):
- *  the page-tab icons' 14px. Leaves ~106px for the name. */
+ *  the page-tab icons' 14px. */
 export const SERVER_ICON_PX = 14
+
+/** The trigger's chip look (Rosson 2026-10-16: "give it a background … or
+ *  a wrap-around border"): a soft theme wash with a 1px low-contrast border
+ *  all round and the theme's field radius (square in the default theme,
+ *  rounded where the theme rounds fields). Hover and the open dropdown
+ *  lift it a step. Following a remote Home room swaps the border to dashed
+ *  (the old outlined-pill cue). Tokens only, so every theme gets its own
+ *  shades. Exported for tests. */
+export const SERVER_CHIP_BASE_CLASS =
+  'border rounded-[var(--radius-field)] transition-colors'
+export const SERVER_CHIP_REST_CLASS =
+  'bg-[var(--color-overlay-soft-bg)] border-[var(--color-overlay-soft-border)] text-[var(--color-text-secondary)]'
+export const SERVER_CHIP_LIFT_CLASS =
+  'bg-[var(--color-bg-elevated)] border-[var(--color-border-strong)] text-[var(--color-text-primary)]'
+export const SERVER_CHIP_HOVER_CLASS =
+  'hover:bg-[var(--color-bg-elevated)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]'
+
+/** Right margin against the cluster's 14px gap. It was -14 (flush) while
+ *  the trigger had no visible edge; a chip needs air before the cog tab,
+ *  so -8 leaves 6px. */
+export const SERVER_CHIP_MARGIN_RIGHT_PX = -8
+
+export function serverChipClass({ open, followsRoom }: { open: boolean; followsRoom: boolean }): string {
+  return [
+    SERVER_CHIP_BASE_CLASS,
+    open ? SERVER_CHIP_LIFT_CLASS : `${SERVER_CHIP_REST_CLASS} ${SERVER_CHIP_HOVER_CLASS}`,
+    followsRoom ? 'border-dashed' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
 
 /** Z20: the trigger's words while a remote Home room is focused. */
 export function followedRoomTitle(roomServer: string, windowServer: string): string {
@@ -400,10 +432,10 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
     return (
       <div
         className="relative no-drag"
-        style={{ marginLeft: -6, marginRight: -14, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        style={{ marginLeft: -6, marginRight: SERVER_CHIP_MARGIN_RIGHT_PX, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <div
-          className={`${SERVER_SWITCHER_WIDTH_CLASS} flex items-center gap-1.5 h-6 px-1.5 text-[11px] text-[var(--color-text-secondary)]`}
+          className={`${SERVER_SWITCHER_WIDTH_CLASS} ${SERVER_CHIP_BASE_CLASS} ${SERVER_CHIP_REST_CLASS} flex items-center gap-1.5 h-6 px-1.5 text-[11px]`}
           title={`${activeLabel} — ${ind.title}`}
           aria-label={`Connected host: ${activeLabel} — ${ind.title}`}
         >
@@ -424,15 +456,14 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
     <div
       data-server-switcher=""
       className="relative no-drag"
-      style={{ marginLeft: -6, marginRight: -14, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      style={{ marginLeft: -6, marginRight: SERVER_CHIP_MARGIN_RIGHT_PX, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
     >
       <button
         onClick={() => toggle()}
         data-testid="server-switcher-trigger"
         data-follows-room={roomServer !== null ? 'true' : undefined}
-        className={`${SERVER_SWITCHER_WIDTH_CLASS} flex items-center justify-start gap-1.5 h-6 px-1.5 text-[11px] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag ${
-          roomServer !== null ? 'border border-[var(--color-border)]' : ''
-        }`}
+        aria-expanded={open}
+        className={`${SERVER_SWITCHER_WIDTH_CLASS} ${serverChipClass({ open, followsRoom: roomServer !== null })} flex items-center justify-start gap-1.5 h-6 px-1.5 text-[11px] no-drag`}
         title={
           roomServer !== null
             ? `${followedRoomTitle(roomServer, activeLabel)} (⌘L)`

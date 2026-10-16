@@ -1,0 +1,222 @@
+From 3535f674b15878784831492c760874415cf42c82 Mon Sep 17 00:00:00 2001
+From: z3thon <rosson.long@lztek.io>
+Date: Fri, 16 Oct 2026 13:35:45 -0600
+Subject: [PATCH] fix(linux): child webviews in a gtk::Fixed hold their bounds
+
+- `set_bounds` moves a `gtk::Fixed` child with `Fixed::move_` and keeps
+  its size as a size request (the approach of #1745). A bare
+  `size_allocate` only held until the next layout pass, when the Fixed put
+  the child back at its `put` position. It still allocates at once, now in
+  the Fixed's own frame (a no-window Fixed below a menu bar is not at 0,0).
+- `bounds()` reports a Fixed child's position (its x/y child properties)
+  and requested size. It returned (0, 0), so a read-modify-write such as
+  tauri's size-only `SetSize` moved the webview back to the corner.
+- Any `gtk::Fixed` counts, subclasses included (cast, not an exact
+  "GtkFixed" type-name match), so a host can subclass it (tauri needs a
+  Fixed that does not turn its children's size requests into the window's
+  minimum size).
+- `reparent` keeps position and size when moving between Fixed
+  containers, and tracks whether the new parent is one.
+
+Tested on Ubuntu 24.04 (WebKitGTK 2.52, X11 under Xvfb) through tauri's
+multiwebview with tauri-apps/tauri#10420's container change: the child
+lands at its rect, keeps it across a size-only update and a window
+relayout. Refs tauri-apps/tauri#10420, #1745.
+---
+ .changes/fix-linux-gtk-fixed-bounds.md |  5 ++
+ src/webkitgtk/mod.rs                   | 95 +++++++++++++++++++++-----
+ 2 files changed, 82 insertions(+), 18 deletions(-)
+ create mode 100644 .changes/fix-linux-gtk-fixed-bounds.md
+
+diff --git a/.changes/fix-linux-gtk-fixed-bounds.md b/.changes/fix-linux-gtk-fixed-bounds.md
+new file mode 100644
+index 00000000..5ae84380
+--- /dev/null
++++ b/.changes/fix-linux-gtk-fixed-bounds.md
+@@ -0,0 +1,5 @@
++---
++"wry": patch
++---
++
++On Linux, webviews placed in a `gtk::Fixed` (including subclasses) keep the bounds set with `WebView::set_bounds` across layout passes, `WebView::bounds` reports their position, and `WebView::reparent` keeps their position and size.
+diff --git a/src/webkitgtk/mod.rs b/src/webkitgtk/mod.rs
+index 1cf0f852..aedf25a8 100644
+--- a/src/webkitgtk/mod.rs
++++ b/src/webkitgtk/mod.rs
+@@ -2,9 +2,7 @@
+ // SPDX-License-Identifier: Apache-2.0
+ // SPDX-License-Identifier: MIT
+ 
+-#[cfg(feature = "x11")]
+-use dpi::LogicalPosition;
+-use dpi::LogicalSize;
++use dpi::{LogicalPosition, LogicalSize};
+ use ffi::CookieManageExt;
+ #[cfg(feature = "x11")]
+ use gdkx11::{
+@@ -29,6 +27,7 @@ use std::ffi::c_ulong;
+ #[cfg(any(debug_assertions, feature = "devtools"))]
+ use std::sync::atomic::{AtomicBool, Ordering};
+ use std::{
++  cell::Cell,
+   collections::HashMap,
+   rc::Rc,
+   sync::{Arc, Mutex},
+@@ -91,7 +90,9 @@ pub(crate) struct InnerWebView {
+   #[cfg(any(debug_assertions, feature = "devtools"))]
+   is_inspector_open: Arc<AtomicBool>,
+   pending_scripts: Arc<Mutex<Option<Vec<String>>>>,
+-  is_in_fixed_parent: bool,
++  /// Lives in a `gtk::Fixed` (or a subclass): placed by `Fixed::move_`.
++  /// A `Cell`: `reparent` can move it into or out of one.
++  is_in_fixed_parent: Cell<bool>,
+ 
+   #[cfg(feature = "x11")]
+   x11: Option<X11Data>,
+@@ -339,7 +340,7 @@ impl InnerWebView {
+       webview,
+       pending_scripts: Arc::new(Mutex::new(Some(Vec::new()))),
+ 
+-      is_in_fixed_parent,
++      is_in_fixed_parent: Cell::new(is_in_fixed_parent),
+       #[cfg(feature = "x11")]
+       x11: None,
+ 
+@@ -700,7 +701,10 @@ impl InnerWebView {
+         .dynamic_cast_ref::<gtk::Box>()
+         .unwrap()
+         .pack_start(webview, true, true, 0);
+-    } else if container_type == "GtkFixed" {
++    } else if let Some(fixed) = container.dynamic_cast_ref::<gtk::Fixed>() {
++      // Any `gtk::Fixed`, subclasses included (a host may subclass it, e.g.
++      // so that children's size requests do not become the window's
++      // minimum size).
+       let scale_factor = webview.scale_factor() as f64;
+       let (width, height) = attributes
+         .bounds
+@@ -715,10 +719,7 @@ impl InnerWebView {
+ 
+       webview.set_size_request(width, height);
+ 
+-      container
+-        .dynamic_cast_ref::<gtk::Fixed>()
+-        .unwrap()
+-        .put(webview, x, y);
++      fixed.put(webview, x, y);
+ 
+       is_in_fixed_parent = true;
+     } else {
+@@ -967,12 +968,39 @@ impl InnerWebView {
+       return Ok(bounds);
+     }
+ 
++    if let Some((x, y, width, height)) = self.fixed_child_bounds() {
++      bounds.position = LogicalPosition::new(x, y).into();
++      bounds.size = LogicalSize::new(width, height).into();
++      return Ok(bounds);
++    }
++
+     let (size, _) = self.webview.allocated_size();
+     bounds.size = LogicalSize::new(size.width(), size.height()).into();
+ 
+     Ok(bounds)
+   }
+ 
++  /// Position (the `gtk::Fixed` child properties) and size (the size request,
++  /// else the allocation) of a webview placed in a `gtk::Fixed`. Without
++  /// this `bounds()` reported (0, 0) for it, and a read-modify-write such as
++  /// a size-only update moved it back to the corner.
++  fn fixed_child_bounds(&self) -> Option<(i32, i32, i32, i32)> {
++    if !self.is_in_fixed_parent.get() {
++      return None;
++    }
++    let fixed = self.webview.parent()?.downcast::<gtk::Fixed>().ok()?;
++    let x = fixed.child_property::<i32>(&self.webview, "x");
++    let y = fixed.child_property::<i32>(&self.webview, "y");
++    let (req_w, req_h) = self.webview.size_request();
++    let (width, height) = if req_w > 0 && req_h > 0 {
++      (req_w, req_h)
++    } else {
++      let (size, _) = self.webview.allocated_size();
++      (size.width(), size.height())
++    };
++    Some((x, y, width, height))
++  }
++
+   pub fn set_bounds(&self, bounds: Rect) -> Result<()> {
+     let scale_factor = self.webview.scale_factor() as f64;
+     let (width, height) = bounds.size.to_logical::<i32>(scale_factor).into();
+@@ -988,10 +1016,33 @@ impl InnerWebView {
+       window.size_allocate(&gtk::Allocation::new(0, 0, width, height));
+     }
+ 
+-    if self.is_in_fixed_parent {
+-      self
++    if self.is_in_fixed_parent.get() {
++      if let Some(fixed) = self
+         .webview
+-        .size_allocate(&gtk::Allocation::new(x, y, width, height));
++        .parent()
++        .and_then(|p| p.downcast::<gtk::Fixed>().ok())
++      {
++        // `move_` and the size request persist across layout passes. A bare
++        // `size_allocate` did not: the `gtk::Fixed` put the child back at its
++        // `put` position and requested size on its next allocation, so
++        // `set_bounds` only held until the window next re-laid out.
++        fixed.move_(&self.webview, x, y);
++        self.webview.set_size_request(width, height);
++        // Apply now too (no frame of lag). A no-window `gtk::Fixed`
++        // allocates children in its parent window's coordinates.
++        let origin = if fixed.has_window() {
++          (0, 0)
++        } else {
++          let a = fixed.allocation();
++          (a.x(), a.y())
++        };
++        self.webview.size_allocate(&gtk::Allocation::new(
++          origin.0 + x,
++          origin.1 + y,
++          width,
++          height,
++        ));
++      }
+     }
+ 
+     Ok(())
+@@ -1237,6 +1288,9 @@ impl InnerWebView {
+       .parent()
+       .and_then(|p| p.dynamic_cast::<gtk::Container>().ok())
+     {
++      // Keep the webview where it was when it moves between `gtk::Fixed`s
++      // (it used to land at 0,0 with no size).
++      let place = self.fixed_child_bounds();
+       parent.remove(&self.webview);
+ 
+       let container_type = container.type_().name();
+@@ -1245,13 +1299,18 @@ impl InnerWebView {
+           .dynamic_cast_ref::<gtk::Box>()
+           .unwrap()
+           .pack_start(&self.webview, true, true, 0);
+-      } else if container_type == "GtkFixed" {
+-        container
+-          .dynamic_cast_ref::<gtk::Fixed>()
+-          .unwrap()
+-          .put(&self.webview, 0, 0);
++        self.is_in_fixed_parent.set(false);
++      } else if let Some(fixed) = container.dynamic_cast_ref::<gtk::Fixed>() {
++        let (x, y, width, height) = place.unwrap_or_else(|| {
++          let (size, _) = self.webview.allocated_size();
++          (0, 0, size.width(), size.height())
++        });
++        self.webview.set_size_request(width, height);
++        fixed.put(&self.webview, x, y);
++        self.is_in_fixed_parent.set(true);
+       } else {
+         container.add(&self.webview);
++        self.is_in_fixed_parent.set(false);
+       }
+     }
+ 
+-- 
+2.50.0
+

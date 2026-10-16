@@ -1,0 +1,526 @@
+From b43eeca0b1252287228e78d891edca186a0dea6a Mon Sep 17 00:00:00 2001
+From: z3thon <rosson.long@lztek.io>
+Date: Fri, 16 Oct 2026 13:37:25 -0600
+Subject: [PATCH] feat: add Rust-side webview screenshot API (rebased #1674)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+`WebView::screenshot(handler)`: a PNG of the webview's visible region,
+delivered to `handler`.
+
+- macOS: `WKWebView takeSnapshotWithConfiguration:completionHandler:`
+  (no screen-recording permission), NSBitmapImageRep → PNG.
+- Windows: `ICoreWebView2::CapturePreview` into an SHCreateMemStream.
+- Linux: `webkit_web_view_get_snapshot` (visible region) → pixbuf → PNG.
+- iOS / Android: not yet.
+
+This is tauri-apps/wry#1674 by @josh-richardson, merged onto current dev
+(conflicts were only in import lists and the error enum), unchanged
+otherwise. Related: #1358, prior art #266, #1258.
+---
+ .changes/webview-screenshot.md |   5 ++
+ Cargo.toml                     |   6 ++
+ examples/screenshot_smoke.rs   | 150 +++++++++++++++++++++++++++++++++
+ src/android/mod.rs             |   8 ++
+ src/error.rs                   |  16 ++++
+ src/lib.rs                     |  15 ++++
+ src/webkitgtk/mod.rs           |  39 ++++++++-
+ src/webview2/mod.rs            |  54 ++++++++++++
+ src/wkwebview/mod.rs           |  69 ++++++++++++++-
+ 9 files changed, 357 insertions(+), 5 deletions(-)
+ create mode 100644 .changes/webview-screenshot.md
+ create mode 100644 examples/screenshot_smoke.rs
+
+diff --git a/.changes/webview-screenshot.md b/.changes/webview-screenshot.md
+new file mode 100644
+index 00000000..9f057303
+--- /dev/null
++++ b/.changes/webview-screenshot.md
+@@ -0,0 +1,5 @@
++---
++"wry": minor
++---
++
++Add `WebView::screenshot` to capture a PNG of the webview's visible region on macOS, Windows and Linux.
+diff --git a/Cargo.toml b/Cargo.toml
+index 7df38b81..0dd04950 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -125,6 +125,7 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = [
+   "WKWebpagePreferences",
+   "WKNavigationResponse",
+   "WKUserScript",
++  "WKSnapshotConfiguration",
+   "WKHTTPCookieStore",
+   "WKWindowFeatures",
+ ] }
+@@ -187,7 +188,12 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+   "NSSavePanel",
+   "NSMenu",
+   "NSGraphics",
++  "NSImage",
++  "NSImageRep",
++  "NSBitmapImageRep",
++  "NSGraphicsContext",
+   "NSScreen",
++  "objc2-core-graphics",
+ ] }
+ 
+ [target."cfg(target_os = \"android\")".dependencies]
+diff --git a/examples/screenshot_smoke.rs b/examples/screenshot_smoke.rs
+new file mode 100644
+index 00000000..ae6118fd
+--- /dev/null
++++ b/examples/screenshot_smoke.rs
+@@ -0,0 +1,150 @@
++// Copyright 2020-2023 Tauri Programme within The Commons Conservancy
++// SPDX-License-Identifier: Apache-2.0
++// SPDX-License-Identifier: MIT
++
++use std::sync::{
++  atomic::{AtomicBool, Ordering},
++  Arc,
++};
++use std::time::Duration;
++
++use tao::{
++  event::{Event, WindowEvent},
++  event_loop::{ControlFlow, EventLoopBuilder},
++  window::WindowBuilder,
++};
++use wry::{PageLoadEvent, WebViewBuilder};
++
++#[derive(Debug, Clone, Copy)]
++enum UserEvent {
++  Capture,
++  Exit,
++}
++
++fn main() -> wry::Result<()> {
++  let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
++  let proxy = event_loop.create_proxy();
++  let window = WindowBuilder::new()
++    .with_title("wry screenshot smoke")
++    .build(&event_loop)
++    .unwrap();
++
++  let already_requested = Arc::new(AtomicBool::new(false));
++  let already_requested_ = already_requested.clone();
++  let proxy_for_load = proxy.clone();
++
++  let builder = WebViewBuilder::new()
++    .with_html(
++      r#"<!doctype html>
++<html>
++  <head>
++    <meta charset="utf-8" />
++    <meta name="viewport" content="width=device-width, initial-scale=1" />
++    <title>WRY Screenshot Smoke</title>
++    <style>
++      html, body {
++        margin: 0;
++        width: 100%;
++        height: 100%;
++        font-family: sans-serif;
++      }
++      body {
++        display: grid;
++        place-items: center;
++        background: #1f2937;
++        color: white;
++      }
++      .card {
++        padding: 24px 28px;
++        border-radius: 16px;
++        background: rgba(255,255,255,0.12);
++        border: 1px solid rgba(255,255,255,0.18);
++        box-shadow: 0 20px 50px rgba(0,0,0,0.35);
++        backdrop-filter: blur(8px);
++      }
++      h1 { margin: 0 0 8px; font-size: 28px; }
++      p { margin: 0; opacity: 0.9; }
++    </style>
++  </head>
++  <body>
++    <div class="card">
++      <h1>Screenshot Smoke Test</h1>
++      <p>If you can read this in screenshot.png, capture worked.</p>
++    </div>
++  </body>
++</html>"#,
++    )
++    .with_on_page_load_handler(move |event, _url| {
++      if matches!(event, PageLoadEvent::Finished)
++        && !already_requested_.swap(true, Ordering::SeqCst)
++      {
++        let proxy = proxy_for_load.clone();
++        std::thread::spawn(move || {
++          std::thread::sleep(Duration::from_millis(1000));
++          let _ = proxy.send_event(UserEvent::Capture);
++        });
++      }
++    });
++
++  #[cfg(any(
++    target_os = "windows",
++    target_os = "macos",
++    target_os = "ios",
++    target_os = "android"
++  ))]
++  let webview = builder.build(&window)?;
++  #[cfg(not(any(
++    target_os = "windows",
++    target_os = "macos",
++    target_os = "ios",
++    target_os = "android"
++  )))]
++  let webview = {
++    use tao::platform::unix::WindowExtUnix;
++    use wry::WebViewBuilderExtUnix;
++    let vbox = window.default_vbox().unwrap();
++    builder.build_gtk(vbox)?
++  };
++
++  event_loop.run(move |event, _, control_flow| {
++    *control_flow = ControlFlow::Wait;
++
++    match event {
++      Event::WindowEvent {
++        event: WindowEvent::CloseRequested,
++        ..
++      } => *control_flow = ControlFlow::Exit,
++      Event::UserEvent(UserEvent::Capture) => {
++        // screenshot is not supported on Android or iOS; the handler would
++        // never be called, so we exit immediately on those platforms.
++        #[cfg(any(target_os = "android", target_os = "ios"))]
++        {
++          let _ = proxy.send_event(UserEvent::Exit);
++          return;
++        }
++
++        #[cfg(not(any(target_os = "android", target_os = "ios")))]
++        {
++          let proxy = proxy.clone();
++          webview
++            .screenshot(move |result| {
++              match result {
++                Ok(bytes) => {
++                  if let Err(err) = std::fs::write("screenshot.png", bytes) {
++                    eprintln!("failed to write screenshot.png: {err}");
++                  } else {
++                    println!("wrote screenshot.png");
++                  }
++                }
++                Err(err) => eprintln!("screenshot failed: {err}"),
++              }
++              let _ = proxy.send_event(UserEvent::Exit);
++            })
++            .expect("failed to request screenshot");
++        }
++      }
++      Event::UserEvent(UserEvent::Exit) => *control_flow = ControlFlow::Exit,
++      _ => {}
++    }
++  });
++}
+diff --git a/src/android/mod.rs b/src/android/mod.rs
+index 2e33ee51..97ba1d87 100644
+--- a/src/android/mod.rs
++++ b/src/android/mod.rs
+@@ -338,6 +338,14 @@ impl InnerWebView {
+     Ok(())
+   }
+ 
++  pub fn screenshot<F>(&self, _handler: F) -> Result<()>
++  where
++    F: Fn(Result<Vec<u8>>) + 'static + Send,
++  {
++    // Unsupported
++    Ok(())
++  }
++
+   pub fn id(&self) -> crate::WebViewId<'_> {
+     &self.id
+   }
+diff --git a/src/error.rs b/src/error.rs
+index d9e39305..b2396804 100644
+--- a/src/error.rs
++++ b/src/error.rs
+@@ -17,6 +17,12 @@ pub enum Error {
+   #[cfg(gtk)]
+   #[error("Couldn't find X11 Display")]
+   X11DisplayNotFound,
++  #[cfg(gtk)]
++  #[error(transparent)]
++  CairoError(#[from] gtk::cairo::Error),
++  #[cfg(gtk)]
++  #[error("Failed to convert WebView snapshot to a Pixbuf")]
++  PixbufConversionFailed,
+   #[cfg(all(gtk, feature = "x11"))]
+   #[error(transparent)]
+   XlibError(#[from] x11_dl::error::OpenError),
+@@ -79,4 +85,14 @@ pub enum Error {
+   #[cfg(target_os = "android")]
+   #[error("Activity not found")]
+   ActivityNotFound,
++  #[cfg(target_os = "macos")]
++  #[error("Could not obtain screenshot from webview")]
++  NilScreenshot,
++  #[cfg(target_os = "macos")]
++  #[error("Screenshot failed ({domain}:{code}): {description}")]
++  MacOsScreenshotError {
++    domain: String,
++    code: isize,
++    description: String,
++  },
+ }
+diff --git a/src/lib.rs b/src/lib.rs
+index 9835e3f6..26e3d186 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -2122,6 +2122,21 @@ impl WebView {
+     self.webview.print()
+   }
+ 
++  /// Capture a PNG screenshot of the currently visible webview contents.
++  ///
++  /// The screenshot is returned asynchronously via `handler`.
++  ///
++  /// ## Platform-specific
++  ///
++  /// - **Linux / macOS / Windows**: Implemented (visible region only).
++  /// - **Android / iOS**: Not supported; `handler` will never be called.
++  pub fn screenshot<F>(&self, handler: F) -> Result<()>
++  where
++    F: Fn(Result<Vec<u8>>) + 'static + Send,
++  {
++    self.webview.screenshot(handler)
++  }
++
+   /// Get a list of cookies for specific url.
+   pub fn cookies_for_url(&self, url: &str) -> Result<Vec<cookie::Cookie<'static>>> {
+     self.webview.cookies_for_url(url)
+diff --git a/src/webkitgtk/mod.rs b/src/webkitgtk/mod.rs
+index 1cf0f852..efd606d6 100644
+--- a/src/webkitgtk/mod.rs
++++ b/src/webkitgtk/mod.rs
+@@ -39,7 +39,8 @@ use webkit2gtk::{
+   AutoplayPolicy, CookieManagerExt, GeolocationPermissionRequest, InputMethodContextExt, LoadEvent,
+   NavigationPolicyDecision, NavigationPolicyDecisionExt, NetworkProxyMode, NetworkProxySettings,
+   NotificationPermissionRequest, PermissionRequestExt, PointerLockPermissionRequest,
+-  PolicyDecisionType, PrintOperationExt, SettingsExt, URIRequest, URIRequestExt,
++  PolicyDecisionType, PrintOperationExt, SettingsExt, SnapshotOptions, SnapshotRegion,
++  URIRequest, URIRequestExt,
+   UserContentInjectedFrames, UserContentManager, UserContentManagerExt, UserMediaPermissionRequest,
+   UserMediaPermissionRequestExt, UserScript, UserScriptInjectionTime,
+   WebContextExt as Webkit2gtkWeContextExt, WebView, WebViewExt, WebsiteDataManagerExt,
+@@ -782,6 +783,42 @@ impl InnerWebView {
+     Ok(())
+   }
+ 
++  pub fn screenshot<F>(&self, handler: F) -> Result<()>
++  where
++    F: Fn(Result<Vec<u8>>) + 'static + Send,
++  {
++    let cancellable: Option<&Cancellable> = None;
++    let cb = move |result: std::result::Result<gtk::cairo::Surface, gtk::glib::Error>| match result
++    {
++      Ok(surface) => match gtk::cairo::ImageSurface::try_from(surface) {
++        Ok(image) => {
++          let width = image.width();
++          let height = image.height();
++          match gdk::pixbuf_get_from_surface(&image, 0, 0, width, height) {
++            Some(pixbuf) => match pixbuf.save_to_bufferv("png", &[]) {
++              Ok(bytes) => handler(Ok(bytes)),
++              Err(err) => handler(Err(Error::GlibError(err))),
++            },
++            None => handler(Err(Error::PixbufConversionFailed)),
++          }
++        }
++        Err(_) => handler(Err(Error::CairoError(
++          gtk::cairo::Error::SurfaceTypeMismatch,
++        ))),
++      },
++      Err(err) => handler(Err(Error::GlibError(err))),
++    };
++
++    self.webview.snapshot(
++      SnapshotRegion::Visible,
++      SnapshotOptions::NONE,
++      cancellable,
++      cb,
++    );
++
++    Ok(())
++  }
++
+   pub fn url(&self) -> Result<String> {
+     Ok(self.webview.uri().unwrap_or_default().to_string())
+   }
+diff --git a/src/webview2/mod.rs b/src/webview2/mod.rs
+index 485bb4ed..f137527d 100644
+--- a/src/webview2/mod.rs
++++ b/src/webview2/mod.rs
+@@ -1890,6 +1890,60 @@ impl InnerWebView {
+     )
+   }
+ 
++  pub fn screenshot<F>(&self, handler: F) -> Result<()>
++  where
++    F: Fn(Result<Vec<u8>>) + 'static + Send,
++  {
++    unsafe {
++      let Some(stream) = SHCreateMemStream(None) else {
++        return Err(Error::from(windows::core::Error::from(E_POINTER)));
++      };
++      let stream_for_handler = stream.clone();
++
++      self.webview.CapturePreview(
++        COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
++        &stream,
++        &CapturePreviewCompletedHandler::create(Box::new(move |res| {
++          let result = (|| -> windows::core::Result<Vec<u8>> {
++            res?;
++
++            let mut bytes = Vec::new();
++            stream_for_handler.Seek(0, STREAM_SEEK_SET, None)?;
++
++            let mut buffer = [0u8; 4096];
++            loop {
++              let mut cb_read = 0;
++              stream_for_handler
++                .Read(
++                  buffer.as_mut_ptr() as *mut _,
++                  buffer.len() as u32,
++                  Some(&mut cb_read),
++                )
++                .ok()?;
++
++              if cb_read == 0 {
++                break;
++              }
++
++              bytes.extend_from_slice(&buffer[..cb_read as usize]);
++            }
++
++            Ok(bytes)
++          })();
++
++          match result {
++            Ok(bytes) => handler(Ok(bytes)),
++            Err(err) => handler(Err(err.into())),
++          }
++
++          Ok(())
++        })),
++      )?;
++    }
++
++    Ok(())
++  }
++
+   pub fn clear_all_browsing_data(&self) -> Result<()> {
+     unsafe {
+       self
+diff --git a/src/wkwebview/mod.rs b/src/wkwebview/mod.rs
+index 8405da2b..70d17a49 100644
+--- a/src/wkwebview/mod.rs
++++ b/src/wkwebview/mod.rs
+@@ -38,12 +38,15 @@ use objc2::{
+   runtime::{AnyObject, NSObject, ProtocolObject},
+ };
+ #[cfg(target_os = "macos")]
+-use objc2_app_kit::{NSApplication, NSAutoresizingMaskOptions, NSTitlebarSeparatorStyle, NSView};
++use objc2_app_kit::{
++  NSApplication, NSAutoresizingMaskOptions, NSBitmapImageFileType, NSBitmapImageRep,
++  NSBitmapImageRepPropertyKey, NSImage, NSTitlebarSeparatorStyle, NSView,
++};
+ #[cfg(target_os = "macos")]
+ use objc2_core_foundation::CGSize;
+ use objc2_core_foundation::{CGPoint, CGRect};
+ use objc2_foundation::{
+-  MainThreadMarker, NSArray, NSBundle, NSDate, NSError, NSHTTPCookie, NSHTTPCookieDomain,
++  MainThreadMarker, NSArray, NSBundle, NSDate, NSDictionary, NSError, NSHTTPCookie, NSHTTPCookieDomain,
+   NSHTTPCookieExpires, NSHTTPCookieMaximumAge, NSHTTPCookieName, NSHTTPCookiePath,
+   NSHTTPCookiePropertyKey, NSHTTPCookieSecure, NSHTTPCookieValue, NSHTTPCookieVersion,
+   NSJSONSerialization, NSMutableDictionary, NSMutableURLRequest, NSNumber,
+@@ -69,8 +72,9 @@ use crate::wkwebview::util::operating_system_version;
+ use objc2_web_kit::WKWebView;
+ 
+ use objc2_web_kit::{
+-  WKAudiovisualMediaTypes, WKInactiveSchedulingPolicy, WKURLSchemeHandler, WKUserContentController,
+-  WKUserScript, WKUserScriptInjectionTime, WKWebViewConfiguration, WKWebsiteDataStore,
++  WKAudiovisualMediaTypes, WKInactiveSchedulingPolicy, WKURLSchemeHandler,
++  WKUserContentController, WKUserScript, WKUserScriptInjectionTime, WKWebViewConfiguration,
++  WKWebsiteDataStore,
+ };
+ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+ 
+@@ -896,6 +900,63 @@ impl InnerWebView {
+     self.print_with_options(&PrintOptions::default())
+   }
+ 
++  pub fn screenshot<F>(&self, handler: F) -> crate::Result<()>
++  where
++    F: Fn(Result<Vec<u8>>) + 'static + Send,
++  {
++    // Safety: objc runtime calls are unsafe
++    #[cfg(target_os = "macos")]
++    unsafe {
++      let callback = block2::RcBlock::new(move |image: *mut NSImage, err: *mut NSError| {
++        if let Some(err) = err.as_ref() {
++          handler(Err(Error::MacOsScreenshotError {
++            domain: err.domain().to_string(),
++            code: err.code(),
++            description: err.localizedDescription().to_string(),
++          }));
++          return;
++        }
++
++        let Some(image) = image.as_ref() else {
++          handler(Err(Error::NilScreenshot));
++          return;
++        };
++
++        let Some(cg_image) = image.CGImageForProposedRect_context_hints(
++          std::ptr::null_mut(),
++          None,
++          None,
++        ) else {
++          handler(Err(Error::NilScreenshot));
++          return;
++        };
++
++        let bitmap = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), &cg_image);
++        bitmap.setSize(image.size());
++
++        let props: Retained<NSDictionary<NSBitmapImageRepPropertyKey, AnyObject>> =
++          NSDictionary::new();
++        let png = bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &props);
++        match png {
++          Some(data) => handler(Ok(data.to_vec())),
++          None => handler(Err(Error::NilScreenshot)),
++        }
++      });
++
++      self
++        .webview
++        .takeSnapshotWithConfiguration_completionHandler(None, &callback);
++    }
++
++    #[cfg(target_os = "ios")]
++    {
++      // Unsupported
++      let _ = handler;
++    }
++
++    Ok(())
++  }
++
+   pub fn print_with_options(&self, _options: &PrintOptions) -> crate::Result<()> {
+     // Safety: objc runtime calls are unsafe
+     #[cfg(target_os = "macos")]
+-- 
+2.50.0
+

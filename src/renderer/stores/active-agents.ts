@@ -341,16 +341,22 @@ export const useActiveAgentsStore = create<ActiveAgentsState>((set, get) => ({
     //                             Chat / claude sessions — NOT in list-running)
     // The v2 set is the one that actually matters for the chat sessions we
     // reap; without it the dot would never light for a normal workspace.
-    const liveCwds = new Set(running.map((r) => r.cwd))
-    try {
-      const agentSessions = asArray<{ cwd: string }>(
-        await daemonCliGet(primaryScope(), 'agents/running'),
-      )
-      for (const a of agentSessions) {
-        if (a?.cwd) liveCwds.add(a.cwd)
+    // plan-agent-status-unify-v1 D1: a daemon that reports
+    // `activity-live-busy` puts `live` on its activity rollups; the rows read
+    // that, and this renderer-side set (and its extra poll) is not built.
+    const daemonLive = primaryScope().serverSupports('activity-live-busy')
+    const liveCwds = daemonLive ? new Set<string>() : new Set(running.map((r) => r.cwd))
+    if (!daemonLive) {
+      try {
+        const agentSessions = asArray<{ cwd: string }>(
+          await daemonCliGet(primaryScope(), 'agents/running'),
+        )
+        for (const a of agentSessions) {
+          if (a?.cwd) liveCwds.add(a.cwd)
+        }
+      } catch {
+        // Daemon momentarily unreachable — keep the legacy set for this cycle.
       }
-    } catch {
-      // Daemon momentarily unreachable — keep the legacy set for this cycle.
     }
     const prevLive = get().liveSessionCwds
     let liveChanged = prevLive.size !== liveCwds.size
@@ -417,7 +423,7 @@ const _liveSessionCwdByKey = new Map<string, string>()
 /** #688 — fold a daemon SessionAdded into the live-session cwd tracking.
  *  Records the key→cwd association and lights the cwd. */
 function trackSessionAdded(agentName: string, cwd: string): void {
-  if (!cwd) return
+  if (!cwd || primaryScope().serverSupports('activity-live-busy')) return
   _liveSessionCwdByKey.set(agentName, cwd)
   useActiveAgentsStore.getState().addLiveSessionCwd(cwd)
 }

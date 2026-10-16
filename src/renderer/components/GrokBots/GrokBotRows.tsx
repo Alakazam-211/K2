@@ -31,25 +31,35 @@ import {
   useGrokBotsSync,
 } from '@/stores/grokbots'
 import { primaryScope } from '@/kessel/server-scope'
-import { AgentRowButton, ShortcutIndexBadge } from '@/components/Sidebar/Sidebar'
+import { AgentRowButton } from '@/components/Sidebar/Sidebar'
+import { AgentStatusCluster } from '@/components/AgentStatus/AgentStatusCluster'
+import { grokAgentStatus } from '@/lib/home-agent-status'
+import { MachineChip } from '@/components/Home/MachineChip'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { useHomeRowAvatar } from '@/lib/home-avatars'
 import { GrokBotTag } from './GrokBotTag'
 
-const STATE_TEXT: Record<GrokAgentState, string> = {
-  working: 'text-[var(--color-status-working)]',
-  'needs-you': 'text-[var(--color-status-warn-amber)]',
-  idle: 'text-[var(--color-text-muted)]',
-  'not-running': 'text-[var(--color-text-muted)]',
-}
-
 const FALLBACK_COLOR = 'var(--color-text-muted)'
 
-function StateText({ state }: { state: GrokAgentState }): React.JSX.Element {
+/** A Grok Bot row's line 2 (plan-agent-status-unify-v1 S4): the shared
+ *  cluster (working in its slot, needs you as the status; live unknown),
+ *  and "not running" as reach offline on a Grok Bot chip. The state stays on
+ *  `data-state` for tests and tooling; the word is the tooltip. */
+function GrokLine({ state, index }: { state: GrokAgentState | null; index: number | null }): React.JSX.Element {
   return (
-    <span data-testid="grokbot-state" data-state={state} className={`text-[10px] ${STATE_TEXT[state]}`}>
-      {GROK_STATE_LABEL[state]}
-    </span>
+    <>
+      <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
+        {state === 'not-running' && <MachineChip place="Grok Bot" reach="off" />}
+      </div>
+      <span
+        className="inline-flex"
+        data-testid="grokbot-state"
+        data-state={state ?? 'unknown'}
+        title={state ? GROK_STATE_LABEL[state] : undefined}
+      >
+        <AgentStatusCluster view={grokAgentStatus(state)} index={index} />
+      </span>
+    </>
   )
 }
 
@@ -114,7 +124,7 @@ export function GrokBotAgentRow({
         avatar={<GrokAvatar id={agent.id} name={agent.name} color={agent.color} avatar={agent.avatar} />}
         name={agent.name}
         nameAside={<GrokBotTag />}
-        subline={<StateText state={state} />}
+        subline={<GrokLine state={state} index={null} />}
       />
     </div>
   )
@@ -197,18 +207,18 @@ export function GrokBotHomeRow({ home, row, index }: { home: Home; row: HomeRow;
         name={agent?.name ?? row.label}
         nameAside={<GrokBotTag />}
         subline={
-          <>
-            <div className="flex min-w-0 flex-1 items-center">
-              {state ? (
-                <StateText state={state} />
-              ) : (
+          state ? (
+            <GrokLine state={state} index={index} />
+          ) : (
+            <>
+              <div className="flex min-w-0 flex-1 items-center">
                 <span className="text-[10px] text-[var(--color-text-muted)]">
                   {unavailable ? 'Unavailable' : 'Checking…'}
                 </span>
-              )}
-            </div>
-            <ShortcutIndexBadge index={index} />
-          </>
+              </div>
+              <AgentStatusCluster view={grokAgentStatus(null)} index={index} />
+            </>
+          )
         }
       />
     </div>

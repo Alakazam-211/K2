@@ -196,6 +196,25 @@ describe('Thread overlay choice chips + secret field', () => {
     expect(screen.queryByText('You')).toBeNull()
   })
 
+  it('says a post came from a Design tab (D-A10)', () => {
+    const item: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 4,
+      id: 't-design',
+      doc: {
+        id: 't-design',
+        kind: 'text',
+        from: 'alice',
+        via: 'compose',
+        created_at: Math.floor(Date.now() / 1000),
+        body: 'Design notes (1) on http://localhost:5173/',
+        design: { itemId: 'd1', url: 'http://localhost:5173/', notes: 1 },
+      },
+    }
+    renderInRoom(overlayRoom, <ThreadItemRow item={item} />)
+    expect(screen.getByText('You · via Design')).not.toBeNull()
+  })
+
   it('ignores a widget origin on a post that is not yours', () => {
     const item: OverlayThreadItem = {
       collection: 'thread',

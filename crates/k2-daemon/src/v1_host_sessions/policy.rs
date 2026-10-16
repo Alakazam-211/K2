@@ -168,7 +168,7 @@ fn strip_danger_flags(args: Vec<String>, declared: &[String]) -> Vec<String> {
 }
 
 /// Ensure unattended auto-approve flags are present when the workspace has
-/// opted in (`api_skip_permissions` / public wiki chat). Strip only *keeps*
+/// opted in (`api_skip_permissions`). Strip only *keeps*
 /// flags the preset already had — if the resolved argv lost them (or the
 /// preset never declared them), an unattended host-session still HITLs.
 /// Prepend missing flags from the preset's declared list, else the
@@ -312,11 +312,10 @@ pub(crate) fn resolve_host_spawn(
     // warning so the operator can declare the flags on the preset row
     // (or accept the residual); we deliberately do NOT guess-strip
     // unknown args (a false positive would break the agent's argv).
-    // Also keep skip ON when durable wiki_public_chat is enabled (both
-    // checked so chat works even if skip was cleared by hand).
+    // W0 (0.46.0): public wiki chat is no longer an opt-in to skip
+    // permissions — only the owner's own `api_skip_permissions` is.
     let skip_permissions_opt_in =
-        k2_core::workspace::settings::get_api_skip_permissions(ws_path)
-            || k2_core::workspace::settings::get_wiki_public_chat(ws_path);
+        k2_core::workspace::settings::get_api_skip_permissions(ws_path);
     let declared_owned: Vec<String> = resolved.danger_flags.clone().unwrap_or_default();
     let declared: &[String] = declared_owned.as_slice();
     if !skip_permissions_opt_in {
@@ -346,7 +345,7 @@ pub(crate) fn resolve_host_spawn(
         args = ensure_danger_flags(args, declared, &command);
         if args != before {
             log_debug!(
-                "[v1-host] ensured auto-approve flag(s) on host-session spawn for ws={} (api_skip_permissions/public chat ON) args={:?}",
+                "[v1-host] ensured auto-approve flag(s) on host-session spawn for ws={} (api_skip_permissions ON) args={:?}",
                 ws_path,
                 args
             );

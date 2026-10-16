@@ -1016,6 +1016,27 @@ async fn async_main() {
     // agent + custom from the start).
     run_correct_auto_pin_filter_migration();
 
+    // W0 (0.46.0) security heal — agent-backed public wiki chat is
+    // disabled. Every boot: any workspace still opted in is switched off,
+    // the skip-permissions the old toggle wrote is reverted, leftover
+    // daemon-held chat keys are revoked, each change is auth-audited.
+    // Idempotent (a clean DB does nothing). See `wiki_routes`.
+    {
+        let healed = crate::wiki_routes::boot_heal_public_chat();
+        if !healed.workspaces.is_empty() || !healed.keys_revoked.is_empty() {
+            log_debug!(
+                "[daemon/boot] wiki public chat heal: {} workspace(s) turned off ({} skip-permissions reverted), {} chat key(s) revoked",
+                healed.workspaces.len(),
+                healed
+                    .workspaces
+                    .iter()
+                    .filter(|h| h.skip_permissions_reverted)
+                    .count(),
+                healed.keys_revoked.len(),
+            );
+        }
+    }
+
     // Canonical-agents feature — harness fan-out is OFF by default and is
     // applied ONLY by the per-workspace, user-confirmed checkbox. This
     // migration is now NEUTERED (no-op): it used to bulk-opt every

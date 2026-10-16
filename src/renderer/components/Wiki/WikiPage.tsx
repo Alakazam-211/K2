@@ -14,7 +14,7 @@
 // "Linked from"), 2D graph, and 3D graph. Selection, search, the picker and
 // every filter are WikiPage state, so they carry across all three.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import remarkGfm from 'remark-gfm'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
 import { usePageViewStore } from '@/stores/page-view'
@@ -33,9 +33,18 @@ import Markdown from '@/components/Markdown/Markdown'
 import WikiGraph from './WikiGraph'
 import WikiNoteList from './WikiNoteList'
 import { WikiViewToggle } from './WikiViewToggle'
-import { localCenterIdFor, type WikiGraphOpts } from './wiki-graph-data'
+import { countWikiGraphNodes, localCenterIdFor, type WikiGraphOpts } from './wiki-graph-data'
 import { wikiBacklinks } from './wiki-standard'
 import type { WikiView } from '@/lib/wiki-view-pref'
+import { useReducedMotion } from '@/hooks/useReducedMotion'
+import {
+  fallbackToastCopy,
+  NO_WEBGL2_TITLE,
+  probeWiki3d,
+  tooManyFor3d,
+  type Wiki3dFallbackReason,
+} from './wiki-3d-guard'
+import type { WikiFocusRequest, WikiGraph3DProps } from './WikiGraph3D'
 import { FocusGroupFilterDropdown } from './FocusGroupFilterDropdown'
 import {
   WikiWorkspacePicker,
@@ -66,6 +75,44 @@ import {
   type WikiServeStatus,
 } from './wiki-api'
 
+/** The 3D chunk failed to load (F5), as opposed to the 3D view crashing (F6). */
+class Wiki3dLoadError extends Error {}
+
+/**
+ * The lazy 3D renderer (react-force-graph-3d + three). React.lazy caches a
+ * rejected import, so a failed load swaps in a fresh lazy for the next try.
+ */
+function makeLazyWikiGraph3D(): React.LazyExoticComponent<React.ComponentType<WikiGraph3DProps>> {
+  return React.lazy(() =>
+    import('./WikiGraph3D').catch((e: unknown) => {
+      throw new Wiki3dLoadError(e instanceof Error ? e.message : String(e))
+    }),
+  )
+}
+let LazyWikiGraph3D = makeLazyWikiGraph3D()
+
+/** Catches the 3D view's crash or load failure and hands it to WikiPage. */
+class Wiki3DErrorBoundary extends React.Component<
+  { onError: (reason: Extract<Wiki3dFallbackReason, 'loadFailed' | 'crashed'>) => void; children: React.ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false }
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true }
+  }
+  componentDidCatch(error: unknown): void {
+    if (error instanceof Wiki3dLoadError) {
+      LazyWikiGraph3D = makeLazyWikiGraph3D()
+      this.props.onError('loadFailed')
+    } else {
+      this.props.onError('crashed')
+    }
+  }
+  render(): React.ReactNode {
+    return this.state.failed ? null : this.props.children
+  }
+}
+
 const TOPBAR_HEIGHT = 38
 /** Quiet poll for new notes — only applies state when structure changes. */
 const POLL_MS = 3_000
@@ -77,6 +124,11 @@ export default function WikiPage(): React.JSX.Element | null {
   const openWiki = usePageViewStore((s) => s.openWiki)
   const view = usePageViewStore((s) => s.wikiView)
   const setWikiView = usePageViewStore((s) => s.setWikiView)
+  const reducedMotion = useReducedMotion()
+  /** Bumped by a wikilink / Linked from click so the 3D view flies there. */
+  const [focusRequest, setFocusRequest] = useState<WikiFocusRequest | null>(null)
+  /** Bumped on every 3D pick: re-probe and give the 3D view a fresh error boundary. */
+  const [try3d, setTry3d] = useState(0)
   const isOpen = page === 'wiki'
   const projects = useProjectsStore((s) => s.projects)
 
@@ -311,6 +363,7 @@ export default function WikiPage(): React.JSX.Element | null {
       const resolved = resolveWikiTarget(index, target)
       if (resolved) {
         setSelectedId(resolved.id)
+        setFocusRequest((f) => ({ id: resolved.id, seq: (f?.seq ?? 0) + 1 }))
         return
       }
       // Unresolved — select or invent a missing node id if present in links.
@@ -319,6 +372,7 @@ export default function WikiPage(): React.JSX.Element | null {
       )
       if (missing) {
         setSelectedId(missing.id)
+        setFocusRequest((f) => ({ id: missing.id, seq: (f?.seq ?? 0) + 1 }))
         return
       }
       useToastStore.getState().addToast(`Note not found: ${target}`, 'error')
@@ -334,6 +388,7 @@ export default function WikiPage(): React.JSX.Element | null {
   /** A "Linked from" click in the reader: same as a wikilink click. */
   const selectFromReader = useCallback((id: string): void => {
     setSelectedId(id)
+    setFocusRequest((f) => ({ id, seq: (f?.seq ?? 0) + 1 }))
   }, [])
 
   const onSeed = async (): Promise<void> => {
@@ -455,7 +510,30 @@ export default function WikiPage(): React.JSX.Element | null {
     [mode, k2Lens, focusGroupFilter, projectFilter, search, localCenterId],
   )
 
+  // ── 3D guard (§3.8): no WebGL 2 / software GL / too many nodes → 2D. ──
+  // Probed while open (no three import; a throwaway context, released), and
+  // again on every 3D pick.
+  const probe = useMemo(() => (isOpen ? probeWiki3d() : null), [isOpen, try3d])
+  const nodeCount = useMemo(
+    () => (index && view === '3d' ? countWikiGraphNodes(index, graphOpts) : 0),
+    [index, view, graphOpts],
+  )
+  const block: Wiki3dFallbackReason | null =
+    view === '3d' && probe ? (probe.blockReason ?? (tooManyFor3d(nodeCount) ? 'tooMany' : null)) : null
+
+  const fallbackTo2d = useCallback(
+    (reason: Wiki3dFallbackReason, count?: number): void => {
+      setWikiView('2d')
+      useToastStore.getState().addToast(fallbackToastCopy(reason, count), 'info', 6000)
+    },
+    [setWikiView],
+  )
+  useEffect(() => {
+    if (isOpen && block) fallbackTo2d(block, nodeCount)
+  }, [isOpen, block, nodeCount, fallbackTo2d])
+
   const onPickView = (next: WikiView): void => {
+    if (next === '3d') setTry3d((n) => n + 1)
     setWikiView(next)
   }
 
@@ -564,7 +642,11 @@ export default function WikiPage(): React.JSX.Element | null {
           >
             {WIKI_ALL_WORKSPACES_LABEL}
           </button>
-          <WikiViewToggle value={view} onChange={onPickView} views={['wiki', '2d']} />
+          <WikiViewToggle
+            value={view}
+            onChange={onPickView}
+            disabled3dTitle={probe?.blockReason === 'noWebGL2' ? NO_WEBGL2_TITLE : null}
+          />
         </div>
 
         <DesktopChromeRight>
@@ -857,7 +939,38 @@ export default function WikiPage(): React.JSX.Element | null {
           {showList && index && (
             <WikiNoteList index={index} opts={graphOpts} selectedId={selectedId} onSelect={selectFromList} />
           )}
-          {index && !isEmpty && !loadError && view !== 'wiki' && (
+          {index && !isEmpty && !loadError && view === '3d' && !block && (
+            <Wiki3DErrorBoundary key={try3d} onError={(reason) => fallbackTo2d(reason)}>
+              <Suspense
+                fallback={
+                  <div className="absolute inset-0 flex items-center justify-center" data-wiki-3d-loading>
+                    <p className="text-sm text-[var(--color-text-muted)]">Loading 3D view…</p>
+                  </div>
+                }
+              >
+                <LazyWikiGraph3D
+                  index={index}
+                  selectedId={selectedId}
+                  search={search}
+                  mode={mode}
+                  k2Lens={k2Lens}
+                  focusGroupFilter={focusGroupFilter}
+                  projectFilter={projectFilter}
+                  onSelect={(id) => {
+                    setSelectedId(id)
+                    if (id === null) {
+                      setNote(null)
+                      setNoteError(null)
+                    }
+                  }}
+                  reducedMotion={reducedMotion}
+                  focusRequest={focusRequest}
+                  onFallback={(reason) => fallbackTo2d(reason)}
+                />
+              </Suspense>
+            </Wiki3DErrorBoundary>
+          )}
+          {index && !isEmpty && !loadError && view === '2d' && (
             <WikiGraph
               index={index}
               selectedId={selectedId}

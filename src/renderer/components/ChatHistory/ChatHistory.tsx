@@ -188,7 +188,8 @@ function DateWithHeartbeat({
       <span
         className="text-[10px] font-mono tabular-nums"
         style={{
-          color: old ? 'var(--color-status-working)' : 'var(--color-text-muted)',
+          // A 20+ day old chat asks you to tidy it: needs-you orange.
+          color: old ? 'var(--color-status-needs-you)' : 'var(--color-text-muted)',
         }}
         title={old ? 'Session is 20+ days old' : undefined}
       >

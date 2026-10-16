@@ -420,6 +420,72 @@ describe('Thread sync: merge by id (every source, no duplicates)', () => {
   })
 })
 
+// Own send time (Rosson 2026-10-16: "You -" until the echo): the
+// `thread/post` answer has no `created_at`, so the row carries the send time
+// and the server's stamp replaces it whichever copy lands first.
+describe('own send carries a time', () => {
+  const postResp = { ok: true, id: 'own-1', seq: 5, from: 'Rosson', body: 'hi', via: 'compose', conversation_id: 'c' }
+  const echoDoc = (at: number) => ({ id: 'own-1', kind: 'text', from: 'Rosson', body: 'hi', via: 'compose', created_at: at })
+
+  it('overlayItemFromThreadPost stamps the local send time and marks it local', () => {
+    const item = overlayItemFromThreadPost(postResp, 'hi', 1_000)
+    expect(item?.doc.created_at).toBe(1_000)
+    expect(item?.localTime).toBe(true)
+  })
+
+  it('overlayItemFromThreadPost defaults the send time to now', () => {
+    const before = Math.floor(Date.now() / 1000)
+    const item = overlayItemFromThreadPost(postResp, 'hi')
+    const after = Math.floor(Date.now() / 1000)
+    expect(item?.doc.created_at).toBeGreaterThanOrEqual(before)
+    expect(item?.doc.created_at).toBeLessThanOrEqual(after)
+  })
+
+  it('overlayItemFromThreadPost keeps a server created_at when the answer has one', () => {
+    const item = overlayItemFromThreadPost({ ...postResp, created_at: 990 }, 'hi', 1_000)
+    expect(item?.doc.created_at).toBe(990)
+    expect(item?.localTime).toBeUndefined()
+  })
+
+  it('the socket echo after the send replaces the local time with the server stamp', () => {
+    const local = overlayItemFromThreadPost(postResp, 'hi', 1_000)!
+    const start = mergeThreadItems([], [local])
+    const after = applyOverlayFrame(start, { collection: 'thread', seq: 5, id: 'own-1', doc: echoDoc(998) }, 0)
+    expect(after).toHaveLength(1)
+    expect(after[0].doc.created_at).toBe(998)
+    expect(after[0].localTime).toBeUndefined()
+  })
+
+  it('the send answer after the socket echo keeps the server stamp', () => {
+    const start = applyOverlayFrame([], { collection: 'thread', seq: 5, id: 'own-1', doc: echoDoc(998) }, 0)
+    const local = overlayItemFromThreadPost(postResp, 'hi', 1_000)!
+    const after = mergeThreadItems(start, [local])
+    expect(after).toHaveLength(1)
+    expect(after[0].doc.created_at).toBe(998)
+    expect(after[0].localTime).toBeUndefined()
+  })
+
+  it('an echo whose stamp equals the local time still clears the local mark', () => {
+    const start = mergeThreadItems([], [overlayItemFromThreadPost(postResp, 'hi', 1_000)!])
+    const after = mergeThreadItems(start, [{ collection: 'thread', seq: 5, id: 'own-1', doc: echoDoc(1_000) }])
+    expect(after).not.toBe(start)
+    expect(after[0].localTime).toBeUndefined()
+    expect(after[0].doc.created_at).toBe(1_000)
+  })
+
+  it('agent rows keep their own created_at', () => {
+    const agent: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 6,
+      id: 'agent-1',
+      doc: { id: 'agent-1', kind: 'text', from: 'k2', body: 'reply', created_at: 777 },
+    }
+    const after = mergeThreadItems([], [agent])
+    expect(after[0].doc.created_at).toBe(777)
+    expect(after[0].localTime).toBeUndefined()
+  })
+})
+
 // prd-daemon-activity-and-thread-working-v1 S7 (TW11): `activity` frames feed
 // the Thread turn, never the items list.
 describe('Thread turn: activity frames (S7)', () => {

@@ -59,6 +59,7 @@ import {
   movedConversation,
   mergeThreadItems,
   OVERLAY_PAGE_SIZE,
+  overlayItemFromThreadPost,
   releaseOverlayWebSocket,
   subscribeOverlayThreadLive,
   threadItemsFromSnapshot,
@@ -571,6 +572,7 @@ export function useOverlayThread(opts: {
       const trimmed = text.trim()
       if (!trimmed || !addr.trim()) return
       setPosting(true)
+      const sentAtSec = Math.floor(Date.now() / 1000)
       try {
         const res = await daemonCliPost<{
           ok?: boolean
@@ -585,20 +587,11 @@ export function useOverlayThread(opts: {
           throw e
         })
         noteMovedFrom(addr, res)
-        if (res?.id && typeof res.seq === 'number') {
-          const item: OverlayThreadItem = {
-            collection: 'thread',
-            seq: res.seq,
-            id: res.id,
-            conversation_id: res.conversation_id,
-            doc: {
-              id: res.id,
-              kind: res.kind || 'text',
-              from: res.from || '',
-              body: res.body ?? trimmed,
-              via: 'compose',
-            },
-          }
+        const item =
+          res?.id && typeof res.seq === 'number'
+            ? overlayItemFromThreadPost(res as Record<string, unknown>, trimmed, sentAtSec)
+            : null
+        if (item) {
           setItems((prev) => mergeThreadItems(prev, [item]))
           if (res.conversation_id) setResolvedConv(res.conversation_id)
         }

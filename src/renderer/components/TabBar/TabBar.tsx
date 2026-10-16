@@ -52,6 +52,7 @@ import { cachedIsGitRepo, probeIsGitRepo } from '@/stores/git-changes'
 import { useToastStore } from '@/stores/toast'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import DrawerTabBarToggle from '@/components/Layout/DrawerTabBarToggle'
+import { TAB_STRIP_HEIGHT } from '@/lib/tab-strip'
 import { useRoomTabBarDrawerToggle } from '@/components/Layout/drawer-toggles'
 
 interface TabBarProps {
@@ -849,7 +850,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     <Surface
       role2="surface"
       bordered={false}
-      className="flex h-9 items-center border-b border-[var(--color-border)] no-drag"
+      // Same height as the drawers' tab strips (`lib/tab-strip.ts`).
+      className={`flex ${TAB_STRIP_HEIGHT} items-center border-b border-[var(--color-border)] no-drag`}
+      data-room-tab-bar=""
     >
       {showLeftDrawerToggle && <DrawerTabBarToggle side="left" placement="room" />}
       {/* Grow 0 so the + sits on the last tab. Overflow stays in this node, not the + . */}

@@ -542,7 +542,9 @@ fn discard_refuses_bad_paths_and_conflicts_without_touching_anything() {
         flags_extended: 0,
         path: b"conf.txt".to_vec(),
     };
-    idx.conflict_add(Some(&entry(1)), Some(&entry(2)), Some(&entry(3))).expect("conflict entries");
+    for stage_n in 1..=3u16 {
+        idx.add(&entry(stage_n)).expect("conflict stage entry");
+    }
     idx.write().expect("write");
     assert!(repo.index().expect("reread").has_conflicts(), "fixture holds a conflict");
     write(&d, "conf.txt", "<<<<<<<\n");
@@ -552,6 +554,22 @@ fn discard_refuses_bad_paths_and_conflicts_without_touching_anything() {
     assert_eq!(fs::read_dir(&trash).expect("trash").count(), 0, "nothing went to the trash");
     let sn = snap(&d, None);
     assert_eq!(row(&sn, "conflicted", "conf.txt").status, "C");
+}
+
+#[test]
+fn discard_restores_a_glob_named_file_literally() {
+    let d = tmp("discard-glob");
+    let trash = tmp("discard-glob-trash");
+    let repo = init(&d);
+    write(&d, "star*.txt", "s0\n");
+    write(&d, "starX.txt", "x0\n");
+    commit_all(&repo, "c1");
+    write(&d, "star*.txt", "s1\n");
+    write(&d, "starX.txt", "x1\n");
+    let out = discard(s(&d), &["star*.txt".to_string()], false, &trash_into(trash)).expect("discard");
+    assert_eq!(out.restored, vec!["star*.txt".to_string()]);
+    assert_eq!(fs::read_to_string(d.join("star*.txt")).expect("star"), "s0\n");
+    assert_eq!(fs::read_to_string(d.join("starX.txt")).expect("x"), "x1\n", "the glob must not match a sibling");
 }
 
 #[test]

@@ -103,6 +103,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import WikiPage from './WikiPage'
 import { usePageViewStore } from '@/stores/page-view'
 import { useProjectsStore } from '@/stores/projects'
+import { openWikiForView } from '@/lib/wiki-open'
 
 beforeEach(() => {
   h.noteCalls = []
@@ -112,6 +113,7 @@ beforeEach(() => {
   useProjectsStore.setState({
     projects: [
       { id: 'alpha', name: 'alpha', path: '/w/alpha', color: '#888', iconUrl: null, focusGroupId: null, pinned: 0, workspaces: [] },
+      { id: 'bravo', name: 'bravo', path: '/w/bravo', color: '#888', iconUrl: null, focusGroupId: null, pinned: 0, workspaces: [] },
     ] as never,
     activeProjectId: 'alpha',
   })
@@ -152,18 +154,16 @@ async function openPopulated(): Promise<void> {
 }
 
 describe('Wiki header view switch', () => {
-  it('sits right after the picker and its All of K2 toggle, labelled, showing the window\'s view', async () => {
+  it('sits right after the workspace picker, labelled, showing the window\'s view', async () => {
     await openPopulated()
     const picker = document.querySelector('[data-wiki-picker-trigger]')
     const group = screen.getByRole('group', { name: 'Wiki view' })
     if (!picker) throw new Error('no picker')
-    // Header left cluster: … picker, All of K2, then the view switch.
+    // Header left cluster: … picker, then the view switch.
     const cluster = group.parentElement
     if (!cluster) throw new Error('no header cluster')
     const kids = Array.from(cluster.children)
-    const pickerAt = kids.findIndex((k) => k.contains(picker))
-    expect(kids[pickerAt + 1]?.hasAttribute('data-wiki-all-k2')).toBe(true)
-    expect(kids.indexOf(group)).toBe(pickerAt + 2)
+    expect(kids.indexOf(group)).toBe(kids.findIndex((k) => k.contains(picker)) + 1)
     expect(group.className).toContain('no-drag')
     expect(viewButton('wiki').getAttribute('aria-pressed')).toBe('true')
     expect(viewButton('2d').getAttribute('aria-pressed')).toBe('false')
@@ -171,32 +171,50 @@ describe('Wiki header view switch', () => {
   })
 })
 
-describe('All of K2 toggle', () => {
-  it('switches to the server-wide map and back to the workspace, in every view', async () => {
+describe('All of K2 on arrival; the view survives scope changes', () => {
+  function pick(value: string): void {
+    const trigger = document.querySelector('[data-wiki-picker-trigger]')
+    if (!(trigger instanceof HTMLElement)) throw new Error('no picker')
+    fireEvent.click(trigger)
+    const row = document.querySelector(`[data-wiki-picker-menu] [data-ws-filter-value="${value}"]`)
+    if (!(row instanceof HTMLElement)) throw new Error(`no picker row ${value}`)
+    fireEvent.click(row)
+  }
+  const pickerLabel = () => document.querySelector('[data-wiki-picker-trigger]')?.getAttribute('aria-label')
+
+  it('the top bar Wiki tab opens on All of K2; a deep link opens the workspace; no separate toggle', async () => {
+    act(() => openWikiForView())
+    render(<WikiPage />)
+    await waitFor(() => expect(h.indexCalls).toContainEqual({ project: '/w/alpha', scope: 'k2' }))
+    expect(h.indexCalls).not.toContainEqual({ project: '/w/alpha', scope: undefined })
+    expect(pickerLabel()).toBe('Wiki workspace: All of K2')
+    expect(document.querySelector('[data-wiki-all-k2]')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'All of K2' })).toBeNull()
+    act(() => usePageViewStore.getState().closeWiki())
+    cleanup()
+    h.indexCalls = []
+    await openPopulated()
+    expect(pickerLabel()).toBe('Wiki workspace: alpha')
+    expect(h.indexCalls).toEqual([{ project: '/w/alpha', scope: undefined }])
+  })
+
+  it('Wiki / 2D stay as picked across workspace switches and All of K2', async () => {
     for (const v of ['wiki', '2d'] as const) {
       cleanup()
       usePageViewStore.setState({ wikiView: v })
       h.indexCalls = []
       await openPopulated()
-      const all = document.querySelector('[data-wiki-all-k2]')
-      if (!(all instanceof HTMLButtonElement)) throw new Error('no All of K2 toggle')
-      expect([all.textContent, all.getAttribute('aria-pressed')]).toEqual(['All of K2', 'false'])
-      fireEvent.click(all)
-      await waitFor(() => expect(h.indexCalls).toContainEqual({ project: '/w/alpha', scope: 'k2' }))
-      expect(all.getAttribute('aria-pressed')).toBe('true')
-      expect(document.querySelector('[data-wiki-picker-trigger]')?.getAttribute('aria-label')).toBe('Wiki workspace: All of K2')
-      if (v === 'wiki') {
-        await waitFor(() => expect(row('alpha::Home.md').getAttribute('aria-current')).toBe('true'))
-        expect(list().querySelector('[data-wiki-note-group="ws:alpha"]')?.getAttribute('aria-label')).toBe('alpha')
-      } else {
-        expect(h.graphProps?.mode).toBe('k2')
-      }
-      h.indexCalls = []
-      fireEvent.click(all)
-      await waitFor(() => expect(h.indexCalls).toContainEqual({ project: '/w/alpha', scope: undefined }))
-      expect(all.getAttribute('aria-pressed')).toBe('false')
-      expect(document.querySelector('[data-wiki-picker-trigger]')?.getAttribute('aria-label')).toBe('Wiki workspace: alpha')
-      expect(usePageViewStore.getState().wikiProjectPath).toBe('/w/alpha')
+      pick('/w/bravo')
+      await waitFor(() => expect(h.indexCalls).toContainEqual({ project: '/w/bravo', scope: undefined }))
+      expect(usePageViewStore.getState().wikiView).toBe(v)
+      expect(viewButton(v).getAttribute('aria-pressed')).toBe('true')
+      pick('all')
+      await waitFor(() => expect(h.indexCalls).toContainEqual({ project: '/w/bravo', scope: 'k2' }))
+      expect(usePageViewStore.getState().wikiView).toBe(v)
+      pick('/w/alpha')
+      await waitFor(() => expect(pickerLabel()).toBe('Wiki workspace: alpha'))
+      expect(usePageViewStore.getState().wikiView).toBe(v)
+      expect(document.querySelector('[data-wiki-body]')?.getAttribute('data-wiki-body')).toBe(v)
     }
   })
 })

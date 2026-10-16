@@ -121,12 +121,20 @@ describe('openWikiForView (the window\'s stores)', () => {
     useHomeRoomsStore.setState({ shown: null })
   })
 
-  it('Agents: opens the room\'s workspace wiki and remembers Agents', () => {
+  it('Agents: opens on All of K2 with the room\'s workspace recorded, and remembers Agents', () => {
     useProjectsStore.setState({ projects: projects as never, activeProjectId: 'alpha' })
     usePageViewStore.getState().setPage('agents')
     openWikiForView()
     const s = usePageViewStore.getState()
-    expect([s.page, s.wikiProjectPath, s.wikiReturnPage, s.lastWikiPath]).toEqual(['wiki', '/w/alpha', 'agents', '/w/alpha'])
+    expect([s.page, s.wikiOpenAll, s.wikiProjectPath, s.wikiReturnPage, s.lastWikiPath]).toEqual(['wiki', true, '/w/alpha', 'agents', '/w/alpha'])
+  })
+
+  it('a deep link (View Wiki / nav menu) opens the workspace, not All of K2', () => {
+    openWikiForView()
+    usePageViewStore.getState().closeWiki()
+    usePageViewStore.getState().openWiki('/w/bravo')
+    const s = usePageViewStore.getState()
+    expect([s.page, s.wikiOpenAll, s.wikiProjectPath]).toEqual(['wiki', false, '/w/bravo'])
   })
 
   it('Home: reads the selected Home, the shown room and the connected server', () => {

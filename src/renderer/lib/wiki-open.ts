@@ -1,6 +1,12 @@
-// Which wiki the top bar's Wiki tab opens (0.46.0, Rosson 2026-10-16).
+// What the top bar's Wiki tab opens (0.46.0, Rosson 2026-10-16).
 //
-// The wiki of the workspace you're looking at:
+// The tab opens on **All of K2** (the server-wide map; Rosson: "When
+// arriving in K2, default to All of K2 in the drop-down"). The drawer's
+// View Wiki and the nav menus still open one workspace's wiki directly.
+//
+// The workspace below is still recorded as the wiki's workspace (the one
+// the picker returns to, Serve/Seed, the last wiki viewed). It is the wiki
+// of the workspace you're looking at:
 //   - Agents: the room's active workspace;
 //   - Home: the selected agent's workspace when it is on this window's
 //     server (a row of the selected Home, shown in the window's own room).
@@ -113,7 +119,7 @@ export function currentWikiDefaultInput(): WikiDefaultInput {
   }
 }
 
-/** The Wiki tab: open the wiki of the workspace on screen (see above). */
+/** The Wiki tab: open All of K2, with the workspace on screen recorded (see above). */
 export function openWikiForView(): void {
-  usePageViewStore.getState().openWiki(defaultWikiPath(currentWikiDefaultInput()))
+  usePageViewStore.getState().openWiki(defaultWikiPath(currentWikiDefaultInput()), { allOfK2: true })
 }

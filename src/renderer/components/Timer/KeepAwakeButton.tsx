@@ -15,17 +15,25 @@ import {
   usePoolHostStatus,
   useTopBarScope,
 } from '@/components/TopBar/top-bar-scope'
-import { MugIcon, type MugFill } from '@/components/icons/K2Icons'
+import {
+  MugIcon,
+  TOP_BAR_ICON_ACTIVE_CLASS,
+  TOP_BAR_ICON_REST_CLASS,
+  type MugFill,
+} from '@/components/icons/K2Icons'
 
 /** While Keep awake is on, re-read the daemon's truth this often (agents
  *  start and stop, the power source changes). Off: no polling. */
 const POLL_MS = 15_000
 
-const TONE_CLASS: Record<KeepAwakeTone, string> = {
-  off: 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]',
-  armed: 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
-  held: 'text-[var(--color-accent)]',
-  warn: 'text-[var(--color-status-error-soft)] hover:text-[var(--color-status-error-bright)]',
+/** Off rests in the top-bar icon colour; on (any mode but Off, armed or
+ *  holding) is the brighter active colour, like the active page tab
+ *  (Rosson 2026-10-16). A problem stays in the error colour. */
+export const TONE_CLASS: Record<KeepAwakeTone, string> = {
+  off: TOP_BAR_ICON_REST_CLASS,
+  armed: TOP_BAR_ICON_ACTIVE_CLASS,
+  held: TOP_BAR_ICON_ACTIVE_CLASS,
+  warn: 'text-[var(--color-status-error-soft)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-status-error-bright)]',
 }
 
 /** Fill shows the mode: Off is empty, While agents are working is half

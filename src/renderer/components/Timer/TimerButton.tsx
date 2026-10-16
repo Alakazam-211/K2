@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useTimerStore, getElapsedMs, formatElapsed } from '@/stores/timer'
-import { ClockIcon } from '@/components/icons/K2Icons'
+import { ClockIcon, TOP_BAR_ICON_ACTIVE_CLASS, TOP_BAR_ICON_REST_CLASS } from '@/components/icons/K2Icons'
 
 export default function TimerButton(): React.JSX.Element | null {
   const status = useTimerStore((s) => s.status)
@@ -39,7 +39,7 @@ export default function TimerButton(): React.JSX.Element | null {
       <div className="flex items-center no-drag">
         <button
           onClick={startTimer}
-          className={`${btnClass} w-5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]`}
+          className={`${btnClass} w-5 ${TOP_BAR_ICON_REST_CLASS}`}
           style={noDrag}
           title="Start stopwatch"
         >
@@ -60,7 +60,8 @@ export default function TimerButton(): React.JSX.Element | null {
       {status === 'running' ? (
         <button
           onClick={pauseTimer}
-          className={`${btnClass} w-5 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]`}
+          data-timer-active="true"
+          className={`${btnClass} w-5 ${TOP_BAR_ICON_ACTIVE_CLASS}`}
           style={noDrag}
           title="Pause timer"
         >
@@ -72,7 +73,7 @@ export default function TimerButton(): React.JSX.Element | null {
       ) : (
         <button
           onClick={resumeTimer}
-          className={`${btnClass} w-5 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]`}
+          className={`${btnClass} w-5 ${TOP_BAR_ICON_REST_CLASS}`}
           style={noDrag}
           title="Resume timer"
         >
@@ -94,12 +95,13 @@ export default function TimerButton(): React.JSX.Element | null {
         </svg>
       </button>
 
-      {/* Elapsed display */}
+      {/* Elapsed display (running: the active icon colour) */}
       <span
+        data-testid="timer-elapsed"
         className={`text-[11px] font-mono tabular-nums px-1 select-none ${
           status === 'paused'
             ? 'text-[var(--color-text-muted)] animate-pulse'
-            : 'text-[var(--color-text-secondary)]'
+            : 'text-[var(--color-text-primary)]'
         }`}
       >
         {displayText}

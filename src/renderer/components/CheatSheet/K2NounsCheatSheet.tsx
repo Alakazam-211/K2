@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { DialogScrim, Surface } from '@/components/ui'
 import { K2_CHEAT_SHEET_INTRO, K2_NOUN_GROUPS } from './k2Nouns'
-import { CheatSheetIcon } from '@/components/icons/K2Icons'
+import { CheatSheetIcon, TOP_BAR_ICON_ACTIVE_CLASS, TOP_BAR_ICON_REST_CLASS } from '@/components/icons/K2Icons'
 
 const noDrag = {
   WebkitAppRegion: 'no-drag',
@@ -29,7 +29,8 @@ export default function K2NounsCheatSheet(): React.JSX.Element {
         type="button"
         data-testid="k2-nouns-cheat-sheet"
         onClick={() => setOpen(true)}
-        className="flex h-6 w-6 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
+        aria-pressed={open}
+        className={`flex h-6 w-6 items-center justify-center ${open ? TOP_BAR_ICON_ACTIVE_CLASS : TOP_BAR_ICON_REST_CLASS} transition-colors no-drag`}
         style={noDrag}
         title="K2 cheat sheet"
         aria-label="K2 cheat sheet"

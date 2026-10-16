@@ -6,7 +6,14 @@ import { keepAwakeEntryFor, resetKeepAwakeForTests } from '@/stores/keep-awake'
 import { primaryScope } from '@/kessel/server-scope'
 import { KEEP_AWAKE_MODES, keepAwakeTone, parseKeepAwakeBody, type KeepAwakeStatus } from '@/lib/keep-awake'
 import { SQUARE_CHECK_CLASS, SQUARE_RADIO_CLASS } from '@/components/ui'
-import { K2_ICON_PX, K2_ICON_STROKE, MUG_LIQUID_BOTTOM, MUG_LIQUID_TOP } from '@/components/icons/K2Icons'
+import {
+  K2_ICON_PX,
+  K2_ICON_STROKE,
+  MUG_LIQUID_BOTTOM,
+  MUG_LIQUID_TOP,
+  TOP_BAR_ICON_ACTIVE_CLASS,
+  TOP_BAR_ICON_REST_CLASS,
+} from '@/components/icons/K2Icons'
 
 const h = vi.hoisted(() => ({
   remote: false,
@@ -330,6 +337,23 @@ describe('KeepAwakeButton', () => {
         expect([attr, mug.getAttribute(attr)]).toEqual([attr, timer.getAttribute(attr)])
       }
     })
+  })
+
+  it('colour: Off rests like the other top-bar icons; any other mode is the brighter active colour', async () => {
+    const seen = new Set<string>()
+    for (const { s: st, tone } of STATES) {
+      const button = await renderWith(st)
+      const want =
+        tone === 'off' ? TOP_BAR_ICON_REST_CLASS : tone === 'warn' ? null : TOP_BAR_ICON_ACTIVE_CLASS
+      if (want !== null) {
+        for (const cls of want.split(' ')) expect([tone, cls, button.classList.contains(cls)]).toEqual([tone, cls, true])
+        expect(button.getAttribute('data-tone')).toBe(tone)
+        seen.add(tone)
+      }
+      if (tone !== 'off') expect([tone, st.mode === 'off']).toEqual([tone, false])
+      cleanup()
+    }
+    expect([...seen].sort()).toEqual(['armed', 'held', 'off'])
   })
 
   it('renders nothing until the server answers (an older server)', async () => {

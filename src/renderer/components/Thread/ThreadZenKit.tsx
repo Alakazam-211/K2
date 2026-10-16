@@ -113,52 +113,29 @@ ${SCOPE} [data-zen-compose-input]:focus { outline: none; }
 //
 // Rosson 2026-10-16, from K2 Companion (`ZenFooterBlur`, 7cbf584 on main,
 // after 4.0.0): the strip behind the message box and the activity tab is
-// see-through, and the messages scroll under it and soften. Companion's
-// stack, mirrored: four masked backdrop-blur layers (strongest at the
-// bottom edge) and a tint gradient, reaching FOOTER_FADE_PX above the box.
-// The tint is the window's own background (`--zen-canvas`), so it works in
-// light and dark; Companion's is black (it is dark only).
+// see-through, and the messages scroll under it and fade out. Companion
+// stacks backdrop blurs under its tint; the desktop app has no blur at all
+// (Rosson 2026-10-04: WebKit leaves stale layers behind backdrop-filter),
+// so this is the tint gradient alone, Companion's no-blur strength (96% /
+// 88% at 60%), reaching FOOTER_FADE_PX above the box. The tint is the
+// window's own background (`--zen-canvas`), so it works in light and dark;
+// Companion's is black (it is dark only). Reduced transparency gets the
+// same gradient: there is no blur to drop.
 
-/** How far (px) the fade reaches above the message box (Companion's). */
-export const FOOTER_FADE_PX = 24
+/** How far (px) the fade reaches above the message box (Companion's 24px,
+ *  a little taller so text fades out without the blur). */
+export const FOOTER_FADE_PX = 32
 
 const FOOTER_FADE_SCOPE = `[${THREAD_ZEN_SCOPE_ATTR}] .thread-footer-fade`
-const blurLayer = (n: number, px: number, solid: number, gone: number): string =>
-  `${FOOTER_FADE_SCOPE} > .thread-footer-blur-${n} { -webkit-backdrop-filter: blur(${px}px); backdrop-filter: blur(${px}px); ` +
-  `-webkit-mask-image: linear-gradient(to top, #000 0%, #000 ${solid}%, transparent ${gone}%); mask-image: linear-gradient(to top, #000 0%, #000 ${solid}%, transparent ${gone}%); }`
-const tint = (bottom: number, mid: number, at: number): string =>
-  `background: linear-gradient(to top, color-mix(in srgb, var(--zen-canvas) ${bottom}%, transparent) 0%, ` +
-  `color-mix(in srgb, var(--zen-canvas) ${mid}%, transparent) ${at}%, transparent 100%);`
 
 export const THREAD_FOOTER_FADE_CSS = `
-${FOOTER_FADE_SCOPE} { position: absolute; left: 0; right: 0; bottom: 0; top: -${FOOTER_FADE_PX}px; pointer-events: none; z-index: 0; }
-${FOOTER_FADE_SCOPE} > span { position: absolute; inset: 0; pointer-events: none; }
-${blurLayer(1, 2, 55, 100)}
-${blurLayer(2, 6, 40, 80)}
-${blurLayer(3, 12, 25, 60)}
-${blurLayer(4, 24, 12, 40)}
-${FOOTER_FADE_SCOPE} > .thread-footer-tint { ${tint(85, 55, 45)} }
-@media (prefers-reduced-transparency: reduce) {
-  ${FOOTER_FADE_SCOPE} > [class^="thread-footer-blur-"] { display: none; }
-  ${FOOTER_FADE_SCOPE} > .thread-footer-tint { ${tint(96, 88, 60)} }
-}
-@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
-  ${FOOTER_FADE_SCOPE} > .thread-footer-tint { ${tint(96, 88, 60)} }
-}
+${FOOTER_FADE_SCOPE} { position: absolute; left: 0; right: 0; bottom: 0; top: -${FOOTER_FADE_PX}px; pointer-events: none; z-index: 0; background: linear-gradient(to top, color-mix(in srgb, var(--zen-canvas) 96%, transparent) 0%, color-mix(in srgb, var(--zen-canvas) 88%, transparent) 60%, transparent 100%); }
 `
 
 /** The fade behind the message box: fills its (relative) box and reaches
- *  FOOTER_FADE_PX above it. Never takes clicks. */
+ *  FOOTER_FADE_PX above it. A gradient only, no blur. Never takes clicks. */
 export function ThreadFooterFade(): JSX.Element {
-  return (
-    <div className="thread-footer-fade" data-thread-footer-fade="" aria-hidden="true">
-      <span className="thread-footer-blur-1" />
-      <span className="thread-footer-blur-2" />
-      <span className="thread-footer-blur-3" />
-      <span className="thread-footer-blur-4" />
-      <span className="thread-footer-tint" />
-    </div>
-  )
+  return <div className="thread-footer-fade" data-thread-footer-fade="" aria-hidden="true" />
 }
 
 export function ThreadZenStyles(): JSX.Element {

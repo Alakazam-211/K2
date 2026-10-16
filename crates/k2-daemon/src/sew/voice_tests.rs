@@ -253,11 +253,14 @@ fn a_cert_for_another_name_or_key_is_never_handed_to_sew() {
     let f = t.install(InstallRequest { tarball_path: Some(MEDIA.into()), ..Default::default() }).unwrap_err();
     assert_eq!(f.code, "turn_failed");
     assert!(f.hint.contains("expected exactly [turn-lztek.k2.dev]"), "{}", f.hint);
+    let key_ref = t.state().turn_key_ref.expect("the vault key is recorded even when issuance fails");
     // Right name, wrong key.
     let wrong = rcgen::CertificateParams::new(vec!["turn-lztek.k2.dev".to_string()]).unwrap().self_signed(&other_key).unwrap();
     t.ops.queue_cp("POST /cert", Ok(json!({"cert": wrong.pem()})));
     let f = t.install(InstallRequest::default()).unwrap_err();
     assert!(f.hint.contains("not for K2's TURN key"), "{}", f.hint);
+    assert_eq!(t.state().turn_key_ref.as_deref(), Some(key_ref.as_str()), "the retry reuses the key, no orphan");
+    assert_eq!(t.secrets.map.lock().unwrap().keys().filter(|k| k.starts_with("sewsec_turn-key_")).count(), 1);
     assert!(!t.ops.effects().contains(&"engine sew media install".to_string()));
 }
 

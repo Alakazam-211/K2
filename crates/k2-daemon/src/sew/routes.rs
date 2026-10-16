@@ -275,7 +275,15 @@ fn voice_request(v: &Value) -> R<super::voice::InstallRequest> {
 
 /// Begin the voice install; run it on a thread (`background`) or inline.
 fn voice_install(env: Env<'static>, req: &super::voice::InstallRequest, background: bool) -> R<Value> {
-    let latch = super::voice::install_begin(&env, req)?;
+    let latch = match super::voice::install_begin(&env, req) {
+        Ok(l) => l,
+        Err(f) => {
+            // Recorded, so `k2 hostchat enable --voice` (which polls
+            // status) sees why voice did not start.
+            super::voice::record_failure(&env, &f);
+            return Err(f);
+        }
+    };
     if background {
         let req = req.clone();
         std::thread::Builder::new()

@@ -53,6 +53,12 @@ export interface PresenceActivity {
   workspaceId: string
   status: 'working' | 'permission'
   display?: ActivityDisplay
+  /** 0.46.0 (plan-agent-status-unify-v1 D2): the summary also lists idle
+   *  workspaces that hold a live session or a heartbeat, with these. */
+  heartbeat?: boolean
+  live?: boolean
+  busy?: boolean
+  counts?: Partial<Record<ActivityDisplay, number>>
 }
 
 /** What a Home row says an agent is doing: the daemon's display, with

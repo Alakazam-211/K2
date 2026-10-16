@@ -48,6 +48,24 @@ const DISPLAYS: ReadonlySet<string> = new Set(['working', 'monitoring', 'waiting
  *  with daemon activity (prd-daemon-activity-and-thread-working-v1 A31)
  *  also sends the real `display` (`monitoring` rows say `working`,
  *  `unverifiable` ones `idle`, in `status`); it is kept when known. */
+/** plan-agent-status-unify-v1 D2: `heartbeat` / `live` / `busy` / `counts`
+ *  on a summary entry (0.46.0+), kept only when well-formed. */
+function d2Fields(r: object): Pick<PresenceActivity, 'heartbeat' | 'live' | 'busy' | 'counts'> {
+  const { heartbeat, live, busy, counts } = r as { heartbeat?: unknown; live?: unknown; busy?: unknown; counts?: unknown }
+  const out: Pick<PresenceActivity, 'heartbeat' | 'live' | 'busy' | 'counts'> = {}
+  if (typeof heartbeat === 'boolean') out.heartbeat = heartbeat
+  if (typeof live === 'boolean') out.live = live
+  if (typeof busy === 'boolean') out.busy = busy
+  if (counts && typeof counts === 'object') {
+    const c: Partial<Record<ActivityDisplay, number>> = {}
+    for (const [k, v] of Object.entries(counts as Record<string, unknown>)) {
+      if (DISPLAYS.has(k) && typeof v === 'number' && Number.isFinite(v) && v >= 0) c[k as ActivityDisplay] = v
+    }
+    out.counts = c
+  }
+  return out
+}
+
 export function parsePresenceActivity(raw: unknown): PresenceActivity[] | null {
   if (!Array.isArray(raw)) return null
   const out: PresenceActivity[] = []
@@ -57,7 +75,7 @@ export function parsePresenceActivity(raw: unknown): PresenceActivity[] | null {
     if (typeof workspaceId !== 'string' || workspaceId.length === 0) continue
     const real = typeof display === 'string' && DISPLAYS.has(display) ? (display as ActivityDisplay) : null
     if (real) {
-      out.push({ workspaceId, status: status === 'permission' ? 'permission' : 'working', display: real })
+      out.push({ workspaceId, status: status === 'permission' ? 'permission' : 'working', display: real, ...d2Fields(r) })
       continue
     }
     if (status !== 'working' && status !== 'permission') continue

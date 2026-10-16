@@ -21,7 +21,7 @@
 //     the floor up to that). Off, or below the floor, it switches this
 //     window's server (H15) and lands on Home.
 
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
@@ -36,11 +36,14 @@ import { homeRoomVerdict, type HomeRoomVerdict } from '@/lib/home-room-floor'
 import { hostPool } from '@/lib/host-pool-instance'
 import { useStore } from 'zustand'
 import type { RowStatus } from '@/lib/home-status'
+import { remoteAgentStatus, rowActionWord, rowReach } from '@/lib/home-agent-status'
+import { MachineChip } from './MachineChip'
+import { AgentStatusCluster } from '@/components/AgentStatus/AgentStatusCluster'
 import { openHomeRow } from '@/lib/home-open'
 import { useHomeRowAvatar } from '@/lib/home-avatars'
 import { useRemoteRoomsPreview } from '@/lib/remote-rooms-preview'
 import { homeRooms, useShownHomeRoom } from '@/stores/home-rooms'
-import { AgentRowButton, ShortcutIndexBadge, ShortcutRangeHint, SingleProjectItem } from '@/components/Sidebar/Sidebar'
+import { AgentRowButton, ShortcutRangeHint, SingleProjectItem } from '@/components/Sidebar/Sidebar'
 import { HOME_ROW_SHORTCUT_HINT } from '@/lib/home-shortcuts'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
@@ -49,59 +52,31 @@ import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAv
 import { RowDropLine, dropTargetIndex, useRowDragReorder } from '@/components/Sidebar/row-drag-reorder'
 import HomePicker from './HomePicker'
 import { AddAgentPicker } from './HomeAddPanels'
-import { useConnectedRowNote, useHomeAddPickerStore, useRowStatus } from './home-room'
+import { useConnectedRowNote, useHomeAddPickerStore, useRoomRowFacts, useRowStatus } from './home-room'
 import { GrokBotHomeRow } from '@/components/GrokBots/GrokBotRows'
 import { isGrokBotAddress } from '@/lib/grokbots'
 
 /** Avatar color for an agent on another server (its color lives there). */
 export const OTHER_SERVER_AVATAR_COLOR = 'var(--color-text-muted)'
 
-const STATUS_TEXT: Record<RowStatus['kind'], string> = {
-  working: 'text-[var(--color-status-working)]',
-  // prd-daemon-activity-and-thread-working-v1 S5: needs you is amber,
-  // monitoring the quieter blue, no update muted (the daemon's displays).
-  permission: 'text-[var(--color-status-warn-amber)]',
-  monitoring: 'text-[var(--color-accent)]',
-  unverifiable: 'text-[var(--color-text-muted)]',
-  review: 'text-[var(--color-status-ok-soft)]',
-  idle: 'text-[var(--color-text-muted)]',
-  live: 'text-[var(--color-status-ok-soft)]',
-  starting: 'text-[var(--color-text-muted)]',
-  offline: 'text-[var(--color-text-muted)]',
-  'signing-in': 'text-[var(--color-text-muted)]',
-  'sign-in': 'text-[var(--color-status-warn)]',
-  'no-access': 'text-[var(--color-status-error-soft)]',
-  checking: 'text-[var(--color-text-muted)]',
-  'not-found': 'text-[var(--color-status-error-soft)]',
-}
+export { MachineChip } from './MachineChip'
 
-/** Which machine a row is on — sized like the Agents row's group chips. */
-export function MachineChip({ place }: { place: string }): React.JSX.Element {
+/** The one word a remote row keeps: an action (Sign in, No access, Not
+ *  found), just before the cluster (Q2: glyphs everywhere else). */
+function RowActionWord({ status }: { status: RowStatus }): React.JSX.Element | null {
+  const word = rowActionWord(status)
+  if (!word) return null
+  const action = status.kind === 'sign-in'
   return (
     <span
-      className="box-border inline-flex h-3.5 max-w-[6.5rem] items-center gap-0.5 truncate px-1 py-0 text-[9px] font-medium leading-none border border-[var(--color-border)] text-[var(--color-text-muted)]"
-      title={`On ${place}`}
-      data-machine-chip=""
+      className={`inline-flex h-3.5 flex-shrink-0 items-center whitespace-nowrap text-[10px] leading-none ${
+        action
+          ? 'text-[var(--color-text-primary)] underline underline-offset-2'
+          : 'text-[var(--color-text-muted)]'
+      }`}
+      data-row-action={status.kind}
     >
-      <svg className="w-2 h-2 flex-shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <rect x="2" y="2" width="12" height="9" rx="1" />
-        <path d="M5 14h6" />
-        <path d="M8 11v3" />
-      </svg>
-      <span className="truncate">{place}</span>
-    </span>
-  )
-}
-
-/** The second-line state of a row that is not live on this server, in the
- *  AgentSpinner slot's type (10px mono, one leading). */
-function RowStateText({ status }: { status: RowStatus }): React.JSX.Element {
-  return (
-    <span
-      className={`inline-flex h-3.5 flex-shrink-0 items-center leading-none text-[10px] font-mono ${STATUS_TEXT[status.kind]}`}
-      data-row-status={status.kind}
-    >
-      {status.label.toLowerCase()}
+      {word}
     </span>
   )
 }
@@ -185,7 +160,24 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
   const preview = useRemoteRoomsPreview()
   const shownRoom = useShownHomeRoom()
   const rowHost = parseHomeAddress(row.address)?.host ?? ''
-  const verdict = homeRoomVerdict(useStore(hostPool.store, (s) => s.entries[rowHost]?.boot ?? null))
+  const boot = useStore(hostPool.store, (s) => s.entries[rowHost]?.boot ?? null)
+  const verdict = homeRoomVerdict(boot)
+  const summary = useStore(hostPool.store, (s) => s.entries[rowHost]?.activity ?? null)
+  const room = useStore(homeRooms.store, (s) => s.entries[row.address]?.room ?? null)
+  const roomFacts = useRoomRowFacts(room)
+  // plan-agent-status-unify-v1 S4: the same cluster as a connected row.
+  const view = useMemo(
+    () =>
+      remoteAgentStatus({
+        status,
+        row,
+        activity: summary,
+        room: roomFacts,
+        serverLiveBusy: boot?.features.includes('activity-live-busy') ?? false,
+      }),
+    [status, row, summary, roomFacts, boot],
+  )
+  const reach = rowReach(status.kind)
   const remoteOnWeb = isWebClient() && !onConnected
   // MS83: "No access" rows never open a room.
   const canOpen = !remoteOnWeb && status.kind !== 'not-found' && status.kind !== 'no-access'
@@ -231,11 +223,13 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
       subline={
         <>
           <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
-            {place !== null && <MachineChip place={place} />}
+            {place !== null && <MachineChip place={place} reach={reach} />}
             {status.note && <SameServerNote note={status.note} />}
           </div>
-          <RowStateText status={status} />
-          <ShortcutIndexBadge index={index} />
+          <RowActionWord status={status} />
+          <span className="inline-flex" data-row-status={status.kind}>
+            <AgentStatusCluster view={view} index={index} />
+          </span>
         </>
       }
     />

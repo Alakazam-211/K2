@@ -283,6 +283,12 @@ describe('active-agents — the daemon owns activity (prd-daemon-activity-and-th
 // with NO poll firing.
 
 describe('active-agents — live-session dot push (#688)', () => {
+  // An older daemon: no `activity-live-busy` (plan-agent-status-unify-v1
+  // D1), so the renderer keeps its own live-session set.
+  beforeEach(async () => {
+    const { noteServerVersion } = await import('@/kessel/server-scope')
+    noteServerVersion('local', null, [])
+  })
   afterEach(async () => {
     const { stopAgentPolling } = await import('./active-agents')
     stopAgentPolling()
@@ -394,6 +400,35 @@ describe('active-agents — live-session dot push (#688)', () => {
       agent_name: 'tab-x',
     })
     expect(useActiveAgentsStore.getState().liveSessionCwds.has('/ws/shared')).toBe(false)
+  })
+})
+
+describe('active-agents — a daemon with rollup live (activity-live-busy)', () => {
+  afterEach(async () => {
+    const { noteServerVersion } = await import('@/kessel/server-scope')
+    noteServerVersion('local', null, [])
+    const { stopAgentPolling } = await import('./active-agents')
+    stopAgentPolling()
+  })
+
+  it('SessionAdded no longer feeds the renderer live-session set', async () => {
+    const { noteServerVersion } = await import('@/kessel/server-scope')
+    noteServerVersion('local', null, ['activity-live-busy'])
+    const { startAgentPolling, useActiveAgentsStore } = await import('./active-agents')
+    vi.spyOn(useActiveAgentsStore.getState(), 'pollOnce').mockResolvedValue(undefined)
+    useActiveAgentsStore.setState({ liveSessionCwds: new Set() })
+    startAgentPolling()
+    fire(ev.reg.sessionAdded)({
+      kind: 'session_added',
+      workspace_path: '/ws/daemon-live',
+      pane_group_id: null,
+      agent_name: 'projD',
+      command: 'claude',
+      args: [],
+      session_id: 'sess-d',
+      isV2: true,
+    })
+    expect(useActiveAgentsStore.getState().liveSessionCwds.has('/ws/daemon-live')).toBe(false)
   })
 })
 

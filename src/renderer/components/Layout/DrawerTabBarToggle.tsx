@@ -17,6 +17,7 @@ import type { ReactNode } from 'react'
 import { DoubleChevron } from '@/components/Sidebar/SidebarCollapseButton'
 import { usePanelsStore } from '@/stores/panels'
 import { NAV_TOGGLE_BOX, useRoomTabBarDrawerToggle } from './drawer-toggles'
+import { TAB_STRIP_HEIGHT } from '@/lib/tab-strip'
 
 type Side = 'left' | 'right'
 
@@ -59,7 +60,14 @@ export function DrawerToggleButton({
       data-drawer-tabbar-toggle={side}
       data-placement={placement}
       data-size={size}
-      className={`no-drag relative flex ${size === 'square' ? NAV_TOGGLE_BOX : 'h-full w-8 self-stretch'} flex-shrink-0 cursor-pointer items-center justify-center bg-white/[0.04] text-[var(--color-text-secondary)] outline-none transition-colors hover:bg-white/[0.08] hover:text-[var(--color-text-primary)] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]`}
+      // 'fill' (in a tab strip) takes the strip's own background and the
+      // strip's icon colours (as the split / + buttons); 'square' keeps the
+      // nav toggle's tinted box.
+      className={`no-drag relative flex ${
+        size === 'square'
+          ? `${NAV_TOGGLE_BOX} bg-white/[0.04] text-[var(--color-text-secondary)] hover:bg-white/[0.08] hover:text-[var(--color-text-primary)]`
+          : 'h-full w-8 self-stretch bg-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-secondary)]'
+      } flex-shrink-0 cursor-pointer items-center justify-center outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]`}
     >
       <DoubleChevron direction={direction} className="h-4 w-4" />
       {children}
@@ -87,12 +95,12 @@ export function NoTabBarDrawerToggles(): React.JSX.Element {
   return (
     <>
       {left && (
-        <div className="absolute left-0 top-0 z-10 flex h-9" data-no-tabbar-drawer-toggle="left">
+        <div className={`absolute left-0 top-0 z-10 flex ${TAB_STRIP_HEIGHT}`} data-no-tabbar-drawer-toggle="left">
           <DrawerTabBarToggle side="left" placement="room" />
         </div>
       )}
       {right && (
-        <div className="absolute right-0 top-0 z-10 flex h-9" data-no-tabbar-drawer-toggle="right">
+        <div className={`absolute right-0 top-0 z-10 flex ${TAB_STRIP_HEIGHT}`} data-no-tabbar-drawer-toggle="right">
           <DrawerTabBarToggle side="right" placement="room" />
         </div>
       )}

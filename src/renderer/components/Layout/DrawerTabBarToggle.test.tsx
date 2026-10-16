@@ -25,6 +25,7 @@ import { DrawerToggleButton, NoTabBarDrawerToggles } from './DrawerTabBarToggle'
 import { usePanelsStore } from '@/stores/panels'
 import { useTabsStore } from '@/stores/tabs'
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
+import { TAB_STRIP_HEIGHT, TAB_STRIP_HEIGHT_PX } from '@/lib/tab-strip'
 
 function setSplit(count: number): void {
   useTabsStore.setState({
@@ -151,12 +152,42 @@ describe('drawer tab strip: open drawers', () => {
         <div />
       </TabbedPanel>,
     )
-    const strip = Array.from(container.querySelectorAll('div')).find((d) =>
-      d.className.includes('h-8 items-center border-b'),
-    )
-    if (!strip) throw new Error('no drawer tab strip')
+    const strip = container.querySelector('[data-drawer-tab-strip]')
+    if (!(strip instanceof HTMLElement)) throw new Error('no drawer tab strip')
     return strip
   }
+
+  it('the strip is the room tab bar height (one shared constant), bottom border included', () => {
+    expect(TAB_STRIP_HEIGHT_PX).toBe(36)
+    expect(TAB_STRIP_HEIGHT).toBe('h-9')
+    const strip = renderDrawer('left')
+    expect(strip.classList.contains(TAB_STRIP_HEIGHT)).toBe(true)
+    expect(strip.classList.contains('h-8')).toBe(false)
+    expect(strip.classList.contains('border-b')).toBe(true)
+    cleanup()
+    const [bar] = renderBars(1)
+    expect(bar.getAttribute('data-room-tab-bar')).toBe('')
+    expect(bar.classList.contains(TAB_STRIP_HEIGHT)).toBe(true)
+    expect(bar.classList.contains('border-b')).toBe(true)
+  })
+
+  it('toggles in tab strips take the strip background (no tinted block), icon colours like split / +', () => {
+    usePanelsStore.setState({ leftPanelOpen: true })
+    const inDrawer = must(toggleIn(renderDrawer('left'), 'left'))
+    cleanup()
+    usePanelsStore.setState({ leftPanelOpen: false })
+    const [bar] = renderBars(1)
+    const inRoom = must(toggleIn(bar, 'left'))
+    for (const btn of [inDrawer, inRoom]) {
+      const cls = Array.from(btn.classList)
+      expect(cls).toContain('bg-transparent')
+      expect(cls).not.toContain('bg-white/[0.04]')
+      expect(cls).not.toContain('hover:bg-white/[0.08]')
+      expect(cls).toContain('text-[var(--color-text-muted)]')
+      expect(cls).toContain('hover:bg-[var(--color-bg-elevated)]')
+      expect(cls).toContain('hover:text-[var(--color-text-secondary)]')
+    }
+  })
 
   it('left drawer: « at the strip end nearest the room (its right end)', () => {
     usePanelsStore.setState({ leftPanelOpen: true })
@@ -213,5 +244,14 @@ describe('DrawerToggleButton (any drawer)', () => {
     expect(btn.querySelector('[data-testid="dot"]')).not.toBeNull()
     fireEvent.click(btn)
     expect(calls).toBe(1)
+  })
+
+  it('square size keeps the nav toggle look (tinted 32×32 box)', () => {
+    const { getByRole } = render(
+      <DrawerToggleButton side="right" placement="drawer" name="chat" size="square" onToggle={() => {}} />,
+    )
+    const cls = Array.from(getByRole('button', { name: 'Hide chat' }).classList)
+    for (const c of ['h-8', 'w-8', 'bg-white/[0.04]', 'hover:bg-white/[0.08]']) expect([c, cls.includes(c)]).toEqual([c, true])
+    expect(cls).not.toContain('bg-transparent')
   })
 })

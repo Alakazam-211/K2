@@ -107,6 +107,14 @@ fn mac_check(m: &J) -> Check {
         Some("apparmor") if m["applied"].as_bool() == Some(true) => {
             c("mac", "ok", "AppArmor: Apps run under the k2-app profile (enforce)", None)
         }
+        // The kernel has AppArmor but the box has no apparmor_parser: box
+        // prep installs the distro's apparmor package (apt, pacman).
+        Some("apparmor") if m.get("parser").is_some_and(J::is_null) => c(
+            "mac",
+            "fail",
+            "AppArmor is on in the kernel but apparmor_parser isn't installed: box prep installs the distro's apparmor package, then loads the k2-app profile",
+            Some(PREPARE),
+        ),
         Some("apparmor") => c(
             "mac",
             "fail",
@@ -1334,5 +1342,26 @@ mod tests {
                 k2_root_proto::Class::Open
             );
         }
+    }
+
+    #[test]
+    fn apparmor_without_its_parser_points_at_box_prep() {
+        let mut f = good();
+        f.helper_status.as_mut().unwrap()["mac"] =
+            json!({"lsm": "apparmor", "applied": false, "loaded": null, "profile": "missing", "marker": "missing", "processDropin": "missing", "parser": null});
+        let d = doctor(&f);
+        assert_eq!(d["ready"], false, "{d:#}");
+        let row = d["checks"].as_array().unwrap().iter().find(|c| c["id"] == "mac").unwrap();
+        assert_eq!(row["status"], "fail");
+        assert!(row["detail"].as_str().unwrap().contains("apparmor_parser isn't installed"), "{row}");
+        assert_eq!(row["fix"], PREPARE);
+        // Prep installs packages before it loads the profile.
+        let p: Vec<String> = plan(&PrepareOpts { runtime: OciRuntime::Crun, cores_mem_min_mib: None, budget: None })
+            .iter()
+            .map(|a| a.join(" "))
+            .collect();
+        let pk = p.iter().position(|v| v == "apps packages install").unwrap();
+        let aa = p.iter().position(|v| v == "apps apparmor on").unwrap();
+        assert!(pk < aa, "{p:?}");
     }
 }

@@ -7038,7 +7038,9 @@ The box (Linux):
                                        io.cost, reserved ports, nft, helper.
   k2 app box prepare [--runtime crun|youki] [--json]
                                        Owner: run the root helper's box prep
-                                       (distro Podman + crun; youki is opt-in).
+                                       (distro Podman + crun; youki is opt-in;
+                                       AppArmor's parser where the kernel has
+                                       AppArmor on, then the k2-app profile).
   k2 app engine install [--from DIR] [--json]
                                        Owner: install/update k2-app-engine (the
                                        guarded engine, signed with the root-helper
@@ -7174,6 +7176,12 @@ for s in json.load(sys.stdin).get("steps", []):
     r = s.get("result")
     ch = r.get("changed") if isinstance(r, dict) else None
     print("  ok   %s%s" % (s.get("verb", ""), "" if ch is None else ("  (changed)" if ch else "  (already)")))
+    aa = r.get("apparmor") if isinstance(r, dict) else None
+    if isinstance(aa, dict) and aa.get("needed"):
+        if aa.get("installed"):
+            print("       AppArmor: installed the distro package %s (apparmor_parser %s) for the k2-app profile" % (" ".join(aa["installed"]), aa.get("parser")))
+        elif aa.get("note"):
+            print("       AppArmor: %s" % aa["note"])
 '
                 printf '%s' "$_CP_BODY" | _app_box_print
             fi

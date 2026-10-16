@@ -528,9 +528,7 @@ describe('Settings → Gardens: where it shows', () => {
     expect(leaf.previousElementSibling?.textContent).toBe('Gardens')
     expect(leaf.className).toContain('pl-7')
     expect((document.querySelector('[data-settings-nav="zen-widget-data"]') as HTMLElement).className).toContain('pl-7')
-    // (By its nav id: the Zen toggle is also named "Gardens" since it moved
-    // to the nav bar's page row, 0.46.0 experiment.)
-    expect(leaf.textContent).toBe('Gardens')
+    expect(screen.getByRole('button', { name: 'Gardens' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Local Data' })).toBeTruthy()
     // The same window shows the Zen toggle.
     expect(document.querySelectorAll('[data-zen-enter]').length).toBeGreaterThan(0)

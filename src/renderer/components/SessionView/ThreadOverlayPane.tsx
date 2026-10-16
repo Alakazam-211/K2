@@ -274,8 +274,9 @@ export function threadAuthorLabel(
   pastAddresses?: readonly string[],
 ): { label: string; mine: boolean } {
   const mine = isOwnThreadPost(doc, viewer)
-  // UWB12a: a post a Garden widget sent for a person says which widget.
-  const viaWidget = isPersonPost(doc) ? doc.widget?.widget?.trim() : ''
+  // UWB12a: a post a Garden widget sent for a person says which widget;
+  // Design notes (D-A10) say "via Design".
+  const viaWidget = isPersonPost(doc) ? doc.widget?.widget?.trim() || (doc.design ? 'Design' : '') : ''
   const name = mine
     ? 'You'
     : isPersonPost(doc)

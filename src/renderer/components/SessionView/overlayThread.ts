@@ -116,6 +116,9 @@ export interface OverlayDoc {
   /** Set when a Garden widget sent this post for the person
    *  (prd-zen-user-widgets-v2 UWB12a; daemon feature `thread-widget-origin`). */
   widget?: { widget: string; garden: string } | null
+  /** Set when a Design tab (or `k2 browser note`) sent these page notes
+   *  (prd-browser-design-mode-v1 D-A10). */
+  design?: { itemId?: string; url: string; notes: number } | null
   /** Who sent a person's post, stamped by the daemon from the credential
    *  (`owner` / `user` / `guest`). Absent on agent posts and older docs;
    *  `isOwnThreadPost` (lib/thread-viewer) decides "You". */

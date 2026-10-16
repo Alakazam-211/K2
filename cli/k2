@@ -22908,7 +22908,9 @@ MOVING TO ANOTHER BOX
   `k2 vault carry export --recipient … --target … --workspace <ws>
   --out carry.age`, then on the new box `k2 vault carry import carry.age`
   (it lists first; add --apply). The file opens only in that vault. The
-  recovery key is never used for this.
+  recovery key is never used for this. Every export is logged with who
+  ran it, the secret names and the target key, and your owner sees it
+  (k2 vault audit, Settings → Access).
 
 PUBLISHED SERVICES
   New services start clean (base env + granted secrets). Ones from before

@@ -429,6 +429,55 @@ fn may_carry(c: &VaultCaller) -> Result<(), VaultError> {
     }
 }
 
+/// H21 (Rosson 2026-10-16): an agent with "Allow managing server-wide
+/// secrets" may carry with no person, so every export is made visible,
+/// never blocked: the vault's own audit (one row per secret plus a summary,
+/// tamper-evident; `k2 vault audit`), the auth audit (Settings → Access),
+/// and, for an agent, an owner notice. Names and fingerprints only, never
+/// values.
+fn record_carry_export(
+    vault: &Arc<LocalVault>,
+    c: &VaultCaller,
+    target_fp: &str,
+    target_vault_id: &str,
+    workspaces: &[String],
+    secrets: &[(String, u32)],
+    names: &[String],
+) {
+    let peer = format!("carry:{target_fp}@{target_vault_id}");
+    vault.audit_carry("carry-export", &c.actor, &peer, secrets);
+    let who = c.actor.stamp();
+    let ws = c.workspace_id().unwrap_or("-");
+    crate::vault::auth_audit(
+        "vault-carry",
+        &who,
+        &format!(
+            "ok export {} [{}] of workspaces [{}] by {who} (workspace {ws}) to {target_fp} (vault {target_vault_id})",
+            names.len(),
+            names.join(", "),
+            workspaces.join(", ")
+        ),
+        "-",
+    );
+    if c.actor.agent().is_some() {
+        k2_core::agent_hooks::emit(
+            k2_core::agent_hooks::HookEvent::SyncProjects,
+            json!({ "vaultNotice": {
+                "kind": "carry-export",
+                "by": who,
+                "workspace": ws,
+                "session": c.session_id,
+                "count": names.len(),
+                "secrets": names,
+                "workspaces": workspaces,
+                "targetFingerprint": target_fp,
+                "targetVaultId": target_vault_id,
+                "at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            } }),
+        );
+    }
+}
+
 fn recipient(vault: &Arc<LocalVault>, c: &VaultCaller) -> Result<Value, VaultError> {
     may_carry(c)?;
     let r = vault.carry_recipient()?;
@@ -461,6 +510,7 @@ fn carry_export(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result
     }
     let all = vault.list(&k2_vault::ListFilter::default(), &k2_vault::Actor::System("carry".into()))?;
     let mut items = vec![];
+    let mut carried: Vec<(String, u32)> = vec![];
     for m in all {
         if m.namespace != k2_vault::Namespace::User {
             continue;
@@ -474,6 +524,7 @@ fn carry_export(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result
             _ => continue,
         };
         let v = vault.resolve(&k2_vault::Selector::Id(m.id.clone()), Use::System, &Requester::System("carry".into()))?;
+        carried.push((m.id.clone(), m.latest_version));
         items.push(k2_vault::carry::CarryItem {
             scope_kind: m.scope.kind.as_str().into(),
             scope_label: label,
@@ -491,7 +542,7 @@ fn carry_export(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result
     let n = items.len();
     let names: Vec<String> = items.iter().map(|i| format!("{}:{}", if i.scope_label.is_empty() { "server" } else { &i.scope_label }, i.name)).collect();
     let file = vault.carry_seal(&target, &target_id, b.own_box_move, items)?;
-    crate::vault::auth_audit("vault-carry", &c.actor.stamp(), &format!("ok export {n} to {}", target.fingerprint()), "-");
+    record_carry_export(vault, c, &target.fingerprint(), &target_id, &b.workspaces, &carried, &names);
     Ok(json!({
         "ok": true,
         "count": n,

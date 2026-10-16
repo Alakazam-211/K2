@@ -11,7 +11,7 @@
 //!
 //! **Suspend is one step**: mark the App suspended (deploys and starts
 //! frozen), revoke every live pass it holds (link and remote, one UPDATE,
-//! so the very next call is `401`), close its link and stop it. Anyone
+//! so the very next call is `401`), then stop it (which closes its link). Anyone
 //! who may see the App may suspend it: it only narrows. Only the owner
 //! resumes.
 //!
@@ -109,9 +109,11 @@ fn suspend(who: &Who, body: &[u8]) -> R<J> {
         )
         .map_err(db_err)?;
     }
-    // Every live pass, link and remote, in one statement: the next call is 401.
+    // Every live pass, link and remote, in one statement: the next call is
+    // 401 (a connection still open answers `app_suspended`). Stopping the
+    // App then closes its link; if a deploy is mid-way the link stays up
+    // refusing everything until it can stop.
     let revoked = passes::revoke_app_passes(&app.service_id).map_err(|e| no("db_error", 500, e))?;
-    super::gateway::close(&app.app_id, Some(&app.service_id), true);
     super::quotas::invalidate(&app.app_id);
     let stopped = match super::supervisor::stop_app(&app, &by) {
         Ok(()) => json!(true),

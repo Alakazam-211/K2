@@ -103,12 +103,22 @@ export type WikiNote = {
   workspacePath?: string | null
 }
 
+/**
+ * W0 (0.46.0): wiki hosting (Serve / Public chat) is hidden in the desktop
+ * UI until it is rebuilt on the K2 runtime. The daemon enforces the
+ * security fixes; this only hides the buttons. Agents still have
+ * `k2 wiki serve|publish|unpublish`. Public chat cannot be turned on.
+ */
+export const WIKI_HOSTING_UI_ENABLED = false
+
 export type WikiServeStatus = {
   enabled: boolean
   port?: number | null
   url?: string | null
-  /** Phase 1 — durable owner opt-in for public wiki chat (default OFF). */
+  /** Always false since W0 (0.46.0): public chat is disabled. */
   publicChatEnabled?: boolean
+  /** Always false since W0: the toggle is gone until the runtime. */
+  publicChatAvailable?: boolean
   /** Phase 1 — enabled + API on + daemon-held host_sessions key usable. */
   publicChatReady?: boolean
   /** Phase 1 — human reason when enabled but not ready. */

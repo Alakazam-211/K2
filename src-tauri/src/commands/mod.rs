@@ -66,6 +66,9 @@ pub mod local_upload;
 // Embedded Browser Tab (PRD prd-browser-pane-v1.md) — Rust-side child-
 // webview lifecycle; renderer gets commands, never webview capabilities.
 pub mod browser_webviews;
+// Design mode picker (prd-browser-design-mode-v1 D-A11): guest script,
+// design gate, parse + clamp of picks. Pure; driven by browser_webviews.
+pub mod design_pick;
 // Browser freeze-frame snapshots (engine capture + JPEG) for the pane above.
 #[cfg(feature = "browser-pane")]
 pub mod browser_snapshot;

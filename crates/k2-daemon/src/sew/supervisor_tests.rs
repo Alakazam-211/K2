@@ -726,32 +726,69 @@ fn status_carries_sews_backup_and_drill_state() {
 }
 
 #[test]
-fn restore_takes_a_backup_first_and_refuses_without_one() {
+fn restore_relies_on_sews_safety_bundle_and_never_takes_a_manual_backup() {
     let t = t();
     t.enabled();
     assert_eq!(restore(&t.env(), "20990101T000000Z").unwrap_err().code, "bundle_not_found");
     assert_eq!(restore(&t.env(), "../etc").unwrap_err().code, "bad_request");
     t.ops.clear();
-    queue_mgmt(&t, "POST /mgmt/v1/backup", Ok(json!({"job_id": "90"})));
-    queue_mgmt(
-        &t,
-        "GET /mgmt/v1/jobs/90",
-        Ok(json!({"id": "90", "kind": "backup", "state": "dead", "attempts": 3, "last_error": "disk full", "created_at": "x"})),
-    );
-    let f = restore(&t.env(), "20260101T031500Z").unwrap_err();
-    assert_eq!(f.code, "pre_restore_backup_failed");
-    assert!(f.hint.contains("disk full"), "{}", f.hint);
-    assert!(!t.ops.argvs().iter().any(|a| a.starts_with("engine sew restore")), "no restore without a backup");
-    t.ops.clear();
     let r = restore(&t.env(), "20260101T031500Z").unwrap();
     assert_eq!(r["restored"], true);
     assert_eq!(r["safetyBundle"], "20260103T000000Z-safety");
-    // The pre-restore backup is Sew's mgmt job, and it came first.
-    let pre = r["preRestoreBackup"].as_str().unwrap().to_string();
-    assert_eq!(backups(&t.env()).unwrap()["latest"]["id"], pre.as_str());
-    assert!(t.ops.mgmt_calls.lock().unwrap().contains(&"POST /mgmt/v1/backup".to_string()));
+    // S29 VM cycle: a `manual` mgmt backup before the restore made Sew's
+    // retention (newest per day) delete the same-day target bundle. K2
+    // makes none; Sew's `pre-restore` safety bundle is the backup.
+    assert!(
+        !t.ops.mgmt_calls.lock().unwrap().iter().any(|c| c == "POST /mgmt/v1/backup"),
+        "{:?}",
+        t.ops.mgmt_calls.lock().unwrap()
+    );
     assert_eq!(t.ops.effects().iter().filter(|e| e.starts_with("engine sew restore")).count(), 1);
+    assert_eq!(backups(&t.env()).unwrap()["backups"].as_array().unwrap().len(), 2, "no bundle made or pruned by K2");
     assert_eq!(t.row().restore_progress.unwrap()["result"], "done");
+    // A Sew refusal (its safety backup failed, or no such bundle) is data:
+    // nothing was replaced, and Sew keeps serving.
+    t.ops.queue(
+        "engine sew restore 20260101T031500Z",
+        Ok(json!({"sewExit": 4, "sew": {"error": {"message": "the safety backup (sew-backup@pre-restore) failed"}}, "restarted": true})),
+    );
+    let f = restore(&t.env(), "20260101T031500Z").unwrap_err();
+    assert_eq!(f.code, "restore_failed");
+    assert!(f.hint.contains("safety backup") && f.hint.contains("not replaced"), "{}", f.hint);
+    assert_eq!(t.row().status, "running");
+    // Exit 1 can come after Sew dropped the schema (S29 VM cycle): never
+    // "not replaced"; point at the safety bundle.
+    t.ops.queue(
+        "engine sew restore 20260101T031500Z",
+        Ok(json!({"sewExit": 1, "sew": {"error": {"message": "pg_restore failed (exit status: 1); schema sew is now empty"}}, "restarted": false})),
+    );
+    t.ops.set_unit(pin::UNIT_SEW, "failed", 1);
+    let f = restore(&t.env(), "20260101T031500Z").unwrap_err();
+    assert!(!f.hint.contains("not replaced"), "{}", f.hint);
+    assert!(f.hint.contains("safety") && f.hint.contains("may be changed or empty"), "{}", f.hint);
+    assert_eq!(t.row().status, "error");
+}
+
+/// S29 VM cycle: a failed restore left Sew's schema empty and sew.service
+/// down; restore must still work then (mgmt is unreachable, so Sew checks
+/// the bundle id itself).
+#[test]
+fn restore_works_on_a_stopped_server_without_the_mgmt_list() {
+    let t = t();
+    t.enabled();
+    t.ops.set_unit(pin::UNIT_SEW, "failed", 1);
+    store::update(1, |r| r.status = "stopped".into()).unwrap();
+    assert_eq!(backups(&t.env()).unwrap_err().code, "mgmt_unreachable");
+    t.ops.clear();
+    let r = restore(&t.env(), "20261016T154452Z").unwrap();
+    assert_eq!(r["restored"], true);
+    // The restore, then the health check's token refetch; nothing else.
+    let eff: Vec<String> = t.ops.effects().into_iter().filter(|e| e != "engine sew token").collect();
+    assert_eq!(eff, vec!["engine sew restore 20261016T154452Z".to_string()]);
+    assert_eq!(t.row().status, "running");
+    // Never into a removed install.
+    store::update(1, |r| r.status = "removed".into()).unwrap();
+    assert_eq!(restore(&t.env(), "20261016T154452Z").unwrap_err().code, "not_installed");
 }
 
 // ── keys ─────────────────────────────────────────────────────────────────

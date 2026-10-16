@@ -34,19 +34,26 @@
 //! valid until its own expiry. Stopping or uninstalling the App closes the
 //! link and revokes every pass.
 //!
-//! **Seams for 0.46.1** (the wall's catalog-row gateway):
-//! - S23 replaces the hand-written route table with rows generated from
-//!   `contract/catalog.json` (exposure `app`): only
-//!   `k2_core::app_surface::{link_allows_http, ws_param}` change;
-//! - S19 adds per-App quotas and the per-call audit (`app-audit.db`) in
-//!   [`gate`] / [`LinkStats`] (requests and refusals are counted already);
-//!   suspend revokes through [`close`];
-//! - the grants formula (§5.3: manifest ∩ owner grant ∩ App policy) narrows
-//!   [`LinkSpec::caps`] / rooms at mint time ([`link_policy`]);
-//! - S13's process exception opens a link the same way with its own
-//!   [`Deliver`] (a file it writes itself);
-//! - the remote App pass (AR10) and `/v1/apps/<own id>/…` (the App-scoped
-//!   key, S45) are added to the gate as further credential/route kinds.
+//! **The door (0.46.1, lane 2)**:
+//! - **quotas** (§5.4, `super::quotas`): per-App rate (token bucket),
+//!   sockets, body size and live subscriptions, with the owner's per-App
+//!   override; refusals carry `limit` and `retryAfterMs`;
+//! - **per-call audit** (§5.5, `super::audit`): every request on a link,
+//!   admitted or refused, is one hash-chained row in `app-audit.db`, with
+//!   alerts on denial spikes, first write verbs, `pass_wrong_link` and
+//!   quota hits;
+//! - **suspend** (`super::suspend`): a suspended App's link answers `401
+//!   app_suspended` and [`open`] refuses it; suspend revokes every pass;
+//! - **the grants formula** (§5.3, `super::grants`): [`open`] narrows the
+//!   engine's manifest ceiling ([`link_policy`]) to the App's approved set;
+//! - the remote App pass (AR10, `skin::link::mint_remote_pass`) is refused
+//!   here like every pass that isn't this link's (`pass_wrong_link`).
+//!
+//! Still seams: S23 replaces the hand-written route table with rows
+//! generated from `contract/catalog.json` (only
+//! `k2_core::app_surface::{link_allows_http, ws_param}` change); S13's
+//! process exception opens a link with its own [`Deliver`];
+//! `/v1/apps/<own id>/…` (the App-scoped key, S45).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -59,8 +66,9 @@ use serde_json::{json, Value};
 
 use crate::routes::dispatcher::Ingress;
 
-/// Connections a link serves at once (§5.4: 64 sockets per App).
-pub const MAX_CONNECTIONS: usize = 64;
+/// Connections a link serves at once by default (§5.4: 64 sockets per
+/// App; the owner's override is `super::quotas`).
+pub const MAX_CONNECTIONS: usize = super::quotas::DEFAULTS.sockets as usize;
 
 /// How a rotated pass reaches the App (the guarded engine's `pass-write`).
 pub type Deliver = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
@@ -200,10 +208,21 @@ fn spawn_accept(handle: &tokio::runtime::Handle, l: tokio::net::TcpListener, ctx
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 continue;
             };
-            if ctx.stats.live.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
+            let max = super::quotas::quotas_for(&ctx.app_id).sockets as usize;
+            if ctx.stats.live.load(Ordering::SeqCst) >= max {
                 ctx.stats.refused.fetch_add(1, Ordering::SeqCst);
+                super::audit::record(k2_core::app_audit::Call {
+                    at_ms: now() * 1000,
+                    app_id: ctx.app_id.clone(),
+                    actor: "app".into(),
+                    verb: "CONNECT link".into(),
+                    result: 429,
+                    code: Some("too_many_sockets".into()),
+                    ..Default::default()
+                });
+                let app = ctx.app_id.clone();
                 tokio::spawn(async move {
-                    let body = refusal(429, "too_many_sockets", &format!("an App holds at most {MAX_CONNECTIONS} connections to its link"), None);
+                    let body = refusal("too_many_sockets", &format!("an App holds at most {max} connections to its link"), Some(&app), Some(max as u64), None);
                     crate::routes::http::send_response(&mut stream, "429 Too Many Requests", "application/json", &body).await;
                 });
                 continue;
@@ -213,7 +232,7 @@ fn spawn_accept(handle: &tokio::runtime::Handle, l: tokio::net::TcpListener, ctx
             tokio::spawn(async move {
                 ctx.stats.live.fetch_add(1, Ordering::SeqCst);
                 let c2 = ctx.clone();
-                LINK.scope(ctx, crate::routes::dispatcher::dispatch(stream, st, Ingress::App)).await;
+                super::audit::scope(LINK.scope(ctx, crate::routes::dispatcher::dispatch(stream, st, Ingress::App))).await;
                 c2.stats.live.fetch_sub(1, Ordering::SeqCst);
             });
         }
@@ -224,7 +243,17 @@ fn spawn_accept(handle: &tokio::runtime::Handle, l: tokio::net::TcpListener, ctx
 /// Returns the raw pass: the caller hands it to the App (a guarded start
 /// carries it). Later rotations go through `deliver`. An open link on the
 /// same port keeps its listener (a redeploy, a second instance).
-pub fn open(spec: LinkSpec, deliver: Option<Deliver>) -> Result<String, String> {
+pub fn open(mut spec: LinkSpec, deliver: Option<Deliver>) -> Result<String, String> {
+    // The door: a suspended App gets no link; the pass carries the
+    // manifest ceiling narrowed to the App's approved set (§5.3).
+    if super::suspend::is_suspended(&spec.app_id) {
+        return Err(format!("{} is suspended (k2 app resume {}, the owner)", spec.app_id, spec.app_id));
+    }
+    let eff = super::grants::narrow_for_link(&spec.app_id, &spec.caps, &spec.workspace_id);
+    spec.caps = eff.caps;
+    if !eff.withheld.is_empty() {
+        k2_core::log_debug!("[apps/gateway] {}: caps withheld until the owner approves them: {}", spec.app_id, eff.withheld.join(", "));
+    }
     let (state, handle) = {
         let g = installed().lock().unwrap_or_else(|e| e.into_inner());
         let i = g.as_ref().ok_or("the gateway has no daemon state yet (boot order)")?;
@@ -263,6 +292,11 @@ pub fn open(spec: LinkSpec, deliver: Option<Deliver>) -> Result<String, String> 
     e.expires_at = m.expires_at;
     e.last_error = None;
     Ok(m.raw)
+}
+
+/// Live connections on `app_id`'s link.
+pub fn connections(app_id: &str) -> usize {
+    links().lock().unwrap_or_else(|e| e.into_inner()).get(app_id).map(|e| e.ctx.stats.live.load(Ordering::SeqCst)).unwrap_or(0)
 }
 
 /// The port `app_id`'s link listens on, when open.
@@ -419,6 +453,7 @@ fn status_text(code: u16) -> &'static str {
         401 => "401 Unauthorized",
         403 => "403 Forbidden",
         404 => "404 Not Found",
+        413 => "413 Payload Too Large",
         415 => "415 Unsupported Media Type",
         421 => "421 Misdirected Request",
         429 => "429 Too Many Requests",
@@ -426,15 +461,27 @@ fn status_text(code: u16) -> &'static str {
     }
 }
 
-fn refusal(_status: u16, code: &str, hint: &str, app: Option<&str>) -> String {
-    json!({ "error": { "code": code, "hint": hint, "app": app } }).to_string()
+/// A structured refusal (§5.4: `error`, `app`, `limit`, `retryAfterMs`).
+fn refusal(code: &str, hint: &str, app: Option<&str>, limit: Option<u64>, retry_after_ms: Option<u64>) -> String {
+    let mut e = json!({ "code": code, "hint": hint, "app": app });
+    if let Some(l) = limit {
+        e["limit"] = json!(l);
+    }
+    if let Some(r) = retry_after_ms {
+        e["retryAfterMs"] = json!(r);
+    }
+    json!({ "error": e }).to_string()
 }
 
 fn deny(ctx: Option<&LinkCtx>, status: u16, code: &str, hint: &str) -> Gate {
+    deny_with(ctx, status, code, hint, None, None)
+}
+
+fn deny_with(ctx: Option<&LinkCtx>, status: u16, code: &str, hint: &str, limit: Option<u64>, retry: Option<u64>) -> Gate {
     if let Some(c) = ctx {
         c.stats.refused.fetch_add(1, Ordering::SeqCst);
     }
-    Gate::Answer { status: status_text(status), body: refusal(status, code, hint, ctx.map(|c| c.app_id.as_str())) }
+    Gate::Answer { status: status_text(status), body: refusal(code, hint, ctx.map(|c| c.app_id.as_str()), limit, retry) }
 }
 
 fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
@@ -476,14 +523,49 @@ pub fn route_allowed(method: &str, path: &str, query: &str, upgrade: bool) -> bo
     k2_core::app_surface::link_allows_http(method, path)
 }
 
+/// What the gate learned about a request, for its audit row.
+#[derive(Default)]
+struct Seen {
+    subscribed: bool,
+}
+
 /// Check one request on a link (the dispatcher calls this before anything
-/// else routes it). `head` is the request line and headers.
+/// else routes it). `head` is the request line and headers. Every request,
+/// admitted or refused, opens its audit row here.
 pub fn gate(head: &str, method: &str, path_and_query: &str) -> Gate {
     let Some(ctx) = current() else {
         return deny(None, 500, "link_context_missing", "a link request outside its link (a K2 bug)");
     };
     let c = ctx.as_ref();
     c.stats.requests.fetch_add(1, Ordering::SeqCst);
+    let path = path_and_query.split_once('?').map(|(p, _)| p).unwrap_or(path_and_query);
+    let bytes_in = header(head, "content-length").and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+    let mut seen = Seen::default();
+    let g = gate_on(c, head, method, path_and_query, bytes_in, &mut seen);
+    let refused = match &g {
+        Gate::Answer { status, body } if !status.starts_with("200") => {
+            let n: u16 = status.split_whitespace().next().and_then(|x| x.parse().ok()).unwrap_or(0);
+            let code = serde_json::from_str::<Value>(body).ok().and_then(|v| v["error"]["code"].as_str().map(str::to_string)).unwrap_or_default();
+            Some((n, code))
+        }
+        _ => None,
+    };
+    super::audit::begin(
+        c,
+        super::audit::Begin {
+            method,
+            path,
+            actor: "app",
+            room: Some(c.workspace_id.clone()),
+            bytes_in,
+            refused: refused.as_ref().map(|(n, code)| (*n, code.as_str())),
+            subscribed: seen.subscribed,
+        },
+    );
+    g
+}
+
+fn gate_on(c: &LinkCtx, head: &str, method: &str, path_and_query: &str, bytes_in: u64, seen: &mut Seen) -> Gate {
     let (path, query) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
     match header(head, "host") {
         Some(h) if host_is_loopback(h) => {}
@@ -508,6 +590,26 @@ pub fn gate(head: &str, method: &str, path_and_query: &str) -> Gate {
         if has_body && !json_ct {
             return deny(Some(c), 415, "json_required", "writes on the gateway link send Content-Type: application/json");
         }
+    }
+    // The door: a suspended App is refused before its pass is even looked
+    // at (suspend also revoked every pass).
+    if super::suspend::is_suspended(&c.app_id) {
+        return deny(Some(c), 401, super::suspend::APP_SUSPENDED, "this App is suspended; only the owner resumes it");
+    }
+    let q = super::quotas::quotas_for(&c.app_id);
+    let limit = super::quotas::body_limit(&q, path);
+    if bytes_in > limit {
+        return deny_with(Some(c), 413, "too_large", &format!("request bodies on this route are at most {limit} bytes"), Some(limit), None);
+    }
+    if let Err((wait, q)) = super::quotas::take(&c.app_id) {
+        return deny_with(
+            Some(c),
+            429,
+            "rate_limited",
+            &format!("this App may make {} calls a second (bursts of {}); retry after {wait} ms", q.rps, q.burst),
+            Some(q.rps as u64),
+            Some(wait),
+        );
     }
     let presented = bearer(head).or_else(|| query_token(query));
     let Some(raw) = presented else {
@@ -544,6 +646,19 @@ pub fn gate(head: &str, method: &str, path_and_query: &str) -> Gate {
             "rotation": "K2 rotates the pass at 80% of its hour; read the file again on pass_invalid",
         });
         return Gate::Answer { status: status_text(200), body: body.to_string() };
+    }
+    if upgrade {
+        if !super::quotas::subscribe(&c.app_id) {
+            return deny_with(
+                Some(c),
+                429,
+                "too_many_subscriptions",
+                &format!("this App holds at most {} live subscriptions", q.subscriptions),
+                Some(q.subscriptions as u64),
+                None,
+            );
+        }
+        seen.subscribed = true;
     }
     Gate::Continue
 }

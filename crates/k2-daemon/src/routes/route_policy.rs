@@ -182,6 +182,9 @@ pub const ROUTES: &[Route] = &[
     // bound to the request, never a passport).
     get("/cli/app/approvals", Member),
     post("/cli/app/approve", Owner),
+    // S19 (0.46.1 door): the per-call audit of an App (a passport: its own
+    // workspace's Apps).
+    get("/cli/app/audit", Member),
     get("/cli/app/box", Admin),
     // Box services (0.46.0): read, propose and revoke are Member (a
     // passport sees its own workspace's Apps); a new one is always a held
@@ -232,12 +235,25 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/link/rotate", Member),
     get("/cli/app/list", Member),
     get("/cli/app/logs", Member),
+    // S19: per-App quotas. Lowering applies now (manage); a raise is the
+    // owner's, anyone else's is a held `quota` request (handler).
+    get("/cli/app/quota", Member),
+    post("/cli/app/quota/set", Member),
+    // AR10: remote App passes. Listing and revoking (narrows) are Member;
+    // minting is a credential mint, the owner's (handler refuses passports).
+    get("/cli/app/remote-pass", Member),
+    post("/cli/app/remote-pass/revoke", Member),
+    post("/cli/app/remote-pass/rotate", Owner),
     post("/cli/app/restart", Member),
+    // S19: only the owner resumes a suspended App.
+    post("/cli/app/resume", Owner),
     post("/cli/app/rollback", Member),
     // S28 `k2 app shell` (WebSocket; same rules as exec).
     get("/cli/app/shell", Member),
     post("/cli/app/start", Member),
     post("/cli/app/stop", Member),
+    // S19: suspend narrows: any Member (a passport: its own workspace's Apps).
+    post("/cli/app/suspend", Member),
     // purge (deletes the App's data) is owner-only in the handler.
     post("/cli/app/uninstall", Member),
     post("/cli/app/validate", Member),

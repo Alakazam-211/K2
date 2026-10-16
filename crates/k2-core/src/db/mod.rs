@@ -2367,7 +2367,28 @@ mod tests {
             .is_err(),
             "0.46.0's CHECK refuses the new kinds (why 0183 rebuilds)"
         );
+        // Apps live before 0.46.1: a guarded one and a process-exception one
+        // are grandfathered at their live Seed's caps; a plain process-engine
+        // App (no pass) and an App with no Seed are not.
+        conn.execute_batch(
+            "INSERT INTO seeds (hash, seed_id, host_mode, manifest_json, created_with, report_json, signer, size_bytes, created_at, last_used_at)
+               VALUES ('h1', 'jobs', 'cmd', '{\"caps\":[\"thread:read\",\"files:write\"]}', '{}', '{}', 'owner', 1, 1, 1),
+                      ('h2', 'bare', 'cmd', '{}', '{}', '{}', 'owner', 1, 1, 1);
+             INSERT INTO apps (app_id, service_id, owner_workspace, path, isolation, live_seed, state, created_by, created_at, updated_at) VALUES
+               ('g1', 's1', 'w', 'guarded', 'container', 'h1', 'live', 'o', 1, 1),
+               ('x1', 's2', 'w', 'open', 'process', 'h2', 'live', 'o', 1, 1),
+               ('p1', 's3', 'w', 'guarded', 'process', 'h1', 'live', 'o', 1, 1),
+               ('n1', 's4', 'w', 'guarded', 'container', NULL, 'stopped', 'o', 1, 1);",
+        )
+        .unwrap();
         run_migrations(&conn).unwrap();
+        let approved = |app: &str| -> Option<String> {
+            conn.query_row("SELECT approved_caps_json FROM apps WHERE app_id = ?1", params![app], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(approved("g1").as_deref(), Some("[\"thread:read\",\"files:write\"]"));
+        assert_eq!(approved("x1").as_deref(), Some("[]"));
+        assert_eq!(approved("p1"), None, "a plain process-engine App carries no pass: nothing to grandfather");
+        assert_eq!(approved("n1"), None, "no live Seed: its next deploy is a first install");
         let (kind, body): (String, String) = conn
             .query_row("SELECT kind, body_json FROM app_widenings WHERE id = 'w_old'", [], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap();

@@ -5,10 +5,12 @@
 //! - Passports (agents) act only on their own workspace's Apps and
 //!   folders. Changing anything (build, deploy, …) also needs the
 //!   workspace switch "Allow this agent to manage Apps"
-//!   (`agents_can_manage_skin`, §5.11.1): without it the call is refused
-//!   `apps_manage_off`. (The held-request path for agents without the
-//!   switch is S42; widenings held for the owner are S20. New egress
-//!   hosts are already held, for every caller: `egress_routes`, S15.)
+//!   (`agents_can_manage_skin`, §5.11.1): without it the change becomes a
+//!   held `manage` request for the owner (S42, `approvals::
+//!   hold_without_switch`); `apps_manage_off` is left only for changes
+//!   outside that list. Deploys adding caps past the App's approved set,
+//!   and first installs, are held for every caller (S20, `grants`). New
+//!   egress hosts are held for every caller too (`egress_routes`, S15).
 //! - A plain K2 shell tab is a human: treated as the owner (NT5).
 //! - App passes, API keys and API sessions are refused (`wrong_credential`).
 //!
@@ -77,11 +79,27 @@ pub const POST_ROUTES: &[&str] = &[
 ];
 
 pub fn is_route(p: &str) -> bool {
-    ROUTES.contains(&p) || super::egress_routes::ROUTES.contains(&p) || super::box_service_routes::ROUTES.contains(&p)
+    ROUTES.contains(&p)
+        || super::egress_routes::ROUTES.contains(&p)
+        || super::box_service_routes::ROUTES.contains(&p)
+        || door_route(p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
-    POST_ROUTES.contains(&p) || super::egress_routes::POST_ROUTES.contains(&p) || super::box_service_routes::POST_ROUTES.contains(&p)
+    POST_ROUTES.contains(&p)
+        || super::egress_routes::POST_ROUTES.contains(&p)
+        || super::box_service_routes::POST_ROUTES.contains(&p)
+        || door_post_route(p)
+}
+
+/// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
+/// remote passes, each in its own module.
+fn door_route(p: &str) -> bool {
+    super::audit::ROUTES.contains(&p) || super::quotas::ROUTES.contains(&p) || super::suspend::ROUTES.contains(&p)
+}
+
+fn door_post_route(p: &str) -> bool {
+    super::quotas::POST_ROUTES.contains(&p) || super::suspend::POST_ROUTES.contains(&p)
 }
 
 // ── refusals ─────────────────────────────────────────────────────────
@@ -204,6 +222,10 @@ pub(crate) fn agent_ws(who: &Who) -> Option<&str> {
 pub(crate) fn need_manage(who: &Who) -> R<()> {
     need_credential(who)?;
     let Some(ws) = agent_ws(who) else { return Ok(()) };
+    // S42: the replay of a held `manage` request the owner approved.
+    if super::approvals::manage_approved_now() {
+        return Ok(());
+    }
     let path = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -340,6 +362,11 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         return dark();
     }
     super::supervisor::ensure_started();
+    // S42: an agent without "Allow this agent to manage Apps" gets a held
+    // request for the owner instead of a refusal.
+    if let Some(held) = super::approvals::hold_without_switch(path, &who, body) {
+        return respond(held);
+    }
     let r = match path {
         // Box prep (S10): the doctor for anyone with a credential, prepare
         // for the owner only.
@@ -365,6 +392,10 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/app/uninstall" => uninstall(&who, body),
         "/cli/app/link" => link(&who, params),
         "/cli/app/link/rotate" => link_rotate(&who, body),
+        // The door (0.46.1 lane 2): audit, quotas, suspend, remote passes.
+        p if super::audit::ROUTES.contains(&p) => super::audit::handle(&who, params),
+        p if super::quotas::ROUTES.contains(&p) => super::quotas::handle(p, &who, body, params),
+        p if super::suspend::ROUTES.contains(&p) => super::suspend::handle(p, &who, body, params),
         // Egress (S15) and held widenings.
         p if super::egress_routes::ROUTES.contains(&p) => super::egress_routes::handle(p, &who, body, params),
         // Box services (0.46.0): forwards into the wall, held for the owner.
@@ -576,6 +607,13 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
         let mut dv = v.clone();
         dv["app"] = json!(app_id);
         let d = deploy_inner(who, &dv)?;
+        // A first install held for the owner (S20): the App exists, its
+        // deploy waits (exit 2 in the CLI).
+        if d.get("status").and_then(J::as_str) == Some("held") {
+            out["status"] = json!("held");
+            out["request"] = d["request"].clone();
+            out["hint"] = d["hint"].clone();
+        }
         out["deploy"] = d;
     }
     Ok(out)
@@ -687,8 +725,14 @@ fn apply_engine(who: &Who, app: AppRow, v: &J) -> R<AppRow> {
 
 fn deploy_inner(who: &Who, v: &J) -> R<J> {
     let app = app_for(who, s(v, "app"))?;
+    super::suspend::refuse_if_suspended(&app.app_id)?;
     let app = apply_engine(who, app, v)?;
     let seed = seed_for_deploy(who, v)?;
+    // S20: caps past the App's approved set (or a first install) are held
+    // for the owner, whoever deploys; the live Seed keeps serving.
+    if let Some(held) = hold_new_caps(who, &app, &seed, v)? {
+        return Ok(held);
+    }
     // Box services the Seed asks for are filed before the start renders
     // its forwards, so approving one later opens it without a restart.
     let box_services = super::box_service_routes::request_manifest(who, &app, &seed, None);
@@ -707,6 +751,51 @@ fn deploy_inner(who: &Who, v: &J) -> R<J> {
     Ok(out)
 }
 
+/// S20: hold a deploy whose Seed asks for caps past the App's approved set
+/// (`deploy`), or an App's first install (`install`), for every caller
+/// (§5.6 always per event, AR14). A first install that asks for nothing,
+/// or fits a set the owner approved before for the same Seed id, records
+/// its set and goes on.
+fn hold_new_caps(who: &Who, app: &AppRow, seed: &str, v: &J) -> R<Option<J>> {
+    use super::grants::{self, DeployCheck};
+    let check = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let c = grants::check_deploy(&conn, app, seed).map_err(db_err)?;
+        if let DeployCheck::FirstFits(set) = &c {
+            grants::record(&conn, &app.app_id, set).map_err(db_err)?;
+        }
+        c
+    };
+    let DeployCheck::Held { kind, add, set } = check else { return Ok(None) };
+    let first = kind == k2_core::app_grace::requests::KIND_INSTALL;
+    let summary = if first {
+        format!("first install of {}: approve caps {}", app.app_id, add.join(", "))
+    } else {
+        format!("deploy {} with new caps {}", app.app_id, add.join(", "))
+    };
+    let r = super::approvals::file(&super::approvals::Filing {
+        who,
+        kind,
+        app: Some(app),
+        label: &app.app_id,
+        workspace: &app.owner_workspace,
+        body: json!({ "app": app.app_id, "seed": seed, "reason": s(v, "reason") }),
+        diff: grants::diff_json(kind, &add, &set),
+        summary,
+        reasons: vec![if first {
+            "an App's first install sets the caps it may use: the owner approves them".to_string()
+        } else {
+            "new caps beyond the App's approved set wait for the owner (every caller)".to_string()
+        }],
+        reason: s(v, "reason"),
+    })?;
+    let mut out = super::approvals::held_answer(&r);
+    out["seed"] = json!(seed);
+    out["note"] = json!(if app.live_seed.is_some() { "the live Seed keeps serving until the owner approves" } else { "nothing runs until the owner approves" });
+    Ok(Some(out))
+}
+
 /// POST `/cli/app/deploy {app, seed|folder, reason?, wait?, types?}`.
 fn deploy_route(who: &Who, body: &[u8]) -> R<J> {
     need_manage(who)?;
@@ -720,6 +809,7 @@ fn rollback(who: &Who, body: &[u8]) -> R<J> {
     need_manage(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
+    super::suspend::refuse_if_suspended(&app.app_id)?;
     let target = super::supervisor::rollback_target(&app, s(&v, "to"))?;
     super::supervisor::check_data_revision(&app, &target)?;
     if let Some(id) = super::supervisor::rollback_to_warm(&app, &target, &actor(who))? {
@@ -747,6 +837,7 @@ fn start(who: &Who, body: &[u8], kind: &'static str) -> R<J> {
     need_manage(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
+    super::suspend::refuse_if_suspended(&app.app_id)?;
     let seed = app
         .live_seed
         .clone()

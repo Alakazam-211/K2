@@ -289,15 +289,14 @@ describe('useTopBarScope (T3.1)', () => {
   })
 })
 
-/** "{server} | value": the server name, then the top bar's own vertical
- *  divider (the same `TopBarPipe` the right cluster uses), no dot. */
-function expectServerDivider(): void {
-  const server = screen.getByTestId('usage-server')
-  expect(server.textContent).toBe('B')
-  const pipes = server.querySelectorAll('[data-top-bar-pipe]')
-  expect(pipes).toHaveLength(1)
-  expect(pipes[0].className).toBe('block w-px h-4 bg-[var(--color-border)] mx-1')
-  expect(screen.getByTestId('subscription-usage').textContent).not.toContain('·')
+/** Rosson 2026-10-16: the usage chip no longer draws the room's server name
+ *  (nor a divider after it); the tooltip still says whose numbers. */
+function expectNoServerName(): void {
+  expect(screen.queryByTestId('usage-server')).toBe(null)
+  const chip = screen.getByTestId('subscription-usage')
+  expect(chip.querySelectorAll('[data-top-bar-pipe]')).toHaveLength(0)
+  expect(chip.textContent?.startsWith('B')).toBe(false)
+  expect(chip.getAttribute('title')).toBe("B's subscription usage")
 }
 
 describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
@@ -318,8 +317,8 @@ describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
     expect(windowGets.map((c) => isWindow(c.scope))).toEqual([true])
 
     focus(roomOnB())
-    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('BClaude42%'))
-    expectServerDivider()
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude42%'))
+    expectNoServerName()
     const bGets = h.gets.filter((c) => c.route === 'usage/subscriptions' && isB(c.scope))
     expect(bGets).toHaveLength(1)
     const creds = await bGets[0].scope.creds()
@@ -339,7 +338,7 @@ describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
   it('Refresh in a usable room POSTs to B; a view-only room only reads', async () => {
     focus(roomOnB())
     bar()
-    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('BClaude42%'))
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude42%'))
     fireEvent.click(screen.getByTestId('subscription-usage'))
     const refresh = (await screen.findByTestId('subscription-usage-refresh')) as HTMLButtonElement
     expect(refresh.disabled).toBe(false)
@@ -362,7 +361,7 @@ describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
     h.posts.length = 0
     focus(roomOnB({ readOnly: true }))
     bar()
-    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('BClaude42%'))
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude42%'))
     fireEvent.click(screen.getByTestId('subscription-usage'))
     const ro = (await screen.findByTestId('subscription-usage-refresh')) as HTMLButtonElement
     expect(ro.disabled).toBe(true)
@@ -377,18 +376,18 @@ describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
     setPool({ reach: 'offline' })
     focus(roomOnB())
     bar()
-    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('Boffline'))
-    expectServerDivider()
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('offline'))
+    expectNoServerName()
     expect(h.gets.filter((c) => c.route === 'usage/subscriptions')).toHaveLength(0)
 
     act(() => setPool({ auth: 'signin-required' }))
-    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('BSign in'))
-    expectServerDivider()
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('Sign in'))
+    expectNoServerName()
     expect(h.gets.filter((c) => c.route === 'usage/subscriptions')).toHaveLength(0)
 
     // Back online: B is asked, the window still is not.
     act(() => setPool({ role: 'member' }))
-    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('BClaude42%'))
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude42%'))
     expect(h.gets.filter((c) => c.route === 'usage/subscriptions').map((c) => isB(c.scope))).toEqual([true])
   })
 
@@ -411,7 +410,7 @@ describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
 
       // Focus B's room: B is polled, the window's server is not.
       focus(roomOnB())
-      await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('BClaude42%'))
+      await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude42%'))
       expect(usageGets(isB)).toBe(1)
       for (let i = 0; i < 3; i++) {
         act(() => {
@@ -437,7 +436,7 @@ describe('usage chip follows the room (Z16, Z19, T3.2)', () => {
 
       // An offline room is not polled.
       act(() => setPool({ reach: 'offline' }))
-      await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('Boffline'))
+      await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('offline'))
       act(() => {
         vi.advanceTimersByTime(USAGE_CACHE_POLL_MS * 2)
       })
@@ -590,6 +589,14 @@ describe('presence roster follows the room (Z15, Z34)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('presence-roster').getAttribute('title')).toBe('2 connected on B — click for details'),
     )
+    // Rosson 2026-10-16: no server name drawn between the people and the
+    // usage chip (or anywhere in the cluster); the centre breadcrumb has it.
+    await waitFor(() => expect(screen.getByTestId('subscription-usage').textContent).toBe('Claude42%'))
+    expect(screen.queryByTestId('usage-server')).toBe(null)
+    expect(screen.queryAllByText('B', { exact: true })).toHaveLength(0)
+    const rosterOnB = screen.getByTestId('presence-roster')
+    const usage = screen.getByTestId('subscription-usage')
+    expect(rosterOnB.nextElementSibling).toBe(usage.parentElement)
     fireEvent.click(screen.getByTestId('presence-roster'))
     expect(await screen.findByText('Connected to B')).toBeTruthy()
     expect(screen.queryByText('Kick')).toBe(null)
@@ -629,7 +636,7 @@ describe('mode toggle shows the room’s mode (Z15)', () => {
 })
 
 describe('server switcher label (Z20, Q4, T3.5)', () => {
-  it('names the room’s server; the dropdown keeps the window’s check; picking B switches the window', async () => {
+  it('keeps naming the window’s server while Home shows B; the dropdown keeps the window’s check; picking B switches the window', async () => {
     const pickHost = vi.fn()
     const real = useConnectHostStore.getState().pickHost
     useConnectHostStore.setState({ pickHost } as never)
@@ -638,11 +645,21 @@ describe('server switcher label (Z20, Q4, T3.5)', () => {
       expect(screen.getByTestId('server-switcher-label').textContent).toBe('This computer')
       expect(screen.getByTestId('server-switcher-trigger').getAttribute('data-follows-room')).toBe(null)
 
+      const before = screen.getByTestId('server-switcher-trigger')
+      const beforeTitle = before.getAttribute('title')
+      const beforeLed = screen.getByTestId('server-status-icon').getAttribute('data-led-color')
+      const beforeClass = before.className
+
       focus(roomOnB())
-      expect(screen.getByTestId('server-switcher-label').textContent).toBe('B')
+      // Rosson 2026-10-16: no name swap, no dashed border, the window's lights.
+      expect(screen.getByTestId('server-switcher-label').textContent).toBe('This computer')
       const trigger = screen.getByTestId('server-switcher-trigger')
       expect(trigger.getAttribute('data-follows-room')).toBe('true')
-      expect(trigger.getAttribute('title')).toBe('Looking at B on Home. This window is on This computer. (⌘L)')
+      expect(trigger.getAttribute('title')).toBe(beforeTitle)
+      expect(trigger.getAttribute('title')?.startsWith('This computer — ')).toBe(true)
+      expect(trigger.className).toBe(beforeClass)
+      expect(trigger.className).not.toContain('border-dashed')
+      expect(screen.getByTestId('server-status-icon').getAttribute('data-led-color')).toBe(beforeLed)
 
       fireEvent.click(trigger)
       expect(screen.getByTestId('server-switcher-looking-at').textContent).toBe('Looking at B (Home room)')

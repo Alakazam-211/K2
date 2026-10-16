@@ -191,7 +191,7 @@ vi.mock('@/lib/daemon-cli', () => ({
           {
             harness: 'claude',
             plan: 'Max 20x',
-            windows: [{ label: 'Weekly', used: 0.31, resetsAt: '2026-10-10T00:00:00Z' }],
+            windows: [{ label: 'Weekly', used: 0.31, resetsAt: '2099-10-10T00:00:00Z' }],
             checkedAt: new Date().toISOString(),
             status: '',
           },

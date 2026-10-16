@@ -8,6 +8,9 @@ import {
 import { primaryScope, scopeMayWrite, type ServerScope } from '@/kessel/server-scope'
 import { onActiveHostChange } from '@/stores/connect-host'
 import { useWindowFocusStore } from '@/stores/window-focus'
+import { onSubscriptionUsageChanged } from '@/stores/session-events'
+import { createKeyedPollers } from '@/lib/keyed-poller'
+import { errorMessage } from '@/lib/daemon-http-error'
 
 // Subscription usage, per server (0.43.2 Z16). The numbers belong to the
 // CLI logins of the machine that runs the agents, so a focused Home room
@@ -61,6 +64,7 @@ function dropEntry(key: string): void {
 export function resetSubscriptionUsageForTests(): void {
   for (const key of new Set([...epochs.keys(), ...loadInflight.keys()])) epochs.set(key, epochOf(key) + 1)
   loadInflight.clear()
+  cachePollers.stopAll()
   useSubscriptionUsageStore.setState({ entries: {} })
 }
 
@@ -90,7 +94,7 @@ export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, ge
           const doc = parseSubscriptionDoc(await daemonCliGet<unknown>(target.scope, 'usage/subscriptions'))
           write(target.key, epoch, { doc, error: null })
         } catch (e) {
-          write(target.key, epoch, { error: String(e) })
+          write(target.key, epoch, { error: errorMessage(e) })
         } finally {
           if (epoch === epochOf(target.key)) loadInflight.delete(target.key)
         }
@@ -111,7 +115,7 @@ export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, ge
           : await daemonCliGet<unknown>(target.scope, 'usage/subscriptions')
         write(target.key, epoch, { doc: parseSubscriptionDoc(raw), error: null })
       } catch (e) {
-        write(target.key, epoch, { error: String(e) })
+        write(target.key, epoch, { error: errorMessage(e) })
       }
     },
 
@@ -121,7 +125,7 @@ export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, ge
         const doc = parseSubscriptionDoc(await daemonCliPost<unknown>(target.scope, REFRESH_ROUTE, {}))
         write(target.key, epoch, { doc, error: null })
       } catch (e) {
-        write(target.key, epoch, { error: String(e) })
+        write(target.key, epoch, { error: errorMessage(e) })
       }
     },
   }
@@ -145,14 +149,35 @@ function pageHidden(): boolean {
   return typeof document !== 'undefined' && document.visibilityState === 'hidden'
 }
 
-/** Re-read one server's cache (`GET`, never the refresh POST) on a timer.
+const cachePollers = createKeyedPollers()
+
+/** Holds on one server's cache poller right now (B32 tests). */
+export function usageCachePollHolds(key: string): number {
+  return cachePollers.holds(key)
+}
+
+/** Re-read one server's cache (`GET`, never the refresh POST) on a timer,
+ *  and right away when the daemon announces `subscription_usage_changed`
+ *  (a probe or a live feed wrote new numbers; Usage v2 B20).
  *  Ticks are skipped while the page is hidden; becoming visible or this
- *  window regaining focus reads once right away. Returns the stop fn. */
+ *  window regaining focus reads once right away.
+ *
+ *  B32: one poller per server key. The top bar, Zen's band and Zen's menu
+ *  all mount a `UsageButton`; each call holds the same poller and the last
+ *  release stops it. Returns this hold's release. */
 export function startUsageCachePoll(target: UsageTarget, intervalMs = USAGE_CACHE_POLL_MS): () => void {
+  return cachePollers.acquire(target.key, () => runCachePoll(target, intervalMs))
+}
+
+function runCachePoll(target: UsageTarget, intervalMs: number): () => void {
   let stopped = false
-  const tick = (): void => {
-    if (stopped || pageHidden()) return
+  const read = (): void => {
+    if (stopped) return
     void useSubscriptionUsageStore.getState().load(target)
+  }
+  const tick = (): void => {
+    if (pageHidden()) return
+    read()
   }
   const interval = setInterval(tick, intervalMs)
   const onVisible = (): void => {
@@ -162,11 +187,15 @@ export function startUsageCachePoll(target: UsageTarget, intervalMs = USAGE_CACH
   const unsubFocus = useWindowFocusStore.subscribe((state, prev) => {
     if (!prev.isFocused && state.isFocused) tick()
   })
+  // A push is cheap (a GET of the cache) and the numbers are new: read even
+  // while hidden so the page shows them the moment it is shown.
+  const unsubChanged = onSubscriptionUsageChanged(target.scope, read)
   return () => {
     if (stopped) return
     stopped = true
     clearInterval(interval)
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
     unsubFocus()
+    unsubChanged()
   }
 }

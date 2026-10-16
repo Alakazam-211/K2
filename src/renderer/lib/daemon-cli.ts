@@ -34,6 +34,7 @@ import {
 } from '@/lib/remote-session'
 import { cliSearchParams, withDaemonFetch } from '@/web/session-token'
 import { getPinnedAuthRecovery } from '@/lib/pool-hooks'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
 
 /** A response plus its (already-consumed) body text. The body is read
  *  exactly once, up front, because BOTH the auth-failure classifier and the
@@ -512,14 +513,7 @@ async function parseDaemonResponse<T>(res: Response, text: string): Promise<T> {
     // the message verbatim so existing renderer code that does
     // `e instanceof Error ? e.message : String(e)` shows a useful
     // string rather than `[object Response]`.
-    let msg = text
-    try {
-      const parsed = JSON.parse(text)
-      if (parsed && typeof parsed.error === 'string') msg = parsed.error
-    } catch {
-      /* fall through with raw text */
-    }
-    throw new Error(msg || `daemon ${route(res.url)} ${res.status}`)
+    throw httpError(res, text)
   }
   if (text.length === 0) return undefined as unknown as T
   try {
@@ -538,16 +532,24 @@ async function parseDaemonResponse<T>(res: Response, text: string): Promise<T> {
  *  message so callers see a useful string, not `[object Response]`. */
 function parseDaemonText(res: Response, text: string): string {
   if (!res.ok) {
-    let msg = text
-    try {
-      const parsed = JSON.parse(text)
-      if (parsed && typeof parsed.error === 'string') msg = parsed.error
-    } catch {
-      /* fall through with raw text */
-    }
-    throw new Error(msg || `daemon ${route(res.url)} ${res.status}`)
+    throw httpError(res, text)
   }
   return text
+}
+
+/** The `{"error":"...","code":"..."}`-aware error for a non-2xx answer,
+ *  carrying the status (Usage v2 B25: branch on it, not on the text). */
+function httpError(res: Response, text: string): DaemonHttpError {
+  let msg = text
+  let code: string | null = null
+  try {
+    const parsed = JSON.parse(text)
+    if (parsed && typeof parsed.error === 'string') msg = parsed.error
+    if (parsed && typeof parsed.code === 'string' && parsed.code !== '') code = parsed.code
+  } catch {
+    /* fall through with raw text */
+  }
+  return new DaemonHttpError(msg || `daemon ${route(res.url)} ${res.status}`, res.status, code)
 }
 
 function route(url: string): string {

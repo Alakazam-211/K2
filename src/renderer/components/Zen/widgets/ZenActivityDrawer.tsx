@@ -22,6 +22,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ThreadTurn } from '@/components/SessionView/overlayThread'
 import { CHAMFER_CUT, THREAD_ZEN_SCOPE_ATTR, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
+import { WorkingGrid } from '@/components/AgentStatus/StatusGlyphs'
 import {
   COUNTER_CHECK_PX,
   COUNTER_GAP_PX,
@@ -96,9 +97,6 @@ function writeZenDrawerExpanded(on: boolean): void {
   }
 }
 
-/** Braille spinner frames (the desktop `.braille-spinner`), 80ms each. */
-const BRAILLE_FRAMES = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-
 /** A Zen root, or the desktop Thread's box (it draws this drawer too). */
 const DRAWER_SCOPE = `:is([data-zen-root], [${THREAD_ZEN_SCOPE_ATTR}])`
 
@@ -109,14 +107,11 @@ export const ZEN_DRAWER_CSS = `
 @keyframes zen-drawer-out { from { transform: none; } to { transform: translateY(calc(100% + 8px)); } }
 @keyframes zen-drawer-fade-in { from { opacity: 0; } }
 @keyframes zen-drawer-fade-out { to { opacity: 0; } }
-@keyframes zen-braille-spin { to { transform: translateY(-10em); } }
 @keyframes zen-drawer-shimmer { 0% { opacity: 1; } 50% { opacity: 0.55; } 100% { opacity: 1; } }
 ${DRAWER_SCOPE} [data-zen-drawer][data-phase="in"] { animation: zen-drawer-in ${ZEN_DRAWER_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1.12) both; }
 ${DRAWER_SCOPE} [data-zen-drawer][data-phase="out"] { animation: zen-drawer-out ${ZEN_DRAWER_MS}ms cubic-bezier(0.4, 0, 0.8, 0.4) both; }
 ${DRAWER_SCOPE} [data-zen-drawer-tile] { transition: background-color 140ms ease; }
 ${DRAWER_SCOPE} [data-zen-drawer-tile]:hover { background: var(--zen-surface); }
-${DRAWER_SCOPE} .zen-braille { display: inline-block; overflow: hidden; height: 1em; line-height: 1em; text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-${DRAWER_SCOPE} .zen-braille > span { display: block; animation: zen-braille-spin 800ms steps(10) infinite; }
 ${DRAWER_SCOPE} .zen-drawer-shimmer { animation: zen-drawer-shimmer 1.6s ease-in-out infinite; }
 ${DRAWER_SCOPE} .zen-drawer-tag { border-radius: 9999px; background: color-mix(in srgb, var(--zen-tag-hue) 16%, transparent); color: color-mix(in srgb, var(--zen-tag-hue) 70%, var(--zen-text)); }
 ${DRAWER_SCOPE} .zen-drawer-count { display: inline-flex; align-items: center; flex: none; white-space: nowrap; line-height: 18px; }
@@ -130,7 +125,7 @@ ${DRAWER_SCOPE} .zen-drawer-tag-background { --zen-tag-hue: var(--zen-text-muted
 @media (prefers-reduced-motion: reduce) {
   ${DRAWER_SCOPE} [data-zen-drawer][data-phase="in"] { animation: zen-drawer-fade-in 160ms ease-out both; }
   ${DRAWER_SCOPE} [data-zen-drawer][data-phase="out"] { animation: zen-drawer-fade-out 160ms ease-in both; }
-  ${DRAWER_SCOPE} .zen-braille > span, ${DRAWER_SCOPE} .zen-drawer-shimmer, ${DRAWER_SCOPE} [data-zen-pulse] { animation: none !important; }
+  ${DRAWER_SCOPE} .zen-drawer-shimmer, ${DRAWER_SCOPE} [data-zen-pulse] { animation: none !important; }
 }
 `
 
@@ -201,40 +196,23 @@ const ICON: Record<StripCounterKey | 'check', (size: number) => React.JSX.Elemen
   ),
 }
 
-function prefersReducedMotion(): boolean {
-  try {
-    return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      : false
-  } catch {
-    return false
-  }
-}
-
-function BrailleSpinner({ still }: { still: boolean }): React.JSX.Element {
-  const box = { width: `${COUNTER_SPINNER_EM}em`, verticalAlign: '-0.15em' }
-  if (still) {
-    return (
-      <span className="zen-braille" data-zen-drawer-spinner="" data-static="" style={box}>
-        •
-      </span>
-    )
-  }
+/** Running subagents: the app's working glyph (plan-agent-status-unify-v1:
+ *  the 3×3 cell spinner replaces the braille everywhere), in the theme's
+ *  working colour. It stills itself for reduced motion. */
+function WorkingMark(): React.JSX.Element {
+  const px = Math.ceil(COUNTER_SPINNER_EM * COUNTER_FONT_PX)
   return (
-    <span className="zen-braille" data-zen-drawer-spinner="" style={box}>
-      <span>
-        {Array.from(BRAILLE_FRAMES).map((f, i) => (
-          <span key={i} style={{ display: 'block' }}>
-            {f}
-          </span>
-        ))}
-      </span>
+    <span
+      data-zen-drawer-spinner=""
+      style={{ display: 'inline-flex', width: px, height: px, verticalAlign: '-0.15em', color: 'var(--zen-working)' }}
+    >
+      <WorkingGrid size={px} />
     </span>
   )
 }
 
 /** One collapsed counter's visible part (aria-hidden; the words are beside it). */
-function CounterGlyphs({ c, still }: { c: StripCounter; still: boolean }): React.JSX.Element {
+function CounterGlyphs({ c }: { c: StripCounter }): React.JSX.Element {
   const icon = ICON[c.key](COUNTER_ICON_PX)
   if (c.key !== 'subagents') {
     return (
@@ -249,7 +227,7 @@ function CounterGlyphs({ c, still }: { c: StripCounter; still: boolean }): React
       {icon}
       {c.count > 0 ? (
         <span data-zen-drawer-running="">
-          <BrailleSpinner still={still} />
+          <WorkingMark />
           {c.count}
         </span>
       ) : null}
@@ -363,7 +341,6 @@ export function ZenActivityDrawer({
   }, [mounted])
 
   if (!display) return null
-  const still = prefersReducedMotion()
   const color = TONE[display.tone]
   const counters = fitStripCounters(
     display.counters,
@@ -501,7 +478,7 @@ export function ZenActivityDrawer({
                       className={`zen-drawer-tag zen-drawer-count zen-drawer-tag-${c.key}`}
                       style={{ height: TAG_H_PX, paddingLeft: ZEN_DRAWER_TAG_PAD_X_PX, paddingRight: ZEN_DRAWER_TAG_PAD_X_PX }}
                     >
-                      <CounterGlyphs c={c} still={still} />
+                      <CounterGlyphs c={c} />
                       <span className="sr-only">{counterSpoken(c)}</span>
                     </span>
                   ))}

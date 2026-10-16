@@ -353,7 +353,7 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
                 return Err(no(
                     "confirm_required",
                     400,
-                    "restore replaces ALL Sew data with that backup (a backup is taken first): pass --confirm",
+                    "restore replaces ALL Sew data with that backup (Sew takes a safety backup first): pass --confirm",
                 ));
             }
             let id = s(&v, "bundleId").ok_or_else(|| no("bad_request", 400, "name the backup (bundleId)"))?;

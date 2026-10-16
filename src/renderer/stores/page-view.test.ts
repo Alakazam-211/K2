@@ -57,6 +57,35 @@ describe('page-view switcher + feedback delegation', () => {
     expect(useFeedbackStore.getState().isOpen).toBe(false)
   })
 
+  it('wiki close returns to the page it was opened from (0.46.0)', () => {
+    for (const from of ['home', 'agents', 'projects', 'feedback'] as const) {
+      usePageViewStore.getState().setPage(from)
+      usePageViewStore.getState().openWiki('/w/cortana')
+      expect([usePageViewStore.getState().page, usePageViewStore.getState().wikiReturnPage]).toEqual(['wiki', from])
+      usePageViewStore.getState().closeWiki()
+      expect([from, usePageViewStore.getState().page, usePageViewStore.getState().wikiProjectPath]).toEqual([from, from, null])
+    }
+  })
+
+  it('switching wikis while open keeps the return page; the last wiki outlives close', () => {
+    usePageViewStore.getState().setPage('home')
+    usePageViewStore.getState().openWiki('/w/a')
+    usePageViewStore.getState().openWiki('/w/b')
+    expect([usePageViewStore.getState().wikiProjectPath, usePageViewStore.getState().wikiReturnPage]).toEqual(['/w/b', 'home'])
+    usePageViewStore.getState().closeWiki()
+    expect([usePageViewStore.getState().page, usePageViewStore.getState().lastWikiPath]).toEqual(['home', '/w/b'])
+    // A null open (no workspace) keeps the last one.
+    usePageViewStore.getState().openWiki(null)
+    expect(usePageViewStore.getState().lastWikiPath).toBe('/w/b')
+  })
+
+  it('setPage("wiki") also remembers where it came from', () => {
+    usePageViewStore.getState().setPage('projects')
+    usePageViewStore.getState().setPage('wiki')
+    usePageViewStore.getState().closeWiki()
+    expect(usePageViewStore.getState().page).toBe('projects')
+  })
+
   it('selecting the Projects tab closes an open Feedback page', () => {
     useFeedbackStore.getState().open()
     usePageViewStore.getState().setPage('projects')

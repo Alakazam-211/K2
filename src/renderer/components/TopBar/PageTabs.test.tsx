@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // Home P1 (H1/H12) — the top switcher order is gear, Home, Agents,
-// Projects, Tickets. Selecting Home sets the page and does not open
+// Projects, Tickets, Wiki (0.46.0). Selecting Home sets the page and does not open
 // Settings; from Settings it closes Settings first (same as every tab).
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -69,7 +69,7 @@ function tabs(container: HTMLElement): HTMLButtonElement[] {
 }
 
 describe('PageTabs — Home tab', () => {
-  it('order is gear, My Home, Agents, Projects, Tickets', () => {
+  it('order is gear, My Home, Agents, Projects, Tickets, Wiki', () => {
     const { container } = render(<PageTabs />)
     const list = tabs(container)
     expect(list.map((b) => b.getAttribute('title')?.split(/ [—(]/)[0])).toEqual([
@@ -78,6 +78,7 @@ describe('PageTabs — Home tab', () => {
       'Agents',
       'Projects',
       'Tickets',
+      'Wiki',
     ])
     expect(list.map((b) => b.getAttribute('aria-label'))).toEqual([
       'Settings',
@@ -85,13 +86,14 @@ describe('PageTabs — Home tab', () => {
       'Agents',
       'Projects',
       'Tickets',
+      'Wiki',
     ])
   })
 
   it('the page tabs are icons only: one 16px svg each, no words, word in title + aria-label', () => {
     const { container } = render(<PageTabs />)
     const pages = tabs(container).slice(1)
-    expect(pages).toHaveLength(4)
+    expect(pages).toHaveLength(5)
     for (const b of pages) {
       expect(b.textContent).toBe('')
       const svgs = b.querySelectorAll('svg')
@@ -106,19 +108,20 @@ describe('PageTabs — Home tab', () => {
     expect(screen.getByRole('button', { name: 'Tickets' })).toBe(pages[3])
   })
 
-  it('each page draws its A3 icon (home, agents, projects, tickets)', () => {
+  it('each page draws its A3 icon (home, agents, projects, tickets, wiki)', () => {
     const { container } = render(<PageTabs />)
     const pages = tabs(container).slice(1)
     PAGE_TAB_ITEMS.forEach(({ Icon }, i) => {
       const { container: one } = render(<Icon size={PAGE_TAB_ICON_PX} />)
       expect(pages[i].innerHTML).toBe(one.innerHTML)
     })
-    expect(PAGE_TAB_ITEMS.map((x) => x.page)).toEqual(['home', 'agents', 'projects', 'feedback'])
+    expect(PAGE_TAB_ITEMS.map((x) => x.page)).toEqual(['home', 'agents', 'projects', 'feedback', 'wiki'])
     expect(pages.map((b) => b.querySelector('svg')?.getAttribute('data-k2-icon'))).toEqual([
       'home',
       'agents',
       'projects',
       'tickets',
+      'wiki',
     ])
     // Squared Lucide: square caps, mitred joins, the one 1.75 stroke.
     for (const b of pages) {
@@ -155,7 +158,7 @@ describe('PageTabs — Home tab', () => {
     usePageViewStore.getState().setPage('projects')
     const { container } = render(<PageTabs />)
     const list = tabs(container)
-    expect(list.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'false', 'true', 'false'])
+    expect(list.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'false', 'true', 'false', 'false'])
     expect(list[3].className).toContain('shadow-[inset_0_-2px_0_var(--color-accent)]')
     expect(list[2].className).not.toContain('shadow-[inset_0_-2px_0_var(--color-accent)]')
   })
@@ -177,7 +180,7 @@ describe('PageTabs — Home tab', () => {
   it('with Settings open only the cog is active', () => {
     h.settings.settingsOpen = true
     const { container } = render(<PageTabs />)
-    expect(tabs(container).map((b) => b.getAttribute('aria-pressed'))).toEqual(['true', 'false', 'false', 'false', 'false'])
+    expect(tabs(container).map((b) => b.getAttribute('aria-pressed'))).toEqual(['true', 'false', 'false', 'false', 'false', 'false'])
   })
 
   it('selecting Home sets the page and does not open Settings', () => {
@@ -215,5 +218,50 @@ describe('PageTabs — Home tab', () => {
     expect(usePageViewStore.getState().page).toBe('projects')
     seen.push(isRoomPage(usePageViewStore.getState().page))
     expect(seen).toEqual([true, true, true, false])
+  })
+})
+
+describe('PageTabs — Wiki tab (0.46.0)', () => {
+  it('the Wiki tab: library icon, tooltip and name "Wiki", last in the row', () => {
+    const { container } = render(<PageTabs />)
+    const wiki = screen.getByRole('button', { name: 'Wiki' })
+    expect(tabs(container).at(-1)).toBe(wiki)
+    expect(wiki.getAttribute('title')).toBe('Wiki')
+    expect(wiki.querySelector('svg')?.getAttribute('data-k2-icon')).toBe('wiki')
+    expect(wiki.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('is active (pressed + accent underline) while the wiki is open, and only it', () => {
+    usePageViewStore.getState().openWiki('/w/cortana')
+    const { container } = render(<PageTabs />)
+    const list = tabs(container)
+    expect(list.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'false', 'false', 'false', 'true'])
+    expect(list[5].className).toContain('shadow-[inset_0_-2px_0_var(--color-accent)]')
+  })
+
+  it('clicking it opens the wiki and remembers the page to return to; close goes back', () => {
+    usePageViewStore.getState().setPage('projects')
+    render(<PageTabs />)
+    fireEvent.click(screen.getByRole('button', { name: 'Wiki' }))
+    expect([usePageViewStore.getState().page, usePageViewStore.getState().wikiReturnPage]).toEqual(['wiki', 'projects'])
+    usePageViewStore.getState().closeWiki()
+    expect(usePageViewStore.getState().page).toBe('projects')
+  })
+
+  it('clicking it again while the wiki is open keeps the wiki shown', () => {
+    usePageViewStore.getState().setPage('home')
+    usePageViewStore.getState().openWiki('/w/cortana')
+    render(<PageTabs />)
+    fireEvent.click(screen.getByRole('button', { name: 'Wiki' }))
+    const s = usePageViewStore.getState()
+    expect([s.page, s.wikiProjectPath, s.wikiReturnPage]).toEqual(['wiki', '/w/cortana', 'home'])
+  })
+
+  it('from Settings it closes Settings and opens the wiki', () => {
+    h.settings.settingsOpen = true
+    render(<PageTabs />)
+    fireEvent.click(screen.getByRole('button', { name: 'Wiki' }))
+    expect(h.settings.closeSettings).toHaveBeenCalled()
+    expect(usePageViewStore.getState().page).toBe('wiki')
   })
 })

@@ -3,10 +3,11 @@
 // icon"). Every icon is 16px on a 24 viewBox with one 1.75 stroke in
 // `currentColor`.
 //
-//   Home, Agents, Projects, Tickets, Server, Admin, Run, Drawer, Clock,
-//   Mug, Help
-//     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `server`,
-//     `circle-user`, `play`, `panel-left`, `clock`, `coffee`, `circle-help`),
+//   Home, Agents, Projects, Tickets, Wiki, Server, Admin, Run, Drawer,
+//   Clock, Mug, Help
+//     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `library`,
+//     `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`,
+//     `circle-help`),
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
 //   Settings
@@ -104,6 +105,19 @@ export function TicketsIcon(props: K2IconProps = {}): React.JSX.Element {
       <path d="M13 5v2" />
       <path d="M13 17v2" />
       <path d="M13 11v2" />
+    </svg>
+  )
+}
+
+/** Wiki: Lucide `library` (a shelf of notes), squared caps. All straight
+ *  strokes, so squaring changes only the caps and joins. */
+export function WikiIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('wiki', props)}>
+      <path d="m16 6 4 14" />
+      <path d="M12 6v14" />
+      <path d="M8 8v12" />
+      <path d="M4 4v16" />
     </svg>
   )
 }

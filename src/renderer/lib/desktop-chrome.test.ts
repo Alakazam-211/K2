@@ -261,8 +261,9 @@ describe('top bars share the Agents bar, not Focus', () => {
 
     const wiki = read('src/renderer/components/Wiki/WikiPage.tsx')
     const wikiUtils = wiki.indexOf('<TopBarUtilities>')
-    const wikiLabel = wiki.search(/truncate ml-2">\s*Wiki/)
-    expect(wikiLabel).toBeGreaterThan(-1)
+    // 0.46.0: the "Wiki · name" label is the workspace picker (left cluster).
+    const wikiLabel = wiki.indexOf('<WikiWorkspacePicker')
+    expect(wikiLabel).toBeGreaterThan(wiki.indexOf('<PageTabs />'))
     expect(wikiLabel).toBeLessThan(wikiUtils)
     expect(wiki.indexOf('onClick={closeWiki}')).toBeGreaterThan(wikiUtils)
     expect(wiki).not.toContain('w-7 h-7')

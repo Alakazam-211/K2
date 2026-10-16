@@ -5105,4 +5105,70 @@ mod tests {
         assert_eq!(r.status, "200 OK", "{}", r.body);
         assert!(thread_pushes(mark, &conv).is_empty(), "air-gap: zero sends");
     }
+
+    /// A clone's Threads (CL5/CL30/CL31): with no pin yet the clone's
+    /// address shows the pending imported history and refuses writes
+    /// (409 `imported_read_only`); `import:<id>` resolves too. Once a pin
+    /// exists, the next resolve settles the history onto it, new posts
+    /// work, and imported cards stay read-only.
+    #[test]
+    fn imported_thread_is_read_only_and_settles_on_resolve() {
+        use k2_core::overlay::transfer as t;
+        let uid = || uuid::Uuid::new_v4().to_string();
+        let src = format!("ovlctsrc{}", &uid()[..8]);
+        let (src_id, _) = seed(&src);
+        let src_pin = uid();
+        pin(&src_id, &src_pin);
+        let export = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            overlay::post_thread(&conn, &src_pin, &src_id, &src, &src, "history line", "thread").unwrap();
+            overlay::post_choice(&conn, &src_pin, &src_id, &src, &src, "Ship?", vec!["Go".into()], false, None).unwrap();
+            t::export_project_threads(&conn, &src_id, &t::ExportOptions::new("ct-route", "src.k2.dev", t::ThreadsChoice::All))
+                .unwrap()
+        };
+        let dst = format!("ovlctdst{}", &uid()[..8]);
+        let (dst_id, _) = seed(&dst);
+        let rep = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            t::import_threads(&conn, &export, &t::ImportContext { project_id: dst_id.clone(), ..Default::default() }).unwrap()
+        };
+        assert!(rep.pending, "{rep:?}");
+        let key = rep.conversations[0].local_conversation_id.clone();
+        let card = overlay::read_thread(&key, 0)
+            .unwrap()
+            .into_iter()
+            .find(|i| i.doc.choice.is_some())
+            .expect("imported card")
+            .id;
+
+        assert_eq!(resolve_addr(&dst).expect("pending history resolves").conversation_id, key);
+        assert_eq!(resolve_addr(&key).expect("import key resolves").project_id, dst_id);
+        let posted = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": dst, "text": "hi", "from": "k2" }));
+        assert_error_code(&posted, "409 Conflict", "imported_read_only");
+        let posted = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": key, "text": "hi", "from": "k2" }));
+        assert_error_code(&posted, "409 Conflict", "imported_read_only");
+        let asked = post_json(
+            "/cli/thread/ask",
+            &HashMap::new(),
+            serde_json::json!({ "addr": key, "prompt": "?", "options": "a,b", "from": "k2" }),
+        );
+        assert_error_code(&asked, "409 Conflict", "imported_read_only");
+        let tap = post_json("/cli/thread/answer", &HashMap::new(), serde_json::json!({ "addr": key, "id": card, "answer": "Go" }));
+        assert_error_code(&tap, "409 Conflict", "imported_read_only");
+
+        // The clone's first chat pins: the next resolve settles the history.
+        let new_pin = uid();
+        pin(&dst_id, &new_pin);
+        assert_eq!(resolve_addr(&dst).unwrap().conversation_id, new_pin);
+        assert_eq!(overlay::read_thread(&new_pin, 0).unwrap().len(), 3, "divider + 2 imported lines");
+        assert!(overlay::read_thread(&key, 0).unwrap().is_empty());
+        let posted = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": dst, "text": "live", "from": "k2" }));
+        assert_eq!(posted.status, "200 OK", "{}", posted.body);
+        let tap = post_json("/cli/thread/answer", &HashMap::new(), serde_json::json!({ "addr": dst, "id": card, "answer": "Go" }));
+        assert_error_code(&tap, "409 Conflict", "imported_read_only");
+        let void = post_json("/cli/thread/void", &HashMap::new(), serde_json::json!({ "addr": dst, "id": card }));
+        assert_error_code(&void, "409 Conflict", "imported_read_only");
+    }
 }

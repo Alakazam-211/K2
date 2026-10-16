@@ -700,6 +700,16 @@ pub fn is_agent_verb(path: &str) -> bool {
         // vault confirm.
         "/cli/app/approvals",
         "/cli/app/deny",
+        // The 0.46.1 door (S19, AR10): read the audit and quotas, lower a
+        // quota (a raise is held), suspend (narrows), list and revoke
+        // remote passes. `/cli/app/resume` and `/cli/app/remote-pass/rotate`
+        // are NOT here: the owner's.
+        "/cli/app/audit",
+        "/cli/app/quota",
+        "/cli/app/quota/set",
+        "/cli/app/suspend",
+        "/cli/app/remote-pass",
+        "/cli/app/remote-pass/revoke",
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",

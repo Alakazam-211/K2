@@ -305,7 +305,8 @@ async fn s14_k2_app_link_routes_scope_and_rotate() {
     assert_eq!(r.status, 200, "{}", r.body);
     allow_manage(&mine, false);
     let r = post(d.port, "/cli/app/link/rotate", &mine_pass, json!({"app": "linkapp"})).await;
-    assert_eq!((r.status, r.code().as_str()), (403, "apps_manage_off"), "{}", r.body);
+    // S42: without the switch the rotate is held for the owner.
+    assert_eq!((r.status, r.json()["status"].as_str(), r.json()["kind"].as_str()), (202, Some("held"), Some("manage")), "{}", r.body);
     allow_manage(&mine, true);
     let r = post(d.port, "/cli/app/link/rotate", &mine_pass, json!({"app": "linkapp"})).await;
     assert_eq!(r.status, 200, "{}", r.body);

@@ -150,6 +150,19 @@ widget library below). That copy is a pre-bundled classic script for sealed
 widget frames, ships with the desktop app only, and lacks the 3MF and PLY
 loaders, so the file viewer bundles its own ES-module copy.
 
+## Third-party: Wiki 3D view (MIT, BSD-3-Clause)
+
+The Wiki page's 3D map uses these npm packages, bundled into a lazy chunk
+that loads only when the 3D view opens (three.js is shared with the file
+viewer above).
+
+| | |
+|--|--|
+| **What** | `react-force-graph-3d` 1.29.2 · `3d-force-graph` 1.80.1 · `three-forcegraph` 1.43.6 · `three-render-objects` 1.43.0 · `three-spritetext` 1.10.0 · `data-bind-mapper` 1.0.3 · `@tweenjs/tween.js` 25.0.0 · `polished` 4.3.1 (+ `@babel/runtime` helpers) · `ngraph.forcelayout` 3.3.1 · `ngraph.graph` 20.1.2 · `ngraph.events` 1.4.0 · `ngraph.random` 1.2.0 · `ngraph.merge` 1.0.0. Used by `src/renderer/components/Wiki/WikiGraph3D.tsx` and `wiki-3d-scene.ts` |
+| **Upstream** | [react-force-graph](https://github.com/vasturiano/react-force-graph) · [3d-force-graph](https://github.com/vasturiano/3d-force-graph) · [three-spritetext](https://github.com/vasturiano/three-spritetext) · [ngraph](https://github.com/anvaka/ngraph.forcelayout) · [polished](https://github.com/styled-components/polished) · [tween.js](https://github.com/tweenjs/tween.js) |
+| **License** | **MIT** (Copyright (c) 2017-2024 Vasco Asturiano; Brian Hough and Maximilian Stoiber; Sebastian McKenzie and other contributors; Tween.js authors; Andrei Kashcha for ngraph.merge) and **BSD-3-Clause** for ngraph.forcelayout, ngraph.graph, ngraph.events and ngraph.random (Copyright (c) Andrei Kashcha) — full texts in `src/renderer/components/Wiki/THIRD_PARTY_NOTICES.txt` |
+| **K2 code** | Remains **FSL-1.1-Apache-2.0**. These packages do **not** relicense the product. |
+
 ## Third-party: Zen widget library
 
 <!-- zen-lib:begin (generated from src/shared/zen-lib.json by scripts/vendor-zen-lib.sh; do not edit by hand) -->

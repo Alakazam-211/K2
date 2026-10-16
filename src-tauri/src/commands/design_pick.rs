@@ -32,12 +32,12 @@ pub const NOT_DESIGN: &str = "not a design view";
 
 /// Install (idempotent) for page load `nav`.
 pub fn install_script(nav: u64) -> String {
-    format!("{DESIGN_PICKER_JS}({nav})")
+    format!("{}({nav})", DESIGN_PICKER_JS.trim_end())
 }
 
 /// Install if needed, then arm or disarm.
 pub fn arm_script(nav: u64, armed: bool) -> String {
-    format!("{DESIGN_PICKER_JS}({nav});\nwindow.__k2DesignPicker.arm({armed});")
+    format!("{};\nwindow.__k2DesignPicker.arm({armed});", install_script(nav))
 }
 
 /// Drain the guest queue as one JSON string (or [`MISSING`]).
@@ -61,7 +61,8 @@ pub fn badges_script(nav: u64, badges: &[Badge]) -> String {
         .map(|b| Badge { n: b.n, selector: clamp_line(&b.selector, k2_core::browser_notes::MAX_SELECTOR_CHARS) })
         .collect();
     format!(
-        "{DESIGN_PICKER_JS}({nav});\nwindow.__k2DesignPicker.setBadges({});",
+        "{};\nwindow.__k2DesignPicker.setBadges({});",
+        install_script(nav),
         js_literal(&serde_json::to_string(&clamped).unwrap_or_else(|_| "[]".into()))
     )
 }

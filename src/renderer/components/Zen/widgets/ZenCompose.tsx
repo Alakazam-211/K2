@@ -16,6 +16,9 @@
 // When the person picks this agent (a row click, or Add agent), the box
 // takes keyboard focus once it can be typed in (`zen-compose-focus`).
 // Nothing else focuses it: not first render, not a remote update.
+//
+// 0.46.0 (Rosson 2026-10-16): past 3 lines the box stacks like the desktop
+// Thread's (the shared rule in ThreadZenKit), on by default.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
@@ -32,9 +35,37 @@ import {
   ThreadAttachmentChip,
   ThreadAttachmentChips,
   ThreadComposeBox,
+  ThreadComposeStackSpacer,
   ThreadRoundButton,
   ThreadSendButton,
+  threadComposeLines,
+  threadComposeStackNext,
+  threadComposeTextSlotStyle,
 } from '@/components/Thread/ThreadZenKit'
+
+/** The box's textarea padding, top + bottom (px). */
+const ZEN_COMPOSE_PAD_Y = 12
+/** The box's gap between its children (`gap-2`), and its buttons' side. */
+const ZEN_COMPOSE_GAP = 8
+const ZEN_COMPOSE_BUTTON = 32
+
+/** Width (px) the one-row layout takes beside the textarea: "+" (when
+ *  attachments are on), the box's gaps, and Send. */
+export function zenComposeRowChrome(attachments: boolean): number {
+  return (attachments ? ZEN_COMPOSE_BUTTON + ZEN_COMPOSE_GAP : 0) + ZEN_COMPOSE_GAP + ZEN_COMPOSE_BUTTON
+}
+
+/** One line of the box's text (px): its computed line height, else its font
+ *  size × 1.4 (a `normal` line height), else 14 × 1.4. */
+function zenComposeLinePx(el: HTMLElement): number {
+  const cs = getComputedStyle(el)
+  if (cs.lineHeight.endsWith('px')) {
+    const lh = parseFloat(cs.lineHeight)
+    if (Number.isFinite(lh) && lh > 0) return lh
+  }
+  const fs = parseFloat(cs.fontSize)
+  return (Number.isFinite(fs) && fs > 0 ? fs : 14) * 1.4
+}
 
 type Attachment = { kind: 'path'; path: string; name: string } | { kind: 'file'; file: File; name: string }
 
@@ -48,6 +79,7 @@ export function ZenCompose({
   attachments: allowAttachments = true,
   onSend,
   drawer,
+  stack = true,
 }: {
   bridge: ZenWidgetBridge
   address: string
@@ -59,6 +91,8 @@ export function ZenCompose({
   onSend?: () => void
   /** Drawn on the box's top edge (Garden 1's activity drawer). */
   drawer?: React.ReactNode
+  /** The desktop Thread's stacked layout past 3 lines (default on). */
+  stack?: boolean
 }): React.JSX.Element {
   const [draft, setDraftState] = useState(() => zenComposeDraft(address))
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -114,6 +148,14 @@ export function ZenCompose({
   // one line in that forced layout, the list above would grow, and the
   // browser would clamp its scrollTop: the newest message and the working
   // dots would slip under the box on every keystroke (Rosson 2026-10-04).
+  //
+  // Past 3 lines the box stacks like the desktop Thread's (ThreadZenKit:
+  // the text on its own full-width line, "+" and Send under it); back to one
+  // row once the text would fit in 2 lines of the one-row field. Re-measured
+  // when the layout flips (the field's width changed); the rule's
+  // hysteresis settles it in one step. A hidden box (no width) keeps its
+  // layout.
+  const [stacked, setStacked] = useState(false)
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
@@ -121,10 +163,18 @@ export function ZenCompose({
     const held = row ? row.style.minHeight : ''
     if (row) row.style.minHeight = `${row.offsetHeight}px`
     el.style.height = 'auto'
-    const next = `${Math.min(el.scrollHeight, 180)}px`
-    el.style.height = next
+    const scrollHeight = el.scrollHeight
+    el.style.height = `${Math.min(scrollHeight, 180)}px`
     if (row) row.style.minHeight = held
-  }, [draft])
+    if (!stack) {
+      setStacked(false)
+      return
+    }
+    const width = el.clientWidth
+    if (width <= 0) return
+    const lines = threadComposeLines({ value: el.value, scrollHeight }, zenComposeLinePx(el), ZEN_COMPOSE_PAD_Y)
+    setStacked((cur) => threadComposeStackNext({ stacked: cur, lines, width, rowChrome: zenComposeRowChrome(allowAttachments) }))
+  }, [draft, stacked, stack, allowAttachments])
 
   const send = useCallback(async () => {
     if (disabled || sending) return
@@ -193,6 +243,7 @@ export function ZenCompose({
       onDrop={onDrop}
     >
       <ThreadComposeBox
+        stacked={stacked}
         chips={
           attachments.length > 0 ? (
             <ThreadAttachmentChips>
@@ -251,8 +302,10 @@ export function ZenCompose({
             font: 'inherit',
             lineHeight: 'var(--zen-line-height)',
             border: 'none',
+            ...threadComposeTextSlotStyle(stacked),
           }}
         />
+        <ThreadComposeStackSpacer stacked={stacked} />
         <ThreadSendButton canSend={canSend} onClick={() => void send()} />
       </ThreadComposeBox>
     </div>

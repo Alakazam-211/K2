@@ -2089,10 +2089,10 @@ fn every_builtin_theme_is_clean_complete_and_distinct() {
     assert_eq!(zen::DEFAULT_THEME, "basic");
     assert_eq!(zen::BUILTIN_THEMES[0].name, zen::DEFAULT_THEME, "basic comes first");
     let names: Vec<&str> = zen::BUILTIN_THEMES.iter().map(|t| t.name).collect();
-    assert_eq!(names, vec!["basic", "paper", "midnight", "haunted"], "no built-in is called default any more");
+    assert_eq!(names, vec!["basic", "paper", "midnight", "haunted", "glass"], "no built-in is called default any more");
     // Rosson 2026-10-04: ids stay lower case; people see capitalized names.
     let labels: Vec<&str> = zen::BUILTIN_THEMES.iter().map(|t| t.label).collect();
-    assert_eq!(labels, vec!["Basic", "Paper", "Midnight", "Haunted"]);
+    assert_eq!(labels, vec!["Basic", "Paper", "Midnight", "Haunted", "Glass"]);
     assert_eq!(zen::theme_label("basic"), "Basic");
     assert_eq!(zen::theme_label("sunset"), "Sunset", "a user theme shows its id with a capital");
     assert_eq!(zen::theme_label("k2-light"), "K2-light");
@@ -2130,6 +2130,11 @@ fn layering_builtin_then_override_then_zen_toml_then_garden_and_reset_clears_the
     let stub = std::fs::read_to_string(f.path_of(&ZenFile::Zen)).expect("zen.toml");
     assert_eq!(stub, zen::DEFAULT_ZEN_TOML);
     assert!(check_zen(&stub).layer.is_empty(), "the zen.toml stub sets nothing");
+    // 0.46.0 (Rosson 2026-10-16): Garden 1 opens on its own default, Glass;
+    // a pick for the computer beats it.
+    let first = f.resolve(Some(&g)).expect("first");
+    assert_eq!((first["theme"]["name"].clone(), first["theme"]["scope"].clone()), (json!("glass"), json!("garden")), "{}", first["theme"]);
+    f.set_theme(Some("basic"), None).expect("basic for the computer");
     let base = f.resolve(Some(&g)).expect("base");
     assert_eq!(base["theme"]["name"], "basic");
     assert_eq!(base["theme"]["builtin"], true);
@@ -2208,14 +2213,14 @@ fn cycling_order_wraps_and_a_garden_pick_beats_the_global_one() {
     f.new_theme("zeta", None).expect("zeta");
     f.new_theme("alpha", None).expect("alpha");
     let names: Vec<String> = f.themes().into_iter().map(|t| t.name).collect();
-    assert_eq!(names, vec!["basic", "paper", "midnight", "haunted", "alpha", "zeta"], "built-ins first, then the user's by name");
+    assert_eq!(names, vec!["basic", "paper", "midnight", "haunted", "glass", "alpha", "zeta"], "built-ins first, then the user's by name");
     let labels: Vec<String> = f.themes().into_iter().map(|t| t.label).collect();
-    assert_eq!(labels, vec!["Basic", "Paper", "Midnight", "Haunted", "Alpha", "Zeta"], "lists show capitalized names");
+    assert_eq!(labels, vec!["Basic", "Paper", "Midnight", "Haunted", "Glass", "Alpha", "Zeta"], "lists show capitalized names");
     let mut seen = Vec::new();
-    for _ in 0..6 {
+    for _ in 0..7 {
         seen.push(f.cycle_theme(1, None).expect("next").theme);
     }
-    assert_eq!(seen, vec!["paper", "midnight", "haunted", "alpha", "zeta", "basic"], "next walks the list and wraps");
+    assert_eq!(seen, vec!["paper", "midnight", "haunted", "glass", "alpha", "zeta", "basic"], "next walks the list and wraps");
     assert_eq!(f.cycle_theme(-1, None).expect("prev").theme, "zeta", "prev wraps backwards");
     assert_eq!(f.cycle_theme(-1, None).expect("prev").theme, "alpha");
 
@@ -2253,7 +2258,7 @@ fn unknown_theme_names_are_refused_and_change_nothing() {
     match f.set_theme(Some("neon"), None) {
         Err(ZenError::UnknownTheme { name, known }) => {
             assert_eq!(name, "neon");
-            assert_eq!(known, vec!["basic", "paper", "midnight", "haunted"]);
+            assert_eq!(known, vec!["basic", "paper", "midnight", "haunted", "glass"]);
         }
         other => panic!("an unknown theme must be UnknownTheme, got {other:?}"),
     }
@@ -2570,9 +2575,9 @@ fn the_diary_garden_shows_the_haunted_study_full_bleed_and_others_stay_as_they_w
     assert_eq!(r["chrome"]["stoplights"], "hidden", "{}", r["chrome"]);
     assert_eq!(r["page"]["layout"]["canvas"], "full", "{}", r["page"]["layout"]);
 
-    // Garden 1 is as it was.
+    // Garden 1 is as it was (its own default, Glass, since 0.46.0).
     let g1 = f.resolve(Some(&one)).expect("Garden 1");
-    assert_eq!(g1["theme"]["name"], "basic");
+    assert_eq!(g1["theme"]["name"], "glass");
     assert!(g1["theme"].get("background").is_none(), "{}", g1["theme"]);
     assert_eq!(g1["chrome"]["stoplights"], "round");
     assert_eq!(g1["page"]["layout"]["canvas"], "framed");

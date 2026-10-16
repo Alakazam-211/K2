@@ -415,6 +415,8 @@ pub enum PropType {
     OneOf(&'static [&'static str]),
     /// A list whose items come from the set, no repeats.
     SubsetOf(&'static [&'static str]),
+    /// A whole number from `min` to `max` (inclusive).
+    Int { min: i64, max: i64 },
 }
 
 /// One prop of a built-in widget kind. `default` is JSON; `None` means
@@ -490,14 +492,28 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
         name: "pins",
         ty: PropType::Bool,
         default: Some("false"),
-        doc: "pinned agents as a grid of pictures at the top, three across (more rows as you pin more); the list below leaves them out. Garden 1 turns it on",
+        doc: "pinned agents as a grid of pictures at the top, three across (more rows as you pin more, up to `pin-limit`); the list below leaves them out. Garden 1 turns it on",
+    },
+    WidgetProp {
+        kind: "agents",
+        name: "pin-limit",
+        ty: PropType::Int { min: 1, max: 99 },
+        default: None,
+        doc: "with `pins`: the most pictures the grid holds; pinned agents past it head the list below. Unset: no limit. Garden 1 sets 9 (three rows of three, Rosson 2026-10-16)",
+    },
+    WidgetProp {
+        kind: "agents",
+        name: "recent-first",
+        ty: PropType::Bool,
+        default: None,
+        doc: "Recent agents first (below the pins, the agents you last messaged from a Garden on this computer, newest first) until the person picks in the Garden's settings; their pick is per computer and wins once made. Unset: off until picked. Garden 1 turns it on",
     },
     WidgetProp {
         kind: "agents",
         name: "settings",
         ty: PropType::Bool,
         default: Some("false"),
-        doc: "a settings button in the widget's header: the Garden's own settings on this computer (Recent agents first). Garden 1 turns it on",
+        doc: "a settings button in the widget's header: the Garden's own settings on this computer (its theme, the pin grid, Recent agents first). Garden 1 turns it on",
     },
     WidgetProp {
         kind: "conversation",
@@ -1538,6 +1554,13 @@ fn check_prop(ctx: &mut Ctx, p: &WidgetProp, v: &Item, pos: (usize, usize)) -> O
             Some(s) if allowed.contains(&s) => Some(json!(s)),
             _ => {
                 ctx.error(vp, format!("{what} must be one of: {}", allowed.join(", ")));
+                None
+            }
+        },
+        PropType::Int { min, max } => match v.as_value().and_then(Value::as_integer) {
+            Some(n) if (min..=max).contains(&n) => Some(json!(n)),
+            _ => {
+                ctx.error(vp, format!("{what} must be a whole number from {min} to {max}"));
                 None
             }
         },

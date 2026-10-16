@@ -9,6 +9,10 @@
 # declares any of it.
 id = "k2.texting@1"
 schema = 1
+# 0.46.0 (Rosson 2026-10-16, from K2 Companion): the theme a Garden on this
+# template shows while its theme syncs with K2's default and nobody picked
+# one (for this Garden or for the computer). Own copies keep theirs.
+theme = "glass"
 
 [layout]
 kind = "columns"
@@ -43,9 +47,15 @@ status = ["working", "idle", "needs-you"]
 # 0.45.6 (Rosson 2026-10-15, from K2 Companion): pinned agents as a
 # three-across grid of pictures at the top of the list.
 pins = true
-# The cog in the header: this Garden's own settings on this computer
-# (Recent agents first, off until you turn it on).
+# 0.46.0 (Rosson 2026-10-16): the grid holds nine, three rows of three;
+# pinned agents past nine head the list.
+pin-limit = 9
+# The cog in the header: this Garden's own settings on this computer (its
+# theme, the pin grid, Recent agents first).
 settings = true
+# 0.46.0 (Rosson 2026-10-16): the agent you last messaged sits at the top,
+# below the pins, until you turn it off in the Garden's settings.
+recent-first = true
 
 [[widget]]
 id = "conversation"

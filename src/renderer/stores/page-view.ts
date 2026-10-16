@@ -1,14 +1,16 @@
 // Projects V1 P4 (prd-projects-v1 §6.0) — which top-level PAGE the app
-// shows. The top bar's switcher (⚙ | Home | Agents | Projects | Tickets)
-// selects one of the page views: 'agents' is today's default workspace
+// shows. The top bar's switcher (⚙ | Home | Agents | Projects | Tickets |
+// Wiki) selects one of the page views: 'agents' is today's default workspace
 // view (Sidebar + tabs + terminal); 'home' is the SAME shell with the Home
 // roster in the sidebar (agents picked from any saved server — Home P1,
-// prd-home-v1 H2: "reuses the Agents page shell"); 'projects' and 'feedback' render as
-// full-page overlays gated on this store. Settings is a store overlay
-// (settingsOpen), not an AppPage — the cog is a fourth tab that opens
-// it. Wiki is opened only from the workspace drawer (no permanent
-// PageTabs entry); Esc or selecting a switcher tab returns to agents /
-// that page.
+// prd-home-v1 H2: "reuses the Agents page shell"); 'projects', 'feedback'
+// and 'wiki' render as full-page overlays gated on this store. Settings is a
+// store overlay (settingsOpen), not an AppPage — the cog is a tab that opens
+// it. Wiki is a page tab too (0.46.0, Rosson 2026-10-16): the tab opens the
+// wiki of the workspace on screen (`lib/wiki-open.ts`); the drawer's View
+// Wiki and the nav menus open one workspace's wiki directly. Close (Esc or
+// the X) returns to the page the wiki was opened from. All of this is
+// per-window view state (thin client).
 //
 // This is the SSOT for "which page" — `useFeedbackStore.isOpen` mirrors
 // it (feedback.ts subscribes) so every pre-switcher consumer of that
@@ -33,28 +35,51 @@ export function primaryRoomPageLive(page: AppPage, homeRoomShown: boolean, zenSh
   return !zenShown && (page === 'agents' || (page === 'home' && homeRoomShown))
 }
 
+/** A page the wiki can return to on close (any page but the wiki). */
+export type WikiReturnPage = Exclude<AppPage, 'wiki'>
+
 interface PageViewState {
   page: AppPage
   /** Workspace path whose wiki is open when `page === 'wiki'`. */
   wikiProjectPath: string | null
+  /** The page the wiki was opened from; close returns there. */
+  wikiReturnPage: WikiReturnPage
+  /** The last workspace wiki shown in this window (kept after close): the
+   *  Wiki tab's fallback when the view has no workspace of this server. */
+  lastWikiPath: string | null
   setPage: (page: AppPage) => void
-  /** Open the wiki overlay for a workspace path (from WorkspacePanel). */
-  openWiki: (projectPath: string) => void
-  /** Close wiki and return to Agents. */
+  /** Open the wiki page for a workspace path (null: no workspace yet).
+   *  While the wiki is open it only switches the workspace; the page to
+   *  return to is kept. */
+  openWiki: (projectPath: string | null) => void
+  /** Close the wiki and return to the page it was opened from. */
   closeWiki: () => void
 }
 
 export const usePageViewStore = create<PageViewState>((set) => ({
   page: 'agents',
   wikiProjectPath: null,
+  wikiReturnPage: 'agents',
+  lastWikiPath: null,
   setPage: (page) =>
     set((s) => ({
       page,
       // Leaving wiki clears the bound workspace path so a later open
       // does not flash stale data under a different project.
       wikiProjectPath: page === 'wiki' ? s.wikiProjectPath : null,
+      wikiReturnPage: page === 'wiki' && s.page !== 'wiki' ? s.page : s.wikiReturnPage,
     })),
   openWiki: (projectPath) =>
-    set({ page: 'wiki', wikiProjectPath: projectPath }),
-  closeWiki: () => set({ page: 'agents', wikiProjectPath: null }),
+    set((s) => ({
+      page: 'wiki',
+      wikiProjectPath: projectPath,
+      wikiReturnPage: s.page === 'wiki' ? s.wikiReturnPage : s.page,
+      lastWikiPath: projectPath ?? s.lastWikiPath,
+    })),
+  closeWiki: () =>
+    set((s) => ({
+      page: s.page === 'wiki' ? s.wikiReturnPage : s.page,
+      wikiProjectPath: null,
+      wikiReturnPage: 'agents',
+    })),
 }))

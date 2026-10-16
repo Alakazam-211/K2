@@ -3,7 +3,7 @@
 // display name or handle (they live on the Agent tab). Its header puts View
 // Wiki on the left and keeps the notifications bell on the right.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, screen } from '@testing-library/react'
+import { cleanup, fireEvent, screen } from '@testing-library/react'
 import { createStore } from 'zustand/vanilla'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => 0) }))
@@ -31,6 +31,7 @@ import WorkspacePanel from './WorkspacePanel'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { fakeScope } from '@/test-utils/fake-scope'
+import { usePageViewStore } from '@/stores/page-view'
 
 const project = {
   id: 'p1',
@@ -79,6 +80,17 @@ describe('Workspace tab header', () => {
     expect(kids[1].className).toContain('ml-auto')
     expect(kids[1].contains(screen.getByTestId('completion-bell'))).toBe(true)
     expect(header.className).not.toContain('justify-end')
+  })
+
+  it('View Wiki opens this workspace\'s wiki directly; close returns to the page (0.46.0)', () => {
+    usePageViewStore.getState().setPage('home')
+    render(true)
+    fireEvent.click(screen.getByText('View Wiki'))
+    const s = usePageViewStore.getState()
+    expect([s.page, s.wikiProjectPath, s.wikiReturnPage]).toEqual(['wiki', '/ws/cortana', 'home'])
+    s.closeWiki()
+    expect(usePageViewStore.getState().page).toBe('home')
+    usePageViewStore.getState().setPage('agents')
   })
 
   it('a room on another server keeps the bell and offers no Wiki', () => {

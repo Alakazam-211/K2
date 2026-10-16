@@ -399,7 +399,7 @@ function workspaceFilterListSections({
 }
 
 /** Stand-in glyph for the All row, so its label aligns with avatar rows. */
-function AllWorkspacesGlyph(): React.JSX.Element {
+export function AllWorkspacesGlyph(): React.JSX.Element {
   return (
     <span className="flex-shrink-0 w-5 h-5 flex items-center justify-center border border-[var(--color-border)] text-[var(--color-text-muted)]">
       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

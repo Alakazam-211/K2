@@ -59,6 +59,7 @@ import {
   ServerIcon,
   SettingsIcon,
   TicketsIcon,
+  WikiIcon,
 } from '@/components/icons/K2Icons'
 
 afterEach(cleanup)
@@ -85,6 +86,7 @@ describe('K2Icons (A3)', () => {
       ['agents', AgentsIcon],
       ['projects', ProjectsIcon],
       ['tickets', TicketsIcon],
+      ['wiki', WikiIcon],
       ['server', ServerIcon],
       ['admin', AdminIcon],
       ['run', RunIcon],
@@ -119,6 +121,29 @@ describe('K2Icons (A3)', () => {
       'round',
       '16',
     ])
+  })
+
+  it('WikiIcon: Lucide library (four straight strokes), squared caps, nothing else', () => {
+    const svg = svgIn(render(<WikiIcon />).container)
+    expect(Array.from(svg.querySelectorAll('path')).map((p) => p.getAttribute('d'))).toEqual([
+      'm16 6 4 14',
+      'M12 6v14',
+      'M8 8v12',
+      'M4 4v16',
+    ])
+    expect(svg.querySelectorAll('rect, circle')).toHaveLength(0)
+    expect([svg.getAttribute('stroke-linecap'), svg.getAttribute('stroke-linejoin')]).toEqual(['square', 'miter'])
+  })
+
+  it('NOTICE lists every Lucide source, library (Wiki) included', async () => {
+    const { readFileSync } = await import('node:fs')
+    const notice = readFileSync(`${process.cwd()}/NOTICE.md`, 'utf8')
+    const row = notice.split('\n').find((l) => l.includes('lucide-static@1.58.0/icons/'))
+    if (!row) throw new Error('NOTICE has no Lucide source row')
+    for (const name of ['house', 'bot', 'layout-dashboard', 'ticket', 'library', 'settings', 'server', 'circle-user', 'play', 'panel-left', 'clock', 'coffee', 'circle-help']) {
+      expect([name, row.includes('`' + name + '`')]).toEqual([name, true])
+    }
+    expect(notice).toContain('Home, Agents, Projects, Tickets, Wiki,')
   })
 
   it('ServerIcon LEDs are bars 3x the old square\'s width, inside the frame; status colour or currentColor', () => {

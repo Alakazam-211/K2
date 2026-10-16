@@ -52,7 +52,7 @@ LiteLLM's `model_prices_and_context_window.json`.
 ## Third-party: Lucide icons (ISC)
 
 The top bar's icons (icon style A3) are Lucide icons, copied in as SVG
-paths. Home, Agents, Projects, Tickets, Server, Admin profile, Run,
+paths. Home, Agents, Projects, Tickets, Wiki, Server, Admin profile, Run,
 Drawer, the stopwatch clock, the Keep awake mug and Help are
 edited (corners squared: square caps, mitred joins, no corner
 radius). Settings is Lucide's `settings` gear, unedited. The Gardens ensō
@@ -60,7 +60,7 @@ is K2's own (`ZenIcon`), not Lucide.
 
 | | |
 |--|--|
-| **What** | SVG paths in `src/renderer/components/icons/K2Icons.tsx`, from `lucide-static@1.58.0/icons/` (`house`, `bot`, `layout-dashboard`, `ticket`, `settings`, `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`, `circle-help`) |
+| **What** | SVG paths in `src/renderer/components/icons/K2Icons.tsx`, from `lucide-static@1.58.0/icons/` (`house`, `bot`, `layout-dashboard`, `ticket`, `library`, `settings`, `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`, `circle-help`) |
 | **Upstream** | [Lucide](https://github.com/lucide-icons/lucide) |
 | **License** | **ISC** (Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.) — full text below |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. The ISC icons do **not** relicense the product. |

@@ -440,6 +440,9 @@ pub struct SummaryWorkspaceRef {
     pub name: String,
     pub path: String,
     pub handle: String,
+    /// At least one enabled, non-archived heartbeat (`projects/list`
+    /// `heartbeatEnabled`). Feeds `agentActivity` `heartbeat` (D2).
+    pub heartbeat: bool,
 }
 
 /// One person present on a workspace. `user` is the roster key
@@ -541,8 +544,33 @@ pub fn summarize(
     out
 }
 
-/// One registered workspace with a busy agent (Home 0.43.2, Z23). Idle
-/// workspaces are left out.
+/// Sessions per display on one workspace (`agentActivity[].counts`, D2):
+/// the same five numbers as the activity rollup's `counts`.
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+pub struct SummaryCounts {
+    pub working: usize,
+    pub monitoring: usize,
+    pub waiting: usize,
+    pub unverifiable: usize,
+    pub idle: usize,
+}
+
+impl SummaryCounts {
+    fn add(&mut self, d: k2_core::activity::Display) {
+        use k2_core::activity::Display;
+        match d {
+            Display::Working => self.working += 1,
+            Display::Monitoring => self.monitoring += 1,
+            Display::Waiting => self.waiting += 1,
+            Display::Unverifiable => self.unverifiable += 1,
+            Display::Idle => self.idle += 1,
+        }
+    }
+}
+
+/// One registered workspace with a busy agent (Home 0.43.2, Z23), or
+/// (0.46.0, plan-agent-status-unify-v1 D2) an idle one that has a live
+/// PTY or a heartbeat. A workspace with none of these is left out.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SummaryActivity {
     #[serde(rename = "workspaceId")]
@@ -551,43 +579,103 @@ pub struct SummaryActivity {
     /// clients filter on; `unverifiable` reads `idle` here).
     pub status: String,
     /// The real rolled-up display (prd-daemon-activity-and-thread-working-v1
-    /// S4): `working` | `monitoring` | `waiting` | `unverifiable`.
+    /// S4): `working` | `monitoring` | `waiting` | `unverifiable` | `idle`
+    /// (`idle` only since D2, on a live or heartbeat workspace).
     pub display: String,
+    /// D2: at least one enabled heartbeat.
+    pub heartbeat: bool,
+    /// D2: at least one live PTY (a session whose PTY runs, or a legacy
+    /// shell). False = reaped.
+    pub live: bool,
+    /// D2: at least one session mid-turn or with subagents running
+    /// (`activity_events::RowView::is_busy`), so "working" can show next
+    /// to "needs you".
+    pub busy: bool,
+    /// D2: sessions per display.
+    pub counts: SummaryCounts,
 }
 
-/// Pure fold of live-session displays onto registered workspaces: each
-/// `(cwd, display)` counts on the registered workspace that owns the cwd
-/// (longest registered prefix, the rule `summarize` uses). The workspace
-/// shows its highest display (`activity_events::rank`); an idle one is
-/// left out. A cwd under no registered workspace is dropped (a Home row
+/// One live session as the summary folds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SummarySession {
+    pub cwd: String,
+    pub display: k2_core::activity::Display,
+    /// `RowView::is_busy`.
+    pub busy: bool,
+    /// `RowView::live` (the PTY has not exited).
+    pub live: bool,
+}
+
+/// Pure fold of live sessions (and legacy shell cwds) onto registered
+/// workspaces: each counts on the registered workspace that owns its cwd
+/// (longest registered prefix, the rule `summarize` and the activity store
+/// use). The workspace shows its highest display (`activity_events::rank`),
+/// its per-display counts, and whether anything is live or busy. It is
+/// listed when its display is not idle, or (D2) it has a live PTY or a
+/// heartbeat. A cwd under no registered workspace is dropped (a Home row
 /// always names a registered one). Sorted by workspace id.
 pub fn fold_agent_activity(
-    sessions: &[(String, k2_core::activity::Display)],
+    sessions: &[SummarySession],
+    shells: &[String],
     workspaces: &[SummaryWorkspaceRef],
 ) -> Vec<SummaryActivity> {
     use k2_core::activity::Display;
+    #[derive(Default)]
+    struct Acc {
+        display: Option<Display>,
+        counts: SummaryCounts,
+        live: bool,
+        busy: bool,
+    }
     let paths: Vec<String> = workspaces.iter().map(|w| w.path.clone()).collect();
-    let mut by_ws: std::collections::BTreeMap<String, Display> = std::collections::BTreeMap::new();
-    for (cwd, display) in sessions {
-        if *display == Display::Idle || cwd.is_empty() {
-            continue;
+    let owner = |cwd: &str| {
+        if cwd.is_empty() {
+            return None;
         }
-        let Some(idx) = crate::session_events::longest_registered_project_index(cwd, &paths) else {
-            continue;
-        };
-        let slot = by_ws.entry(workspaces[idx].id.clone()).or_insert(*display);
-        if crate::activity_events::rank(*display) > crate::activity_events::rank(*slot) {
-            *slot = *display;
+        crate::session_events::longest_registered_project_index(cwd, &paths)
+    };
+    let mut by_ws: std::collections::BTreeMap<usize, Acc> = std::collections::BTreeMap::new();
+    for s in sessions {
+        let Some(idx) = owner(&s.cwd) else { continue };
+        let acc = by_ws.entry(idx).or_default();
+        acc.counts.add(s.display);
+        acc.live |= s.live;
+        acc.busy |= s.busy;
+        let best = acc.display.unwrap_or(Display::Idle);
+        if acc.display.is_none() || crate::activity_events::rank(s.display) > crate::activity_events::rank(best) {
+            acc.display = Some(s.display);
         }
     }
-    by_ws
+    for cwd in shells {
+        let Some(idx) = owner(cwd) else { continue };
+        by_ws.entry(idx).or_default().live = true;
+    }
+    for (idx, w) in workspaces.iter().enumerate() {
+        if w.heartbeat {
+            by_ws.entry(idx).or_default();
+        }
+    }
+    let mut out: Vec<SummaryActivity> = by_ws
         .into_iter()
-        .map(|(workspace_id, display)| SummaryActivity {
-            workspace_id,
-            status: crate::activity_events::legacy_word(display).to_string(),
-            display: display.as_str().to_string(),
+        .filter_map(|(idx, acc)| {
+            let w = &workspaces[idx];
+            let display = acc.display.unwrap_or(Display::Idle);
+            if display == Display::Idle && !acc.live && !w.heartbeat {
+                return None;
+            }
+            Some(SummaryActivity {
+                workspace_id: w.id.clone(),
+                status: crate::activity_events::legacy_word(display).to_string(),
+                display: display.as_str().to_string(),
+                heartbeat: w.heartbeat,
+                live: acc.live,
+                busy: acc.busy,
+                counts: acc.counts,
+            })
         })
-        .collect()
+        .collect();
+    out.sort_by(|a, b| a.workspace_id.cmp(&b.workspace_id));
+    out
 }
 
 /// `GET /cli/presence/summary` →
@@ -599,6 +687,11 @@ pub fn fold_agent_activity(
 /// RL7) over the same live-session list `/cli/ops/overview` walks; `activeProjectIds` is the canonical Active set, from the same
 /// function the `active_changed` broadcast calls. Older clients read only
 /// `online` and `workspaces`.
+/// 0.46.0 (plan-agent-status-unify-v1 D2): each `agentActivity` entry adds
+/// `heartbeat`, `live`, `busy` and per-display `counts`, and idle
+/// workspaces with a live PTY or a heartbeat are listed too (`status`
+/// `idle`, `display` `idle`; older clients keep only `working` /
+/// `permission` words or read `idle` as no activity).
 /// Auth (owner token OR live connect session; app/skin passes and agent
 /// passports refused) is gated in the dispatcher, same gate as the roster.
 pub fn handle_summary() -> crate::cli_response::CliResponse {
@@ -614,6 +707,7 @@ pub fn handle_summary() -> crate::cli_response::CliResponse {
             name: p.name,
             path: p.path,
             handle: p.handle,
+            heartbeat: p.heartbeat_enabled != 0,
         })
         .collect();
     let window = k2_core::app_settings::load().active_window_hours;
@@ -625,10 +719,15 @@ pub fn handle_summary() -> crate::cli_response::CliResponse {
     active_ids.sort();
     active_ids.dedup();
     let displays = crate::activity_events::displays();
-    let statuses: Vec<(String, k2_core::activity::Display)> = crate::ops_routes::live_sessions()
+    let statuses: Vec<SummarySession> = crate::ops_routes::live_sessions()
         .into_iter()
-        .filter_map(|s| displays.get(&s.session_id).map(|(d, _)| (s.workspace_path, *d)))
+        .filter_map(|s| {
+            let (display, row) = displays.get(&s.session_id)?;
+            let view = crate::activity_events::RowView::from_json(row)?;
+            Some(SummarySession { cwd: s.workspace_path, display: *display, busy: view.is_busy(), live: view.live })
+        })
         .collect();
+    let shells = crate::activity_events::legacy_shell_cwds();
     // 0.46.0: the owner's displayName (linked account's "First Last",
     // else its username, else "Owner"); ownerDisplayName is not read.
     let owner_name = k2_core::person_name::load_effective(k2_core::notify_prefs::OWNER).display_name;
@@ -636,7 +735,7 @@ pub fn handle_summary() -> crate::cli_response::CliResponse {
     let body = serde_json::json!({
         "online": live.len(),
         "workspaces": summarize(&live, &refs, &owner_name),
-        "agentActivity": fold_agent_activity(&statuses, &refs),
+        "agentActivity": fold_agent_activity(&statuses, &shells, &refs),
         "activeProjectIds": active_ids,
     });
     match serde_json::to_string(&body) {
@@ -963,6 +1062,7 @@ mod tests {
             name: name.into(),
             path: path.into(),
             handle: handle.into(),
+            heartbeat: false,
         }
     }
 
@@ -1022,11 +1122,30 @@ mod tests {
         assert!(summarize(&[], &refs, "owner").is_empty());
     }
 
+
+    fn sess(cwd: &str, d: k2_core::activity::Display, busy: bool, live: bool) -> SummarySession {
+        SummarySession { cwd: cwd.to_string(), display: d, busy, live }
+    }
+
+    fn act(id: &str, status: &str, display: &str) -> SummaryActivity {
+        SummaryActivity {
+            workspace_id: id.into(),
+            status: status.into(),
+            display: display.into(),
+            heartbeat: false,
+            live: false,
+            busy: false,
+            counts: SummaryCounts::default(),
+        }
+    }
+
     /// Home 0.43.2 (Z23) — busy sessions fold onto the workspace that owns
     /// their cwd (longest prefix), the highest display wins, idle and
     /// unregistered cwds drop out. T-S4h (A31): the old words stay
     /// (`waiting` → `permission`, `monitoring` → `working`,
-    /// `unverifiable` → `idle`) with the real `display` beside them.
+    /// `unverifiable` → `idle`) with the real `display` beside them. The
+    /// sessions here have no live PTY and no workspace has a heartbeat, so
+    /// D2 adds nothing but the counts.
     #[test]
     fn fold_agent_activity_uses_longest_prefix_and_the_highest_display() {
         use k2_core::activity::Display::{self, *};
@@ -1037,11 +1156,10 @@ mod tests {
             wref("id-mon", "Mon", "/m", "mon"),
             wref("id-stale", "Stale", "/s", "stale"),
         ];
-        let s = |cwd: &str, d: Display| (cwd.to_string(), d);
-        let act = |id: &str, status: &str, display: &str| SummaryActivity {
-            workspace_id: id.into(),
-            status: status.into(),
-            display: display.into(),
+        let s = |cwd: &str, d: Display| sess(cwd, d, false, false);
+        let with_counts = |mut a: SummaryActivity, f: &dyn Fn(&mut SummaryCounts)| {
+            f(&mut a.counts);
+            a
         };
         let out = fold_agent_activity(
             &[
@@ -1054,22 +1172,81 @@ mod tests {
                 s("/elsewhere", Working),
                 s("", Working),
             ],
+            &[],
             &refs,
         );
         assert_eq!(
             out,
             vec![
-                act("id-app", "working", "working"),
-                act("id-mon", "working", "monitoring"),
-                act("id-stale", "idle", "unverifiable"),
-                act("id-w", "permission", "waiting"),
+                with_counts(act("id-app", "working", "working"), &|c| c.working = 1),
+                with_counts(act("id-mon", "working", "monitoring"), &|c| c.monitoring = 1),
+                with_counts(act("id-stale", "idle", "unverifiable"), &|c| c.unverifiable = 1),
+                with_counts(act("id-w", "permission", "waiting"), &|c| {
+                    c.working = 1;
+                    c.waiting = 1;
+                }),
             ]
         );
         // Order of the sessions doesn't change the answer.
-        let out2 = fold_agent_activity(&[s("/w", Waiting), s("/w/docs", Working)], &refs);
-        assert_eq!(out2, vec![act("id-w", "permission", "waiting")]);
-        let out3 = fold_agent_activity(&[s("/w/docs", Monitoring), s("/w", Working)], &refs);
-        assert_eq!(out3, vec![act("id-w", "working", "working")]);
-        assert!(fold_agent_activity(&[], &refs).is_empty());
+        let out2 = fold_agent_activity(&[s("/w", Waiting), s("/w/docs", Working)], &[], &refs);
+        let out2b = fold_agent_activity(&[s("/w/docs", Working), s("/w", Waiting)], &[], &refs);
+        assert_eq!(out2, out2b);
+        assert_eq!((out2[0].workspace_id.as_str(), out2[0].display.as_str()), ("id-w", "waiting"));
+        let out3 = fold_agent_activity(&[s("/w/docs", Monitoring), s("/w", Working)], &[], &refs);
+        assert_eq!((out3[0].status.as_str(), out3[0].display.as_str()), ("working", "working"));
+        assert!(fold_agent_activity(&[], &[], &refs).is_empty());
+    }
+
+    /// D2 (plan-agent-status-unify-v1): remote Home rows get `heartbeat`,
+    /// `live` and `busy`; an idle workspace is listed when it has a live
+    /// PTY (session or legacy shell) or a heartbeat, and left out once
+    /// everything is reaped and it has no heartbeat.
+    #[test]
+    fn fold_agent_activity_flags_heartbeat_live_and_busy() {
+        use k2_core::activity::Display::*;
+        let mut hb = wref("id-hb", "Beat", "/hb", "hb");
+        hb.heartbeat = true;
+        let refs = vec![
+            wref("id-ask", "Ask", "/ask", "ask"),
+            hb,
+            wref("id-live", "Live", "/live", "live"),
+            wref("id-shell", "Shell", "/shell", "shell"),
+            wref("id-gone", "Gone", "/gone", "gone"),
+        ];
+        let out = fold_agent_activity(
+            &[
+                // The lead asks while a subagent runs: waiting AND busy.
+                sess("/ask", Waiting, true, true),
+                sess("/ask/sub", Idle, false, true),
+                // Idle but its PTY is live.
+                sess("/live", Idle, false, true),
+                // Reaped: the row's PTY exited.
+                sess("/gone", Idle, false, false),
+            ],
+            &["/shell/x".to_string(), "/nowhere".to_string()],
+            &refs,
+        );
+        let mut ask = act("id-ask", "permission", "waiting");
+        ask.live = true;
+        ask.busy = true;
+        ask.counts.waiting = 1;
+        ask.counts.idle = 1;
+        let mut beat = act("id-hb", "idle", "idle");
+        beat.heartbeat = true;
+        let mut live = act("id-live", "idle", "idle");
+        live.live = true;
+        live.counts.idle = 1;
+        let mut shell = act("id-shell", "idle", "idle");
+        shell.live = true;
+        assert_eq!(out, vec![ask, beat, live, shell]);
+        let j = serde_json::to_value(&out[0]).expect("json");
+        assert_eq!(
+            j,
+            serde_json::json!({
+                "workspaceId": "id-ask", "status": "permission", "display": "waiting",
+                "heartbeat": false, "live": true, "busy": true,
+                "counts": { "working": 0, "monitoring": 0, "waiting": 1, "unverifiable": 0, "idle": 1 },
+            })
+        );
     }
 }

@@ -187,10 +187,47 @@ async fn summary_lists_busy_workspaces_from_activity_and_hooks() {
         std::fs::create_dir_all(&idle_dir).expect("create idle dir");
         seed_project("ws-idle-id", &idle_dir.to_string_lossy());
 
-        // Nothing has said anything yet: no busy workspace. Both projects
-        // were just interacted with, so both are Active.
+        // D2 (0.46.0): the idle workspace has an enabled heartbeat.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::db::schema::AgentHeartbeat::insert(
+                &conn,
+                "sd-hb-1",
+                "ws-idle-id",
+                "nightly",
+                "daily",
+                "{}",
+                "wakeup.md",
+                true,
+            )
+            .expect("seed heartbeat");
+        }
+        // One `agentActivity` entry (D2 adds heartbeat / live / busy /
+        // counts beside the old words).
+        let counts = |working: u64, waiting: u64, idle: u64| {
+            serde_json::json!({ "working": working, "monitoring": 0, "waiting": waiting, "unverifiable": 0, "idle": idle })
+        };
+        let beat = serde_json::json!({
+            "workspaceId": "ws-idle-id", "status": "idle", "display": "idle",
+            "heartbeat": true, "live": false, "busy": false, "counts": counts(0, 0, 0),
+        });
+        let busy_ws = |status: &str, display: &str, busy: bool, c: serde_json::Value| {
+            serde_json::json!({
+                "workspaceId": "ws-busy-id", "status": status, "display": display,
+                "heartbeat": false, "live": true, "busy": busy, "counts": c,
+            })
+        };
+
+        // Nothing has said anything yet: the live idle session and the
+        // heartbeat workspace are listed as idle (D2). Both projects were
+        // just interacted with, so both are Active.
         let v = summary(port);
-        assert_eq!(v["agentActivity"], serde_json::json!([]), "{v}");
+        assert_eq!(
+            v["agentActivity"],
+            serde_json::json!([busy_ws("idle", "idle", false, counts(0, 0, 1)), beat]),
+            "{v}"
+        );
         let active: Vec<&str> = v["activeProjectIds"]
             .as_array()
             .unwrap_or_else(|| panic!("activeProjectIds is an array: {v}"))
@@ -203,16 +240,16 @@ async fn summary_lists_busy_workspaces_from_activity_and_hooks() {
         assert_eq!(v["workspaces"], serde_json::json!([]), "{v}");
 
         // 1. A braille spinner title through the real PTY → the activity
-        //    observer says working.
+        //    observer says working (busy).
         session.write(b"\x1b]0;\xe2\xa0\x8b Working\x07\n".to_vec());
         await_activity(
             port,
-            serde_json::json!([{ "workspaceId": "ws-busy-id", "status": "working", "display": "working" }]),
+            serde_json::json!([busy_ws("working", "working", true, counts(1, 0, 0)), beat]),
             "title activity",
         );
 
         // 2. A newer permission hook for that session (paneId = the v2
-        //    session id) wins over the title.
+        //    session id) wins over the title. Nothing else runs: not busy.
         let r = http(
             port,
             "GET",
@@ -221,20 +258,25 @@ async fn summary_lists_busy_workspaces_from_activity_and_hooks() {
         assert_eq!(r.status, 200, "hook: {}", r.body);
         await_activity(
             port,
-            serde_json::json!([{ "workspaceId": "ws-busy-id", "status": "permission", "display": "waiting" }]),
+            serde_json::json!([busy_ws("permission", "waiting", false, counts(0, 1, 0)), beat]),
             "permission hook",
         );
 
-        // 3. A stop hook clears it.
+        // 3. A stop hook clears it: idle, still live.
         let r = http(
             port,
             "GET",
             &format!("/hook/complete?token={OWNER_TOKEN}&paneId={sid}&tabId=t&eventType=Stop"),
         );
         assert_eq!(r.status, 200, "hook: {}", r.body);
-        await_activity(port, serde_json::json!([]), "stop hook");
+        await_activity(
+            port,
+            serde_json::json!([busy_ws("idle", "idle", false, counts(0, 0, 1)), beat]),
+            "stop hook",
+        );
 
-        // 4. Busy again, then the session goes away: it drops out.
+        // 4. Busy again, then the session is reaped: the workspace drops
+        //    out (no live PTY, no heartbeat); the heartbeat one stays.
         let r = http(
             port,
             "GET",
@@ -243,12 +285,12 @@ async fn summary_lists_busy_workspaces_from_activity_and_hooks() {
         assert_eq!(r.status, 200, "hook: {}", r.body);
         await_activity(
             port,
-            serde_json::json!([{ "workspaceId": "ws-busy-id", "status": "working", "display": "working" }]),
+            serde_json::json!([busy_ws("working", "working", true, counts(1, 0, 0)), beat]),
             "start hook",
         );
         let removed = v2_session_map::unregister(agent).expect("session was registered");
         drop(removed);
-        await_activity(port, serde_json::json!([]), "session removed");
+        await_activity(port, serde_json::json!([beat]), "session removed");
         drop(session);
     });
 }

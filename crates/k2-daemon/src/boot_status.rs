@@ -799,6 +799,14 @@ pub const FEATURE_THREAD_STREAM: &str = "thread-stream-v1";
 /// the room-wide counts too, as before. No SQL migration.
 pub const FEATURE_THREAD_ACTIVITY_EAR: &str = "thread-activity-ear-v1";
 
+/// plan-agent-status-unify-v1 D1/D2 (0.46.0): the activity rollup carries
+/// `live` and `busy` (snapshot `workspaces[]` and every `activity_changed`
+/// `workspace`), and `presence/summary` `agentActivity` entries carry
+/// `heartbeat`, `live`, `busy` and `counts` (idle workspaces with a live
+/// PTY or a heartbeat listed too). A client drops its own live-session
+/// poll (`liveSessionCwds`) only on a server that reports this key.
+pub const FEATURE_ACTIVITY_LIVE_BUSY: &str = "activity-live-busy";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -859,6 +867,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_APP_PROJECT_CHAT);
     out.push(FEATURE_APP_MOBILE_ACCESS);
     out.push(FEATURE_APP_WALLET);
+    out.push(FEATURE_ACTIVITY_LIVE_BUSY);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
         // Same DB as 0157: migration 0189 (push_devices.previews) ran with it.
@@ -957,6 +966,7 @@ mod tests {
                 "app-project-chat-v1",
                 "app-mobile-access-v1",
                 "app-wallet-v1",
+                "activity-live-busy",
                 "thread-push-v1",
                 "push-previews-v1",
                 "push-e2e-v1",

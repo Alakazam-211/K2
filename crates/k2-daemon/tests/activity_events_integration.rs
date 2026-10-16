@@ -611,12 +611,40 @@ async fn presence_keep_awake_v1_busy_and_the_snapshot_agree() {
     assert_eq!(act.get("agree-mon"), Some(&want("working", "monitoring")));
     assert_eq!(act.get("agree-cron"), Some(&want("working", "monitoring")));
     assert_eq!(act.get("agree-stale"), Some(&want("idle", "unverifiable")));
-    assert_eq!(act.get("agree-idle"), None, "idle workspaces stay out");
+    // D2 (0.46.0): an idle workspace with a live PTY is listed, as idle.
+    assert_eq!(act.get("agree-idle"), Some(&want("idle", "idle")), "a live idle workspace is listed");
     for name in names {
         if let Some((_, d)) = act.get(&format!("agree-{name}")) {
             assert_eq!(d, &display(name), "{name}: presence and snapshot disagree");
         }
     }
+    // D1/D2: the summary's live/busy agree with the snapshot rollups.
+    let entry = |id: &str| {
+        summary["agentActivity"]
+            .as_array()
+            .expect("agentActivity")
+            .iter()
+            .find(|a| a["workspaceId"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("{id} in {summary}"))
+    };
+    let rollup_for = |n: &str| {
+        let path = sessions.iter().find(|s| s.0 == n).expect("session").2.to_string_lossy().into_owned();
+        snap["workspaces"]
+            .as_array()
+            .expect("workspaces")
+            .iter()
+            .find(|w| w["workspacePath"] == path.as_str())
+            .cloned()
+            .unwrap_or_else(|| panic!("{n} rollup in {snap}"))
+    };
+    for (name, busy) in [("work", true), ("mon", false), ("cron", false), ("stale", false), ("idle", false)] {
+        let e = entry(&format!("agree-{name}"));
+        assert_eq!((e["live"].as_bool(), e["busy"].as_bool(), e["heartbeat"].as_bool()), (Some(true), Some(busy), Some(false)), "{name}: {e}");
+        let w = rollup_for(name);
+        assert_eq!((w["live"].as_u64(), w["busy"].as_u64()), (Some(1), Some(u64::from(busy))), "{name}: {w}");
+    }
+    assert_eq!(entry("agree-mon")["counts"]["monitoring"], 1);
 
     // Keep awake re-reads the same rows (A32): working and plain
     // monitoring hold; a cron-only row doesn't; a 40-minute unverifiable
@@ -703,4 +731,175 @@ fn lead_working_touches_active_in_the_daemon() {
     let touched = last_interaction_at("act-q14-pid").expect("touched");
     assert!(touched > 1, "lead → working touches Active");
     activity_store::unregister(&sid);
+}
+
+/// The newest `workspace` rollup the tap saw for `project_id`.
+fn latest_rollup(frames: &[SessionEvent], project_id: &str) -> Option<serde_json::Value> {
+    activity_frames(frames)
+        .into_iter()
+        .rev()
+        .find_map(|(_, _, _, ws)| ws.filter(|w| w["projectId"] == project_id))
+}
+
+fn snapshot_rollup(project_id: &str) -> serde_json::Value {
+    let snap = activity_events::snapshot(None);
+    snap["workspaces"]
+        .as_array()
+        .expect("workspaces")
+        .iter()
+        .find(|w| w["projectId"] == project_id)
+        .cloned()
+        .unwrap_or_else(|| panic!("no {project_id} rollup in {snap}"))
+}
+
+/// plan-agent-status-unify-v1 D1: `live` counts the workspace's live PTYs
+/// across sessions and drops as they are reaped; `busy` counts sessions
+/// mid-turn or with a subagent still running, so a lead asking permission
+/// while its subagent works is busy AND waiting. Every change reaches the
+/// `activity_changed` rollup, which matches the snapshot.
+#[test]
+fn live_and_busy_roll_up_across_sessions_and_follow_reaping() {
+    let _g = lock();
+    let _home = TempHome::new();
+    activity_events::spawn();
+    k2_core::agent_hooks::set_sink(Box::new(NoSink));
+    let dir = tmp_dir("lb");
+    seed_project("act-lb-pid", &dir, 0);
+    let tap = BusTap::start();
+    let one = spawn_cat(&dir, "tab-lb-1");
+    let two = spawn_cat(&dir, "tab-lb-2");
+    let (s1, s2) = (one.session_id.to_string(), two.session_id.to_string());
+    tap.wait_for("live 2 on the bus", |f| latest_rollup(f, "act-lb-pid").is_some_and(|w| w["live"] == 2));
+    let w = snapshot_rollup("act-lb-pid");
+    assert_eq!((w["live"].as_u64(), w["busy"].as_u64(), w["display"].as_str()), (Some(2), Some(0), Some("idle")), "{w}");
+
+    // Session 1: a turn, a subagent, then the lead asks permission.
+    let t = now_ms();
+    prompt(&s1, "p1", t);
+    apply(&s1, r#"{"hook_event_name":"SubagentStart","prompt_id":"p1","agent_id":"ag-lb","agent_type":"general-purpose"}"#, t + 1);
+    apply(&s1, r#"{"hook_event_name":"PreToolUse","prompt_id":"p1","tool_name":"Bash","tool_use_id":"tu-lb","tool_input":{"command":"ls"}}"#, t + 2);
+    apply(&s1, r#"{"hook_event_name":"PermissionRequest","prompt_id":"p1","tool_name":"Bash","tool_input":{"command":"ls"}}"#, t + 3);
+    let row1 = activity_store::row_json(&s1).expect("row 1");
+    assert_eq!((row1["display"].as_str(), row1["lead"]["state"].as_str()), (Some("waiting"), Some("waiting")), "{row1}");
+    assert_eq!(row1["children"]["subagents"], 1, "{row1}");
+    // Session 2: mid-turn.
+    prompt(&s2, "p1", t + 4);
+    let frames = tap.wait_for("busy 2 on the bus", |f| latest_rollup(f, "act-lb-pid").is_some_and(|w| w["busy"] == 2));
+    let w = snapshot_rollup("act-lb-pid");
+    assert_eq!(latest_rollup(&frames, "act-lb-pid").as_ref(), Some(&w), "the frame's rollup is the snapshot's");
+    assert_eq!(w["display"], "waiting", "{w}");
+    assert_eq!((w["counts"]["waiting"].as_u64(), w["counts"]["working"].as_u64()), (Some(1), Some(1)), "{w}");
+    assert_eq!((w["live"].as_u64(), w["busy"].as_u64()), (Some(2), Some(2)), "{w}");
+
+    // Session 2's turn ends: only the waiting-with-subagent one is busy.
+    stop(&s2, "p1", "[]", "[]", t + 5);
+    tap.wait_for("busy 1 on the bus", |f| latest_rollup(f, "act-lb-pid").is_some_and(|w| w["busy"] == 1));
+    let w = snapshot_rollup("act-lb-pid");
+    assert_eq!((w["display"].as_str(), w["live"].as_u64(), w["busy"].as_u64()), (Some("waiting"), Some(2), Some(1)), "{w}");
+
+    // Reap session 2: its row goes, live drops to 1 on the removal frame.
+    two.kill();
+    drop(v2_session_map::unregister("tab-lb-2"));
+    let frames = tap.wait_for("the removal frame", |f| {
+        activity_frames(f).iter().any(|(_, _, removed, _)| removed.as_deref() == Some(s2.as_str()))
+    });
+    let (_, _, _, ws) = activity_frames(&frames)
+        .into_iter()
+        .find(|(_, _, removed, _)| removed.as_deref() == Some(s2.as_str()))
+        .expect("removal");
+    let ws = ws.expect("the removal carries the rollup");
+    assert_eq!((ws["live"].as_u64(), ws["busy"].as_u64()), (Some(1), Some(1)), "{ws}");
+
+    // Session 1's PTY exits: the sweep marks its row `pty_exited`, so the
+    // workspace reads reaped (live 0) even before the row is removed.
+    one.kill();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while one.is_child_alive() {
+        assert!(Instant::now() < deadline, "cat never exited");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    activity_store::sweep_liveness();
+    tap.wait_for("live 0 on the bus", |f| latest_rollup(f, "act-lb-pid").is_some_and(|w| w["live"] == 0));
+    let row1 = activity_store::row_json(&s1).expect("the row stays until unregister");
+    assert_eq!(row1["reason"], "pty_exited", "{row1}");
+    let w = snapshot_rollup("act-lb-pid");
+    assert_eq!(w["live"], 0, "{w}");
+    drop(v2_session_map::unregister("tab-lb-1"));
+    let frames = tap.wait_for("the last removal", |f| {
+        activity_frames(f).iter().any(|(_, _, removed, _)| removed.as_deref() == Some(s1.as_str()))
+    });
+    let last = latest_rollup(&frames, "act-lb-pid").expect("rollup");
+    assert_eq!((last["live"].as_u64(), last["busy"].as_u64(), last["display"].as_str()), (Some(0), Some(0), Some("idle")), "{last}");
+}
+
+struct QuietSink;
+
+impl k2_core::terminal::TerminalEventSink for QuietSink {
+    fn on_title(&self, _: &str, _: &str) {}
+    fn on_bell(&self, _: &str) {}
+    fn on_exit(&self, _: &str, _: i32) {}
+    fn on_grid_update(&self, _: &str, _: &k2_core::terminal::grid_types::GridUpdate) {}
+}
+
+/// D1: a legacy `TerminalManager` shell (no activity row) counts in its
+/// workspace's `live`. Its creation and kill each send a workspace-only
+/// `activity_changed` frame (`row` and `removed` null) with the new
+/// rollup, and the snapshot agrees.
+#[test]
+fn a_legacy_shell_counts_as_live_and_announces_itself() {
+    let _g = lock();
+    let _home = TempHome::new();
+    activity_events::spawn();
+    let dir = tmp_dir("shell");
+    seed_project("act-shell-pid", &dir, 0);
+    let tap = BusTap::start();
+    let id = format!("sd-legacy-{}", uuid::Uuid::new_v4());
+    {
+        let manager = k2_core::terminal::shared();
+        let mut manager = manager.lock();
+        manager
+            .create(
+                id.clone(),
+                dir.to_string_lossy().into_owned(),
+                Some("cat".into()),
+                None,
+                Some(80),
+                Some(24),
+                Arc::new(QuietSink),
+            )
+            .expect("legacy terminal");
+    }
+    activity_events::note_shells_changed();
+    let frames = tap.wait_for("the shell frame", |f| {
+        activity_frames(f).iter().any(|(_, row, removed, ws)| {
+            row.is_none() && removed.is_none() && ws.as_ref().is_some_and(|w| w["projectId"] == "act-shell-pid" && w["live"] == 1)
+        })
+    });
+    let ws = latest_rollup(&frames, "act-shell-pid").expect("rollup");
+    assert_eq!((ws["display"].as_str(), ws["busy"].as_u64(), ws["counts"]["idle"].as_u64()), (Some("idle"), Some(0), Some(0)), "{ws}");
+    assert_eq!(snapshot_rollup("act-shell-pid")["live"], 1, "the snapshot lists a shell-only workspace");
+    // Another nudge with nothing changed sends nothing.
+    let before = activity_frames(&tap.snapshot()).len();
+    activity_events::note_shells_changed();
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(activity_frames(&tap.snapshot()).len(), before, "no change, no frame");
+
+    {
+        let manager = k2_core::terminal::shared();
+        let mut manager = manager.lock();
+        manager.kill(&id).expect("kill legacy terminal");
+    }
+    activity_events::note_shells_changed();
+    let frames = tap.wait_for("live 0 after the kill", |f| latest_rollup(f, "act-shell-pid").is_some_and(|w| w["live"] == 0));
+    let gone = activity_frames(&frames)
+        .into_iter()
+        .rev()
+        .find(|(_, _, _, ws)| ws.as_ref().is_some_and(|w| w["projectId"] == "act-shell-pid"))
+        .expect("frame");
+    assert!(gone.1.is_none() && gone.2.is_none(), "a workspace-only frame");
+    // seq stays gap-free across workspace-only frames.
+    let act = activity_frames(&frames);
+    for w in act.windows(2) {
+        assert_eq!(w[1].0, w[0].0 + 1, "seq gap: {} then {}", w[0].0, w[1].0);
+    }
 }

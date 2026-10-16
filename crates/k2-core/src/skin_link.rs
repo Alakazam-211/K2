@@ -252,10 +252,208 @@ pub fn prune_link_passes() -> Result<usize, String> {
     })
 }
 
+// ── remote App passes (AR10) ─────────────────────────────────────────
+//
+// An App hosted elsewhere (Argus, shape c) can't be link-bound. Its pass
+// reuses the same `tokens` columns: `app_service_id` = the App, `link_id`
+// NULL, `expires_at` set, name `appremote:<label>:<id8>`. So:
+// - every link listener refuses it ([`resolve_link_pass`] wants this
+//   link's id): `pass_wrong_link`;
+// - the general resolver accepts it (main port, tunnel) like a platform
+//   token, until it expires or is revoked;
+// - suspend and `k2 app token rotate` revoke it.
+
+/// `tokens.name` prefix of a remote App pass.
+pub const REMOTE_PASS_NAME_PREFIX: &str = "appremote:";
+/// Default life of a remote pass (rotate with `k2 app token rotate`).
+pub const REMOTE_PASS_TTL_SECS: i64 = 30 * 86_400;
+/// Longest life a remote pass may be minted with.
+pub const REMOTE_PASS_MAX_TTL_SECS: i64 = 90 * 86_400;
+
+/// One remote pass as listed (never the secret).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemotePassInfo {
+    pub id: String,
+    pub prefix: String,
+    pub caps: Vec<String>,
+    pub rooms: Vec<String>,
+    pub issued_at: i64,
+    pub expires_at: i64,
+    pub revoked_at: Option<i64>,
+}
+
+/// Is `name` (a `tokens.name`, the pass's stamp) a remote App pass?
+pub fn is_remote_pass_name(name: &str) -> bool {
+    name.starts_with(REMOTE_PASS_NAME_PREFIX)
+}
+
+/// Mint a remote pass for the App `app_service_id` with `caps` (filtered
+/// like a link pass) in `rooms`, living `ttl_secs` (clamped to
+/// 60 s … [`REMOTE_PASS_MAX_TTL_SECS`]).
+pub fn mint_remote_pass(
+    app_service_id: &str,
+    app_label: &str,
+    caps: &[String],
+    rooms: &[String],
+    ttl_secs: i64,
+) -> Result<LinkPassMint, String> {
+    let svc = app_service_id.trim();
+    if svc.is_empty() {
+        return Err("a remote App pass needs an App".into());
+    }
+    let (caps, dropped) = link_caps(caps);
+    if !dropped.is_empty() {
+        return Err(format!("caps a remote App pass can't carry: {}", dropped.join(", ")));
+    }
+    let rooms = normalize_room_ids(rooms);
+    let id = uuid::Uuid::new_v4().to_string();
+    let raw = generate_raw_key();
+    let prefix = display_prefix(&raw);
+    let issued_at = now_secs();
+    let expires_at = issued_at + ttl_secs.clamp(60, REMOTE_PASS_MAX_TTL_SECS);
+    let name = format!("{REMOTE_PASS_NAME_PREFIX}{}:{}", app_label.trim(), &id[..8]);
+    with_conn(|conn| {
+        conn.execute(
+            "INSERT INTO tokens
+             (id, principal_id, name, key_hash, key_prefix, caps, rooms, created_at, revoked_at, session, expires_at,
+              app_service_id, link_id)
+             VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 0, ?8, ?9, NULL)",
+            params![id, name, sha256_hex(&raw), prefix, caps_json(&caps), rooms_json(&rooms), issued_at, expires_at, svc],
+        )
+        .map_err(|e| format!("remote pass insert: {e}"))?;
+        Ok(())
+    })?;
+    Ok(LinkPassMint { id, raw, prefix, caps, rooms, issued_at, expires_at })
+}
+
+/// An App's remote passes, newest first (live and recently ended).
+pub fn remote_passes(app_service_id: &str) -> Result<Vec<RemotePassInfo>, String> {
+    let like = format!("{REMOTE_PASS_NAME_PREFIX}%");
+    with_conn(|conn| {
+        let mut st = conn
+            .prepare(
+                "SELECT id, key_prefix, caps, rooms, created_at, expires_at, revoked_at FROM tokens
+                 WHERE link_id IS NULL AND session = 0 AND app_service_id = ?1 AND name LIKE ?2
+                 ORDER BY created_at DESC, id",
+            )
+            .map_err(|e| format!("remote pass list: {e}"))?;
+        let rows = st
+            .query_map(params![app_service_id, like], |r| {
+                Ok(RemotePassInfo {
+                    id: r.get(0)?,
+                    prefix: r.get(1)?,
+                    caps: caps_from_json(&r.get::<_, String>(2)?),
+                    rooms: rooms_from_json(&r.get::<_, String>(3)?),
+                    issued_at: r.get(4)?,
+                    expires_at: r.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                    revoked_at: r.get(6)?,
+                })
+            })
+            .map_err(|e| format!("remote pass list: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("remote pass list: {e}"))
+    })
+}
+
+/// The App a live remote pass (by token id) is bound to.
+pub fn remote_pass_app(token_id: &str) -> Option<String> {
+    let like = format!("{REMOTE_PASS_NAME_PREFIX}%");
+    with_conn(|conn| {
+        conn.query_row(
+            "SELECT app_service_id FROM tokens WHERE id = ?1 AND link_id IS NULL AND session = 0 AND name LIKE ?2",
+            params![token_id, like],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|e| format!("remote pass app: {e}"))
+    })
+    .ok()
+    .flatten()
+    .flatten()
+}
+
+/// Revoke an App's live remote passes, or one of them (`only`). Returns
+/// how many.
+pub fn revoke_remote_passes(app_service_id: &str, only: Option<&str>) -> Result<usize, String> {
+    let svc = app_service_id.trim();
+    if svc.is_empty() {
+        return Err("missing App".into());
+    }
+    let like = format!("{REMOTE_PASS_NAME_PREFIX}%");
+    with_conn(|conn| {
+        conn.execute(
+            "UPDATE tokens SET revoked_at = ?1
+             WHERE link_id IS NULL AND session = 0 AND app_service_id = ?2 AND name LIKE ?3 AND revoked_at IS NULL
+               AND (?4 IS NULL OR id = ?4)",
+            params![now_secs(), svc, like, only],
+        )
+        .map_err(|e| format!("remote pass revoke: {e}"))
+    })
+}
+
+/// Suspend (§5.4): revoke every live pass the App holds, link and remote,
+/// in one statement. Guest sessions are the guests' own and stay.
+pub fn revoke_app_passes(app_service_id: &str) -> Result<usize, String> {
+    let svc = app_service_id.trim();
+    if svc.is_empty() {
+        return Err("missing App".into());
+    }
+    let like = format!("{REMOTE_PASS_NAME_PREFIX}%");
+    with_conn(|conn| {
+        conn.execute(
+            "UPDATE tokens SET revoked_at = ?1
+             WHERE app_service_id = ?2 AND session = 0 AND revoked_at IS NULL
+               AND (link_id IS NOT NULL OR name LIKE ?3)",
+            params![now_secs(), svc, like],
+        )
+        .map_err(|e| format!("App pass revoke: {e}"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
     use super::*;
+
+    /// AR10: a remote pass is App-bound with an expiry; refused on every
+    /// link listener; accepted by the general resolver; revoked by suspend
+    /// (with the link passes) and by rotate.
+    #[test]
+    fn a_remote_pass_is_refused_on_links_and_revoked_by_suspend() {
+        with_temp_home(|| {
+            let r = mint_remote_pass(APP, "argus", &caps(&["thread:read", "pty:write"]), &["ws-1".to_string()], 3600);
+            assert!(r.unwrap_err().contains("pty:write"), "unknown caps are refused, not dropped");
+            let r = mint_remote_pass(APP, "argus", &caps(&["thread:read"]), &["ws-1".to_string()], 10 * REMOTE_PASS_MAX_TTL_SECS).unwrap();
+            assert_eq!(r.expires_at - r.issued_at, REMOTE_PASS_MAX_TTL_SECS, "ttl clamped");
+            let p = resolve_skin_token(&r.raw).expect("the general resolver accepts a remote pass");
+            assert!(is_remote_pass_name(&p.username), "{}", p.username);
+            assert_eq!(remote_pass_app(&p.id).as_deref(), Some(APP));
+            assert!(resolve_link_pass(&r.raw, "gw:38601", APP).is_none(), "never on a link");
+            assert_eq!(classify_presented(&r.raw), PresentedPass::Other);
+            let listed = remote_passes(APP).unwrap();
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].id, r.id);
+            assert!(remote_passes(OTHER_APP).unwrap().is_empty());
+
+            // Suspend: link and remote passes in one step; other tokens stay.
+            let l = mint_link_pass(APP, "argus", "gw:38601", &caps(&["thread:read"]), &["ws-1".to_string()]).unwrap();
+            let other = mint_remote_pass(OTHER_APP, "o", &caps(&["thread:read"]), &[], 3600).unwrap();
+            let (_, plat) = create_token("dannon-bff", Some(&caps(&["thread:read"])), &["ws-1".to_string()]).unwrap();
+            assert_eq!(revoke_app_passes(APP).unwrap(), 2);
+            assert!(resolve_skin_token(&r.raw).is_none());
+            assert!(resolve_link_pass(&l.raw, "gw:38601", APP).is_none());
+            assert!(resolve_skin_token(&other.raw).is_some(), "another App's pass stays");
+            assert!(resolve_skin_token(&plat).is_some(), "a platform token stays");
+            assert!(remote_passes(APP).unwrap()[0].revoked_at.is_some());
+
+            // Rotate = a new pass, then revoke the old one by id.
+            let a = mint_remote_pass(OTHER_APP, "o", &caps(&["thread:read"]), &[], 3600).unwrap();
+            assert_eq!(revoke_remote_passes(OTHER_APP, Some(&other.id)).unwrap(), 1);
+            assert!(resolve_skin_token(&other.raw).is_none());
+            assert!(resolve_skin_token(&a.raw).is_some());
+            assert!(remote_pass_app(&resolve_skin_token(&plat).unwrap().id).is_none(), "a platform token isn't a remote pass");
+        });
+    }
 
     fn with_temp_home<F: FnOnce()>(f: F) {
         let _home = crate::test_env::TempHome::new();

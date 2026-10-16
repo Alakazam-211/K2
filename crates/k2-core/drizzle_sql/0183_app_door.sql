@@ -23,8 +23,9 @@
 -- apps.approved_caps_json
 --     = the App's approved cap set (§5.6): a JSON array of catalog cap
 --       names the owner approved (first install or a held deploy). NULL =
---       none recorded: an App with a live Seed is grandfathered at its live
---       Seed's caps on first use; an App with none is a first install.
+--       none: the next deploy is a first install. Apps that already carry
+--       a pass (guarded, or the process exception) with a live Seed are
+--       grandfathered here at that Seed's manifest caps.
 -- apps.quota_json
 --     = the owner's per-App override of the §5.4 quota defaults
 --       ({"rps":N,"burst":N,"sockets":N,"bodyBytes":N,"uploadBytes":N,
@@ -77,3 +78,8 @@ ALTER TABLE apps ADD COLUMN suspended_reason TEXT;
 ALTER TABLE apps ADD COLUMN approved_caps_json TEXT;
 --> statement-breakpoint
 ALTER TABLE apps ADD COLUMN quota_json TEXT;
+--> statement-breakpoint
+UPDATE apps SET approved_caps_json = COALESCE(
+    (SELECT json_extract(s.manifest_json, '$.caps') FROM seeds s WHERE s.hash = apps.live_seed), '[]')
+  WHERE approved_caps_json IS NULL AND live_seed IS NOT NULL
+    AND (isolation = 'container' OR (path = 'open' AND isolation = 'process'));

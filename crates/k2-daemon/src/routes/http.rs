@@ -1213,6 +1213,9 @@ pub(crate) async fn send_response_with_cookie_and_location(
         body,
         frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
+    // Runtime S19: on an App's gateway link, the per-call audit row gets
+    // the result and bytes out (a no-op off a link).
+    crate::apps::audit::note_response(status, body.len());
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 
@@ -1236,6 +1239,7 @@ pub(crate) async fn send_response_with_headers(
         body,
         frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
+    crate::apps::audit::note_response(status, body.len());
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 

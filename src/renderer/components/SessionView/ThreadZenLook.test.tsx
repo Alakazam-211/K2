@@ -508,13 +508,13 @@ describe('chamfered corners in K2\'s square Style', () => {
     ]) {
       expect(small.hasAttribute('data-chamfer')).toBe(false)
     }
-    // The cuts: 4px on surfaces (a bubble's tail corner stays sharp), 3px on Send and the drawer.
+    // The cuts: 4px on surfaces (a bubble tail corner stays sharp), 5px on Send, 3px on the drawer.
     const mine = el('[data-zen-bubble="me"]')
     expect(['tl', 'tr', 'br', 'bl'].map((k) => mine.style.getPropertyValue(`--ch-${k}`))).toEqual(['4px', '4px', '0px', '4px'])
     expect(el('[data-zen-bubble="agent"]').style.getPropertyValue('--ch-bl')).toBe('0px')
     expect(el('[data-zen-compose-box]').style.getPropertyValue('--ch-tl')).toBe('4px')
     expect(el('[data-zen-compose-box]').style.getPropertyValue('--ch-bw')).toBe('1px')
-    expect(el('[data-zen-send]').style.getPropertyValue('--ch-tl')).toBe('3px')
+    expect(el('[data-zen-send]').style.getPropertyValue('--ch-tl')).toBe('5px')
     // On the box's top edge: top corners cut, the bottom runs into the field.
     const tile = el('[data-zen-drawer-tile]')
     expect(['tl', 'tr', 'br', 'bl'].map((k) => tile.style.getPropertyValue(`--ch-${k}`))).toEqual(['3px', '3px', '0px', '0px'])

@@ -81,7 +81,8 @@ export const THREAD_CARD_TOKENS = {
 export type ChamferCorners = readonly [number, number, number, number]
 
 /** The cut sizes the Thread uses: big surfaces 4px, a 32px button 3px. */
-export const CHAMFER_CUT = { surface: 4, button: 3 } as const
+/** Send reads at 5px (Rosson 2026-10-16: 3px was too subtle). */
+export const CHAMFER_CUT = { surface: 4, button: 3, send: 5 } as const
 
 export function chamferVars(o: {
   /** One cut for every corner, or one per corner (TL, TR, BR, BL). */
@@ -485,7 +486,7 @@ export function ThreadSendButton({
         background: canSend ? 'var(--zen-accent)' : 'var(--zen-surface)',
         color: canSend ? 'var(--zen-accent-text)' : 'var(--zen-text-muted)',
         transition: 'background-color 140ms ease',
-        ...chamferVars({ cut: CHAMFER_CUT.button, fill: canSend ? 'var(--zen-accent)' : 'var(--zen-surface)' }),
+        ...chamferVars({ cut: CHAMFER_CUT.send, fill: canSend ? 'var(--zen-accent)' : 'var(--zen-surface)' }),
       }}
     >
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

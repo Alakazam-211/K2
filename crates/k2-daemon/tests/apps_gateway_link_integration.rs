@@ -76,6 +76,8 @@ fn spec(app: &str, svc: &str, ws: &Ws, caps: &[&str]) -> LinkSpec {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s14_the_link_admits_only_its_own_pass_on_app_routes() {
     let env = setup(&[]);
+    // The door's alerts (pass_wrong_link below) never wake a real agent.
+    k2_daemon::apps::alerts::set_sink(Some(Box::new(|_: &str, _: &str| {})));
     let d = k2_daemon::test_harness::start(OWNER).await;
     let ws = seed_ws(&env, "linkws");
     let other_ws = seed_ws(&env, "otherws");

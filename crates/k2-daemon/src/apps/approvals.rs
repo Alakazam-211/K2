@@ -96,7 +96,7 @@ pub(crate) fn held_answer(r: &reqs::AppRequest) -> J {
         "reasons": r.reasons,
         "expiresAt": r.expires_at,
         "hint": format!(
-            "held for the owner: they approve it in person (k2 app approve {} from a terminal outside K2, or Settings → Apps → \
+            "held for the owner: they approve it in person (k2 app approve {} from a terminal outside K2, or Settings → App \
              Approvals), or deny it. Check with k2 app approvals.",
             r.id
         ),
@@ -202,7 +202,7 @@ fn approve(who: &Who, body: &[u8]) -> R<J> {
             codes::OWNER_ONLY,
             403,
             "only the server's owner approves App requests, in person: k2 app approve <id> from a terminal outside K2, \
-             or Settings → Apps → Approvals. An agent can propose, never approve.",
+             or Settings → App Approvals. An agent can propose, never approve.",
         ));
     };
     let v = json_body(body)?;
@@ -526,7 +526,7 @@ pub(crate) fn hold_without_switch(path: &str, who: &Who, body: &[u8]) -> Option<
         let mut out = held_answer(&r);
         out["hint"] = json!(format!(
             "held for the owner: \"Allow this agent to manage Apps\" is off for this workspace, so every App change waits for \
-             the owner (k2 app approve {} outside K2, or Settings → Apps → Approvals). To stop a misbehaving App now: k2 app suspend <app>.",
+             the owner (k2 app approve {} outside K2, or Settings → App Approvals). To stop a misbehaving App now: k2 app suspend <app>.",
             r.id
         ));
         Ok(out)

@@ -152,6 +152,11 @@ jobs:
           cargo test -p k2-core --lib -- deploy::
           cargo test -p k2-daemon --lib -- apps::
           cargo test -p k2-daemon --test apps_runtime_integration
+          # The 0.46.1 door (lane 2): app-audit.db, remote passes, 0173,
+          # and quotas/audit/suspend on a live gateway link.
+          cargo test -p k2-core --lib -- app_audit skin_link app_door app_grace::requests
+          cargo test -p k2-daemon --test apps_door_integration
+          cargo test -p k2-daemon --test apps_gateway_link_integration
           # The guarded engine's k2app-side binary (S11/S12): wire, caller
           # check over socket pairs, Quadlet rendering, seccomp, Seeds.
           cargo test -p k2-app-engine

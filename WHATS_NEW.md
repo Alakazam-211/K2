@@ -12,7 +12,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Its agent hears about trouble.** An App's agent is told when the App is refused more than 20 times in 5 minutes, uses a write action for the first time, shows a pass at the wrong door, or hits a limit.
 - **New permissions wait for you.** An App's first install, and any later deploy that asks for permissions you haven't approved, wait in `k2 app approvals` while the running version keeps serving, even when you deploy it yourself. The App's pass carries only what you approved. Apps already behind the wall keep what they have.
 - **Agents without "Allow this agent to manage Apps" ask instead.** Their install, deploy, stop and other changes now become one request you approve or deny, and run as asked when you approve.
-- **Approvals in Settings.** Settings → Apps → Approvals lists what is waiting, in plain words, with Approve (Touch ID or your password) and Deny with a note. On a server where you can't confirm in person yet (no vault password and no owner login), it says so, and `k2 app doctor` does too.
+- **Approvals in Settings.** Settings → App Approvals lists what is waiting, in plain words, with Approve (Touch ID or your password) and Deny with a note. On a server where you can't confirm in person yet (no vault password and no owner login), it says so, and `k2 app doctor` does too.
 - **Apps hosted elsewhere.** `k2 app token rotate <app>` gives an App that runs on another machine its own pass for K2: it expires (30 days by default), carries only the App's approved permissions, works on K2's main address and tunnel but never at an App's door, and is ended by suspend. `k2 app remote-pass <app>` lists and ends them.
 
 ## 0.46.0

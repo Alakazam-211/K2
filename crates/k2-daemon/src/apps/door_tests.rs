@@ -58,10 +58,10 @@ fn fx(tag: &str) -> Fx {
         }
         // Seeds: caps are the manifest's; reports are valid.
         for (hash, seed_id, caps) in [
-            ("seed-two", "jobs", json!(["thread:read", "files:write"])),
-            ("seed-one", "jobs", json!(["thread:read"])),
-            ("seed-three", "jobs", json!(["thread:read", "files:write", "store:read"])),
-            ("seed-none", "bare", json!([])),
+            ("2222222222222222222222222222222222222222222222222222222222222222", "jobs", json!(["thread:read", "files:write"])),
+            ("1111111111111111111111111111111111111111111111111111111111111111", "jobs", json!(["thread:read"])),
+            ("3333333333333333333333333333333333333333333333333333333333333333", "jobs", json!(["thread:read", "files:write", "store:read"])),
+            ("0000000000000000000000000000000000000000000000000000000000000000", "bare", json!([])),
         ] {
             conn.execute(
                 "INSERT INTO seeds (hash, seed_id, host_mode, manifest_json, created_with, report_json, signer, size_bytes, created_at, last_used_at) \
@@ -155,7 +155,7 @@ fn suspend_revokes_every_pass_in_one_step_and_only_the_owner_resumes() {
 
     // Frozen: deploys, starts, rollbacks, the link and remote passes.
     for (path, body) in [
-        ("/cli/app/deploy", json!({"app": "jobs", "seed": "seed-one"})),
+        ("/cli/app/deploy", json!({"app": "jobs", "seed": "1111111111111111111111111111111111111111111111111111111111111111"})),
         ("/cli/app/start", json!({"app": "jobs"})),
         ("/cli/app/rollback", json!({"app": "jobs"})),
     ] {
@@ -193,7 +193,7 @@ fn remote_passes_are_the_owners_to_mint_and_anyones_to_revoke() {
         let h = k2_core::db::shared();
         let conn = h.lock();
         super::grants::record(&conn, "jobs", &["thread:read".to_string()]).unwrap();
-        conn.execute("UPDATE apps SET live_seed = 'seed-two' WHERE app_id = 'jobs'", []).unwrap();
+        conn.execute("UPDATE apps SET live_seed = '2222222222222222222222222222222222222222222222222222222222222222' WHERE app_id = 'jobs'", []).unwrap();
     }
     for who in [agent(&f.ws_a), admin()] {
         let (st, v) = call("/cli/app/remote-pass/rotate", &who, json!({"app": "jobs"}));
@@ -213,10 +213,11 @@ fn remote_passes_are_the_owners_to_mint_and_anyones_to_revoke() {
     // Rotate: a new pass; the old one is revoked unless keepOld.
     let (_, v) = call("/cli/app/remote-pass/rotate", &Who::Owner, json!({"app": "jobs"}));
     assert_eq!(v["revoked"], 1, "{v}");
+    let second = v["pass"].as_str().unwrap().to_string();
     assert!(k2_core::skin::resolve_skin_token(&first).is_none());
     let (st, v) = get("/cli/app/remote-pass", &agent(&f.ws_a), &[("app", "jobs")]);
     assert_eq!((st, v["live"].as_u64()), (200, Some(1)), "{v}");
-    assert!(!v.to_string().contains("k2skn_"), "never the secret: {v}");
+    assert!(!v.to_string().contains(&first) && !v.to_string().contains(second.as_str()), "never the secret: {v}");
     let (st, _) = get("/cli/app/remote-pass", &agent(&f.ws_b), &[("app", "jobs")]);
     assert_eq!(st, 404);
     let (st, v) = call("/cli/app/remote-pass/revoke", &agent(&f.ws_a), json!({"app": "jobs"}));
@@ -226,29 +227,48 @@ fn remote_passes_are_the_owners_to_mint_and_anyones_to_revoke() {
 #[test]
 fn quotas_lower_at_once_and_raises_are_the_owners() {
     let f = fx("quota");
-    let (st, v) = get("/cli/app/quota", &agent(&f.ws_a), &[("app", "jobs")]);
+    // Its own App id: the gateway's quota cache is process-wide.
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::insert_app(
+            &conn,
+            &store::NewApp {
+                app_id: "qapp",
+                service_id: "svc-qapp",
+                seed_id: None,
+                owner_workspace: &f.ws_a,
+                isolation: "container",
+                memory_limit_bytes: None,
+                front_port: 0,
+                created_by: "owner",
+            },
+        )
+        .unwrap();
+    }
+    let (st, v) = get("/cli/app/quota", &agent(&f.ws_a), &[("app", "qapp")]);
     assert_eq!(st, 200, "{v}");
     assert_eq!(v["quotas"]["rps"], 50);
     assert_eq!(v["quotas"]["bodyBytes"], 8 * 1024 * 1024);
     switch(&f.ws_a, true);
-    let (st, v) = call("/cli/app/quota/set", &agent(&f.ws_a), json!({"app": "jobs", "rps": 5, "bodyBytes": "1M"}));
+    let (st, v) = call("/cli/app/quota/set", &agent(&f.ws_a), json!({"app": "qapp", "rps": 5, "bodyBytes": "1M"}));
     assert_eq!(st, 200, "{v}");
     assert_eq!((v["quotas"]["rps"].as_u64(), v["quotas"]["bodyBytes"].as_u64()), (Some(5), Some(1024 * 1024)));
-    assert_eq!(super::quotas::quotas_for("jobs").rps, 5, "the gateway sees it at once");
+    assert_eq!(super::quotas::quotas_for("qapp").rps, 5, "the gateway sees it at once");
     // A raise from the agent is held for the owner.
-    let (st, v) = call("/cli/app/quota/set", &agent(&f.ws_a), json!({"app": "jobs", "rps": 500}));
+    let (st, v) = call("/cli/app/quota/set", &agent(&f.ws_a), json!({"app": "qapp", "rps": 500}));
     assert_eq!((st, v["kind"].as_str()), (202, Some("quota")), "{v}");
     let id = v["request"]["id"].as_str().unwrap().to_string();
-    assert_eq!(super::quotas::quotas_for("jobs").rps, 5, "held is not live");
+    assert_eq!(super::quotas::quotas_for("qapp").rps, 5, "held is not live");
     let out = approve(&id, &owner_login(), "connect:rosson");
     assert_eq!(out["status"], "approved", "{out}");
-    assert_eq!(super::quotas::quotas_for("jobs").rps, 500);
+    assert_eq!(super::quotas::quotas_for("qapp").rps, 500);
     // The owner raises directly; nonsense is refused.
-    let (st, _) = call("/cli/app/quota/set", &Who::Owner, json!({"app": "jobs", "sockets": 128}));
+    let (st, _) = call("/cli/app/quota/set", &Who::Owner, json!({"app": "qapp", "sockets": 128}));
     assert_eq!(st, 200);
-    let (st, v) = call("/cli/app/quota/set", &Who::Owner, json!({"app": "jobs", "rps": 0}));
+    let (st, v) = call("/cli/app/quota/set", &Who::Owner, json!({"app": "qapp", "rps": 0}));
     assert_eq!((st, code(&v)), (400, "bad_request"), "{v}");
-    let (st, v) = call("/cli/app/quota/set", &Who::Owner, json!({"app": "jobs", "reset": true}));
+    let (st, v) = call("/cli/app/quota/set", &Who::Owner, json!({"app": "qapp", "reset": true}));
     assert_eq!((st, v["quotas"]["rps"].as_u64()), (200, Some(50)), "{v}");
 }
 
@@ -256,14 +276,14 @@ fn quotas_lower_at_once_and_raises_are_the_owners() {
 fn deploys_adding_caps_and_first_installs_are_held_for_every_caller() {
     let f = fx("deploy");
     // First install of a guarded App, the owner token included (AR14).
-    let (st, v) = call("/cli/app/deploy", &Who::Owner, json!({"app": "jobs", "seed": "seed-two"}));
+    let (st, v) = call("/cli/app/deploy", &Who::Owner, json!({"app": "jobs", "seed": "2222222222222222222222222222222222222222222222222222222222222222"}));
     assert_eq!((st, v["status"].as_str(), v["kind"].as_str()), (202, Some("held"), Some("install")), "{v}");
     assert_eq!(v["diff"]["caps"]["add"], json!(["thread:read", "files:write"]));
     let id = v["request"]["id"].as_str().unwrap().to_string();
     assert_eq!(recorded("jobs"), None, "nothing approved while held");
     // The agent with its switch on is held the same way.
     switch(&f.ws_a, true);
-    let (st, v) = call("/cli/app/deploy", &agent(&f.ws_a), json!({"app": "jobs", "seed": "seed-two"}));
+    let (st, v) = call("/cli/app/deploy", &agent(&f.ws_a), json!({"app": "jobs", "seed": "2222222222222222222222222222222222222222222222222222222222222222"}));
     assert_eq!((st, v["kind"].as_str()), (202, Some("install")), "{v}");
     // Only the owner approves; the approved set is recorded.
     let r = super::approvals::handle(
@@ -284,30 +304,30 @@ fn deploys_adding_caps_and_first_installs_are_held_for_every_caller() {
         super::grants::check_deploy(&conn, &row, seed).unwrap()
     };
     use super::grants::DeployCheck;
-    assert_eq!(check("jobs", "seed-one"), DeployCheck::Fits, "narrowing never waits");
-    assert_eq!(check("jobs", "seed-two"), DeployCheck::Fits);
+    assert_eq!(check("jobs", "1111111111111111111111111111111111111111111111111111111111111111"), DeployCheck::Fits, "narrowing never waits");
+    assert_eq!(check("jobs", "2222222222222222222222222222222222222222222222222222222222222222"), DeployCheck::Fits);
     assert_eq!(
-        check("jobs", "seed-three"),
+        check("jobs", "3333333333333333333333333333333333333333333333333333333333333333"),
         DeployCheck::Held {
             kind: reqs::KIND_DEPLOY,
             add: vec!["store:read".into()],
             set: vec!["files:write".into(), "thread:read".into(), "store:read".into()]
         }
     );
-    let (st, v) = call("/cli/app/deploy", &Who::Owner, json!({"app": "jobs", "seed": "seed-three"}));
+    let (st, v) = call("/cli/app/deploy", &Who::Owner, json!({"app": "jobs", "seed": "3333333333333333333333333333333333333333333333333333333333333333"}));
     assert_eq!((st, v["kind"].as_str()), (202, Some("deploy")), "{v}");
     assert_eq!(v["diff"]["lines"], json!(["+ cap store:read"]));
     // An App without a pass (the stage-1 process engine) holds nothing.
-    assert_eq!(check("plain", "seed-three"), DeployCheck::Fits);
+    assert_eq!(check("plain", "3333333333333333333333333333333333333333333333333333333333333333"), DeployCheck::Fits);
     // A first install asking for nothing, or fitting an earlier approval
     // of the same Seed id, records its set and goes on.
-    assert_eq!(check("other", "seed-none"), DeployCheck::FirstFits(vec![]));
+    assert_eq!(check("other", "0000000000000000000000000000000000000000000000000000000000000000"), DeployCheck::FirstFits(vec![]));
     {
         let h = k2_core::db::shared();
         let conn = h.lock();
         conn.execute("UPDATE apps SET seed_id = 'jobs' WHERE app_id = 'jobs'", []).unwrap();
     }
-    assert_eq!(check("other", "seed-one"), DeployCheck::FirstFits(vec!["thread:read".into()]));
+    assert_eq!(check("other", "1111111111111111111111111111111111111111111111111111111111111111"), DeployCheck::FirstFits(vec!["thread:read".into()]));
     // The link pass: manifest ∩ approved.
     let e = super::grants::narrow_for_link("jobs", &["thread:read".into(), "store:read".into()], &f.ws_a);
     assert_eq!((e.caps, e.withheld), (vec!["thread:read".to_string()], vec!["store:read".to_string()]));

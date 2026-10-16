@@ -185,14 +185,14 @@ fn agent_proposes_owner_approves_and_a_signed_command_goes_out() {
 
     // The owner token alone isn't enough (AR14).
     let e = call(APPROVE, &Who::Owner, json!({"request": id})).unwrap_err();
-    assert_eq!(e, (403, cadmin::codes::OWNER_CONFIRM_REQUIRED.to_string()));
+    assert_eq!(e, (403, cadmin::codes::VAULT_CONFIRM_REQUIRED.to_string()));
     // A confirm minted for another request is refused (and burned).
     let other = token_for("car_someone_else");
     let e = call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": other})).unwrap_err();
-    assert_eq!(e.1, cadmin::codes::OWNER_CONFIRM_REQUIRED);
+    assert_eq!(e.1, cadmin::codes::VAULT_CONFIRM_REQUIRED);
     // A confirm for another action is refused.
     let wrong_action = test_seams::vault_handle().confirm.mint("reveal", Some(&id), "owner", "local-auth");
-    assert_eq!(call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": wrong_action})).unwrap_err().1, cadmin::codes::OWNER_CONFIRM_REQUIRED);
+    assert_eq!(call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": wrong_action})).unwrap_err().1, cadmin::codes::VAULT_CONFIRM_REQUIRED);
 
     let r = call(APPROVE, &Who::Owner, json!({"request": id, "confirmToken": token_for(&id)})).unwrap();
     assert_eq!(r["sent"], true, "{r}");

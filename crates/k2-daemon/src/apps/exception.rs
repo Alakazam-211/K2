@@ -23,7 +23,9 @@ use crate::compute_routes::Who;
 /// The vault confirm action (`vault_routes::CONFIRM_ACTIONS`); the token
 /// is bound to the App id.
 pub const CONFIRM_ACTION: &str = "app-process-exception";
-pub const OWNER_CONFIRM_REQUIRED: &str = "owner_confirm_required";
+/// One confirm code for everything that needs the person's confirm (Rosson
+/// 2026-10-16): the vault's `vault_confirm_required`, hint unchanged.
+pub use super::egress_routes::codes::VAULT_CONFIRM_REQUIRED;
 
 fn confirm_stamp(who: &Who) -> Option<String> {
     match who {
@@ -128,7 +130,7 @@ pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
     let devices = devices_of(&v)?;
     let Some(token) = s(&v, "confirmToken") else {
         return Err(no(
-            OWNER_CONFIRM_REQUIRED,
+            VAULT_CONFIRM_REQUIRED,
             403,
             "this needs a fresh owner confirm (Touch ID, your login or the vault password): k2 app exception <app> on asks for it",
         ));
@@ -138,10 +140,10 @@ pub(crate) fn route(who: &Who, body: &[u8]) -> R<J> {
     let proof = vault
         .confirm
         .take(token, CONFIRM_ACTION, Some(&app.app_id), &stamp)
-        .map_err(|_| no(OWNER_CONFIRM_REQUIRED, 403, "confirm again: a confirm works once, for this App, within 60 seconds"))?;
+        .map_err(|_| no(VAULT_CONFIRM_REQUIRED, 403, "confirm again: a confirm works once, for this App, within 60 seconds"))?;
     let via = match proof {
         k2_vault::HumanProof::Confirmed { method } => method,
-        k2_vault::HumanProof::None => return Err(no(OWNER_CONFIRM_REQUIRED, 403, "no owner confirm")),
+        k2_vault::HumanProof::None => return Err(no(VAULT_CONFIRM_REQUIRED, 403, "no owner confirm")),
     };
     let reason = s(&v, "reason").map(|r| r.chars().take(500).collect::<String>());
     let approval = json!({ "by": actor(who), "at": deploy::now(), "via": via, "reason": reason, "devices": devices }).to_string();
@@ -199,5 +201,43 @@ mod tests {
         assert_eq!(confirm_stamp(&Who::Owner).as_deref(), Some("owner"));
         assert_eq!(confirm_stamp(&Who::Login { username: "z".into(), role: Role::Owner }).as_deref(), Some("connect:z"));
         assert!(confirm_stamp(&Who::Login { username: "z".into(), role: Role::Admin }).is_none());
+    }
+
+    #[test]
+    fn the_owner_without_a_confirm_gets_the_one_confirm_code() {
+        // Rosson 2026-10-16: everything that needs the person's confirm
+        // answers vault_confirm_required (never owner_confirm_required).
+        assert_eq!(VAULT_CONFIRM_REQUIRED, "vault_confirm_required");
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        {
+            let h = k2_core::db::shared();
+            let conn = h.lock();
+            conn.execute("INSERT INTO projects (id, name, path, handle) VALUES ('ws-x', 'ws-x', '/tmp/k2-exc-test/ws-x', 'ws-x')", [])
+                .unwrap();
+            store::insert_app(
+                &conn,
+                &store::NewApp {
+                    app_id: "jobs",
+                    service_id: "svc-jobs-exc",
+                    seed_id: None,
+                    owner_workspace: "ws-x",
+                    isolation: "container",
+                    memory_limit_bytes: None,
+                    front_port: 0,
+                    created_by: "owner",
+                },
+            )
+            .unwrap();
+        }
+        for who in [Who::Owner, Who::Login { username: "rosson".into(), role: Role::Owner }] {
+            let e = route(&who, br#"{"app":"jobs","on":true}"#).unwrap_err();
+            if cfg!(target_os = "linux") {
+                assert_eq!((e.code, e.status), ("vault_confirm_required", 403), "{who:?}: {}", e.hint);
+                assert!(e.hint.contains("k2 app exception <app> on asks for it"), "{}", e.hint);
+            } else {
+                assert_eq!((e.code, e.status), (codes::ENGINE_UNAVAILABLE, 409), "{who:?}: {}", e.hint);
+            }
+        }
     }
 }

@@ -512,7 +512,7 @@ pub fn handle(
         return refuse(
             403,
             "owner_only",
-            "Agents and K2 terminals can only read tokens. Change tokens on Settings → LLMs → Tokens, or run k2 from a terminal outside K2.",
+            "Agents and K2 terminals can only read tokens. Change tokens on Settings → Language Models → Subs / Tokens, or run k2 from a terminal outside K2.",
         );
     }
     match path {
@@ -702,7 +702,7 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                 Err(WalletError::NotFound(k)) if k == "no_next" => refuse(
                     404,
                     "no_next",
-                    "there is no other signed-in subscription for that tool; add one on Settings → LLMs → Tokens",
+                    "there is no other signed-in subscription for that tool; add one on Settings → Language Models → Subs / Tokens",
                 ),
                 Err(e) => {
                     if matches!(e.code(), "account_mismatch" | "signing_in" | "changed") {

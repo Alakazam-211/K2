@@ -71,14 +71,14 @@ fn account_mismatch(what: &str, label: &str, expected: &(AccountIdentity, Source
         )
     } else if what == "capture" {
         format!(
-            "K2 stopped the switch: the sign-in live on this server belongs to {} ({}), but you expected \"{label}\" ({}) to be live. Saving it would put another account's sign-in into \"{label}\". Nothing changed. If someone signed in outside K2, add that sign-in on Settings → LLMs → Tokens, or sign this token in again.",
+            "K2 stopped the switch: the sign-in live on this server belongs to {} ({}), but you expected \"{label}\" ({}) to be live. Saving it would put another account's sign-in into \"{label}\". Nothing changed. If someone signed in outside K2, add that sign-in on Settings → Language Models → Subs / Tokens, or sign this token in again.",
             actual.0.describe(),
             actual.1.describe(),
             expected.0.describe()
         )
     } else {
         format!(
-            "K2 stopped the switch: the saved sign-in for \"{label}\" belongs to {} ({}), not {} ({}). The server default is unchanged. Sign \"{label}\" in again on Settings → LLMs → Tokens.",
+            "K2 stopped the switch: the saved sign-in for \"{label}\" belongs to {} ({}), not {} ({}). The server default is unchanged. Sign \"{label}\" in again on Settings → Language Models → Subs / Tokens.",
             actual.0.describe(),
             actual.1.describe(),
             expected.0.describe(),

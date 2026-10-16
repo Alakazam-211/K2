@@ -211,7 +211,7 @@ class H(BaseHTTPRequestHandler):
         elif verb in POST_ONLY and method != "POST":
             status, out = 405, {"error": "POST required"}
         elif verb in POST_ONLY and token == scoped:
-            status, out = 403, {"error": {"code": "owner_only", "hint": "Change tokens on Settings → LLMs → Tokens, or run k2 from a terminal outside K2."}}
+            status, out = 403, {"error": {"code": "owner_only", "hint": "Change tokens on Settings → Language Models → Subs / Tokens, or run k2 from a terminal outside K2."}}
         elif verb == "list":
             out = LIST
         elif verb == "status":
@@ -427,7 +427,7 @@ set +e
 cell llm tokens switch claude personal >/dev/null 2>"$WORK/err"; rc=$?
 set -e
 assert_eq "passport switch → exit 3" "$rc" "3"
-assert_contains "owner_only hint" "$(cat "$WORK/err")" "owner_only: Change tokens on Settings → LLMs → Tokens, or run k2 from a terminal outside K2."
+assert_contains "owner_only hint" "$(cat "$WORK/err")" "owner_only: Change tokens on Settings → Language Models → Subs / Tokens, or run k2 from a terminal outside K2."
 assert_eq "passport mutation sent the scoped token" "$(last token)" "$SCOPED"
 assert_absent "passport mutation never the owner token" "$(tail -n 1 "$WORK/reqs.jsonl")" "$OWNER"
 

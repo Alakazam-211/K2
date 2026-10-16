@@ -146,6 +146,33 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = [
     "objc2-app-kit",
     "WKWebView",
     "WKNavigation",
+    # Browser freeze-frame (commands/browser_snapshot.rs).
+    "WKSnapshotConfiguration",
+    "block2",
+] }
+# Browser freeze-frame: snapshot NSImage → CGImage → ImageIO JPEG, and the
+# pane's corner radius (commands/browser_webviews.rs). Same 0.3.2 lines wry
+# 0.57 pins.
+block2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "objc2-core-graphics",
+    "objc2-quartz-core",
+    "NSImage",
+    "NSImageRep",
+    "NSBitmapImageRep",
+    "NSGraphicsContext",
+    "NSResponder",
+    "NSView",
+    "NSColor",
+] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CGImage",
+] }
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CALayer",
 ] }
 # Same tao tauri-runtime-wry uses (path-patched to third_party/tao). Only for
 # `tao::platform::macos::set_event_fault_hook` (src/event_faults.rs).
@@ -159,18 +186,28 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
     "objc2-core-foundation",
     "NSGeometry",
+    "NSData",
+    "NSDictionary",
+    "NSError",
+    "NSString",
+    "NSValue",
 ] }
 
 # Linux page history is webkit2gtk::WebView on the child tauri already
 # stores. Same pin as wry 0.57 (=2.0.2) so this is not a second webkit.
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
 webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+# Browser freeze-frame: the WebKitGTK snapshot is a cairo image surface.
+# Same 0.18 line webkit2gtk 2.0.2 uses.
+cairo-rs = "0.18"
 
 # Windows page history is the controller's ICoreWebView2, not a new webview.
 # Tauri 2.12 / wry 0.57 use webview2-com 0.39 and windows-core 0.62.
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"
 windows-core = "0.62"
+# Browser freeze-frame: CapturePreview writes into an SHCreateMemStream.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
 
 [features]
 default = ["browser-pane"]

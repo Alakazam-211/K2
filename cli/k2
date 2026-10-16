@@ -892,6 +892,27 @@ urlencode() {
     python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$1" 2>/dev/null || echo "$1"
 }
 
+# Absolute form of a path whose parents may not exist yet. Resolves the
+# deepest folder that does exist and keeps the missing tail as typed.
+# The old `$(cd "$(dirname p)" && pwd)/$(basename p)` form returned
+# "/<basename>" when the parent was missing: `k2 workspace create
+# /home/k2/ai/hearth` with no ~/ai asked the daemon for /hearth, which
+# failed with "Permission denied (os error 13)" (2026-10-16).
+cli_abs_path() {
+    local p="$1"
+    [ -n "$p" ] || return 0
+    case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+    while [ "$p" != "/" ] && [ "${p%/}" != "$p" ]; do p="${p%/}"; done
+    local head="$p" tail="" base
+    while [ ! -d "$head" ]; do
+        tail="/$(basename "$head")$tail"
+        head="$(dirname "$head")"
+    done
+    base="$(cd "$head" 2>/dev/null && pwd)" || base="$head"
+    [ "$base" = "/" ] && base=""
+    printf '%s%s\n' "${base}" "${tail}"
+}
+
 # 0.40.24 (B4): true when any argument is --help/-h. Used to intercept
 # help requests on every workspace/connections/agent subcommand BEFORE
 # the args reach a handler — `k2 workspace create --help` used to
@@ -15783,8 +15804,8 @@ EOF
     [ -n "$url" ] || { echo "usage: k2 vault fetch --secret NAME URL" >&2; exit 2; }
     [ "${#secrets[@]}" -gt 0 ] || { echo "usage: name the secret: --secret NAME" >&2; exit 2; }
     [ -z "$ctype" ] || headers+=("Content-Type: $ctype")
-    [ -z "$body_file" ] || body_file="$(cd "$(dirname "$body_file")" 2>/dev/null && pwd)/$(basename "$body_file")"
-    [ -z "$out" ] || out="$(cd "$(dirname "$out")" 2>/dev/null && pwd)/$(basename "$out")"
+    [ -z "$body_file" ] || body_file="$(cli_abs_path "$body_file")"
+    [ -z "$out" ] || out="$(cli_abs_path "$out")"
     local req
     req="$(printf '%s' "$body_inline" | python3 -c '
 import base64, json, sys
@@ -16108,7 +16129,7 @@ print(json.dumps(o))' "$done_path" "$ttl" "${use_secrets[@]+"${use_secrets[@]}"}
         import)
             [ -n "$name" ] || { echo "usage: k2 vault import <.env file> [--scope ws:<name>|server] [--delivery env|file|fetch] [--remove-original]" >&2; exit 2; }
             local ij abs
-            abs="$(cd "$(dirname "$name")" 2>/dev/null && pwd)/$(basename "$name")"
+            abs="$(cli_abs_path "$name")"
             ij="$(python3 -c 'import json,sys
 o=json.loads(sys.argv[1]); o["path"]=sys.argv[2]
 if sys.argv[3]: o["delivery"]=sys.argv[3]
@@ -21377,7 +21398,7 @@ cmd_workspace_create() {
         exit 1
     fi
     # Resolve to absolute path
-    target_path="$(cd "$(dirname "$target_path")" 2>/dev/null && pwd)/$(basename "$target_path")" 2>/dev/null || target_path="$target_path"
+    target_path="$(cli_abs_path "$target_path")"
     local extra=()
     [ "$no_wiki" = true ] && extra+=("no_wiki=1")
     [ "$no_agents_md" = true ] && extra+=("no_agents_md=1")

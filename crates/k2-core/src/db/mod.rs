@@ -1354,6 +1354,14 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0170_app_walls_lite",
             include_str!("../../drizzle_sql/0170_app_walls_lite.sql"),
         ),
+        // 0171–0175 are held for the 0.46.1 runtime lanes, 0176 is the
+        // integrator's spare and 0177 is the publish probe grace fix.
+        // 0178 — Changes tab v1.1 review notes (C5): `git_review_notes`.
+        // New table only; renumber freely on a slip.
+        (
+            "0178_git_review_notes",
+            include_str!("../../drizzle_sql/0178_git_review_notes.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -2014,7 +2022,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0170_app_walls_lite",
+            last_name, "0178_git_review_notes",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2051,6 +2059,7 @@ mod tests {
                 "0168_app_grace",
                 "0169_app_egress",
                 "0170_app_walls_lite",
+                "0178_git_review_notes",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2223,7 +2232,9 @@ mod tests {
             for t in ["deploy_audit", "deployments", "apps", "seeds"] {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
-            for m in ["0165_app_runtime_core", "0168_app_grace", "0169_app_egress", "0170_app_walls_lite"] {
+            // 0178 (review notes) came after them all; its table goes first.
+            conn.execute_batch("DROP TABLE git_review_notes;").unwrap();
+            for m in ["0165_app_runtime_core", "0168_app_grace", "0169_app_egress", "0170_app_walls_lite", "0178_git_review_notes"] {
                 conn.execute("DELETE FROM _migrations WHERE name = ?1", params![m]).unwrap();
             }
             let last: String = conn

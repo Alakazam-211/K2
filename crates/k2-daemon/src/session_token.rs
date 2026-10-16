@@ -532,6 +532,11 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/git/commit",
         "/cli/git/diff-file",
         "/cli/git/discard",
+        // C5: review notes (list + resolve only) and `k2 changes open`.
+        "/cli/git/init",
+        "/cli/git/notes",
+        "/cli/git/notes/resolve",
+        "/cli/git/open-changes",
         "/cli/git/snapshot",
         "/cli/git/stage",
         "/cli/git/stage-all",

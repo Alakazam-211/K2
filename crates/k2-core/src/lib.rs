@@ -177,6 +177,8 @@ pub mod fs_guest_upload;
 pub mod git;
 /// Changes tab v1: snapshot, both-sides diff, discard-to-Trash, rev.
 pub mod git_changes;
+/// Changes tab v1.1 (C5): review notes left on changed lines for the agent.
+pub mod git_notes;
 /// Ensure global git user.name / user.email when missing (init-git path).
 pub mod git_identity;
 // Phase 2.5c: workspace heartbeat schedules + launchd + cron live here

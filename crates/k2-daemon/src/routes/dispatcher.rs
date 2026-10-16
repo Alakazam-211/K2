@@ -5450,6 +5450,45 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // Changes tab v1.1 (C5) — review notes writes. Same token gate as
+        // the git arm below (owner token or a Connect login; app passes and
+        // API keys refused); the author is the credential's actor, never
+        // the body. `send` may wake the agent, so it runs on the blocking
+        // pool like `workspace/msg`.
+        p if is_post && post_allowed && p.starts_with("/cli/git/notes/") => {
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let actor = super::http::actor_label(&query, state.token.as_str(), None);
+            let role = super::http::actor_role(&query, state.token.as_str());
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let p_owned = p.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                let caller = crate::git_notes_routes::human_caller(actor, role);
+                crate::git_notes_routes::dispatch_post(
+                    &p_owned,
+                    &body_bytes,
+                    &caller,
+                    &crate::git_notes_routes::deliver_to_agent,
+                )
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         // Phase 2 Unit 4 — POST routes for git (libgit2 ops). F5:
         // spawn_blocking because diff/merge/status on large repos
         // can block for 100s of ms.

@@ -1442,6 +1442,19 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/git/snapshot" => crate::git_routes::handle_git_snapshot(params),
         // POST-only; the central guard 405s a GET first. Belt.
         "/cli/git/discard" => crate::git_routes::handle_git_discard(false, &[]),
+        // C5: review notes list (owner token / Connect login). The POST
+        // notes routes and open-changes are POST-only; belt 405s.
+        "/cli/git/notes" => crate::git_notes_routes::handle_list(
+            params,
+            &crate::git_notes_routes::list_caller(),
+        ),
+        "/cli/git/notes/add"
+        | "/cli/git/notes/update"
+        | "/cli/git/notes/resolve"
+        | "/cli/git/notes/delete"
+        | "/cli/git/notes/send"
+        | "/cli/git/open-changes"
+        | "/cli/git/init" => CliResponse::method_not_allowed(),
         "/cli/git/diff-file" => crate::git_routes::handle_git_diff_file(params),
         "/cli/git/diff-summary" => crate::git_routes::handle_git_diff_summary(params),
         "/cli/git/diff-between" => crate::git_routes::handle_git_diff_between_branches(params),

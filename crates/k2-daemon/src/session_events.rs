@@ -792,6 +792,27 @@ pub enum SessionEvent {
         repo_root: String,
         rev: String,
     },
+
+    /// Changes tab v1.1 (C5): the review notes on a workspace changed
+    /// (added, edited, resolved, deleted or sent). APP-LEVEL like
+    /// `GitChanged`; clients filter on `workspacePath` and refetch
+    /// `GET /cli/git/notes`.
+    ///
+    /// Wire: `{ "kind": "git_notes_changed", "workspacePath": string }`.
+    GitNotesChanged {
+        #[serde(rename = "workspacePath")]
+        workspace_path: String,
+    },
+
+    /// Changes tab (C5, `k2 changes open`): a client showing this
+    /// workspace should open (or focus) its Changes tab. APP-LEVEL; a
+    /// window acts only when its room shows that workspace.
+    ///
+    /// Wire: `{ "kind": "open_changes", "workspacePath": string }`.
+    OpenChanges {
+        #[serde(rename = "workspacePath")]
+        workspace_path: String,
+    },
 }
 
 impl SessionEvent {
@@ -849,6 +870,8 @@ impl SessionEvent {
             SessionEvent::RemoteSessionAccessDenied { .. } => "remote_session_access_denied",
             SessionEvent::FsChanged { .. } => "fs_changed",
             SessionEvent::GitChanged { .. } => "git_changed",
+            SessionEvent::GitNotesChanged { .. } => "git_notes_changed",
+            SessionEvent::OpenChanges { .. } => "open_changes",
         }
     }
 }
@@ -1111,6 +1134,24 @@ pub fn emit_git_changed(workspace_path: &str, repo_root: &str, rev: &str) {
         repo_root: repo_root.to_string(),
         rev: rev.to_string(),
     });
+}
+
+/// Changes tab v1.1 — broadcast `git_notes_changed` for one workspace
+/// path (empty is a no-op).
+pub fn emit_git_notes_changed(workspace_path: &str) {
+    if workspace_path.is_empty() {
+        return;
+    }
+    let _ = emit(SessionEvent::GitNotesChanged { workspace_path: workspace_path.to_string() });
+}
+
+/// `k2 changes open` — ask clients showing `workspace_path` to open its
+/// Changes tab (empty is a no-op).
+pub fn emit_open_changes(workspace_path: &str) {
+    if workspace_path.is_empty() {
+        return;
+    }
+    let _ = emit(SessionEvent::OpenChanges { workspace_path: workspace_path.to_string() });
 }
 
 /// Path-boundary match shared by list-for-workspace and the workspace
@@ -2066,6 +2107,43 @@ mod tests {
         assert_eq!(json["repoRoot"], "/x/foo");
         assert_eq!(json["rev"], "abcd1234:7");
         assert_keys(&json, &["kind", "workspacePath", "repoRoot", "rev"]);
+    }
+
+    /// Changes tab v1.1 FROZEN WIRE CONTRACTS (C5).
+    #[test]
+    fn git_notes_changed_and_open_changes_frozen_contracts() {
+        let json = as_json(&SessionEvent::GitNotesChanged { workspace_path: "/x/foo".into() });
+        assert_eq!(json["kind"], "git_notes_changed");
+        assert_eq!(json["workspacePath"], "/x/foo");
+        assert_keys(&json, &["kind", "workspacePath"]);
+        let json = as_json(&SessionEvent::OpenChanges { workspace_path: "/x/foo".into() });
+        assert_eq!(json["kind"], "open_changes");
+        assert_eq!(json["workspacePath"], "/x/foo");
+        assert_keys(&json, &["kind", "workspacePath"]);
+    }
+
+    #[test]
+    fn emit_git_notes_changed_and_open_changes_skip_empty() {
+        let ws = format!("/tmp/k2-notes-emit-{}", uuid::Uuid::new_v4().simple());
+        let mut rx = subscribe();
+        while rx.try_recv().is_ok() {}
+        emit_git_notes_changed("");
+        emit_open_changes("");
+        emit_git_notes_changed(&ws);
+        emit_open_changes(&ws);
+        let mut got = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                SessionEvent::GitNotesChanged { workspace_path } if workspace_path == ws || workspace_path.is_empty() => {
+                    got.push(format!("notes:{workspace_path}"))
+                }
+                SessionEvent::OpenChanges { workspace_path } if workspace_path == ws || workspace_path.is_empty() => {
+                    got.push(format!("open:{workspace_path}"))
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(got, vec![format!("notes:{ws}"), format!("open:{ws}")]);
     }
 
     #[test]

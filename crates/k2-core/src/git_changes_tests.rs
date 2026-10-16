@@ -672,3 +672,41 @@ fn classify_git_paths_for_main_and_linked_worktree() {
     assert_eq!(sn.branch.as_deref(), Some("wt1"));
     assert_eq!(row(&sn, "untracked", "wt_new.txt").status, "U");
 }
+
+/// C5 gap 3: the untracked folder row (`x/`) stages like `git add x/`:
+/// every file under it, recursively, minus what .gitignore excludes, and
+/// nothing outside it (a sibling `x-other` or `x*` is left alone).
+#[test]
+fn stage_file_adds_an_untracked_folder_recursively_respecting_gitignore() {
+    let d = tmp("stage-dir");
+    let repo = init(&d);
+    write(&d, "a.txt", "a\n");
+    write(&d, ".gitignore", "*.log\n");
+    commit_all(&repo, "init");
+    write(&d, "x/one.txt", "1\n");
+    write(&d, "x/deep/two.txt", "2\n");
+    write(&d, "x/deep/noise.log", "ignored\n");
+    write(&d, "x-other/three.txt", "3\n");
+    write(&d, "x*/star.txt", "*\n");
+
+    let sn = snap(&d, None);
+    assert!(row(&sn, "untracked", "x/").dir, "collapsed folder row");
+
+    for spelling in ["x/", "x"] {
+        crate::git::stage_file(s(&d), spelling).expect("stage folder");
+    }
+    let sn = snap(&d, None);
+    let staged: Vec<&str> = sn.files.iter().filter(|f| f.group == "staged").map(|f| f.path.as_str()).collect();
+    assert_eq!(staged, vec!["x/deep/two.txt", "x/one.txt"], "{:?}", sn.files);
+    assert!(sn.files.iter().any(|f| f.group == "untracked" && f.path == "x-other/"));
+    assert!(sn.files.iter().any(|f| f.group == "untracked" && f.path == "x*/"));
+    let mut idx = repo.index().expect("index");
+    idx.read(true).expect("reload index");
+    assert!(idx.get_path(Path::new("x/one.txt"), 0).is_some());
+    assert!(idx.get_path(Path::new("x/deep/noise.log"), 0).is_none(), "ignored file stays out");
+
+    // A plain file still stages as before.
+    write(&d, "a.txt", "a2\n");
+    crate::git::stage_file(s(&d), "a.txt").expect("stage file");
+    assert_eq!(row(&snap(&d, None), "staged", "a.txt").status, "M");
+}

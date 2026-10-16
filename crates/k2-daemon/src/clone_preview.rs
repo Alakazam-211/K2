@@ -29,7 +29,7 @@ use serde_json::{json, Value as J};
 #[serde(rename_all = "camelCase")]
 struct PreviewBody {
     /// The workspace's absolute path, or (CLI) its name, handle or id.
-    #[serde(default)]
+    #[serde(default, rename = "project_path", alias = "projectPath")]
     project_path: String,
     #[serde(default)]
     workspace: String,
@@ -79,8 +79,10 @@ fn preview(who: &Who, body: &[u8]) -> R<J> {
         return Err(no("bad_request", 400, "name the workspace (project_path or workspace)"));
     }
     let ws = if token.starts_with('/') {
+        // The path as registered first (a /tmp spelling stays /tmp), then
+        // its canonical form (validate_path refuses traversal).
         let canonical = k2_core::fs_commands::validate_path(token).map_err(|e| no("bad_request", 400, e))?;
-        crate::compute_routes::ws_by_token(&canonical.to_string_lossy())
+        crate::compute_routes::ws_by_token(token).or_else(|| crate::compute_routes::ws_by_token(&canonical.to_string_lossy()))
     } else {
         crate::compute_routes::ws_by_token(token)
     }

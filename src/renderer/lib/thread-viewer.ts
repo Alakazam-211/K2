@@ -22,7 +22,9 @@ import { onNotifyPrefsChanged } from '@/stores/session-events'
 
 /** `doc.author` on a Thread post. */
 export interface ThreadAuthor {
-  /** `owner` | `user` | `guest` (a later kind still parses). */
+  /** `owner` | `user` | `guest` | `imported` (a person's post that came
+   *  with a clone: a historical name, never the viewer) — a later kind
+   *  still parses. */
   kind: string
   /** `owner`, a Connect username, or an app guest's pass username. */
   login: string
@@ -94,6 +96,9 @@ export function cardAnswererLabel(raw: unknown, viewer: ThreadViewer | null): st
   if (!a) return null
   if (isViewerAuthor(a, viewer)) return 'You'
   if (a.kind === 'owner') return a.name && a.name.toLowerCase() !== 'owner' ? a.name : 'the owner'
+  // A card that came with a clone: its historical name ("Rosson",
+  // "alice (Connect, rosson.k2.dev)"), never "You" here.
+  if (a.kind === 'imported') return a.name || a.login
   return a.login
 }
 

@@ -803,7 +803,7 @@ mod tests {
         };
         let shells = vec![shell(Some("p1"), "/w/one"), shell(Some("p3"), "/w/three"), shell(None, "/tmp/loose")];
         let all = rollups(&rows, &shells);
-        let find = |pred: &dyn Fn(&Rollup) -> bool| all.iter().find(|r| pred(r)).cloned().expect("rollup");
+        let find = |pred: &dyn Fn(&Rollup) -> bool| all.iter().find(|&r| pred(r)).cloned().expect("rollup");
         let p1 = find(&|r| r.project_id.as_deref() == Some("p1"));
         assert_eq!(p1.live, 3, "2 running rows + 1 shell, not the exited row: {p1:?}");
         assert_eq!(p1.counts.idle, 2, "the exited row still counts as an idle row");

@@ -5,11 +5,13 @@ import { useSettingsStore } from '@/stores/settings'
 import { ThreadOverlayPane, threadZenScopeProps } from './ThreadOverlayPane'
 import type { ThreadTurn } from './overlayThread'
 import { ThreadComposeDrawerContext, type ThreadComposeDrawer } from './threadComposeDrawer'
+import { ThreadFooterFade } from '@/components/Thread/ThreadZenKit'
 
 /**
- * Thread list + Message-the-agent bar. Absolute inset so the bar's
- * used height always shortens the list — WKWebView does not shrink a
- * flex-1 / height:100% scrollport when a sibling textarea grows.
+ * Thread list + Message-the-agent bar. The bar floats over the list's
+ * bottom on a see-through fade (K2 Companion's footer fade): the list
+ * fills the column and pads its bottom by the bar's measured height, so
+ * messages scroll under the bar and the newest rests right above it.
  *
  * `data-compose-drop-surface` is the image-drop hit region for the bar
  * inside this column (external-drop-router / file-drag). Non-image drops
@@ -79,8 +81,7 @@ export function ThreadOverlayColumn({
       {...scope}
     >
       <div
-        className="absolute left-0 right-0 top-0 overflow-hidden flex flex-col"
-        style={{ bottom }}
+        className="absolute inset-0 overflow-hidden flex flex-col"
         data-testid="agent-session-thread-list-slot"
       >
         <SelectableRegion className="h-full min-h-0 flex flex-col overflow-hidden">
@@ -91,6 +92,7 @@ export function ThreadOverlayColumn({
             agentName={agentName}
             onStop={onStop}
             onTurn={composeShown ? setTurn : undefined}
+            bottomInset={composeShown ? bottom : 0}
           />
         </SelectableRegion>
       </div>
@@ -103,7 +105,10 @@ export function ThreadOverlayColumn({
             focusThreadComposeSlotTextarea(e.currentTarget, e.target)
           }}
         >
-          <ThreadComposeDrawerContext.Provider value={drawer}>{composeBar}</ThreadComposeDrawerContext.Provider>
+          {composeShown ? <ThreadFooterFade /> : null}
+          <div className="relative" style={{ zIndex: 1 }}>
+            <ThreadComposeDrawerContext.Provider value={drawer}>{composeBar}</ThreadComposeDrawerContext.Provider>
+          </div>
         </div>
       ) : null}
     </div>

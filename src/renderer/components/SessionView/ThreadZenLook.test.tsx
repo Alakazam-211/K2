@@ -64,7 +64,7 @@ import {
   THREAD_COMPOSE_STACK_PREVIEW,
 } from '@/components/Terminal/TerminalComposeBar'
 import { composeTextareaHeight } from '@/components/Terminal/terminalCompose'
-import { CHAMFER_SCOPE, THREAD_CHAMFER_CSS, THREAD_COMPOSE_BOX_BORDER, THREAD_COMPOSE_BOX_PAD, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
+import { CHAMFER_SCOPE, FOOTER_FADE_PX, THREAD_CHAMFER_CSS, THREAD_COMPOSE_BOX_BORDER, THREAD_COMPOSE_BOX_PAD, THREAD_FOOTER_FADE_CSS, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { primaryScope } from '@/kessel/server-scope'
 import { resetThreadViewersForTests, setThreadViewerForTests, type ThreadViewer } from '@/lib/thread-viewer'
@@ -73,7 +73,7 @@ import { zenEmptyThreadText as zenWidgetEmptyText } from '@/components/Zen/widge
 import { coerceThreadTurn, type OverlayThreadItem, type ThreadTurn } from './overlayThread'
 import { SessionViewChromeContext, type SessionViewChromeValue } from './sessionViewChrome'
 import { ThreadComposeDrawerContext } from './threadComposeDrawer'
-import { ThreadItemRow } from './ThreadOverlayPane'
+import { ThreadItemRow, ThreadOverlayPane } from './ThreadOverlayPane'
 import { ThreadOverlayColumn } from './ThreadOverlayColumn'
 
 const room = testRoom({ tabs: {}, scope: primaryScope(), projects: [] })
@@ -565,6 +565,46 @@ describe('chamfered corners in K2\'s square Style', () => {
       expect(el('[data-zen-send]').style.borderRadius, style).toBe('999px')
       cleanup()
     }
+  })
+})
+
+// Rosson 2026-10-16, from K2 Companion (7cbf584): the strip behind the box
+// and the activity tab is see-through; messages scroll under it and fade.
+describe('footer fade behind the message box', () => {
+  it('is Companion\'s stack: four masked blur layers and a tint of the window\'s own background', () => {
+    expect(FOOTER_FADE_PX).toBe(24)
+    for (const [n, px] of [[1, 2], [2, 6], [3, 12], [4, 24]] as const) {
+      expect(THREAD_FOOTER_FADE_CSS).toContain(`.thread-footer-blur-${n} { -webkit-backdrop-filter: blur(${px}px); backdrop-filter: blur(${px}px);`)
+    }
+    expect(THREAD_FOOTER_FADE_CSS).toContain('color-mix(in srgb, var(--zen-canvas) 85%, transparent) 0%')
+    expect(THREAD_FOOTER_FADE_CSS).toContain('top: -24px; pointer-events: none;')
+    // Reduced transparency (and no backdrop-filter): no blur, a stronger tint.
+    expect(THREAD_FOOTER_FADE_CSS).toMatch(/prefers-reduced-transparency: reduce\) \{\s*\S+ \.thread-footer-fade > \[class\^="thread-footer-blur-"\] \{ display: none; \}/)
+    expect(THREAD_FOOTER_FADE_CSS).toContain('var(--zen-canvas) 96%')
+    // Only in the desktop Thread box.
+    expect(THREAD_FOOTER_FADE_CSS.split('\n').filter((l) => l.includes('.thread-footer-')).every((l) => l.includes('[data-k2-thread-zen] .thread-footer-fade'))).toBe(true)
+  })
+
+  it('a column without a message box draws no fade', () => {
+    renderInRoom(room, <ThreadOverlayColumn addr="sales" conversationId="c" active composeBar={null} />)
+    expect(document.querySelector('[data-thread-footer-fade]')).toBeNull()
+    expect(screen.getByTestId('thread-overlay-list').style.paddingBottom).toBe('8px')
+  })
+
+  it('a list pinned at the bottom stays pinned when the box (its inset) grows', () => {
+    h.threadHook.items = [
+      { collection: 'thread', seq: 1, id: 'x', doc: { id: 'x', kind: 'text', from: 'k2', body: 'hi', created_at: 1 } },
+    ]
+    const view = renderInRoom(room, <ThreadOverlayPane addr="sales" conversationId="c" bottomInset={40} />)
+    const list = screen.getByTestId('thread-overlay-list')
+    const box = { scrollHeight: 600, clientHeight: 300, scrollTop: 0 }
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, get: () => box.scrollHeight })
+    Object.defineProperty(list, 'clientHeight', { configurable: true, get: () => box.clientHeight })
+    Object.defineProperty(list, 'scrollTop', { configurable: true, get: () => box.scrollTop, set: (v: number) => { box.scrollTop = v } })
+    box.scrollHeight = 660
+    view.rerender(<ThreadOverlayPane addr="sales" conversationId="c" bottomInset={100} />)
+    expect(list.style.paddingBottom).toBe('108px')
+    expect(box.scrollTop).toBe(660)
   })
 })
 

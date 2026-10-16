@@ -39,6 +39,20 @@ pub fn open(cols: u16, rows: u16) -> std::io::Result<(OwnedFd, OwnedFd)> {
             return Err(os_err());
         }
         let slave = OwnedFd::from_raw_fd(s);
+        // Raw from the start: this terminal only carries bytes to
+        // `podman exec -it`, whose own terminal inside the container does
+        // the line discipline. A cooked outer terminal echoed input twice
+        // and, for input that arrived before podman switched it to raw
+        // (piped stdin), turned the client's closing ^D into an EOF that
+        // ended podman's input with lines still unread.
+        let mut t: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(s, &mut t) != 0 {
+            return Err(os_err());
+        }
+        libc::cfmakeraw(&mut t);
+        if libc::tcsetattr(s, libc::TCSANOW, &t) != 0 {
+            return Err(os_err());
+        }
         set_size(master.as_raw_fd(), cols, rows)?;
         Ok((master, slave))
     }
@@ -212,6 +226,31 @@ mod tests {
         let text = String::from_utf8_lossy(&text);
         assert!(text.contains("got:hello"), "{text:?}");
         assert!(text.contains("tty"), "stdin is a terminal: {text:?}");
+    }
+
+    /// The engine's terminal is raw: input sent before the command reads
+    /// it (piped stdin) is neither echoed nor cut at a ^D; every byte
+    /// reaches the command.
+    #[test]
+    fn early_input_passes_through_untouched() {
+        let (daemon, engine) = UnixStream::pair().unwrap();
+        let mut w = daemon.try_clone().unwrap();
+        w.write_all(&tty::encode(tty::INPUT, b"one\ntwo\n\x04")).unwrap();
+        let mut c = Command::new("/bin/sh");
+        c.args(["-c", "sleep 1; head -c 9 | od -An -c | tr -s ' '"]);
+        c.env_clear().env("PATH", "/usr/bin:/bin");
+        let t = std::thread::spawn(move || bridge(c, 80, 24, engine).unwrap());
+        let mut r = daemon;
+        let mut text = Vec::new();
+        while let Some((k, p)) = tty::read(&mut r).unwrap() {
+            if k == tty::OUTPUT {
+                text.extend_from_slice(&p);
+            }
+        }
+        assert_eq!(t.join().unwrap(), 0);
+        let text = String::from_utf8_lossy(&text);
+        assert!(text.contains("o n e \\n t w o \\n 004"), "every byte, the ^D included: {text:?}");
+        assert!(!text.contains("one\r\n"), "no echo from the engine's terminal: {text:?}");
     }
 
     #[test]

@@ -1,0 +1,297 @@
+//! Route tests for the Changes tab v1 git routes (C1): snapshot,
+//! `diff-file?sides=1`, discard (Trash, 405, traversal, conflict), stage
+//! hardening, the immediate `git_changed`, and the route-policy rows.
+//! Discards go to a temp dir via the `git_changes` trash override.
+
+use super::*;
+use crate::session_events::SessionEvent;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+fn tmp(tag: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("k2-gitroutes-{tag}-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&d).expect("mkdir temp");
+    d
+}
+
+/// One trash dir for this test process (the override is global); every
+/// test trashes uniquely named files, so they never collide.
+fn trash_dir() -> &'static PathBuf {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let d = tmp("trash");
+        git_changes::set_trash_override(Some(d.clone()));
+        d
+    })
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args(["-c", "user.name=K2 Test", "-c", "user.email=k2-test@example.com", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .expect("spawn git");
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+fn repo(tag: &str) -> PathBuf {
+    let d = tmp(tag);
+    git(&d, &["init", "-q"]);
+    // Commits made by the daemon's `git::commit` read the repo config.
+    git(&d, &["config", "user.name", "K2 Test"]);
+    git(&d, &["config", "user.email", "k2-test@example.com"]);
+    std::fs::write(d.join("a.txt"), "one\ntwo\n").expect("a");
+    git(&d, &["add", "-A"]);
+    git(&d, &["commit", "-q", "-m", "init"]);
+    d
+}
+
+fn s(p: &Path) -> String {
+    p.to_str().expect("utf8").to_string()
+}
+
+fn params(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+}
+
+fn json(r: &CliResponse) -> serde_json::Value {
+    serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("body is not JSON ({e}): {}", r.body))
+}
+
+fn post(path: &str, body: serde_json::Value) -> CliResponse {
+    dispatch_unit4_git_post(path, body.to_string().as_bytes())
+}
+
+// ── snapshot ─────────────────────────────────────────────────────────
+
+#[test]
+fn snapshot_route_answers_the_contract_shape() {
+    let d = repo("snap");
+    std::fs::write(d.join("a.txt"), "one\nTWO\n").expect("edit");
+    std::fs::write(d.join("new.txt"), "n\n").expect("new");
+    let r = crate::cli::dispatch("/cli/git/snapshot", &params(&[("path", &s(&d))]));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let j = json(&r);
+    assert_eq!(j["isRepo"], true);
+    assert_eq!(j["branch"], "main");
+    assert_eq!(j["counts"]["unstaged"], 1);
+    assert_eq!(j["counts"]["untracked"], 1);
+    assert_eq!(j["truncated"], false);
+    assert_eq!(j["limit"], 1000);
+    let rows = j["files"].as_array().expect("files");
+    assert_eq!(rows[0]["path"], "a.txt");
+    assert_eq!(rows[0]["group"], "unstaged");
+    assert_eq!(rows[0]["status"], "M");
+    assert_eq!(rows[0]["additions"], 1);
+    assert_eq!(rows[0]["deletions"], 1);
+    assert_eq!(rows[1]["status"], "U");
+    assert!(j["rev"].as_str().expect("rev").contains(':'));
+
+    let missing = crate::cli::dispatch("/cli/git/snapshot", &params(&[]));
+    assert_eq!(missing.status, "400 Bad Request");
+    assert_eq!(json(&missing)["code"], "bad_request");
+
+    let not_repo = crate::cli::dispatch("/cli/git/snapshot", &params(&[("path", &s(&tmp("snap-norepo")))]));
+    assert_eq!(not_repo.status, "200 OK");
+    assert_eq!(json(&not_repo)["isRepo"], false);
+
+    let bad_base = crate::cli::dispatch("/cli/git/snapshot", &params(&[("path", &s(&d)), ("base", "nope")]));
+    assert_eq!(bad_base.status, "400 Bad Request");
+    assert_eq!(json(&bad_base)["code"], "bad_ref");
+
+    let with_base = crate::cli::dispatch("/cli/git/snapshot", &params(&[("path", &s(&d)), ("base", "main")]));
+    assert_eq!(with_base.status, "200 OK", "{}", with_base.body);
+    assert_eq!(json(&with_base)["base"]["ref"], "main");
+    assert_eq!(json(&with_base)["files"][0]["group"], "base");
+}
+
+// ── diff-file ────────────────────────────────────────────────────────
+
+#[test]
+fn diff_file_sides_and_the_old_hunks_shape() {
+    let d = repo("diff");
+    std::fs::write(d.join("a.txt"), "one\nTWO\nthree\n").expect("edit");
+    let ws = s(&d);
+
+    let old = crate::cli::dispatch("/cli/git/diff-file", &params(&[("path", &ws), ("file_path", "a.txt")]));
+    assert_eq!(old.status, "200 OK");
+    assert!(json(&old).is_array(), "without sides=1 the gutter shape is unchanged: {}", old.body);
+
+    let r = crate::cli::dispatch("/cli/git/diff-file", &params(&[("path", &ws), ("file_path", "a.txt"), ("sides", "1")]));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let j = json(&r);
+    assert_eq!(j["mode"], "worktree");
+    assert_eq!(j["old"]["label"], "HEAD");
+    assert_eq!(j["old"]["text"], "one\ntwo\n");
+    assert_eq!(j["new"]["label"], "WORKTREE");
+    assert_eq!(j["new"]["text"], "one\nTWO\nthree\n");
+    assert_eq!(j["additions"], 2);
+    assert_eq!(j["deletions"], 1);
+    assert_eq!(j["binary"], false);
+    assert_eq!(j["tooLarge"], false);
+
+    git(&d, &["add", "a.txt"]);
+    let st = crate::cli::dispatch("/cli/git/diff-file", &params(&[("path", &ws), ("file_path", "a.txt"), ("sides", "1"), ("staged", "1")]));
+    assert_eq!(json(&st)["mode"], "staged");
+    assert_eq!(json(&st)["new"]["label"], "INDEX");
+
+    let cases: [(&[(&str, &str)], &str, &str); 4] = [
+        (&[("file_path", "../x"), ("sides", "1")], "400 Bad Request", "bad_path"),
+        (&[("file_path", "nope.txt"), ("sides", "1")], "404 Not Found", "not_found"),
+        (&[("file_path", "a.txt"), ("sides", "1"), ("mode", "sideways")], "400 Bad Request", "bad_request"),
+        (&[("file_path", "a.txt"), ("sides", "1"), ("base", "no-such")], "400 Bad Request", "bad_ref"),
+    ];
+    for (extra, status, code) in cases {
+        let mut p = params(extra);
+        p.insert("path".into(), ws.clone());
+        let r = crate::cli::dispatch("/cli/git/diff-file", &p);
+        assert_eq!(r.status, status, "{extra:?}: {}", r.body);
+        assert_eq!(json(&r)["code"], code, "{extra:?}");
+    }
+}
+
+// ── discard ──────────────────────────────────────────────────────────
+
+#[test]
+fn discard_get_is_405_and_policy_rows_are_member() {
+    let r = handle_git_discard(false, b"{}");
+    assert_eq!(r.status, "405 Method Not Allowed");
+    let via_get_chain = crate::cli::dispatch("/cli/git/discard", &params(&[]));
+    assert_eq!(via_get_chain.status, "405 Method Not Allowed");
+
+    use crate::routes::route_policy::{get_refused, lookup, post_allowed, Floor};
+    let row = lookup("/cli/git/discard").expect("classified");
+    assert_eq!((row.get, row.post), (None, Some(Floor::Member)));
+    assert!(post_allowed("/cli/git/discard"));
+    assert!(get_refused("/cli/git/discard", ""), "the central guard 405s a GET before auth");
+    let snap = lookup("/cli/git/snapshot").expect("classified");
+    assert_eq!((snap.get, snap.post), (Some(Floor::Member), None));
+    assert!(!get_refused("/cli/git/snapshot", "path=/x"));
+}
+
+#[test]
+fn discard_route_trashes_untracked_restores_tracked_and_emits() {
+    let trash = trash_dir();
+    let d = repo("discard");
+    let tag = uuid::Uuid::new_v4().simple().to_string();
+    let junk = format!("junk-{tag}.txt");
+    std::fs::write(d.join("a.txt"), "agent edit\n").expect("edit");
+    std::fs::write(d.join(&junk), "junk\n").expect("junk");
+    let ws = s(&d);
+    let mut rx = crate::session_events::subscribe();
+
+    let r = post("/cli/git/discard", serde_json::json!({ "path": ws, "files": ["a.txt", junk] }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let j = json(&r);
+    assert_eq!(j["success"], true);
+    assert_eq!(j["restored"], serde_json::json!(["a.txt"]));
+    assert_eq!(j["trashed"], serde_json::json!(["a.txt", junk]));
+    assert_eq!(j["failed"], serde_json::json!([]));
+    assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("a"), "one\ntwo\n");
+    assert!(!d.join(&junk).exists());
+    let in_trash: Vec<String> = std::fs::read_dir(trash)
+        .expect("trash")
+        .map(|e| e.expect("e").file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(&format!("junk-{tag}.txt-")))
+        .collect();
+    assert_eq!(in_trash.len(), 1, "the untracked file is in the trash dir, not deleted");
+
+    // The route emitted git_changed right away with the same rev.
+    let rev = j["rev"].as_str().expect("rev").to_string();
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let mut seen = None;
+    while Instant::now() < deadline && seen.is_none() {
+        match rx.try_recv() {
+            Ok(SessionEvent::GitChanged { workspace_path, rev: r, .. }) if workspace_path == ws => seen = Some(r),
+            Ok(_) => {}
+            Err(_) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    assert_eq!(seen.as_deref(), Some(rev.as_str()), "git_changed carries the response rev");
+}
+
+#[test]
+fn discard_route_refuses_traversal_conflicts_and_bad_bodies() {
+    trash_dir();
+    let d = repo("discard-bad");
+    std::fs::write(d.join("a.txt"), "edited\n").expect("edit");
+    let ws = s(&d);
+    for bad in ["../../etc/hosts", "/etc/hosts", ".git/config"] {
+        let r = post("/cli/git/discard", serde_json::json!({ "path": ws, "files": ["a.txt", bad] }));
+        assert_eq!(r.status, "400 Bad Request", "{bad}: {}", r.body);
+        assert_eq!(json(&r)["code"], "bad_path");
+    }
+    assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("a"), "edited\n", "refusal changes nothing");
+
+    let empty = post("/cli/git/discard", serde_json::json!({ "path": ws, "files": [] }));
+    assert_eq!((empty.status, json(&empty)["code"].clone()), ("400 Bad Request", serde_json::json!("bad_request")));
+    let no_path = post("/cli/git/discard", serde_json::json!({ "path": "", "files": ["a.txt"] }));
+    assert_eq!(no_path.status, "400 Bad Request");
+    let not_json = dispatch_unit4_git_post("/cli/git/discard", b"nope");
+    assert_eq!(not_json.status, "400 Bad Request");
+    let norepo = post("/cli/git/discard", serde_json::json!({ "path": s(&tmp("discard-norepo")), "files": ["x"] }));
+    assert_eq!(json(&norepo)["code"], "not_a_repo");
+
+    // A real merge conflict → 409 and nothing touched.
+    git(&d, &["checkout", "-q", "--", "a.txt"]);
+    git(&d, &["checkout", "-q", "-b", "other"]);
+    std::fs::write(d.join("a.txt"), "other side\n").expect("o");
+    git(&d, &["commit", "-q", "-am", "other"]);
+    git(&d, &["checkout", "-q", "main"]);
+    std::fs::write(d.join("a.txt"), "main side\n").expect("m");
+    git(&d, &["commit", "-q", "-am", "main"]);
+    let merge = Command::new("git")
+        .args(["-c", "user.name=K2 Test", "-c", "user.email=k2-test@example.com", "merge", "-q", "other"])
+        .current_dir(&d)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .expect("merge");
+    assert!(!merge.status.success(), "the fixture merge must conflict");
+    let before = std::fs::read_to_string(d.join("a.txt")).expect("conflicted a");
+    let r = post("/cli/git/discard", serde_json::json!({ "path": ws, "files": ["a.txt"], "includeStaged": true }));
+    assert_eq!(r.status, "409 Conflict", "{}", r.body);
+    assert_eq!(json(&r)["code"], "conflicted");
+    assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("a"), before);
+    let snap = json(&crate::cli::dispatch("/cli/git/snapshot", &params(&[("path", &ws)])));
+    assert_eq!(snap["state"], "merge");
+    assert_eq!(snap["files"][0]["group"], "conflicted");
+}
+
+// ── stage / unstage / commit ─────────────────────────────────────────
+
+#[test]
+fn stage_refuses_traversal_and_mutations_bump_rev() {
+    let d = repo("stage");
+    let ws = s(&d);
+    std::fs::write(d.join("b.txt"), "b\n").expect("b");
+    for bad in ["../outside.txt", ".git/HEAD"] {
+        for route in ["/cli/git/stage", "/cli/git/unstage"] {
+            let r = post(route, serde_json::json!({ "path": ws, "filePath": bad }));
+            assert_eq!(r.status, "400 Bad Request", "{route} {bad}");
+            assert_eq!(json(&r)["code"], "bad_path", "{route} {bad}");
+        }
+    }
+    let key = git_changes::rev_key(&d);
+    let r0 = git_changes::current_rev(&key);
+    let st = post("/cli/git/stage", serde_json::json!({ "path": ws, "filePath": "b.txt" }));
+    assert_eq!(st.status, "200 OK", "{}", st.body);
+    let r1 = git_changes::current_rev(&key);
+    assert_ne!(r0, r1, "stage bumps the rev");
+    let abs = s(&d.join("b.txt"));
+    let un = post("/cli/git/unstage", serde_json::json!({ "path": ws, "filePath": abs }));
+    assert_eq!(un.status, "200 OK", "an absolute path inside the repo is accepted: {}", un.body);
+    let r2 = git_changes::current_rev(&key);
+    assert_ne!(r1, r2);
+    assert_eq!(post("/cli/git/stage-all", serde_json::json!({ "path": ws })).status, "200 OK");
+    let c = post("/cli/git/commit", serde_json::json!({ "path": ws, "message": "from the tab" }));
+    assert_eq!(c.status, "200 OK", "{}", c.body);
+    assert_ne!(git_changes::current_rev(&key), r2);
+    let snap = json(&crate::cli::dispatch("/cli/git/snapshot", &params(&[("path", &ws)])));
+    assert_eq!(snap["counts"]["total"], 0, "{snap}");
+}

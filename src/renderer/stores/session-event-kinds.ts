@@ -115,6 +115,9 @@ export const SESSION_EVENT_ROUTES = {
     ignored: 'Owner audit of a refused remote drive; no client surface shows it yet.',
   },
   fs_changed: { class: 'app', app: true, carried: true },
+  // Changes tab v1 (prd-changes-tab-v1): the Changes tab refetches its
+  // snapshot on it. Carried, so a pinned room's tab stays live too.
+  git_changed: { class: 'app', app: true, carried: true },
   // prd-zen-mode-v1 Z12/Z58: this computer's ~/.k2/zen changed. Only the
   // LOCAL daemon's bus matters (Zen config is local); not carried, a room's
   // socket never stands in for it.

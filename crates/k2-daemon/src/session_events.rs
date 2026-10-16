@@ -775,6 +775,23 @@ pub enum SessionEvent {
         workspace_path: String,
         paths: Vec<String>,
     },
+
+    /// Changes tab v1 (C1): the git state behind a workspace's Changes
+    /// view may have moved (index / HEAD / refs, or a non-ignored
+    /// working-tree edit). APP-LEVEL like `FsChanged`: every client gets
+    /// it and filters on `workspacePath`. Debounced 300 ms (1 s max) per
+    /// workspace by `git_live`.
+    ///
+    /// Wire: `{ "kind": "git_changed", "workspacePath": string,
+    /// "repoRoot": string, "rev": string }`. `rev` is opaque; refetch
+    /// `GET /cli/git/snapshot` when it differs from the snapshot's.
+    GitChanged {
+        #[serde(rename = "workspacePath")]
+        workspace_path: String,
+        #[serde(rename = "repoRoot")]
+        repo_root: String,
+        rev: String,
+    },
 }
 
 impl SessionEvent {
@@ -831,6 +848,7 @@ impl SessionEvent {
             SessionEvent::FederationPeersChanged { .. } => "federation_peers_changed",
             SessionEvent::RemoteSessionAccessDenied { .. } => "remote_session_access_denied",
             SessionEvent::FsChanged { .. } => "fs_changed",
+            SessionEvent::GitChanged { .. } => "git_changed",
         }
     }
 }
@@ -1078,6 +1096,20 @@ pub fn emit_fs_changed(workspace_path: &str, paths: impl IntoIterator<Item = Str
     let _ = emit(SessionEvent::FsChanged {
         workspace_path: workspace_path.to_string(),
         paths,
+    });
+}
+
+/// Changes tab v1 — broadcast `git_changed` for one workspace. Empty
+/// workspace or rev is a no-op. Called by `git_live` (debounced watcher
+/// bursts and git routes that just changed the repo).
+pub fn emit_git_changed(workspace_path: &str, repo_root: &str, rev: &str) {
+    if workspace_path.is_empty() || rev.is_empty() {
+        return;
+    }
+    let _ = emit(SessionEvent::GitChanged {
+        workspace_path: workspace_path.to_string(),
+        repo_root: repo_root.to_string(),
+        rev: rev.to_string(),
     });
 }
 
@@ -2018,6 +2050,41 @@ mod tests {
             serde_json::json!(["/x/foo/a.rs", "/x/foo/src"])
         );
         assert_keys(&json, &["kind", "workspacePath", "paths"]);
+    }
+
+    /// Changes tab v1 FROZEN WIRE CONTRACT (prd-changes-tab-v1):
+    /// `{ "kind": "git_changed", "workspacePath", "repoRoot", "rev" }`.
+    #[test]
+    fn git_changed_frozen_contract() {
+        let json = as_json(&SessionEvent::GitChanged {
+            workspace_path: "/x/foo".into(),
+            repo_root: "/x/foo".into(),
+            rev: "abcd1234:7".into(),
+        });
+        assert_eq!(json["kind"], "git_changed");
+        assert_eq!(json["workspacePath"], "/x/foo");
+        assert_eq!(json["repoRoot"], "/x/foo");
+        assert_eq!(json["rev"], "abcd1234:7");
+        assert_keys(&json, &["kind", "workspacePath", "repoRoot", "rev"]);
+    }
+
+    #[test]
+    fn emit_git_changed_skips_empty_and_emits_otherwise() {
+        let ws = format!("/tmp/k2-git-emit-{}", uuid::Uuid::new_v4().simple());
+        let mut rx = subscribe();
+        while rx.try_recv().is_ok() {}
+        emit_git_changed("", "/r", "x:1");
+        emit_git_changed(&ws, "/r", "");
+        emit_git_changed(&ws, "/r", "x:2");
+        let mut got = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let SessionEvent::GitChanged { workspace_path, rev, .. } = ev {
+                if workspace_path == ws || workspace_path.is_empty() {
+                    got.push(rev);
+                }
+            }
+        }
+        assert_eq!(got, vec!["x:2".to_string()]);
     }
 
     #[test]

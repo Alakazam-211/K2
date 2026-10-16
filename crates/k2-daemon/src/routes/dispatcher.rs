@@ -11159,6 +11159,29 @@ async fn handle_one_request(
         // Unified /cli/* dispatch. Auth + param validation +
         // per-route handler all live in `crate::cli::dispatch`; main.rs
         // just translates the CliResponse into bytes.
+        // Changes tab v1: git reads (status, both-sides diff of up to
+        // 10 MB a side) run on the blocking pool, never an async worker.
+        // Same token gate as the catch-all below (owner token or a Connect
+        // login; app passes and API keys are refused).
+        p if !is_post && p.starts_with("/cli/git/") => {
+            let params =
+                super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query)
+                    .await;
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || crate::cli::dispatch(&p_owned, &params))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                    status: "500 Internal Server Error",
+                    content_type: "application/json",
+                    body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+                });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
+        }
         p if p.starts_with("/cli/") => {
             // 0.44.4: formerly GET-shaped verbs arrive here as POST; read
             // the whole body (keep-alive framing) and fold a form/JSON body

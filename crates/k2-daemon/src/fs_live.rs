@@ -10,6 +10,12 @@
 //!
 //! Debounce (~200ms) matches `src-tauri/src/watcher.rs`. Paths are
 //! batched and grouped by longest-prefix project root before emit.
+//!
+//! Changes tab v1: the same batches (with `.git` paths, which
+//! `fs_changed` drops) feed [`crate::git_live`], which maps `.git/index`,
+//! `HEAD`, `refs/**` and non-ignored edits to a debounced `git_changed`.
+//! Worktree checkouts outside every project root, and git dirs outside
+//! the watched roots, get their own watches.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -62,7 +68,69 @@ pub fn resync_watches() {
     RESYNC_REQUESTED.store(true, Ordering::Relaxed);
 }
 
+/// What the watcher covers: recursive Files roots (`fs_changed` +
+/// working-tree git edits) and the workspaces `git_changed` is mapped for.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct WatchPlan {
+    /// Recursively watched directories (project roots, plus worktree
+    /// checkouts that live outside every project root).
+    pub roots: Vec<String>,
+    /// Workspace paths `git_changed` is emitted for (project roots and
+    /// every worktree workspace, even one inside a project root).
+    pub git_workspaces: Vec<String>,
+}
+
+/// The live plan: registered projects + worktree workspaces.
+fn db_plan() -> WatchPlan {
+    let projects = k2_core::projects_ops::projects_list_with_workspaces().unwrap_or_default();
+    let mut project_roots: Vec<String> = Vec::new();
+    let mut worktrees: Vec<String> = Vec::new();
+    for p in projects {
+        let root = p.project.path.trim_end_matches('/').to_string();
+        if !root.is_empty() && Path::new(&root).is_dir() {
+            project_roots.push(root);
+        }
+        for ws in p.workspaces {
+            if let Some(wt) = ws.worktree_path {
+                let wt = wt.trim_end_matches('/').to_string();
+                if !wt.is_empty() && Path::new(&wt).is_dir() {
+                    worktrees.push(wt);
+                }
+            }
+        }
+    }
+    plan_from(project_roots, worktrees)
+}
+
+/// Build a plan: every project root is a recursive root; a worktree is a
+/// recursive root only when no project root already covers it.
+pub(crate) fn plan_from(project_roots: Vec<String>, worktrees: Vec<String>) -> WatchPlan {
+    let under_root = |p: &str| {
+        project_roots.iter().any(|r| session_events::cwd_path_boundary_matches(p, r))
+    };
+    let mut roots = project_roots.clone();
+    let mut git_workspaces = project_roots.clone();
+    for wt in worktrees {
+        if !under_root(&wt) && !roots.contains(&wt) {
+            roots.push(wt.clone());
+        }
+        if !git_workspaces.contains(&wt) {
+            git_workspaces.push(wt);
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    WatchPlan { roots, git_workspaces }
+}
+
 fn run_loop() -> Result<(), String> {
+    static NEVER: AtomicBool = AtomicBool::new(false);
+    run_loop_with(&db_plan, &NEVER)
+}
+
+/// The watcher loop over `plan()` (re-read on resync). Returns when
+/// `stop` is set (tests) or the notify channel dies.
+pub(crate) fn run_loop_with(plan: &dyn Fn() -> WatchPlan, stop: &AtomicBool) -> Result<(), String> {
     let (tx, rx) = mpsc::sync_channel::<notify::Result<Event>>(NOTIFY_CHANNEL_BOUND);
     let mut watcher = RecommendedWatcher::new(
         DroppingHandler::new(tx),
@@ -70,19 +138,23 @@ fn run_loop() -> Result<(), String> {
     )
     .map_err(|e| format!("create watcher: {e}"))?;
 
-    let mut watched: HashSet<String> = HashSet::new();
-    sync_watches(&mut watcher, &mut watched);
+    let mut watched: HashMap<String, RecursiveMode> = HashMap::new();
+    let mut git_set = sync_watches(&mut watcher, &mut watched, &plan());
     log_debug!(
-        "[daemon/fs_live] watching {} project root(s)",
-        watched.len()
+        "[daemon/fs_live] watching {} path(s), {} git workspace(s)",
+        watched.len(),
+        git_set.repos.len()
     );
 
     let mut last_resync = Instant::now();
 
     loop {
-        // Periodic + explicit resync of the project-root set.
+        if stop.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        // Periodic + explicit resync of the watch set.
         if RESYNC_REQUESTED.swap(false, Ordering::Relaxed) || last_resync.elapsed() >= RESYNC_POLL {
-            sync_watches(&mut watcher, &mut watched);
+            git_set = sync_watches(&mut watcher, &mut watched, &plan());
             last_resync = Instant::now();
         }
 
@@ -121,20 +193,27 @@ fn run_loop() -> Result<(), String> {
         if coalesced.is_empty() {
             continue;
         }
-        emit_batched(coalesced);
+        // Changes tab: `.git` signals + non-ignored edits → git_changed
+        // (git_live debounces). Sees the raw set, `.git` paths included.
+        git_set.touch_affected(&coalesced, &is_noisy);
+        let files: HashSet<String> = coalesced.into_iter().filter(|p| !is_noisy(p)).collect();
+        if !files.is_empty() {
+            emit_batched(files);
+        }
     }
 }
 
+/// Every non-empty path of an observed event (noise is filtered later:
+/// `.git` paths matter to `git_changed`, not to `fs_changed`).
 fn collect_paths(event: &Event, out: &mut HashSet<String>) {
     if !should_observe(event.kind) {
         return;
     }
     for p in &event.paths {
         let s = p.to_string_lossy().to_string();
-        if s.is_empty() || is_noisy(&s) {
-            continue;
+        if !s.is_empty() {
+            out.insert(s);
         }
-        out.insert(s);
     }
 }
 
@@ -144,7 +223,7 @@ fn collect_paths(event: &Event, out: &mut HashSet<String>) {
 /// `.git/` / build dirs thrash. Emitting those as `fs_changed` made
 /// every connected Files tree force-reload (0.40.58 bounce loop on
 /// hosts like NSI). User-visible source files still pass through.
-fn is_noisy(path: &str) -> bool {
+pub(crate) fn is_noisy(path: &str) -> bool {
     // Normalize separators for a simple contains check.
     let p = path.replace('\\', "/");
     let lower = p.to_ascii_lowercase();
@@ -219,36 +298,53 @@ fn emit_batched(paths: HashSet<String>) {
     }
 }
 
-/// Align the live watcher set with the current registered projects.
-fn sync_watches(watcher: &mut RecommendedWatcher, watched: &mut HashSet<String>) {
-    let desired: HashSet<String> = k2_core::projects_ops::projects_list()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|p| p.path.trim_end_matches('/').to_string())
-        .filter(|p| !p.is_empty() && Path::new(p).is_dir())
-        .collect();
-
-    // Unwatch removed roots.
-    let to_remove: Vec<String> = watched.difference(&desired).cloned().collect();
-    for root in to_remove {
-        if let Err(e) = watcher.unwatch(Path::new(&root)) {
-            log_debug!("[daemon/fs_live] unwatch {root}: {e}");
+/// Align the live watcher with `plan`: recursive roots plus the git dirs
+/// that live outside them. Returns the git watch set for the plan.
+fn sync_watches(
+    watcher: &mut RecommendedWatcher,
+    watched: &mut HashMap<String, RecursiveMode>,
+    plan: &WatchPlan,
+) -> crate::git_live::GitWatchSet {
+    let git_set = crate::git_live::GitWatchSet::build(&plan.git_workspaces);
+    let mut desired: HashMap<String, RecursiveMode> = HashMap::new();
+    for r in &plan.roots {
+        if Path::new(r).is_dir() {
+            desired.insert(r.clone(), RecursiveMode::Recursive);
         }
-        watched.remove(&root);
+    }
+    for (p, recursive) in git_set.extra_watches(&plan.roots) {
+        let mode = if recursive { RecursiveMode::Recursive } else { RecursiveMode::NonRecursive };
+        desired.entry(p).or_insert(mode);
     }
 
-    // Watch new roots.
-    let to_add: Vec<String> = desired.difference(watched).cloned().collect();
-    for root in to_add {
-        match watcher.watch(Path::new(&root), RecursiveMode::Recursive) {
+    // Unwatch removed paths (and paths whose mode changed).
+    let stale: Vec<String> = watched
+        .iter()
+        .filter(|(p, m)| desired.get(*p) != Some(*m))
+        .map(|(p, _)| p.clone())
+        .collect();
+    for p in stale {
+        if let Err(e) = watcher.unwatch(Path::new(&p)) {
+            log_debug!("[daemon/fs_live] unwatch {p}: {e}");
+        }
+        watched.remove(&p);
+    }
+
+    // Watch new paths.
+    for (p, mode) in desired {
+        if watched.contains_key(&p) {
+            continue;
+        }
+        match watcher.watch(Path::new(&p), mode) {
             Ok(()) => {
-                watched.insert(root);
+                watched.insert(p, mode);
             }
             Err(e) => {
-                log_debug!("[daemon/fs_live] watch {root}: {e}");
+                log_debug!("[daemon/fs_live] watch {p}: {e}");
             }
         }
     }
+    git_set
 }
 
 /// Group paths by workspace using the same resolver as the live loop.

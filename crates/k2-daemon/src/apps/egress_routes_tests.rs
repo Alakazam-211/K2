@@ -122,13 +122,13 @@ fn an_agent_proposes_and_only_the_owner_in_person_approves() {
         assert_eq!(e.1, codes::OWNER_ONLY, "{who:?}");
     }
     let e = call("/cli/app/approve", &Who::Owner, json!({"request": id})).unwrap_err();
-    assert_eq!(e.1, codes::OWNER_CONFIRM_REQUIRED, "the owner token alone is not an approval (AR14)");
+    assert_eq!(e.1, codes::VAULT_CONFIRM_REQUIRED, "the owner token alone is not an approval (AR14)");
     let e = call("/cli/app/approve", &Who::Owner, json!({"request": id, "confirmToken": token_for("w_other", "owner")})).unwrap_err();
-    assert_eq!(e.1, codes::OWNER_CONFIRM_REQUIRED, "bound to the request");
+    assert_eq!(e.1, codes::VAULT_CONFIRM_REQUIRED, "bound to the request");
     let wrong_action = test_seams::vault_handle().confirm.mint("node-admin", Some(&id), "owner", "local-auth");
-    assert_eq!(call("/cli/app/approve", &Who::Owner, json!({"request": id, "confirmToken": wrong_action})).unwrap_err().1, codes::OWNER_CONFIRM_REQUIRED);
+    assert_eq!(call("/cli/app/approve", &Who::Owner, json!({"request": id, "confirmToken": wrong_action})).unwrap_err().1, codes::VAULT_CONFIRM_REQUIRED);
     let e = call("/cli/app/approve", &owner_login(), json!({"request": id, "confirmToken": token_for(&id, "owner")})).unwrap_err();
-    assert_eq!(e.1, codes::OWNER_CONFIRM_REQUIRED, "bound to the confirming actor");
+    assert_eq!(e.1, codes::VAULT_CONFIRM_REQUIRED, "bound to the confirming actor");
 
     // The owner, confirmed: live now; the agent hears.
     let tok = token_for(&id, "owner");
@@ -139,7 +139,7 @@ fn an_agent_proposes_and_only_the_owner_in_person_approves() {
     assert!(msgs_to(&f.ws_a).iter().any(|m| m.contains("approved") && m.contains(&id)));
     // Single use; and decided is decided.
     let e = call("/cli/app/approve", &Who::Owner, json!({"request": id, "confirmToken": tok})).unwrap_err();
-    assert_eq!(e.1, codes::OWNER_CONFIRM_REQUIRED);
+    assert_eq!(e.1, codes::VAULT_CONFIRM_REQUIRED);
     let e = call("/cli/app/approve", &Who::Owner, json!({"request": id, "confirmToken": token_for(&id, "owner")})).unwrap_err();
     assert_eq!((e.0, e.1), (409, codes::NOT_PENDING));
 

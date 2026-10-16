@@ -223,7 +223,7 @@ fn approve(who: &Who, body: &[u8]) -> R<J> {
     // decision then refuses a request that is no longer pending.
     let Some(token) = s(&v, "confirmToken") else {
         return Err(no(
-            codes::OWNER_CONFIRM_REQUIRED,
+            codes::VAULT_CONFIRM_REQUIRED,
             403,
             "approving needs a fresh owner confirm (Touch ID, your login or vault password): k2 app approve <id> asks for it",
         ));
@@ -231,10 +231,10 @@ fn approve(who: &Who, body: &[u8]) -> R<J> {
     let proof = vault()?
         .confirm
         .take(token, CONFIRM_ACTION, Some(&r.id), &stamp)
-        .map_err(|_| no(codes::OWNER_CONFIRM_REQUIRED, 403, "confirm again: a confirm works once, for this request, within 60 seconds"))?;
+        .map_err(|_| no(codes::VAULT_CONFIRM_REQUIRED, 403, "confirm again: a confirm works once, for this request, within 60 seconds"))?;
     let via = match proof {
         k2_vault::HumanProof::Confirmed { method } => method,
-        k2_vault::HumanProof::None => return Err(no(codes::OWNER_CONFIRM_REQUIRED, 403, "no owner confirm")),
+        k2_vault::HumanProof::None => return Err(no(codes::VAULT_CONFIRM_REQUIRED, 403, "no owner confirm")),
     };
     let by = actor(who);
     let decided = db(|c| Ok(reqs::decide(c, &r.id, reqs::STATUS_APPROVED, &by, Some(&via), None, deploy::now())))?.map_err(decide_err)?;

@@ -175,7 +175,7 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
     ])
     expect(frames.map((r) => r.getAttribute('rx'))).toEqual([null, null])
     expect([first?.getAttribute('stroke-linecap'), first?.getAttribute('stroke-linejoin')]).toEqual(['square', 'miter'])
-    // …and two square LEDs where Lucide draws its dots (the status light).
+    // …and two LED bars starting where Lucide draws its dots (the status light).
     expect(first?.querySelectorAll('[data-led]')).toHaveLength(2)
     expect(first?.querySelectorAll('circle')).toHaveLength(0)
   })
@@ -205,6 +205,11 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
       expect(icon.getAttribute('data-led-color')).toBe(c.color)
       const leds = Array.from(icon.querySelectorAll('[data-led]'))
       expect(leds).toHaveLength(2)
+      // Bars 3x the old 3.5 square's width (Rosson 2026-10-16).
+      expect(leds.map((l) => [l.getAttribute('width'), l.getAttribute('height')])).toEqual([
+        ['10.5', '3.5'],
+        ['10.5', '3.5'],
+      ])
       expect(leds.map((l) => l.getAttribute('fill'))).toEqual([c.color, c.color])
       expect(t.getAttribute('aria-label')).toBe(`rosson.k2.dev — ${c.words}`)
       expect(t.getAttribute('title')).toBe(`rosson.k2.dev — ${c.words} (⌘L)`)

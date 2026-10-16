@@ -94,6 +94,11 @@ describe('agent on another server', () => {
     expect(icon?.getAttribute('data-testid')).toBe('server-status-icon')
     expect(icon?.getAttribute('width')).toBe(String(SERVER_ICON_PX))
     expect(icon?.getAttribute('data-led-color')).toBe(GREEN)
+    // The LED bars (3x the old square's width) carry the status colour.
+    expect(Array.from(icon?.querySelectorAll('[data-led]') ?? []).map((l) => [l.getAttribute('fill'), l.getAttribute('width')])).toEqual([
+      [GREEN, '10.5'],
+      [GREEN, '10.5'],
+    ])
     expect(server.getAttribute('title')).toBe('z3thon.k2.dev — Connection: connected')
     expect(server.getAttribute('aria-label')).toBe('z3thon.k2.dev — Connection: connected')
   })

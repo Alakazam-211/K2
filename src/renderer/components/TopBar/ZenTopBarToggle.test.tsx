@@ -25,6 +25,9 @@ vi.mock('@/components/Timer/KeepAwakeButton', () => ({ default: () => <span data
 vi.mock('@/components/CheatSheet/K2NounsCheatSheet', () => ({ default: () => <span data-stub="cheat-sheet" /> }))
 vi.mock('@/components/Presence/PresenceRoster', () => ({ default: () => <span data-stub="presence" /> }))
 vi.mock('@/components/Presence/ModeToggle', () => ({ default: () => <span data-stub="mode" /> }))
+// Rosson 2026-10-16: the Admin profile button sits right of the Zen toggle
+// (`AdminProfileButton.test.tsx` checks it).
+vi.mock('./AdminProfileButton', () => ({ default: () => <span data-stub="admin-profile" /> }))
 
 import { act } from 'react'
 import { cleanup, fireEvent, render } from '@testing-library/react'
@@ -66,7 +69,7 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('the Zen toggle in the top bar (G5, TG3.4)', () => {
-  it('Agents / Home: the last item, right of both drawer toggles, after a pipe', () => {
+  it('Agents / Home: right of both drawer toggles, after a pipe (Admin profile last)', () => {
     render(
       <TopBarUtilities>
         <button data-drawer="left" />
@@ -87,6 +90,7 @@ describe('the Zen toggle in the top bar (G5, TG3.4)', () => {
       'right',
       'pipe',
       'zen',
+      'admin-profile',
     ])
     const toggle = document.querySelector('[data-zen-enter]')
     expect(toggle?.getAttribute('aria-pressed')).toBe('false')
@@ -95,7 +99,7 @@ describe('the Zen toggle in the top bar (G5, TG3.4)', () => {
 
   it('a page without drawer toggles (Settings, Feedback): after the mode toggle, with its own pipe', () => {
     render(<TopBarUtilities />)
-    expect(clusterItems().slice(-3)).toEqual(['mode', 'pipe', 'zen'])
+    expect(clusterItems().slice(-4)).toEqual(['mode', 'pipe', 'zen', 'admin-profile'])
   })
 
   it('a click turns this window’s Zen on over the current page; Shift starts safe mode', () => {

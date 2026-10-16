@@ -364,7 +364,7 @@ pub fn chain_matches(chain: &str, host: &str, key: &rcgen::KeyPair) -> Result<i6
 /// Connect's turn budget: 5 issuances / 24 h / label).
 fn reusable(env: &Env, label: &str, st: &VoiceState) -> Option<(String, String)> {
     let chain = st.cert_pem.as_deref()?;
-    if st.cert_not_after.map_or(true, |t| t - env.ops.now() < RENEW_WINDOW_SECS) {
+    if st.cert_not_after.is_none_or(|t| t - env.ops.now() < RENEW_WINDOW_SECS) {
         return None;
     }
     let key_pem = env.secrets.resolve(st.turn_key_ref.as_deref()?).ok()??;
@@ -554,10 +554,8 @@ fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
             Ok(()) => label_ok = true,
             Err(e) => warnings.push(format!("the nested voice label could not be pointed at sew-media ({e}): K2 Connect Pro is needed for voice.{label}.k2.dev")),
         }
-    } else if st.voice_label {
-        if env.ops.nested_label(VOICE_LABEL, None).is_ok() {
-            label_ok = false;
-        }
+    } else if st.voice_label && env.ops.nested_label(VOICE_LABEL, None).is_ok() {
+        label_ok = false;
     }
 
     step(env, "start");
@@ -691,14 +689,14 @@ pub fn renew_due(env: &Env, st: &VoiceState) -> bool {
         return false;
     }
     let now = env.ops.now();
-    let in_window = st.cert_not_after.map_or(true, |t| t - now < RENEW_WINDOW_SECS);
+    let in_window = st.cert_not_after.is_none_or(|t| t - now < RENEW_WINDOW_SECS);
     if !in_window {
         return false;
     }
     if st.logins_at_failure.is_some_and(|n| env.ops.frpc_logins() > n) {
         return true;
     }
-    st.next_try_at.map_or(true, |t| now >= t)
+    st.next_try_at.is_none_or(|t| now >= t)
 }
 
 /// Renew the TURN cert with the same key (`PUT /turn/dns` first: a new box

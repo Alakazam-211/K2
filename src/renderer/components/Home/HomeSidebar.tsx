@@ -21,7 +21,7 @@
 //     the floor up to that). Off, or below the floor, it switches this
 //     window's server (H15) and lands on Home.
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
@@ -46,6 +46,7 @@ import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import ResizeHandle from '@/components/Sidebar/ResizeHandle'
 import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButton'
 import { PresenceAvatarCluster } from '@/components/Presence/PresenceWorkspaceAvatars'
+import { RowDropLine, dropTargetIndex, useRowDragReorder } from '@/components/Sidebar/row-drag-reorder'
 import HomePicker from './HomePicker'
 import { AddAgentPicker } from './HomeAddPanels'
 import { useConnectedRowNote, useHomeAddPickerStore, useRowStatus } from './home-room'
@@ -306,60 +307,14 @@ export default function HomeSidebar(): React.JSX.Element {
   const barRef = useRef<HTMLDivElement | null>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
 
-  // ── Drag-to-reorder (the Agents sidebar's mouse drag + accent line) ──
-  const [dragIndex, setDragIndex] = useState<number | null>(null)
-  const [dropIndex, setDropIndex] = useState<number | null>(null)
-  const dropIndexRef = useRef<number | null>(null)
-  const suppressClickRef = useRef(false)
-
-  const handleRowMouseDown = useCallback(
-    (e: React.MouseEvent, fromIndex: number) => {
-      if (e.button !== 0) return
-      // Group chips and other in-row controls keep their own click.
-      if ((e.target as HTMLElement).closest('[role="button"]')) return
-      const startX = e.clientX
-      const startY = e.clientY
-      let started = false
-      const onMove = (ev: MouseEvent): void => {
-        if (!started && (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 5)) {
-          started = true
-          setDragIndex(fromIndex)
-          document.body.style.cursor = 'grabbing'
-          document.body.style.userSelect = 'none'
-        }
-        if (!started || !listRef.current) return
-        const items = listRef.current.querySelectorAll('[data-home-row]')
-        let idx = 0
-        for (let i = 0; i < items.length; i++) {
-          const rect = items[i].getBoundingClientRect()
-          if (ev.clientY > rect.top + rect.height / 2) idx = i + 1
-        }
-        dropIndexRef.current = idx
-        setDropIndex(idx)
-      }
-      const onUp = (): void => {
-        document.removeEventListener('mousemove', onMove)
-        document.removeEventListener('mouseup', onUp)
-        document.body.style.cursor = ''
-        document.body.style.userSelect = ''
-        if (started) {
-          suppressClickRef.current = true
-          const di = dropIndexRef.current
-          if (di !== null && di !== fromIndex && di !== fromIndex + 1) {
-            const to = di > fromIndex ? di - 1 : di
-            const current = selectedHome(useHomesStore.getState())
-            useHomesStore.getState().moveRow(current.id, fromIndex, to)
-          }
-        }
-        setDragIndex(null)
-        setDropIndex(null)
-        dropIndexRef.current = null
-      }
-      document.addEventListener('mousemove', onMove)
-      document.addEventListener('mouseup', onUp)
-    },
-    [],
-  )
+  // ── Drag-to-reorder (shared with the Agents sidebar: same ghost, line, cursor) ──
+  const rowDrag = useRowDragReorder<'home'>()
+  const dropHomeRow = useCallback((from: number, gap: number) => {
+    const to = dropTargetIndex(from, gap)
+    if (to === null) return
+    const current = selectedHome(useHomesStore.getState())
+    useHomesStore.getState().moveRow(current.id, from, to)
+  }, [])
 
   // Close the picker on outside click / Esc.
   useEffect(() => {
@@ -409,24 +364,26 @@ export default function HomeSidebar(): React.JSX.Element {
             <div
               key={row.address}
               data-home-row={row.address}
-              style={{ opacity: dragIndex === idx ? 0.4 : 1 }}
-              onMouseDown={(e) => handleRowMouseDown(e, idx)}
-              onClickCapture={(e) => {
-                if (suppressClickRef.current) {
-                  suppressClickRef.current = false
-                  e.stopPropagation()
-                  e.preventDefault()
-                }
-              }}
+              style={{ opacity: rowDrag.isDragging('home', idx) ? 0.4 : 1 }}
+              onMouseDown={(e) =>
+                rowDrag.onRowMouseDown(e, {
+                  zone: 'home',
+                  index: idx,
+                  container: () => listRef.current,
+                  rowSelector: '[data-home-row]',
+                  onDrop: dropHomeRow,
+                })
+              }
+              onClickCapture={rowDrag.onRowClickCapture}
             >
-              {dragIndex !== null && dropIndex === idx && <div className="h-[2px] bg-[var(--color-accent)] mx-3" />}
+              {rowDrag.showsDropLineAt('home', idx) && <RowDropLine />}
               <HomeRowView home={home} row={row} index={idx} />
-              {idx < rows.length - 1 && !(dragIndex !== null && dropIndex === idx + 1) && (
+              {idx < rows.length - 1 && !rowDrag.showsDropLineAt('home', idx + 1) && (
                 <div className="border-b border-[var(--color-border)]" />
               )}
             </div>
           ))}
-          {dragIndex !== null && dropIndex === rows.length && <div className="h-[2px] bg-[var(--color-accent)] mx-3" />}
+          {rowDrag.showsDropLineAt('home', rows.length) && <RowDropLine />}
         </div>
 
         {rows.length === 0 && (

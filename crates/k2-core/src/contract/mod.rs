@@ -25,6 +25,7 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
+pub mod app;
 pub mod gen;
 pub mod lint;
 
@@ -62,7 +63,9 @@ pub struct Catalog {
 pub enum Exposure {
     /// A custom Garden widget (sealed frame, MessagePort transport).
     Widget,
-    /// An App (Cut B; no `app` verb rows in this cut).
+    /// An App: its server code through its gateway link, or a guest's
+    /// browser through the App's helper (runtime S23: one row per live
+    /// gateway route; `app_surface.rs` is generated from them).
     App,
     /// A custom Garden widget, through this computer's daemon only
     /// (`POST /cli/zen/call`; prd-gardens-local-services-v1 §3.1,
@@ -188,6 +191,37 @@ pub struct HttpBinding {
     /// Argument name → query or body name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub params: BTreeMap<String, String>,
+    /// `app` rows (S23, room-scope RS7): response field names the catalog
+    /// renames from the live wire, catalog name → wire name, at any depth
+    /// (`relPath` ← `path`). The server SDK renames back; the lint checks
+    /// only the catalog names.
+    #[serde(default, rename = "responseNames", skip_serializing_if = "BTreeMap::is_empty")]
+    pub response_names: BTreeMap<String, String>,
+    /// `app` POST rows: arguments (catalog names) the route reads from the
+    /// query string; every other argument goes in the JSON body. A GET
+    /// sends every argument in the query.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub query: Vec<String>,
+    /// `app` rows: which door forwards the route. Absent = both (the
+    /// browser helper and the App's gateway link).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub door: Option<Door>,
+    /// `app` GET rows: `false` = no HEAD twin (the route is one exact GET).
+    /// Absent = a GET row also opens HEAD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<bool>,
+}
+
+/// The one door an `app` row is limited to (absent = both).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Door {
+    /// Only the browser helper (`--skin-gateway`): the route acts on a
+    /// guest's own login session, which an App pass never is.
+    Helper,
+    /// Only the App's gateway link: a BFF's server-side call (a guest's
+    /// login through the App) that the browser origin never forwards.
+    Link,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,6 +241,10 @@ pub struct SocketBinding {
     /// The verb to refetch with after a gap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refetch: Option<String>,
+    /// `app` rows: the query parameter the socket must carry (GA1: a
+    /// socket can't be App-facing without naming it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub param: Option<String>,
 }
 
 /// One cap (UWA9, UW23).
@@ -391,6 +429,22 @@ mod tests {
                 "tx_expired",
                 "busy",
                 "paused",
+                // The App transport (runtime S23): the gateway link's and
+                // the App routes' refusals, plus the server SDK's own two.
+                "pass_required",
+                "pass_invalid",
+                "pass_wrong_link",
+                "not_on_link",
+                "json_required",
+                "skin_room",
+                "usage",
+                "not_found",
+                "bad_login",
+                "locked",
+                "card_not_pending",
+                "guest_required",
+                "no_app_pass",
+                "no_app_key",
             ]
         );
     }

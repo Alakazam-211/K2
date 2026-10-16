@@ -562,7 +562,13 @@ pub fn thread_preview(doc: &k2_core::overlay::OverlayDoc) -> String {
 /// Thread item per addr, one request per server for list previews. Each
 /// addr resolves and authorizes on its own; an addr that fails is an item
 /// with `error`, never a failure of the batch. Reads exactly one item per
-/// addr (never `limit=0`). App passes are refused by the dispatcher.
+/// addr (never `limit=0`).
+///
+/// Room-scope R5 (0.46.1): a guest or App pass (bound by the dispatcher)
+/// resolves each addr the way `GET /cli/thread` does for it (its rooms'
+/// pinned Chats only; anything else is the uniform `skin_room`) and needs
+/// `thread:read` in that room, else the item's error is `cap_not_granted`.
+/// The batch limit stays [`THREAD_LATEST_MAX_ADDRS`] (Q17).
 fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
     let raw = str_param(params, "addrs");
     let mut addrs: Vec<String> = Vec::new();
@@ -596,6 +602,12 @@ fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
             };
             if let Err(e) = authorize_read(principal.as_ref(), &resolved) {
                 return serde_json::json!({ "addr": addr, "error": error_of(e) });
+            }
+            if require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_READ).is_err() {
+                return serde_json::json!({
+                    "addr": addr,
+                    "error": { "code": "cap_not_granted", "hint": format!("missing capability {}", k2_core::skin::CAP_THREAD_READ) },
+                });
             }
             match overlay::read_thread_page(&resolved.conversation_id, None, None, 1) {
                 Ok(page) => match page.items.last() {

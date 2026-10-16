@@ -1,10 +1,11 @@
-// Drawer handles (0.46.0 UI experiment): a slim pill, centred vertically
-// on the edge where a drawer opens, replaces the top bar's drawer
-// buttons. Click toggles the drawer. While the drawer is open the pill
-// sits on the drawer's inner edge (half over the drawer, so it stays
-// reachable over a Browser tab's native page) and can also be dragged to
-// resize it; the drawer's own full-height resize edge still works above
-// and below the pill.
+// Drawer handles (0.46.0 UI experiment): a small dog-ear tab (a page
+// corner folded over), flush against the edge where a drawer opens and
+// centred vertically, replaces the top bar's drawer buttons. Click
+// toggles the drawer. Closed, the tab hangs off the room's edge into the
+// room. Open, it hangs off the drawer's inner border over the drawer (so
+// it stays reachable over a Browser tab's native page) and can also be
+// dragged to resize it; the drawer's own full-height resize edge still
+// works above and below the tab.
 //
 // Open state stays per-window chrome (`usePanelsStore` →
 // `k2.windowChrome.<label>`); this is only another gesture on it.
@@ -13,7 +14,7 @@
 import { useCallback, useRef } from 'react'
 import { usePanelsStore } from '@/stores/panels'
 
-/** Pointer travel (px) before a press on an open drawer's pill becomes a resize drag. */
+/** Pointer travel (px) before a press on an open drawer's tab becomes a resize drag. */
 const DRAG_THRESHOLD_PX = 3
 
 const SIDE_NAME: Record<'left' | 'right', string> = { left: 'Left', right: 'Right' }
@@ -91,15 +92,18 @@ export default function DrawerHandle({
   const tip = `${action} ${name.toLowerCase()} (${label})${open ? ' · drag to resize' : ''}`
 
   // Closed: flush inside the room's edge (the right edge is the window's,
-  // so the pill cannot hang past it). Open: centred on the drawer border.
+  // so the tab cannot hang past it). Open: flush against the drawer
+  // border, over the drawer. `attached` is the tab's edge that touches the
+  // border; the folded corner is on the other (free) side, at the top.
   const position =
     side === 'left'
       ? open
-        ? 'left-0 -translate-x-1/2'
-        : 'left-0'
+        ? 'left-0 -translate-x-full justify-end'
+        : 'left-0 justify-start'
       : open
-        ? 'right-0 translate-x-1/2'
-        : 'right-0'
+        ? 'right-0 translate-x-full justify-start'
+        : 'right-0 justify-end'
+  const attached: 'left' | 'right' = (side === 'left') !== open ? 'left' : 'right'
 
   return (
     <button
@@ -114,13 +118,29 @@ export default function DrawerHandle({
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
-      className={`group no-drag absolute top-1/2 z-20 flex h-14 w-3 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)] ${position}`}
+      className={`group no-drag absolute top-1/2 z-20 flex h-12 w-3 -translate-y-1/2 cursor-pointer items-center outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)] ${position}`}
     >
-      <span
+      {/* Drawn attached on the left with the top-right corner folded;
+          mirrored when the tab is attached on the right. */}
+      <svg
         aria-hidden="true"
-        data-drawer-pill=""
-        className="block h-8 w-1 rounded-full bg-[var(--color-text-secondary)] transition-all duration-150 group-hover:h-12 group-hover:w-1.5 group-hover:bg-[var(--color-text-primary)] group-focus-visible:bg-[var(--color-accent)]"
-      />
+        data-drawer-dogear={attached}
+        viewBox="0 0 12 32"
+        preserveAspectRatio="none"
+        className="block h-7 w-2.5 transition-all duration-150 group-hover:h-8 group-hover:w-3"
+        style={attached === 'right' ? { transform: 'scaleX(-1)' } : undefined}
+      >
+        <path
+          data-part="body"
+          d="M0 0 H6 L12 6 V30 Q12 32 10 32 H0 Z"
+          className="fill-[var(--color-text-secondary)] transition-colors duration-150 group-hover:fill-[var(--color-text-primary)] group-focus-visible:fill-[var(--color-accent)]"
+        />
+        <path
+          data-part="fold"
+          d="M6 0 V6 H12 Z"
+          className="fill-[var(--color-text-muted)] transition-colors duration-150 group-hover:fill-[var(--color-text-secondary)]"
+        />
+      </svg>
     </button>
   )
 }

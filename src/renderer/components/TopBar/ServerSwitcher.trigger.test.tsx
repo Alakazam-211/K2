@@ -114,10 +114,13 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
     expect(screen.getByTestId('server-switcher-trigger').getAttribute('aria-expanded')).toBe('true')
   })
 
-  it('serverChipClass: following a remote room keeps the chip with a dashed border', () => {
-    expect(serverChipClass({ open: false, followsRoom: true }).split(' ')).toContain('border-dashed')
-    expect(serverChipClass({ open: true, followsRoom: true }).split(' ')).toContain('border-dashed')
-    expect(serverChipClass({ open: false, followsRoom: false }).split(' ')).not.toContain('border-dashed')
+  it('serverChipClass: rest vs open, never a dashed border', () => {
+    const rest = serverChipClass({ open: false }).split(' ')
+    const lifted = serverChipClass({ open: true }).split(' ')
+    expect(rest).toContain('bg-[var(--color-overlay-soft-bg)]')
+    expect(lifted).toContain('bg-[var(--color-bg-elevated)]')
+    expect(rest).not.toContain('border-dashed')
+    expect(lifted).not.toContain('border-dashed')
   })
 
   it('a short and a long name get the same fixed-width trigger', () => {

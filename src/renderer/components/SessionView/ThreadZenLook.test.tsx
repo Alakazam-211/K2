@@ -60,7 +60,7 @@ vi.mock('./useOverlayThread', () => ({
 import { composeRowChromeWidth, TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { composeTextareaHeight } from '@/components/Terminal/terminalCompose'
 import { ThreadAttachmentChip, ThreadFooterFade, threadComposeLines, threadComposeStackNext } from '@/components/Thread/ThreadZenKit'
-import { CHAMFER_SCOPE, FOOTER_FADE_PX, THREAD_CHAMFER_CSS, THREAD_COMPOSE_BOX_BORDER, THREAD_COMPOSE_BOX_PAD, THREAD_FOOTER_FADE_CSS, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
+import { CHAMFER_SCOPE, FOOTER_BLUR_LAYERS, FOOTER_FADE_PX, FOOTER_TINT_STOPS, THREAD_CHAMFER_CSS, THREAD_COMPOSE_BOX_BORDER, THREAD_COMPOSE_BOX_PAD, THREAD_FOOTER_FADE_CSS, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { primaryScope } from '@/kessel/server-scope'
 import { resetThreadViewersForTests, setThreadViewerForTests, type ThreadViewer } from '@/lib/thread-viewer'
@@ -622,30 +622,63 @@ describe('chamfered corners in K2\'s square Style', () => {
 // Rosson 2026-10-16, from K2 Companion (7cbf584): the strip behind the box
 // and the activity tab is see-through; messages scroll under it and fade.
 describe('footer fade behind the message box', () => {
-  it('is a gradient of the window\'s own background, reaching 32px above the box', () => {
-    expect(FOOTER_FADE_PX).toBe(32)
-    expect(THREAD_FOOTER_FADE_CSS).toContain('top: -32px; pointer-events: none;')
+  it('the tint eases from clear at the top to 95%, in px from the top (no % band, no hard edge)', () => {
+    expect(FOOTER_FADE_PX).toBe(48)
+    expect(THREAD_FOOTER_FADE_CSS).toContain('top: -48px; pointer-events: none;')
+    // Clear at the top, rising every step, 95% just past the box's top edge.
+    expect(FOOTER_TINT_STOPS[0]).toEqual([0, 0])
+    expect(FOOTER_TINT_STOPS.at(-1)).toEqual([FOOTER_FADE_PX + 8, 95])
+    for (let i = 1; i < FOOTER_TINT_STOPS.length; i++) {
+      const [at, pct] = FOOTER_TINT_STOPS[i]
+      const [prevAt, prevPct] = FOOTER_TINT_STOPS[i - 1]
+      expect(at - prevAt, `stop ${i}`).toBeLessThanOrEqual(8)
+      expect(pct, `stop ${i}`).toBeGreaterThan(prevPct)
+      // No jump: at most +22 points per 8px step.
+      expect(pct - prevPct, `stop ${i}`).toBeLessThanOrEqual(22)
+    }
     expect(THREAD_FOOTER_FADE_CSS).toContain(
-      'background: linear-gradient(to top, color-mix(in srgb, var(--zen-canvas) 96%, transparent) 0%, color-mix(in srgb, var(--zen-canvas) 88%, transparent) 60%, transparent 100%);',
+      '.thread-footer-tint { background: linear-gradient(to bottom, color-mix(in srgb, var(--zen-canvas) 0%, transparent) 0px, color-mix(in srgb, var(--zen-canvas) 6%, transparent) 8px,',
     )
+    expect(THREAD_FOOTER_FADE_CSS).not.toMatch(/var\(--zen-canvas\) \d+%, transparent\) \d+%/)
     // Only in the desktop Thread box.
     expect(THREAD_FOOTER_FADE_CSS.split('\n').filter((l) => l.includes('.thread-footer-')).every((l) => l.includes('[data-k2-thread-zen] .thread-footer-fade'))).toBe(true)
   })
 
-  // Rosson 2026-10-04: no backdrop-filter / blur in the desktop app (WebKit
-  // leaves stale layers behind it).
-  it('has no blur: no backdrop-filter in its CSS, no blur layers in the strip', () => {
-    expect(THREAD_FOOTER_FADE_CSS).not.toMatch(/backdrop-filter|blur\(/)
-    // One gradient for everyone: no reduced-transparency or no-blur variant.
-    expect(THREAD_FOOTER_FADE_CSS).not.toContain('prefers-reduced-transparency')
-    expect(THREAD_FOOTER_FADE_CSS).not.toContain('@supports')
+  // Rosson's 2026-10-04 no-blur rule is suspended for this strip on the dev
+  // branch while he judges it: four blur layers, as on mobile.
+  it('blurs like mobile: four layers, -webkit- and standard backdrop-filter and mask, feathered in', () => {
+    expect(FOOTER_BLUR_LAYERS.map(([px]) => px)).toEqual([2, 6, 12, 24])
+    FOOTER_BLUR_LAYERS.forEach(([px, from, to], i) => {
+      const rule = THREAD_FOOTER_FADE_CSS.split('\n').find((l) => l.includes(`.thread-footer-blur-${i + 1} {`))
+      if (!rule) throw new Error(`no rule for blur layer ${i + 1}`)
+      expect(rule).toContain(`-webkit-backdrop-filter: blur(${px}px);`)
+      expect(rule).toContain(` backdrop-filter: blur(${px}px);`)
+      const mask = `linear-gradient(to bottom, transparent ${from}px, #000 ${to}px)`
+      expect(rule).toContain(`-webkit-mask-image: ${mask};`)
+      expect(rule).toContain(` mask-image: ${mask};`)
+      // A feather, not a cut: it fades in over at least 16px.
+      expect(to - from).toBeGreaterThanOrEqual(16)
+    })
     render(<ThreadFooterFade />)
     const strip = document.querySelector('[data-thread-footer-fade]') as HTMLElement
-    expect(strip.children).toHaveLength(0)
-    expect(strip.className).toBe('thread-footer-fade')
-    expect(document.querySelector('[class*="blur"]')).toBeNull()
-    expect(strip.style.getPropertyValue('backdrop-filter')).toBe('')
-    expect(strip.style.getPropertyValue('-webkit-backdrop-filter')).toBe('')
+    expect(Array.from(strip.children).map((c) => c.className)).toEqual([
+      'thread-footer-blur-1',
+      'thread-footer-blur-2',
+      'thread-footer-blur-3',
+      'thread-footer-blur-4',
+      'thread-footer-tint',
+    ])
+  })
+
+  it('reduced transparency (and no backdrop-filter) keeps the gradient alone, no blur', () => {
+    const reduced = /@media \(prefers-reduced-transparency: reduce\) \{([^}]*\})\s*\}/.exec(THREAD_FOOTER_FADE_CSS)
+    if (!reduced) throw new Error('no reduced-transparency block')
+    expect(reduced[1]).toContain('[class^="thread-footer-blur-"] { display: none; }')
+    expect(reduced[1]).not.toMatch(/blur\(|backdrop-filter/)
+    expect(reduced[1]).not.toContain('thread-footer-tint')
+    const noBlur = /@supports not \(\(-webkit-backdrop-filter: blur\(1px\)\) or \(backdrop-filter: blur\(1px\)\)\) \{([^}]*\})\s*\}/.exec(THREAD_FOOTER_FADE_CSS)
+    if (!noBlur) throw new Error('no @supports fallback block')
+    expect(noBlur[1]).toContain('[class^="thread-footer-blur-"] { display: none; }')
   })
 
   it('a column without a message box draws no fade', () => {

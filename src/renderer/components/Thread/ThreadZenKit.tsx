@@ -113,29 +113,84 @@ ${SCOPE} [data-zen-compose-input]:focus { outline: none; }
 //
 // Rosson 2026-10-16, from K2 Companion (`ZenFooterBlur`, 7cbf584 on main,
 // after 4.0.0): the strip behind the message box and the activity tab is
-// see-through, and the messages scroll under it and fade out. Companion
-// stacks backdrop blurs under its tint; the desktop app has no blur at all
-// (Rosson 2026-10-04: WebKit leaves stale layers behind backdrop-filter),
-// so this is the tint gradient alone, Companion's no-blur strength (96% /
-// 88% at 60%), reaching FOOTER_FADE_PX above the box. The tint is the
-// window's own background (`--zen-canvas`), so it works in light and dark;
-// Companion's is black (it is dark only). Reduced transparency gets the
-// same gradient: there is no blur to drop.
+// see-through; messages scroll under it, blur and fade out. The desktop's
+// no-blur rule (2026-10-04, WebKit stale layers) is suspended for this one
+// strip on the dev branch while Rosson judges it.
+//
+// Four masked backdrop-blur layers (Companion's 2/6/12/24px) and a tint of
+// the window's own background (`--zen-canvas`, so light and dark both
+// work). Every stop is in px from the strip's top, not % of its height:
+// the strip is FOOTER_FADE_PX above the box plus the whole box, so % stops
+// put most of the ramp behind the box and left a near-solid band with a
+// hard top edge above it (the first version). Here the tint eases from
+// clear at the top to 95% by the box's top edge, and each blur layer feathers
+// in over its own band, stronger further down. Prefixed and standard
+// properties both (WKWebView reads the -webkit- ones). Reduced
+// transparency, or no backdrop-filter, keeps the gradient alone.
 
-/** How far (px) the fade reaches above the message box (Companion's 24px,
- *  a little taller so text fades out without the blur). */
-export const FOOTER_FADE_PX = 32
+/** How far (px) the fade reaches above the message box. */
+export const FOOTER_FADE_PX = 48
 
 const FOOTER_FADE_SCOPE = `[${THREAD_ZEN_SCOPE_ATTR}] .thread-footer-fade`
 
+/** The tint: clear at the top, easing to 95% at the box's top edge (px
+ *  stops, [px from the top, % of the background]). */
+export const FOOTER_TINT_STOPS: ReadonlyArray<readonly [number, number]> = [
+  [0, 0],
+  [8, 6],
+  [16, 18],
+  [24, 36],
+  [32, 58],
+  [40, 78],
+  [48, 90],
+  [56, 95],
+]
+
+/** Blur layers: [blur px, feather start px, fully on px] from the strip's top. */
+export const FOOTER_BLUR_LAYERS: ReadonlyArray<readonly [number, number, number]> = [
+  [2, 0, 16],
+  [6, 8, 32],
+  [12, 20, 44],
+  [24, 32, 56],
+]
+
+const tintCss = (): string =>
+  `background: linear-gradient(to bottom, ${FOOTER_TINT_STOPS.map(
+    ([at, pct]) => `color-mix(in srgb, var(--zen-canvas) ${pct}%, transparent) ${at}px`,
+  ).join(', ')});`
+
+const blurLayerCss = ([px, from, to]: readonly [number, number, number], n: number): string => {
+  const mask = `linear-gradient(to bottom, transparent ${from}px, #000 ${to}px)`
+  return (
+    `${FOOTER_FADE_SCOPE} > .thread-footer-blur-${n + 1} { -webkit-backdrop-filter: blur(${px}px); backdrop-filter: blur(${px}px); ` +
+    `-webkit-mask-image: ${mask}; mask-image: ${mask}; }`
+  )
+}
+
 export const THREAD_FOOTER_FADE_CSS = `
-${FOOTER_FADE_SCOPE} { position: absolute; left: 0; right: 0; bottom: 0; top: -${FOOTER_FADE_PX}px; pointer-events: none; z-index: 0; background: linear-gradient(to top, color-mix(in srgb, var(--zen-canvas) 96%, transparent) 0%, color-mix(in srgb, var(--zen-canvas) 88%, transparent) 60%, transparent 100%); }
+${FOOTER_FADE_SCOPE} { position: absolute; left: 0; right: 0; bottom: 0; top: -${FOOTER_FADE_PX}px; pointer-events: none; z-index: 0; }
+${FOOTER_FADE_SCOPE} > span { position: absolute; inset: 0; pointer-events: none; }
+${FOOTER_BLUR_LAYERS.map(blurLayerCss).join('\n')}
+${FOOTER_FADE_SCOPE} > .thread-footer-tint { ${tintCss()} }
+@media (prefers-reduced-transparency: reduce) {
+  ${FOOTER_FADE_SCOPE} > [class^="thread-footer-blur-"] { display: none; }
+}
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  ${FOOTER_FADE_SCOPE} > [class^="thread-footer-blur-"] { display: none; }
+}
 `
 
 /** The fade behind the message box: fills its (relative) box and reaches
- *  FOOTER_FADE_PX above it. A gradient only, no blur. Never takes clicks. */
+ *  FOOTER_FADE_PX above it. Never takes clicks. */
 export function ThreadFooterFade(): JSX.Element {
-  return <div className="thread-footer-fade" data-thread-footer-fade="" aria-hidden="true" />
+  return (
+    <div className="thread-footer-fade" data-thread-footer-fade="" aria-hidden="true">
+      {FOOTER_BLUR_LAYERS.map((_, i) => (
+        <span key={i} className={`thread-footer-blur-${i + 1}`} />
+      ))}
+      <span className="thread-footer-tint" />
+    </div>
+  )
 }
 
 export function ThreadZenStyles(): JSX.Element {

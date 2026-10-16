@@ -122,8 +122,8 @@ describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own sect
   })
 })
 
-describe('Settings nav Language Models group (0.46, Rosson: Models · Subscriptions / Tokens · Usage; was LLMs · Tokens · Token Usage)', () => {
-  it('Language Models is a group: Models, Subscriptions / Tokens, Usage, before Access; Gardens follows Access', () => {
+describe('Settings nav Language Models group (0.46, Rosson: Models · Subs / Tokens · Usage; was LLMs · Tokens · Token Usage)', () => {
+  it('Language Models is a group: Models, Subs / Tokens, Usage, before Access; Gardens follows Access', () => {
     const start = src.indexOf("title: 'Language Models'")
     const gardens = src.indexOf("title: 'Gardens'")
     const server = src.indexOf("title: 'Access'")
@@ -132,7 +132,7 @@ describe('Settings nav Language Models group (0.46, Rosson: Models · Subscripti
     expect(src.slice(start, server)).toContain(
       [
         "{ id: 'agents', label: 'Models' },",
-        "{ id: 'llm-tokens', label: 'Subscriptions / Tokens' },",
+        "{ id: 'llm-tokens', label: 'Subs / Tokens' },",
         "{ id: 'token-usage', label: 'Usage' },",
       ].join('\n        '),
     )
@@ -151,7 +151,7 @@ describe('Settings nav Language Models group (0.46, Rosson: Models · Subscripti
     expect(src).toContain('...TOKEN_USAGE_MANIFEST,')
     expect(src).not.toContain("title: 'LLMs'")
     expect(SECTION_LABELS.agents).toBe('Models')
-    expect(SECTION_LABELS['llm-tokens']).toBe('Subscriptions / Tokens')
+    expect(SECTION_LABELS['llm-tokens']).toBe('Subs / Tokens')
     expect(SECTION_LABELS['token-usage']).toBe('Usage')
     expect(SECTION_LABELS['editors-agents']).toBe('Models')
   })

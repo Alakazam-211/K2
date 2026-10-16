@@ -44,14 +44,14 @@ describe('CLI Tools Setup install rows', () => {
     render(<AgentsSection />)
     expand(/Claude Code/)
     expect(screen.getByText(CLI_INSTALL_COMMANDS.claude)).toBeTruthy()
-    expect(screen.getAllByText(/Then add the subscription under Language Models → Subscriptions \/ Tokens\./).length).toBe(1)
+    expect(screen.getAllByText(/Then add the subscription under Language Models → Subs \/ Tokens\./).length).toBe(1)
     expect(document.body.textContent).not.toMatch(/Node\.js/)
     expect(screen.getByRole('button', { name: 'Install' })).toBeTruthy()
     expand(/Claude Code/)
 
     expand(/OpenAI Codex/)
     expect(screen.getByText(CLI_INSTALL_COMMANDS.codex)).toBeTruthy()
-    expect(screen.getAllByText(/Then add the subscription under Language Models → Subscriptions \/ Tokens\./).length).toBe(1)
+    expect(screen.getAllByText(/Then add the subscription under Language Models → Subs \/ Tokens\./).length).toBe(1)
     expect(document.body.textContent).not.toContain('codex --login')
     expand(/OpenAI Codex/)
 
@@ -77,7 +77,7 @@ describe('CLI Tools Setup install rows', () => {
   })
 })
 
-describe('Settings → Language Models → Models page (0.46: Models · Subscriptions / Tokens · Usage)', () => {
+describe('Settings → Language Models → Models page (0.46: Models · Subs / Tokens · Usage)', () => {
   beforeEach(() => {
     usePresetsStore.setState({ presets: [], showPresetsBar: true, fetchPresets: vi.fn(async () => {}) })
   })
@@ -98,10 +98,10 @@ describe('Settings → Language Models → Models page (0.46: Models · Subscrip
     expect(left.textContent).not.toContain('CLI Tools Setup')
     expect(right.querySelector('h2')?.textContent).toBe('CLI Tools Setup')
     expect(right.querySelector('[data-settings-id="agents.cli-claude"]')).not.toBeNull()
-    // The Tokens column moved to Settings → Language Models → Subscriptions / Tokens.
+    // The Tokens column moved to Settings → Language Models → Subs / Tokens.
     expect(document.querySelector('[data-settings-id="agents.accounts"]')).toBeNull()
     expect(document.querySelector('[data-settings-id="agents.add-login"]')).toBeNull()
-    expect(screen.queryByRole('heading', { name: 'Subscriptions / Tokens' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Subs / Tokens' })).toBeNull()
     expect(document.body.textContent).not.toContain('LLMs → Tokens')
   })
 })

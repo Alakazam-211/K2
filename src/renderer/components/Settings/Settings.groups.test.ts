@@ -26,7 +26,7 @@ const leafIds = (nav: Nav): Array<SettingsSection | undefined> =>
   nav.flatMap((b) => (b.kind === 'item' ? [b.id] : b.items.map((i) => i.id)))
 
 describe('Settings → Language Models group (was LLMs)', () => {
-  it('is one group with Models, Subscriptions / Tokens, Usage (in that order), whether or not Gardens show', () => {
+  it('is one group with Models, Subs / Tokens, Usage (in that order), whether or not Gardens show', () => {
     for (const zenGardens of [true, false]) {
       const nav = settingsNav({ zenGardens })
       const group = nav.find((b) => b.kind === 'group' && b.title === 'Language Models')
@@ -35,7 +35,7 @@ describe('Settings → Language Models group (was LLMs)', () => {
         title: 'Language Models',
         items: [
           { id: 'agents', label: 'Models' },
-          { id: 'llm-tokens', label: 'Subscriptions / Tokens' },
+          { id: 'llm-tokens', label: 'Subs / Tokens' },
           { id: 'token-usage', label: 'Usage' },
         ],
       })
@@ -66,8 +66,8 @@ describe('Settings search: Language Models pages (was LLMs)', () => {
   const llm = [...AGENTS_MANIFEST, ...LLM_TOKENS_MANIFEST, ...TOKEN_USAGE_MANIFEST]
   const ids = (q: string): string[] => searchManifest(llm, q).map((e) => e.id)
 
-  it('labels the pages Models, Subscriptions / Tokens, Usage', () => {
-    expect(LLM_TOKENS_MANIFEST.find((e) => e.id === 'agents.accounts')!.label).toBe('Subscriptions / Tokens')
+  it('labels the pages Models, Subs / Tokens, Usage', () => {
+    expect(LLM_TOKENS_MANIFEST.find((e) => e.id === 'agents.accounts')!.label).toBe('Subs / Tokens')
     expect(TOKEN_USAGE_MANIFEST.find((e) => e.id === 'token-usage.machine')!.label).toBe('Usage')
     expect(SECTION_LABELS.agents).toBe('Models')
   })

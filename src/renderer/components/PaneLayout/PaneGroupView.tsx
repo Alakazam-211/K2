@@ -4,9 +4,10 @@ import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { FileViewerPane } from '@/components/FileViewerPane/FileViewerPane'
 import { AgentPane } from '@/components/AgentPane/AgentPane'
 import { BrowserPane } from '@/components/BrowserPane/BrowserPane'
+import { ChangesPane } from '@/components/Changes/ChangesPane'
 import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
 import { workingAgentInPane } from '@/lib/room-close-guard'
-import type { TerminalItemData, FileViewerItemData, AgentItemData, BrowserItemData } from '@/stores/tabs'
+import type { TerminalItemData, FileViewerItemData, AgentItemData, BrowserItemData, ChangesItemData } from '@/stores/tabs'
 import { useActiveAgentsStore, type ActiveAgent } from '@/stores/active-agents'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
 import { PaneTabBar } from './PaneTabBar'
@@ -367,6 +368,16 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                   paneGroupId={paneGroupId}
                   url={bd.url}
                   navSeq={bd.navSeq}
+                />
+              )
+            } else if (item.type === 'changes') {
+              // Changes tab (C2): git list + actions + C3's diff viewer.
+              content = (
+                <ChangesPane
+                  tabId={tabId}
+                  paneGroupId={paneGroupId}
+                  itemId={item.id}
+                  data={item.data as ChangesItemData}
                 />
               )
             }

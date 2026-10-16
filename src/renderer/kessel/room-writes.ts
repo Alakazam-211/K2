@@ -86,6 +86,7 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'git/unstage': 'unstage a file in B’s checkout',
   'git/stage-all': 'stage everything in B’s checkout',
   'git/commit': 'commit in B’s checkout',
+  'git/discard': 'the Changes tab discards a file in B’s checkout (its copy goes to B’s Trash first)',
 
   // Heartbeats (row launch and toggle; the scheduler is B's).
   'heartbeat/launch': 'Launch on a heartbeat row fires it on B (call site checks the room write)',

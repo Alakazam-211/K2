@@ -188,8 +188,48 @@ pub fn create_workspace_ex(
     if Path::new(path).exists() {
         return Err(format!("Directory already exists: {}", path));
     }
-    fs::create_dir_all(path).map_err(|e| format!("Failed to create directory: {}", e))?;
+    create_workspace_dir(path)?;
     register_workspace_ex(path, seed_wiki, seed_agents_md, fanout)
+}
+
+/// Make a new workspace folder, missing parents included, as the
+/// daemon's own user (no root helper, no extra mode bits beyond the
+/// umask). The path must be absolute: a relative one would land in the
+/// daemon's cwd, never where the caller meant.
+///
+/// A permission error names the nearest existing folder the daemon could
+/// not write to, so a bad path (e.g. `/hearth` instead of
+/// `/home/k2/ai/hearth`) reads as "you can't write there", not a bare
+/// `Permission denied (os error 13)`.
+pub fn create_workspace_dir(path: &str) -> Result<(), String> {
+    let target = Path::new(path);
+    if !target.is_absolute() {
+        return Err(format!("Workspace path must be absolute: {path}"));
+    }
+    match fs::create_dir_all(target) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            let blocker = target
+                .ancestors()
+                .skip(1)
+                .find(|a| a.exists())
+                .unwrap_or_else(|| Path::new("/"));
+            let user = std::env::var("USER")
+                .or_else(|_| std::env::var("LOGNAME"))
+                .unwrap_or_else(|_| "the daemon's user".to_string());
+            let home = std::env::var("HOME").unwrap_or_default();
+            let hint = if home.is_empty() {
+                String::new()
+            } else {
+                format!(" Pick a folder you can write to, e.g. under {home}.")
+            };
+            Err(format!(
+                "Cannot create workspace {path}: {} is not writable by {user} (permission denied).{hint}",
+                blocker.display()
+            ))
+        }
+        Err(e) => Err(format!("Failed to create directory {path}: {e}")),
+    }
 }
 
 /// `/cli/workspace/open` — verify the path is an existing directory
@@ -407,6 +447,62 @@ mod tests {
         assert_eq!(count_projects(&path), 1, "still one projects row");
         assert_eq!(count_workspaces(&path), 1, "still one workspaces row");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_workspace_makes_missing_nested_parents() {
+        crate::db::init_for_tests();
+        let root = unique_dir("missing-parents");
+        // Field report 2026-10-16: /home/k2/ai did not exist yet.
+        let target = root.join("ai").join("team").join("hearth");
+        let path = target.to_string_lossy().into_owned();
+        assert!(!root.join("ai").exists(), "precondition: parent missing");
+        let body = create_workspace_ex(&path, false, false, false)
+            .expect("create under a missing nested parent must succeed");
+        assert!(target.is_dir(), "workspace dir not created: {path}");
+        let v: serde_json::Value = serde_json::from_str(&body).expect("json body");
+        assert_eq!(v["success"], serde_json::Value::Bool(true));
+        assert_eq!(v["path"], serde_json::Value::String(path.clone()));
+        assert_eq!(count_projects(&path), 1, "registered once");
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    #[test]
+    fn create_workspace_dir_rejects_relative_path() {
+        let err = create_workspace_dir("ai/hearth").unwrap_err();
+        assert_eq!(err, "Workspace path must be absolute: ai/hearth");
+        assert!(
+            !Path::new("ai").exists(),
+            "relative path must not be created in the cwd"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_workspace_dir_unwritable_root_names_the_blocker() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = unique_dir("unwritable");
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).expect("mkdir locked");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555))
+            .expect("chmod 0555");
+        let target = locked.join("ai").join("hearth");
+        let path = target.to_string_lossy().into_owned();
+        let res = create_workspace_dir(&path);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod back");
+        let err = res.expect_err("create under a read-only folder must fail");
+        let blocker = locked.to_string_lossy().into_owned();
+        assert!(
+            err.starts_with(&format!(
+                "Cannot create workspace {path}: {blocker} is not writable by "
+            )),
+            "error must name the unwritable folder, got: {err}"
+        );
+        assert!(err.contains("(permission denied)"), "got: {err}");
+        assert!(!err.contains("os error 13"), "no bare errno copy: {err}");
+        assert!(!locked.join("ai").exists(), "nothing created");
+        std::fs::remove_dir_all(&root).expect("cleanup");
     }
 
     #[test]

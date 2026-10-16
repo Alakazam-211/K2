@@ -250,6 +250,12 @@ fn every_root_exec_verb_refuses_an_unknown_or_missing_binary_and_runs_nothing() 
             (vec!["engine", "sew", "restore", "20260927T031512Z"], vec![]),
             (vec!["engine", "sew", "media", "install"], br#"{"public_url":"wss://voice.box.k2.dev"}"#.to_vec()),
             (vec!["engine", "sew", "media", "uninstall"], vec![]),
+            (vec!["engine", "sew", "media", "reconfigure"], br#"{"public_url":"wss://hearth.box.k2.dev"}"#.to_vec()),
+            (vec!["engine", "sew", "media", "turn-cert"], turn_cert_body().into_bytes()),
+            (vec!["engine", "sew", "media", "status"], vec![]),
+            (vec!["engine", "sew", "media", "enable"], vec![]),
+            (vec!["engine", "sew", "media", "disable"], vec![]),
+            (vec!["engine", "sew", "media", "probe-record", "ok", "ok", "fail"], vec![]),
             (vec!["engine", "sew", "systemctl", "start"], vec![]),
             (vec!["engine", "sew", "systemctl", "migrate"], vec![]),
         ];
@@ -605,4 +611,127 @@ fn sew_daemon_verbs_refuse_an_agent_caller_before_reading_stdin() {
         assert_eq!(o.code, exit::NOT_DAEMON, "{argv:?}");
     }
     assert!(sew_calls(&t).is_empty());
+}
+
+// ── media: TURN TLS, reconfigure, status, probe (K13) ───────────────────
+
+const TEST_CERT: &str = "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIU\n-----END CERTIFICATE-----\n";
+const TEST_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49\n-----END PRIVATE KEY-----\n";
+
+fn turn_cert_body() -> String {
+    serde_json::json!({"cert_pem": TEST_CERT, "key_pem": TEST_KEY}).to_string()
+}
+
+/// What the staged TURN files hold while `sew` runs (they are removed after).
+fn capture_turn_files(t: &T) -> std::rc::Rc<std::cell::RefCell<Vec<(String, String, String, u32)>>> {
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (s, c, k, j) = (seen.clone(), t.p(SEW_STAGE_TURN_CERT), t.p(SEW_STAGE_TURN_KEY), t.p(SEW_STAGE_MEDIA_JSON));
+    t.exec.0.borrow_mut().effects.push((
+        SEW_BIN.into(),
+        std::rc::Rc::new(move |_args: &[String]| {
+            let cert = std::fs::read_to_string(&c).unwrap_or_default();
+            let key = std::fs::read_to_string(&k).unwrap_or_default();
+            let json = std::fs::read_to_string(&j).unwrap_or_default();
+            let mode = std::fs::metadata(&k).map(|m| m.permissions().mode() & 0o777).unwrap_or(0);
+            s.borrow_mut().push((cert, key, json, mode));
+        }),
+    ));
+    seen
+}
+
+#[test]
+fn media_install_hands_sew_the_turn_tls_as_staged_files_never_paths_from_input() {
+    let t = box_root();
+    with_pin_installed(&t);
+    ok(&t.call_in(&["engine", "sew", "stage-media"], &media_tarball()));
+    sew_answers(&t, 0, r#"{"changed":["turn-tls"]}"#);
+    let seen = capture_turn_files(&t);
+    let body = serde_json::json!({
+        "public_url": "wss://hearth.box.k2.dev", "node_ip": "203.0.113.7", "udp_port": 7882, "tcp_port": 7881,
+        "turn_tls": "direct", "turn_domain": "turn-box.k2.dev", "turn_advertise_port": 5349, "sysctl": "apply",
+        "turn_cert_pem": TEST_CERT, "turn_key_pem": TEST_KEY,
+    });
+    ok(&t.call_in(&["engine", "sew", "media", "install"], body.to_string().as_bytes()));
+    let seen = seen.borrow();
+    assert_eq!(seen.len(), 1);
+    let (cert, key, json_text, mode) = &seen[0];
+    assert_eq!(cert, TEST_CERT);
+    assert_eq!(key, TEST_KEY);
+    assert_eq!(*mode, 0o600, "the key file is root-only");
+    let j: serde_json::Value = serde_json::from_str(json_text).unwrap();
+    assert_eq!(j["turn_cert"], t.p(SEW_STAGE_TURN_CERT).display().to_string());
+    assert_eq!(j["turn_key"], t.p(SEW_STAGE_TURN_KEY).display().to_string());
+    assert_eq!(j["public_url"], "wss://hearth.box.k2.dev");
+    assert_eq!(j["turn_domain"], "turn-box.k2.dev");
+    assert!(j.get("turn_key_pem").is_none() && j.get("turn_cert_pem").is_none(), "no key text in Sew's JSON");
+    assert!(!json_text.contains("PRIVATE KEY"));
+    assert!(!t.p(SEW_STAGE_TURN_KEY).exists() && !t.p(SEW_STAGE_TURN_CERT).exists(), "removed after the call");
+    assert!(!t.p(SEW_STAGE_MEDIA_JSON).exists());
+}
+
+#[test]
+fn media_reconfigure_sets_the_voice_url_without_a_tarball() {
+    let t = box_root();
+    with_pin_installed(&t);
+    sew_answers(&t, 0, r#"{"changed":["/etc/sew/sew.toml [voice]"],"restart_required":[]}"#);
+    let seen = capture_turn_files(&t);
+    for bad in [
+        &b"{}"[..],
+        br#"{"public_url":"https://hearth.box.k2.dev"}"#,
+        br#"{"public_url":"wss://hearth.box.k2.dev","tarball":"/tmp/x"}"#,
+        br#"{"turn_cert":"/etc/shadow","turn_key":"/etc/shadow"}"#,
+    ] {
+        assert_eq!(t.call_in(&["engine", "sew", "media", "reconfigure"], bad).code, exit::ARGV, "{}", String::from_utf8_lossy(bad));
+    }
+    assert!(sew_calls(&t).is_empty());
+    ok(&t.call_in(&["engine", "sew", "media", "reconfigure"], br#"{"public_url":"wss://hearth.box.k2.dev"}"#));
+    let path = t.p(SEW_STAGE_MEDIA_JSON).display().to_string();
+    assert_eq!(sew_calls(&t)[0].0, vec!["media", "install", "--reconfigure", "--config-json", path.as_str(), "--json"]);
+    let j: serde_json::Value = serde_json::from_str(&seen.borrow()[0].2).unwrap();
+    assert_eq!(j, serde_json::json!({"public_url": "wss://hearth.box.k2.dev", "profile": "shared"}));
+}
+
+#[test]
+fn media_turn_cert_renews_through_staged_files_when_idle() {
+    let t = box_root();
+    with_pin_installed(&t);
+    sew_answers(&t, 0, r#"{"changed":["turn-tls/fullchain.pem"]}"#);
+    let seen = capture_turn_files(&t);
+    for bad in [
+        serde_json::json!({"cert_pem": "/etc/shadow", "key_pem": TEST_KEY}).to_string(),
+        serde_json::json!({"cert_pem": TEST_CERT, "key_pem": TEST_CERT}).to_string(),
+        serde_json::json!({"cert_pem": TEST_CERT, "key_pem": TEST_KEY, "now": true}).to_string(),
+    ] {
+        assert_eq!(t.call_in(&["engine", "sew", "media", "turn-cert"], bad.as_bytes()).code, exit::ARGV, "{bad}");
+    }
+    ok(&t.call_in(&["engine", "sew", "media", "turn-cert"], turn_cert_body().as_bytes()));
+    let c = t.p(SEW_STAGE_TURN_CERT).display().to_string();
+    let k = t.p(SEW_STAGE_TURN_KEY).display().to_string();
+    assert_eq!(
+        sew_calls(&t)[0].0,
+        vec!["media", "turn-cert", "--cert", c.as_str(), "--key", k.as_str(), "--when-idle", "--json"]
+    );
+    assert_eq!(seen.borrow()[0].1, TEST_KEY);
+    assert!(!t.p(SEW_STAGE_TURN_KEY).exists(), "the key copy is gone after the call");
+}
+
+#[test]
+fn media_status_enable_disable_and_probe_record_argv_are_fixed() {
+    let t = box_root();
+    with_pin_installed(&t);
+    sew_answers(&t, 0, r#"{"installed":true,"enabled":true,"state":"running","alarms":[]}"#);
+    let v = json(&t.call(&["engine", "sew", "media", "status"]));
+    assert_eq!(v["sew"]["state"], "running");
+    ok(&t.call(&["engine", "sew", "media", "enable"]));
+    ok(&t.call(&["engine", "sew", "media", "disable"]));
+    ok(&t.call(&["engine", "sew", "media", "probe-record", "ok", "fail", "ok"]));
+    let argv: Vec<Vec<String>> = sew_calls(&t).into_iter().map(|(a, _)| a).collect();
+    let want: Vec<Vec<&str>> = vec![
+        vec!["media", "status", "--json"],
+        vec!["media", "enable", "--json"],
+        vec!["media", "disable", "--json"],
+        vec!["media", "probe-record", "--udp", "ok", "--tcp", "fail", "--turn-tls", "ok", "--from", "k2", "--json"],
+    ];
+    assert_eq!(argv, want);
+    assert_eq!(t.call(&["engine", "sew", "media", "probe-record", "yes", "ok", "ok"]).code, exit::ARGV);
 }

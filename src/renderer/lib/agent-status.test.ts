@@ -3,7 +3,17 @@
 // plus independent working / live / heartbeat, by the §3.1 rank.
 
 import { describe, expect, it } from 'vitest'
-import { agentStatus, shortcutLabel, STATUS_RANK, type AgentRollupInput, type AgentStatus } from './agent-status'
+import {
+  agentStatus,
+  rollupOfRows,
+  rowIsBusy,
+  sessionsStatus,
+  shortcutLabel,
+  STATUS_RANK,
+  worseUnseen,
+  type AgentRollupInput,
+  type AgentStatus,
+} from './agent-status'
 import type { ActivityDisplay } from '@/stores/session-events'
 
 function rollup(
@@ -175,5 +185,77 @@ describe('shortcutLabel (the number column)', () => {
 describe('STATUS_RANK', () => {
   it('is the approved order', () => {
     expect(STATUS_RANK).toEqual(['needs-you', 'failed', 'done', 'monitoring', 'no-update'])
+  })
+})
+
+// ── A tab's own sessions (S5) ─────────────────────────────────────────────
+
+type Lead = 'idle' | 'working' | 'waiting'
+function sRow(display: ActivityDisplay, o: { lead?: Lead; subagents?: number; reason?: string } = {}) {
+  const lead: Lead = o.lead ?? (display === 'working' ? 'working' : display === 'waiting' ? 'waiting' : 'idle')
+  return {
+    display,
+    lead: { state: lead, outcome: 'none' as const, since: 0, promptId: null },
+    children: { subagents: o.subagents ?? 0, shells: 0, monitors: 0, crons: 0, unknown: 0, owed: 0, waiting: 0 },
+    reason: o.reason ?? 'idle',
+    evidenceAt: null,
+    staleSince: null,
+  }
+}
+
+describe('rowIsBusy (D1 rule, one row)', () => {
+  it('working rows; waiting rows only while the lead works or subagents run', () => {
+    expect(rowIsBusy(sRow('working'))).toBe(true)
+    expect(rowIsBusy(sRow('waiting'))).toBe(false)
+    expect(rowIsBusy(sRow('waiting', { lead: 'working' }))).toBe(true)
+    expect(rowIsBusy(sRow('waiting', { subagents: 2 }))).toBe(true)
+    expect(rowIsBusy(sRow('monitoring', { subagents: 2 }))).toBe(false)
+    expect(rowIsBusy(sRow('idle'))).toBe(false)
+  })
+})
+
+describe('rollupOfRows', () => {
+  it('counts each display, busy and live (a pty_exited row holds no PTY)', () => {
+    const r = rollupOfRows([sRow('working'), sRow('waiting', { subagents: 1 }), sRow('idle', { reason: 'pty_exited' })], true)
+    expect(r).toEqual({
+      display: 'waiting',
+      counts: { working: 1, waiting: 1, monitoring: 0, unverifiable: 0, idle: 1 },
+      busy: 2,
+      live: 2,
+    })
+  })
+
+  it('no rows: reaped (live 0) on a daemon that owns rows, unknown (null) on an older server', () => {
+    expect(rollupOfRows([], true).live).toBe(0)
+    expect(rollupOfRows([], false).live).toBeNull()
+    expect(rollupOfRows([sRow('idle')], false).live).toBe(1)
+  })
+})
+
+describe('sessionsStatus (a tab)', () => {
+  const cases: Array<[string, Parameters<typeof sessionsStatus>[0], { status: AgentStatus; working: boolean }]> = [
+    ['working only', { rows: [sRow('working')], unseen: null, daemonRows: true }, { status: 'live', working: true }],
+    ['working + needs you', { rows: [sRow('waiting', { subagents: 1 })], unseen: null, daemonRows: true }, { status: 'needs-you', working: true }],
+    ['needs you only', { rows: [sRow('waiting')], unseen: null, daemonRows: true }, { status: 'needs-you', working: false }],
+    ['done (not viewed)', { rows: [sRow('idle')], unseen: 'done', daemonRows: true }, { status: 'done', working: false }],
+    ['failed (not viewed)', { rows: [sRow('idle')], unseen: 'failed', daemonRows: true }, { status: 'failed', working: false }],
+    ['monitoring beats live', { rows: [sRow('monitoring')], unseen: null, daemonRows: true }, { status: 'monitoring', working: false }],
+    ['idle, live', { rows: [sRow('idle')], unseen: null, daemonRows: true }, { status: 'live', working: false }],
+    ['no rows: reaped', { rows: [], unseen: null, daemonRows: true }, { status: 'reaped', working: false }],
+    ['no rows, older server: empty', { rows: [], unseen: null, daemonRows: false }, { status: 'idle', working: false }],
+  ]
+  for (const [name, input, want] of cases) {
+    it(name, () => {
+      const v = sessionsStatus(input)
+      expect({ status: v.status, working: v.working }).toEqual(want)
+      expect(v.heartbeat).toBe(false)
+    })
+  }
+
+  it('worseUnseen: failed wins, then done, then null', () => {
+    expect(worseUnseen(null, null)).toBeNull()
+    expect(worseUnseen('done', null)).toBe('done')
+    expect(worseUnseen('done', 'failed')).toBe('failed')
+    expect(worseUnseen('failed', 'done')).toBe('failed')
   })
 })

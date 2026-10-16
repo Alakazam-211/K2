@@ -121,7 +121,6 @@ function walk(d: string, out: string[] = []): string[] {
  *  a new file here is a sixth look. */
 const PART_2_PENDING = new Set([
   'Activity/ActivityMark.tsx',
-  'TabBar/TabBar.tsx',
   'RunningAgentsPanel/RunningAgentsPanel.tsx',
 ])
 
@@ -134,7 +133,11 @@ describe('one renderer for agent activity', () => {
       const src = readFileSync(file, 'utf8')
       if (/<ActivityMark\b/.test(src)) offenders.push(`${rel}: ActivityMark`)
       if (src.includes('liveSessionCwds')) offenders.push(`${rel}: liveSessionCwds`)
-      if (src.includes('braille-spinner') && src.includes('useActivity(')) offenders.push(`${rel}: braille + useActivity`)
+      // A file that reads agent activity (the store, or a room's view of
+      // it) never draws the braille spinner: working is the 3×3 grid.
+      if (src.includes('braille-spinner') && /useActivity\(|stores\/activity'|\.activityView\b/.test(src)) {
+        offenders.push(`${rel}: braille + activity`)
+      }
     }
     expect(offenders).toEqual([])
   })

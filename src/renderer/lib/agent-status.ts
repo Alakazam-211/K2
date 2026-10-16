@@ -147,6 +147,78 @@ export function agentStatus(input: AgentStatusInput): AgentStatusView {
   return { heartbeat: input.heartbeatEnabled, live, working, status, title, workingTitle }
 }
 
+// ── A handful of sessions (a tab, the pinned Chat, one running session) ──
+//
+// A tab is not a workspace: it shows only its own sessions' rows. The fold
+// is the same; these helpers make the rollup the daemon would make for
+// just those rows (RL1's counts, D1's `busy` and `live` rules), so a tab
+// and its workspace row can never disagree about one session.
+
+type SessionRow = Pick<ActivityRow, 'display' | 'lead' | 'children' | 'reason' | 'evidenceAt' | 'staleSince'>
+
+/** D1's busy rule for one row: working, or waiting while its lead is still
+ *  mid-turn or subagents still run (working + needs you). */
+export function rowIsBusy(row: Pick<ActivityRow, 'display' | 'lead' | 'children'>): boolean {
+  if (row.display === 'working') return true
+  if (row.display !== 'waiting') return false
+  return row.lead?.state === 'working' || (row.children?.subagents ?? 0) > 0
+}
+
+/** Does a row still hold a PTY? Every v2 session has a row from spawn to
+ *  unregister (DA2); one whose PTY exited says so in its reason. */
+export function rowHoldsPty(row: Pick<ActivityRow, 'reason'>): boolean {
+  return row.reason !== 'pty_exited'
+}
+
+/** The rollup the daemon would make for just these rows. `daemonRows`:
+ *  the rows are the daemon's own (RL8), so no row means no live session
+ *  (reaped); on an older server live is unknown. */
+export function rollupOfRows(rows: readonly SessionRow[], daemonRows: boolean): AgentRollupInput {
+  const counts: Record<ActivityDisplay, number> = { working: 0, waiting: 0, monitoring: 0, unverifiable: 0, idle: 0 }
+  let busy = 0
+  let live = 0
+  for (const r of rows) {
+    counts[r.display] += 1
+    if (rowIsBusy(r)) busy += 1
+    if (rowHoldsPty(r)) live += 1
+  }
+  const order: ActivityDisplay[] = ['waiting', 'working', 'monitoring', 'unverifiable', 'idle']
+  const display = order.find((d) => counts[d] > 0) ?? 'idle'
+  return { display, counts, busy, live: daemonRows || live > 0 ? live : null }
+}
+
+/** The status of a few sessions (a tab, the pinned Chat): their rows, this
+ *  window's unseen outcome for them, and whether the rows are the daemon's. */
+export function sessionsStatus(input: {
+  rows: readonly SessionRow[]
+  unseen: UnseenOutcome | null
+  daemonRows: boolean
+  now?: number
+  skewMs?: number
+}): AgentStatusView {
+  const { rows } = input
+  const statusRow =
+    rows.find((r) => r.display === 'waiting') ??
+    rows.find((r) => r.display === 'monitoring') ??
+    rows.find((r) => r.display === 'unverifiable') ??
+    null
+  return agentStatus({
+    rollup: rollupOfRows(rows, input.daemonRows),
+    unseen: input.unseen,
+    heartbeatEnabled: false,
+    titleRow: statusRow,
+    workingRow: rows.find((r) => r.display === 'working') ?? null,
+    now: input.now,
+    skewMs: input.skewMs,
+  })
+}
+
+/** Two unseen outcomes as one: failed wins over done. */
+export function worseUnseen(a: UnseenOutcome | null, b: UnseenOutcome | null): UnseenOutcome | null {
+  if (a === 'failed' || b === 'failed') return 'failed'
+  return a ?? b
+}
+
 /** A real status (not live / reaped / idle)? */
 export function isRankedStatus(s: AgentStatus): boolean {
   return STATUS_RANK.includes(s)

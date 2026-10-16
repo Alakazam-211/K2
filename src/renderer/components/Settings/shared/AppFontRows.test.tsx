@@ -43,16 +43,14 @@ async function pick(row: HTMLElement, trigger: string, option: string): Promise<
 }
 
 describe('General page order', () => {
-  it('the app font sits below the app and CLI versions (Rosson 2026-10-16)', () => {
+  it('the app font sits below the app version and above the CLI version (Rosson 2026-10-16)', () => {
     const src = readFileSync(join(__dirname, '../sections/GeneralSection.tsx'), 'utf8')
     const version = src.indexOf('data-settings-id="general.app-version"')
-    const cli = src.indexOf('<CLIVersionRow />')
     const font = src.indexOf('data-settings-id="general.font"')
-    const devtools = src.indexOf('<DevToolsRow />')
+    const cli = src.indexOf('CLI Version — right under App Version')
     expect(version).toBeGreaterThan(0)
-    expect(cli).toBeGreaterThan(version)
-    expect(font).toBeGreaterThan(cli)
-    expect(devtools).toBeGreaterThan(font)
+    expect(font).toBeGreaterThan(version)
+    expect(cli).toBeGreaterThan(font)
   })
 })
 

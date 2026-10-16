@@ -325,6 +325,11 @@ export function GeneralSection(): React.JSX.Element {
           </div>
         )}
 
+        {/* App font (0.45.7): the same setting as Editors / Fonts → Code.
+            Sits just below the app version and its update notices (Rosson 2026-10-16). */}
+        <div className="border border-[var(--color-border)]" data-settings-id="general.font">
+          <AppFontRows where="general" lastHasBorder={false} />
+        </div>
         {/* CLI Version — right under App Version so it feels like part of the app */}
         <CLIVersionRow />
 

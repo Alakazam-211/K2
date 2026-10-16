@@ -1,24 +1,16 @@
-// THE SWITCHES for the drawer-controls experiment (0.46.0 UI). Each can be
-// turned off on its own.
+// THE SWITCH for the drawer-controls experiment (0.46.0 UI).
 //
-// - DRAWER_HANDLE_PAGES: pages whose room shell shows the edge grips
-//   (`DrawerHandle.tsx`) instead of the top bar's drawer buttons. Empty it
-//   to bring the top bar buttons back.
-// - DRAWER_TABBAR_TOGGLE_PAGES: pages whose tab bars carry the » / «
-//   drawer toggles (`DrawerTabBarToggle.tsx`): in the room's tab bar while
-//   a drawer is closed, in the drawer's own tab strip while it is open.
+// DRAWER_TABBAR_TOGGLE_PAGES: pages whose tab bars carry the » / « drawer
+// toggles (`DrawerTabBarToggle.tsx`) INSTEAD of the top bar's drawer
+// buttons: in the room's tab bar while a drawer is closed, in the drawer's
+// own tab strip while it is open. Empty it to bring the top bar buttons
+// back.
 //
 // Agents only while Rosson tries it; add 'home' (same shell) to extend.
 
 import { createContext, useContext } from 'react'
 import type { AppPage } from '@/stores/page-view'
 import { usePanelsStore } from '@/stores/panels'
-
-export const DRAWER_HANDLE_PAGES: ReadonlySet<AppPage> = new Set<AppPage>(['agents'])
-
-export function drawerHandlesOn(page: AppPage): boolean {
-  return DRAWER_HANDLE_PAGES.has(page)
-}
 
 export const DRAWER_TABBAR_TOGGLE_PAGES: ReadonlySet<AppPage> = new Set<AppPage>(['agents'])
 

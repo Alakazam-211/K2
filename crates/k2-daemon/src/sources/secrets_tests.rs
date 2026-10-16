@@ -54,7 +54,7 @@ fn a_bound_secret_goes_in_the_sealed_header_and_the_echo_is_redacted() {
     }
     assert_eq!(up.conns(), 0, "no request without the grant");
     // Binding needs a person's confirm.
-    assert_eq!(bind("src-bind-1", "SRC_BIND_KEY", &up.origin(), &k2_vault::HumanProof::None).unwrap_err().code, "confirm_required");
+    assert_eq!(bind("src-bind-1", "SRC_BIND_KEY", &up.origin(), &k2_vault::HumanProof::None).unwrap_err().code, "vault_confirm_required");
     assert_eq!(bind("src-bind-1", "SRC_BIND_KEY", "https://api.example.com:443", &confirmed()).unwrap_err().code, "secret_origin_mismatch");
     assert_eq!(bind("src-bind-1", "NO_SUCH_KEY", &up.origin(), &confirmed()).unwrap_err().code, "secret_not_found");
     bind("src-bind-1", "SRC_BIND_KEY", &up.origin(), &confirmed()).expect("bind");

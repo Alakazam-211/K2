@@ -48,6 +48,9 @@ export function sourcesErrorText(e: unknown): string {
     if (info.code === 'person_only') return 'This needs a person (Owner or Admin) on this server.'
     if (info.code === 'cap_not_granted') return 'Your login on this server can’t see that source (admins only).'
     if (info.code === 'role_required') return 'Your login on this server can’t do that.'
+    // vault_confirm_required (0.46.0) or confirm_required (a 0.45.x server).
+    if (info.code === 'vault_confirm_required' || info.code === 'confirm_required')
+      return 'This needs your confirm (Touch ID, your login or the vault password). Try again and confirm when asked.'
     if (info.code === 'no_confirm_method')
       return 'No way to confirm here. Bind from Settings over your Connect login, or set a vault password.'
     return info.hint || info.code

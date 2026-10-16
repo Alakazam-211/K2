@@ -561,6 +561,9 @@ export type SourcesErrorCode =
   | 'field_person_only'
   | 'other_agent'
   | 'too_long'
+  /** The one confirm code (0.46.0): a vault/person confirm is needed. */
+  | 'vault_confirm_required'
+  /** The same, from a 0.45.x server (kept for one release). */
   | 'confirm_required'
   | 'confirm_failed'
   | 'source_not_found'

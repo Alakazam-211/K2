@@ -31,6 +31,8 @@ import {
   SIGNING_IN_SWITCH_REASON,
 } from './AgentAccountsColumn'
 import { resetLlmAccountsForTests, parseAccountsDoc, errorText } from '@/stores/llm-accounts'
+import { resetUsageLimitsForTests } from '@/stores/usage-limits'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { AGENTS_MANIFEST } from '../sections/AgentsSection'
 import { LLM_TOKENS_MANIFEST, LlmTokensSection } from '../sections/LlmTokensSection'
@@ -134,6 +136,7 @@ function routeGet(route: string, params?: Record<string, string>): unknown {
 
 beforeEach(() => {
   resetLlmAccountsForTests()
+  resetUsageLimitsForTests()
   h.daemonCliGet.mockReset()
   h.daemonCliPost.mockReset()
   h.openUrl.mockClear()
@@ -301,8 +304,9 @@ describe('time until each token refreshes', () => {
     // Unknown reset: no time at all, not a guess.
     expect(win('acc_work', 'Weekly').textContent).toBe('Weekly 10%')
     expect(win('acc_work', 'Weekly').getAttribute('title')).toBeNull()
-    // A different token counts down to its own reset; a past reset reads "now".
-    expect(win('acc_home', 'Session').textContent).toBe('Session 100% · now')
+    // A different token counts down to its own reset; a past reset is being
+    // re-checked (Usage v2 P8), never its old 100%.
+    expect(win('acc_home', 'Session').textContent).toBe('Session · reset — re-checking')
     expect(win('acc_home', 'Weekly').textContent).toBe('Weekly 60% · 4d')
     // No reading: no windows.
     expect(screen.queryByTestId('llm-usage-window-acc_stale-Session')).toBeNull()
@@ -500,5 +504,120 @@ describe('store helpers', () => {
       'Change tokens on Settings → LLMs → Tokens.',
     )
     expect(errorText(new Error('plain'))).toBe('plain')
+  })
+})
+
+describe('Usage v2 limit bars from /cli/usage/limits (Owner / Admin)', () => {
+  const T0 = Date.parse('2026-10-16T12:00:00Z')
+  const iso = (ms: number) => new Date(ms).toISOString()
+  const week = 7 * 24 * 3600
+
+  function limitsDoc(): Record<string, unknown> {
+    return {
+      generatedAt: iso(T0),
+      airgap: false,
+      tools: [
+        {
+          tool: 'claude',
+          display: 'Claude',
+          supported: true,
+          logins: [
+            {
+              accountId: 'acc_work',
+              label: 'work',
+              kind: 'subscription',
+              isDefault: true,
+              isLive: true,
+              pinned: [],
+              state: 'ok',
+              status: '',
+              plan: 'Max',
+              checkedAt: iso(T0 - 2 * 60_000),
+              source: 'live_statusline',
+              windows: [
+                { id: 'five_hour', label: 'Session', used: 0.2, usedPercent: 20, resetsAt: iso(T0 + 3 * 3_600_000) },
+                {
+                  id: 'seven_day',
+                  label: 'Weekly',
+                  used: 0.92,
+                  usedPercent: 92,
+                  resetsAt: iso(T0 + 3 * 86_400_000),
+                  windowSecs: week,
+                  windowStart: iso(T0 + 3 * 86_400_000 - week * 1000),
+                },
+                { id: 'model:fable:weekly', label: 'Fable Weekly', used: 0.5, usedPercent: 50, resetsAt: iso(T0 + 3 * 86_400_000) },
+              ],
+            },
+            {
+              accountId: 'acc_home',
+              label: 'home',
+              kind: 'subscription',
+              isDefault: false,
+              isLive: false,
+              pinned: [],
+              state: 'expired',
+              status: 'Sign-in expired',
+              plan: '',
+              checkedAt: iso(T0 - 3 * 3_600_000),
+              nextProbeAt: iso(T0 + 30 * 60_000),
+              windows: [],
+            },
+          ],
+        },
+      ],
+    }
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.setSystemTime(T0)
+    h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) =>
+      route === 'usage/limits' ? limitsDoc() : routeGet(route, params),
+    )
+    h.daemonCliPost.mockImplementation(async (route: string) => {
+      if (route === 'usage/limits/refresh') return limitsDoc()
+      if (route.startsWith('llm/accounts/')) return {}
+      throw new Error(`unexpected POST ${route}`)
+    })
+  })
+
+  afterEach(() => {
+    resetUsageLimitsForTests()
+  })
+
+  it('draws every window (model-scoped weeks too, B30) with tones, a pace mark and freshness', async () => {
+    await renderColumn()
+    await waitFor(() => expect(screen.getByTestId('llm-usage-window-acc_work-Fable Weekly')).toBeTruthy())
+    const meter = screen.getByTestId('llm-usage-acc_work')
+    expect([...meter.querySelectorAll('[data-limit-tone]')].map((el) => el.getAttribute('data-limit-tone'))).toEqual([
+      'ok',
+      'over',
+      'ok',
+    ])
+    expect(meter.querySelectorAll('[data-testid="limit-pace-mark"]')).toHaveLength(1)
+    expect(screen.getByTestId('llm-usage-window-acc_work-Weekly').textContent).toBe('Weekly 92% · 3d · ahead of pace')
+    expect(screen.getByTestId('llm-usage-age-acc_work').textContent).toContain('Usage checked 2 min ago · live from a running session')
+  })
+
+  it('says why an expired login has no numbers, when it is next checked, and offers a Refresh', async () => {
+    await renderColumn()
+    await waitFor(() => expect(screen.getByTestId('llm-usage-state-acc_home')).toBeTruthy())
+    expect(screen.getByTestId('llm-usage-state-acc_home').textContent).toBe('Sign-in expired. Sign in again to see its limits.')
+    expect(screen.getByTestId('llm-usage-age-acc_home').textContent).toContain('Usage checked 3 h ago · next check 30m')
+    fireEvent.click(screen.getByTestId('llm-usage-refresh-acc_home'))
+    await waitFor(() =>
+      expect(h.daemonCliPost).toHaveBeenCalledWith('usage/limits/refresh', { accountId: 'acc_home' }),
+    )
+  })
+
+  it("a Member's 403 leaves each row on its wallet reading and offers no per-login Refresh", async () => {
+    h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) => {
+      if (route === 'usage/limits') throw new DaemonHttpError('Usage is visible to the server Owner and Admins', 403, 'admin_only')
+      return routeGet(route, params)
+    })
+    await renderColumn()
+    await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith('usage/limits'))
+    expect(screen.getByTestId('llm-usage-acc_work').textContent).toContain('Session 42%')
+    expect(screen.queryByTestId('llm-usage-refresh-acc_work')).toBeNull()
   })
 })

@@ -58,7 +58,7 @@ vi.mock('./useOverlayThread', () => ({
 }))
 
 import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
-import { CHAMFER_SCOPE, THREAD_CHAMFER_CSS, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
+import { CHAMFER_SCOPE, THREAD_CHAMFER_CSS, THREAD_COMPOSE_BOX_BORDER, THREAD_COMPOSE_BOX_PAD, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { primaryScope } from '@/kessel/server-scope'
 import { resetThreadViewersForTests, setThreadViewerForTests, type ThreadViewer } from '@/lib/thread-viewer'
@@ -234,12 +234,33 @@ describe('the Thread\'s message box (Zen look)', () => {
     expect(field.contains(box())).toBe(true)
     expect(field.contains(screen.getByRole('button', { name: 'Attach file' }))).toBe(true)
     expect(field.contains(screen.getByTestId('compose-slash-button'))).toBe(true)
-    // "+" and "/" sit together, 2px apart (not the box's 8px gap).
+    // Rosson: the "+" to "/" gap equals the field's edge to "+" (visible ink).
     const tools = field.querySelector('[data-compose-tools]') as HTMLElement
-    expect(tools.style.gap).toBe('2px')
-    expect(tools.contains(screen.getByRole('button', { name: 'Attach file' }))).toBe(true)
-    expect(tools.contains(screen.getByTestId('compose-slash-button'))).toBe(true)
-    expect(screen.getByTestId('compose-slash-button').style.width).toBe('26px')
+    const plus = screen.getByRole('button', { name: 'Attach file' })
+    const slash = screen.getByTestId('compose-slash-button')
+    expect(tools.contains(plus) && tools.contains(slash)).toBe(true)
+    const px = (v: string): number => {
+      const n = Number.parseFloat(v)
+      if (!Number.isFinite(n)) throw new Error(`not a px value: "${v}"`)
+      return n
+    }
+    // The glyphs are drawn shapes whose ink fills their box (no side bearings).
+    const plusInk = plus.querySelector('svg[data-compose-glyph="plus"]') as SVGElement
+    const slashInk = slash.querySelector('svg[data-compose-glyph="slash"]') as SVGElement
+    expect(px(plusInk.getAttribute('width') ?? '')).toBe(12)
+    expect(px(slashInk.getAttribute('width') ?? '')).toBe(8)
+    expect(plus.textContent).toBe('')
+    // The field's own edge: its padding (inline) and its 1px border (the
+    // shorthand carries a var(), which jsdom drops, so the kit's constant).
+    expect(px(field.style.paddingLeft)).toBe(THREAD_COMPOSE_BOX_PAD)
+    expect(THREAD_COMPOSE_BOX_BORDER).toBe(1)
+    const edgeToPlus = THREAD_COMPOSE_BOX_BORDER + px(field.style.paddingLeft) + px(tools.style.marginLeft) + px(plus.style.paddingLeft)
+    const plusToSlash = px(plus.style.paddingRight) + px(tools.style.gap) + px(slash.style.paddingLeft)
+    expect(edgeToPlus).toBe(10)
+    expect(plusToSlash).toBe(edgeToPlus)
+    // Hit areas: the buttons keep their pads (22px and 18px wide, 32px tall).
+    expect(plus.style.height).toBe('32px')
+    expect(px(plus.style.paddingLeft) + 12 + px(plus.style.paddingRight)).toBe(22)
     const send = screen.getByRole('button', { name: 'Send message' })
     expect(send.hasAttribute('data-zen-send')).toBe(true)
     expect(send.style.borderRadius).toBe('999px')

@@ -31,7 +31,7 @@ use k2_core::tunnel::subdomains;
 
 const LOG_CAP: u64 = 2 * 1024 * 1024;
 const KILL_GRACE: Duration = Duration::from_millis(400);
-const DEFAULT_PROBE: Duration = Duration::from_secs(15);
+const DEFAULT_PROBE: Duration = Duration::from_millis(ps::PROBE_TIMEOUT_DEFAULT_MS);
 
 /// Current k2-daemon loopback port. Used to synthesize skin-gateway `--upstream`.
 /// Never persisted in `published_services.cmd`.
@@ -96,6 +96,10 @@ struct LiveChild {
     #[allow(dead_code)]
     port: u16,
     started: Instant,
+    /// Startup grace for this child (`--probe-timeout`, else the default):
+    /// `starting` until it runs out, then `unhealthy` (local) or rolled
+    /// back (tunnel).
+    grace: Duration,
     probe_ok: AtomicBool,
     stop_requested: AtomicBool,
     child: Mutex<Option<Child>>,
@@ -145,12 +149,70 @@ fn live_remove(project_id: &str, name: &str) -> Option<Arc<LiveChild>> {
         .remove(&(project_id.to_string(), name.to_string()))
 }
 
+/// The default startup grace, and the longest a start request waits in
+/// line for the port: 15 s, or `K2_PUBLISH_PROBE_MS` (tests).
 fn probe_timeout() -> Duration {
     std::env::var("K2_PUBLISH_PROBE_MS")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .map(|ms| Duration::from_millis(ms.max(50)))
         .unwrap_or(DEFAULT_PROBE)
+}
+
+/// This service's startup grace: its stored `--probe-timeout` (capped at
+/// 15 min), else [`probe_timeout`].
+fn grace_for(row: &ps::PublishedService) -> Duration {
+    match row.probe_timeout_ms {
+        Some(ms) if ms > 0 => Duration::from_millis((ms as u64).min(ps::PROBE_TIMEOUT_MAX_MS)),
+        _ => probe_timeout(),
+    }
+}
+
+/// How often a service inside its grace is re-probed (1 s;
+/// `K2_PUBLISH_REPROBE_MS` for tests).
+fn reprobe_interval() -> Duration {
+    std::env::var("K2_PUBLISH_REPROBE_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|ms| Duration::from_millis(ms.max(20)))
+        .unwrap_or(Duration::from_secs(1))
+}
+
+/// How often a local service past its grace (status `unhealthy`) is
+/// re-probed so a late bind still turns it `running` (5 s;
+/// `K2_PUBLISH_SUPERVISE_MS` for tests).
+fn supervise_interval() -> Duration {
+    std::env::var("K2_PUBLISH_SUPERVISE_MS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|ms| Duration::from_millis(ms.max(20)))
+        .unwrap_or(Duration::from_secs(5))
+}
+
+/// `800ms`, `2.5s`, `90s` → `1m30s`, `10m` — for errors and status lines.
+pub fn fmt_duration(d: Duration) -> String {
+    let ms = d.as_millis() as u64;
+    if ms < 1000 {
+        return format!("{ms}ms");
+    }
+    if ms % 1000 != 0 && ms < 10_000 {
+        return format!("{:.1}s", ms as f64 / 1000.0);
+    }
+    let secs = ms / 1000;
+    match (secs / 60, secs % 60) {
+        (0, s) => format!("{s}s"),
+        (m, 0) => format!("{m}m"),
+        (m, s) => format!("{m}m{s}s"),
+    }
+}
+
+/// The rollback error when a service never opened its port in its grace.
+fn grace_miss_message(port: u16, grace: Duration) -> String {
+    format!(
+        "probe failed: process started but 127.0.0.1:{port} never accepted within {}; \
+         raise --probe-timeout (k2 publish run <name> ... --probe-timeout 10m, at most 15m)",
+        fmt_duration(grace)
+    )
 }
 
 fn claim_tries() -> u32 {
@@ -600,7 +662,7 @@ fn compute_status(row: &ps::PublishedService, live: Option<&LiveChild>) -> (&'st
         if l.probe_ok.load(Ordering::SeqCst) {
             return (STATUS_RUNNING, pid);
         }
-        if l.started.elapsed() < probe_timeout() {
+        if l.started.elapsed() < l.grace {
             return (STATUS_STARTING, pid);
         }
         return (STATUS_UNHEALTHY, pid);
@@ -629,7 +691,10 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
     } else {
         compute_status(row, live.as_deref())
     };
-    let url = if status == STATUS_STOPPED && row.error.is_some() && row.desired == DESIRED_STOPPED {
+    let url = if row.hostname_pending {
+        // Inside the startup grace: the nested hostname is not published yet.
+        None
+    } else if status == STATUS_STOPPED && row.error.is_some() && row.desired == DESIRED_STOPPED {
         // Hostname-fail path: do not advertise a public URL.
         if row.error.as_deref().is_some_and(|e| {
             e.contains("hostname")
@@ -646,6 +711,15 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
         public_url(&row.name, &row.expose)
     };
     let mut json = ServiceJson::from_row(row, status, url, pid);
+    if row.cmd != ps::CMD_APP_SENTINEL {
+        let grace = live.as_deref().map(|l| l.grace).unwrap_or_else(|| grace_for(row));
+        json.probe_timeout_effective_ms = grace.as_millis() as i64;
+        if status == STATUS_STARTING {
+            if let Some(l) = live.as_deref() {
+                json.starting_left_ms = Some(grace.saturating_sub(l.started.elapsed()).as_millis() as i64);
+            }
+        }
+    }
     if row.kind == KIND_SKIN && status == STATUS_RUNNING {
         json.helper_needs_restart = helper_needs_restart(&row.id);
     }
@@ -765,6 +839,7 @@ fn adopt_live(
     child: Child,
     pid: i32,
     job: Option<WinJobSlot>,
+    grace: Duration,
 ) -> Arc<LiveChild> {
     let entry = Arc::new(LiveChild {
         project_id: project_id.to_string(),
@@ -772,6 +847,7 @@ fn adopt_live(
         pid,
         port,
         started: Instant::now(),
+        grace,
         probe_ok: AtomicBool::new(false),
         stop_requested: AtomicBool::new(false),
         child: Mutex::new(Some(child)),
@@ -796,6 +872,7 @@ fn adopt_reattach(project_id: &str, name: &str, port: u16, pid: i32) -> Arc<Live
         pid,
         port,
         started: Instant::now(),
+        grace: probe_timeout(),
         probe_ok: AtomicBool::new(true),
         stop_requested: AtomicBool::new(false),
         child: Mutex::new(None),
@@ -927,6 +1004,20 @@ pub struct RunSpec {
     /// Explicit owner/admin transfer of a label another workspace holds
     /// (`--transfer`). Refused for agents and members; audited.
     pub transfer: bool,
+    /// `--probe-timeout`: the startup grace stored on the row.
+    pub probe_timeout: ProbeTimeout,
+}
+
+/// What a run does to the stored startup grace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProbeTimeout {
+    /// No flag: a new service gets the default, a re-run keeps its value.
+    #[default]
+    Keep,
+    /// `--probe-timeout default`: back to the daemon default.
+    Default,
+    /// `--probe-timeout <dur>`, in ms (1 ms to 15 min).
+    Ms(u64),
 }
 
 pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
@@ -957,6 +1048,13 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
     }
     if spec.port == 0 {
         return Err(PublishError::bad("Missing port"));
+    }
+    if let ProbeTimeout::Ms(ms) = spec.probe_timeout {
+        if ms == 0 || ms > ps::PROBE_TIMEOUT_MAX_MS {
+            return Err(PublishError::bad(
+                "--probe-timeout must be more than 0 and at most 15m",
+            ));
+        }
     }
     let skin_root = if spec.skin {
         validate_skin_root(&spec.cwd, &spec.skin_root).map_err(PublishError::bad)?
@@ -1034,6 +1132,15 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
                     PublishError::fail(e.to_string())
                 }
             })?;
+        }
+        let stored = match spec.probe_timeout {
+            ProbeTimeout::Keep => None,
+            ProbeTimeout::Default => Some(None),
+            ProbeTimeout::Ms(ms) => Some(Some(ms)),
+        };
+        if let Some(ms) = stored {
+            ps::set_probe_timeout(&conn, &spec.project_id, &name, ms)
+                .map_err(|e| PublishError::fail(e.to_string()))?;
         }
     }
 
@@ -1121,33 +1228,77 @@ fn start_inner(
         let conn = db.lock();
         let _ = ps::set_runtime(&conn, project_id, name, Some(pid as i64), None, Some(now_unix()));
     }
-    let entry = adopt_live(project_id, name, row.port as u16, child, pid, job);
+    let grace = grace_for(&row);
+    let entry = adopt_live(project_id, name, row.port as u16, child, pid, job, grace);
     emit_changed(project_id);
 
-    if !wait_for_port(row.port as u16, probe_timeout()) {
+    // The request waits at most the default window (15 s); a longer
+    // `--probe-timeout` goes on in the background (status `starting`).
+    let window = grace.min(probe_timeout());
+    if !wait_for_port(row.port as u16, window) {
         entry.probe_ok.store(false, Ordering::SeqCst);
+        let alive = matches!(slot_state(&entry), Slot::Current);
+        if alive && grace > window {
+            // Inside the grace. desired=running so boot honours it; a
+            // tunnelled service's hostname waits for the first answer.
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                let _ = ps::set_desired(&conn, project_id, name, DESIRED_RUNNING);
+                let _ = ps::set_error(&conn, project_id, name, None);
+                let _ = ps::set_hostname_pending(&conn, project_id, name, want_tunnel);
+            }
+            spawn_grace_waiter(Arc::clone(&entry), want_tunnel, transfer);
+            emit_changed(project_id);
+            let row = load_row(project_id, name).unwrap_or(row);
+            return Ok(to_json(&row));
+        }
         if want_tunnel {
-            rollback_hostname_fail(project_id, name, &entry, "probe failed: 127.0.0.1 port never accepted");
-            return Err(PublishError::fail(
-                "probe failed: process started but 127.0.0.1:<port> never accepted",
-            ));
+            let msg = if alive {
+                grace_miss_message(row.port as u16, grace)
+            } else {
+                format!(
+                    "probe failed: the process exited before 127.0.0.1:{} accepted (k2 publish logs {name})",
+                    row.port
+                )
+            };
+            rollback_hostname_fail(project_id, name, &entry, &msg);
+            return Err(PublishError::fail(msg));
         }
         // Local: keep the process (status unhealthy). Persist desired=running
-        // so boot still honors it.
+        // so boot still honors it, and keep probing so a late bind turns
+        // it `running`.
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
             let _ = ps::set_desired(&conn, project_id, name, DESIRED_RUNNING);
+        }
+        if alive {
+            spawn_grace_waiter(Arc::clone(&entry), false, false);
         }
         emit_changed(project_id);
         let row = load_row(project_id, name).unwrap_or(row);
         return Ok(to_json(&row));
     }
     entry.probe_ok.store(true, Ordering::SeqCst);
+    finish_start(project_id, name, &entry, &row, want_tunnel, transfer)?;
+    let row = load_row(project_id, name).unwrap_or(row);
+    Ok(to_json(&row))
+}
 
+/// The port answered: publish the nested hostname (tunnel), then mark the
+/// service running. A hostname failure rolls the start back.
+fn finish_start(
+    project_id: &str,
+    name: &str,
+    entry: &LiveChild,
+    row: &ps::PublishedService,
+    want_tunnel: bool,
+    transfer: bool,
+) -> Result<(), PublishError> {
     if want_tunnel {
         let cfg = tunnel_config::load().map_err(|e| {
-            rollback_hostname_fail(project_id, name, &entry, &e);
+            rollback_hostname_fail(project_id, name, entry, &e);
             PublishError::fail(e)
         })?;
         if let Err(e) = attach_hostname(
@@ -1158,7 +1309,7 @@ fn start_inner(
             &cfg.subdomain,
             transfer,
         ) {
-            rollback_hostname_fail(project_id, name, &entry, &e);
+            rollback_hostname_fail(project_id, name, entry, &e);
             return Err(PublishError::fail(e));
         }
     }
@@ -1168,13 +1319,119 @@ fn start_inner(
         let conn = db.lock();
         let _ = ps::set_desired(&conn, project_id, name, DESIRED_RUNNING);
         let _ = ps::set_error(&conn, project_id, name, None);
+        let _ = ps::set_hostname_pending(&conn, project_id, name, false);
     }
     if row.kind != KIND_SKIN {
         probe_cmd_frame_async(project_id, name, row.port as u16);
     }
     emit_changed(project_id);
-    let row = load_row(project_id, name).unwrap_or(row);
-    Ok(to_json(&row))
+    Ok(())
+}
+
+/// Where a live entry stands in the live map.
+enum Slot {
+    /// Still this service's child.
+    Current,
+    /// A restart put another child in its place.
+    Replaced,
+    /// Gone: the child exited or was stopped.
+    Gone,
+}
+
+fn slot_state(entry: &LiveChild) -> Slot {
+    let map = live().lock().unwrap_or_else(|e| e.into_inner());
+    match map.get(&(entry.project_id.clone(), entry.name.clone())) {
+        Some(cur) if std::ptr::eq(cur.as_ref(), entry) => Slot::Current,
+        Some(_) => Slot::Replaced,
+        None => Slot::Gone,
+    }
+}
+
+fn spawn_grace_waiter(entry: Arc<LiveChild>, want_tunnel: bool, transfer: bool) {
+    let name = entry.name.clone();
+    let _ = thread::Builder::new()
+        .name(format!("publish-grace-{name}"))
+        .spawn(move || grace_wait(entry, want_tunnel, transfer));
+}
+
+/// Background re-probe after the start request returned. Every
+/// [`reprobe_interval`] inside the grace: port open → [`finish_start`]
+/// (`starting` → `running`, hostname published, changed event). Grace
+/// over: a tunnelled service is rolled back exactly like a sync miss; a
+/// local one turns `unhealthy` and is re-probed every
+/// [`supervise_interval`] until it binds, exits or is stopped.
+fn grace_wait(entry: Arc<LiveChild>, want_tunnel: bool, transfer: bool) {
+    let (project_id, name) = (entry.project_id.clone(), entry.name.clone());
+    let mut told_unhealthy = false;
+    loop {
+        if entry.stop_requested.load(Ordering::SeqCst) {
+            return;
+        }
+        match slot_state(&entry) {
+            Slot::Current => {}
+            Slot::Replaced => return,
+            Slot::Gone => {
+                // `stop` removes the slot a moment before it flags the
+                // entry; give it that moment.
+                thread::sleep(Duration::from_millis(50));
+                if entry.stop_requested.load(Ordering::SeqCst) {
+                    return;
+                }
+                if want_tunnel {
+                    {
+                        let db = k2_core::db::shared();
+                        let conn = db.lock();
+                        let _ = ps::mark_hostname_failed(
+                            &conn,
+                            &project_id,
+                            &name,
+                            &format!(
+                                "probe failed: the process exited before 127.0.0.1:{} accepted (k2 publish logs {name})",
+                                entry.port
+                            ),
+                        );
+                    }
+                    emit_changed(&project_id);
+                }
+                return;
+            }
+        }
+        if port_accepts(entry.port) {
+            entry.probe_ok.store(true, Ordering::SeqCst);
+            let Some(row) = load_row(&project_id, &name) else {
+                return;
+            };
+            match finish_start(&project_id, &name, &entry, &row, want_tunnel, transfer) {
+                Ok(()) => log_debug!(
+                    "[publish] {project_id}/{name} port {} answered after {}",
+                    entry.port,
+                    fmt_duration(entry.started.elapsed())
+                ),
+                Err(e) => log_debug!("[publish] {project_id}/{name} late start failed: {}", e.message),
+            }
+            return;
+        }
+        let elapsed = entry.started.elapsed();
+        if elapsed >= entry.grace {
+            if want_tunnel {
+                let msg = grace_miss_message(entry.port, entry.grace);
+                log_debug!("[publish] {project_id}/{name} {msg}");
+                rollback_hostname_fail(&project_id, &name, &entry, &msg);
+                return;
+            }
+            if !told_unhealthy {
+                told_unhealthy = true;
+                emit_changed(&project_id);
+            }
+            thread::sleep(supervise_interval());
+        } else {
+            thread::sleep(
+                reprobe_interval()
+                    .min(entry.grace - elapsed)
+                    .max(Duration::from_millis(20)),
+            );
+        }
+    }
 }
 
 fn rollback_hostname_fail(project_id: &str, name: &str, entry: &LiveChild, error: &str) {
@@ -1202,6 +1459,7 @@ pub fn stop(project_id: &str, name: &str) -> Result<ServiceJson, PublishError> {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = ps::set_desired(&conn, project_id, &name, DESIRED_STOPPED);
+        let _ = ps::set_hostname_pending(&conn, project_id, &name, false);
         let _ = ps::mark_exited(&conn, project_id, &name, None);
         let _ = ps::set_runtime(&conn, project_id, &name, None, row.error.as_deref(), None);
     }
@@ -1563,8 +1821,25 @@ pub fn boot_desired_running() {
                 row.name,
                 pid
             );
-            adopt_reattach(&row.project_id, &row.name, port, pid);
+            let entry = adopt_reattach(&row.project_id, &row.name, port, pid);
             emit_changed(&row.project_id);
+            if row.hostname_pending && row.expose == EXPOSE_TUNNEL {
+                // The daemon went down inside this service's grace and the
+                // port has answered since: publish the hostname now.
+                let r = row.clone();
+                let _ = thread::Builder::new()
+                    .name(format!("publish-attach-{}", row.name))
+                    .spawn(move || {
+                        if let Err(e) = finish_start(&r.project_id, &r.name, &entry, &r, true, false) {
+                            log_debug!(
+                                "[publish] boot hostname attach {}/{} failed: {}",
+                                r.project_id,
+                                r.name,
+                                e.message
+                            );
+                        }
+                    });
+            }
             if row.kind == KIND_SKIN {
                 // S24-8: a helper from before per-App logins (macOS keeps
                 // helpers across a daemon update) logs guests in as `host`.
@@ -2183,6 +2458,7 @@ mod tests {
             skin_root: String::new(),
             cwd_explicit: false,
             transfer: false,
+            probe_timeout: ProbeTimeout::Keep,
         };
         let json = run(spec).expect("run");
         assert_eq!(
@@ -2235,6 +2511,7 @@ mod tests {
             skin_root: String::new(),
             cwd_explicit: false,
             transfer: false,
+            probe_timeout: ProbeTimeout::Keep,
         })
         .expect("run --no-tunnel");
         assert_eq!(json.expose, EXPOSE_LOCAL);
@@ -2286,6 +2563,7 @@ mod tests {
                 skin_root: String::new(),
                 cwd_explicit: false,
                 transfer: false,
+                probe_timeout: ProbeTimeout::Keep,
             })
             .expect_err("B must not take A's label");
             assert_eq!(err.status, "409 Conflict", "skin={skin} msg={}", err.message);
@@ -2308,6 +2586,7 @@ mod tests {
             skin_root: String::new(),
             cwd_explicit: false,
             transfer: true,
+            probe_timeout: ProbeTimeout::Keep,
         })
         .expect_err("non-owner transfer must fail");
         assert_eq!(err.status, "403 Forbidden", "msg={}", err.message);
@@ -2406,6 +2685,7 @@ mod tests {
             skin_root: String::new(),
             cwd_explicit: false,
             transfer: false,
+            probe_timeout: ProbeTimeout::Keep,
         })
         .expect_err("not Pro must fail");
         assert!(
@@ -2494,6 +2774,7 @@ mod tests {
             skin_root: String::new(),
             cwd_explicit: false,
             transfer: false,
+            probe_timeout: ProbeTimeout::Keep,
         })
         .expect_err("hostname fail");
         drop(cp_base);
@@ -2542,6 +2823,7 @@ mod tests {
             skin_root: String::new(),
             cwd_explicit: false,
             transfer: false,
+            probe_timeout: ProbeTimeout::Keep,
         };
         run(spec()).expect("first run");
         let err = run(spec()).expect_err("second must fail");
@@ -2567,6 +2849,7 @@ mod tests {
             skin_root: String::new(),
             cwd_explicit: false,
             transfer: false,
+            probe_timeout: ProbeTimeout::Keep,
         })
         .expect_err("cmd+skin");
         assert!(
@@ -2586,6 +2869,7 @@ mod tests {
             skin_root: String::new(),
             cwd_explicit: true,
             transfer: false,
+            probe_timeout: ProbeTimeout::Keep,
         })
         .expect_err("cwd+skin");
         assert!(
@@ -2593,6 +2877,326 @@ mod tests {
             "got: {}",
             err.message
         );
+    }
+
+    // ── Startup grace (`--probe-timeout`, found 2026-10-16 by Sew/Hearth) ──
+
+    /// A command that opens `port` only after `delay_s` seconds (a build
+    /// before the server binds).
+    fn late_listener_cmd(port: u16, delay_s: f32) -> String {
+        format!("sleep {delay_s}; exec {}", listener_cmd(port))
+    }
+
+    fn grace_spec(project_id: &str, name: &str, cmd: String, dir: &Path, port: u16, no_tunnel: bool, pt: ProbeTimeout) -> RunSpec {
+        RunSpec {
+            project_id: project_id.to_string(),
+            name: name.to_string(),
+            cmd,
+            cwd: dir.to_path_buf(),
+            port,
+            no_tunnel,
+            replace_spec: false,
+            skin: false,
+            skin_root: String::new(),
+            cwd_explicit: false,
+            transfer: false,
+            probe_timeout: pt,
+        }
+    }
+
+    /// Poll `to_json` until `want` or `within` runs out; returns the last JSON.
+    fn wait_status(project_id: &str, name: &str, want: &str, within: Duration) -> ServiceJson {
+        let deadline = Instant::now() + within;
+        loop {
+            let row = load_row(project_id, name).expect("row");
+            let json = to_json(&row);
+            if json.status == want || Instant::now() >= deadline {
+                return json;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn drain_changed_for(rx: &mut tokio::sync::broadcast::Receiver<crate::session_events::SessionEvent>, project_id: &str) -> usize {
+        let mut n = 0;
+        loop {
+            match rx.try_recv() {
+                Ok(crate::session_events::SessionEvent::PublishServicesChanged { project_id: p }) if p == project_id => n += 1,
+                Ok(_) => {}
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+                Err(_) => return n,
+            }
+        }
+    }
+
+    /// Control-plane mock for a Pro account whose nested `label` routes to
+    /// `127.0.0.1:<port>`. Counts POST/PUT writes (hostname publishes).
+    struct ProCp {
+        writes: StdArc<AtomicUsize>,
+        _cp_base: k2_core::test_env::EnvVar,
+    }
+
+    fn start_pro_cp(label: &str, port: u16) -> ProCp {
+        let writes = StdArc::new(AtomicUsize::new(0));
+        let writes2 = StdArc::clone(&writes);
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("mock cp");
+        let cp_port = listener.local_addr().unwrap().port();
+        let get_body = format!(
+            r#"{{"subdomains":[{{"label":"rosson","primary":true,"connected":true,"tier":"pro"}},{{"label":"{label}","target":"127.0.0.1:{port}"}}]}}"#
+        );
+        thread::spawn(move || {
+            listener.set_nonblocking(true).ok();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while Instant::now() < deadline {
+                if let Ok((mut sock, _)) = listener.accept() {
+                    sock.set_nonblocking(false).ok();
+                    let mut buf = [0u8; 8192];
+                    let n = sock.read(&mut buf).unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let body = if req.starts_with("GET ") {
+                        get_body.clone()
+                    } else {
+                        writes2.fetch_add(1, AtomOrd::SeqCst);
+                        "{}".to_string()
+                    };
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = sock.write_all(resp.as_bytes());
+                } else {
+                    thread::sleep(Duration::from_millis(20));
+                }
+            }
+        });
+        let cp_base = k2_core::test_env::EnvVar::set(
+            subdomains::CONTROL_PLANE_BASE_ENV,
+            format!("http://127.0.0.1:{cp_port}"),
+        );
+        ProCp { writes, _cp_base: cp_base }
+    }
+
+    fn write_pro_tunnel(home: &Path) {
+        let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true });
+        fs::write(home.join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+    }
+
+    /// Local: binds after the default window (300 ms here) but inside its
+    /// 6 s grace → the run answers `starting` with the time left, then the
+    /// background re-probe turns it `running` and emits the changed event.
+    #[test]
+    fn local_late_bind_within_grace_ends_running_with_event() {
+        assert!(python_ok(), "python3 is required for published-service runtime tests");
+        let _home = crate::test_support::TempHome::new();
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "300");
+        let _reprobe = k2_core::test_env::EnvVar::set("K2_PUBLISH_REPROBE_MS", "50");
+        let dir = _home.path().join("ws-grace-local");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let name = unique("gracelocal");
+        let port = free_port();
+        let json = run(grace_spec(&project_id, &name, late_listener_cmd(port, 1.5), &dir, port, true, ProbeTimeout::Ms(6000)))
+            .expect("run returns inside the grace");
+        assert_eq!(json.status, STATUS_STARTING, "{json:?}");
+        assert_eq!(json.probe_timeout_ms, Some(6000));
+        assert_eq!(json.probe_timeout_effective_ms, 6000);
+        let left = json.starting_left_ms.expect("startingLeftMs while starting");
+        assert!(left > 4000 && left <= 6000, "left={left}");
+        assert_eq!(json.desired, DESIRED_RUNNING, "boot must honour a service inside its grace");
+        let mut rx = crate::session_events::subscribe();
+        let json = wait_status(&project_id, &name, STATUS_RUNNING, Duration::from_secs(8));
+        assert_eq!(json.status, STATUS_RUNNING, "late bind inside the grace must end running: {json:?}");
+        assert!(json.starting_left_ms.is_none());
+        assert!(json.error.is_none(), "{json:?}");
+        assert!(
+            drain_changed_for(&mut rx, &project_id) >= 1,
+            "starting → running must emit PublishServicesChanged"
+        );
+        let row = load_row(&project_id, &name).unwrap();
+        assert_eq!(row.probe_timeout_ms, Some(6000), "grace is stored on the row");
+        cleanup(&project_id, &name);
+    }
+
+    /// Local with the default grace: the old "unhealthy forever" bug. Past
+    /// the grace it reads `unhealthy`, and keeps being re-probed, so a late
+    /// bind still turns it `running`.
+    #[test]
+    fn local_past_grace_is_reprobed_and_turns_running() {
+        assert!(python_ok(), "python3 is required for published-service runtime tests");
+        let _home = crate::test_support::TempHome::new();
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "300");
+        let _reprobe = k2_core::test_env::EnvVar::set("K2_PUBLISH_REPROBE_MS", "50");
+        let _supervise = k2_core::test_env::EnvVar::set("K2_PUBLISH_SUPERVISE_MS", "100");
+        let dir = _home.path().join("ws-grace-unhealthy");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let name = unique("graceunh");
+        let port = free_port();
+        let json = run(grace_spec(&project_id, &name, late_listener_cmd(port, 1.5), &dir, port, true, ProbeTimeout::Keep))
+            .expect("local run keeps the process");
+        assert_eq!(json.status, STATUS_UNHEALTHY, "past the default grace: {json:?}");
+        assert_eq!(json.probe_timeout_ms, None, "no flag = default");
+        assert_eq!(json.probe_timeout_effective_ms, 300, "default follows K2_PUBLISH_PROBE_MS");
+        let json = wait_status(&project_id, &name, STATUS_RUNNING, Duration::from_secs(8));
+        assert_eq!(json.status, STATUS_RUNNING, "re-probe must flip unhealthy → running: {json:?}");
+        cleanup(&project_id, &name);
+    }
+
+    /// Tunnel: inside the grace the hostname is NOT published (no control-
+    /// plane write, no url, hostnamePending); the first port answer
+    /// publishes it and the service ends `running` with its url.
+    #[test]
+    fn tunnel_late_bind_publishes_hostname_after_first_answer() {
+        assert!(python_ok(), "python3 is required for published-service runtime tests");
+        let _home = crate::test_support::TempHome::new();
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "300");
+        let _reprobe = k2_core::test_env::EnvVar::set("K2_PUBLISH_REPROBE_MS", "50");
+        let _claim_tries = k2_core::test_env::EnvVar::set("K2_PUBLISH_CLAIM_TRIES", "4");
+        write_pro_tunnel(_home.path());
+        let name = unique("gracetun");
+        let port = free_port();
+        let cp = start_pro_cp(&name, port);
+        let dir = _home.path().join("ws-grace-tunnel");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let json = run(grace_spec(&project_id, &name, late_listener_cmd(port, 1.5), &dir, port, false, ProbeTimeout::Ms(8000)))
+            .expect("tunnelled run is not rolled back inside its grace");
+        assert_eq!(json.status, STATUS_STARTING, "{json:?}");
+        assert!(json.hostname_pending, "hostname waits for the first answer: {json:?}");
+        assert!(json.url.is_none(), "no public url before the hostname exists: {json:?}");
+        assert_eq!(cp.writes.load(AtomOrd::SeqCst), 0, "no control-plane write inside the grace");
+        let json = wait_status(&project_id, &name, STATUS_RUNNING, Duration::from_secs(10));
+        assert_eq!(json.status, STATUS_RUNNING, "{json:?}");
+        // finish_start publishes the hostname, then flips the row.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let row = loop {
+            let row = load_row(&project_id, &name).unwrap();
+            if !row.hostname_pending || Instant::now() >= deadline {
+                break row;
+            }
+            thread::sleep(Duration::from_millis(50));
+        };
+        assert!(!row.hostname_pending, "pending cleared after the attach");
+        assert!(row.error.is_none(), "error: {:?}", row.error);
+        assert_eq!(row.desired, DESIRED_RUNNING);
+        assert!(cp.writes.load(AtomOrd::SeqCst) >= 1, "hostname published after the port answered");
+        let json = to_json(&row);
+        assert_eq!(json.url.as_deref(), Some(format!("https://{name}.rosson.k2.dev").as_str()));
+        cleanup(&project_id, &name);
+    }
+
+    /// Tunnel that never binds: rolled back only when its grace runs out,
+    /// with an error that names the grace and the flag. No hostname.
+    #[test]
+    fn tunnel_never_binds_is_rolled_back_after_its_grace() {
+        assert!(python_ok(), "python3 is required for published-service runtime tests");
+        let _home = crate::test_support::TempHome::new();
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "300");
+        let _reprobe = k2_core::test_env::EnvVar::set("K2_PUBLISH_REPROBE_MS", "50");
+        write_pro_tunnel(_home.path());
+        let name = unique("gracenever");
+        let port = free_port();
+        let cp = start_pro_cp(&name, port);
+        let dir = _home.path().join("ws-grace-never");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let started = Instant::now();
+        let json = run(grace_spec(&project_id, &name, "sleep 30".into(), &dir, port, false, ProbeTimeout::Ms(1500)))
+            .expect("inside the grace the run answers starting");
+        assert_eq!(json.status, STATUS_STARTING, "{json:?}");
+        let pid = json.pid.expect("pid") as i32;
+        let deadline = Instant::now() + Duration::from_secs(6);
+        let row = loop {
+            let row = load_row(&project_id, &name).expect("row stays (stopped + error)");
+            if row.desired == DESIRED_STOPPED || Instant::now() >= deadline {
+                break row;
+            }
+            thread::sleep(Duration::from_millis(50));
+        };
+        assert!(started.elapsed() >= Duration::from_millis(1500), "not before the grace ran out");
+        assert_eq!(row.desired, DESIRED_STOPPED, "rolled back after the grace");
+        let err = row.error.clone().expect("rollback error");
+        assert!(err.contains("never accepted within 1.5s"), "names the grace: {err}");
+        assert!(err.contains("raise --probe-timeout"), "names the flag: {err}");
+        assert!(!row.hostname_pending);
+        assert!(row.pid.is_none());
+        thread::sleep(Duration::from_millis(600));
+        assert!(!pid_alive(pid), "rollback kills the process");
+        assert_eq!(cp.writes.load(AtomOrd::SeqCst), 0, "never published a hostname");
+        let json = to_json(&row);
+        assert_eq!(json.status, STATUS_STOPPED);
+        assert!(json.url.is_none(), "{json:?}");
+        cleanup(&project_id, &name);
+    }
+
+    /// Tunnel with a grace no longer than the request window: the sync
+    /// rollback is unchanged, but its error names the grace.
+    #[test]
+    fn tunnel_sync_miss_error_names_the_grace() {
+        assert!(python_ok(), "python3 is required for published-service runtime tests");
+        let _home = crate::test_support::TempHome::new();
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "400");
+        write_pro_tunnel(_home.path());
+        let name = unique("gracesync");
+        let port = free_port();
+        let _cp = start_pro_cp(&name, port);
+        let dir = _home.path().join("ws-grace-sync");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let err = run(grace_spec(&project_id, &name, "sleep 30".into(), &dir, port, false, ProbeTimeout::Keep))
+            .expect_err("default grace miss rolls back");
+        assert!(err.message.contains("never accepted within 400ms"), "{}", err.message);
+        assert!(err.message.contains("raise --probe-timeout"), "{}", err.message);
+        cleanup(&project_id, &name);
+    }
+
+    /// The flag round-trips through storage: a re-run without it keeps the
+    /// stored grace, `default` clears it; over 15 min is refused before
+    /// anything is written.
+    #[test]
+    fn probe_timeout_is_stored_kept_reset_and_capped() {
+        assert!(python_ok(), "python3 is required for published-service runtime tests");
+        let _home = crate::test_support::TempHome::new();
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "3000");
+        let dir = _home.path().join("ws-grace-store");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let name = unique("gracestore");
+        let port = free_port();
+        let over = run(grace_spec(&project_id, &name, listener_cmd(port), &dir, port, true, ProbeTimeout::Ms(ps::PROBE_TIMEOUT_MAX_MS + 1)))
+            .expect_err("over the cap");
+        assert_eq!(over.status, "400 Bad Request");
+        assert!(over.message.contains("at most 15m"), "{}", over.message);
+        assert!(load_row(&project_id, &name).is_none(), "refused before any row");
+
+        let json = run(grace_spec(&project_id, &name, listener_cmd(port), &dir, port, true, ProbeTimeout::Ms(ps::PROBE_TIMEOUT_MAX_MS)))
+            .expect("15m is allowed");
+        assert_eq!(json.status, STATUS_RUNNING);
+        assert_eq!(json.probe_timeout_ms, Some(ps::PROBE_TIMEOUT_MAX_MS as i64));
+        stop(&project_id, &name).expect("stop");
+        thread::sleep(Duration::from_millis(300));
+
+        let json = run(grace_spec(&project_id, &name, listener_cmd(port), &dir, port, true, ProbeTimeout::Keep))
+            .expect("re-run without the flag");
+        assert_eq!(json.probe_timeout_ms, Some(ps::PROBE_TIMEOUT_MAX_MS as i64), "kept");
+        stop(&project_id, &name).expect("stop");
+        thread::sleep(Duration::from_millis(300));
+
+        let json = run(grace_spec(&project_id, &name, listener_cmd(port), &dir, port, true, ProbeTimeout::Default))
+            .expect("re-run with default");
+        assert_eq!(json.probe_timeout_ms, None, "default clears it");
+        assert_eq!(json.probe_timeout_effective_ms, 3000);
+        cleanup(&project_id, &name);
+    }
+
+    #[test]
+    fn fmt_duration_reads_like_the_flag() {
+        assert_eq!(fmt_duration(Duration::from_millis(400)), "400ms");
+        assert_eq!(fmt_duration(Duration::from_millis(1500)), "1.5s");
+        assert_eq!(fmt_duration(Duration::from_secs(15)), "15s");
+        assert_eq!(fmt_duration(Duration::from_secs(90)), "1m30s");
+        assert_eq!(fmt_duration(Duration::from_secs(600)), "10m");
+        assert_eq!(fmt_duration(Duration::from_secs(252)), "4m12s");
     }
 
     #[test]

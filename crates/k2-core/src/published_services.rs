@@ -107,6 +107,71 @@ pub struct PublishedService {
     /// Framing policy (migration 0143): `''` default, `none`, or extra
     /// origins. See [`crate::frame_policy`].
     pub frame_ancestors: String,
+    /// Startup grace (migration 0177): how long the service may take to open
+    /// its port, in ms. `None` = the daemon default (15 s).
+    pub probe_timeout_ms: Option<i64>,
+    /// Migration 0177: a tunnelled service is inside its grace and its
+    /// nested hostname is not published yet.
+    pub hostname_pending: bool,
+}
+
+/// Startup grace when a service stores none (`K2_PUBLISH_PROBE_MS` in the
+/// daemon's environment overrides it; tests use that).
+pub const PROBE_TIMEOUT_DEFAULT_MS: u64 = 15_000;
+
+/// Longest startup grace `--probe-timeout` accepts (15 min).
+pub const PROBE_TIMEOUT_MAX_MS: u64 = 15 * 60 * 1000;
+
+/// Parse a `--probe-timeout` value: `90s`, `10m`, `1500ms`, `1m30s` or a
+/// bare number of seconds. Must be > 0 and at most 15 min.
+pub fn parse_probe_timeout(raw: &str) -> Result<u64, String> {
+    let t = raw.trim().to_ascii_lowercase();
+    let bad = || {
+        format!(
+            "--probe-timeout must be a duration like 90s, 10m or 1500ms (at most 15m), got '{}'",
+            raw.trim()
+        )
+    };
+    if t.is_empty() {
+        return Err(bad());
+    }
+    let mut total: u64 = 0;
+    if t.bytes().all(|b| b.is_ascii_digit()) {
+        total = t.parse::<u64>().map_err(|_| bad())?.checked_mul(1000).ok_or_else(bad)?;
+    } else {
+        let mut rest = t.as_str();
+        while !rest.is_empty() {
+            let digits = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
+            if digits == 0 {
+                return Err(bad());
+            }
+            let n: u64 = rest[..digits].parse().map_err(|_| bad())?;
+            rest = &rest[digits..];
+            let unit_len = rest.bytes().take_while(|b| b.is_ascii_alphabetic()).count();
+            let mult = match &rest[..unit_len] {
+                "ms" => 1,
+                "s" => 1000,
+                "m" => 60_000,
+                "h" => 3_600_000,
+                _ => return Err(bad()),
+            };
+            rest = &rest[unit_len..];
+            total = n
+                .checked_mul(mult)
+                .and_then(|v| total.checked_add(v))
+                .ok_or_else(bad)?;
+        }
+    }
+    if total == 0 {
+        return Err(bad());
+    }
+    if total > PROBE_TIMEOUT_MAX_MS {
+        return Err(format!(
+            "--probe-timeout is at most 15m (got {}); a service that needs longer should open its port first and build behind it",
+            raw.trim()
+        ));
+    }
+    Ok(total)
 }
 
 /// Frozen HTTP Service object (`GET /cli/publish/list`).
@@ -180,6 +245,21 @@ pub struct ServiceJson {
     /// claim of that name is refused. Only sent when true.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reserved_label: bool,
+    /// Stored startup grace in ms (`--probe-timeout`); null = the daemon
+    /// default. Always present on the wire.
+    #[serde(default)]
+    pub probe_timeout_ms: Option<i64>,
+    /// The grace this service gets, in ms (stored value or the default).
+    #[serde(default)]
+    pub probe_timeout_effective_ms: i64,
+    /// While `status` is `starting`: ms left before the grace runs out.
+    /// Null otherwise.
+    #[serde(default)]
+    pub starting_left_ms: Option<i64>,
+    /// True while a tunnelled service waits inside its grace and its
+    /// nested hostname is not published yet. Always present.
+    #[serde(default)]
+    pub hostname_pending: bool,
 }
 
 impl ServiceJson {
@@ -232,13 +312,19 @@ impl ServiceJson {
             helper_needs_restart: false,
             clean_mode: false,
             reserved_label: crate::skin::is_reserved_nested_label(&row.name),
+            probe_timeout_ms: row.probe_timeout_ms,
+            probe_timeout_effective_ms: row
+                .probe_timeout_ms
+                .unwrap_or(PROBE_TIMEOUT_DEFAULT_MS as i64),
+            starting_left_ms: None,
+            hostname_pending: row.hostname_pending,
         }
     }
 }
 
 const COLS: &str = "id, project_id, name, cmd, cwd, port, expose, desired, pid, \
      last_exit_code, last_started_at, last_exited_at, error, created_at, updated_at, \
-     kind, skin_root, frame_ancestors";
+     kind, skin_root, frame_ancestors, probe_timeout_ms, hostname_pending";
 
 fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PublishedService> {
     Ok(PublishedService {
@@ -260,6 +346,8 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PublishedService> {
         kind: row.get::<_, String>(15).unwrap_or_else(|_| KIND_CMD.to_string()),
         skin_root: row.get::<_, String>(16).unwrap_or_default(),
         frame_ancestors: row.get(17)?,
+        probe_timeout_ms: row.get(18)?,
+        hostname_pending: row.get::<_, i64>(19)? != 0,
     })
 }
 
@@ -480,7 +568,8 @@ pub fn mark_hostname_failed(
     let now = now_unix();
     conn.execute(
         "UPDATE published_services SET desired = 'stopped', pid = NULL, error = ?1, \
-         last_exited_at = ?2, updated_at = ?2 WHERE project_id = ?3 AND name = ?4",
+         hostname_pending = 0, last_exited_at = ?2, updated_at = ?2 \
+         WHERE project_id = ?3 AND name = ?4",
         params![error, now, project_id, name],
     )?;
     Ok(())
@@ -499,6 +588,40 @@ pub fn set_frame_ancestors(
         "UPDATE published_services SET frame_ancestors = ?1, updated_at = ?2 \
          WHERE project_id = ?3 AND name = ?4",
         params![stored, now_unix(), project_id, name],
+    )?;
+    Ok(n > 0)
+}
+
+/// Store the startup grace (`None` = back to the daemon default). The
+/// caller validated it ([`parse_probe_timeout`]).
+pub fn set_probe_timeout(
+    conn: &Connection,
+    project_id: &str,
+    name: &str,
+    ms: Option<u64>,
+) -> Result<bool> {
+    let name = name.trim().to_ascii_lowercase();
+    let n = conn.execute(
+        "UPDATE published_services SET probe_timeout_ms = ?1, updated_at = ?2 \
+         WHERE project_id = ?3 AND name = ?4",
+        params![ms.map(|v| v as i64), now_unix(), project_id, name],
+    )?;
+    Ok(n > 0)
+}
+
+/// Mark (or clear) "nested hostname not yet published" on a tunnelled
+/// service that is inside its startup grace.
+pub fn set_hostname_pending(
+    conn: &Connection,
+    project_id: &str,
+    name: &str,
+    pending: bool,
+) -> Result<bool> {
+    let name = name.trim().to_ascii_lowercase();
+    let n = conn.execute(
+        "UPDATE published_services SET hostname_pending = ?1, updated_at = ?2 \
+         WHERE project_id = ?3 AND name = ?4",
+        params![pending as i64, now_unix(), project_id, name],
     )?;
     Ok(n > 0)
 }
@@ -652,9 +775,16 @@ mod tests {
             "envDeprecation",
             "envMode",
             "envRemovedIn",
+            "probeTimeoutMs",
+            "probeTimeoutEffectiveMs",
+            "startingLeftMs",
+            "hostnamePending",
         ] {
             assert!(v.get(key).is_some(), "Service JSON must carry {key}");
         }
+        assert!(v["probeTimeoutMs"].is_null(), "no stored grace = null");
+        assert_eq!(v["probeTimeoutEffectiveMs"], PROBE_TIMEOUT_DEFAULT_MS);
+        assert_eq!(v["hostnamePending"], false);
         assert_eq!(v["id"], row.id, "id is published_services.id");
         assert_eq!(v["projectId"], pid);
         assert!(v.get("project_id").is_none(), "wire key is projectId");
@@ -668,6 +798,54 @@ mod tests {
         assert_eq!(v["expose"], "local");
         assert_eq!(v["desired"], "running");
         assert_eq!(v["status"], "running");
+    }
+
+    #[test]
+    fn probe_timeout_parses_units_and_enforces_the_cap() {
+        assert_eq!(parse_probe_timeout("90s").unwrap(), 90_000);
+        assert_eq!(parse_probe_timeout("10m").unwrap(), 600_000);
+        assert_eq!(parse_probe_timeout("1500ms").unwrap(), 1_500);
+        assert_eq!(parse_probe_timeout("1m30s").unwrap(), 90_000);
+        assert_eq!(parse_probe_timeout("45").unwrap(), 45_000, "bare number = seconds");
+        assert_eq!(parse_probe_timeout(" 15M ").unwrap(), PROBE_TIMEOUT_MAX_MS);
+        let over = parse_probe_timeout("16m").unwrap_err();
+        assert!(over.contains("at most 15m"), "{over}");
+        assert!(parse_probe_timeout("1h").unwrap_err().contains("at most 15m"));
+        for bad in ["", "0", "0s", "abc", "10x", "s", "-5s", "1.5m", "10m junk"] {
+            let e = parse_probe_timeout(bad).expect_err(bad);
+            assert!(e.contains("--probe-timeout"), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn probe_timeout_and_hostname_pending_round_trip() {
+        let conn = fresh();
+        let pid = project(&conn, "/tmp/pub-grace");
+        insert(&conn, &pid, "hearth", "sh publish.sh", "/tmp/pub-grace", 3047, EXPOSE_TUNNEL, DESIRED_STOPPED, KIND_CMD, "")
+            .unwrap();
+        let row = get_by_project_name(&conn, &pid, "hearth").unwrap().unwrap();
+        assert_eq!(row.probe_timeout_ms, None);
+        assert!(!row.hostname_pending);
+
+        assert!(set_probe_timeout(&conn, &pid, "hearth", Some(600_000)).unwrap());
+        assert!(set_hostname_pending(&conn, &pid, "hearth", true).unwrap());
+        let row = get_by_project_name(&conn, &pid, "hearth").unwrap().unwrap();
+        assert_eq!(row.probe_timeout_ms, Some(600_000));
+        assert!(row.hostname_pending);
+        let v = serde_json::to_value(ServiceJson::from_row(&row, STATUS_STARTING, None, None)).unwrap();
+        assert_eq!(v["probeTimeoutMs"], 600_000);
+        assert_eq!(v["probeTimeoutEffectiveMs"], 600_000);
+        assert_eq!(v["hostnamePending"], true);
+
+        // A failed hostname step clears the pending mark with the row.
+        mark_hostname_failed(&conn, &pid, "hearth", "probe failed").unwrap();
+        let row = get_by_project_name(&conn, &pid, "hearth").unwrap().unwrap();
+        assert!(!row.hostname_pending);
+        assert_eq!(row.probe_timeout_ms, Some(600_000), "the grace survives a failure");
+
+        assert!(set_probe_timeout(&conn, &pid, "hearth", None).unwrap());
+        let row = get_by_project_name(&conn, &pid, "hearth").unwrap().unwrap();
+        assert_eq!(row.probe_timeout_ms, None, "None = back to the default");
     }
 
     #[test]

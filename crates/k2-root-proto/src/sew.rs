@@ -105,8 +105,9 @@ pub struct SewRelease {
 /// recognises the binary already on a box (upgrade source, rollback).
 ///
 /// PLACEHOLDER until Sew publishes SW1 (a tagged release with
-/// `release.json` carrying `binary_sha256`). Paste the snippet Sew's
-/// `release.sh` prints here.
+/// `release.json` carrying `binary_sha256`). Append the entry
+/// `scripts/sew-pins-from-release.sh <release-dir>` prints from that
+/// release's `release.json` + SHA256SUMS.
 pub const SEW_RELEASES: &[SewRelease] = &[SewRelease {
     version: "0.1.0",
     artifacts: &[
@@ -167,8 +168,10 @@ pub const TEST_RELEASES: &[SewRelease] = &[
 /// ONLY with the `sew-test-pins` feature, which release builds never enable
 /// (`sign-root-helper.sh` refuses a helper carrying [`SEW_TEST_PINS_FLAG`];
 /// `k2-root-helper/tests/binary.rs` proves a default build carries neither
-/// these hashes nor the flag). The media binary sha comes from Sew's
-/// `release.json` (`sidecars[media].artifacts[].binary_sha256`).
+/// these hashes nor the flag). Generated from each release's
+/// `release.json` (Sew's contract; K2-PIN.txt is not authoritative) by
+/// `scripts/sew-pins-from-release.sh <dir> --const <NAME>`, which also
+/// checks SHA256SUMS and the tarballs; the output is byte-equal to these.
 ///
 /// Two tables, like two K2 releases: `sew-test-pins` pins 0.1.0 (enable),
 /// `sew-test-pins-upgrade` appends 0.1.1 as the pin (the upgrade source

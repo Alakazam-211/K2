@@ -162,6 +162,9 @@ pub fn normalize_rel_path(workdir: &Path, input: &str) -> Result<String, Changes
             r.to_path_buf()
         } else if let Ok(r) = p.strip_prefix(&canon_wd) {
             r.to_path_buf()
+        } else if let Some(r) = canonical_prefix(p).as_deref().and_then(|c| c.strip_prefix(&canon_wd).ok()) {
+            // Another spelling of the same place (`/var/…` vs `/private/var/…`).
+            r.to_path_buf()
         } else {
             return Err(bad("outside the repository"));
         }
@@ -184,6 +187,24 @@ pub fn normalize_rel_path(workdir: &Path, input: &str) -> Result<String, Changes
         return Err(bad("inside .git"));
     }
     Ok(parts.join("/"))
+}
+
+/// `p` with its nearest existing ancestor canonicalized and the missing
+/// tail re-attached as written (the leaf need not exist).
+fn canonical_prefix(p: &Path) -> Option<PathBuf> {
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut cur = p;
+    loop {
+        if let Ok(c) = std::fs::canonicalize(cur) {
+            let mut out = c;
+            for t in tail.iter().rev() {
+                out.push(t);
+            }
+            return Some(out);
+        }
+        tail.push(cur.file_name()?);
+        cur = cur.parent()?;
+    }
 }
 
 /// Refuse a working-tree path whose real location (after resolving
@@ -1180,13 +1201,26 @@ pub struct RepoDirs {
     commondir_forms: Vec<String>,
 }
 
-fn forms(p: &Path) -> Vec<String> {
+/// Every spelling of `p`: as given, canonical, and — when it sits under
+/// the canonical `alias.0` — re-rooted at `alias.1` (the workspace path as
+/// the caller spells it; git2 may report `/private/var/…` for `/var/…`).
+fn forms(p: &Path, alias: Option<&(String, String)>) -> Vec<String> {
     let mut v = vec![trim_slash(&p.to_string_lossy())];
+    let mut push = |s: String| {
+        if !v.contains(&s) {
+            v.push(s);
+        }
+    };
     if let Ok(c) = std::fs::canonicalize(p) {
         let c = trim_slash(&c.to_string_lossy());
-        if !v.contains(&c) {
-            v.push(c);
+        if let Some((canon_root, raw_root)) = alias {
+            if c == *canon_root {
+                push(raw_root.clone());
+            } else if let Some(rest) = c.strip_prefix(&format!("{canon_root}/")) {
+                push(format!("{raw_root}/{rest}"));
+            }
         }
+        push(c);
     }
     v
 }
@@ -1231,10 +1265,14 @@ pub fn repo_dirs(path: &str) -> Option<RepoDirs> {
     let workdir = repo.workdir()?.to_path_buf();
     let gitdir = repo.path().to_path_buf();
     let commondir = common_dir(&repo, &gitdir);
+    let alias = std::fs::canonicalize(path)
+        .ok()
+        .map(|c| (trim_slash(&c.to_string_lossy()), trim_slash(path)))
+        .filter(|(c, raw)| c != raw);
     Some(RepoDirs {
-        workdir_forms: forms(&workdir),
-        gitdir_forms: forms(&gitdir),
-        commondir_forms: forms(&commondir),
+        workdir_forms: forms(&workdir, alias.as_ref()),
+        gitdir_forms: forms(&gitdir, alias.as_ref()),
+        commondir_forms: forms(&commondir, alias.as_ref()),
         workdir,
         gitdir,
         commondir,

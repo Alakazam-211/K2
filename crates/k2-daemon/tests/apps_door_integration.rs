@@ -66,8 +66,14 @@ fn conn(port: u16) -> TcpStream {
     s
 }
 
+/// `/gw/me` (the gate answers it, then closes the connection).
 fn me(pass: &str) -> String {
-    format!("GET /gw/me HTTP/1.1\r\nHost: 127.0.0.1:8730\r\nAuthorization: Bearer {pass}\r\n\r\n")
+    format!("GET /gw/me HTTP/1.1\r\nHost: 127.0.0.1:8730\r\nAuthorization: Bearer {pass}\r\nConnection: close\r\n\r\n")
+}
+
+/// An App-facing route the real handler serves (keep-alive).
+fn agents(pass: &str) -> String {
+    format!("GET /cli/skin/agents HTTP/1.1\r\nHost: 127.0.0.1:8730\r\nAuthorization: Bearer {pass}\r\n\r\n")
 }
 
 fn err(body: &str) -> Value {
@@ -142,15 +148,17 @@ async fn door_quotas_audit_alerts_and_suspend_on_a_live_link() {
     let p = pass.clone();
     let op = other_pass.clone();
     let (first, burst_over, after_wait, too_big, wrong) = blocking(move || {
-        let mut s = conn(port);
         // §5.3: manifest (thread:read, files:write) ∩ approved (thread:read).
-        let first = send(&mut s, &me(&p));
+        let first = send(&mut conn(port), &me(&p));
         // The bucket holds 3: two more pass, the fourth in the same instant is 429.
-        let _ = send(&mut s, &me(&p));
-        let _ = send(&mut s, &me(&p));
-        let burst_over = send(&mut s, &me(&p));
+        let mut s = conn(port);
+        let a = send(&mut s, &agents(&p));
+        assert_eq!(a.0, 200, "{}", a.1);
+        let a = send(&mut s, &agents(&p));
+        assert_eq!(a.0, 200, "{}", a.1);
+        let burst_over = send(&mut s, &agents(&p));
         std::thread::sleep(Duration::from_millis(1100));
-        let after_wait = send(&mut s, &me(&p));
+        let after_wait = send(&mut conn(port), &agents(&p));
         // A body over the override's 64 bytes.
         let body = format!("{{\"text\":\"{}\"}}", "x".repeat(80));
         let too_big = send(
@@ -199,7 +207,7 @@ async fn door_quotas_audit_alerts_and_suspend_on_a_live_link() {
     for want in ["rate_limited", "too_large", "pass_wrong_link"] {
         assert!(codes.contains(&want), "{want} audited: {codes:?}");
     }
-    let ok = calls.iter().filter(|c| c["result"] == 200 && c["verb"] == "GET /gw/me").count();
+    let ok = calls.iter().filter(|c| c["result"] == 200).count();
     assert!(ok >= 4, "admitted calls audited with their result: {}", a);
     for c in calls {
         assert_eq!(c["appId"], "doorapp");
@@ -228,7 +236,7 @@ async fn door_quotas_audit_alerts_and_suspend_on_a_live_link() {
     let mut held = blocking(move || {
         let mut s = conn(port);
         std::thread::sleep(Duration::from_millis(1100));
-        let r = send(&mut s, &me(&p));
+        let r = send(&mut s, &agents(&p));
         assert_eq!(r.0, 200, "{}", r.1);
         s
     })
@@ -238,7 +246,7 @@ async fn door_quotas_audit_alerts_and_suspend_on_a_live_link() {
     assert_eq!(r.json()["passesRevoked"], 1);
     let p = pass.clone();
     let (next, s2) = blocking(move || {
-        let r = send(&mut held, &me(&p));
+        let r = send(&mut held, &agents(&p));
         (r, held)
     })
     .await;

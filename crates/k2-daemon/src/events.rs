@@ -193,6 +193,14 @@ impl AgentHookEventSink for DaemonBroadcastSink {
                     crate::session_events::SessionEvent::MailChanged { reason },
                 );
             }
+            // Sew on K2 (S29 A3 / K14): the app-level twin of `sew:changed`,
+            // so a remote client refetches GET /cli/sew/status. Reason only.
+            HookEvent::SewChanged => {
+                let reason = payload.get("reason").and_then(|r| r.as_str()).unwrap_or("changed").to_string();
+                let _ = crate::session_events::emit(
+                    crate::session_events::SessionEvent::SewChanged { reason },
+                );
+            }
             _ => {}
         }
 
@@ -362,6 +370,28 @@ mod tests {
     /// mirror a K2 Connect client never sees these changes (the legacy
     /// `/events` WS is loopback-only). Drains a real bus subscription —
     /// unrelated events from parallel tests are skipped, not failed on.
+    /// Sew on K2 (K14): `sew:changed` reaches the app-level bus as
+    /// `sew_changed` with the payload's reason (and nothing else).
+    #[test]
+    fn sew_changed_hook_mirrors_its_reason_to_the_session_events_bus() {
+        use crate::session_events::SessionEvent;
+        let tx = broadcast::Sender::<WireEvent>::new(16);
+        let sink = DaemonBroadcastSink::new(tx);
+        let mut rx = crate::session_events::subscribe();
+        sink.emit(HookEvent::SewChanged, serde_json::json!({"reason": "voice-installed"}));
+        let mut found = false;
+        while let Ok(got) = rx.try_recv() {
+            if let SessionEvent::SewChanged { reason } = got {
+                if reason == "voice-installed" {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        assert!(found, "no sew_changed mirror");
+        assert_eq!(HookEvent::SewChanged.event_name(), "sew:changed");
+    }
+
     #[test]
     fn project_group_feedback_and_mail_hooks_mirror_to_session_events_bus() {
         use crate::session_events::SessionEvent;

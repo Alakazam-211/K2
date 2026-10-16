@@ -288,6 +288,9 @@ impl ProxyRegistration {
         if !self.is_current_run(run) {
             return; // a previous child's late output
         }
+        if line.contains("login to server success") {
+            FRPC_LOGINS.fetch_add(1, Ordering::SeqCst);
+        }
         // The control session to frps went away (frp 0.61 lines, e.g.
         // `[W] [client/service.go:319] [<runid>] connect to server error: …`,
         // `[I] [client/service.go:308] [<runid>] try to connect to server...`,
@@ -1138,6 +1141,17 @@ pub fn last_stop_reason() -> Option<String> {
 /// that found the tunnel already serving does not bump it, so equal
 /// values before and after a call prove frpc was not restarted.
 static SPAWN_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// frpc logins to frps accepted since this daemon started (the
+/// `login to server success` line). The relay learns the box's public IP
+/// at Login, so Sew voice retries a TURN DNS `403 ip_unverified` after the
+/// count moves (k2-connect `docs/turn.md`).
+static FRPC_LOGINS: AtomicU64 = AtomicU64::new(0);
+
+/// See [`FRPC_LOGINS`].
+pub fn frpc_login_count() -> u64 {
+    FRPC_LOGINS.load(Ordering::SeqCst)
+}
 
 pub fn spawn_generation() -> u64 {
     SPAWN_GENERATION.load(Ordering::SeqCst)
@@ -3551,8 +3565,10 @@ mod tests {
         });
         assert!(!reg.is_registered(), "never spawned");
         let r1 = reg.begin_run();
+        let logins = frpc_login_count();
         reg.observe_line(r1, "[I] [service.go:299] login to server success, get run id [x]");
         assert!(!reg.is_registered(), "login alone is not registration");
+        assert!(frpc_login_count() > logins, "a login moves the login count (Sew TURN DNS retry)");
         reg.observe_line(r1, "[I] [proxy_wrapper.go:204] [x] [k2so-other] start proxy success");
         assert!(!reg.is_registered(), "another proxy's success does not count");
         reg.observe_line(r1, "[I] [proxy_wrapper.go:204] [x] [k2so-rosson2] start proxy success");

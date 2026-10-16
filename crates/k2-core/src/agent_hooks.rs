@@ -168,6 +168,11 @@ pub enum HookEvent {
     /// `send --wait` learns via its own poll; this event refreshes the
     /// Approvals tab + outbox views.
     MailSendDecided,
+    /// Sew on K2 (S29 K14): the Sew server or its voice changed (state
+    /// transition, enable/disable/uninstall/purge, voice installed, URL
+    /// set, TURN cert renewed, config). Payload `{reason}` only: never a
+    /// link, a key or a token.
+    SewChanged,
 }
 
 impl HookEvent {
@@ -199,6 +204,7 @@ impl HookEvent {
             Self::MailServerStateChanged => "mail:server-state-changed",
             Self::MailSendApprovalRequested => "mail:send-approval-requested",
             Self::MailSendDecided => "mail:send-decided",
+            Self::SewChanged => "sew:changed",
         }
     }
 }

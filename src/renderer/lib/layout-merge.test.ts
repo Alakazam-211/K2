@@ -198,3 +198,40 @@ describe('collapseEmptyLeadingColumns', () => {
     expect(collapseEmptyLeadingColumns([[1], []])).toEqual([[1], []])
   })
 })
+
+// Pinned tabs (Rosson 2026-10-16): a tab's pin is part of its own edit, and
+// the merged columns always keep [system][pinned][regular].
+describe('pinned tabs in the merge', () => {
+  const pinned = (id: string): SerializedTab => tab(id, `pg-${id}`, { isPinnedFile: true })
+
+  it('a tab this window pinned moves right after the system tabs, past tabs another window opened', () => {
+    const base = layout([systemTab('chat', 'chat'), tab('a'), tab('b')])
+    const local = layout([systemTab('chat', 'chat'), pinned('b'), tab('a')])
+    const remote = layout([systemTab('chat', 'chat'), tab('a'), tab('b'), tab('c')])
+    const merged = mergeSerializedLayouts(base, local, remote)
+    expect(ids(merged)).toEqual([['chat', 'b', 'a', 'c']])
+    expect(merged.tabs[1].isPinnedFile).toBe(true)
+  })
+
+  it('a pin made in another window survives this window opening a tab', () => {
+    const base = layout([tab('a'), tab('b')])
+    const local = layout([tab('a'), tab('b'), tab('n')])
+    const remote = layout([pinned('b'), tab('a')])
+    // `n` lands after its local neighbour `b` (the first regular slot).
+    const merged = mergeSerializedLayouts(base, local, remote)
+    expect(ids(merged)).toEqual([['b', 'n', 'a']])
+    expect(merged.tabs.map((t) => t.isPinnedFile === true)).toEqual([true, false, false])
+  })
+
+  it('keeps each split column in pinned order', () => {
+    const base = layout([tab('a')], [tab('x'), tab('y')])
+    const local = layout([tab('a')], [tab('x'), tab('y')])
+    const remote = layout([tab('a')], [tab('x'), pinned('y')])
+    expect(ids(mergeSerializedLayouts(base, local, remote))).toEqual([['a'], ['y', 'x']])
+  })
+
+  it('canonical JSON tells a pin from no pin', () => {
+    expect(canonicalLayoutJson(layout([tab('a')]))).not.toBe(canonicalLayoutJson(layout([pinned('a')])))
+    expect(canonicalLayoutJson(layout([tab('a')]))).toBe(canonicalLayoutJson(layout([tab('a', 'pg-a', { isPinnedFile: false })])))
+  })
+})

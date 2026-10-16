@@ -107,7 +107,7 @@ fn mgmt_fail(e: MgmtError) -> Fail {
                         .into(),
                 ),
                 "owner_exists" => ("owner_exists", 409, "this Sew install already has an owner: invite people with k2 hostchat users invite".into()),
-                "username_taken" => ("username_taken", 409, "that username is taken: pick another (--username)".into()),
+                "username_taken" => ("username_taken", 409, "that username is taken: pick another name".into()),
                 "user_deactivated" => ("user_deactivated", 409, "that user is deactivated: k2 hostchat users reactivate <name>".into()),
                 "is_owner" => ("is_owner", 409, "the install owner cannot be revoked".into()),
                 "owner_role_fixed" | "guest_role_fixed" => ("role_fixed", 409, format!("Sew refused the role change ({code})")),

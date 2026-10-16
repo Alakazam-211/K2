@@ -397,12 +397,28 @@ fn log_line(spec: &AppSpec, line: &str) {
 
 /// The App's gateway rule (root helper, protocol 6). Without it the App
 /// can't reach its gateway port at all (the table drops it): fail closed.
+/// It carries the App's approved box services' host ports every time (the
+/// helper replaces the App's list), so every re-apply keeps them.
 pub fn install_gateway_rule(app: &str, gw: u16) -> std::result::Result<(), String> {
     let st = crate::root_helper::state();
     if !st.usable(k2_root_proto::version::APPS_MIN_PROTOCOL) {
         return Err("the root helper is older than protocol 6".into());
     }
-    crate::root_helper::call_text(&["apps".into(), "nft".into(), "app".into(), app.into(), gw.to_string()], None).map(|_| ())
+    crate::root_helper::call_text(&gateway_rule_argv(app, gw, &super::box_service_routes::allowed_ports(app)), None).map(|_| ())
+}
+
+/// `apps nft app <id> <gw> [<box port>…]`.
+pub fn gateway_rule_argv(app: &str, gw: u16, box_ports: &[u16]) -> Vec<String> {
+    let mut a: Vec<String> = vec!["apps".into(), "nft".into(), "app".into(), app.into(), gw.to_string()];
+    a.extend(box_ports.iter().map(u16::to_string));
+    a
+}
+
+/// Does the engine take box forwards (`version` lists the feature)?
+fn engine_has_box_forward() -> bool {
+    engine_version().is_ok_and(|v| {
+        v["features"].as_array().is_some_and(|f| f.iter().any(|x| x.as_str() == Some(wire::FEATURE_BOX_FORWARD)))
+    })
 }
 
 pub fn remove_gateway_rule(app: &str) {
@@ -431,6 +447,7 @@ pub fn logs(app: &str, deployment: &str, lines: u32) -> Result<String> {
 pub fn remove_app(app: &str, purge: bool) -> Result<Value> {
     let v = call(&Request::RemoveApp { app: app.into(), data: purge }, None, Duration::from_secs(1200))?;
     remove_gateway_rule(app);
+    super::box_service_routes::forget_live(app);
     super::egress_proxy::stop(app);
     Ok(v)
 }
@@ -506,7 +523,32 @@ impl RuntimeEngine for GuardedEngine {
             .remove(&spec.deployment_id)
             .ok_or_else(|| eng_err(codes::ENGINE_UNAVAILABLE, "start before prepare"))?;
         let seed_hash = spec_seed_hash(p).ok_or_else(|| eng_err(codes::SEED_NOT_FOUND, "the prepared Seed has no hash"))?;
-        let env = guarded_env(spec, std::env::var("LANG").ok(), std::env::var("TZ").ok());
+        let mut env = guarded_env(spec, std::env::var("LANG").ok(), std::env::var("TZ").ok());
+        // Box services (0.46.0): approved and held ones are forwarded into
+        // the wall; the App's nft rule opens only the approved ones.
+        let (mut box_forwards, skipped) = super::box_service_routes::forwards_for(app.as_str(), port);
+        if !skipped.is_empty() {
+            log_line(spec, &format!("guarded: box services not forwarded (refused port, or on the App's own port {port}): {}", skipped.join(", ")));
+        }
+        if !box_forwards.is_empty() && !engine_has_box_forward() {
+            log_line(spec, "guarded: the App engine predates box services; reinstall it (k2 app engine install) and restart the App");
+            box_forwards.clear();
+        }
+        if !box_forwards.is_empty() {
+            for (k, v) in super::box_service_routes::env_for(app.as_str(), false) {
+                if box_forwards.iter().any(|f| v.ends_with(&format!(":{}", f.app_port))) {
+                    env.insert(k, v);
+                }
+            }
+            log_line(
+                spec,
+                &format!(
+                    "guarded: box services in the wall: {} (k2 app box-service {})",
+                    box_forwards.iter().map(|f| format!("127.0.0.1:{} -> host {}", f.app_port, f.host_port)).collect::<Vec<_>>().join(", "),
+                    spec.app_id
+                ),
+            );
+        }
         // S14: the App's gateway link and a fresh pass, before the App
         // starts (it may call K2 on boot). A redeploy keeps the listener.
         let (caps, rooms, dropped_caps) = super::gateway::link_policy(&seed_caps(&p.workdir)?, &spec.workspace_id);
@@ -548,6 +590,7 @@ impl RuntimeEngine for GuardedEngine {
             secrets,
             pass_hex: Some(wire::hex_encode(pass.as_bytes())),
             io: k2_root_proto::apps::IoMax::from_column(spec.io_max_json.as_deref()),
+            box_forwards,
         };
         if let Err(w) = wire::check_start(&s) {
             close_new_link();
@@ -576,6 +619,7 @@ impl RuntimeEngine for GuardedEngine {
             }
         };
         let unit = v["unit"].as_str().unwrap_or_default().to_string();
+        super::box_service_routes::record_live(app.as_str(), &v);
         log_line(spec, &format!("guarded container {unit} started on 127.0.0.1:{port}; its output is in the unit's journal (k2 app logs)"));
         if let Err(e) = install_gateway_rule(app.as_str(), gw) {
             log_line(spec, &format!("guarded: gateway rule not installed ({e}); the App can't reach K2 until it is"));
@@ -650,6 +694,7 @@ impl RuntimeEngine for GuardedEngine {
             };
             let Ok(port) = u16::try_from(port) else { continue };
             let gw = i["gwPort"].as_u64().and_then(|g| u16::try_from(g).ok());
+            super::box_service_routes::record_live(app, &i);
             if let Some(gw) = gw {
                 // After a daemon restart the rule may point at an old inode.
                 let _ = install_gateway_rule(app, gw);

@@ -1354,6 +1354,15 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0170_app_walls_lite",
             include_str!("../../drizzle_sql/0170_app_walls_lite.sql"),
         ),
+        // 0171 — App box services (0.46.0): an owner-approved forward into a
+        // walled App for a service on this box's loopback (Sew's client API
+        // and voice signalling for Hearth). Rebuilds `app_widenings` with the
+        // `box_service` kind; the 0.46.1 lanes held 0171–0175 shift up one,
+        // and their `app_widenings` rebuild keeps `box_service`.
+        (
+            "0171_app_box_services",
+            include_str!("../../drizzle_sql/0171_app_box_services.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -2014,7 +2023,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0170_app_walls_lite",
+            last_name, "0171_app_box_services",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2051,6 +2060,7 @@ mod tests {
                 "0168_app_grace",
                 "0169_app_egress",
                 "0170_app_walls_lite",
+                "0171_app_box_services",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2065,7 +2075,7 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         run_migrations(&conn).unwrap();
         let tables = table_names(&conn);
-        for t in ["app_widenings", "app_owner_token_uses", "app_egress_policy", "app_egress_hosts"] {
+        for t in ["app_widenings", "app_owner_token_uses", "app_egress_policy", "app_egress_hosts", "app_box_services"] {
             assert!(tables.iter().any(|n| n == t), "{t} missing: {tables:?}");
         }
         assert!(!tables.iter().any(|n| n == "app_requests"), "the grace requests folded into app_widenings");
@@ -2081,6 +2091,7 @@ mod tests {
             ins(&format!("w_{i}"), kind, None, "pending").expect("a grace kind on a --cmd service");
         }
         assert!(ins("w_x", "egress", Some("no-such-app"), "pending").is_err(), "an egress request names a real App");
+        assert!(ins("w_b", "box_service", Some("no-such-app"), "pending").is_err(), "a box service request names a real App");
         assert!(ins("w_y", "bogus", None, "pending").is_err(), "unknown kind");
         assert!(ins("w_z", "config", None, "held").is_err(), "one status vocabulary: pending, not held");
         let cols: Vec<String> = conn

@@ -1,7 +1,8 @@
 //! Held App requests: one list, one approve, one deny for every kind
 //! (`prd-k2-app-runtime-v1` §5.6). The 0.46.0 grace kinds (`config`,
-//! `publish_run`, `app_key`, `clean_mode`) and S15's egress kinds
-//! (`egress`, `egress_mode`) share the `app_widenings` table, these routes,
+//! `publish_run`, `app_key`, `clean_mode`), S15's egress kinds
+//! (`egress`, `egress_mode`) and box services (`box_service`, 0171) share
+//! the `app_widenings` table, these routes,
 //! `k2 app approvals|approve|deny` and the vault confirm action
 //! `app-approve`. Served with the grace routes, so not behind the runtime
 //! preview flag (`--cmd` services have requests too).
@@ -81,6 +82,9 @@ pub(crate) fn request_json(r: &reqs::AppRequest) -> J {
     if r.kind == reqs::KIND_EGRESS {
         v["hosts"] = json!(r.hosts().iter().map(k2_core::deploy::egress::HostSpec::display).collect::<Vec<_>>());
     }
+    if r.kind == reqs::KIND_BOX_SERVICE {
+        v["services"] = json!(r.box_services());
+    }
     v
 }
 
@@ -111,7 +115,15 @@ pub(crate) fn notify_requester(r: &reqs::AppRequest, text: &str) {
 }
 
 /// Egress kinds changed the App's host list or mode: the proxy reloads.
+/// A box service request closed: the App's nft rule reloads.
 fn egress_changed(r: &reqs::AppRequest) {
+    if r.kind == reqs::KIND_BOX_SERVICE {
+        if let Some(app) = r.app_id.as_deref() {
+            if let Err(e) = super::box_service_routes::changed(app) {
+                k2_core::log_debug!("[apps] {app}: box service door reload: {e}");
+            }
+        }
+    }
     if r.kind == reqs::KIND_EGRESS || r.kind == reqs::KIND_EGRESS_MODE {
         if let Some(app) = r.app_id.as_deref() {
             super::egress_proxy::reload(app);
@@ -231,6 +243,9 @@ fn approve(who: &Who, body: &[u8]) -> R<J> {
     let applied = if decided.kind == reqs::KIND_EGRESS || decided.kind == reqs::KIND_EGRESS_MODE {
         egress_changed(&decided);
         Ok(json!({ "applied": decided.summary, "note": "it applies to the App's next connection" }))
+    } else if decided.kind == reqs::KIND_BOX_SERVICE {
+        // The list changed with the decision; the App's door reloads now.
+        Ok(super::box_service_routes::applied_note(&decided))
     } else {
         super::grace::apply_request(&decided, &by)
     };

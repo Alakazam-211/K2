@@ -77,11 +77,11 @@ pub const POST_ROUTES: &[&str] = &[
 ];
 
 pub fn is_route(p: &str) -> bool {
-    ROUTES.contains(&p) || super::egress_routes::ROUTES.contains(&p)
+    ROUTES.contains(&p) || super::egress_routes::ROUTES.contains(&p) || super::box_service_routes::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
-    POST_ROUTES.contains(&p) || super::egress_routes::POST_ROUTES.contains(&p)
+    POST_ROUTES.contains(&p) || super::egress_routes::POST_ROUTES.contains(&p) || super::box_service_routes::POST_ROUTES.contains(&p)
 }
 
 // ── refusals ─────────────────────────────────────────────────────────
@@ -367,6 +367,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         "/cli/app/link/rotate" => link_rotate(&who, body),
         // Egress (S15) and held widenings.
         p if super::egress_routes::ROUTES.contains(&p) => super::egress_routes::handle(p, &who, body, params),
+        // Box services (0.46.0): forwards into the wall, held for the owner.
+        p if super::box_service_routes::ROUTES.contains(&p) => super::box_service_routes::handle(p, &who, body, params),
         // S28 and the process exception.
         "/cli/app/exec" => super::exec::exec_route(&who, body),
         "/cli/app/exception" => super::exception::route(&who, body),
@@ -687,6 +689,9 @@ fn deploy_inner(who: &Who, v: &J) -> R<J> {
     let app = app_for(who, s(v, "app"))?;
     let app = apply_engine(who, app, v)?;
     let seed = seed_for_deploy(who, v)?;
+    // Box services the Seed asks for are filed before the start renders
+    // its forwards, so approving one later opens it without a restart.
+    let box_services = super::box_service_routes::request_manifest(who, &app, &seed, None);
     let dep = super::supervisor::begin(&app, &seed, store::KIND_DEPLOY, &actor(who), s(v, "reason"))?;
     // S15: hosts the Seed asks for that aren't allowed yet become a held
     // request; the deploy goes on, and the App can't reach them until the
@@ -695,6 +700,9 @@ fn deploy_inner(who: &Who, v: &J) -> R<J> {
     let mut out = deployment_answer(&dep, wait_secs(v))?;
     if let Some(e) = egress {
         out["egress"] = e;
+    }
+    if let Some(b) = box_services {
+        out["boxServices"] = b;
     }
     Ok(out)
 }
@@ -1347,6 +1355,7 @@ fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
 fn inspect(who: &Who, params: &HashMap<String, String>) -> R<J> {
     need_credential(who)?;
     let app = app_for(who, params.get("app").map(String::as_str))?;
+    let box_services = super::box_service_routes::summary_json(&app);
     let db = k2_core::db::shared();
     let conn = db.lock();
     let seed = match app.live_seed.as_deref() {
@@ -1362,6 +1371,7 @@ fn inspect(who: &Who, params: &HashMap<String, String>) -> R<J> {
         "runtime": super::supervisor::runtime_json(&app.app_id),
         "liveSeed": seed,
         "lastDeployment": last,
+        "boxServices": box_services,
         "audit": match chain {
             Ok(n) => json!({ "verified": true, "rows": n }),
             Err(b) => json!({ "verified": false, "brokenAt": b.seq, "reason": b.reason }),

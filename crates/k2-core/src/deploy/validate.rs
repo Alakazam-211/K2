@@ -208,6 +208,42 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
             }
         }
     }
+    if m.box_services.len() > super::box_service::MAX_PER_APP {
+        errors.push(issue(
+            "manifest_invalid",
+            format!("boxServices: at most {}", super::box_service::MAX_PER_APP),
+            at("boxServices"),
+        ));
+    }
+    for b in &m.box_services {
+        if !super::box_service::name_ok(&b.name) {
+            errors.push(issue(
+                "box_service_invalid",
+                format!("boxServices: '{}' is not a name (lowercase letters, digits and '-', like sew-api)", b.name),
+                at("boxServices"),
+            ));
+        }
+        if b.host_port.is_none() && super::box_service::preset(&b.name).is_none() {
+            errors.push(issue(
+                "box_service_invalid",
+                format!("boxServices: '{}' needs a hostPort (only sew-api and sew-signal are known by name)", b.name),
+                at("boxServices"),
+            ));
+        }
+        if b.host_port.is_some_and(|p| p < 1024) {
+            errors.push(issue("box_service_invalid", format!("boxServices: '{}' hostPort is a system port (below 1024)", b.name), at("boxServices")));
+        }
+        if b.app_port.is_some_and(|p| !super::box_service::app_port_ok(p)) {
+            errors.push(issue(
+                "box_service_invalid",
+                format!("boxServices: '{}' appPort must be 1024 or more, not 8730 (the gateway link) and outside 38600-38999", b.name),
+                at("boxServices"),
+            ));
+        }
+        if b.proto.as_deref().is_some_and(|p| p != super::box_service::PROTO_TCP) {
+            errors.push(issue("box_service_invalid", format!("boxServices: '{}' proto is tcp (HTTP and websockets ride it)", b.name), at("boxServices")));
+        }
+    }
     if !m.build.is_empty() {
         warnings.push(issue(
             "build_not_run",

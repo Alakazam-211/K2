@@ -206,10 +206,14 @@ pub enum Verb {
     AppsReservePorts(bool),
     AppsNftApply { gw: PortRange, px: PortRange, db: PortRange },
     AppsNftRemove,
-    /// `apps nft app <id> <gw-port>`: the App's own gateway port, matched
-    /// on its cgroups (slice 3). Re-run after each App start (nft resolves
-    /// a cgroup path to an inode when the rule loads).
-    AppsNftApp { id: AppId, gw: u16 },
+    /// `apps nft app <id> <gw-port> [<box-port>…]`: the App's own gateway
+    /// port, matched on its cgroups (slice 3), plus its owner-approved box
+    /// services' host loopback ports (0.46.0, at most
+    /// [`crate::apps::MAX_BOX_SERVICES`], each [`crate::apps::box_port_ok`]).
+    /// The list replaces the App's previous one (none = no box services).
+    /// Re-run after each App start (nft resolves a cgroup path to an inode
+    /// when the rule loads).
+    AppsNftApp { id: AppId, gw: u16, box_ports: Vec<u16> },
     AppsNftAppRemove(AppId),
     /// Install (or update) `k2-app-engine` from a signed payload on stdin,
     /// its user unit for `k2app` and the socket dir (slice 3, S11).
@@ -452,12 +456,24 @@ impl Verb {
                 db: PortRange::parse(db).ok_or(REFUSED)?,
             },
             ["apps", "nft", "remove"] => Verb::AppsNftRemove,
-            ["apps", "nft", "app", id, port] => {
+            ["apps", "nft", "app", id, port, rest @ ..] => {
                 let gw = PortRange::parse(port).filter(|r| r.lo == r.hi).ok_or(REFUSED)?.lo;
                 if !(crate::apps::GATEWAY_PORTS.lo..=crate::apps::GATEWAY_PORTS.hi).contains(&gw) {
                     return Err(REFUSED);
                 }
-                Verb::AppsNftApp { id: AppId::parse(id).ok_or(REFUSED)?, gw }
+                if rest.len() > crate::apps::MAX_BOX_SERVICES {
+                    return Err(REFUSED);
+                }
+                let mut box_ports = Vec::with_capacity(rest.len());
+                for t in rest {
+                    // Canonical single ports only, each off the deny-list, no repeats.
+                    let p = PortRange::parse(t).filter(|r| r.lo == r.hi && r.token() == *t).ok_or(REFUSED)?.lo;
+                    if !crate::apps::box_port_ok(p) || box_ports.contains(&p) {
+                        return Err(REFUSED);
+                    }
+                    box_ports.push(p);
+                }
+                Verb::AppsNftApp { id: AppId::parse(id).ok_or(REFUSED)?, gw, box_ports }
             }
             ["apps", "nft", "app-remove", id] => Verb::AppsNftAppRemove(AppId::parse(id).ok_or(REFUSED)?),
             ["apps", "install-engine"] => Verb::AppsInstallEngine,
@@ -625,7 +641,11 @@ impl Verb {
                 s(&["apps", "nft", "apply", &gw.token(), &px.token(), &db.token()])
             }
             Verb::AppsNftRemove => s(&["apps", "nft", "remove"]),
-            Verb::AppsNftApp { id, gw } => s(&["apps", "nft", "app", id.as_str(), &gw.to_string()]),
+            Verb::AppsNftApp { id, gw, box_ports } => {
+                let mut v = vec!["apps".to_string(), "nft".into(), "app".into(), id.as_str().into(), gw.to_string()];
+                v.extend(box_ports.iter().map(u16::to_string));
+                v
+            }
             Verb::AppsNftAppRemove(id) => s(&["apps", "nft", "app-remove", id.as_str()]),
             Verb::AppsInstallEngine => s(&["apps", "install-engine"]),
             Verb::AppsLogs { id, deployment, lines } => {
@@ -893,6 +913,12 @@ pub fn catalog() -> Vec<Verb> {
         Verb::AppsNftApp {
             id: AppId::parse("nsi-skin").expect("id"),
             gw: 38_601,
+            box_ports: vec![],
+        },
+        Verb::AppsNftApp {
+            id: AppId::parse("hearth").expect("id"),
+            gw: 38_602,
+            box_ports: vec![8470, 7880],
         },
         Verb::AppsNftAppRemove(AppId::parse("nsi-skin").expect("id")),
         Verb::AppsInstallEngine,
@@ -1207,6 +1233,7 @@ mod tests {
             &["apps", "budget", "off"],
             &["apps", "unprep"],
             &["apps", "nft", "app", "jobs", "38600"],
+            &["apps", "nft", "app", "hearth", "38602", "8470", "7880"],
             &["apps", "nft", "app-remove", "jobs"],
             &["apps", "install-engine"],
             &["apps", "logs", "jobs", "d-0123456789ab", "200"],
@@ -1343,6 +1370,17 @@ mod tests {
             &["apps", "nft", "app", "jobs", "22"],
             &["apps", "nft", "app", "../x", "38600"],
             &["apps", "nft", "app", "jobs", "38600", "accept"],
+            // Box services: never the deny-list, never a range, no repeats,
+            // at most eight.
+            &["apps", "nft", "app", "jobs", "38600", "22"],
+            &["apps", "nft", "app", "jobs", "38600", "5432"],
+            &["apps", "nft", "app", "jobs", "38600", "38601"],
+            &["apps", "nft", "app", "jobs", "38600", "38950"],
+            &["apps", "nft", "app", "jobs", "38600", "2019"],
+            &["apps", "nft", "app", "jobs", "38600", "8470-8471"],
+            &["apps", "nft", "app", "jobs", "38600", "08470"],
+            &["apps", "nft", "app", "jobs", "38600", "8470", "8470"],
+            &["apps", "nft", "app", "jobs", "38600", "2001", "2002", "2003", "2004", "2005", "2006", "2007", "2008", "2009"],
             &["apps", "nft", "app", "user.slice/x", "38600"],
             &["apps", "nft", "app-remove"],
             &["apps", "nft", "app-remove", "*"],

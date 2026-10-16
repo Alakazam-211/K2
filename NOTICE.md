@@ -49,6 +49,39 @@ LiteLLM's `model_prices_and_context_window.json`.
 | **License** | **MIT** (Copyright (c) 2023 Berri AI) — full text in `crates/k2-core/data/LLM_PRICES_NOTICE.txt` |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. The MIT data does **not** relicense the product. |
 
+## Third-party: Lucide icons (ISC)
+
+The top bar's icons (icon style A3) are Lucide icons, copied in as SVG
+paths. Home, Agents, Projects, Tickets, Server, Admin profile, Run and
+Drawer are edited (corners squared: square caps, mitred joins, no corner
+radius). Settings is Lucide's `settings` gear, unedited. The Gardens ensō
+is K2's own (`ZenIcon`), not Lucide.
+
+| | |
+|--|--|
+| **What** | SVG paths in `src/renderer/components/icons/K2Icons.tsx`, from `lucide-static@1.58.0/icons/` (`house`, `bot`, `layout-dashboard`, `ticket`, `settings`, `server`, `circle-user`, `play`, `panel-left`) |
+| **Upstream** | [Lucide](https://github.com/lucide-icons/lucide) |
+| **License** | **ISC** (Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.) — full text below |
+| **K2 code** | Remains **FSL-1.1-Apache-2.0**. The ISC icons do **not** relicense the product. |
+
+> ISC License
+>
+> Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as
+> part of Feather (MIT). All other copyright (c) for Lucide are held by
+> Lucide Contributors 2022.
+>
+> Permission to use, copy, modify, and/or distribute this software for any
+> purpose with or without fee is hereby granted, provided that the above
+> copyright notice and this permission notice appear in all copies.
+>
+> THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+> WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+> MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+> ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+> WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+> ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+> OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
 ## Third-party: Public Suffix List (MPL-2.0) and BIP-39 word list (MIT)
 
 The vault (`crates/k2-vault`) embeds two data files:

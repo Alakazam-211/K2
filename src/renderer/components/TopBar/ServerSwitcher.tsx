@@ -39,7 +39,7 @@ import { webFeatures } from '@/web/features'
 import { LOCAL_SCOPE_LABEL } from '@/kessel/server-scope'
 import { useTopBarScope } from './top-bar-scope'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
-import { ServerStatusIcon } from '@/components/icons/ServerStatusIcon'
+import { K2_ICON_PX, ServerIcon } from '@/components/icons/K2Icons'
 
 function statusColor(status: ConnectionStatus): string {
   switch (status) {
@@ -197,8 +197,8 @@ export const THIS_COMPUTER_LABEL = LOCAL_SCOPE_LABEL
 export const SERVER_SWITCHER_WIDTH_PX = 140
 export const SERVER_SWITCHER_WIDTH_CLASS = 'w-[140px] shrink-0'
 /** The server icon at the trigger's left (its LEDs are the status light):
- *  the page-tab icons' 14px. */
-export const SERVER_ICON_PX = 14
+ *  A3's one 16px top-bar icon size. */
+export const SERVER_ICON_PX = K2_ICON_PX
 
 /** The trigger's chip look (Rosson 2026-10-16: "give it a background … or
  *  a wrap-around border"): a soft theme wash with a 1px low-contrast border
@@ -439,7 +439,7 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
           title={`${activeLabel} — ${ind.title}`}
           aria-label={`Connected host: ${activeLabel} — ${ind.title}`}
         >
-          <ServerStatusIcon ledColor={ind.color} size={SERVER_ICON_PX} label={ind.title} />
+          <ServerIcon ledColor={ind.color} size={SERVER_ICON_PX} label={ind.title} />
           <span className="min-w-0 flex-1 truncate">{activeLabel}</span>
         </div>
       </div>
@@ -472,7 +472,7 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
         aria-label={`${shownServer} — ${ind.title}`}
         aria-keyshortcuts="Meta+L"
       >
-        <ServerStatusIcon ledColor={ind.color} size={SERVER_ICON_PX} />
+        <ServerIcon ledColor={ind.color} size={SERVER_ICON_PX} />
         <span className="min-w-0 flex-1 truncate text-left" data-testid="server-switcher-label">
           {shownServer}
         </span>

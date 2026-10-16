@@ -170,7 +170,16 @@ describe('the Admin profile button in the top bar', () => {
     for (const cls of ['h-6', 'w-6', 'cursor-pointer', 'hover:bg-[var(--color-bg-elevated)]', 'text-[var(--color-text-secondary)]']) {
       expect([cls, button().classList.contains(cls), zen.classList.contains(cls)]).toEqual([cls, true, true])
     }
-    expect(button().querySelector('svg[data-admin-profile-icon]')).not.toBeNull()
+    // Icon style A3: Lucide `circle-user`, squared, at the one 16px.
+    const icon = button().querySelector('svg[data-k2-icon="admin"]')
+    if (!icon) throw new Error('no A3 admin icon')
+    expect([icon.getAttribute('width'), icon.getAttribute('stroke-linecap'), icon.getAttribute('aria-hidden')]).toEqual([
+      '16',
+      'square',
+      'true',
+    ])
+    expect(icon.querySelectorAll('circle')).toHaveLength(2)
+    expect(icon.querySelector('path')?.getAttribute('d')).toBe('M7 20.66V17h10v3.66')
   })
 
   it('is absent where the Zen toggle is (Windows, Focus windows)', () => {

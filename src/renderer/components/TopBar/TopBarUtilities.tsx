@@ -9,6 +9,7 @@ import { zenAvailable } from '@/lib/zen/zen-platform'
 import { TopBarFollowRoomContext } from './top-bar-scope'
 import TopBarPipe from './TopBarPipe'
 import ZenTopBarToggle from './ZenTopBarToggle'
+import AdminProfileButton from './AdminProfileButton'
 
 /** True when this page passed drawer or close controls after the last pipe. */
 export function hasTopBarPageToggles(children: ReactNode): boolean {
@@ -20,7 +21,8 @@ export function hasTopBarPageToggles(children: ReactNode): boolean {
  * keep awake, cheat sheet, pipe, mode, then a pipe only when that page has
  * its own toggles, then (where Zen exists) a pipe and the Zen toggle as the
  * LAST item: right of the drawer toggles on Agents and Home
- * (prd-zen-gardens-v1 G5, G63).
+ * (prd-zen-gardens-v1 G5, G63). The Admin profile button sits right of
+ * the Zen toggle, wherever that toggle shows (Rosson 2026-10-16).
  * No Agents run button — pass it as `leading` from TopBar only.
  *
  * 0.43.2 Z36: `followRoom` (TopBar only) lets presence, usage, Keep awake
@@ -55,6 +57,7 @@ export default function TopBarUtilities({
         <>
           <TopBarPipe />
           <ZenTopBarToggle />
+          <AdminProfileButton />
         </>
       ) : null}
     </div>

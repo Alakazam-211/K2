@@ -118,6 +118,9 @@ export type SettingsSection =
   | 'data'
   /** Settings → Cores → Apps (route id skin-access; per-app roles and users). */
   | 'skin-access'
+  /** Settings → Cores → App Approvals (0.46.1 door, prd-k2-app-runtime-v1 §5.6):
+   *  held App requests the owner approves in person or denies. */
+  | 'app-approvals'
   /** Settings → Compute (K2 compute nodes preview: this server's nodes + this computer as a node). */
   | 'compute'
 

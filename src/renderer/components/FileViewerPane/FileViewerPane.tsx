@@ -37,6 +37,8 @@ import { BinaryEmptyState } from './BinaryEmptyState'
 import { ViewerNote } from './ViewerNote'
 import { dxfReadErrorNote, dxfReadsAsBytes } from './dxfReadError'
 import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
+import { PinIcon } from '@/components/icons/K2Icons'
+import { isPinnedTab } from '@/lib/pinned-tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { FILE_POLL_INTERVAL } from '@shared/constants'
 
@@ -240,36 +242,15 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   const setTabDirty = useRoomTabs((s) => s.setTabDirty)
   const setFileViewerState = useRoomTabs((s) => s.setFileViewerState)
 
-  const pinned = useRoomTabs((s) => {
-    const tab = s.tabs.find((t) => t.id === tabId)
-    if (!tab) return false
-    // Search all paneGroups for an item matching paneId
-    for (const [, pg] of tab.paneGroups) {
-      for (const item of pg.items) {
-        if (item.id === paneId && item.type === 'file-viewer') {
-          return item.pinned ?? false
-        }
-      }
-    }
-    return false
+  // The toolbar pin pins THIS viewer's tab — the same pin as the tab
+  // strip's (right-click Pin Tab / the tab's pin), for every file kind.
+  // 'none' = no pinnable tab holds this viewer (a system tab, or none).
+  const tabPin = useRoomTabs((s): 'pinned' | 'unpinned' | 'none' => {
+    const tab = [...s.tabs, ...s.extraGroups.flatMap((g) => g.tabs)].find((t) => t.id === tabId)
+    if (!tab || tab.isSystemAgent) return 'none'
+    return isPinnedTab(tab) ? 'pinned' : 'unpinned'
   })
-  const pinPane = useRoomTabs((s) => s.pinPane)
-  const unpinPane = useRoomTabs((s) => s.unpinPane)
-
-  // #587 — HTML files get a *top-level tab* pin (next to the Inbox)
-  // instead of the within-pane preview pin. `filePin` reflects whether
-  // this file is currently in the workspace's pinned-HTML tab list;
-  // the toolbar pin button toggles it for html files.
-  const filePin = useRoomTabs((s) =>
-    s.tabs.some((t) => {
-      if (!t.isPinnedFile) return false
-      const item = Array.from(t.paneGroups.values())[0]?.items[0]
-      if (item?.type !== 'file-viewer') return false
-      return (item.data as { filePath?: string }).filePath === filePath
-    }),
-  )
-  const pinFileAsTab = useRoomTabs((s) => s.pinFileAsTab)
-  const unpinFileTab = useRoomTabs((s) => s.unpinFileTab)
+  const togglePinTab = useRoomTabs((s) => s.togglePinTab)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [searchVisible, setSearchVisible] = useState(false)
@@ -565,23 +546,8 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
   }, [searchQuery, content, viewMode])
 
   const handleTogglePin = useCallback(() => {
-    // #587 — HTML files pin to a TOP-LEVEL tab (next to the Inbox), not
-    // the within-pane preview pin. Toggling here adds/removes the file
-    // from the workspace's pinned-HTML tab list.
-    if (category === 'html') {
-      if (filePin) {
-        unpinFileTab(filePath)
-      } else {
-        pinFileAsTab(filePath)
-      }
-      return
-    }
-    if (pinned) {
-      unpinPane(tabId, paneId)
-    } else {
-      pinPane(tabId, paneId)
-    }
-  }, [category, filePin, filePath, pinFileAsTab, unpinFileTab, pinned, tabId, paneId, pinPane, unpinPane])
+    togglePinTab(tabId)
+  }, [togglePinTab, tabId])
 
   // Preview | Edit for markdown/html/image/csv/mermaid/diagram.
   // Audio/video/pdf/docx are preview-only surfaces (no raw text edit).
@@ -739,25 +705,22 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           </svg>
         </button>
 
-        {/* Pin/Unpin — for HTML this is the top-level tab pin (next to
-            the Inbox); for other files it's the within-pane preview pin. */}
-        <button
-          className={`p-1 transition-colors ${
-            (category === 'html' ? filePin : pinned)
-              ? 'text-[var(--color-accent)]'
-              : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
-          }`}
-          onClick={handleTogglePin}
-          title={
-            category === 'html'
-              ? (filePin ? 'Unpin tab' : 'Pin as tab (next to Inbox)')
-              : (pinned ? 'Unpin (preview mode)' : 'Pin (keep open)')
-          }
-        >
-          <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707l-.71-.71-3.18 3.18a3.5 3.5 0 0 1-.4.3L11 11.106V14.5a.5.5 0 0 1-.854.354L7.5 12.207 4.854 14.854a.5.5 0 0 1-.708-.708L6.793 11.5 4.146 8.854A.5.5 0 0 1 4.5 8h3.394a3.5 3.5 0 0 0 .3-.4l3.18-3.18-.71-.71a.5.5 0 0 1 .354-.854z" />
-          </svg>
-        </button>
+        {/* Pin / Unpin this viewer's tab — the tab strip's pin (any file
+            kind). Hidden when no pinnable tab holds the viewer. */}
+        {tabPin !== 'none' && (
+          <button
+            data-file-viewer-pin={tabPin}
+            className={`p-1 transition-colors ${
+              tabPin === 'pinned'
+                ? 'text-[var(--color-accent)]'
+                : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
+            }`}
+            onClick={handleTogglePin}
+            title={tabPin === 'pinned' ? 'Unpin tab' : 'Pin tab (keeps it at the left)'}
+          >
+            <PinIcon size={14} />
+          </button>
+        )}
 
         {/* Close */}
         {onClose && (

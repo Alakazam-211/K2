@@ -84,9 +84,10 @@ function setiIn(root: ParentNode): HTMLElement | null {
   )
 }
 
+/** Agent marks (24-unit viewBox), not K2's own icons (the tab pin). */
 function agentIconsIn(root: ParentNode): SVGElement[] {
   return Array.from(root.querySelectorAll('svg')).filter(
-    (svg) => svg.getAttribute('viewBox') === '0 0 24 24',
+    (svg) => svg.getAttribute('viewBox') === '0 0 24 24' && !svg.hasAttribute('data-k2-icon'),
   )
 }
 
@@ -94,8 +95,10 @@ function globeIn(root: ParentNode): SVGElement | null {
   return root.querySelector('circle[r="6.5"]')?.closest('svg') ?? null
 }
 
-function pinIn(root: ParentNode): SVGPathElement | null {
-  return root.querySelector('svg path[d^="M9.828"]')
+/** The pinned tab's pin (its close slot), not the hover pin every unpinned
+ *  tab carries. */
+function pinIn(root: ParentNode): SVGElement | null {
+  return root.querySelector('[data-tab-pinned-glyph] svg[data-k2-icon="pin"]')
 }
 
 function glyphFor(name: string): string {
@@ -196,12 +199,14 @@ describe('tab file and browser icons', () => {
     cleanup()
   })
 
-  it('renders the pin for a pinned HTML tab', () => {
+  it('a pinned HTML tab keeps its file icon and shows the pin in its close slot', () => {
     const root = showTab(
       makeTab('pin', 'page.html', [fileItem('/work/page.html', true)], { isPinnedFile: true }),
     )
     if (!pinIn(root)) throw new Error('pinned HTML tab did not render the pin')
-    expect(setiIn(root)).toBeNull()
+    const icon = setiIn(root)
+    if (!icon) throw new Error('pinned HTML tab lost its Seti icon')
+    expect(icon.textContent).toBe(glyphFor('page.html'))
     expect(globeIn(root)).toBeNull()
     expect(agentIconsIn(root)).toHaveLength(0)
     expect(root.querySelector('span.truncate')?.textContent).toBe('page.html')

@@ -39,6 +39,7 @@ import {
   type VaultRecipientLookup,
   type VaultRecipientResponse,
 } from './clone-vault'
+import type { CloneExtras } from './clone-options'
 
 /** Manifest summary the daemon returns from `clone/bundle`. */
 export interface CloneManifestSummary {
@@ -77,6 +78,13 @@ export interface ClonedProject {
 export interface CloneUnpackResult extends CloneVaultUnpackFields {
   project: ClonedProject
   dest_path: string
+  /** Clone carries Threads and vault (0.46.0): optional counts the
+   *  destination reports; older daemons omit them. */
+  threads_imported?: number
+  threads_skipped?: number
+  vault_imported?: number
+  vault_skipped?: number
+  cards_posted?: number
 }
 
 /** Host filesystem info (`fs/info`). */
@@ -252,6 +260,9 @@ export async function cloneWorkspaceTo(
   /** The Secrets block's choices, clone id and `clone-carry` confirm
    *  token (any copy needs one; see `clone/vault/plan`). */
   vaultOptions: CloneVaultOptions = {},
+  /** Thread / per-secret choices + person-confirm tokens (0.46.0,
+   *  clone-options.ts). Spread into the `clone/bundle` body. */
+  extras?: CloneExtras,
 ): Promise<CloneUnpackResult> {
   // This flow SWITCHES THE WINDOW to the destination (step 2) and keeps
   // talking to "the window's server" across that switch: bundle on the
@@ -273,6 +284,7 @@ export async function cloneWorkspaceTo(
       project_path: projectPath,
       carry_secrets: carrySecrets,
       live_only: !includeAllHistory,
+      ...(extras ?? {}),
       ...vaultBundleFields(vaultLookup, vaultOptions),
     })
     if (!bundle?.bundle_path) {

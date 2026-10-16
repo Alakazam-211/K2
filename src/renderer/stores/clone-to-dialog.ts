@@ -7,6 +7,33 @@ import type {
 } from '@/lib/clone-to'
 import type { ConnectHost } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
+import {
+  anyCopy,
+  buildCloneExtras,
+  CloneConfirmCancelled,
+  initialSecretChoices,
+  type AskPassword,
+  type CloneExtras,
+  type ClonePreview,
+  type SecretChoice,
+} from '@/lib/clone-options'
+
+/** Source-side collaborators for the options phase (0.46.0): the preview
+ *  and the two person confirms. Injected by `start` (start-clone-to.ts
+ *  binds the source scope) so the store is testable with mocks. */
+export interface CloneOptionDeps {
+  fetchPreview: () => Promise<ClonePreview>
+  /** `clone-env` confirm for sending `.env` files as files (D4). */
+  envConfirm: (askPassword: AskPassword) => Promise<string>
+  /** Vault slice's plan-bound `clone-carry` confirm for Copy rows. */
+  carryConfirm: (secrets: Record<string, SecretChoice>, askPassword: AskPassword) => Promise<string>
+}
+
+/** The password field the dialog shows while a confirm waits on it. */
+export interface PasswordPrompt {
+  method: string
+  label: string
+}
 
 // Store for the "Clone to" modal. Mirrors the open/close idiom of
 // add-workspace-dialog / remote-folder-picker. The modal subscribes to this
@@ -61,7 +88,26 @@ interface CloneToDialogState {
   /** Runner that starts the orchestration; set by `start`, invoked by
    *  `confirm` with the chosen toggle value. Held so the dialog's Clone
    *  button can kick off the run without re-plumbing deps through the UI. */
-  onConfirm: ((carrySecrets: boolean, includeAllHistory: boolean) => void) | null
+  onConfirm: ((carrySecrets: boolean, includeAllHistory: boolean, extras?: CloneExtras) => void) | null
+  /** Names-only plan from `clone/preview` (null until loaded / on error). */
+  preview: ClonePreview | null
+  previewLoading: boolean
+  /** Why the preview failed (a gate refusal reads verbatim). */
+  previewError: string | null
+  /** "Bring the Thread" (D3: ticked by default, always offered). */
+  bringThread: boolean
+  /** Only the last N days of Thread (null = all). */
+  sinceDays: number | null
+  /** Per-secret Copy / Leave blank / Skip, by name. */
+  secretChoices: Record<string, SecretChoice>
+  /** A confirm is running (the Clone button waits). */
+  confirming: boolean
+  /** Error from the confirm step; the dialog stays on options. */
+  optionsError: string | null
+  passwordPrompt: PasswordPrompt | null
+  /** Agent proposal being run, if any (passed through as proposal_id). */
+  proposalId: string | null
+  optionDeps: CloneOptionDeps | null
 
   /** Open the modal at the 'options' phase for a given source + host.
    *  `host: null` + `pull: true` is the "Clone to this computer" run. */
@@ -70,14 +116,22 @@ interface CloneToDialogState {
     projectName: string
     host: ConnectHost | null
     pull?: boolean
-    onConfirm: (carrySecrets: boolean, includeAllHistory: boolean) => void
+    onConfirm: (carrySecrets: boolean, includeAllHistory: boolean, extras?: CloneExtras) => void
+    optionDeps?: CloneOptionDeps
+    proposalId?: string | null
   }) => void
+  setBringThread: (bring: boolean) => void
+  setSinceDays: (days: number | null) => void
+  setSecretChoice: (name: string, choice: SecretChoice) => void
+  /** The dialog's password field answers the pending confirm (null = cancel). */
+  answerPassword: (password: string | null) => void
   /** Toggle the "Include secrets" checkbox (options phase only). */
   setCarrySecrets: (carrySecrets: boolean) => void
   /** Toggle the "Include all chat history" checkbox (options phase only). */
   setIncludeAllHistory: (includeAllHistory: boolean) => void
-  /** Proceed from the options panel: flip to 'running' and start the run. */
-  confirm: () => void
+  /** Proceed from the options panel: run the person confirms the choices
+   *  need (`.env` files, Copy rows), then flip to 'running' and start. */
+  confirm: () => Promise<void>
   setStage: (stage: CloneStage) => void
   setSummary: (summary: CloneManifestSummary) => void
   setDone: (result: CloneUnpackResult) => void
@@ -101,19 +155,37 @@ const RESET = {
   projectName: null,
   host: null,
   pull: false,
-  carrySecrets: true,
+  // D4 (0.46.0): sending `.env` files as files needs a person confirm, so
+  // it is an explicit choice now, not the default.
+  carrySecrets: false,
   includeAllHistory: true,
   stage: 'bundling' as CloneStage,
   summary: null,
   result: null,
   error: null,
   onConfirm: null,
+  preview: null,
+  previewLoading: false,
+  previewError: null,
+  bringThread: true,
+  sinceDays: null as number | null,
+  secretChoices: {} as Record<string, SecretChoice>,
+  confirming: false,
+  optionsError: null,
+  passwordPrompt: null,
+  proposalId: null,
+  optionDeps: null,
 }
+
+// The resolver for the pending password prompt (module-level: functions
+// don't belong in the serializable store state).
+let pendingPassword: ((pw: string | null) => void) | null = null
 
 export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
   ...RESET,
 
-  start: ({ projectPath, projectName, host, pull, onConfirm }) =>
+  start: ({ projectPath, projectName, host, pull, onConfirm, optionDeps, proposalId }) => {
+    pendingPassword = null
     set({
       ...RESET,
       isOpen: true,
@@ -122,21 +194,83 @@ export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
       projectName,
       host,
       pull: pull ?? false,
-      carrySecrets: true,
-      includeAllHistory: true,
       onConfirm,
-    }),
+      optionDeps: optionDeps ?? null,
+      proposalId: proposalId ?? null,
+      previewLoading: !!optionDeps,
+    })
+    if (!optionDeps) return
+    void optionDeps.fetchPreview().then(
+      (preview) => {
+        // A newer start (or close) replaced this run: drop the answer.
+        if (get().optionDeps !== optionDeps) return
+        set({ preview, previewLoading: false, secretChoices: initialSecretChoices(preview) })
+      },
+      (e: unknown) => {
+        if (get().optionDeps !== optionDeps) return
+        set({ previewLoading: false, previewError: e instanceof Error ? e.message : String(e) })
+      },
+    )
+  },
 
-  setCarrySecrets: (carrySecrets) => set({ carrySecrets }),
+  setCarrySecrets: (carrySecrets) => set({ carrySecrets, optionsError: null }),
   setIncludeAllHistory: (includeAllHistory) => set({ includeAllHistory }),
+  setBringThread: (bringThread) => set({ bringThread }),
+  setSinceDays: (sinceDays) => set({ sinceDays }),
+  setSecretChoice: (name, choice) => {
+    const { preview, secretChoices } = get()
+    const row = preview?.secrets.rows.find((r) => r.name === name)
+    // Copy only where the daemon allows it (D1 Member rule, copyable).
+    if (choice === 'copy' && !(row && row.copyable && preview?.callerCanCopySecrets)) return
+    set({ secretChoices: { ...secretChoices, [name]: choice }, optionsError: null })
+  },
+  answerPassword: (password) => {
+    const resolve = pendingPassword
+    pendingPassword = null
+    set({ passwordPrompt: null })
+    resolve?.(password)
+  },
 
-  confirm: () => {
-    const { phase, pull, onConfirm, carrySecrets, includeAllHistory } = get()
-    if (phase !== 'options') return
+  confirm: async () => {
+    const st = get()
+    if (st.phase !== 'options' || st.confirming) return
+    const extras = buildCloneExtras({
+      bringThread: st.bringThread,
+      sinceDays: st.sinceDays,
+      secretChoices: st.secretChoices,
+      proposalId: st.proposalId,
+    })
+    const ask: AskPassword = (method, label) =>
+      new Promise<string | null>((resolve) => {
+        pendingPassword = resolve
+        set({ passwordPrompt: { method, label } })
+      })
+    const needsEnv = st.carrySecrets
+    const needsCarry = anyCopy(st.secretChoices)
+    if (needsEnv || needsCarry) {
+      if (!st.optionDeps) {
+        set({ optionsError: 'This clone needs a person confirm, and none is available here.' })
+        return
+      }
+      set({ confirming: true, optionsError: null })
+      try {
+        if (needsEnv) extras.env_confirm_token = await st.optionDeps.envConfirm(ask)
+        if (needsCarry) extras.confirm_token = await st.optionDeps.carryConfirm(st.secretChoices, ask)
+      } catch (e) {
+        set({
+          confirming: false,
+          passwordPrompt: null,
+          optionsError: e instanceof CloneConfirmCancelled ? null : e instanceof Error ? e.message : String(e),
+        })
+        return
+      }
+      // Closed while the confirm ran: don't start.
+      if (!get().isOpen) return
+    }
     // A pull opens on ITS first stage (packing on the server); the
     // orchestration's first onStage overwrites either way.
-    set({ phase: 'running', stage: pull ? 'packing' : 'bundling' })
-    onConfirm?.(carrySecrets, includeAllHistory)
+    set({ phase: 'running', confirming: false, stage: st.pull ? 'packing' : 'bundling' })
+    st.onConfirm?.(st.carrySecrets, st.includeAllHistory, extras)
   },
 
   setStage: (stage) => set({ stage }),
@@ -162,5 +296,10 @@ export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
     set({ ...RESET })
   },
 
-  close: () => set({ ...RESET }),
+  close: () => {
+    const resolve = pendingPassword
+    pendingPassword = null
+    set({ ...RESET })
+    resolve?.(null)
+  },
 }))

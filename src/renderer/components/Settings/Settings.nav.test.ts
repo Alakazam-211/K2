@@ -131,7 +131,7 @@ describe('Settings nav Language Models group (0.46, Rosson: Models · Subs / Tok
     expect(gardens).toBeGreaterThan(server)
     expect(src.slice(start, server)).toContain(
       [
-        "{ id: 'agents', label: 'Models' },",
+        "{ id: 'agents', label: 'Providers / Models' },",
         "{ id: 'llm-tokens', label: 'Subs / Tokens' },",
         "{ id: 'token-usage', label: 'Usage' },",
       ].join('\n        '),
@@ -150,9 +150,9 @@ describe('Settings nav Language Models group (0.46, Rosson: Models · Subs / Tok
     expect(src).toContain('...LLM_TOKENS_MANIFEST,')
     expect(src).toContain('...TOKEN_USAGE_MANIFEST,')
     expect(src).not.toContain("title: 'LLMs'")
-    expect(SECTION_LABELS.agents).toBe('Models')
+    expect(SECTION_LABELS.agents).toBe('Providers / Models')
     expect(SECTION_LABELS['llm-tokens']).toBe('Subs / Tokens')
     expect(SECTION_LABELS['token-usage']).toBe('Usage')
-    expect(SECTION_LABELS['editors-agents']).toBe('Models')
+    expect(SECTION_LABELS['editors-agents']).toBe('Providers / Models')
   })
 })

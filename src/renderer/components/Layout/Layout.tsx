@@ -1,5 +1,6 @@
 import { type ReactNode } from 'react'
 import TopBar from '../TopBar/TopBar'
+import type { TopBarRemoteServer } from '../TopBar/TopBarTitle'
 import IconRail from '../Sidebar/IconRail'
 import { Surface } from '../ui'
 import { useSidebarStore } from '../../stores/sidebar'
@@ -22,6 +23,8 @@ interface LayoutProps {
   projectName?: string
   /** Workspace name shown in TopBar */
   workspaceName?: string
+  /** Home: the other server the shown agent is on (TopBar centre). */
+  remoteServer?: TopBarRemoteServer
 }
 
 export default function Layout({
@@ -31,7 +34,8 @@ export default function Layout({
   rightPanel,
   children,
   projectName,
-  workspaceName
+  workspaceName,
+  remoteServer
 }: LayoutProps): React.JSX.Element {
   const sidebarWidth = useSidebarStore((s) => s.width)
   const isCollapsed = useSidebarStore((s) => s.isCollapsed)
@@ -46,6 +50,7 @@ export default function Layout({
       <TopBar
         projectName={projectName}
         workspaceName={workspaceName}
+        remoteServer={remoteServer}
       />
 
       {/* Content area — ST3: sidebar | panes gap (0 in Square) */}

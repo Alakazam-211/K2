@@ -9,6 +9,7 @@ import DesktopChromeLeft from './DesktopChromeLeft'
 import DesktopChromeRight from './DesktopChromeRight'
 import K2MarkButton from './K2MarkButton'
 import TopBarUtilities from './TopBarUtilities'
+import TopBarTitle, { type TopBarRemoteServer } from './TopBarTitle'
 import { RunIcon } from '@/components/icons/K2Icons'
 import { Surface } from '@/components/ui'
 import {
@@ -21,6 +22,8 @@ interface TopBarProps {
   projectName?: string
   projectPath?: string
   workspaceName?: string
+  /** Home: the other server the shown agent is on (centre breadcrumb). */
+  remoteServer?: TopBarRemoteServer
   onRunCommand?: (command: string) => void
 }
 
@@ -28,6 +31,7 @@ export default function TopBar({
   projectName,
   projectPath,
   workspaceName,
+  remoteServer,
   onRunCommand
 }: TopBarProps): React.JSX.Element {
   const [hasRun, setHasRun] = useState(false)
@@ -88,24 +92,8 @@ export default function TopBar({
         <PageTabs />
       </div>
 
-      {/* Center: workspace + worktree name */}
-      <div className="flex items-center gap-1.5 text-xs">
-        {projectName ? (
-          <>
-            <span className="text-[var(--color-text-secondary)]">{projectName}</span>
-            {workspaceName && (
-            <>
-                <span className="text-[var(--color-text-muted)]">/</span>
-                <span className="text-[var(--color-text-primary)] font-medium">
-                  {workspaceName}
-                </span>
-              </>
-            )}
-          </>
-        ) : (
-          <span className="text-[var(--color-text-muted)]">No workspace selected</span>
-        )}
-      </div>
+      {/* Center: [other server /] agent / branch */}
+      <TopBarTitle agent={projectName} branch={workspaceName} remoteServer={remoteServer} />
 
       {/* Right: run button + utilities + window controls. The drawer
           toggles live in the room and drawer tab bars

@@ -1,0 +1,51 @@
+# Zen theme "glass": K2 Companion's look on the desktop (Rosson
+# 2026-10-16): a black canvas, dark cards, iMessage blue, round corners.
+# Built into K2 (read-only). It sits on top of "basic": anything not set
+# here comes from there. `k2 zen theme new glass` makes an override.
+#
+# Glass without blur (Rosson 2026-10-04: WebKit left stale blurred layers
+# behind): the cards are a light white wash over the black canvas with a
+# brighter rim, so they read as glass with no backdrop-filter. Pop-ups
+# (surface-raised) stay solid so nothing shows through them.
+schema = 1
+
+[theme]
+scheme = "dark"
+
+[colors.dark]
+canvas = "#000000"
+surface = "rgba(255, 255, 255, 0.09)"
+surface-raised = "#1c1c1e"
+border = "rgba(255, 255, 255, 0.16)"
+text = "#ffffff"
+text-muted = "#8e8e93"
+accent = "#0a84ff"
+accent-text = "#ffffff"
+bubble-me = "#0a84ff"
+bubble-me-text = "#ffffff"
+bubble-agent = "#3a3a3c"
+bubble-agent-text = "#ffffff"
+working = "#30d158"
+idle = "#8e8e93"
+needs-you = "#ff9f0a"
+danger = "#ff453a"
+
+[font]
+family = "system"
+size = 14
+
+[shape]
+radius = 22
+bubble-radius = 18
+
+[terminal.dark]
+foreground = "#ffffff"
+background = "#000000"
+cursor = "#0a84ff"
+cursor-text = "#ffffff"
+selection = "#1c3f66"
+blue = "#0a84ff"
+bright-blue = "#64b5ff"
+green = "#30d158"
+red = "#ff453a"
+yellow = "#ffd60a"

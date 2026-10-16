@@ -296,7 +296,15 @@ kind = "columns"
             Box::leak(DIARY_FIXTURE.replace("order = 10", "order = 10\ntheme = \"neon\"").into_boxed_str());
         assert!(parse_entry("diary-1.toml", unknown).expect_err("refused").contains("isn't a built-in theme"));
         assert_eq!(template_theme(DIARY_TEMPLATE_ID), Some("haunted"), "the shipped Diary shows the study");
+        // Garden 1 is a start, not a catalog Garden: its default theme
+        // (Glass, 0.46.0) is template data read through the Garden's theme
+        // set, so only a synced Garden 1 shows it; the catalog names none.
         assert_eq!(template_theme("k2.texting@1"), None);
+        assert_eq!(
+            crate::zen::Defaults::live().template_default_theme("k2.texting@1").as_deref(),
+            Some("glass"),
+            "Garden 1 names Glass in its template"
+        );
     }
 
     /// Rosson 2026-10-08: the Diary works the moment it's created; New

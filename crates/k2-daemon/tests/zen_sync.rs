@@ -245,14 +245,20 @@ const FROZEN: &[(&str, &str)] = &[
     // 0.45.6 (GS45, Rosson 2026-10-15): Garden 1 gets K2 Companion's pin
     // grid, settings cog and activity drawer (`pins`, `settings`,
     // `activity-drawer`; off by default in widget-props).
-    ("template:k2.texting@1", "a00b851026ae72d0"),
+    // 0.46.0 (GS45, Rosson 2026-10-16): Garden 1 takes K2 Companion's look:
+    // the Glass theme (`theme`), nine pins (`pin-limit`) and Recent agents
+    // first (`recent-first`; both props unset by default in widget-props).
+    ("template:k2.texting@1", "8889bebc10e1786c"),
     ("theme:basic", "7fc5a1fb5062b263"),
+    // 0.46.0 (GS45, Rosson 2026-10-16): K2 Companion's look, Garden 1's
+    // default theme.
+    ("theme:glass", "161b7599eafd08cc"),
     // The Diary's study (Rosson 2026-10-08), new in 0.45.1; 0.45.2 draws
     // a creepier one (haunted-background-2.webp; GS45, Rosson 2026-10-08).
     ("theme:haunted", "ccd919524b13e5f9"),
     ("theme:midnight", "ff5f017a77ab1206"),
     ("theme:paper", "08fe35e01810ae29"),
-    ("widget-props", "243e9c43200d40ea"),
+    ("widget-props", "16e90623b0957c98"),
 ];
 
 fn frozen_hashes() -> BTreeMap<String, String> {
@@ -898,11 +904,33 @@ fn gs51_the_kanban_is_new_in_the_catalog() {
     assert!(fresh.find_garden("Kanban").is_none(), "never preinstalled");
 }
 
+/// Take 0.46.0's Garden 1 look out of a set (Rosson 2026-10-16): the Glass
+/// theme, Garden 1's `theme = "glass"`, `pin-limit = 9`, `recent-first =
+/// true` and those two props.
+fn strip_0460(s: &mut DefaultsSet) {
+    let t = s.templates.get_mut(zen::TEMPLATE_ID).expect("texting in the set");
+    for line in ["theme = \"glass\"\n", "pin-limit = 9\n", "recent-first = true\n"] {
+        replace_in(t, line, "");
+    }
+    for k in ["agents.pin-limit", "agents.recent-first"] {
+        assert!(s.widget_props.remove(k).is_some(), "this build lists the {k} prop");
+    }
+    assert!(s.themes.remove("glass").is_some(), "this build ships the Glass theme");
+}
+
+/// K2's defaults as 0.45.7 shipped them: this build's set without 0.46.0's
+/// Garden 1 look.
+fn release_0457() -> Defaults {
+    fake_set(strip_0460)
+}
+
 /// K2's defaults as 0.45.5 shipped them: this build's set without Garden
 /// 1's K2 Companion port (the `pins`, `settings` and `activity-drawer`
-/// props and the texting template lines that turn them on).
+/// props and the texting template lines that turn them on), nor 0.46.0's
+/// look.
 fn release_0455() -> Defaults {
     fake_set(|s| {
+        strip_0460(s);
         let t = s.templates.get_mut(zen::TEMPLATE_ID).expect("texting in the set");
         for line in ["pins = true\n", "settings = true\n", "activity-drawer = true\n"] {
             replace_in(t, line, "");
@@ -963,10 +991,16 @@ fn gs51_garden1_companion_port_is_news_after_0455() {
         );
         assert_eq!(f.keep_previous_offered(id).expect("offered"), Vec::<Part>::new(), "{what}: no previous look to keep");
     }
-    assert_eq!(f.keep_previous_offered(&g1).expect("offered"), vec![Part::Page], "Garden 1 can keep 0.45.5's page");
+    // 0.46.0 also gives the synced Garden 1 the Glass theme, so its theme
+    // moved too since 0.45.5.
+    assert_eq!(
+        f.keep_previous_offered(&g1).expect("offered"),
+        vec![Part::Page, Part::Theme],
+        "Garden 1 can keep 0.45.5's page and theme"
+    );
     assert_eq!(updates.len(), 1, "exactly one update item, Garden 1's: {news}");
     assert_eq!(updates[0]["garden"], g1.as_str(), "{news}");
-    assert_eq!(updates[0]["part"], "page", "the page changed, not the theme: {news}");
+    assert_eq!(updates[0]["part"], "both", "the page and the theme changed: {news}");
     assert_eq!(updates[0]["previous"], old_fp.as_str());
     assert_eq!(news["copiesWithNewerDefault"], 1, "the own copy of Garden 1's page is counted: {news}");
 
@@ -991,6 +1025,122 @@ fn gs51_garden1_companion_port_is_news_after_0455() {
     assert_eq!(resolve_now(&f, &mine), mine_before, "an own copy doesn't move");
     assert_eq!(widget(&mine_before, "agents")["props"]["pins"], false);
     assert_eq!(widget(&resolve_now(&f, &g2), "agents")["props"]["pins"], false, "Garden 2's own Agents widget: no pins");
+}
+
+/// Rosson 2026-10-16 (0.46.0): Garden 1 takes K2 Companion's look: the
+/// Glass theme, a pin grid of nine (`pin-limit = 9`) and Recent agents
+/// first on (`recent-first = true`). Upgrading from 0.45.7: the synced
+/// Garden 1 gets all of it and one update item on the What's new card; a
+/// synced Garden 1 with its own theme pick gets the page, keeps its theme;
+/// an own copy doesn't move (the copies line counts it); Garden 2 never
+/// changes. An explicit pick, for the Garden or for the computer, beats
+/// Garden 1's default theme.
+#[test]
+fn gs53_garden1_glass_look_is_news_after_0457() {
+    let (_t, z) = temp_dir("garden1-glass");
+    let old = release_0457();
+    let old_fp = old.fingerprint().to_string();
+    let f = ZenFiles::with_defaults(&z, old);
+    legacy_setup(&f);
+    let g1 = gid(&f, 0);
+    let g2 = gid(&f, 1);
+    write_garden(&f, &g2, CONTENT_ONLY.as_bytes());
+    let mine = new_garden(&f, "mine", "texting", Some(LAYOUT_ONLY));
+    let picked = new_garden(&f, "picked", "texting", None);
+    // 0.45.7's first read, then the person keeps "mine" as their own copy
+    // and picks Paper for "picked" (Settings → Gardens, the theme picker).
+    f.news().expect("news on 0.45.7");
+    f.set_garden_sync(&mine, Parts::Both, false).expect("mine: own copy");
+    f.set_theme(Some("paper"), Some(&picked)).expect("picked: Paper for this Garden");
+    f.news_seen(&[], true).expect("0.45.7: everything seen");
+    for (id, want) in [(&g1, "basic"), (&mine, "basic"), (&picked, "paper"), (&g2, "basic")] {
+        assert_eq!(resolve_now(&f, id)["theme"]["name"], want, "0.45.7: {id}");
+    }
+    let mine_before = resolve_now(&f, &mine);
+
+    // This build starts on the same folder.
+    let f = ZenFiles::with_defaults(&z, fake_set(|_| {}));
+    let news = f.news().expect("news after the upgrade");
+    assert_eq!(news["previousDefaults"], old_fp.as_str(), "0.45.7's set is the previous one: {news}");
+    let updates: Vec<&J> = news["items"].as_array().expect("items").iter().filter(|i| i["kind"] == "update").collect();
+    let item = |id: &str| updates.iter().find(|i| i["garden"] == id).copied();
+    assert_eq!(item(&g1).unwrap_or_else(|| panic!("no update item for Garden 1: {news}"))["part"], "both", "{news}");
+    assert_eq!(item(&picked).unwrap_or_else(|| panic!("no update item for picked: {news}"))["part"], "page", "{news}");
+    assert!(item(&mine).is_none(), "an own copy gets no update item: {news}");
+    assert!(item(&g2).is_none(), "Garden 2 didn't change: {news}");
+    assert_eq!(updates.len(), 2, "{news}");
+    assert_eq!(news["copiesWithNewerDefault"], 1, "the own copy of Garden 1 is counted: {news}");
+    // Seen once: after the card is read, nothing new.
+    f.news_seen(&[], true).expect("seen");
+    assert_eq!(f.news().expect("news")["items"], json!([]), "the card shows it once");
+
+    let agents = |v: &J| {
+        v["page"]["widgets"]
+            .as_array()
+            .expect("widgets")
+            .iter()
+            .find(|w| w["kind"] == "agents")
+            .cloned()
+            .unwrap_or_else(|| panic!("no agents widget: {v}"))
+    };
+    // The synced Garden 1: Glass (its own default, scope garden), nine
+    // pins, recent first.
+    let now = resolve_now(&f, &g1);
+    assert_eq!(now["theme"]["name"], "glass", "{}", now["theme"]);
+    assert_eq!(now["theme"]["scope"], "garden", "{}", now["theme"]);
+    assert_eq!(now["theme"]["label"], "Glass");
+    let props = agents(&now)["props"].clone();
+    assert_eq!(props["pins"], true, "{props}");
+    assert_eq!(props["pin-limit"], 9, "{props}");
+    assert_eq!(props["recent-first"], true, "{props}");
+    // 0.45.7's Garden 1: basic, no limit, no recent-first opinion.
+    let then = resolve_as(&f, &g1, &view(copy_of(&old_fp), copy_of(&old_fp)));
+    assert_eq!(then["theme"]["name"], "basic", "{}", then["theme"]);
+    let then_props = agents(&then)["props"].clone();
+    assert!(then_props.get("pin-limit").is_none(), "{then_props}");
+    assert!(then_props.get("recent-first").is_none(), "{then_props}");
+    // "picked" keeps its Paper; "mine" doesn't move at all; Garden 2's own
+    // Agents widget has neither prop.
+    assert_eq!(resolve_now(&f, &picked)["theme"]["name"], "paper");
+    assert_eq!(agents(&resolve_now(&f, &picked))["props"]["pin-limit"], 9);
+    assert_eq!(resolve_now(&f, &mine), mine_before, "an own copy doesn't move");
+    assert_eq!(mine_before["theme"]["name"], "basic");
+    let g2_props = agents(&resolve_now(&f, &g2))["props"].clone();
+    assert!(g2_props.get("pin-limit").is_none() && g2_props.get("recent-first").is_none(), "{g2_props}");
+    // A Garden made from Garden 1 now starts on Glass.
+    let fresh = new_garden(&f, "fresh", "texting", None);
+    assert_eq!(resolve_now(&f, &fresh)["theme"]["name"], "glass");
+
+    // An explicit pick wins over Garden 1's default: the computer's, then
+    // the Garden's own.
+    f.set_theme(Some("midnight"), None).expect("midnight for the computer");
+    let t = resolve_now(&f, &g1)["theme"].clone();
+    assert_eq!((t["name"].clone(), t["scope"].clone()), (json!("midnight"), json!("global")), "{t}");
+    f.set_theme(Some("paper"), Some(&g1)).expect("paper for Garden 1");
+    let t = resolve_now(&f, &g1)["theme"].clone();
+    assert_eq!((t["name"].clone(), t["scope"].clone()), (json!("paper"), json!("garden")), "{t}");
+}
+
+/// Rosson 2026-10-16: `pin-limit` is a whole number from 1 to 99; anything
+/// else is refused with the range.
+#[test]
+fn gs53_pin_limit_is_a_whole_number_in_range() {
+    for (v, ok) in [("9", true), ("1", true), ("99", true), ("0", false), ("100", false), ("\"9\"", false), ("9.5", false)] {
+        let text = format!(
+            "schema = 1\ntemplate = \"k2.blank@1\"\n\n[layout]\nkind = \"columns\"\n\n[[layout.column]]\nsize = 100\nmin-width = 240\n\n\
+             [[widget]]\nid = \"agents\"\nkind = \"agents\"\ncolumn = 0\n\n[widget.props]\npins = true\npin-limit = {v}\nrecent-first = false\n"
+        );
+        let c = schema::check_garden("gardens/g-pins.toml", &text, zen::builtin_layer(), zen::BLANK_TEMPLATE_ID);
+        if ok {
+            assert!(c.is_clean(), "pin-limit = {v} must be fine: {:?}", c.errors);
+        } else {
+            assert!(
+                c.errors.iter().any(|e| e.message.contains("agents.pin-limit must be a whole number from 1 to 99")),
+                "pin-limit = {v} must be refused with the range: {:?}",
+                c.errors
+            );
+        }
+    }
 }
 
 // ── GS52: headless, the real binary under a temp HOME ──────────────────

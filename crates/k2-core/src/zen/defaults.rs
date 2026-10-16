@@ -232,6 +232,15 @@ impl Defaults {
         toml_json(id, self.template_source(id)?).ok()
     }
 
+    /// A start template's default theme: its top-level `theme` (Garden 1's
+    /// `glass`, 0.46.0). Data of the set, so a Garden whose theme is its own
+    /// copy reads its archived set and keeps what it had. A catalog
+    /// Garden's theme is `[catalog] theme`, read by
+    /// [`super::garden_catalog::template_theme`], not this.
+    pub fn template_default_theme(&self, id: &str) -> Option<String> {
+        self.template_toml(id)?.get("theme")?.as_str().map(str::to_string)
+    }
+
     /// A template's resolved page (Z10, FC29): `{template, layout, widgets,
     /// controls, chrome, bands, edges, menus}`, built with this set's prop
     /// defaults. `None` for an unknown id.
@@ -339,6 +348,22 @@ mod tests {
         assert_eq!(d.widget_prop_default("agents", "home"), None);
         assert!(d.knows_widget_prop("agents", "home"));
         assert!(d.frame()["glass"].is_object(), "the frame is frame.toml");
+    }
+
+    /// Rosson 2026-10-16 (0.46.0): Garden 1 names the Glass theme; the empty
+    /// start and the catalog name none here (the Diary's is `[catalog]`).
+    /// Every default theme a template names is a built-in of the same set.
+    #[test]
+    fn garden_one_names_glass_and_every_named_theme_is_built_in() {
+        let d = Defaults::live();
+        assert_eq!(d.template_default_theme(schema::TEMPLATE_ID).as_deref(), Some("glass"));
+        assert_eq!(d.template_default_theme(schema::BLANK_TEMPLATE_ID), None);
+        assert_eq!(d.template_default_theme("k2.nope@1"), None);
+        for id in d.template_ids() {
+            if let Some(t) = d.template_default_theme(id) {
+                assert!(d.theme_layer(&t).is_some(), "{id} names '{t}', which isn't a built-in of the set");
+            }
+        }
     }
 
     #[test]

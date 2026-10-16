@@ -1095,7 +1095,7 @@ impl ZenFiles {
                 }
                 Ok(v)
             };
-            let theme = self.active_theme(Some(&g.id));
+            let theme = self.active_theme_in(Some(&g.id), Some(&gd.theme));
             let base = if super::builtin_theme(&theme.name).is_some() { theme.name.clone() } else { super::DEFAULT_THEME.to_string() };
             let offered = self.keep_previous_offered(&g.id)?;
             let (own, own_err) = match self.garden_own_keys(&g.id) {

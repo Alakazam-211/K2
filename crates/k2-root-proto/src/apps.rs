@@ -960,9 +960,13 @@ pub fn apparmor_profile() -> &'static str {
      \x20 deny /root/** rwklx,\n\
      \n\
      \x20 # Signals and ptrace stay inside the profile; the engine, conmon and\n\
-     \x20 # systemd (unconfined) may signal the App.\n\
+     \x20 # systemd (unconfined) may signal the App. Where the distro confines\n\
+     \x20 # crun with its own (unconfined-mode) profile, crun stops the App and\n\
+     \x20 # the App's own tasks carry the stack crun//&k2-app.\n\
      \x20 signal (send,receive) peer=k2-app,\n\
+     \x20 signal (send,receive) peer=\"crun//&k2-app\",\n\
      \x20 signal (receive) peer=unconfined,\n\
+     \x20 signal (receive) peer=crun,\n\
      \x20 ptrace (trace,read,tracedby,readby) peer=k2-app,\n\
      }\n"
 }
@@ -1344,6 +1348,11 @@ mod tests {
             "  deny /var/lib/k2app/engine/** rwklx,\n",
             "  deny /run/k2app/** rwklx,\n",
             "  ptrace (trace,read,tracedby,readby) peer=k2-app,\n",
+            // Debian 13 confines crun with its own profile: crun stops the
+            // App, and the App's tasks carry the stack (seen denied in the
+            // guarded e2e before these rules).
+            "  signal (receive) peer=crun,\n",
+            "  signal (send,receive) peer=\"crun//&k2-app\",\n",
         ] {
             assert!(p.contains(want), "missing {want:?}");
         }

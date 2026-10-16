@@ -280,6 +280,10 @@ _cli_tool_id_for_verb() {
         # terminal it never re-sources the owner token (agents would
         # bypass the workspace switch and grants).
         compute) echo "compute" ;;
+        # k2 hostchat (Sew S29 K14): id + locked, so inside a K2 terminal the
+        # daemon sees the session passport and the "Manage Sew" switch
+        # applies; person-only steps refuse it.
+        hostchat) echo "hostchat" ;;
         # k2 sources (Garden v3 data sources): id + locked, so inside a K2
         # terminal the daemon sees the session passport (agents can't act as
         # the owner on approvals, secrets or pins).
@@ -333,7 +337,7 @@ _cli_tool_default_mode() {
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat|sidecar|project) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
-        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams) echo "id" ;;
+        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|hostchat) echo "id" ;;
         *) echo "open" ;;
     esac
 }
@@ -341,7 +345,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|hostchat) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -653,6 +657,13 @@ fi
 [ "${1:-}" = "sessions" ] && [ "${2:-}" = "spawn" ] && _skip_conn_gate=1
 # `k2 compute` / `k2 compute --help` only print help.
 if [ "${1:-}" = "compute" ]; then
+    case "${2:-}" in
+        ""|help|--help|-h) _skip_conn_gate=1 ;;
+        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+    esac
+fi
+# `k2 hostchat` / `k2 hostchat --help` only print help.
+if [ "${1:-}" = "hostchat" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
         *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
@@ -21221,6 +21232,7 @@ cmd_help() {
         preset)                   cmd_help_preset ;;
         sidecar)                  _sidecar_usage ;;
         compute)                  _compute_usage ;;
+        hostchat)                 _hostchat_usage ;;
         sources|source)           _sources_usage ;;
         llm)                      _llm_accounts_usage ;;
         vault)                    _vault_usage ;;
@@ -39376,6 +39388,406 @@ cmd_mail_access() {
 
 # ── k2 hostmail (server-admin family) ───────────────────────────────────
 
+# ── k2 hostchat — the Sew chat (and voice) server on this box ───────────
+# Sew S29 K14 over /cli/sew/*. Owner/admin, or an agent whose workspace has
+# "Manage Sew" (chat_manage) on; person-only steps (purge, recovery key,
+# dropping the old master key) need the owner and a vault confirm from a
+# terminal outside K2. Setup links print to stdout only (never stderr).
+# Exit: 0 ok · 2 bad request · 3 refused / infra.
+
+_hostchat_usage() {
+    cat <<'EOF'
+k2 hostchat — the Sew chat server (and voice) on this box
+
+Server:
+  k2 hostchat status [--health] [--json]
+  k2 hostchat preflight [--tarball FILE] [--json]
+  k2 hostchat enable [--tarball FILE] [--recovery-key-file FILE]
+                     [--identity k2|standalone]
+                     [--voice [--voice-url wss://HOST] [--media-tarball FILE] [--node-ip IP]]
+                     [--no-wait] [--json]
+         --identity picks how people sign in. It is fixed for the life of an
+         install: changing it later means a fresh install (uninstall --purge,
+         then enable). Default k2; standalone = Sew's own password logins.
+  k2 hostchat disable | rollback | doctor | backup | backups [--json]
+  k2 hostchat upgrade [--tarball FILE] [--dry-run] [--json]
+  k2 hostchat restore <bundle-id> --confirm [--json]
+  k2 hostchat rotate-master [--json]
+  k2 hostchat config [--public-url https://HOST] [--setup-url https://HOST/setup] [--json]
+  k2 hostchat uninstall [--drop-grants] [--json]          (data, keys, backups kept)
+  k2 hostchat job <id> [--json]
+Person only (the owner, outside K2, with Touch ID / the vault password):
+  k2 hostchat purge --confirm-hostname HOST [--keep-backups]
+  k2 hostchat recovery-key
+  k2 hostchat rotate-master --drop-prev
+
+Voice (sew-media, TURN over TLS on 5349, WebRTC DTLS-SRTP):
+  k2 hostchat media preflight [--json]
+  k2 hostchat media install [--url wss://HOST] [--node-ip IP] [--tarball FILE] [--no-wait] [--json]
+  k2 hostchat media url <wss://HOST>        voice.public_url (an App origin that proxies /rtc, or voice.<box>)
+  k2 hostchat media status [--json]
+  k2 hostchat media renew                   renew the TURN certificate now
+  k2 hostchat media probe --udp ok|fail --tcp ok|fail --turn-tls ok|fail
+                                            record a call test from outside the box
+  k2 hostchat media uninstall
+
+Users (standalone installs; setup links go to stdout only):
+  k2 hostchat users list [--json]
+  k2 hostchat users owner <name> [--display-name NAME]
+  k2 hostchat users invite <name|email> [--display-name NAME] [--role member|admin|guest] [--email EMAIL]
+  k2 hostchat users reset <name>            a new setup link (password reset)
+  k2 hostchat users revoke <name> | reactivate <name>
+  k2 hostchat users role <name> admin|member
+
+Agents need "Manage Sew" on their workspace:
+  k2 agent access set <workspace> chat_manage on   (the owner or an admin)
+EOF
+}
+
+# Call /cli/sew/*: _hostchat_call METHOD PATH [payload] [tcp] → _CP_BODY.
+_hostchat_call() {
+    local raw
+    raw="$(_compute_send "$@")"
+    _compute_split "$raw"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+}
+
+# Print _CP_BODY: raw JSON with --json, else the verb's summary.
+_hostchat_print() {
+    local verb="$1" as_json="$2"
+    if [ "$as_json" = "1" ]; then
+        printf '%s\n' "$_CP_BODY"
+        return 0
+    fi
+    printf '%s' "$_CP_BODY" | K2_HC_VERB="$verb" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+verb = os.environ["K2_HC_VERB"]
+def line(k, x):
+    if x is not None and x != "" and x != []:
+        print("%-16s %s" % (k + ":", x))
+if verb in ("status",):
+    if not v.get("supported", True):
+        print("Sew: not supported here (Linux boxes only)"); sys.exit(0)
+    line("Sew", v.get("state"))
+    line("identity", v.get("identityProvider"))
+    line("version", v.get("installedVersion") or ("pin " + str(v.get("pinnedVersion"))))
+    line("install id", v.get("installId"))
+    if v.get("upgradeAvailable"):
+        line("upgrade", "available: k2 hostchat upgrade")
+    line("alarms", ", ".join(v.get("alarms") or []))
+    for w in v.get("warnings") or []:
+        line("warning", w.get("message") or w.get("code"))
+    line("last error", v.get("lastError"))
+    vo = v.get("voice") or {}
+    if vo:
+        line("voice", vo.get("state"))
+        line("voice URL", vo.get("publicUrl"))
+        line("TURN", "%s:5349 (node %s)" % (vo.get("turnHost"), vo.get("nodeIp")) if vo.get("turnHost") else None)
+        c = vo.get("cert") or {}
+        if c.get("daysLeft") is not None:
+            line("TURN cert", "%s days left" % c.get("daysLeft"))
+        t = vo.get("turnTls") or {}
+        line("TURN-TLS check", t.get("served"))
+        p = vo.get("progress") or {}
+        if p.get("result") in ("running", "error"):
+            line("voice step", "%s (%s)" % (p.get("step"), p.get("result")))
+        line("voice error", vo.get("lastError"))
+elif verb in ("preflight", "media-preflight"):
+    print("ready" if v.get("ready") else "NOT ready")
+    for c in v.get("checks") or []:
+        print("  %-5s %-14s %s%s" % (c.get("status"), c.get("id"), c.get("detail"), ("  (" + c["hint"] + ")") if c.get("hint") else ""))
+elif verb.startswith("users-") and verb != "users-list":
+    line("user", v.get("username"))
+    line("role", v.get("installRole"))
+    if v.get("sessionsRevoked") is not None:
+        line("sessions ended", v.get("sessionsRevoked"))
+    sl = v.get("setupLink") or {}
+    if sl.get("url"):
+        print("Setup link (one use, until %s; share it privately):" % sl.get("expiresAt"))
+        print(sl["url"])
+elif verb == "users-list":
+    rows = v.get("users") or []
+    if not rows:
+        print("(no users)")
+    for u in rows:
+        print("%-24s %-8s %-6s %s%s" % (u.get("username") or u.get("externalId"), u.get("installRole"), u.get("kind"),
+              u.get("displayName") or "", "  (deactivated)" if u.get("deactivated") else ""))
+elif verb == "recovery-key":
+    print(v.get("recoveryKey") or v.get("key") or "")
+    if v.get("warning"):
+        print(v["warning"], file=sys.stderr)
+else:
+    keep = {k: x for k, x in v.items() if k not in ("ok",)}
+    for k, x in keep.items():
+        line(k, x if not isinstance(x, (dict, list)) else json.dumps(x))
+'
+}
+
+# Wait until GET /cli/sew/status leaves the installing step(s).
+_hostchat_wait() {
+    local voice="${1:-0}" as_json="${2:-0}" i=0 last=""
+    while [ "$i" -lt 600 ]; do
+        _hostchat_call GET /cli/sew/status ""
+        local now
+        now="$(printf '%s' "$_CP_BODY" | K2_HC_VOICE="$voice" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+st = v.get("state")
+vo = v.get("voice") or {}
+p = vo.get("progress") or {}
+busy = st == "installing" or (os.environ["K2_HC_VOICE"] == "1" and p.get("result") == "running")
+step = ((v.get("enableProgress") or {}).get("current")) if st == "installing" else p.get("step")
+print(("busy " if busy else "done ") + "%s/%s" % (st, step or "-"))
+')"
+        case "$now" in
+            done*)
+                [ "$as_json" = "1" ] || echo "${now#done }" | sed 's#/-$##' >&2
+                _hostchat_print status "$as_json"
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+vo = v.get("voice") or {}
+bad = v.get("state") == "error" or (vo.get("progress") or {}).get("result") == "error"
+sys.exit(3 if bad else 0)
+'
+                return $?
+                ;;
+        esac
+        if [ "$now" != "$last" ] && [ "$as_json" != "1" ]; then
+            echo "… ${now#busy }" >&2
+            last="$now"
+        fi
+        sleep 2
+        i=$((i + 1))
+    done
+    echo '{"error":"timeout","hint":"still installing after 20 minutes: k2 hostchat status"}' >&2
+    exit 3
+}
+
+# One top-level string field of _CP_BODY ("" when absent).
+_hostchat_field() {
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin).get(sys.argv[1]); print(v if isinstance(v, str) else "")' "$1"
+}
+
+# The install id a person confirm is bound to (or `none`).
+_hostchat_install_id() {
+    _hostchat_call GET /cli/sew/status ""
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("installId") or "none")'
+}
+
+_hostchat_person() {
+    if _compute_in_session; then
+        echo '{"error":"person_only","hint":"a person does this from a terminal outside K2 (Touch ID or the vault password), never an agent"}' >&2
+        exit 3
+    fi
+}
+
+cmd_hostchat() {
+    if [ $# -eq 0 ]; then _hostchat_usage; return 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        -h|--help|help) _hostchat_usage; return 0 ;;
+        media) _hostchat_media "$@"; return ;;
+        users|user) _hostchat_users "$@"; return ;;
+    esac
+    local as_json=0 tarball="" recovery="" identity="" voice=0 voice_url="" media_tarball="" node_ip="" wait=1
+    local health=0 dry=0 confirm=0 drop_grants=0 drop_prev=0 keep_backups=0 host="" public_url="" setup_url="" pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --tarball) tarball="${2:?--tarball FILE}"; shift 2 ;;
+            --recovery-key-file) recovery="${2:?--recovery-key-file FILE}"; shift 2 ;;
+            --identity) identity="${2:?--identity k2|standalone}"; shift 2 ;;
+            --voice) voice=1; shift ;;
+            --voice-url) voice=1; voice_url="${2:?--voice-url wss://HOST}"; shift 2 ;;
+            --media-tarball) voice=1; media_tarball="${2:?--media-tarball FILE}"; shift 2 ;;
+            --node-ip) node_ip="${2:?--node-ip IP}"; shift 2 ;;
+            --no-wait) wait=0; shift ;;
+            --health) health=1; shift ;;
+            --dry-run) dry=1; shift ;;
+            --confirm) confirm=1; shift ;;
+            --drop-grants) drop_grants=1; shift ;;
+            --drop-prev) drop_prev=1; shift ;;
+            --keep-backups) keep_backups=1; shift ;;
+            --confirm-hostname) host="${2:?--confirm-hostname HOST}"; shift 2 ;;
+            --public-url) public_url="${2:?--public-url https://HOST}"; shift 2 ;;
+            --setup-url) setup_url="${2:?--setup-url https://HOST/setup}"; shift 2 ;;
+            -h|--help) _hostchat_usage; return 0 ;;
+            -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 hostchat --help)\"}" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    case "$identity" in ""|k2|standalone) ;; *) echo '{"error":"usage","hint":"--identity is k2 or standalone"}' >&2; exit 2 ;; esac
+    abs() { case "$1" in ""|/*) printf '%s' "$1" ;; *) printf '%s/%s' "$PWD" "$1" ;; esac; }
+    case "$sub" in
+        status)
+            local q=""; [ "$health" = "1" ] && q="health=1"
+            _hostchat_call GET /cli/sew/status "$q"
+            _hostchat_print status "$as_json" ;;
+        preflight)
+            local q=""; [ -n "$tarball" ] && q="tarballPath=$(urlencode "$(abs "$tarball")")"
+            _hostchat_call GET /cli/sew/preflight "$q"
+            _hostchat_print preflight "$as_json" ;;
+        enable)
+            if [ "$identity" = "standalone" ] && [ "$as_json" != "1" ]; then
+                echo "Identity: standalone (Sew's own password logins). This is fixed for this install; switching later means a fresh install." >&2
+            fi
+            local vj=""
+            if [ "$voice" = "1" ]; then
+                vj="$(_compute_json K2_CJ_publicUrl="$voice_url" K2_CJ_nodeIp="$node_ip" K2_CJ_mediaTarballPath="$(abs "$media_tarball")")"
+            fi
+            _hostchat_call POST /cli/sew/server/enable "$(_compute_json K2_CJ_tarballPath="$(abs "$tarball")" \
+                K2_CJ_recoveryKeyFile="$(abs "$recovery")" K2_CJ_identity="$identity" K2_CJ_voice_j="$vj")"
+            if [ "$wait" = "1" ] && [ "$(_hostchat_field state)" = "installing" ]; then
+                _hostchat_wait "$voice" "$as_json"
+                return $?
+            fi
+            _hostchat_print enable "$as_json" ;;
+        disable) _hostchat_call POST /cli/sew/server/disable "{}"; _hostchat_print disable "$as_json" ;;
+        rollback) _hostchat_call POST /cli/sew/server/rollback "{}"; _hostchat_print rollback "$as_json" ;;
+        doctor) _hostchat_call POST /cli/sew/server/doctor "{}"; _hostchat_print doctor "$as_json" ;;
+        backup) K2_CP_MAX_TIME=1900 _hostchat_call POST /cli/sew/server/backup "{}"; _hostchat_print backup "$as_json" ;;
+        backups) _hostchat_call GET /cli/sew/backups ""; _hostchat_print backups "$as_json" ;;
+        job)
+            [ -n "${pos[0]:-}" ] || { echo '{"error":"usage","hint":"k2 hostchat job <id>"}' >&2; exit 2; }
+            _hostchat_call GET /cli/sew/job "id=$(urlencode "${pos[0]}")"; _hostchat_print job "$as_json" ;;
+        upgrade)
+            local b; b="$(_compute_json K2_CJ_tarballPath="$(abs "$tarball")" K2_CJ_dryRun_b="$dry")"
+            _hostchat_call POST /cli/sew/server/upgrade "$b"
+            if [ "$wait" = "1" ] && [ "$(_hostchat_field state)" = "upgrading" ]; then
+                sleep 2; _hostchat_call GET /cli/sew/status ""
+            fi
+            _hostchat_print upgrade "$as_json" ;;
+        restore)
+            [ -n "${pos[0]:-}" ] || { echo '{"error":"usage","hint":"k2 hostchat restore <bundle-id> --confirm"}' >&2; exit 2; }
+            local cb=0; [ "$confirm" = "1" ] && cb=1
+            _hostchat_call POST /cli/sew/server/restore "$(_compute_json K2_CJ_bundleId="${pos[0]}" K2_CJ_confirm_b="$cb")"
+            _hostchat_print restore "$as_json" ;;
+        rotate-master)
+            if [ "$drop_prev" = "1" ]; then
+                _hostchat_person
+                local id tok; id="$(_hostchat_install_id)"
+                tok="$(_vault_confirm_token sew-drop-prev "$id" "Drop Sew's old master key")" || exit 3
+                _hostchat_call POST /cli/sew/server/rotate-master "$(_compute_json K2_CJ_phase=drop-prev K2_CJ_confirmToken="$tok")" tcp
+            else
+                _hostchat_call POST /cli/sew/server/rotate-master "$(_compute_json K2_CJ_phase=start)"
+            fi
+            _hostchat_print rotate-master "$as_json" ;;
+        recovery-key)
+            _hostchat_person
+            local id tok; id="$(_hostchat_install_id)"
+            tok="$(_vault_confirm_token sew-recovery-key "$id" "Show Sew's recovery key")" || exit 3
+            _hostchat_call POST /cli/sew/server/recovery-key "$(_compute_json K2_CJ_confirmToken="$tok")" tcp
+            _hostchat_print recovery-key "$as_json" ;;
+        config)
+            [ -n "$public_url$setup_url" ] || { echo '{"error":"usage","hint":"k2 hostchat config --public-url https://HOST and/or --setup-url https://HOST/setup"}' >&2; exit 2; }
+            _hostchat_call POST /cli/sew/server/config "$(_compute_json K2_CJ_publicUrl="$public_url" K2_CJ_setupUrl="$setup_url")"
+            _hostchat_print config "$as_json" ;;
+        uninstall)
+            local dg=0; [ "$drop_grants" = "1" ] && dg=1
+            _hostchat_call POST /cli/sew/server/uninstall "$(_compute_json K2_CJ_dropGrants_b="$dg")"
+            _hostchat_print uninstall "$as_json" ;;
+        purge)
+            [ -n "$host" ] || { echo '{"error":"usage","hint":"k2 hostchat purge --confirm-hostname HOST (k2 hostchat status shows it)"}' >&2; exit 2; }
+            _hostchat_person
+            local id tok kb=0; id="$(_hostchat_install_id)"; [ "$keep_backups" = "1" ] && kb=1
+            tok="$(_vault_confirm_token sew-purge "$id" "Delete all Sew data on this box")" || exit 3
+            _hostchat_call POST /cli/sew/server/uninstall "$(_compute_json K2_CJ_purge_b=1 K2_CJ_confirmHostname="$host" \
+                K2_CJ_keepBackups_b="$kb" K2_CJ_confirmToken="$tok")" tcp
+            _hostchat_print purge "$as_json" ;;
+        *)
+            echo "{\"error\":\"usage\",\"hint\":\"unknown hostchat command '$sub' (k2 hostchat --help)\"}" >&2
+            exit 2 ;;
+    esac
+}
+
+_hostchat_media() {
+    local sub="${1:-}"; [ $# -gt 0 ] && shift
+    local as_json=0 url="" node_ip="" tarball="" wait=1 udp="" tcp="" tls="" pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --url|--voice-url|--public-url) url="${2:?--url wss://HOST}"; shift 2 ;;
+            --node-ip) node_ip="${2:?--node-ip IP}"; shift 2 ;;
+            --tarball|--media-tarball) tarball="${2:?--tarball FILE}"; shift 2 ;;
+            --no-wait) wait=0; shift ;;
+            --udp) udp="${2:?--udp ok|fail}"; shift 2 ;;
+            --tcp) tcp="${2:?--tcp ok|fail}"; shift 2 ;;
+            --turn-tls) tls="${2:?--turn-tls ok|fail}"; shift 2 ;;
+            -h|--help) _hostchat_usage; return 0 ;;
+            -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 hostchat --help)\"}" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    case "$tarball" in ""|/*) ;; *) tarball="$PWD/$tarball" ;; esac
+    case "$sub" in
+        preflight) _hostchat_call GET /cli/sew/media/preflight ""; _hostchat_print media-preflight "$as_json" ;;
+        status) _hostchat_call GET /cli/sew/status "health=1"
+            if [ "$as_json" = "1" ]; then
+                printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin).get("voice")))'
+            else
+                _hostchat_print status 0
+            fi ;;
+        install)
+            _hostchat_call POST /cli/sew/media/install "$(_compute_json K2_CJ_publicUrl="$url" K2_CJ_nodeIp="$node_ip" K2_CJ_mediaTarballPath="$tarball")"
+            if [ "$wait" = "1" ] && [ "$(_hostchat_field voice)" = "installing" ]; then
+                _hostchat_wait 1 "$as_json"
+                return $?
+            fi
+            _hostchat_print media-install "$as_json" ;;
+        url)
+            local u="${pos[0]:-$url}"
+            [ -n "$u" ] || { echo '{"error":"usage","hint":"k2 hostchat media url wss://HOST"}' >&2; exit 2; }
+            _hostchat_call POST /cli/sew/media/url "$(_compute_json K2_CJ_publicUrl="$u")"
+            _hostchat_print media-url "$as_json" ;;
+        renew) _hostchat_call POST /cli/sew/media/renew "{}"; _hostchat_print media-renew "$as_json" ;;
+        probe)
+            [ -n "$udp" ] && [ -n "$tcp" ] && [ -n "$tls" ] || { echo '{"error":"usage","hint":"k2 hostchat media probe --udp ok|fail --tcp ok|fail --turn-tls ok|fail"}' >&2; exit 2; }
+            _hostchat_call POST /cli/sew/media/probe "$(_compute_json K2_CJ_udp="$udp" K2_CJ_tcp="$tcp" K2_CJ_turnTls="$tls")"
+            _hostchat_print media-probe "$as_json" ;;
+        uninstall) _hostchat_call POST /cli/sew/media/uninstall "{}"; _hostchat_print media-uninstall "$as_json" ;;
+        ""|-h|--help|help) _hostchat_usage ;;
+        *) echo "{\"error\":\"usage\",\"hint\":\"unknown media command '$sub' (k2 hostchat --help)\"}" >&2; exit 2 ;;
+    esac
+}
+
+_hostchat_users() {
+    local sub="${1:-}"; [ $# -gt 0 ] && shift
+    local as_json=0 display="" role="" email="" pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --display-name) display="${2:?--display-name NAME}"; shift 2 ;;
+            --role) role="${2:?--role member|admin|guest}"; shift 2 ;;
+            --email) email="${2:?--email EMAIL}"; shift 2 ;;
+            --admin) role="admin"; shift ;;
+            -h|--help) _hostchat_usage; return 0 ;;
+            -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 hostchat --help)\"}" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    local user="${pos[0]:-}"
+    case "$sub" in
+        list|"") _hostchat_call GET /cli/sew/users ""; _hostchat_print users-list "$as_json"; return ;;
+        -h|--help|help) _hostchat_usage; return 0 ;;
+    esac
+    [ -n "$user" ] || { echo "{\"error\":\"usage\",\"hint\":\"k2 hostchat users $sub <name>\"}" >&2; exit 2; }
+    case "$sub" in
+        owner) _hostchat_call POST /cli/sew/users/owner "$(_compute_json K2_CJ_user="$user" K2_CJ_displayName="$display")" ;;
+        invite) _hostchat_call POST /cli/sew/users/invite "$(_compute_json K2_CJ_user="$user" K2_CJ_displayName="$display" K2_CJ_role="${role:-member}" K2_CJ_email="$email")" ;;
+        reset) _hostchat_call POST /cli/sew/users/reset "$(_compute_json K2_CJ_user="$user")" ;;
+        revoke) _hostchat_call POST /cli/sew/users/revoke "$(_compute_json K2_CJ_user="$user")" ;;
+        reactivate) _hostchat_call POST /cli/sew/users/reactivate "$(_compute_json K2_CJ_user="$user")" ;;
+        role)
+            local r="${pos[1]:-$role}"
+            [ -n "$r" ] || { echo '{"error":"usage","hint":"k2 hostchat users role <name> admin|member"}' >&2; exit 2; }
+            _hostchat_call POST /cli/sew/users/role "$(_compute_json K2_CJ_user="$user" K2_CJ_role="$r")" ;;
+        *) echo "{\"error\":\"usage\",\"hint\":\"unknown users command '$sub' (k2 hostchat --help)\"}" >&2; exit 2 ;;
+    esac
+    _hostchat_print "users-$sub" "$as_json"
+}
+
 cmd_hostmail() {
     # C18: group help only for `k2 hostmail` / `k2 hostmail --help`.
     # Leaf `--help` must reach the subcommand (domain/enable/delete/…).
@@ -51471,6 +51883,10 @@ EOF
     compute)
         # K2 compute nodes (prd-k2-compute-nodes-v1).
         shift; cmd_compute "$@"
+        ;;
+    hostchat)
+        # The Sew chat + voice server on this box (Sew S29 K14).
+        shift; cmd_hostchat "$@"
         ;;
     sources|source)
         # Garden v3 data sources (contract-sources-v1 §7).

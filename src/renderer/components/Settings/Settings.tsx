@@ -122,8 +122,8 @@ function thirdPartyBotLeaves(): NavLeaf[] {
  *  right half) and Token Usage (id `token-usage`).
  *  Renamed 0.46 (Rosson: "change the "LLMs" section to say "Language
  *  Models" … call the first tab "models". Then do Subscriptions / Tokens.
- *  Then do Usage"): Language Models → Models · Subscriptions / Tokens ·
- *  Usage. Ids unchanged, so deep links still land on the same pages.
+ *  Then do Usage"; then 'Do "Subs / Tokens" (subscriptions is too long)'):
+ *  Language Models → Models · Subs / Tokens · Usage. Ids unchanged, so deep links still land on the same pages.
  *  K2 Server split in two in 0.45.7 (Rosson): Access (who may get in and
  *  with what: Admin Access, User Access, User Templates, API Keys, Vault;
  *  the login log stays in Logs → Access Audit, which each Access page links
@@ -170,7 +170,7 @@ export function settingsNav({
       title: 'Language Models',
       items: [
         { id: 'agents', label: 'Models' },
-        { id: 'llm-tokens', label: 'Subscriptions / Tokens' },
+        { id: 'llm-tokens', label: 'Subs / Tokens' },
         { id: 'token-usage', label: 'Usage' },
       ],
     },

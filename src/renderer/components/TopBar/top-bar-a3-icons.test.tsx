@@ -146,18 +146,19 @@ describe('K2Icons (A3)', () => {
     expect(notice).toContain('Home, Agents, Projects, Tickets, Wiki,')
   })
 
-  it('ServerIcon LEDs are bars half the frame\'s inside width, inside the frame; status colour or currentColor', () => {
+  it('ServerIcon LEDs are bars 2x the old square\'s width, just under half the frame; status colour or currentColor', () => {
     // The old LED was a 3.5 square at x 4.25; the bar keeps x, y and height
-    // and spans 50% of the frame's inside width (x 2.875 to 21.125).
+    // and is twice as wide: just under half the frame's inside width
+    // (x 2.875 to 21.125).
     const inner = 22 - 1.75 / 2 - (2 + 1.75 / 2)
-    expect(SERVER_LED).toEqual({ x: 4.25, width: inner / 2, height: 3.5, y: [4.25, 16.25] })
-    expect(SERVER_LED.width).toBe(9.125)
+    expect(SERVER_LED).toEqual({ x: 4.25, width: 2 * 3.5, height: 3.5, y: [4.25, 16.25] })
+    expect(SERVER_LED.width < inner / 2 && SERVER_LED.width > inner / 2 - 2.5).toBe(true)
     const plain = render(<ServerIcon />)
     const a = svgIn(plain.container)
     const bars = Array.from(a.querySelectorAll('[data-led]'))
     expect(bars.map((l) => [l.getAttribute('x'), l.getAttribute('y'), l.getAttribute('width'), l.getAttribute('height')])).toEqual([
-      ['4.25', '4.25', '9.125', '3.5'],
-      ['4.25', '16.25', '9.125', '3.5'],
+      ['4.25', '4.25', '7', '3.5'],
+      ['4.25', '16.25', '7', '3.5'],
     ])
     expect(bars.map((l) => [l.getAttribute('fill'), l.getAttribute('stroke')])).toEqual([
       ['currentColor', 'none'],
@@ -175,8 +176,8 @@ describe('K2Icons (A3)', () => {
     const lit = render(<ServerIcon ledColor="#3fb950" label="Connection: connected" />)
     const b = svgIn(lit.container)
     expect(Array.from(b.querySelectorAll('[data-led]')).map((l) => [l.getAttribute('fill'), l.getAttribute('width')])).toEqual([
-      ['#3fb950', '9.125'],
-      ['#3fb950', '9.125'],
+      ['#3fb950', '7'],
+      ['#3fb950', '7'],
     ])
     expect([b.getAttribute('role'), b.getAttribute('aria-label'), b.getAttribute('aria-hidden')]).toEqual([
       'img',

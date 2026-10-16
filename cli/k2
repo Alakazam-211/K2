@@ -291,6 +291,10 @@ _cli_tool_id_for_verb() {
         # LLM tokens (`k2 llm tokens`, alias `accounts`): an `id` tool, so inside a K2
         # terminal the daemon sees the session passport (read-only there).
         llm) echo "llm-accounts" ;;
+        # k2 usage (Usage v2): an `id` tool, so inside a K2 terminal the
+        # daemon sees the session passport (its own workspace, read-only
+        # limits), never the owner token.
+        usage) echo "usage" ;;
         # K2 vault: an `id` tool, so inside a K2 terminal the daemon sees the
         # session passport (agent-level), never the owner token.
         vault) echo "vault" ;;
@@ -337,7 +341,7 @@ _cli_tool_default_mode() {
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat|sidecar|project) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
-        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|changes) echo "id" ;;
+        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|changes|usage) echo "id" ;;
         *) echo "open" ;;
     esac
 }
@@ -345,7 +349,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|changes) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|changes|usage) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -684,6 +688,13 @@ if [ "${1:-}" = "llm" ]; then
                 case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac
             done
             ;;
+    esac
+fi
+# `k2 usage` / `k2 usage --help` only print help.
+if [ "${1:-}" = "usage" ]; then
+    case "${2:-}" in
+        ""|help|--help|-h) _skip_conn_gate=1 ;;
+        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
 # `k2 hooks emit` (GL45) checks its own session passport and transport
@@ -16370,6 +16381,269 @@ else:
     esac
 }
 
+# ── k2 usage (prd-usage-v2 §5) ───────────────────────────────────────
+# Token usage and subscription limits on this server. An `id` tool: in a
+# K2 terminal it sends the session passport, so an agent sees its own
+# workspace's tokens / turns and read-only limits; outside K2 the owner
+# token sees everything. Members are refused by the daemon (exit 3).
+
+_usage_cli_usage() {
+    cat <<'EOF'
+k2 usage — token usage and subscription limits on this server (Owner and Admin).
+
+  k2 usage tokens [--workspace PATH|--here] [--outside] [--harness H] [--login ID]
+                  [--model M] [--since 7d] [--until T]
+                  [--by workspace|model|login|harness] [--tz ZONE] [--json]
+                                  totals, estimated cost, days, and a breakdown
+  k2 usage turns [--limit N] [--workspace PATH|--here] [--harness H] [--login ID]
+                 [--since T] [--before CURSOR] [--json]
+                                  the newest requests first
+  k2 usage limits [--refresh] [--tool claude|codex|grok] [--login ID] [--json]
+                                  every login's subscription windows
+
+Times: 7d, 24h, 90m, an RFC3339 time, or unix ms. --tz defaults to this
+computer's zone. Input is uncached input; output includes reasoning; one
+request is one model call (Grok: one prompt). Cost is an estimate at API
+list prices, not your bill.
+In a K2 terminal (an agent) you see your own workspace only, and limits are
+read-only (--refresh needs a terminal outside K2).
+EOF
+}
+
+# This computer's IANA zone (TZ, /etc/localtime, /etc/timezone), else UTC.
+_usage_local_tz() {
+    local z="${TZ:-}"
+    z="${z#:}"
+    if [ -z "$z" ] && [ -L /etc/localtime ]; then
+        z="$(readlink /etc/localtime 2>/dev/null)"
+        z="${z##*zoneinfo/}"
+    fi
+    if [ -z "$z" ] && [ -r /etc/timezone ]; then
+        z="$(head -n 1 /etc/timezone 2>/dev/null)"
+    fi
+    case "$z" in ''|/*|*' '*) z="UTC" ;; esac
+    printf '%s' "$z"
+}
+
+# GET a usage route; sets _SC_BODY/_SC_STATUS, exits on a refusal.
+_usage_get() {
+    local path="$1" query="${2:-}"
+    _sidecar_split "$(_sidecar_send GET "/cli/usage/${path}" "$query")"
+    [ "$_SC_STATUS" = "200" ] || _sidecar_fail "$_SC_STATUS" "$_SC_BODY"
+}
+
+cmd_usage() {
+    local sub="${1:-}"
+    case "$sub" in
+        ""|help|--help|-h) _usage_cli_usage; return 0 ;;
+    esac
+    shift
+    if _wants_help "$@"; then
+        _usage_cli_usage
+        return 0
+    fi
+    local as_json=0 refresh=0 here=0 outside=0
+    local ws="" harness="" login="" model="" since="" until="" by="" tz="" limit="" before="" tool=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --refresh) refresh=1; shift ;;
+            --here) here=1; shift ;;
+            --outside) outside=1; shift ;;
+            --workspace|--harness|--login|--model|--since|--until|--by|--tz|--limit|--before|--tool)
+                [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
+                case "$1" in
+                    --workspace) ws="$2" ;;
+                    --harness) harness="$2" ;;
+                    --login) login="$2" ;;
+                    --model) model="$2" ;;
+                    --since) since="$2" ;;
+                    --until) until="$2" ;;
+                    --by) by="$2" ;;
+                    --tz) tz="$2" ;;
+                    --limit) limit="$2" ;;
+                    --before) before="$2" ;;
+                    --tool) tool="$2" ;;
+                esac
+                shift 2 ;;
+            --*) echo "usage: unknown flag '$1' (k2 usage --help)" >&2; exit 2 ;;
+            *) echo "usage: unexpected argument '$1' (k2 usage --help)" >&2; exit 2 ;;
+        esac
+    done
+    if [ "$here" = "1" ]; then
+        [ -z "$ws" ] || { echo "usage: --here and --workspace are the same thing; pick one" >&2; exit 2; }
+        ws="${K2_PROJECT_PATH:-$PWD}"
+    fi
+    if [ -n "$ws" ] && [ "$outside" = "1" ]; then
+        echo "usage: --workspace and --outside cannot both be set" >&2; exit 2
+    fi
+    case "$harness" in ""|claude|codex|grok) ;; *) echo "usage: --harness must be claude, codex, or grok" >&2; exit 2 ;; esac
+    case "$tool" in ""|claude|codex|grok) ;; *) echo "usage: --tool must be claude, codex, or grok" >&2; exit 2 ;; esac
+    case "$by" in ""|workspace|model|login|harness) ;; *) echo "usage: --by must be workspace, model, login, or harness" >&2; exit 2 ;; esac
+    case "$limit" in ""|[1-9]|[1-9][0-9]|[1-9][0-9][0-9]) ;; *) echo "usage: --limit must be 1-200" >&2; exit 2 ;; esac
+    local q=""
+    _uq() { [ -n "$2" ] && q="${q}${q:+&}$1=$(urlencode "$2")"; return 0; }
+    case "$sub" in
+        tokens)
+            if [ "$refresh" = "1" ] || [ -n "$before$tool$limit" ]; then
+                echo "usage: k2 usage tokens takes no --refresh / --before / --tool / --limit (k2 usage --help)" >&2; exit 2
+            fi
+            [ -n "$tz" ] || tz="$(_usage_local_tz)"
+            _uq workspace "$ws"; _uq harness "$harness"; _uq account "$login"; _uq model "$model"
+            _uq since "$since"; _uq until "$until"; _uq group_by "$by"; _uq tz "$tz"
+            [ "$outside" = "1" ] && _uq outside 1
+            _usage_get tokens "$q"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+def n(x):
+    x = int(x or 0)
+    for unit, size in (("B", 10**9), ("M", 10**6), ("k", 10**3)):
+        if x >= size:
+            return "%.1f%s" % (x / size, unit)
+    return str(x)
+def cost(t):
+    c = t.get("cost")
+    if not c:
+        return ""
+    s = "$%.2f" % c.get("usd", 0)
+    if c.get("unpriced_requests"):
+        s += " (+%d unpriced)" % c["unpriced_requests"]
+    return s
+def line(label, t):
+    return "  %-32s %8s req  in %7s  out %7s  cache r %7s  w %7s  %s" % (
+        label[:32], n(t.get("requests")), n(t.get("input_tokens")), n(t.get("output_tokens")),
+        n(t.get("cache_read_tokens")), n(t.get("cache_write_tokens")), cost(t))
+scope = r.get("workspace") or "this server"
+print("Usage on %s (days in %s)" % (scope, r.get("tz")))
+t = r.get("total") or {}
+print(line("Total", t))
+c = t.get("cost")
+if c:
+    print("  Estimated API-equivalent cost: $%.2f — an estimate, not your bill." % c.get("usd", 0))
+groups = r.get("groups")
+if groups is None:
+    groups = [{"label": h["harness"], **h} for h in r.get("harnesses") or []]
+if groups:
+    print("By %s:" % (sys.argv[1] or "harness"))
+    for g in groups:
+        print(line(g.get("label") or g.get("key") or "-", g))
+days = (r.get("days") or [])[-14:]
+if days:
+    print("Days:")
+    for d in days:
+        print(line(d["day"], d))
+print("Input is uncached; output includes reasoning.")
+' "$by"
+            ;;
+        turns)
+            if [ "$refresh" = "1" ] || [ "$outside" = "1" ] || [ -n "$tool$by$tz$until$model" ]; then
+                echo "usage: k2 usage turns [--limit N] [--workspace PATH|--here] [--harness H] [--login ID] [--since T] [--before CURSOR] [--json]" >&2; exit 2
+            fi
+            _uq workspace "$ws"; _uq harness "$harness"; _uq account "$login"; _uq since "$since"
+            _uq limit "$limit"; _uq before "$before"
+            _usage_get turns "$q"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys, time
+p = json.load(sys.stdin)
+rows = p.get("rows") or []
+if not rows:
+    print("(no requests)")
+for r in rows:
+    ms = r.get("recorded_ms")
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(ms / 1000)) if ms else "-"
+    ws = (r.get("workspace") or r.get("workspace_path") or "-").rstrip("/").split("/")[-1] or "-"
+    c = r.get("cost_usd")
+    cost = ("$%.4f" % c) if c is not None else "unpriced"
+    print("%s  %-6s %-24s %-18s in %-7s out %-6s cr %-8s cw %-6s %s" % (
+        when, r.get("harness"), (r.get("model") or "-")[:24], ws[:18], r.get("input_tokens"), r.get("output_tokens"),
+        r.get("cache_read_tokens"), r.get("cache_write_tokens"), cost))
+if p.get("next_cursor"):
+    print("older: k2 usage turns --before %s" % p["next_cursor"])
+'
+            ;;
+        limits)
+            if [ "$outside" = "1" ] || [ -n "$ws$harness$model$since$until$by$tz$limit$before" ]; then
+                echo "usage: k2 usage limits [--refresh] [--tool claude|codex|grok] [--login ID] [--json]" >&2; exit 2
+            fi
+            if [ "$refresh" = "1" ]; then
+                local body
+                body="$(python3 -c 'import json,sys; d={}; t,a=sys.argv[1],sys.argv[2]; d.update({"tool": t} if t else {}); d.update({"accountId": a} if a else {}); print(json.dumps(d))' "$tool" "$login")"
+                _sidecar_split "$(_sidecar_send POST "/cli/usage/limits/refresh" "$body")"
+                [ "$_SC_STATUS" = "200" ] || _sidecar_fail "$_SC_STATUS" "$_SC_BODY"
+            else
+                _usage_get limits ""
+            fi
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys, datetime
+d = json.load(sys.stdin)
+want_tool, want_login = sys.argv[1], sys.argv[2]
+now = datetime.datetime.now(datetime.timezone.utc)
+def parse(s):
+    try:
+        return datetime.datetime.fromisoformat((s or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+def ago(s):
+    t = parse(s)
+    if not t:
+        return "never checked"
+    m = int((now - t).total_seconds() // 60)
+    return "updated %s ago" % ("%dm" % m if m < 120 else "%dh" % (m // 60))
+def until(s):
+    t = parse(s)
+    if not t:
+        return ""
+    m = int((t - now).total_seconds() // 60)
+    if m <= 0:
+        return "reset — re-checking"
+    return "resets in %s" % ("%dm" % m if m < 120 else ("%dh" % (m // 60) if m < 2880 else "%dd" % (m // 1440)))
+STATES = {"not_signed_in": "not signed in", "expired": "sign-in needs a refresh (k2 llm tokens login)",
+          "probe_failed": "last check failed", "unsupported": "no limits for this login", "airgap": "off in air-gap mode",
+          "no_window": "no usage window"}
+if d.get("airgap"):
+    print("Air-gap mode is on: limits are not checked.")
+for t in d.get("tools") or []:
+    if want_tool and t.get("tool") != want_tool:
+        continue
+    logins = [l for l in t.get("logins") or [] if not want_login or l.get("accountId") == want_login or l.get("label") == want_login]
+    if not t.get("supported"):
+        if logins:
+            print("%s: no limits API" % t.get("display"))
+        continue
+    print("%s:" % t.get("display"))
+    if not logins:
+        print("  (not signed in)")
+    for l in logins:
+        mark = "*" if l.get("isDefault") else " "
+        wins = []
+        for w in l.get("windows") or []:
+            pct = w.get("usedPercent")
+            if pct is None:
+                pct = float(w.get("used") or 0) * 100
+            u = until(w.get("resetsAt"))
+            wins.append("%s %d%%%s" % (w.get("label"), round(pct), (" (" + u + ")") if u else ""))
+        state = l.get("state") or "ok"
+        note = STATES.get(state, "")
+        if state == "probe_failed" and l.get("error"):
+            note += ": " + l["error"]
+        pinned = " [pinned]" if l.get("pinned") else ""
+        src = " · live" if (l.get("source") or "").startswith("live") else ""
+        print("%s %-22s %s%s" % (mark, (l.get("label") or "-")[:22], " · ".join(wins) or "-", pinned))
+        print("    %s%s%s" % (ago(l.get("checkedAt")), src, (" · " + note) if note else ""))
+print("* = the server default login.")
+' "$tool" "$login"
+            ;;
+        *)
+            echo "usage: unknown usage verb '$sub' (k2 usage --help)" >&2
+            exit 2
+            ;;
+    esac
+}
+
 cmd_llm() {
     local sub="${1:-}"
     case "$sub" in
@@ -21388,6 +21662,7 @@ cmd_help() {
         changes)                  _changes_usage ;;
         sources|source)           _sources_usage ;;
         llm)                      _llm_accounts_usage ;;
+        usage)                    _usage_cli_usage ;;
         vault)                    _vault_usage ;;
         feedback|tickets)         cmd_help_feedback ;;
         mail)                     cmd_help_mail ;;
@@ -22021,6 +22296,48 @@ cmd_schema() {
       "description": "One token: state, plan, usage.",
       "args": [{"name": "tool", "required": true}, {"name": "label", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "Raw daemon JSON."}]
+    },
+    {
+      "name": "usage tokens",
+      "usage": "k2 usage tokens [--workspace PATH|--here] [--outside] [--harness H] [--login ID] [--model M] [--since 7d] [--until T] [--by workspace|model|login|harness] [--tz ZONE] [--json]",
+      "description": "Token usage on this server: totals, estimated API-equivalent cost (not your bill), days in your zone, and a breakdown. Owner and Admin; an agent sees its own workspace.",
+      "args": [],
+      "flags": [
+        {"name": "--workspace", "arg": "path", "description": "One workspace (cwds inside it count)."},
+        {"name": "--here", "arg": null, "description": "This workspace."},
+        {"name": "--outside", "arg": null, "description": "Only usage outside every workspace."},
+        {"name": "--harness", "arg": "harness", "description": "claude, codex, or grok."},
+        {"name": "--login", "arg": "id", "description": "One login (LLM token id)."},
+        {"name": "--model", "arg": "model", "description": "One model."},
+        {"name": "--since", "arg": "time", "description": "7d, 24h, 90m, RFC3339, or unix ms."},
+        {"name": "--until", "arg": "time", "description": "Exclusive upper bound."},
+        {"name": "--by", "arg": "group", "description": "workspace, model, login, or harness."},
+        {"name": "--tz", "arg": "zone", "description": "IANA zone for days (default: this computer's)."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
+    },
+    {
+      "name": "usage turns",
+      "usage": "k2 usage turns [--limit N] [--workspace PATH|--here] [--harness H] [--login ID] [--since T] [--before CURSOR] [--json]",
+      "description": "The newest model requests first, with tokens and estimated cost.",
+      "args": [],
+      "flags": [
+        {"name": "--limit", "arg": "n", "description": "1-200 (default 50)."},
+        {"name": "--before", "arg": "cursor", "description": "Older page (the cursor the last page printed)."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
+    },
+    {
+      "name": "usage limits",
+      "usage": "k2 usage limits [--refresh] [--tool claude|codex|grok] [--login ID] [--json]",
+      "description": "Every login's subscription windows (% used, resets, freshness; live from running sessions when they report). --refresh re-checks (not from K2 terminals).",
+      "args": [],
+      "flags": [
+        {"name": "--refresh", "arg": null, "description": "Re-check now (one check at a time)."},
+        {"name": "--tool", "arg": "tool", "description": "One tool."},
+        {"name": "--login", "arg": "id", "description": "One login."},
+        {"name": "--json", "arg": null, "description": "Raw daemon JSON."}
+      ]
     },
     {
       "name": "llm tokens usage",
@@ -52351,6 +52668,10 @@ EOF
     llm)
         # LLM tokens (`k2 llm tokens`; `k2 llm accounts` is an alias).
         shift; cmd_llm "$@"
+        ;;
+    usage)
+        # Token usage + subscription limits (prd-usage-v2 §5).
+        shift; cmd_usage "$@"
         ;;
     vault)
         # K2 vault (prd-k2-vault-v1 §14).

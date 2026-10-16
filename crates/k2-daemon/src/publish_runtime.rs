@@ -696,8 +696,11 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
         None
     } else if status == STATUS_STOPPED && row.error.is_some() && row.desired == DESIRED_STOPPED {
         // Hostname-fail path: do not advertise a public URL.
+        // A probe failure rolls back before the hostname step: there is
+        // no public URL to show either.
         if row.error.as_deref().is_some_and(|e| {
             e.contains("hostname")
+                || e.starts_with("probe failed")
                 || e.contains("pro_required")
                 || e.contains("claim")
                 || e.contains("nested")

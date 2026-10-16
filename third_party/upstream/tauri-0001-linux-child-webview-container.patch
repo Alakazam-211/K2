@@ -1,0 +1,494 @@
+From cfdf94895ca3d1f04b02150e5b0d7c86eb42f1b9 Mon Sep 17 00:00:00 2001
+From: z3thon <rosson.long@lztek.io>
+Date: Fri, 16 Oct 2026 13:40:38 -0600
+Subject: [PATCH] fix(linux): put child webviews in a per-window gtk::Fixed
+
+With `unstable`, every child webview was packed into the window's vertical
+`gtk::Box`. A box stacks its children and ignores positions, so
+`Window::add_child(position, size)` and `Webview::set_bounds` did nothing
+and two webviews split the window between them (#10420, #13071, #15656,
+#16132).
+
+Built as suggested in the review of #15704: one container per window,
+created with the window (`create_window` and `CreateRawWindow`, `unstable`
+only), packed into `default_vbox` under any menu bar, stored on
+`WindowWrapper` and handed to `create_webview` through
+`CreateWebviewOptions`. `WindowChild` webviews are built into it, and
+`Reparent` moves a webview into the new window's container.
+
+The container is a `gtk::Fixed` subclass that requests no size of its own
+(`src/child_container.rs`). A plain `gtk::Fixed` requests its children's
+bounding box, which GTK turns into the window's minimum size: with a
+webview filling the window, the window could never be made smaller.
+
+Needs wry's gtk::Fixed `set_bounds`/`bounds`/`reparent` fix (based on
+tauri-apps/wry#1745) for positions to survive layout passes and size-only
+updates.
+
+Tested on Ubuntu 24.04 (WebKitGTK 2.52, X11 under Xvfb): a child lands at
+its rect, keeps it across a size-only update and a window relayout, and
+the window shrinks below its children; with a plain `gtk::Fixed` the same
+harness shows the window stuck at its children's size.
+---
+ .changes/linux-child-webview-container.md     |   5 +
+ .../tauri-runtime-wry/src/child_container.rs  | 128 ++++++++++++
+ crates/tauri-runtime-wry/src/lib.rs           | 187 +++++++++++++++++-
+ 3 files changed, 313 insertions(+), 7 deletions(-)
+ create mode 100644 .changes/linux-child-webview-container.md
+ create mode 100644 crates/tauri-runtime-wry/src/child_container.rs
+
+diff --git a/.changes/linux-child-webview-container.md b/.changes/linux-child-webview-container.md
+new file mode 100644
+index 0000000..fa43df2
+--- /dev/null
++++ b/.changes/linux-child-webview-container.md
+@@ -0,0 +1,5 @@
++---
++"tauri-runtime-wry": patch:bug
++---
++
++On Linux, child webviews (`unstable` multiwebview) are placed in a per-window `gtk::Fixed` container instead of the window's `gtk::Box`, so `Window::add_child` positions and `Webview::set_bounds` are respected. The container requests no size of its own, so child webviews do not lock the window's minimum size.
+diff --git a/crates/tauri-runtime-wry/src/child_container.rs b/crates/tauri-runtime-wry/src/child_container.rs
+new file mode 100644
+index 0000000..be715c0
+--- /dev/null
++++ b/crates/tauri-runtime-wry/src/child_container.rs
+@@ -0,0 +1,128 @@
++// Copyright 2019-2024 Tauri Programme within The Commons Conservancy
++// SPDX-License-Identifier: Apache-2.0
++// SPDX-License-Identifier: MIT
++
++//! Linux: the container child webviews live in.
++//!
++//! Child webviews (`WebviewKind::WindowChild`, the `unstable` multiwebview)
++//! used to be packed into the window's vertical `gtk::Box`. A box stacks
++//! its children and ignores positions, so `add_child(position, size)` and
++//! `set_bounds` did nothing and two webviews split the window in halves
++//! (tauri#10420, #13071, #15656, #16132).
++//!
++//! Each window now gets one of these, created with the window and packed
++//! into the window's `default_vbox` (under any menu bar), and every child
++//! webview is built into it. wry places webviews in a `gtk::Fixed` with
++//! `Fixed::put` / `Fixed::move_` and a size request.
++//!
++//! It is a `gtk::Fixed` that requests no size of its own. A plain
++//! `gtk::Fixed` requests the bounding box of its children's size requests,
++//! and GTK turns a window's minimum request into its minimum size: with a
++//! webview filling the window, the user could never make it smaller.
++
++use gtk::glib;
++use gtk::prelude::*;
++use gtk::subclass::prelude::*;
++
++mod imp {
++  use super::*;
++
++  #[derive(Default)]
++  pub struct ChildWebviewContainer;
++
++  #[glib::object_subclass]
++  impl ObjectSubclass for ChildWebviewContainer {
++    const NAME: &'static str = "TauriChildWebviewContainer";
++    type Type = super::ChildWebviewContainer;
++    type ParentType = gtk::Fixed;
++  }
++
++  impl ObjectImpl for ChildWebviewContainer {}
++
++  impl WidgetImpl for ChildWebviewContainer {
++    // Children are still allocated at their own size requests (that is
++    // `gtk::Fixed`'s `size_allocate`); only the container's own request is
++    // zero, so it never forces a minimum window size.
++    fn preferred_width(&self) -> (i32, i32) {
++      (0, 0)
++    }
++    fn preferred_height(&self) -> (i32, i32) {
++      (0, 0)
++    }
++    fn preferred_width_for_height(&self, _height: i32) -> (i32, i32) {
++      (0, 0)
++    }
++    fn preferred_height_for_width(&self, _width: i32) -> (i32, i32) {
++      (0, 0)
++    }
++  }
++
++  impl ContainerImpl for ChildWebviewContainer {}
++  impl FixedImpl for ChildWebviewContainer {}
++}
++
++glib::wrapper! {
++  pub struct ChildWebviewContainer(ObjectSubclass<imp::ChildWebviewContainer>)
++    @extends gtk::Fixed, gtk::Container, gtk::Widget;
++}
++
++impl Default for ChildWebviewContainer {
++  fn default() -> Self {
++    glib::Object::new()
++  }
++}
++
++/// The container for `window`'s child webviews, packed below anything
++/// already in its `default_vbox` (a menu bar), filling the rest.
++pub fn new_for(window: &tao::window::Window) -> Option<gtk::Fixed> {
++  use tao::platform::unix::WindowExtUnix;
++  let vbox = window.default_vbox()?;
++  let container = ChildWebviewContainer::default();
++  vbox.pack_start(&container, true, true, 0);
++  container.show();
++  Some(container.upcast())
++}
++
++#[cfg(test)]
++mod tests {
++  use super::*;
++
++  /// Needs a display (GTK init): on a headless box run it under `xvfb-run`.
++  /// Without one it fails, loudly, rather than skipping.
++  #[test]
++  fn requests_no_size_but_allocates_children_at_their_requests() {
++    if gtk::init().is_err() {
++      panic!("GTK could not initialise: run this test with a display (xvfb-run)");
++    }
++    let container = ChildWebviewContainer::default();
++    let fixed: &gtk::Fixed = container.upcast_ref();
++    let child = gtk::DrawingArea::new();
++    child.set_size_request(800, 600);
++    fixed.put(&child, 40, 30);
++    container.show_all();
++
++    // The container asks for nothing, whatever its children ask for.
++    let (min_w, nat_w) = container.preferred_width();
++    let (min_h, nat_h) = container.preferred_height();
++    assert_eq!((min_w, nat_w, min_h, nat_h), (0, 0, 0, 0));
++
++    // A plain gtk::Fixed would ask for the children's box (the old lock).
++    let plain = gtk::Fixed::new();
++    let other = gtk::DrawingArea::new();
++    other.set_size_request(800, 600);
++    plain.put(&other, 40, 30);
++    plain.show_all();
++    assert_eq!(plain.preferred_width().0, 840);
++
++    // Children still land at their position and size request.
++    container.size_allocate(&gtk::Allocation::new(0, 0, 300, 200));
++    let a = child.allocation();
++    assert_eq!((a.x(), a.y(), a.width(), a.height()), (40, 30, 800, 600));
++
++    // move_ is what wry's set_bounds uses; it persists across allocations.
++    fixed.move_(&child, 10, 20);
++    container.size_allocate(&gtk::Allocation::new(0, 0, 300, 200));
++    let a = child.allocation();
++    assert_eq!((a.x(), a.y()), (10, 20));
++  }
++}
+diff --git a/crates/tauri-runtime-wry/src/lib.rs b/crates/tauri-runtime-wry/src/lib.rs
+index f69fff8..6fd3a03 100644
+--- a/crates/tauri-runtime-wry/src/lib.rs
++++ b/crates/tauri-runtime-wry/src/lib.rs
+@@ -143,6 +143,17 @@ use std::{
+ pub type WebviewId = u32;
+ type IpcHandler = dyn Fn(Request<String>) + 'static;
+ 
++#[cfg(all(
++  feature = "unstable",
++  any(
++    target_os = "linux",
++    target_os = "dragonfly",
++    target_os = "freebsd",
++    target_os = "netbsd",
++    target_os = "openbsd"
++  )
++))]
++mod child_container;
+ #[cfg(not(debug_assertions))]
+ mod dialog;
+ mod monitor;
+@@ -388,6 +399,14 @@ impl<T: UserEvent> Context<T> {
+           pending,
+           #[cfg(windows)]
+           _options.focused_webview,
++          #[cfg(any(
++            target_os = "linux",
++            target_os = "dragonfly",
++            target_os = "freebsd",
++            target_os = "netbsd",
++            target_os = "openbsd"
++          ))]
++          _options.child_container,
+         )
+       }),
+       tx,
+@@ -1492,6 +1511,15 @@ pub type CreateWebviewClosure =
+ pub struct CreateWebviewOptions {
+   #[cfg(windows)]
+   pub focused_webview: Arc<Mutex<FocusState>>,
++  /// Linux: the window's child-webview container (see `child_container`).
++  #[cfg(any(
++    target_os = "linux",
++    target_os = "dragonfly",
++    target_os = "freebsd",
++    target_os = "netbsd",
++    target_os = "openbsd"
++  ))]
++  pub child_container: Option<gtk::Fixed>,
+ }
+ 
+ pub enum Message<T: 'static> {
+@@ -2454,6 +2482,15 @@ pub struct WindowWrapper {
+   surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
+   #[cfg(windows)]
+   focused_webview: Arc<Mutex<FocusState>>,
++  /// Linux: where this window's child webviews live (see `child_container`).
++  #[cfg(any(
++    target_os = "linux",
++    target_os = "dragonfly",
++    target_os = "freebsd",
++    target_os = "netbsd",
++    target_os = "openbsd"
++  ))]
++  child_container: Option<gtk::Fixed>,
+ }
+ 
+ impl WindowWrapper {
+@@ -2915,6 +2952,14 @@ impl<T: UserEvent> Runtime<T> for Wry<T> {
+           CreateWebviewOptions {
+             #[cfg(windows)]
+             focused_webview: w.focused_webview.clone(),
++            #[cfg(any(
++              target_os = "linux",
++              target_os = "dragonfly",
++              target_os = "freebsd",
++              target_os = "netbsd",
++              target_os = "openbsd"
++            ))]
++            child_container: w.child_container.clone(),
+           },
+         )
+       });
+@@ -2932,6 +2977,14 @@ impl<T: UserEvent> Runtime<T> for Wry<T> {
+         pending,
+         #[cfg(windows)]
+         _options.focused_webview,
++        #[cfg(any(
++          target_os = "linux",
++          target_os = "dragonfly",
++          target_os = "freebsd",
++          target_os = "netbsd",
++          target_os = "openbsd"
++        ))]
++        _options.child_container,
+       )?;
+ 
+       if let Some(w) = self
+@@ -3593,11 +3646,36 @@ fn handle_user_message<T: UserEvent>(
+         });
+ 
+         if let Some(webview) = webview_handle {
+-          if let Some((Some(new_parent_window), new_parent_window_webviews)) = windows
++          if let Some((
++            Some(new_parent_window),
++            new_parent_window_webviews,
++            _new_parent_container,
++          )) = windows
+             .0
+             .borrow_mut()
+             .get_mut(&new_parent_window_id)
+-            .map(|w| (w.inner.clone(), &mut w.webviews))
++            .map(|w| {
++              (
++                w.inner.clone(),
++                &mut w.webviews,
++                #[cfg(any(
++                  target_os = "linux",
++                  target_os = "dragonfly",
++                  target_os = "freebsd",
++                  target_os = "netbsd",
++                  target_os = "openbsd"
++                ))]
++                w.child_container.clone(),
++                #[cfg(not(any(
++                  target_os = "linux",
++                  target_os = "dragonfly",
++                  target_os = "freebsd",
++                  target_os = "netbsd",
++                  target_os = "openbsd"
++                )))]
++                (),
++              )
++            })
+           {
+             #[cfg(target_os = "macos")]
+             let reparent_result = {
+@@ -3615,7 +3693,9 @@ fn handle_user_message<T: UserEvent>(
+               target_os = "openbsd"
+             ))]
+             let reparent_result = {
+-              if let Some(container) = new_parent_window.default_vbox() {
++              if let Some(container) = &_new_parent_container {
++                webview.inner.reparent(container)
++              } else if let Some(container) = new_parent_window.default_vbox() {
+                 webview.inner.reparent(container)
+               } else {
+                 Err(wry::Error::MessageSender)
+@@ -3957,6 +4037,14 @@ fn handle_user_message<T: UserEvent>(
+           CreateWebviewOptions {
+             #[cfg(windows)]
+             focused_webview: w.focused_webview.clone(),
++            #[cfg(any(
++              target_os = "linux",
++              target_os = "dragonfly",
++              target_os = "freebsd",
++              target_os = "netbsd",
++              target_os = "openbsd"
++            ))]
++            child_container: w.child_container.clone(),
+           },
+         )
+       });
+@@ -3999,6 +4087,29 @@ fn handle_user_message<T: UserEvent>(
+       if let Ok(window) = builder.build(event_loop) {
+         window_id_map.insert(window.id(), window_id);
+ 
++        #[cfg(all(
++          feature = "unstable",
++          any(
++            target_os = "linux",
++            target_os = "dragonfly",
++            target_os = "freebsd",
++            target_os = "netbsd",
++            target_os = "openbsd"
++          )
++        ))]
++        let child_container = child_container::new_for(&window);
++        #[cfg(all(
++          not(feature = "unstable"),
++          any(
++            target_os = "linux",
++            target_os = "dragonfly",
++            target_os = "freebsd",
++            target_os = "netbsd",
++            target_os = "openbsd"
++          )
++        ))]
++        let child_container: Option<gtk::Fixed> = None;
++
+         let window = Arc::new(window);
+ 
+         #[cfg(windows)]
+@@ -4033,6 +4144,14 @@ fn handle_user_message<T: UserEvent>(
+             surface,
+             #[cfg(windows)]
+             focused_webview: Default::default(),
++            #[cfg(any(
++              target_os = "linux",
++              target_os = "dragonfly",
++              target_os = "freebsd",
++              target_os = "netbsd",
++              target_os = "openbsd"
++            ))]
++            child_container,
+           },
+         );
+         sender.send(Ok(Arc::downgrade(&window))).unwrap();
+@@ -4563,6 +4682,31 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
+ 
+   context.window_id_map.insert(window.id(), window_id);
+ 
++  // Linux: one container for this window's child webviews, made with the
++  // window (tauri#15704 review: create it once, keep it on the window).
++  #[cfg(all(
++    feature = "unstable",
++    any(
++      target_os = "linux",
++      target_os = "dragonfly",
++      target_os = "freebsd",
++      target_os = "netbsd",
++      target_os = "openbsd"
++    )
++  ))]
++  let child_container = child_container::new_for(&window);
++  #[cfg(all(
++    not(feature = "unstable"),
++    any(
++      target_os = "linux",
++      target_os = "dragonfly",
++      target_os = "freebsd",
++      target_os = "netbsd",
++      target_os = "openbsd"
++    )
++  ))]
++  let child_container: Option<gtk::Fixed> = None;
++
+   if let Some(handler) = after_window_creation {
+     let raw = RawWindow {
+       #[cfg(windows)]
+@@ -4611,6 +4755,14 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
+       webview,
+       #[cfg(windows)]
+       focused_webview.clone(),
++      #[cfg(any(
++        target_os = "linux",
++        target_os = "dragonfly",
++        target_os = "freebsd",
++        target_os = "netbsd",
++        target_os = "openbsd"
++      ))]
++      child_container.clone(),
+     )?);
+   }
+ 
+@@ -4646,6 +4798,14 @@ fn create_window<T: UserEvent, F: Fn(RawWindow) + Send + 'static>(
+     surface,
+     #[cfg(windows)]
+     focused_webview,
++    #[cfg(any(
++      target_os = "linux",
++      target_os = "dragonfly",
++      target_os = "freebsd",
++      target_os = "netbsd",
++      target_os = "openbsd"
++    ))]
++    child_container,
+   })
+ }
+ 
+@@ -4674,6 +4834,14 @@ fn create_webview<T: UserEvent>(
+   context: &Context<T>,
+   pending: PendingWebview<T, Wry<T>>,
+   #[cfg(windows)] focused_webview: Arc<Mutex<FocusState>>,
++  #[cfg(any(
++    target_os = "linux",
++    target_os = "dragonfly",
++    target_os = "freebsd",
++    target_os = "netbsd",
++    target_os = "openbsd"
++  ))]
++  child_container: Option<gtk::Fixed>,
+ ) -> Result<WebviewWrapper> {
+   if !context.webview_runtime_installed {
+     #[cfg(all(not(debug_assertions), windows))]
+@@ -5168,11 +5336,16 @@ You may have it installed on another user account, but it is not available for t
+       target_os = "ios",
+       target_os = "android"
+     )))]
+-    WebviewKind::WindowChild => {
++    WebviewKind::WindowChild => match &child_container {
++      // In the window's child container: wry places each webview at its
++      // own position and size (a box would stack them).
++      Some(container) => webview_builder.build_gtk(container),
+       // only way to account for menu bar height, and also works for multiwebviews :)
+-      let vbox = window.default_vbox().unwrap();
+-      webview_builder.build_gtk(vbox)
+-    }
++      None => {
++        let vbox = window.default_vbox().unwrap();
++        webview_builder.build_gtk(vbox)
++      }
++    },
+     #[cfg(any(
+       target_os = "windows",
+       target_os = "macos",
+-- 
+2.50.0
+

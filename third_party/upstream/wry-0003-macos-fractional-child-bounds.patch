@@ -1,0 +1,134 @@
+From 4754a9656fda03abd44910e51bd6037dcc387e52 Mon Sep 17 00:00:00 2001
+From: z3thon <rosson.long@lztek.io>
+Date: Fri, 16 Oct 2026 13:20:04 -0600
+Subject: [PATCH] fix(macos): keep fractional point frames for child webviews
+
+A child WKWebView's size (and position) was rounded to whole logical
+points in both the initial frame and `set_bounds`. A rect snapped to the
+device-pixel grid sits on half points on a 2x screen, so the webview
+landed up to a point off the content it docks into: a 1pt seam or overlap.
+Keep f64 logical points end to end (`window_position` now takes f64).
+
+`set_bounds` also unwrapped the webview's window and superview; a child
+that is closing or being reparented has neither and panicked the main
+thread. It now returns `Ok` without moving anything.
+
+Tested on macOS 27 (half-point bounds survive `set_bounds`).
+---
+ .changes/fix-macos-fractional-child-bounds.md |  5 +++
+ src/wkwebview/mod.rs                          | 41 +++++++++++--------
+ 2 files changed, 30 insertions(+), 16 deletions(-)
+ create mode 100644 .changes/fix-macos-fractional-child-bounds.md
+
+diff --git a/.changes/fix-macos-fractional-child-bounds.md b/.changes/fix-macos-fractional-child-bounds.md
+new file mode 100644
+index 00000000..799e0c56
+--- /dev/null
++++ b/.changes/fix-macos-fractional-child-bounds.md
+@@ -0,0 +1,5 @@
++---
++"wry": patch
++---
++
++On macOS, child webviews keep fractional logical point bounds instead of rounding them to whole points, and `set_bounds` no longer panics when the webview is not in a window.
+diff --git a/src/wkwebview/mod.rs b/src/wkwebview/mod.rs
+index 8405da2b..4d21faad 100644
+--- a/src/wkwebview/mod.rs
++++ b/src/wkwebview/mod.rs
+@@ -393,15 +393,18 @@ impl InnerWebView {
+         let window = ns_view.window().unwrap();
+ 
+         let scale_factor = window.backingScaleFactor();
+-        let (x, y) = attributes
++        // Logical points as f64: a fractional point (a DOM rect snapped to
++        // the device-pixel grid) is a whole device pixel on a 2x screen.
++        // Rounding to whole points left up to a 1pt seam against the DOM.
++        let (x, y): (f64, f64) = attributes
+           .bounds
+           .map(|b| b.position.to_logical::<f64>(scale_factor))
+           .map(Into::into)
+-          .unwrap_or((0, 0));
+-        let (w, h) = if is_child {
++          .unwrap_or((0., 0.));
++        let (w, h): (f64, f64) = if is_child {
+           attributes
+             .bounds
+-            .map(|b| b.size.to_logical::<u32>(scale_factor))
++            .map(|b| b.size.to_logical::<f64>(scale_factor))
+             .map(Into::into)
+         } else {
+           None
+@@ -409,19 +412,19 @@ impl InnerWebView {
+         .unwrap_or_else(|| {
+           if is_child {
+             let frame = NSView::frame(ns_view);
+-            (frame.size.width as u32, frame.size.height as u32)
++            (frame.size.width, frame.size.height)
+           } else {
+-            (0, 0)
++            (0., 0.)
+           }
+         });
+ 
+         let frame = CGRect {
+           origin: if is_child {
+-            window_position(ns_view, x, y, h as f64)
++            window_position(ns_view, x, y, h)
+           } else {
+-            CGPoint::new(x as f64, (0 - y - h as i32) as f64)
++            CGPoint::new(x, 0. - y - h)
+           },
+-          size: CGSize::new(w as f64, h as f64),
++          size: CGSize::new(w, h),
+         };
+         let webview: Retained<WryWebView> =
+           objc2::msg_send![super(webview), initWithFrame: frame, configuration: &**config];
+@@ -1047,13 +1050,19 @@ impl InnerWebView {
+   pub fn set_bounds(&self, #[allow(unused)] bounds: Rect) -> crate::Result<()> {
+     #[cfg(target_os = "macos")]
+     if self.is_child {
+-      let window = self.webview.window().unwrap();
++      // A child that is not in a window (closing, reparenting) has no
++      // frame to set; do not panic the main thread over it.
++      // SAFETY: plain AppKit getters on the main thread (wry's WebView is !Send).
++      let (Some(window), Some(parent_view)) = (self.webview.window(), unsafe { self.webview.superview() })
++      else {
++        return Ok(());
++      };
+       let scale_factor = window.backingScaleFactor();
+-      let (x, y) = bounds.position.to_logical::<f64>(scale_factor).into();
+-      let (width, height) = bounds.size.to_logical::<i32>(scale_factor).into();
++      // f64 logical points end to end (see the initial frame above).
++      let (x, y): (f64, f64) = bounds.position.to_logical::<f64>(scale_factor).into();
++      let (width, height): (f64, f64) = bounds.size.to_logical::<f64>(scale_factor).into();
+ 
+       unsafe {
+-        let parent_view = self.webview.superview().unwrap();
+         let frame = CGRect {
+           origin: window_position(&parent_view, x, y, height),
+           size: CGSize::new(width, height),
+@@ -1459,7 +1468,7 @@ impl Drop for InnerWebView {
+ ///   Default coordinate system: a bottom-left is (0, 0) and y increasing upwards.
+ ///   Flipped coordinate system: a top-left is (0, 0) and y increasing downwards.
+ #[allow(dead_code)]
+-unsafe fn window_position(view: &NSView, x: i32, y: i32, height: f64) -> CGPoint {
++unsafe fn window_position(view: &NSView, x: f64, y: f64, height: f64) -> CGPoint {
+   let is_flipped = {
+     #[cfg(target_os = "macos")]
+     {
+@@ -1472,10 +1481,10 @@ unsafe fn window_position(view: &NSView, x: i32, y: i32, height: f64) -> CGPoint
+   };
+ 
+   if is_flipped {
+-    CGPoint::new(x as f64, y as f64)
++    CGPoint::new(x, y)
+   } else {
+     let frame: CGRect = view.frame();
+-    CGPoint::new(x as f64, frame.size.height - y as f64 - height)
++    CGPoint::new(x, frame.size.height - y - height)
+   }
+ }
+ 
+-- 
+2.50.0
+

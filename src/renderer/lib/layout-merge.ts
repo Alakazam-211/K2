@@ -17,12 +17,14 @@
 //   - move a tab to the column this window moved it to;
 //   - use this window's column count when this window split or unsplit
 //     since `base`, else the remote's;
-//   - keep the remote order unless this window reordered a column.
+//   - keep the remote order unless this window reordered a column;
+//   - pinned tabs last move back right after the system tabs.
 //
 // Pure: no store, no network. Per-window view state (focused column,
 // selected tab per column) never appears in a merged layout.
 
 import type { SerializedLayout, SerializedTab } from '@/stores/tabs'
+import { orderPinnedTabs } from '@/lib/pinned-tabs'
 
 /** The empty shared layout (V16). Saved instead of deleting the row so the
  *  revision keeps climbing and other windows hear about it. */
@@ -301,6 +303,11 @@ export function mergeSerializedLayouts(
     })
     return out
   })
+
+  // Pinned tabs stay right after the system tabs, whichever side pinned or
+  // unpinned (a tab's pin is part of its own edit, so it can land among the
+  // regular tabs above).
+  cols = cols.map((c) => orderPinnedTabs(c))
 
   return layoutFromColumns(cols, remote.version ?? local.version ?? 2)
 }

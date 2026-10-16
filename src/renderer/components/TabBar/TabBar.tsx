@@ -47,6 +47,8 @@ import { errorText, useLlmAccountsStore, type LlmAccountsDoc } from '@/stores/ll
 import type { Tab } from '@/stores/tabs'
 import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
+import { PinnedTabSlotGlyph, TabPinButton } from '@/components/TabBar/TabPin'
+import { clampTabDropIndex, isPinnedTab } from '@/lib/pinned-tabs'
 import { useToastStore } from '@/stores/toast'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import DrawerTabBarToggle from '@/components/Layout/DrawerTabBarToggle'
@@ -558,6 +560,11 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         }
         dropIdx = tabIdx + 1
       }
+      // A pinned tab drops only among the pinned tabs, a regular one only
+      // among the regular tabs, so the indicator shows where it will land.
+      const store = room.tabs.getState()
+      const strip = groupIndex === 0 ? store.tabs : store.extraGroups[groupIndex - 1]?.tabs ?? []
+      dropIdx = clampTabDropIndex(strip, index, dropIdx) ?? index
       reorderDropRef.current = dropIdx
       setReorderDropIndex(dropIdx)
     }
@@ -619,6 +626,17 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     [removeTabFromGroup, groupIndex, room]
   )
 
+  // Pin / unpin from the tab itself (hover pin, the pinned tab's pin slot,
+  // right-click). A view-only room changes no tabs.
+  const handleTogglePinTab = useCallback(
+    (e: React.MouseEvent, tabId: string) => {
+      e.stopPropagation()
+      if (room.readOnly) return
+      room.tabs.getState().togglePinTab(tabId)
+    },
+    [room]
+  )
+
   const handleTabContextMenu = useCallback(async (e: React.MouseEvent, tabId: string, pinSessionId: string | null) => {
     e.preventDefault()
     e.stopPropagation()
@@ -668,6 +686,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
 
     const menuItems = [
       { id: 'rename', label: 'Rename Tab' },
+      ...(tab && !tab.isSystemAgent && !room.readOnly ? [
+        { id: 'toggle-pin', label: isPinnedTab(tab) ? 'Unpin Tab' : 'Pin Tab' },
+      ] : []),
       // MS57 — opening this computer's terminal app / Finder on a path only
       // makes sense in a room whose files live here.
       ...(room.localCommands ? [{ id: 'open-terminal', label: `Open in ${defaultTerminal}` }] : []),
@@ -725,6 +746,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       setPinModalSessionId(pinSessionId)
     } else if (clickedId === 'unpin-dimensions' && pinSessionId) {
       handleUnpin(pinSessionId)
+    } else if (clickedId === 'toggle-pin') {
+      room.tabs.getState().togglePinTab(tabId)
     } else if (clickedId === 'rename') {
       // Enter inline-edit mode for this (regular) tab. The label→input
       // swap and commit/cancel wiring live in the tab render branch.
@@ -737,14 +760,16 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         removeTabFromGroup(groupIndex, tabId)
       }
     } else if (clickedId === 'close-others') {
-      // Close all tabs except the right-clicked one
+      // Close all tabs except the right-clicked one. Pinned tabs stay (a
+      // pinned tab closes only by its own Close Tab).
       for (const tab of allTabs) {
-        if (tab.id !== tabId) {
+        if (tab.id !== tabId && !isPinnedTab(tab)) {
           removeTabFromGroup(groupIndex, tab.id)
         }
       }
     } else if (clickedId === 'close-all') {
       for (const tab of allTabs) {
+        if (isPinnedTab(tab)) continue
         removeTabFromGroup(groupIndex, tab.id)
       }
     } else if (clickedId === 'force-reap-all') {
@@ -1030,6 +1055,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
               key={tab.id}
               data-tab-id={tab.id}
               data-tab-reorder-index={index}
+              data-tab-pinned={isPinnedTab(tab) ? 'true' : undefined}
               className={`group relative flex h-full min-w-[100px] max-w-[200px] flex-shrink-0 items-center border-r border-[var(--color-border)] px-3 text-xs transition-colors select-none ${
                 isActive
                   ? 'bg-white/[0.08] text-[var(--color-text-primary)]'
@@ -1055,16 +1081,10 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
               {/* Tab icon — single icon with activity indicator beneath */}
               {(() => {
                 // Determine which icon to show
+                // A pinned tab keeps its kind's icon; its pin sits in the
+                // close slot (TabPin.tsx).
                 let icon: React.ReactNode = null
-                if (tab.isPinnedFile) {
-                  // #587 — pinned HTML file tab. A pin glyph reads as
-                  // "kept open next to the Inbox".
-                  icon = (
-                    <svg className="w-3 h-3 text-[var(--color-accent)]" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707l-.71-.71-3.18 3.18a3.5 3.5 0 0 1-.4.3L11 11.106V14.5a.5.5 0 0 1-.854.354L7.5 12.207 4.854 14.854a.5.5 0 0 1-.708-.708L6.793 11.5 4.146 8.854A.5.5 0 0 1 4.5 8h3.394a3.5 3.5 0 0 0 .3-.4l3.18-3.18-.71-.71a.5.5 0 0 1 .354-.854z" />
-                    </svg>
-                  )
-                } else if (isWorktreeTab) {
+                if (isWorktreeTab) {
                   icon = (
                     <svg className="w-3 h-3 text-[var(--color-text-muted)] opacity-70" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="4" cy="4" r="1.5" /><circle cx="12" cy="4" r="1.5" /><circle cx="4" cy="12" r="1.5" />
@@ -1165,6 +1185,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   closeTerminalForRenderer; this is purely the
                   visual cue.
                   See `.k2so/prds/heartbeat-active-session-tracking.md`. */}
+              {!room.readOnly && !isPinnedTab(tab) && editingTabId !== tab.id && (
+                <TabPinButton onPin={(e) => handleTogglePinTab(e, tab.id)} />
+              )}
               {(() => {
                 // Detect a heartbeat tab two ways:
                 //   1. `heartbeatName` stamped on the terminal data
@@ -1198,7 +1221,12 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 // and reveal the close glyph on hover. Heartbeat tabs
                 // get `–` (minimize), regular tabs get `×` — same hover
                 // pattern, different glyph.
-                const closeGlyph = isMinimizeTab ? (
+                // A pinned tab has no ×: its slot is the pin, and a click
+                // there unpins (TabPin.tsx). Close Tab is in its menu.
+                const pinned = isPinnedTab(tab)
+                const closeGlyph = pinned ? (
+                  <PinnedTabSlotGlyph />
+                ) : isMinimizeTab ? (
                   <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                     <line x1="1.5" y1="4" x2="6.5" y2="4" />
                   </svg>
@@ -1211,9 +1239,12 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 return (
                   <button
                     className="ml-2 flex h-4 w-4 flex-shrink-0 items-center justify-center hover:bg-[var(--color-wash-2)] group/close"
-                    onClick={(e) => handleCloseTab(e, tab.id)}
+                    data-tab-close-slot={pinned ? 'unpin' : 'close'}
+                    onClick={(e) => (pinned ? handleTogglePinTab(e, tab.id) : handleCloseTab(e, tab.id))}
                     title={
-                      isMinimizeTab
+                      pinned
+                        ? 'Unpin tab'
+                        : isMinimizeTab
                         ? isAgentActive
                           ? 'Session is working — hide anyway (PTY keeps running)'
                           : 'Hide tab — session keeps running in the background'

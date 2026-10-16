@@ -53,6 +53,7 @@ import {
   type UnsubscribeFn,
 } from '@/stores/session-events'
 import { paintableBrowserIcon } from '@/lib/browser-tab-icon'
+import { clampReorderTarget, orderPinnedTabs, withTabPinned } from '@/lib/pinned-tabs'
 import { takeSessionRemoved } from '@/lib/sidecar-refresh-tab'
 import {
   EMPTY_SERIALIZED_LAYOUT,
@@ -728,10 +729,9 @@ export interface SerializedTab {
   mosaicTree: MosaicNode<string> | null
   paneGroups: Record<string, SerializedPaneGroup>
   isSystemAgent?: boolean
-  /** #587 — pinned HTML file tab. Rendered immediately after the
-   *  system (Chat/Inbox) tabs and before regular tabs. Survives reload
-   *  via the same serialize/restore path as system tabs; closing one
-   *  unpins (removes) it rather than hiding. */
+  /** Pinned tab (any kind; began as the #587 pinned-HTML flag, the wire
+   *  name stays — see `lib/pinned-tabs.ts`). Sits right after the system
+   *  (Chat/Inbox) tabs, before regular tabs, in pin order. */
   isPinnedFile?: boolean
   /** Tab-rename stickiness — persists a USER rename across relaunch so a
    *  locked tab stays locked (PTY/session titles still can't clobber it
@@ -775,9 +775,11 @@ export interface Tab {
   isDirty?: boolean
   /** System agent tab — pinned at start of tab bar, can't be closed or reordered */
   isSystemAgent?: boolean
-  /** #587 — pinned HTML file tab. Sits right after the system (Chat/
-   *  Inbox) tabs and before regular tabs. Carries a pinned file-viewer
-   *  item (html mode). Closing it unpins rather than hides. */
+  /** Pinned tab — any tab kind, pinned from the tab strip (right-click or
+   *  the tab's pin) or a file viewer's pin. Sits right after the system
+   *  (Chat/Inbox) tabs and before regular tabs, in pin order; drags stay
+   *  inside the pinned group. The name is the #587 pinned-HTML flag's
+   *  (see `lib/pinned-tabs.ts`). */
   isPinnedFile?: boolean
   /** Tab-rename stickiness — a USER rename sets this true (daemon-canonical
    *  `tab_titles.locked`). Once locked, program-generated PTY/OSC/session
@@ -1034,6 +1036,12 @@ export interface TabsState {
   /** True if `filePath` is currently pinned as a top-level tab in the
    *  active workspace. */
   isFilePinned: (filePath: string) => boolean
+  /** Pin a tab (any kind, any column): it moves to the end of its column's
+   *  pinned group. No-op for system tabs or a tab already pinned. */
+  pinTab: (tabId: string) => void
+  /** Unpin a tab: it moves to the first slot after the pinned group. */
+  unpinTab: (tabId: string) => void
+  togglePinTab: (tabId: string) => void
   /** Activate the pinned system agent tab (switches to it). */
   activateSystemAgentTab: () => void
   /** Get the pinned system agent tab if it exists. */
@@ -3127,6 +3135,39 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     }
   }
 
+  /** Pin / unpin one tab in whichever column holds it (`lib/pinned-tabs.ts`).
+   *  Pinning also keeps the tab's file viewers (`item.pinned`), so opening
+   *  another file never recycles a pinned tab's file. The new strip is an
+   *  ordinary layout change: autosave shares it with every window. */
+  function setTabPinned(tabId: string, pinned: boolean): void {
+    const mark = (tab: Tab, on: boolean): Tab => {
+      const { isPinnedFile: _was, ...rest } = tab
+      if (!on) return rest
+      const paneGroups = new Map(tab.paneGroups)
+      for (const [pgId, pg] of tab.paneGroups) {
+        if (!pg.items.some((item) => item.type === 'file-viewer' && !item.pinned)) continue
+        paneGroups.set(pgId, {
+          ...pg,
+          items: pg.items.map((item) => (item.type === 'file-viewer' ? { ...item, pinned: true } : item)),
+        })
+      }
+      return { ...rest, paneGroups, isPinnedFile: true }
+    }
+    const state = store.getState()
+    const tabs = withTabPinned(state.tabs, tabId, pinned, mark)
+    if (tabs !== state.tabs) {
+      store.setState({ tabs })
+      return
+    }
+    const gi = state.extraGroups.findIndex((g) => g.tabs.some((t) => t.id === tabId))
+    if (gi < 0) return
+    const groupTabs = withTabPinned(state.extraGroups[gi].tabs, tabId, pinned, mark)
+    if (groupTabs === state.extraGroups[gi].tabs) return
+    store.setState({
+      extraGroups: state.extraGroups.map((g, i) => (i === gi ? { ...g, tabs: groupTabs } : g)),
+    })
+  }
+
   // ── Store ────────────────────────────────────────────────────────────────
 
   const store = create<TabsState>((set, get) => ({
@@ -3203,16 +3244,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       const tab = get().tabs.find((t) => t.id === tabId)
       if (tab?.isSystemAgent) return
 
-      // #587 — closing a pinned HTML file tab means UNPIN, not just hide.
-      // Route through unpinFileTab so the pin state stays consistent
-      // (and so a re-pin later re-creates the tab rather than colliding).
-      if (tab?.isPinnedFile) {
-        const item = Array.from(tab.paneGroups.values())[0]?.items[0]
-        if (item?.type === 'file-viewer') {
-          get().unpinFileTab((item.data as FileViewerItemData).filePath)
-          return
-        }
-      }
+      // A pinned tab closes like any other tab (its pin goes with it).
 
       // Kill all PTYs in the removed tab (PTYs survive tab switches for persistence)
       if (tab) {
@@ -3312,28 +3344,28 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
 
     reorderTabs: (fromIndex, toIndex, groupIndex = 0) => {
       set((state) => {
-        if (groupIndex === 0) {
-          const tabs = [...state.tabs]
-          // Don't reorder the pinned system agent tabs (always at the
-          // front) or the pinned HTML file tabs (#587 — fixed slot right
-          // after the system tabs). Either endpoint touching a pinned
-          // tab cancels the reorder so the canonical
-          // [system][pinned-file][regular] order is preserved.
-          if (
-            tabs[fromIndex]?.isSystemAgent || tabs[toIndex]?.isSystemAgent ||
-            tabs[fromIndex]?.isPinnedFile || tabs[toIndex]?.isPinnedFile
-          ) return {}
+        // The strip is [system][pinned][regular]: system tabs never move,
+        // and a tab only moves inside its own band (a pinned tab among the
+        // pinned tabs, a regular one among the regular tabs) — the target
+        // is clamped into the band, never across it.
+        const reorder = (src: Tab[]): Tab[] | null => {
+          const to = clampReorderTarget(src, fromIndex, toIndex)
+          if (to === null || to === fromIndex) return null
+          const tabs = [...src]
           const [moved] = tabs.splice(fromIndex, 1)
-          tabs.splice(toIndex, 0, moved)
-          return { tabs }
+          tabs.splice(to, 0, moved)
+          return tabs
         }
-        const extraGroups = state.extraGroups.map((g: { tabs: Tab[], activeTabId: string | null }, i: number) => {
-          if (i !== groupIndex - 1) return g
-          const tabs = [...g.tabs]
-          const [moved] = tabs.splice(fromIndex, 1)
-          tabs.splice(toIndex, 0, moved)
-          return { ...g, tabs }
-        })
+        if (groupIndex === 0) {
+          const tabs = reorder(state.tabs)
+          return tabs ? { tabs } : {}
+        }
+        const group = state.extraGroups[groupIndex - 1]
+        const tabs = group ? reorder(group.tabs) : null
+        if (!tabs) return {}
+        const extraGroups = state.extraGroups.map((g: { tabs: Tab[], activeTabId: string | null }, i: number) =>
+          i === groupIndex - 1 ? { ...g, tabs } : g,
+        )
         return { extraGroups }
       })
     },
@@ -4023,6 +4055,16 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
 
     getSystemAgentTab: () => {
       return get().tabs.find((t) => t.isSystemAgent)
+    },
+
+    // ── Pinned tabs ───────────────────────────────────────────────────
+
+    pinTab: (tabId: string) => setTabPinned(tabId, true),
+    unpinTab: (tabId: string) => setTabPinned(tabId, false),
+    togglePinTab: (tabId: string) => {
+      const tab = collectStoreTabs(get()).find((t) => t.id === tabId)
+      if (!tab || tab.isSystemAgent) return
+      setTabPinned(tabId, !tab.isPinnedFile)
     },
 
     // ── Pinned HTML file tabs (#587) ─────────────────────────────────
@@ -5105,14 +5147,16 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
 
       // Add to target group
       const updatedState = get()
+      // A pinned tab stays pinned: it lands at the end of the target
+      // column's pinned group (orderPinnedTabs), not after its regular tabs.
       if (toGroup === 0) {
-        set({ tabs: [...updatedState.tabs, tab], activeTabId: tab.id })
+        set({ tabs: orderPinnedTabs([...updatedState.tabs, tab]), activeTabId: tab.id })
       } else {
         const gi = toGroup - 1
         const newGroups = [...updatedState.extraGroups]
         if (gi >= 0 && gi < newGroups.length) {
           newGroups[gi] = {
-            tabs: [...newGroups[gi].tabs, tab],
+            tabs: orderPinnedTabs([...newGroups[gi].tabs, tab]),
             activeTabId: tab.id
           }
           set({ extraGroups: newGroups })
@@ -5176,7 +5220,9 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       const restoreTab = (serializedTab: SerializedTab): Tab =>
         restoreSerializedTab(serializedTab, cwd, liveById, liveItemsById, usedItemIds)
 
-      const restoredTabs: Tab[] = (Array.isArray(layout.tabs) ? layout.tabs : []).map(restoreTab)
+      // Pinned tabs sit after the system tabs whatever order the row holds
+      // (an older client may have saved them elsewhere).
+      const restoredTabs: Tab[] = orderPinnedTabs((Array.isArray(layout.tabs) ? layout.tabs : []).map(restoreTab))
 
       // per-client-view-state.md (Phase 1+2) — selection is NO LONGER read from
       // the shared layout's leaked `activeTabId` (that hijacked peers). A tab
@@ -5199,7 +5245,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       for (const g of get().extraGroups) if (g.activeTabId) liveColumnSelections.add(g.activeTabId)
       const restoredExtraGroups: Array<{ tabs: Tab[], activeTabId: string | null }> = []
       for (const group of layout.extraGroups ?? []) {
-        const groupTabs = (Array.isArray(group?.tabs) ? group.tabs : []).map(restoreTab)
+        const groupTabs = orderPinnedTabs((Array.isArray(group?.tabs) ? group.tabs : []).map(restoreTab))
         const kept = groupTabs.find((t) => liveColumnSelections.has(t.id))
         restoredExtraGroups.push({
           tabs: groupTabs,

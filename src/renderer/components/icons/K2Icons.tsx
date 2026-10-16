@@ -4,10 +4,10 @@
 // `currentColor`.
 //
 //   Home, Agents, Projects, Tickets, Wiki, Server, Admin, Run, Drawer,
-//   Clock, Mug, Help
+//   Clock, Mug, Help, Pin, PinOff
 //     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `library`,
 //     `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`,
-//     `circle-help`),
+//     `circle-help`, `pin`, `pin-off`),
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
 //   Settings
@@ -269,6 +269,29 @@ export function HelpIcon(props: K2IconProps = {}): React.JSX.Element {
       <circle cx="12" cy="12" r="10" />
       <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
       <path d="M12 17h.01" />
+    </svg>
+  )
+}
+
+/** Pin (a pinned tab; pin a tab): Lucide `pin`, squared (flat head, straight
+ *  shaft and skirt, no fillets). */
+export function PinIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('pin', props)}>
+      <path d="M12 17v5" />
+      <path d="M6 2h12v4h-3v5l4 3v3H5v-3l4-3V6H6Z" />
+    </svg>
+  )
+}
+
+/** Unpin: Lucide `pin-off`, squared the same way as `PinIcon`. */
+export function PinOffIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('pin-off', props)}>
+      <path d="M12 17v5" />
+      <path d="M15 9.34V6h3V2H7.89" />
+      <path d="M2 2l20 20" />
+      <path d="M9 9v2l-4 3v3h12" />
     </svg>
   )
 }

@@ -67,6 +67,8 @@ pub mod chat_continue;
 pub mod chat_overlay;
 /// Host token ledger (`~/.k2/usage/tokens.sqlite`). Not the app database.
 pub mod token_usage;
+/// Estimated API-equivalent cost for the ledger (LiteLLM table, MIT).
+pub mod usage_prices;
 pub mod chat_user_archive;
 // K2 Connect "Clone to" — the pure bundle engine (inventory the three
 // state locations, scrub secrets, exclude bulk, tar/gz a manifest-driven

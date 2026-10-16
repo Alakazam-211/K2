@@ -37,6 +37,18 @@ The Files drawer uses the **Seti** icon font for file-type glyphs
 When redistributing K2 builds that include the Seti font, ship the MIT
 notice (this section and/or `THIRD_PARTY_NOTICES.txt`).
 
+## Third-party: LiteLLM model price table (MIT)
+
+The Usage page's estimated API-equivalent cost uses per-token rates from
+LiteLLM's `model_prices_and_context_window.json`.
+
+| | |
+|--|--|
+| **What** | `crates/k2-core/data/llm_prices.json` (a trimmed copy, bundled) and the daemon's daily refresh into `~/.k2/usage/prices.json` |
+| **Upstream** | [LiteLLM](https://github.com/BerriAI/litellm) (Berri AI) |
+| **License** | **MIT** (Copyright (c) 2023 Berri AI) — full text in `crates/k2-core/data/LLM_PRICES_NOTICE.txt` |
+| **K2 code** | Remains **FSL-1.1-Apache-2.0**. The MIT data does **not** relicense the product. |
+
 ## Third-party: Public Suffix List (MPL-2.0) and BIP-39 word list (MIT)
 
 The vault (`crates/k2-vault`) embeds two data files:

@@ -890,6 +890,73 @@ mod real {
         }
     }
 
+    /// Freeze-frame: a JPEG of the page's visible region, as raw bytes (an
+    /// ArrayBuffer in JS). Captured on the main thread inside `with_webview`
+    /// with the engine's own API (commands/browser_snapshot.rs), encoded on a
+    /// worker thread. The renderer gives this a ~150 ms budget and falls
+    /// back to a blank hide, so every failure is just `Err`.
+    #[tauri::command]
+    pub async fn browser_snapshot(
+        app: AppHandle,
+        item_id: String,
+        parent_window: Option<String>,
+    ) -> Result<tauri::ipc::Response, String> {
+        let view = browser_view(&app, &item_id, parent_window.as_deref())
+            .ok_or("no such browser view")?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        view.with_webview(move |webview| {
+            let handler: super::super::browser_snapshot::SnapshotHandler = Box::new(move |result| {
+                let _ = tx.send(result);
+            });
+            capture_on_platform(webview, handler);
+        })
+        .map_err(|e| e.to_string())?;
+        let captured = match tokio::time::timeout(std::time::Duration::from_secs(2), rx).await {
+            Ok(Ok(result)) => result?,
+            Ok(Err(_)) => return Err("browser view closed before the snapshot".into()),
+            Err(_) => return Err("browser snapshot timed out".into()),
+        };
+        let jpeg = tauri::async_runtime::spawn_blocking(move || captured.into_jpeg())
+            .await
+            .map_err(|e| e.to_string())??;
+        Ok(tauri::ipc::Response::new(jpeg))
+    }
+
+    fn capture_on_platform(
+        webview: tauri::webview::PlatformWebview,
+        handler: super::super::browser_snapshot::SnapshotHandler,
+    ) {
+        #[cfg(target_os = "macos")]
+        {
+            // SAFETY: inner() is the WKWebView tauri owns; main thread.
+            let view: &objc2_web_kit::WKWebView = unsafe { &*webview.inner().cast() };
+            super::super::browser_snapshot::macos::capture(view, handler);
+        }
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd"
+        ))]
+        super::super::browser_snapshot::gtk::capture(&webview.inner(), handler);
+        #[cfg(windows)]
+        super::super::browser_snapshot::windows::capture(&webview.controller(), handler);
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux",
+            target_os = "dragonfly",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd"
+        )))]
+        {
+            let _ = webview;
+            handler(Err("browser snapshot is not supported on this platform".into()));
+        }
+    }
+
     #[cfg(test)]
     mod favicon_parse_tests {
         use super::parse_favicon_result;
@@ -1029,6 +1096,14 @@ mod stub {
         _item_id: String,
         _parent_window: Option<String>,
     ) -> Result<super::BrowserHistoryState, String> {
+        Err(OFF.into())
+    }
+    #[tauri::command]
+    pub async fn browser_snapshot(
+        _app: AppHandle,
+        _item_id: String,
+        _parent_window: Option<String>,
+    ) -> Result<tauri::ipc::Response, String> {
         Err(OFF.into())
     }
 }

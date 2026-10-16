@@ -16,6 +16,12 @@ import {
 } from '@/lib/loopback-remote'
 import { webFeatures } from '@/web/features'
 import { normalizeUrl } from './normalizeUrl'
+import {
+  BrowserFreeze,
+  FREEZE_BUDGET_MS,
+  type BrowserFace,
+  type FrozenFrame,
+} from './browserFreeze'
 
 export { focusVisibleBrowserAddress } from './focusBrowserAddress'
 export { normalizeUrl }
@@ -41,8 +47,9 @@ export { normalizeUrl }
  *    is not a term.
  *  - overlays: DOM menus, dialogs, toasts and drags claim their box in the
  *    overlay arbiter (`lib/browser-overlay.ts`). Only a claim that
- *    intersects this dock covers (hides) the page; a menu on the far side
- *    of the window leaves it live.
+ *    intersects this dock covers the page, and a covered page FREEZES
+ *    (`browserFreeze.ts`): a snapshot of the page is shown as an `<img>`
+ *    in the dock, then the native view hides; uncover shows it again.
  *  - lifecycle: the webview is created lazily on FIRST visibility (so a
  *    restored background layout doesn't load pages invisibly) and
  *    `browser_close`d on unmount (item/tab close).
@@ -123,6 +130,34 @@ export function browserPaneVisible(input: {
   return input.tabVisible && !workspaceCovered
 }
 
+/**
+ * `browser_snapshot` → a picture of the native page as an object URL, sized
+ * to the dock rect it was taken in (logical px). Null when there is no
+ * view, no rect, the stub build, or no object URLs (tests).
+ */
+export async function takeBrowserSnapshot(
+  itemId: string,
+  parentWindow: string,
+  rect: Rect | null,
+): Promise<FrozenFrame | null> {
+  if (!rect || !webFeatures.browserPane) return null
+  if (typeof URL.createObjectURL !== 'function') return null
+  const bytes = await invoke<ArrayBuffer | null>('browser_snapshot', { itemId, parentWindow })
+  if (!(bytes instanceof ArrayBuffer) || bytes.byteLength === 0) return null
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }))
+  let released = false
+  return {
+    url,
+    width: rect.width,
+    height: rect.height,
+    release: () => {
+      if (released) return
+      released = true
+      URL.revokeObjectURL(url)
+    },
+  }
+}
+
 /** FNV-1a 32-bit of a host key, as 8 hex chars (Home M4, MS69). */
 export function hostHash(hostKey: string): string {
   let h = 0x811c9dc5
@@ -172,19 +207,22 @@ export function BrowserPane({
   const appPage = usePageViewStore((s) => s.page)
   const windowFocused = useWindowFocusStore((s) => s.isFocused)
   const parked = useRoomParked()
-  // Content area the native view docks onto (below the chrome bar).
-  const contentRef = useRef<HTMLDivElement | null>(null)
-  // A DOM overlay (menu, dialog, toast, drag) whose box intersects the
-  // dock. The native page paints over DOM, so it gives way. OS focus does not.
-  const covered = useBrowserCovered(contentRef)
-  const visible = browserPaneVisible({
+  const shown = browserPaneVisible({
     standalone,
     tabVisible,
     settingsOpen,
     page: appPage,
     windowFocused,
     parked,
-  }) && !covered
+  })
+  // Content area the native view docks onto (below the chrome bar).
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  // A DOM overlay (menu, dialog, toast, drag, drawer slide) whose box
+  // intersects the dock. OS focus does not cover.
+  const covered = useBrowserCovered(contentRef)
+  const face: BrowserFace = !shown ? 'hidden' : covered ? 'frozen' : 'live'
+  // "Visible" for creation, navigation and the URL poll: live only.
+  const visible = face === 'live'
   const setBrowserItemState = useStore(room.tabs, (s) => s.setBrowserItemState)
 
   // Parent window for all browser_* invokes (main / window-{uuid}).
@@ -220,6 +258,12 @@ export function BrowserPane({
   const pendingUrlRef = useRef<string>('')
   const visibleRef = useRef(visible)
   visibleRef.current = visible
+
+  // Freeze-frame picture shown in the dock while the native view is hidden
+  // under an overlay (null when the page is live or hidden).
+  const [frame, setFrame] = useState<FrozenFrame | null>(null)
+  const frameRef = useRef<FrozenFrame | null>(null)
+  const framePaintedRef = useRef<(() => void) | null>(null)
 
   // ── Bounds bridge ───────────────────────────────────────────────────
   const rafRef = useRef<number | null>(null)
@@ -264,6 +308,7 @@ export function BrowserPane({
       await invoke('browser_create', { itemId, url: normalized, rect, parentWindow })
       createdRef.current = true
       setCreated(true)
+      freezeRef.current?.adoptCreatedView()
       setUnavailable(false)
       lastKnownUrlRef.current = normalized
       pendingUrlRef.current = ''
@@ -375,22 +420,68 @@ export function BrowserPane({
     }
   }, [itemId, parentWindow, refreshHistory])
 
-  // ── Visibility bridge + lazy creation ───────────────────────────────
+  // ── Visibility bridge: live / frozen / hidden ───────────────────────
+  // The freeze controller owns browser_set_visible once the view exists.
+  // Its side effects read the latest ids and callbacks through this ref.
+  const freezeCtx = useRef({ itemId, parentWindow, measureRect })
+  freezeCtx.current = { itemId, parentWindow, measureRect }
+  const freezeRef = useRef<BrowserFreeze | null>(null)
+  if (freezeRef.current === null) {
+    freezeRef.current = new BrowserFreeze(
+      {
+        budgetMs: FREEZE_BUDGET_MS,
+        setNativeVisible: (show) => {
+          if (!createdRef.current) return
+          const { itemId: id, parentWindow: parent } = freezeCtx.current
+          void invoke('browser_set_visible', { itemId: id, visible: show, parentWindow: parent }).catch(() => {})
+        },
+        beforeShow: () => {
+          // Bounds may have gone stale while hidden (mosaic resizes under
+          // display:none, a drawer slide) — re-assert before showing.
+          if (!createdRef.current) return
+          const { itemId: id, parentWindow: parent, measureRect: measure } = freezeCtx.current
+          const rect = measure()
+          if (!rect) return
+          void invoke('browser_set_bounds', { itemId: id, rect, parentWindow: parent }).catch(() => {})
+        },
+        snapshot: () => {
+          const { itemId: id, parentWindow: parent, measureRect: measure } = freezeCtx.current
+          return takeBrowserSnapshot(id, parent, measure())
+        },
+        showFrame: (next) =>
+          new Promise<void>((resolve) => {
+            const prev = frameRef.current
+            frameRef.current = next
+            if (prev && prev !== next) prev.release()
+            framePaintedRef.current?.()
+            framePaintedRef.current = next ? resolve : null
+            setFrame(next)
+            if (!next) resolve()
+          }),
+        afterPaint: (fn) => {
+          if (typeof requestAnimationFrame !== 'function') {
+            setTimeout(fn, 32)
+            return
+          }
+          requestAnimationFrame(() => requestAnimationFrame(fn))
+        },
+        setTimer: (fn, ms) => setTimeout(fn, ms),
+        clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      },
+      { face, nativeShown: false },
+    )
+  }
+
+  // Lazy creation: only a live (shown, uncovered) pane creates its view.
   useEffect(() => {
-    if (visible) {
-      if (!createdRef.current) {
-        const target = normalizeUrl(url)
-        if (target) void createView(target)
-      } else {
-        void invoke('browser_set_visible', { itemId, visible: true, parentWindow }).catch(() => {})
-        // Bounds may have gone stale while hidden (mosaic resizes under
-        // display:none don't reach the native view) — re-assert on show.
-        scheduleBoundsPush()
-      }
-    } else if (createdRef.current) {
-      void invoke('browser_set_visible', { itemId, visible: false, parentWindow }).catch(() => {})
-    }
-  }, [visible, url, itemId, createView, scheduleBoundsPush, parentWindow])
+    if (!visible || createdRef.current) return
+    const target = normalizeUrl(url)
+    if (target) void createView(target)
+  }, [visible, url, createView])
+
+  useEffect(() => {
+    freezeRef.current?.set(face)
+  }, [face])
 
   // ── Navigate requests (openUrlInPane navigate-in-place reuse) ───────
   // Tab panes: only a request from THIS window (navSeq bump) moves the
@@ -461,6 +552,7 @@ export function BrowserPane({
   // (or a remount) hard-colliding.
   useEffect(() => {
     return () => {
+      freezeRef.current?.dispose()
       createdRef.current = false
       createInFlightRef.current = false
       void invoke('browser_close', { itemId, parentWindow }).catch(() => {})
@@ -696,7 +788,32 @@ export function BrowserPane({
       {/* Docking area — the native child webview is positioned exactly
           over this div. DOM content here only shows when the view is
           absent (not created / stub build / error). */}
-      <div ref={contentRef} className="flex-1 min-h-0 relative">
+      <div ref={contentRef} className="flex-1 min-h-0 relative overflow-hidden">
+        {frame && (
+          // Freeze-frame: the page as it was, pinned top-left at its own
+          // size so a shrinking dock (drawer slide) clips it, never squashes.
+          <img
+            src={frame.url}
+            alt=""
+            aria-hidden
+            draggable={false}
+            data-browser-freeze=""
+            className="pointer-events-none absolute left-0 top-0 select-none"
+            style={{ width: frame.width, height: frame.height, maxWidth: 'none' }}
+            onLoad={() => {
+              const done = framePaintedRef.current
+              framePaintedRef.current = null
+              if (!done) return
+              if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => done())
+              else done()
+            }}
+            onError={() => {
+              const done = framePaintedRef.current
+              framePaintedRef.current = null
+              done?.()
+            }}
+          />
+        )}
         {placeholder !== null && (
           <div
             className="absolute inset-0 flex items-center justify-center px-4 text-center text-[var(--color-text-muted)]"

@@ -1930,6 +1930,7 @@ pub fn run() {
             commands::browser_webviews::browser_back,
             commands::browser_webviews::browser_forward,
             commands::browser_webviews::browser_history_state,
+            commands::browser_webviews::browser_snapshot,
             // Remote Gmail OAuth — client-local loopback capture.
             commands::oauth_loopback::oauth_loopback_bind,
             commands::oauth_loopback::oauth_loopback_wait,

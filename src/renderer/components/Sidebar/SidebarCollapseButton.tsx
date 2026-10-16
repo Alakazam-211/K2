@@ -12,28 +12,43 @@ export function SidebarCollapseButton(): React.JSX.Element {
       title={collapsed ? 'Open workspaces sidebar' : 'Collapse workspaces sidebar'}
       aria-label={collapsed ? 'Open workspaces sidebar' : 'Collapse workspaces sidebar'}
     >
-      <svg
-        className="w-4 h-4"
-        viewBox="0 0 14 14"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden
-      >
-        {collapsed ? (
-          <>
-            <path d="M4.5 3.5 L8 7 L4.5 10.5" />
-            <path d="M8 3.5 L11.5 7 L8 10.5" />
-          </>
-        ) : (
-          <>
-            <path d="M9.5 3.5 L6 7 L9.5 10.5" />
-            <path d="M6 3.5 L2.5 7 L6 10.5" />
-          </>
-        )}
-      </svg>
+      <DoubleChevron direction={collapsed ? 'right' : 'left'} className="w-4 h-4" />
     </button>
+  )
+}
+
+/** The nav's double-arrow glyph (» / «). Shared with the drawer toggles in
+ *  the room and drawer tab bars (`Layout/DrawerTabBarToggle.tsx`). */
+export function DoubleChevron({
+  direction,
+  className,
+}: {
+  direction: 'left' | 'right'
+  className?: string
+}): React.JSX.Element {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 14 14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      data-double-chevron={direction}
+    >
+      {direction === 'right' ? (
+        <>
+          <path d="M4.5 3.5 L8 7 L4.5 10.5" />
+          <path d="M8 3.5 L11.5 7 L8 10.5" />
+        </>
+      ) : (
+        <>
+          <path d="M9.5 3.5 L6 7 L9.5 10.5" />
+          <path d="M6 3.5 L2.5 7 L6 10.5" />
+        </>
+      )}
+    </svg>
   )
 }

@@ -7,7 +7,7 @@ import { usePanelsStore } from '../../stores/panels'
 import { usePageViewStore } from '../../stores/page-view'
 import { TAB_LABELS } from '../TabbedPanel/TabbedPanel'
 import DrawerHandle from './DrawerHandle'
-import { drawerHandlesOn } from './drawer-handles'
+import { DrawerTabBarTogglesContext, drawerHandlesOn, drawerTabBarTogglesOn } from './drawer-handles'
 
 interface LayoutProps {
   /** Content for the primary sidebar (projects list) — shown when expanded */
@@ -50,9 +50,12 @@ export default function Layout({
   const handles = usePageViewStore((s) => drawerHandlesOn(s.page))
   const leftHandle = handles && !!leftPanel && leftTabs.length > 0
   const rightHandle = handles && !!rightPanel && rightTabs.length > 0
+  // Same experiment: » / « drawer toggles in the room and drawer tab bars.
+  const tabBarToggles = usePageViewStore((s) => drawerTabBarTogglesOn(s.page))
 
   // App shell — ST3: window inset + canvas layer (both flush/0 in Square)
   return (
+    <DrawerTabBarTogglesContext.Provider value={tabBarToggles}>
     <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg-canvas)] p-[var(--inset-window)]">
       {/* TopBar */}
       <TopBar
@@ -123,5 +126,6 @@ export default function Layout({
         )}
       </div>
     </div>
+    </DrawerTabBarTogglesContext.Provider>
   )
 }

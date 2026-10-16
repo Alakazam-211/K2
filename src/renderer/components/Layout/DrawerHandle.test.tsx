@@ -45,7 +45,13 @@ vi.mock('@/lib/daemon-settings', () => ({
 }))
 
 import Layout from './Layout'
-import { DRAWER_HANDLE_PAGES, drawerHandlesOn } from './drawer-handles'
+import {
+  DRAWER_HANDLE_PAGES,
+  DRAWER_TABBAR_TOGGLE_PAGES,
+  drawerHandlesOn,
+  drawerTabBarTogglesOn,
+  useDrawerTabBarToggles,
+} from './drawer-handles'
 import { usePageViewStore, type AppPage } from '@/stores/page-view'
 import { usePanelsStore } from '@/stores/panels'
 import { useSidebarStore } from '@/stores/sidebar'
@@ -97,6 +103,23 @@ describe('drawer handles switch', () => {
     expect([...DRAWER_HANDLE_PAGES]).toEqual(['agents'])
     expect(drawerHandlesOn('agents')).toBe(true)
     expect(drawerHandlesOn('home')).toBe(false)
+    expect([...DRAWER_TABBAR_TOGGLE_PAGES]).toEqual(['agents'])
+    expect(drawerTabBarTogglesOn('agents')).toBe(true)
+    expect(drawerTabBarTogglesOn('home')).toBe(false)
+  })
+
+  it('Layout turns the tab bar toggles on for Agents and off for Home', () => {
+    function Probe(): React.JSX.Element {
+      return <div data-testid="probe" data-on={useDrawerTabBarToggles() ? 'yes' : 'no'} />
+    }
+    render(
+      <Layout leftPanel={<div />} rightPanel={<div />}>
+        <Probe />
+      </Layout>,
+    )
+    expect(screen.getByTestId('probe').getAttribute('data-on')).toBe('yes')
+    onPage('home')
+    expect(screen.getByTestId('probe').getAttribute('data-on')).toBe('no')
   })
 })
 

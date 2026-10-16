@@ -370,12 +370,16 @@ export function ThreadComposeBox({
   drawer,
   children,
   error,
+  stacked = false,
 }: {
   chips?: ReactNode
   drawer?: ReactNode
   /** The leading buttons, the textarea and Send, in order. */
   children: ReactNode
   error?: ReactNode
+  /** Wrap: the caller puts the textarea on its own first line (CSS order,
+   *  no remount) and the buttons on the line under it. */
+  stacked?: boolean
 }): JSX.Element {
   return (
     <>
@@ -384,9 +388,11 @@ export function ThreadComposeBox({
       <div
         data-zen-compose-box=""
         data-chamfer=""
+        data-stacked={stacked ? 'true' : undefined}
         className="flex items-end gap-2"
         style={{
           position: 'relative',
+          ...(stacked ? { flexWrap: 'wrap', rowGap: 4 } : {}),
           padding: THREAD_COMPOSE_BOX_PAD,
           borderRadius: 'calc(var(--zen-radius) + 4px)',
           background: 'var(--zen-surface-raised)',

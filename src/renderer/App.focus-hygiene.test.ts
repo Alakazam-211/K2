@@ -100,11 +100,14 @@ describe('Focus window overlay hygiene', () => {
     expect(importers, `remaining WorktreeBar importers: ${importers.join(', ')}`).toEqual([])
   })
 
-  it('FocusLayout still exposes left/right panel toggles; panel tab set unchanged', () => {
-    expect(focusLayoutSrc).toContain('toggleLeftPanel')
-    expect(focusLayoutSrc).toContain('toggleRightPanel')
-    expect(focusLayoutSrc).toContain('title="Toggle left panel"')
-    expect(focusLayoutSrc).toContain('title="Toggle right panel"')
+  it('FocusLayout drawers slide and open from the tab bars, not top bar toggles; panel tab set unchanged', () => {
+    // 0.46.0: the drawer toggles live in the room and drawer tab bars
+    // (Layout/DrawerTabBarToggle.tsx), the same in every window.
+    expect(focusLayoutSrc).not.toContain('title="Toggle left panel"')
+    expect(focusLayoutSrc).not.toContain('title="Toggle right panel"')
+    expect(focusLayoutSrc).toContain('<AnimatedDrawer open={leftPanelOpen} side="left">')
+    expect(focusLayoutSrc).toContain('<AnimatedDrawer open={rightPanelOpen} side="right">')
+    expect(appSrc).toContain('<NoTabBarDrawerToggles />')
     expect(panelsSrc).toMatch(/type PanelTab = 'files' \| 'changes' \| 'history' \| 'workspace'/)
   })
 

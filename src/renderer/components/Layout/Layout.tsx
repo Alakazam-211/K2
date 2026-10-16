@@ -4,9 +4,7 @@ import IconRail from '../Sidebar/IconRail'
 import { Surface } from '../ui'
 import { useSidebarStore } from '../../stores/sidebar'
 import { usePanelsStore } from '../../stores/panels'
-import { usePageViewStore } from '../../stores/page-view'
 import AnimatedDrawer from './AnimatedDrawer'
-import { DrawerTabBarTogglesContext, drawerTabBarTogglesOn } from './drawer-handles'
 
 interface LayoutProps {
   /** Content for the primary sidebar (projects list) — shown when expanded */
@@ -40,25 +38,14 @@ export default function Layout({
 
   const leftPanelOpen = usePanelsStore((s) => s.leftPanelOpen)
   const rightPanelOpen = usePanelsStore((s) => s.rightPanelOpen)
-  const toggleLeftPanel = usePanelsStore((s) => s.toggleLeftPanel)
-  const toggleRightPanel = usePanelsStore((s) => s.toggleRightPanel)
-  // Drawer-controls experiment: on these pages » / « toggles in the room
-  // and drawer tab bars replace the top bar's drawer buttons.
-  const tabBarToggles = usePageViewStore((s) => drawerTabBarTogglesOn(s.page))
 
   // App shell — ST3: window inset + canvas layer (both flush/0 in Square)
   return (
-    <DrawerTabBarTogglesContext.Provider value={tabBarToggles}>
     <div className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-bg-canvas)] p-[var(--inset-window)]">
       {/* TopBar */}
       <TopBar
         projectName={projectName}
         workspaceName={workspaceName}
-        leftPanelVisible={leftPanelOpen}
-        rightPanelVisible={rightPanelOpen}
-        onToggleLeftPanel={toggleLeftPanel}
-        onToggleRightPanel={toggleRightPanel}
-        showDrawerToggles={!tabBarToggles}
       />
 
       {/* Content area — ST3: sidebar | panes gap (0 in Square) */}
@@ -100,6 +87,5 @@ export default function Layout({
         )}
       </div>
     </div>
-    </DrawerTabBarTogglesContext.Provider>
   )
 }

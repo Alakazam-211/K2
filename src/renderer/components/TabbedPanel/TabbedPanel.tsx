@@ -8,7 +8,6 @@ import { usePanelsStore } from '../../stores/panels'
 import { showContextMenu } from '../../lib/context-menu'
 import { Surface } from '@/components/ui'
 import DrawerTabBarToggle from '@/components/Layout/DrawerTabBarToggle'
-import { useDrawerTabBarToggles } from '@/components/Layout/drawer-handles'
 
 type PanelTab = 'files' | 'changes' | 'history' | 'workspace'
 
@@ -107,7 +106,6 @@ export default function TabbedPanel({
   const thisSide = resizeSide === 'right' ? 'left' : 'right'
   const oppositeSide = thisSide === 'left' ? 'right' : 'left'
   const oppositeLabel = oppositeSide === 'left' ? 'Left' : 'Right'
-  const drawerToggle = useDrawerTabBarToggles()
 
   const handleTabContextMenu = useCallback(async (e: React.MouseEvent, tab: PanelTab) => {
     e.preventDefault()
@@ -156,9 +154,9 @@ export default function TabbedPanel({
       {/* Tab strip — h-8 (32px) matches the center PresetsBar launch strip so
           the bottom border lines up across left / center / right. */}
       <div className="flex h-8 items-center border-b border-[var(--color-border)] flex-shrink-0">
-        {/* Drawer-controls experiment (Agents): the open drawer's close
-            toggle sits at the strip's end nearest the room. */}
-        {drawerToggle && thisSide === 'right' && <DrawerTabBarToggle side="right" placement="drawer" />}
+        {/* The open drawer's close toggle sits at the strip's end nearest
+            the room (`Layout/DrawerTabBarToggle.tsx`). */}
+        {thisSide === 'right' && <DrawerTabBarToggle side="right" placement="drawer" />}
         {tabs.map((tab) => (
           <button
             key={tab}
@@ -173,7 +171,7 @@ export default function TabbedPanel({
             {TAB_LABELS[tab]}
           </button>
         ))}
-        {drawerToggle && thisSide === 'left' && <DrawerTabBarToggle side="left" placement="drawer" />}
+        {thisSide === 'left' && <DrawerTabBarToggle side="left" placement="drawer" />}
       </div>
 
       {/* Tab content */}

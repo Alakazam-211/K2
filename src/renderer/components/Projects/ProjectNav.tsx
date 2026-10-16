@@ -20,6 +20,7 @@ import { showContextMenu } from '@/lib/context-menu'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
 import { KeyCombo } from '@/components/KeySymbol'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
+import { DoubleChevron } from '@/components/Sidebar/SidebarCollapseButton'
 import ProjectGroupAvatar from './ProjectGroupAvatar'
 import { completeDashDrag, useDashboardDndStore } from './dashboard-dnd'
 import {
@@ -736,9 +737,9 @@ function NewProjectAffordance(): React.JSX.Element {
 
   if (!editing) {
     return (
-      <div className="p-3 border-t border-[var(--color-border)]">
+      <div className="p-3 border-t border-[var(--color-border)] flex items-center gap-2">
         <button
-          className="no-drag w-full flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08] transition-colors"
+          className="no-drag flex-1 min-w-0 flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08] transition-colors"
           onClick={() => setEditing(true)}
         >
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -746,6 +747,7 @@ function NewProjectAffordance(): React.JSX.Element {
           </svg>
           New Project
         </button>
+        <ProjectNavCollapseButton />
       </div>
     )
   }
@@ -754,6 +756,28 @@ function NewProjectAffordance(): React.JSX.Element {
     <div className="p-3 border-t border-[var(--color-border)]">
       <CreateProjectForm onDone={() => setEditing(false)} />
     </div>
+  )
+}
+
+/** Collapse the projects nav to its rail, or open it again. The nav is
+ *  never fully hidden (it collapses to the rail), so its toggle follows the
+ *  main nav's own pattern: the » / « button at the bottom of the nav and of
+ *  the rail, reachable whether or not a project is open. */
+export function ProjectNavCollapseButton(): React.JSX.Element {
+  const collapsed = useProjectGroupsStore((s) => s.navCollapsed)
+  const label = collapsed ? 'Open projects nav' : 'Collapse projects nav'
+  return (
+    <button
+      type="button"
+      className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 bg-white/[0.04] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08] transition-colors"
+      onClick={() => useProjectGroupsStore.getState().setNavCollapsed(!collapsed)}
+      title={label}
+      aria-label={label}
+      aria-expanded={!collapsed}
+      data-projects-nav-toggle=""
+    >
+      <DoubleChevron direction={collapsed ? 'right' : 'left'} className="w-4 h-4" />
+    </button>
   )
 }
 
@@ -1109,6 +1133,9 @@ export function ProjectNavRail({
           </div>
         </div>
       )}
+      <div className="mt-auto pt-1.5 flex-shrink-0">
+        <ProjectNavCollapseButton />
+      </div>
     </div>
   )
 }

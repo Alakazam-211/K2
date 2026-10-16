@@ -8,7 +8,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render } from '@testing-library/react'
-import type { ReactElement } from 'react'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({
@@ -22,7 +21,7 @@ if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !=
 
 import { TabBar } from '@/components/TabBar/TabBar'
 import TabbedPanel from '@/components/TabbedPanel/TabbedPanel'
-import { DrawerTabBarTogglesContext } from './drawer-handles'
+import { DrawerToggleButton, NoTabBarDrawerToggles } from './DrawerTabBarToggle'
 import { usePanelsStore } from '@/stores/panels'
 import { useTabsStore } from '@/stores/tabs'
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
@@ -37,23 +36,16 @@ function setSplit(count: number): void {
   })
 }
 
-function withToggles(ui: ReactElement, on = true): ReactElement {
-  return <DrawerTabBarTogglesContext.Provider value={on}>{ui}</DrawerTabBarTogglesContext.Provider>
-}
-
-function renderBars(count: number, on = true): HTMLElement[] {
+function renderBars(count: number): HTMLElement[] {
   setSplit(count)
   const { container } = renderInPrimaryRoom(
-    withToggles(
-      <>
-        {Array.from({ length: count }, (_, i) => (
-          <div key={i} data-col={i}>
-            <TabBar cwd="/ws" groupIndex={i} />
-          </div>
-        ))}
-      </>,
-      on,
-    ),
+    <>
+      {Array.from({ length: count }, (_, i) => (
+        <div key={i} data-col={i}>
+          <TabBar cwd="/ws" groupIndex={i} />
+        </div>
+      ))}
+    </>,
   )
   return Array.from({ length: count }, (_, i) => {
     const bar = container.querySelector(`[data-col="${i}"]`)?.firstElementChild
@@ -142,31 +134,22 @@ describe('room tab bar: closed drawers', () => {
     expect(toggleIn(bar, 'left')).toBeNull()
     expect(toggleIn(bar, 'right')).not.toBeNull()
   })
-
-  it('off outside the Agents Layout (no context): no toggles', () => {
-    const [bar] = renderBars(2, false)
-    expect(bar.querySelector('[data-drawer-tabbar-toggle]')).toBeNull()
-    expect(document.querySelector('[data-drawer-tabbar-toggle]')).toBeNull()
-  })
 })
 
 describe('drawer tab strip: open drawers', () => {
-  function renderDrawer(side: 'left' | 'right', on = true): HTMLElement {
+  function renderDrawer(side: 'left' | 'right'): HTMLElement {
     const tabs = side === 'left' ? (['files', 'workspace'] as const) : (['history', 'changes'] as const)
     const { container } = render(
-      withToggles(
-        <TabbedPanel
-          tabs={[...tabs]}
-          activeTab={tabs[0]}
-          onTabChange={() => {}}
-          width={260}
-          onWidthChange={() => {}}
-          resizeSide={side === 'left' ? 'right' : 'left'}
-        >
-          <div />
-        </TabbedPanel>,
-        on,
-      ),
+      <TabbedPanel
+        tabs={[...tabs]}
+        activeTab={tabs[0]}
+        onTabChange={() => {}}
+        width={260}
+        onWidthChange={() => {}}
+        resizeSide={side === 'left' ? 'right' : 'left'}
+      >
+        <div />
+      </TabbedPanel>,
     )
     const strip = Array.from(container.querySelectorAll('div')).find((d) =>
       d.className.includes('h-8 items-center border-b'),
@@ -198,9 +181,37 @@ describe('drawer tab strip: open drawers', () => {
     fireEvent.click(btn)
     expect(usePanelsStore.getState().rightPanelOpen).toBe(false)
   })
+})
 
-  it('no toggle in the strip outside the Agents Layout', () => {
-    const strip = renderDrawer('left', false)
-    expect(strip.querySelector('[data-drawer-tabbar-toggle]')).toBeNull()
+describe('no tab bar (empty room, Focus window loading)', () => {
+  it('a closed drawer gets its toggle in the top corner; open drawers none', () => {
+    const { container } = render(
+      <div className="relative">
+        <NoTabBarDrawerToggles />
+      </div>,
+    )
+    const left = must(container.querySelector('[data-no-tabbar-drawer-toggle="left"]') as HTMLElement | null)
+    const right = must(container.querySelector('[data-no-tabbar-drawer-toggle="right"]') as HTMLElement | null)
+    expect(left.className).toContain('left-0')
+    expect(right.className).toContain('right-0')
+    fireEvent.click(must(toggleIn(left, 'left')))
+    expect(usePanelsStore.getState().leftPanelOpen).toBe(true)
+    expect(container.querySelector('[data-no-tabbar-drawer-toggle="left"]')).toBeNull()
+    expect(container.querySelector('[data-no-tabbar-drawer-toggle="right"]')).not.toBeNull()
+  })
+})
+
+describe('DrawerToggleButton (any drawer)', () => {
+  it('names the drawer and calls its own toggle', () => {
+    let calls = 0
+    const { getByRole } = render(
+      <DrawerToggleButton side="right" placement="room" name="project chat" onToggle={() => calls++}>
+        <span data-testid="dot" />
+      </DrawerToggleButton>,
+    )
+    const btn = getByRole('button', { name: 'Show project chat' })
+    expect(btn.querySelector('[data-testid="dot"]')).not.toBeNull()
+    fireEvent.click(btn)
+    expect(calls).toBe(1)
   })
 })

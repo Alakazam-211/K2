@@ -64,6 +64,7 @@ import {
   setProjectChatDraft,
 } from '@/lib/composer-drafts'
 import { primaryScope } from '@/kessel/server-scope'
+import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
 
 // Resize-handle hit-area thickness (px), centered on the panel's left
 // border (the dashboard's DIVIDER_HIT_PX idiom).
@@ -309,9 +310,17 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
         title="Drag to resize"
       />
       {resizing && <div className="fixed inset-0 z-50" style={{ cursor: 'col-resize' }} />}
-      {/* Header row — identity only; open/close lives on the top-bar
-          toggle (§6.7.3). */}
+      {/* Header row — the close toggle at the end nearest the dashboard
+          (the drawer-toggle principle), then identity. */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] flex-shrink-0">
+        <div className="-ml-3 -my-1.5 flex self-stretch">
+          <DrawerToggleButton
+            side="right"
+            placement="drawer"
+            name="project chat"
+            onToggle={() => useProjectGroupsStore.getState().setChatCollapsed(true)}
+          />
+        </div>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--color-text-muted)] flex-shrink-0">
           <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
         </svg>

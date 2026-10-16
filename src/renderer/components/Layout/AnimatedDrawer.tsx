@@ -20,10 +20,16 @@ import { DRAWER_ANIM_MS, DRAWER_TRANSITION, drawerMotionOn } from './drawer-moti
 export default function AnimatedDrawer({
   open,
   side,
+  bordered = true,
+  clipAtRest = true,
   children,
 }: {
   open: boolean
   side: 'left' | 'right'
+  /** Draw the border on the room side (off when the drawer draws its own). */
+  bordered?: boolean
+  /** Clip at rest too (off when the drawer's resize edge hangs past it). */
+  clipAtRest?: boolean
   children: ReactNode
 }): React.JSX.Element | null {
   const [mounted, setMounted] = useState(open)
@@ -41,6 +47,7 @@ export default function AnimatedDrawer({
     if (outer) {
       outer.style.transition = ''
       outer.style.width = ''
+      outer.style.overflow = ''
       delete outer.dataset.drawerAnim
     }
   }, [])
@@ -62,6 +69,7 @@ export default function AnimatedDrawer({
     outer.style.transition = 'none'
     outer.style.width = `${from}px`
     void outer.offsetWidth // commit the start width before transitioning
+    outer.style.overflow = 'hidden'
     outer.dataset.drawerAnim = dir === 'open' ? 'opening' : 'closing'
     outer.style.transition = DRAWER_TRANSITION
     outer.style.width = `${to}px`
@@ -72,6 +80,7 @@ export default function AnimatedDrawer({
       stop.current = null
       outer.style.transition = ''
       outer.style.width = ''
+      outer.style.overflow = ''
       delete outer.dataset.drawerAnim
       if (dir === 'close') setMounted(false)
     }
@@ -121,8 +130,8 @@ export default function AnimatedDrawer({
     <div
       ref={outerRef}
       data-drawer-side={side}
-      className={`flex h-full min-h-0 flex-shrink-0 flex-col overflow-hidden border-[var(--color-border)] ${
-        side === 'left' ? 'border-r' : 'border-l'
+      className={`flex h-full min-h-0 flex-shrink-0 flex-col ${clipAtRest ? 'overflow-hidden' : ''} ${
+        bordered ? `border-[var(--color-border)] ${side === 'left' ? 'border-r' : 'border-l'}` : ''
       }`}
     >
       <div ref={innerRef} className="flex h-full min-h-0 w-max flex-col">

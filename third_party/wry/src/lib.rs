@@ -433,6 +433,85 @@ impl Default for Rect {
   }
 }
 
+impl Rect {
+  /// Whole device pixels for this rect, rounding its four *edges* rather
+  /// than its origin and size separately. Rounding `x` and `width` on their
+  /// own can move the right edge a pixel off where `x + width` lands, which
+  /// opens a 1px seam (or overlap) against content laid out around it.
+  #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+  pub(crate) fn to_physical_edges(
+    &self,
+    scale_factor: f64,
+  ) -> (dpi::PhysicalPosition<i32>, dpi::PhysicalSize<i32>) {
+    let position = self.position.to_physical::<f64>(scale_factor);
+    let size = self.size.to_physical::<f64>(scale_factor);
+    let left = position.x.round();
+    let top = position.y.round();
+    let right = (position.x + size.width).round();
+    let bottom = (position.y + size.height).round();
+    (
+      dpi::PhysicalPosition::new(left as i32, top as i32),
+      dpi::PhysicalSize::new((right - left).max(0.) as i32, (bottom - top).max(0.) as i32),
+    )
+  }
+}
+
+#[cfg(test)]
+mod rect_edge_tests {
+  use super::Rect;
+
+  #[test]
+  fn edges_round_not_origin_and_size() {
+    // 100.4 + 50.4 = 150.8: right edge 151. Rounding each alone gives
+    // 100 + 50 = 150, a pixel short.
+    let rect = Rect {
+      position: dpi::LogicalPosition::new(100.4, 10.0).into(),
+      size: dpi::LogicalSize::new(50.4, 20.0).into(),
+    };
+    let (pos, size) = rect.to_physical_edges(1.0);
+    assert_eq!((pos.x, pos.y), (100, 10));
+    assert_eq!((size.width, size.height), (51, 20));
+  }
+
+  #[test]
+  fn adjacent_rects_share_an_edge_at_fractional_scale() {
+    // Two panes side by side at 150%: the left one's right edge must be the
+    // right one's left edge, in device pixels.
+    let scale = 1.5;
+    let left = Rect {
+      position: dpi::LogicalPosition::new(0.0, 0.0).into(),
+      size: dpi::LogicalSize::new(333.3, 100.0).into(),
+    };
+    let right = Rect {
+      position: dpi::LogicalPosition::new(333.3, 0.0).into(),
+      size: dpi::LogicalSize::new(200.0, 100.0).into(),
+    };
+    let (lp, ls) = left.to_physical_edges(scale);
+    let (rp, _) = right.to_physical_edges(scale);
+    assert_eq!(lp.x + ls.width, rp.x);
+  }
+
+  #[test]
+  fn physical_rects_pass_through() {
+    let rect = Rect {
+      position: dpi::PhysicalPosition::new(7, 9).into(),
+      size: dpi::PhysicalSize::new(640u32, 480u32).into(),
+    };
+    let (pos, size) = rect.to_physical_edges(2.0);
+    assert_eq!((pos.x, pos.y, size.width, size.height), (7, 9, 640, 480));
+  }
+
+  #[test]
+  fn negative_sizes_clamp_to_zero() {
+    let rect = Rect {
+      position: dpi::LogicalPosition::new(10.0, 10.0).into(),
+      size: dpi::LogicalSize::new(-5.0, 0.2).into(),
+    };
+    let (_, size) = rect.to_physical_edges(1.0);
+    assert_eq!((size.width, size.height), (0, 0));
+  }
+}
+
 /// Resolves a custom protocol [`Request`] asynchronously.
 ///
 /// See [`WebViewBuilder::with_asynchronous_custom_protocol`] for more information.

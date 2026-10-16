@@ -1529,13 +1529,12 @@ impl InnerWebView {
     position: PhysicalPosition<i32>,
   ) -> Result<()> {
     unsafe {
-      self.controller.SetBounds(RECT {
-        top: 0,
-        left: 0,
-        right: size.width,
-        bottom: size.height,
-      })?;
-
+      // Move the host HWND first and synchronously, then size the
+      // controller inside it: both land before the next paint. With
+      // SWP_ASYNCWINDOWPOS the controller took its new size at once while
+      // the HWND moved a message later, so the page drew at the old offset
+      // for a frame. `WebView` is !Send, so this always runs on the thread
+      // that owns `self.hwnd`; the async flag bought nothing.
       SetWindowPos(
         self.hwnd,
         None,
@@ -1543,8 +1542,15 @@ impl InnerWebView {
         position.y,
         size.width,
         size.height,
-        SWP_ASYNCWINDOWPOS | SWP_NOACTIVATE | SWP_NOZORDER,
+        SWP_NOACTIVATE | SWP_NOZORDER,
       )?;
+
+      self.controller.SetBounds(RECT {
+        top: 0,
+        left: 0,
+        right: size.width,
+        bottom: size.height,
+      })?;
     }
 
     Ok(())
@@ -1553,8 +1559,7 @@ impl InnerWebView {
   pub fn set_bounds(&self, bounds: Rect) -> Result<()> {
     let dpi = unsafe { util::hwnd_dpi(self.hwnd) };
     let scale_factor = util::dpi_to_scale_factor(dpi);
-    let size = bounds.size.to_physical::<i32>(scale_factor);
-    let position = bounds.position.to_physical(scale_factor);
+    let (position, size) = bounds.to_physical_edges(scale_factor);
     self.set_bounds_inner(size, position)?;
     Ok(())
   }

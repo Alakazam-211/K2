@@ -15933,8 +15933,11 @@ k2 vault — secrets for agents, without showing them the value
 
   Moving secrets to another box (owner, Admin, or an agent allowed to manage server-wide secrets):
   k2 vault recipient                       this vault's carry address (run it on the target box)
-  k2 vault carry export --recipient <age1…> --target <vault-id> --workspace <ws> [--server NAME] [--own-box-move] --out <file>
-  k2 vault carry import <file> [--apply]   lists first; --apply puts them in this box's vault
+  k2 vault carry export --recipient <age1…> --target <vault-id> --workspace <ws> [--target-workspace <id>] [--server NAME] [--own-box-move] --out <file>
+  k2 vault carry import <file> [--workspace <id>] [--apply]
+                                           lists first (with the target workspace id); --apply puts them in this box's vault.
+                                           Workspace secrets match by id, never by name: --workspace <id> on this box, or the
+                                           id the carry was made for (--target-workspace). A name works only if it is that id.
 
 Scope (--scope): ws:<workspace> (default inside a workspace), server, session.
 set options:
@@ -16270,7 +16273,7 @@ cmd_vault() {
     local as_json=0 scope="" system=0 kind="" hosts="" preset="" delivery="" ceiling="" describe="" rotate_every="" ttl=""
     local inject_header="" inject_format="" to="" from="" as_d="" env_name="" file_name="" grant_id="" yes=0 since="" to_version=""
     local remove_original=0 env_file_opt="" done_path="" ttl_secs=""
-    local carry_recipient="" carry_target="" own_box_move=0 out_file="" holder="" dry_run=0 replace=0 apply=0
+    local carry_recipient="" carry_target="" carry_target_ws="" own_box_move=0 out_file="" holder="" dry_run=0 replace=0 apply=0
     local add_hosts=() rm_hosts=() pos=() use_secrets=() carry_ws=() carry_server=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -16282,10 +16285,10 @@ cmd_vault() {
             --dry-run) dry_run=1; shift ;;
             --replace) replace=1; shift ;;
             --apply) apply=1; shift ;;
-            --recipient|--target|--workspace|--server|--out|--holder)
+            --recipient|--target|--target-workspace|--workspace|--server|--out|--holder)
                 [ -n "${2:-}" ] || { echo "usage: $1 needs a value" >&2; exit 2; }
                 case "$1" in
-                    --recipient) carry_recipient="$2" ;; --target) carry_target="$2" ;;
+                    --recipient) carry_recipient="$2" ;; --target) carry_target="$2" ;; --target-workspace) carry_target_ws="$2" ;;
                     --workspace) carry_ws+=("$2") ;; --server) carry_server+=("$2") ;;
                     --out) out_file="$2" ;; --holder) holder="$2" ;;
                 esac
@@ -16695,9 +16698,12 @@ import json, sys
 r, t, own = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 ws = [w for w in sys.argv[4].split("\x1f") if w]
 srv = [x for x in sys.argv[5].split("\x1f") if x]
-print(json.dumps({"targetRecipient": r, "targetVaultId": t, "ownBoxMove": own, "workspaces": ws, "server": srv}))' \
+body = {"targetRecipient": r, "targetVaultId": t, "ownBoxMove": own, "workspaces": ws, "server": srv}
+if sys.argv[6]:
+    body["targetWorkspaceId"] = sys.argv[6]
+print(json.dumps(body))' \
                         "$carry_recipient" "$carry_target" "$own_box_move" \
-                        "$(IFS=$'\x1f'; echo "${carry_ws[*]:-}")" "$(IFS=$'\x1f'; echo "${carry_server[*]:-}")")"
+                        "$(IFS=$'\x1f'; echo "${carry_ws[*]:-}")" "$(IFS=$'\x1f'; echo "${carry_server[*]:-}")" "$carry_target_ws")"
                     _vault_call POST carry/export "$cb"
                     ( umask 077; printf '%s' "$_SC_BODY" | python3 -c '
 import base64, json, sys
@@ -16710,11 +16716,15 @@ for n in v["secrets"]:
                     ;;
                 import)
                     local f="${pos[1]:-}"
-                    [ -n "$f" ] && [ -f "$f" ] || { echo "usage: k2 vault carry import <file> [--apply]" >&2; exit 2; }
+                    [ -n "$f" ] && [ -f "$f" ] || { echo "usage: k2 vault carry import <file> [--workspace <id>] [--apply]" >&2; exit 2; }
+                    [ "${#carry_ws[@]}" -le 1 ] || { echo "usage: k2 vault carry import takes one --workspace <id>" >&2; exit 2; }
                     local ib
                     ib="$(python3 -c '
 import base64, json, sys
-print(json.dumps({"carryB64": base64.b64encode(open(sys.argv[1], "rb").read()).decode(), "apply": sys.argv[2] == "1"}))' "$f" "$apply")"
+body = {"carryB64": base64.b64encode(open(sys.argv[1], "rb").read()).decode(), "apply": sys.argv[2] == "1"}
+if sys.argv[3]:
+    body["workspace"] = sys.argv[3]
+print(json.dumps(body))' "$f" "$apply" "${carry_ws[0]:-}")"
                     _vault_call POST carry/import "$ib"
                     if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
                     printf '%s' "$_SC_BODY" | python3 -c '
@@ -16722,8 +16732,18 @@ import json, sys
 v = json.load(sys.stdin)
 if v.get("dryRun"):
     print("from vault %s (key %s)%s:" % (v["sourceVaultId"], v["sourceKeyFingerprint"], ", owner move" if v.get("ownBoxMove") else ""))
+    if v.get("madeForWorkspaceId"):
+        print("made for workspace %s" % v["madeForWorkspaceId"])
     for s in v["secrets"]:
-        print("  %-24s %-28s %s" % (s["scope"], s["name"], ", ".join(s["hosts"]) or "-"))
+        if s.get("skip"):
+            dest = "-> skipped"
+        elif s.get("targetWorkspaceId"):
+            dest = "-> %s (%s)" % (s.get("targetWorkspace") or "?", s["targetWorkspaceId"])
+        else:
+            dest = "-> server"
+        print("  %-24s %-28s %-40s %s" % (s["scope"], s["name"], dest, ", ".join(s["hosts"]) or "-"))
+        if s.get("skip"):
+            print("      " + s["skip"])
     print("nothing changed yet; add --apply to put these in this vault")
 else:
     print("imported: %s" % (", ".join(v["imported"]) or "none"))
@@ -25923,8 +25943,10 @@ MOVING TO ANOTHER BOX
   With "Allow managing server-wide secrets" you may move secrets in a
   migration: on the new box `k2 vault recipient`, on the old box
   `k2 vault carry export --recipient … --target … --workspace <ws>
-  --out carry.age`, then on the new box `k2 vault carry import carry.age`
-  (it lists first; add --apply). The file opens only in that vault. The
+  --out carry.age`, then on the new box `k2 vault carry import carry.age
+  --workspace <id>` with the workspace id on the new box (it lists first;
+  add --apply). Secrets go to a workspace by id, never by name. The file
+  opens only in that vault. The
   recovery key is never used for this.
 
 PUBLISHED SERVICES

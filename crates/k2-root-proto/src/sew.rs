@@ -30,7 +30,9 @@ pub const SEW_BIN: &str = "/usr/local/bin/sew";
 /// Where the helper stages a new `/usr/local/bin/sew` before the rename.
 pub const SEW_BIN_STAGING: &str = "/usr/local/bin/.sew.k2-new";
 pub const SEW_CONFIG_DIR: &str = "/etc/sew";
-/// `root:sew 0640`. The helper edits only `[mgmt] allow_uids` (SW7).
+/// `root:sew 0640`. Sew's file: K2 never edits it. The daemon's uid
+/// reaches `[mgmt] allow_uids` through `sew install`'s own
+/// `mgmt_allow_uids` input (Sew SW5 + SW7).
 pub const SEW_CONFIG: &str = "/etc/sew/sew.toml";
 /// `root:sew-mgmt 0640`, `sewsvc_<43 base64url>`. The daemon gets it from
 /// the helper (`engine sew token`), never through a supplementary group.
@@ -367,9 +369,18 @@ impl InstallRequest {
     /// The `sew install --config-json` body (Sew SW5 `InstallInputs`).
     /// Provider k2, profile shared (the K2 memory split), never a cred mode
     /// (Sew picks encrypted credentials on systemd ≥ 250) and never
-    /// `mgmt_users` (no `sew-mgmt` group for the daemon: SW7 allow_uids).
-    pub fn sew_inputs(&self) -> serde_json::Value {
-        serde_json::json!({"provider": "k2", "k2_jwks_url": self.jwks_url, "profile": "shared"})
+    /// `mgmt_users` (no `sew-mgmt` group for the daemon). `daemon_uid` is
+    /// the caller check's uid, never an input field: Sew writes it to
+    /// `[mgmt] allow_uids` itself (SW5 `mgmt_allow_uids`, SW7), so the
+    /// daemon reaches the mgmt socket without a supplementary group and K2
+    /// never edits `sew.toml`.
+    pub fn sew_inputs(&self, daemon_uid: u32) -> serde_json::Value {
+        serde_json::json!({
+            "provider": "k2",
+            "k2_jwks_url": self.jwks_url,
+            "profile": "shared",
+            "mgmt_allow_uids": [daemon_uid],
+        })
     }
 }
 
@@ -642,9 +653,16 @@ mod tests {
         let ok = r#"{"jwksUrl":"http://127.0.0.1:38471/v1/chat/jwks","masterKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#;
         let r: InstallRequest = serde_json::from_str(ok).unwrap();
         r.validate().unwrap();
-        assert_eq!(r.sew_inputs()["provider"], "k2");
-        assert!(r.sew_inputs().get("mgmt_users").is_none(), "no sew-mgmt group (SW7)");
-        assert!(r.sew_inputs().get("cred_mode").is_none(), "never a plain cred mode");
+        let inputs = r.sew_inputs(1001);
+        assert_eq!(inputs["provider"], "k2");
+        assert_eq!(inputs["mgmt_allow_uids"], serde_json::json!([1001]), "Sew writes [mgmt] allow_uids (SW5)");
+        assert!(inputs.get("mgmt_users").is_none(), "no sew-mgmt group (SW7)");
+        assert!(inputs.get("cred_mode").is_none(), "never a plain cred mode");
+        // A uid on stdin never parses: only the caller check names it.
+        assert!(serde_json::from_str::<InstallRequest>(
+            r#"{"jwksUrl":"http://127.0.0.1:1/v1/chat/jwks","masterKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","mgmt_allow_uids":[0]}"#
+        )
+        .is_err());
         // Unknown keys (a path, a provider, a cred mode) never parse.
         for bad in [
             r#"{"jwksUrl":"http://127.0.0.1:1/v1/chat/jwks","masterKey":"x","provider":"standalone"}"#,

@@ -940,7 +940,10 @@ export function TerminalComposeBar({
     // drawer on its top edge — plus the desktop's "/" commands. Keys are
     // the same handler as the terminal's bar (`handleKeyDown`): Esc,
     // Ctrl+C, Ctrl+B and an empty Enter reach the agent's PTY.
-    const circle = 32
+    // "+" and "/" sit together as one tool group: 2px apart, each a
+    // narrower pill (the box's 8px gap between them read as far too wide,
+    // Rosson 2026-10-16). Zen's box has "+" only, so it is unchanged.
+    const tool = { width: 26, height: 32 }
     return (
       <div
         ref={barRef}
@@ -978,7 +981,8 @@ export function TerminalComposeBar({
             ) : undefined
           }
         >
-          <ThreadRoundButton label="Attach file" title="Attach a file or image" onClick={handleAttachClick}>
+          <div data-compose-tools="" className="flex flex-shrink-0 items-end" style={{ gap: 2 }}>
+          <ThreadRoundButton label="Attach file" title="Attach a file or image" onClick={handleAttachClick} style={tool}>
             +
           </ThreadRoundButton>
           <ThreadRoundButton
@@ -995,8 +999,7 @@ export function TerminalComposeBar({
               'data-testid': 'compose-slash-button',
             }}
             style={{
-              width: circle,
-              height: circle,
+              ...tool,
               fontFamily:
                 "'MesloLGM Nerd Font', 'MesloLGM Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",
               fontSize: 15,
@@ -1005,6 +1008,7 @@ export function TerminalComposeBar({
           >
             /
           </ThreadRoundButton>
+          </div>
           {slashMenu}
           <div className="relative min-w-0 flex-1" style={{ alignSelf: 'center' }}>
             {textarea}

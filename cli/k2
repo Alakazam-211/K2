@@ -17320,7 +17320,7 @@ if d.get("running"):
         sa = d["server_addr"]
         # 0.45.7: port + whether this is the primary relay or a fallback.
         if d.get("server_port"):
-            sa = f"{sa}:{d['server_port']}"
+            sa = sa + ":" + str(d["server_port"])
         if d.get("relay_primary") is True:
             sa += " (primary relay)"
         elif d.get("relay_primary") is False:
@@ -17332,7 +17332,8 @@ rl = d.get("relay_list")
 if isinstance(rl, dict):
     import datetime
     relays = ", ".join(rl.get("relays") or []) or "(none)"
-    print(f"  Relays:     {relays} [{rl.get('source', '?')}]")
+    src = rl.get("source") or "?"
+    print(f"  Relays:     {relays} [{src}]")
     if rl.get("checked_at"):
         ts = datetime.datetime.fromtimestamp(rl["checked_at"]).strftime("%Y-%m-%d %H:%M")
         print(f"  Relay list: checked with k2.dev {ts}")

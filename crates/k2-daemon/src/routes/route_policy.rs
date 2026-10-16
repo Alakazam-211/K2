@@ -183,6 +183,12 @@ pub const ROUTES: &[Route] = &[
     get("/cli/app/approvals", Member),
     post("/cli/app/approve", Owner),
     get("/cli/app/box", Admin),
+    // Box services (0.46.0): read, propose and revoke are Member (a
+    // passport sees its own workspace's Apps); a new one is always a held
+    // request (approve is the owner's above); revoking is immediate.
+    get("/cli/app/box-service", Member),
+    post("/cli/app/box-service/request", Member),
+    post("/cli/app/box-service/revoke", Member),
     post("/cli/app/box/prepare", Owner),
     post("/cli/app/build", Member),
     // 0.46.0 grace: clean mode on narrows (anyone, own Apps for passports);

@@ -207,7 +207,7 @@ fn dispatch(
         Verb::AppsReservePorts(on) => Some(apps::reserve_ports(ctx, *on)?),
         Verb::AppsNftApply { gw, px, db } => Some(apps::nft_apply(ctx, *gw, *px, *db)?),
         Verb::AppsNftRemove => Some(apps::nft_remove(ctx)?),
-        Verb::AppsNftApp { id, gw } => Some(apps::nft_app(ctx, id, *gw)?),
+        Verb::AppsNftApp { id, gw, box_ports } => Some(apps::nft_app(ctx, id, *gw, box_ports)?),
         Verb::AppsNftAppRemove(id) => Some(apps::nft_app_remove(ctx, id)?),
         Verb::AppsInstallEngine => Some(apps::install_engine(ctx, stdin)?),
         Verb::AppsLogs { id, deployment, lines } => Some(apps::logs(ctx, id, deployment, *lines)?),

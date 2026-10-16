@@ -121,6 +121,15 @@ for needle in "THE AGENT'S .k2 FOLDER" "agent_config_protected" "files:agentconf
     assert_contains "apps names $needle" "$apps_out" "$needle"
 done
 
+echo "== k2 study apps / app-deploys: box services (0.46.0) =="
+for needle in '"boxServices": [{"name": "sew-api"}]' "k2 app box-service request" "K2_BOX_<NAME>"; do
+    assert_contains "apps names $needle" "$apps_out" "$needle"
+done
+dep_out="$("$K2" study app-deploys)"
+for needle in "BOX SERVICES" "K2_BOX_SEW_API=127.0.0.1:8470" "k2 app box-service revoke" "5432 (Postgres)"; do
+    assert_contains "app-deploys names $needle" "$dep_out" "$needle"
+done
+
 echo "== k2 study app-tickets (prd-app-tickets-websocket-v1) =="
 tk_out="$("$K2" study app-tickets)"
 assert_contains "tickets socket path" "$tk_out" "WS   /cli/activity/events?workspace=<handle>"

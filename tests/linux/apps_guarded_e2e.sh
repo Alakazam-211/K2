@@ -305,6 +305,143 @@ K2 app egress rm esc-a example.com >/dev/null
 curl -s -m 30 "http://127.0.0.1:$FA/egress?target=example.com:443" | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["connect"]["status"]==403 and v["fetch"]["status"]!=200, v'
 ok "allowed: CONNECT 200 and Node fetch() reaches https://example.com through the proxy; rm applies at once"
 
+echo "== box services (0.46.0): an owner-approved forward to a host loopback service =="
+# A stand-in for Sew's client API on host loopback 8470 (the sew-api
+# preset's default; no /etc/sew/sew.toml here): GET, an upload (answers the
+# byte count), and an upgrade that echoes whatever follows.
+cat >/tmp/box_echo.py <<'PY'
+import socketserver, sys
+class H(socketserver.StreamRequestHandler):
+    def handle(self):
+        line = self.rfile.readline().decode("latin-1")
+        hdr = {}
+        while True:
+            l = self.rfile.readline().decode("latin-1").strip()
+            if not l:
+                break
+            k, _, v = l.partition(":")
+            hdr[k.strip().lower()] = v.strip()
+        path = line.split(" ")[1] if " " in line else "/"
+        if hdr.get("upgrade", "").lower() == "websocket":
+            self.wfile.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+            self.wfile.flush()
+            while True:
+                d = self.request.recv(65536)
+                if not d:
+                    return
+                self.request.sendall(d)
+        n = int(hdr.get("content-length", "0") or 0)
+        got = 0
+        while got < n:
+            d = self.rfile.read(min(65536, n - got))
+            if not d:
+                break
+            got += len(d)
+        body = (str(got) if path == "/upload" else "box-echo").encode()
+        self.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" % (len(body), body))
+class S(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+S(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+runuser -u nobody -- python3 /tmp/box_echo.py 8470 >/tmp/box_echo.log 2>&1 &
+ECHO=$!
+for _ in $(seq 1 50); do ss -ltnH 'sport = :8470' | grep -q 127.0.0.1 && break; sleep 0.1; done
+[ "$(curl -s -m 5 http://127.0.0.1:8470/hello)" = box-echo ] || fail "the host echo server on 127.0.0.1:8470"
+boxprobe() { curl -s -m 40 "http://127.0.0.1:$1/box?port=8470&bytes=${2:-0}"; }
+boxprobe "$FA" >/tmp/bx0.json
+jq_ 'assert v["get"]["status"]==0 and v["upgrade"]["status"]==0, v; assert v["env"]=={}, v["env"]' /tmp/bx0.json
+ok "before any box service: the App can't reach host 127.0.0.1:8470 and has no K2_BOX_* env"
+
+set +e
+for bad in 22 5432 38601 2019 "$DPORT"; do
+	K2 app box-service request esc-a e2e-bad "$bad" --json >/tmp/bsbad.txt 2>&1; rc=$?
+	[ "$rc" = 3 ] && grep -q box_service_refused /tmp/bsbad.txt || { set -e; fail "box service on port $bad: rc $rc $(cat /tmp/bsbad.txt)"; }
+done
+K2_NO_APPROVE=1 K2 app box-service request esc-a sew-api --reason e2e >/tmp/bsreq.txt 2>&1; rc=$?
+K2_NO_APPROVE=1 K2 app box-service request esc-a e2e-dummy 9999 >/tmp/bsreq2.txt 2>&1; rc2=$?
+set -e
+[ "$rc" = 2 ] && grep -q "held for the owner" /tmp/bsreq.txt || fail "box-service request: rc $rc $(cat /tmp/bsreq.txt)"
+[ "$rc2" = 2 ] || fail "box-service request (dummy): rc $rc2 $(cat /tmp/bsreq2.txt)"
+ok "refused: 22 (ssh), 5432 (Postgres), 38601 (another App's gateway), 2019 (Caddy admin), the daemon's own port $DPORT; sew-api (preset → 8470) is held for the owner (exit 2)"
+BSREQ="$(K2 app approvals --json | python3 -c 'import json,sys; print([r for r in json.load(sys.stdin)["requests"] if r["appId"]=="esc-a" and r["kind"]=="box_service"][0]["id"])')"
+K2 app box-service esc-a --json >/tmp/bs1.json
+jq_ 's={x["name"]:x for x in v["services"]}; assert s["sew-api"]["status"]=="pending" and s["sew-api"]["hostPort"]==8470, s; assert s["sew-api"]["forwarded"] is False, ("asked for after the start", s); assert v["wall"]=="container"' /tmp/bs1.json
+# Asked for after the App started: one restart puts the forward in the wall
+# (held: the door stays shut).
+K2 app restart esc-a >/tmp/bsrestart.txt 2>&1 || true
+r="$(wait_dep esc-a)"
+[ "$r" = live ] || fail "esc-a restart for the box forward: $r"
+NETL="$(grep -h '^Network=' /var/lib/k2app/.config/containers/systemd/k2app-esc-a--*.container | grep ',-T,8470:8470' || true)"
+[ -n "$NETL" ] && printf '%s' "$NETL" | grep -q '^Network=pasta:-T,8730:38600,-T,38900,' && printf '%s' "$NETL" | grep -q ',-T,9999:9999' \
+	|| fail "the unit's pasta forwards: $(grep -h '^Network=' /var/lib/k2app/.config/containers/systemd/k2app-esc-a--*.container)"
+! nft list chain inet k2app k2app_apps | grep 'k2apps-esc_a.slice' | grep -q 8470 || fail "a held service's port is admitted: $(nft list chain inet k2app k2app_apps)"
+boxprobe "$FA" >/tmp/bx1.json
+jq_ 'assert v["env"].get("K2_BOX_SEW_API")=="127.0.0.1:8470", v["env"]; assert v["get"]["status"]==0 and v["upgrade"]["status"]==0, ("held: the door is shut", v)' /tmp/bx1.json
+ok "held: the forward is in the wall (pasta -T 8470:8470, K2_BOX_SEW_API set) but the App's nft rule doesn't admit 8470"
+
+# The owner's approval. The confirm needs the owner in person (a vault
+# password on a terminal); try it on a pty, else apply the approval as the
+# daemon records it and let a live reload (the same call approve makes)
+# open the door.
+real=0
+PW="e2e-vault-pw-$RANDOM-0123"
+K2CMD="runuser -u k2 -- env HOME=$K2HOME PATH=/usr/local/bin:/usr/bin:/bin K2_PROJECT_PATH=$WS /it/cli/k2"
+set +e
+if command -v script >/dev/null; then
+	printf '%s\n%s\n' "$PW" "$PW" | timeout 60 script -qec "$K2CMD vault confirm-password set" /dev/null >/tmp/vcp.txt 2>&1
+	printf '%s\n' "$PW" | timeout 60 script -qec "$K2CMD app approve $BSREQ" /dev/null >/tmp/bsappr.txt 2>&1
+	grep -q "$BSREQ approved" /tmp/bsappr.txt && real=1
+fi
+set -e
+if [ "$real" = 1 ]; then
+	ok "approved by the owner with the vault confirm ($(grep -o 'approved.*' /tmp/bsappr.txt | head -n1))"
+else
+	info "no in-person confirm in this VM ($(tr '\n' ' ' </tmp/bsappr.txt 2>/dev/null | tail -c 200)); applying the approval as the daemon records it"
+	DBF="$K2HOME/.k2/k2.db"; [ -f "$DBF" ] || DBF="$K2HOME/.k2/k2so.db"
+	python3 - "$DBF" "$BSREQ" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("UPDATE app_box_services SET status='allowed', request_id=NULL, approved_by='e2e' WHERE app_id='esc-a' AND request_id=? AND name='sew-api'", (sys.argv[2],))
+c.execute("UPDATE app_widenings SET status='approved', decided_by='e2e' WHERE id=?", (sys.argv[2],))
+c.commit()
+PY
+	# Any change to the App's list reloads its door live (revoking the dummy here).
+	K2 app box-service revoke esc-a e2e-dummy >/dev/null
+fi
+nft list chain inet k2app k2app_apps | grep 'k2apps-esc_a.slice' | grep -q 'tcp dport { 38600, 38900, 8470' || fail "approved: the per-App rule: $(nft list chain inet k2app k2app_apps)"
+boxprobe "$FA" 33554432 >/tmp/bx2.json
+python3 - /tmp/bx2.json <<'PY'
+import json, sys
+v = json.load(open(sys.argv[1]))
+assert v["get"] == {"status": 200, "body": "box-echo"}, v["get"]
+assert v["upload"] == {"status": 200, "body": "33554432"}, ("a 32 MiB upload passes whole", v["upload"])
+assert v["upgrade"]["status"] == 101 and "ping-after-1s" in v["upgrade"]["echo"], ("an upgraded connection held open and echoed", v["upgrade"])
+print("    box:", {k: v[k] for k in ("env", "get", "upload")}, "upgrade", v["upgrade"]["status"])
+PY
+ok "approved without a restart: the App reaches host 127.0.0.1:8470 from 127.0.0.1:8470 in its wall (GET, a 32 MiB upload, an upgraded connection held open)"
+FB="$(front esc-b)"
+curl -s -m 40 "http://127.0.0.1:$FB/box?port=8470" | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["get"]["status"]==0 and v["env"]=={}, v'
+ok "esc-b (no box service) still can't reach 8470"
+K2 app box-service esc-a --json >/tmp/bs2.json
+jq_ 's={x["name"]:x for x in v["services"]}; assert s["sew-api"]["status"]=="allowed" and s["sew-api"]["forwarded"] is True and s["sew-api"]["door"]=="open", s' /tmp/bs2.json
+K2 app inspect esc-a --json | python3 -c 'import json,sys; b=json.load(sys.stdin)["boxServices"]; assert b["allowed"]==1, b'
+K2 app box-service esc-a | grep -q 'allowed  sew-api' || fail "k2 app box-service text"
+ok "status: k2 app box-service and k2 app inspect show it (allowed, forwarded, door open)"
+
+K2 app box-service revoke esc-a sew-api | grep -q "revoked sew-api" || fail "revoke"
+! nft list chain inet k2app k2app_apps | grep 'k2apps-esc_a.slice' | grep -q 8470 || fail "revoked: still admitted: $(nft list chain inet k2app k2app_apps)"
+boxprobe "$FA" >/tmp/bx3.json
+jq_ 'assert v["get"]["status"]==0 and v["upgrade"]["status"]==0, ("revoked: refused at once, no restart", v)' /tmp/bx3.json
+DBF="$K2HOME/.k2/k2.db"; [ -f "$DBF" ] || DBF="$K2HOME/.k2/k2so.db"
+python3 - "$DBF" <<'PY'
+import sqlite3, sys
+ev = [r[0] for r in sqlite3.connect(sys.argv[1]).execute("SELECT event FROM deploy_audit WHERE subject_id='esc-a' AND event LIKE 'box_service_%'")]
+assert "box_service_requested" in ev and "box_service_revoked" in ev, ev
+PY
+ok "revoked: the door shuts at once (nft reloaded, the next connection fails); requested/revoked are in the App's audit chain"
+kill "$ECHO" 2>/dev/null || true
+
 echo "== zero-downtime switch under load =="
 LOG=/tmp/load.txt
 : >"$LOG"

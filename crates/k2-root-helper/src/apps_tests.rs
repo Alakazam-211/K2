@@ -1756,3 +1756,39 @@ fn logs_read_one_deployments_unit_for_the_daemon_only() {
     t.as_agent();
     assert_eq!(t.call(&["apps", "logs", "nsi-skin", "d-0123456789ab", "200"]).code, exit::NOT_DAEMON);
 }
+
+#[test]
+fn nft_app_box_ports_join_the_apps_rule_and_a_new_list_replaces_the_old() {
+    let t = box_root();
+    with_app_user(&t);
+    current_table(&t);
+    container_cgroup(&t, "hearth");
+    let o = t.call(&["apps", "nft", "app", "hearth", "38602", "8470", "7880"]);
+    ok(&o);
+    assert_eq!(json(&o)["boxPorts"], serde_json::json!([8470, 7880]));
+    let sc = nft_scripts(&t).pop().unwrap();
+    assert!(sc.contains("k2apps-hearth.slice\" oifname \"lo\" tcp dport { 38602, 38902, 8470, 7880 } accept"), "{sc}");
+    let st = json(&t.call(&["apps", "status"]));
+    assert_eq!(st["nftBoxPorts"], serde_json::json!({"hearth": [8470, 7880]}));
+    // Revoke one: the list is replaced and the chain reloads without it.
+    ok(&t.call(&["apps", "nft", "app", "hearth", "38602", "8470"]));
+    let sc = nft_scripts(&t).pop().unwrap();
+    assert!(sc.contains("tcp dport { 38602, 38902, 8470 } accept"), "{sc}");
+    assert!(!sc.contains("7880"), "{sc}");
+    // A full re-apply keeps them (boot, drift).
+    t.as_agent();
+    ok(&t.call(&["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"]));
+    assert!(nft_scripts(&t).pop().unwrap().contains("tcp dport { 38602, 38902, 8470 } accept"));
+    t.as_daemon();
+    // None: back to the gateway and proxy only; app-remove forgets them.
+    ok(&t.call(&["apps", "nft", "app", "hearth", "38602"]));
+    assert!(nft_scripts(&t).pop().unwrap().contains("tcp dport { 38602, 38902 } accept"));
+    ok(&t.call(&["apps", "nft", "app", "hearth", "38602", "8470"]));
+    ok(&t.call(&["apps", "nft", "app-remove", "hearth"]));
+    let st = json(&t.call(&["apps", "status"]));
+    assert_eq!(st["nftBoxPorts"], serde_json::json!({}));
+    // The deny-list holds at the helper's door too.
+    for bad in ["22", "5432", "38601", "2019"] {
+        assert_ne!(t.call(&["apps", "nft", "app", "hearth", "38602", bad]).code, 0, "{bad}");
+    }
+}

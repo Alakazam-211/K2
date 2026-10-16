@@ -153,6 +153,10 @@ impl RuntimeEngine for ProcessException {
         for k in ["K2_HOST", "K2_PORT", "K2_GATEWAY_URL"] {
             env.remove(k);
         }
+        // Box services (0.46.0): the process exception has the host's
+        // loopback, narrowed by its nft rule; it dials the host port, which
+        // the rule admits only while approved.
+        env.extend(super::box_service_routes::env_for(app.as_str(), true));
         let g = crate::vault::publish_env::granted(&spec.service_id, &spec.workspace_id, &p.workdir);
         let (secrets, _dropped) = guarded::secret_items(g.env, g.files);
         let memory_mib = guarded::memory_mib(spec.memory_limit_bytes);

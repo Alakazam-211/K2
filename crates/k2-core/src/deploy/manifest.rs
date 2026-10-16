@@ -68,6 +68,30 @@ pub struct Manifest {
     /// (§5.6). A guarded App reaches nothing else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub egress: Option<EgressRequest>,
+    /// Services on this box's loopback the App asks to reach (0.46.0,
+    /// `deploy::box_service`): each one is a held request until the owner
+    /// approves it; then the guarded engine forwards the container's
+    /// `127.0.0.1:<appPort>` to host `127.0.0.1:<hostPort>`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub box_services: Vec<BoxServiceRequest>,
+}
+
+/// One manifest `boxServices` entry. A known name (`sew-api`,
+/// `sew-signal`) may leave `hostPort` out: K2 reads it from Sew's config.
+/// `appPort` (the port inside the wall) defaults to the host port.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoxServiceRequest {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_port: Option<u16>,
+    /// `tcp` (the only one; HTTP and websockets ride it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proto: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -229,6 +253,21 @@ mod tests {
         assert_eq!(m.egress.unwrap().hosts, vec!["api.stripe.com", "*.s3.amazonaws.com:443"]);
         let e = parse(&OK.replace("\"caps\"", "\"egress\": {\"mode\": \"broad\"}, \"caps\"")).unwrap_err();
         assert!(e.message.contains("mode"), "a Seed can't pick broad: {e:?}");
+    }
+
+    #[test]
+    fn box_services_are_an_optional_request() {
+        assert!(parse(OK).unwrap().box_services.is_empty());
+        let m = parse(&OK.replace(
+            "\"caps\"",
+            "\"boxServices\": [{\"name\": \"sew-api\"}, {\"name\": \"sew-signal\", \"hostPort\": 7880, \"appPort\": 7880, \"proto\": \"tcp\", \"reason\": \"voice\"}], \"caps\"",
+        ))
+        .unwrap();
+        assert_eq!(m.box_services.len(), 2);
+        assert_eq!(m.box_services[0], BoxServiceRequest { name: "sew-api".into(), host_port: None, app_port: None, proto: None, reason: None });
+        assert_eq!(m.box_services[1].host_port, Some(7880));
+        let e = parse(&OK.replace("\"caps\"", "\"boxServices\": [{\"name\": \"x\", \"host\": \"10.0.0.1\"}], \"caps\"")).unwrap_err();
+        assert!(e.message.contains("host"), "only a loopback port, never a host: {e:?}");
     }
 
     #[test]

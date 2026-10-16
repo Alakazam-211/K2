@@ -710,6 +710,11 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/app/egress/log",
         "/cli/app/egress/mode",
         "/cli/app/egress/rm",
+        // Box services (0.46.0): read, propose (always held for the owner),
+        // revoke (narrowing, at once).
+        "/cli/app/box-service",
+        "/cli/app/box-service/request",
+        "/cli/app/box-service/revoke",
         // Held requests: list own, withdraw own through deny.
         // `/cli/app/approve` is NOT here: the owner's, in person, with a
         // vault confirm.

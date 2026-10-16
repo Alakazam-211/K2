@@ -7,7 +7,9 @@
 //!   `--cmd` service when the cross-over switches are enforced), `app_key`
 //!   (an App-scoped key mint), `clean_mode` (turning clean mode off);
 //! - S15 egress kinds: `egress` (new hosts on an App's allowlist) and
-//!   `egress_mode` (`broad`, the open path's).
+//!   `egress_mode` (`broad`, the open path's);
+//! - `box_service` (0.46.0, 0171): a forward into a walled App for a
+//!   service on this box's loopback (`deploy::box_service`).
 //!
 //! A request is `pending` until the server's owner approves it in person
 //! (a fresh vault confirm, action `app-approve`, bound to the request id;
@@ -31,6 +33,7 @@ pub const KIND_APP_KEY: &str = "app_key";
 pub const KIND_CLEAN_MODE: &str = "clean_mode";
 pub const KIND_EGRESS: &str = "egress";
 pub const KIND_EGRESS_MODE: &str = "egress_mode";
+pub const KIND_BOX_SERVICE: &str = "box_service";
 
 pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_APPROVED: &str = "approved";
@@ -250,6 +253,9 @@ pub fn update_diff(conn: &Connection, id: &str, diff: &Value, summary: &str, rea
 fn closed(conn: &Connection, r: &AppRequest, status: &str, by: &str) -> rusqlite::Result<()> {
     if r.kind == KIND_EGRESS || r.kind == KIND_EGRESS_MODE {
         crate::deploy::egress::on_closed(conn, r, status, by)?;
+    }
+    if r.kind == KIND_BOX_SERVICE {
+        crate::deploy::box_service::on_closed(conn, r, status, by)?;
     }
     Ok(())
 }

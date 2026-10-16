@@ -30,6 +30,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod audit;
 pub mod backoff;
+pub mod box_service;
 pub mod build;
 pub mod egress;
 pub mod engine;

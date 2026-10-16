@@ -1232,7 +1232,7 @@ impl RepoDirs {
 }
 
 /// A pathspec that matches `rel` literally (`\` before `* ? [ ] \`).
-fn pathspec_literal(rel: &str) -> String {
+pub(crate) fn pathspec_literal(rel: &str) -> String {
     let mut out = String::with_capacity(rel.len());
     for c in rel.chars() {
         if matches!(c, '*' | '?' | '[' | ']' | '\\') {

@@ -478,8 +478,20 @@ pub const ROUTES: &[Route] = &[
     post("/cli/git/discard", Member),
     get("/cli/git/file-at-ref", Member),
     get("/cli/git/info", Member),
+    // C5 scope add: `git init` at a workspace root (Changes empty state).
+    post("/cli/git/init", Member),
     post("/cli/git/merge-branch", Member),
     get("/cli/git/merge-status", Member),
+    // Changes tab v1.1 (C5): review notes. List + write for any login;
+    // update/delete check author-or-Admin in the handler.
+    get("/cli/git/notes", Member),
+    post("/cli/git/notes/add", Member),
+    post("/cli/git/notes/delete", Member),
+    post("/cli/git/notes/resolve", Member),
+    post("/cli/git/notes/send", Member),
+    post("/cli/git/notes/update", Member),
+    // C5: `k2 changes open` asks clients to show the Changes tab.
+    post("/cli/git/open-changes", Member),
     post("/cli/git/prune-worktrees", Member),
     post("/cli/git/remove-worktree", Member),
     post("/cli/git/reopen-worktree", Member),

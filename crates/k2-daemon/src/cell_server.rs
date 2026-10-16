@@ -677,7 +677,8 @@ mod unix_impl {
                         )
                     }
                 };
-                from_cli(crate::git_routes::handle_agent_route(p, is_post, params, body, &own))
+                let actor = crate::routes::http::agent_actor_label(principal);
+                from_cli(crate::git_routes::handle_agent_route_as(p, is_post, params, body, &own, &actor))
             }
             // K2 projects mutations + chat post over the cell socket: the
             // bound session's passport, gated by the workspace's "Manage

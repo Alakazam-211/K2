@@ -270,6 +270,57 @@ pub fn chat_key_meta(workspace_path: &str) -> Option<ChatKeyMeta> {
     })
 }
 
+/// W0 (0.46.0): public chat is disabled, so every daemon-held chat key is
+/// dead weight — and an injected agent could have read one. Revoke every
+/// key on file under [`store_dir`] and any other live key carrying the
+/// [`KEY_LABEL_PREFIX`] label, then delete the files. Idempotent. Returns
+/// the revoked key ids.
+pub fn revoke_all_chat_keys() -> Vec<String> {
+    let mut revoked = Vec::new();
+    if let Ok(entries) = fs::read_dir(store_dir()) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Some(file) = read_secret_file(&path) {
+                match revoke_api_key(&file.key_id) {
+                    Ok(true) => revoked.push(file.key_id.clone()),
+                    Ok(false) => {}
+                    Err(e) => crate::log_debug!(
+                        "[wiki-public-chat] ERROR revoke {}: {e}",
+                        file.key_id
+                    ),
+                }
+            }
+            if let Err(e) = fs::remove_file(&path) {
+                crate::log_debug!(
+                    "[wiki-public-chat] ERROR remove {}: {e}",
+                    path.display()
+                );
+            }
+        }
+    }
+    match crate::api_keys::list_api_keys() {
+        Ok(keys) => {
+            for k in keys {
+                let ours = k
+                    .label
+                    .as_deref()
+                    .map(|l| l.starts_with(KEY_LABEL_PREFIX))
+                    .unwrap_or(false);
+                if ours && k.revoked_at.is_none() {
+                    if let Ok(true) = revoke_api_key(&k.id) {
+                        revoked.push(k.id);
+                    }
+                }
+            }
+        }
+        Err(e) => crate::log_debug!("[wiki-public-chat] ERROR list keys: {e}"),
+    }
+    revoked
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

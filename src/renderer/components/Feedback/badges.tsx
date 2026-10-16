@@ -7,7 +7,7 @@ import type { FeedbackKind, FeedbackStatus } from './feedback-api'
 export function KindBadge({ kind }: { kind: FeedbackKind }): React.JSX.Element {
   const cls =
     kind === 'approval'
-      ? 'bg-[color-mix(in_srgb,var(--color-status-warn-amber)_10%,transparent)] text-[var(--color-status-warn-amber)]'
+      ? 'bg-[color-mix(in_srgb,var(--color-status-needs-you)_10%,transparent)] text-[var(--color-status-needs-you)]'
       : kind === 'fyi'
         ? 'bg-white/[0.06] text-[var(--color-text-muted)]'
         : 'bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
@@ -19,11 +19,11 @@ export function KindBadge({ kind }: { kind: FeedbackKind }): React.JSX.Element {
 }
 
 export function StatusBadge({ status }: { status: FeedbackStatus }): React.JSX.Element {
-  // waiting = yellow (warn-amber); needs_discussion = orange (working-soft,
+  // waiting (on you) = needs you; needs_discussion = orange (working-soft,
   // the previous waiting color); planned = accent; answered = green.
   const cls =
     status === 'waiting'
-      ? 'bg-[color-mix(in_srgb,var(--color-status-warn-amber)_12%,transparent)] text-[var(--color-status-warn-amber)]'
+      ? 'bg-[color-mix(in_srgb,var(--color-status-needs-you)_12%,transparent)] text-[var(--color-status-needs-you)]'
       : status === 'needs_discussion'
         ? 'bg-[color-mix(in_srgb,var(--color-status-working-soft)_10%,transparent)] text-[var(--color-status-working-soft)]'
         : status === 'answered'

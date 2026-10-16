@@ -31,11 +31,12 @@ import {
 import { HtmlBriefBadge } from './badges'
 import type { FilterableWorkspace } from './WorkspaceFilterDropdown'
 
-/** StatusBadge's palette (waiting amber, needs discussion orange, answered
- *  green, planned accent, closed muted), shared by the chip and the rail dot. */
+/** StatusBadge's palette (waiting = needs you, needs discussion orange,
+ *  answered green, planned accent, closed muted), shared by the chip and the
+ *  rail dot. */
 export function statusChipClass(status: FeedbackStatus): string {
   return status === 'waiting'
-    ? 'bg-[color-mix(in_srgb,var(--color-status-warn-amber)_12%,transparent)] text-[var(--color-status-warn-amber)]'
+    ? 'bg-[color-mix(in_srgb,var(--color-status-needs-you)_12%,transparent)] text-[var(--color-status-needs-you)]'
     : status === 'needs_discussion'
       ? 'bg-[color-mix(in_srgb,var(--color-status-working-soft)_10%,transparent)] text-[var(--color-status-working-soft)]'
       : status === 'answered'
@@ -48,7 +49,7 @@ export function statusChipClass(status: FeedbackStatus): string {
 /** Solid dot color per status (collapsed rail). */
 export function statusDotColor(status: FeedbackStatus): string {
   return status === 'waiting'
-    ? 'var(--color-status-warn-amber)'
+    ? 'var(--color-status-needs-you)'
     : status === 'needs_discussion'
       ? 'var(--color-status-working-soft)'
       : status === 'answered'

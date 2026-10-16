@@ -125,7 +125,9 @@ function TotalsTable({
 const SERIES_FILL: Record<DailySeries, string> = {
   input: 'var(--color-accent)',
   output: 'var(--color-status-ok)',
-  cacheRead: 'var(--color-status-working)',
+  // Its own orange (a series, not a status): status-working is now the
+  // accent, the same as Input's.
+  cacheRead: 'var(--color-status-working-soft)',
 }
 
 const SERIES_LABEL: Record<DailySeries, string> = {

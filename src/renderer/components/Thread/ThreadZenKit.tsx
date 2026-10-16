@@ -58,7 +58,7 @@ export const THREAD_ZEN_DESKTOP_TOKENS = {
   '--zen-bubble-agent-text': 'var(--color-text-primary)',
   '--zen-working': 'var(--color-status-working)',
   '--zen-idle': 'var(--color-text-muted)',
-  '--zen-needs-you': 'var(--color-status-warn-amber)',
+  '--zen-needs-you': 'var(--color-status-needs-you)',
   '--zen-danger': 'var(--color-status-error)',
   // Zen's default shape (zen-tokens), not the Style's square corners.
   '--zen-radius': '14px',

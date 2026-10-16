@@ -310,17 +310,9 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
         title="Drag to resize"
       />
       {resizing && <div className="fixed inset-0 z-50" style={{ cursor: 'col-resize' }} />}
-      {/* Header row — the close toggle at the end nearest the dashboard
-          (the drawer-toggle principle), then identity. */}
+      {/* Header row — identity only; the close toggle sits in the
+          composer row, across from Send (Rosson, 0.46.0). */}
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] flex-shrink-0">
-        <div className="-ml-3 -my-1.5 flex self-stretch">
-          <DrawerToggleButton
-            side="right"
-            placement="drawer"
-            name="project chat"
-            onToggle={() => useProjectGroupsStore.getState().setChatCollapsed(true)}
-          />
-        </div>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--color-text-muted)] flex-shrink-0">
           <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
         </svg>
@@ -410,8 +402,11 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
         {/* Composer — gated on Connect role (≥ Member); hidden for Viewers. */}
         <div className="border-t border-[var(--color-border)] px-3 py-2 flex-shrink-0 min-w-0 w-full">
           {readOnly ? (
-            <div className="text-[10px] text-[var(--color-text-muted)] py-1">
-              Viewers can read project chat but can&rsquo;t post.
+            <div className="flex items-center gap-2">
+              <HideChatButton />
+              <div className="text-[10px] text-[var(--color-text-muted)] py-1">
+                Viewers can read project chat but can&rsquo;t post.
+              </div>
             </div>
           ) : (
             <>
@@ -434,7 +429,9 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                 className="min-w-0 w-full max-w-full box-border px-2.5 py-2 bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-x-hidden overflow-y-auto break-words placeholder:text-[var(--color-text-muted)] selectable-copy"
                 style={{ fontSize: editorFontSize }}
               />
-              <div className="flex justify-end mt-1.5">
+              {/* Hide (left) across from Send (right). */}
+              <div className="flex items-stretch justify-between mt-1.5" data-project-chat-actions="">
+                <HideChatButton />
                 <button
                   type="button"
                   disabled={busy || draft.trim().length === 0}
@@ -452,5 +449,19 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
         </div>
       </div>
     </div>
+  )
+}
+
+/** Close the project chat: the drawer's » toggle, at the bottom left of the
+ *  panel across from Send. (Closed, the « toggle with the unread dot sits
+ *  at the far right of the dashboard tab row.) */
+function HideChatButton(): React.JSX.Element {
+  return (
+    <DrawerToggleButton
+      side="right"
+      placement="drawer"
+      name="chat"
+      onToggle={() => useProjectGroupsStore.getState().setChatCollapsed(true)}
+    />
   )
 }

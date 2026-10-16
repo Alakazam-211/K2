@@ -193,17 +193,24 @@ export function sessionsStatus(input: {
   rows: readonly SessionRow[]
   unseen: UnseenOutcome | null
   daemonRows: boolean
+  /** Used only when no row speaks for the sessions: whether something else
+   *  the daemon said (its running-sessions list) has them live. */
+  liveFallback?: boolean | null
   now?: number
   skewMs?: number
 }): AgentStatusView {
   const { rows } = input
+  let rollup = rollupOfRows(rows, input.daemonRows)
+  if (rows.length === 0 && typeof input.liveFallback === 'boolean') {
+    rollup = { ...rollup, live: input.liveFallback ? 1 : 0 }
+  }
   const statusRow =
     rows.find((r) => r.display === 'waiting') ??
     rows.find((r) => r.display === 'monitoring') ??
     rows.find((r) => r.display === 'unverifiable') ??
     null
   return agentStatus({
-    rollup: rollupOfRows(rows, input.daemonRows),
+    rollup,
     unseen: input.unseen,
     heartbeatEnabled: false,
     titleRow: statusRow,

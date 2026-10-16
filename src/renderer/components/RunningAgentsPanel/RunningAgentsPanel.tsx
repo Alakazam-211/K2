@@ -7,9 +7,9 @@ import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useTabsStore } from '@/stores/tabs'
 import { useProjectsStore } from '@/stores/projects'
 import { useActiveAgentsStore } from '@/stores/active-agents'
-import { rowForAgentName, useActivity, type ActivityDisplay } from '@/stores/activity'
-import { DISPLAY_LABEL } from '@/lib/activity-copy'
-import { ActivityMark } from '@/components/Activity/ActivityMark'
+import { agentUnseenOutcome, rowForAgentName, useActivity } from '@/stores/activity'
+import { sessionsStatus, type AgentStatusView } from '@/lib/agent-status'
+import { StatusSlot, WorkingSlot } from '@/components/AgentStatus/AgentStatusCluster'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { agentNameFromId } from '@/lib/terminal-id'
 import { Surface } from '@/components/ui'
@@ -157,13 +157,20 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
     if (selectedIndex >= filtered.length) setSelectedIndex(Math.max(0, filtered.length - 1))
   }, [filtered.length, selectedIndex])
 
-  // What each session is doing: the window server's daemon rows (S5).
+  // What each session is doing: the window server's daemon rows, drawn in
+  // the shared status model (plan-agent-status-unify-v1): the working slot,
+  // then the status slot (status, else live / reaped). Every session here
+  // is on the daemon's running list, so one with no row is live.
   const activityRows = useActivity(primaryScope(), (s) => s.rows)
-  const displayOf = (agent: RunningAgentInfo): ActivityDisplay => {
+  const unseenDone = useActivity(primaryScope(), (s) => s.unseenDone)
+  const daemonRows = useActivity(primaryScope(), (s) => s.supported)
+  const skewMs = useActivity(primaryScope(), (s) => s.skewMs)
+  const statusOf = (agent: RunningAgentInfo): AgentStatusView => {
     const row =
       activityRows.get(agent.terminalId) ??
       (agent.agentName ? rowForAgentName({ rows: activityRows }, agent.agentName) : null)
-    return row?.display ?? 'idle'
+    const unseen = agentUnseenOutcome({ unseenDone }, agent.agentName ?? '', row?.sessionId ?? agent.terminalId)
+    return sessionsStatus({ rows: row ? [row] : [], unseen, daemonRows, liveFallback: true, skewMs })
   }
 
   const handleKeyDown = useCallback(
@@ -330,11 +337,6 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
     return parts[parts.length - 1] || cwd
   }
 
-  const statusLabel = (agent: RunningAgentInfo): string => {
-    const label = DISPLAY_LABEL[displayOf(agent)]
-    return label.charAt(0).toUpperCase() + label.slice(1)
-  }
-
   return (
     <div
       className="fixed inset-0 z-[9999] flex items-start justify-center pt-[15vh] no-drag"
@@ -423,17 +425,21 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
                       )}
                     </div>
 
-                    {/* Status */}
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      {displayOf(agent) === 'idle' ? (
-                        <span className="w-1.5 h-1.5 bg-[var(--color-neutral)]" />
-                      ) : (
-                        <ActivityMark display={displayOf(agent)} size={6} />
-                      )}
-                      <span className="text-[10px] text-[var(--color-text-muted)]">
-                        {statusLabel(agent)}
-                      </span>
-                    </div>
+                    {/* Status: working | status-or-live (glyphs; the words
+                        are their tooltips, Q2). */}
+                    {(() => {
+                      const view = statusOf(agent)
+                      return (
+                        <span
+                          data-running-agent-status={view.status}
+                          className="inline-flex flex-none items-center"
+                          style={{ gap: 'var(--clu-gap)' }}
+                        >
+                          <WorkingSlot view={view} />
+                          <StatusSlot view={view} />
+                        </span>
+                      )
+                    })()}
 
                     {/* Copy workspace:agent identifier */}
                     <button

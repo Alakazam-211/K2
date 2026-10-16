@@ -243,6 +243,8 @@ describe('sessionsStatus (a tab)', () => {
     ['idle, live', { rows: [sRow('idle')], unseen: null, daemonRows: true }, { status: 'live', working: false }],
     ['no rows: reaped', { rows: [], unseen: null, daemonRows: true }, { status: 'reaped', working: false }],
     ['no rows, older server: empty', { rows: [], unseen: null, daemonRows: false }, { status: 'idle', working: false }],
+    ['no rows, listed as running: live', { rows: [], unseen: null, daemonRows: true, liveFallback: true }, { status: 'live', working: false }],
+    ['a row beats the fallback', { rows: [sRow('idle', { reason: 'pty_exited' })], unseen: null, daemonRows: true, liveFallback: true }, { status: 'reaped', working: false }],
   ]
   for (const [name, input, want] of cases) {
     it(name, () => {

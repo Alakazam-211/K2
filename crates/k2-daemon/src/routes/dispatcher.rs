@@ -5978,9 +5978,61 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
-            let r = tokio::task::spawn_blocking(move || crate::clone_preview::handle(&clone_who, &body_bytes))
+            let vault_caller = crate::vault::actor::from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str()).ok();
+            let r = tokio::task::spawn_blocking(move || crate::clone_preview::handle(&clone_who, vault_caller.as_ref(), &body_bytes))
                 .await
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // Thread export / import / imports (prd-clone-carries-threads-and-
+        // vault-v1 T4). Ahead of the shared `/cli/thread/` arms. Export and
+        // import are clone doors (gate first); the handler narrows them to
+        // Owner/Admin people.
+        p if crate::thread_transfer_routes::is_route(p) => {
+            if crate::thread_transfer_routes::is_post_route(p)
+                && !super::http::require_post(&mut *stream, &mut buf, is_post).await
+            {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::thread_transfer_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::vault_routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let clone_who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            if let Some(door) = crate::clone_gate::Door::for_path(p) {
+                if let Err(r) = crate::clone_gate::check(&clone_who, door, ingress.as_str()) {
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                    return DispatchOutcome::Done;
+                }
+            }
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                let home = dirs::home_dir().unwrap_or_default();
+                crate::thread_transfer_routes::handle(&p_owned, &clone_who, &body_bytes, &params, &home)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
         // Agent clone proposals (prd-clone-carries-threads-and-vault-v1
@@ -6087,6 +6139,16 @@ async fn handle_one_request(
                     return DispatchOutcome::Done;
                 }
             };
+            // Clone gate first (CL4): the vault half of a clone is a clone door.
+            let clone_who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            if let Err(r) = crate::clone_gate::check(
+                &clone_who,
+                crate::clone_gate::Door::for_path(p).unwrap_or(crate::clone_gate::Door::Bundle),
+                ingress.as_str(),
+            ) {
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
             let caller = crate::vault::actor::from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str());
             let p_owned = p.to_string();
             let ingress_label = ingress.as_str().to_string();

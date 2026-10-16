@@ -139,7 +139,31 @@ expect_eq "pulled file" "$(cat "$FDEST/notes.txt")" "hello from sales"
 echo "== D4: .env files need a confirm =="
 st="$(post_status "$PA" "/cli/clone/bundle?token=$TA" "{\"project_path\":\"$WS\",\"carry_secrets\":true}")"
 expect_eq "carry_secrets without a confirm is 403" "$st" "403"
-expect_has "clone_env_confirm_required" "$(cat "$SANDBOX/body")" "clone_env_confirm_required"
+expect_has "vault_confirm_required (slice A's clone-carry confirm, D4)" "$(cat "$SANDBOX/body")" "vault_confirm_required"
+
+echo "== a vault secret rides as a blank card (no confirm needed) =="
+printf 'sk_live_cc_vault_value_5678' | ka vault set CC_API_KEY --scope ws:salesws --kind api_key >/dev/null
+pvj="$(ka clone preview salesws --json)"
+expect_eq "the preview lists the secret by name" "$(printf '%s' "$pvj" | jget secrets.rows.0.name)" "CC_API_KEY"
+expect_not "no secret value in the preview" "$pvj" "sk_live_cc_vault_value"
+mkdir -p "$BHOME/carried"
+carried="$(ka clone to "http://127.0.0.1:$PB" salesws --token "$TB" --dest "$BHOME/carried" --blank CC_API_KEY --yes --json)"
+expect_eq "the choice travelled as blank" "$(printf '%s' "$carried" | jget secrets.CC_API_KEY)" "blank"
+expect_has "the blank card waits for the clone's first Thread" "$carried" "CC_API_KEY"
+expect_not "no secret value in the push output" "$carried" "sk_live_cc_vault_value"
+set +e
+ka clone to "http://127.0.0.1:$PB" salesws --token "$TB" --dest "$BHOME/carried" --copy NOPE --yes >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "an unknown secret name is a usage error" "$rc" "2"
+
+echo "== thread export / import / imports (T4) =="
+exp="$(ka thread export salesws --json)"
+EXP="$(printf '%s' "$exp" | jget path)"
+expect_has "export lands in clone-tmp" "$EXP" "$AHOME/.k2/clone-tmp/"
+[ "$(stat -f '%Lp' "$EXP" 2>/dev/null || stat -c '%a' "$EXP")" = "600" ] && ok "export file is 0600" || bad "export file mode"
+imp="$(ka thread import "$EXP" --to "$HDEST" --json)"
+expect_has "import answers a report" "$imp" '"report"'
+expect_has "imports lists for the workspace" "$(ka thread imports "$HDEST" --json)" '"imports"'
 
 echo "== the clone gate =="
 printf 'password1\n' | ka users add mem --password-stdin >/dev/null

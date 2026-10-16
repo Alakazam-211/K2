@@ -519,6 +519,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         // person's step (vault confirm). Purge and drop-prev ride routes an
         // agent may reach; their handlers refuse every passport.
         "/cli/sew/server/recovery-key",
+        // Thread export / import (T4) are people only (the `/cli/thread`
+        // allow prefix would otherwise admit them). Covers `imports`.
+        "/cli/thread/export",
+        "/cli/thread/import",
     ];
     if DENY_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return false;

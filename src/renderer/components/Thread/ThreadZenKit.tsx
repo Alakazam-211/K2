@@ -355,6 +355,12 @@ export function ThreadLoadOlder({
 
 // ── The message box ─────────────────────────────────────────────────────
 
+/** The field's padding and border (px); a leading control's ink starts
+ *  THREAD_COMPOSE_BOX_EDGE in from the field's outer edge plus its own. */
+export const THREAD_COMPOSE_BOX_PAD = 6
+export const THREAD_COMPOSE_BOX_BORDER = 1
+export const THREAD_COMPOSE_BOX_EDGE = THREAD_COMPOSE_BOX_PAD + THREAD_COMPOSE_BOX_BORDER
+
 /** The rounded field: leading buttons, the textarea, Send. A drawer (the
  *  activity drawer) is drawn on its top edge, chips above that. */
 export function ThreadComposeBox({
@@ -379,12 +385,17 @@ export function ThreadComposeBox({
         className="flex items-end gap-2"
         style={{
           position: 'relative',
-          padding: 6,
+          padding: THREAD_COMPOSE_BOX_PAD,
           borderRadius: 'calc(var(--zen-radius) + 4px)',
           background: 'var(--zen-surface-raised)',
-          border: '1px solid var(--zen-border)',
+          border: `${THREAD_COMPOSE_BOX_BORDER}px solid var(--zen-border)`,
           minWidth: 0,
-          ...chamferVars({ cut: CHAMFER_CUT.surface, fill: 'var(--zen-surface-raised)', edge: 'var(--zen-border)', border: 1 }),
+          ...chamferVars({
+            cut: CHAMFER_CUT.surface,
+            fill: 'var(--zen-surface-raised)',
+            edge: 'var(--zen-border)',
+            border: THREAD_COMPOSE_BOX_BORDER,
+          }),
         }}
       >
         {children}

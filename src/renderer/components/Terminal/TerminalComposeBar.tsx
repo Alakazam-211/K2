@@ -82,6 +82,7 @@ import {
   ThreadComposeBox,
   ThreadRoundButton,
   ThreadSendButton,
+  THREAD_COMPOSE_BOX_EDGE,
 } from '@/components/Thread/ThreadZenKit'
 
 /** Shown when Thread Send runs before this cell has its own address. The draft stays. */
@@ -940,10 +941,13 @@ export function TerminalComposeBar({
     // drawer on its top edge — plus the desktop's "/" commands. Keys are
     // the same handler as the terminal's bar (`handleKeyDown`): Esc,
     // Ctrl+C, Ctrl+B and an empty Enter reach the agent's PTY.
-    // "+" and "/" sit together as one tool group: 2px apart, each a
-    // narrower pill (the box's 8px gap between them read as far too wide,
-    // Rosson 2026-10-16). Zen's box has "+" only, so it is unchanged.
-    const tool = { width: 26, height: 32 }
+    // "+" and "/" (Rosson 2026-10-16): the gap between the two glyphs is
+    // the gap between the field's edge and "+". Both are drawn shapes of a
+    // known ink width (no font side bearings), each button pads its ink by
+    // COMPOSE_TOOL.pad on both sides (the hit area), and the group's margin
+    // and gap are solved so both visible gaps are COMPOSE_TOOL.gap.
+    const toolLayout = composeToolLayout()
+    const tool = { width: 'auto', minWidth: 0, height: 32, padding: `0 ${COMPOSE_TOOL.pad}px` }
     return (
       <div
         ref={barRef}
@@ -981,9 +985,13 @@ export function TerminalComposeBar({
             ) : undefined
           }
         >
-          <div data-compose-tools="" className="flex flex-shrink-0 items-end" style={{ gap: 2 }}>
+          <div
+            data-compose-tools=""
+            className="flex flex-shrink-0 items-end"
+            style={{ gap: toolLayout.boxGap, marginLeft: toolLayout.marginLeft }}
+          >
           <ThreadRoundButton label="Attach file" title="Attach a file or image" onClick={handleAttachClick} style={tool}>
-            +
+            <ComposePlusGlyph />
           </ThreadRoundButton>
           <ThreadRoundButton
             label="Slash command"
@@ -998,15 +1006,9 @@ export function TerminalComposeBar({
               'aria-pressed': slashCommand != null,
               'data-testid': 'compose-slash-button',
             }}
-            style={{
-              ...tool,
-              fontFamily:
-                "'MesloLGM Nerd Font', 'MesloLGM Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",
-              fontSize: 15,
-              fontWeight: 600,
-            }}
+            style={tool}
           >
-            /
+            <ComposeSlashGlyph />
           </ThreadRoundButton>
           </div>
           {slashMenu}
@@ -1127,6 +1129,47 @@ export function TerminalComposeBar({
       </div>
       </div>
     </div>
+  )
+}
+
+/** The Thread box's "+" / "/" spacing (px). `gap` is both visible gaps:
+ *  the field's outer edge to the "+" ink, and the "+" ink to the "/" ink. */
+export const COMPOSE_TOOL = {
+  gap: 10,
+  /** Each button's side padding around its ink (the hit area). */
+  pad: 5,
+  /** Ink widths of the two drawn glyphs. */
+  plusInk: 12,
+  slashInk: 8,
+} as const
+
+/** The group's left margin and the space between the two buttons that
+ *  make both visible gaps `COMPOSE_TOOL.gap`, given the field's border +
+ *  padding on its left (`THREAD_COMPOSE_BOX_EDGE`). */
+export function composeToolLayout(): { marginLeft: number; boxGap: number } {
+  const { gap, pad } = COMPOSE_TOOL
+  return { marginLeft: gap - THREAD_COMPOSE_BOX_EDGE - pad, boxGap: gap - 2 * pad }
+}
+
+/** "+" as two bars: ink exactly COMPOSE_TOOL.plusInk wide. */
+function ComposePlusGlyph(): React.JSX.Element {
+  const w = COMPOSE_TOOL.plusInk
+  return (
+    <svg data-compose-glyph="plus" width={w} height={w} viewBox={`0 0 ${w} ${w}`} fill="currentColor" aria-hidden="true" style={{ display: 'block' }}>
+      <rect x={w / 2 - 1} y={0} width={2} height={w} />
+      <rect x={0} y={w / 2 - 1} width={w} height={2} />
+    </svg>
+  )
+}
+
+/** "/" as a slanted bar: ink exactly COMPOSE_TOOL.slashInk wide. */
+function ComposeSlashGlyph(): React.JSX.Element {
+  const w = COMPOSE_TOOL.slashInk
+  const h = 14
+  return (
+    <svg data-compose-glyph="slash" width={w} height={h} viewBox={`0 0 ${w} ${h}`} fill="currentColor" aria-hidden="true" style={{ display: 'block' }}>
+      <polygon points={`${w - 2.2},0 ${w},0 2.2,${h} 0,${h}`} />
+    </svg>
   )
 }
 

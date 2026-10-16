@@ -439,6 +439,114 @@ fn a_carry_opens_only_in_the_target_vault_and_lists_before_applying() {
     assert_eq!(s, 403, "{v}");
 }
 
+/// CL12 regression: `k2 vault carry import` picks the target workspace by
+/// id. A different workspace on the target with the same name never gets
+/// the secrets: not by default, and not when a person names it.
+#[test]
+fn a_carry_import_matches_the_workspace_by_id_never_by_name() {
+    use crate::vault_use_routes::{CARRY_EXPORT, CARRY_IMPORT, RECIPIENT};
+    use k2_vault::{Kind, ListFilter, Namespace, PutRequest, Scope, ScopeKind, SecretBytes, SecretStore};
+    crate::test_support::with_temp_home(|| {
+        let root = TestDir::new("carry-by-id");
+        let folder = format!("ca-sales-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let register = |parent: &str| {
+            let p = root.path().join(parent).join(&folder);
+            std::fs::create_dir_all(&p).expect("mkdir");
+            let canon = std::fs::canonicalize(&p).expect("canon").to_string_lossy().to_string();
+            k2_core::projects_ops::projects_add_without_git(&canon).expect("register")
+        };
+        // Same folder name three times: an unrelated workspace that will be
+        // on the target box, the agent on the old box, and its clone.
+        let other = register("other");
+        let source = register("source");
+        let clone = register("clone");
+        let other_name = crate::vault::workspace_label(&other.id);
+        let clone_name = crate::vault::workspace_label(&clone.id);
+        assert_eq!(crate::vault::workspace_id(&other_name).as_deref(), Some(other.id.as_str()), "the name token names the unrelated workspace");
+
+        let src = vault();
+        let mut r = PutRequest::new(Namespace::User, Scope::workspace(source.id.clone()), "STRIPE_KEY", Kind::ApiKey);
+        r.hosts = vec!["https://api.stripe.com".into()];
+        src.v.put(r, SecretBytes::from_slice(SENTINEL.as_bytes()), &Actor::Owner).expect("put");
+
+        let in_scope = |t: &T, id: &str| -> usize {
+            t.v.list(&ListFilter::default(), &Actor::System("test".into()))
+                .expect("list")
+                .into_iter()
+                .filter(|m| m.namespace == Namespace::User && m.scope.kind == ScopeKind::Workspace && m.scope.id == id)
+                .count()
+        };
+        let export = |dst: &T, target_ws: Option<&str>| -> Value {
+            let (s, r) = call(dst, RECIPIENT, &owner(), Value::Null);
+            assert_eq!(s, 200, "{r}");
+            let mut body = json!({ "targetRecipient": r["recipient"], "targetVaultId": r["vaultId"], "workspaces": [source.path.clone()] });
+            if let Some(t) = target_ws {
+                body["targetWorkspaceId"] = json!(t);
+            }
+            let (s, ex) = call(&src, CARRY_EXPORT, &owner(), body);
+            assert_eq!(s, 200, "{ex}");
+            assert_eq!(ex["count"], 1, "{ex}");
+            assert!(!ex.to_string().contains(SENTINEL), "export response carries ciphertext only");
+            ex["carryB64"].clone()
+        };
+        let dst = vault();
+        let dst_bound = vault();
+        let carry = export(&dst, None);
+        let bound = export(&dst_bound, Some(&clone.id));
+        // The target box: the source workspace isn't there.
+        k2_core::projects_ops::projects_delete(&source.id).expect("drop the source row");
+
+        // 1. Nothing named: the source id isn't here, so nothing lands (the
+        //    old label match would have put it into `other`).
+        let (s, v) = call(&dst, CARRY_IMPORT, &owner(), json!({ "carryB64": carry, "apply": true }));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["imported"].as_array().expect("imported").len(), 0, "{v}");
+        assert!(v["skipped"][0].as_str().expect("skip line").contains(&source.id), "{v}");
+        assert_eq!(in_scope(&dst, &other.id), 0, "never the same-named workspace");
+
+        // 2. A name alone is refused: the carry wasn't made for that id.
+        for apply in [false, true] {
+            let (s, v) = call(&dst, CARRY_IMPORT, &owner(), json!({ "carryB64": carry, "apply": apply, "workspace": other_name }));
+            assert_eq!(s, 403, "{v}");
+            assert_eq!(code(&v), "carry_workspace_by_name", "{v}");
+            assert!(v["error"]["hint"].as_str().unwrap_or("").contains("--workspace"), "the refusal teaches the id flag: {v}");
+        }
+        assert_eq!(in_scope(&dst, &other.id), 0, "never the same-named workspace");
+
+        // 3. By id: the dry run shows the resolved target id, then it lands.
+        let (s, v) = call(&dst, CARRY_IMPORT, &owner(), json!({ "carryB64": carry, "workspace": clone.id }));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["dryRun"], true);
+        assert_eq!(v["secrets"][0]["targetWorkspaceId"], json!(clone.id), "{v}");
+        assert_eq!(v["secrets"][0]["sourceWorkspaceId"], json!(source.id), "{v}");
+        assert_eq!(in_scope(&dst, &clone.id), 0, "a dry run writes nothing");
+        let (s, v) = call(&dst, CARRY_IMPORT, &owner(), json!({ "carryB64": carry, "apply": true, "workspace": clone.id }));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["imported"], json!(["STRIPE_KEY"]), "{v}");
+        assert!(!v.to_string().contains(SENTINEL));
+        assert_eq!(in_scope(&dst, &clone.id), 1);
+        assert_eq!(in_scope(&dst, &other.id), 0, "never the same-named workspace");
+
+        // 4. A carry made for the clone's id: refused for another id or
+        //    another workspace's name; the clone's own name is fine.
+        let (s, v) = call(&dst_bound, CARRY_IMPORT, &owner(), json!({ "carryB64": bound, "apply": true, "workspace": other.id }));
+        assert_eq!(s, 403, "{v}");
+        assert_eq!(code(&v), "carry_for_another_workspace", "{v}");
+        let (s, v) = call(&dst_bound, CARRY_IMPORT, &owner(), json!({ "carryB64": bound, "apply": true, "workspace": other_name }));
+        assert_eq!(s, 403, "{v}");
+        assert_eq!(code(&v), "carry_workspace_by_name", "{v}");
+        assert_eq!(in_scope(&dst_bound, &other.id), 0, "never the same-named workspace");
+        let (s, v) = call(&dst_bound, CARRY_IMPORT, &owner(), json!({ "carryB64": bound, "apply": true, "workspace": clone_name }));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["imported"], json!(["STRIPE_KEY"]), "{v}");
+        assert_eq!(in_scope(&dst_bound, &clone.id), 1);
+        assert_eq!(in_scope(&dst_bound, &other.id), 0, "never the same-named workspace");
+
+        k2_core::projects_ops::projects_delete(&other.id).expect("cleanup");
+        k2_core::projects_ops::projects_delete(&clone.id).expect("cleanup");
+    });
+}
+
 #[test]
 fn restoring_a_backup_is_for_people_and_checks_before_replacing() {
     use crate::vault_use_routes::BACKUP;

@@ -52,6 +52,7 @@ fn item(name: &str, value: &str) -> CarryItem {
     CarryItem {
         scope_kind: "workspace".into(),
         scope_label: "sales".into(),
+        scope_id: None,
         name: name.into(),
         kind: "api_key".into(),
         hosts: vec!["https://api.stripe.com:443".into()],

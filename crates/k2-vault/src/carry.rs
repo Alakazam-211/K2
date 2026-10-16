@@ -32,8 +32,13 @@ pub const FORMAT: &str = "k2-vault-carry/1";
 pub struct CarryItem {
     /// `workspace` | `server`
     pub scope_kind: String,
-    /// Workspace handle on the source box (the target maps it to its own).
+    /// Workspace handle on the source box (shown to people only; never
+    /// used to pick the target workspace, CL12).
     pub scope_label: String,
+    /// The source workspace's id (`projects.id`). Carries made before
+    /// 0.46.0 have none; their workspace secrets need an explicit target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
     pub name: String,
     pub kind: String,
     pub hosts: Vec<String>,
@@ -63,6 +68,11 @@ pub struct CarryPayload {
     pub source_public_key: String,
     /// Same box owner moving their own workspace (keeps `human_given`).
     pub own_box_move: bool,
+    /// The workspace id on the TARGET box this carry was made for, when the
+    /// sender named one (`--target-workspace`). Import matches workspaces
+    /// by id only (CL12).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_workspace_id: Option<String>,
     pub items: Vec<CarryItem>,
 }
 
@@ -91,6 +101,19 @@ impl LocalVault {
 
     /// Sign and seal a carry to a target vault.
     pub fn carry_seal(&self, target: &Recipient, target_vault_id: &str, own_box_move: bool, items: Vec<CarryItem>) -> Result<Vec<u8>> {
+        self.carry_seal_for(target, target_vault_id, own_box_move, None, items)
+    }
+
+    /// [`Self::carry_seal`], naming the workspace id on the target box the
+    /// carry is for.
+    pub fn carry_seal_for(
+        &self,
+        target: &Recipient,
+        target_vault_id: &str,
+        own_box_move: bool,
+        target_workspace_id: Option<String>,
+        items: Vec<CarryItem>,
+    ) -> Result<Vec<u8>> {
         let payload = CarryPayload {
             format: FORMAT.into(),
             source_vault_id: self.vault_id().to_string(),
@@ -98,6 +121,7 @@ impl LocalVault {
             created_at: chrono::Utc::now().to_rfc3339(),
             source_public_key: crate::crypto::hex(&self.engine_public_key(ENGINE, SIGNING)?),
             own_box_move,
+            target_workspace_id,
             items,
         };
         let mut p = serde_json::to_string(&payload).map_err(|_| VaultError::internal("carry json"))?;

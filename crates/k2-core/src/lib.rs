@@ -55,6 +55,8 @@ pub mod agent_hooks;
 /// The 0.46.0 App grace release: App keys, held requests, config
 /// classifier, per-service warnings (scan), owner-token uses.
 pub mod app_grace;
+/// The per-call App audit (`~/.k2/apps/app-audit.db`, runtime S19).
+pub mod app_audit;
 pub mod app_settings;
 /// Private memory-backed runtime dir (rendered frpc config; K2 vault §10.4).
 pub mod runtime_dir;

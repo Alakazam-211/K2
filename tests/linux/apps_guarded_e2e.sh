@@ -353,12 +353,24 @@ sleep 2
 ok "a killed container is restarted by the supervisor"
 
 echo "== lane D: MAC, io.max, exec, shell =="
+# Under k2-app: the label is `k2-app (enforce)`, or k2-app stacked on the
+# distro's own `crun` profile (Debian 13 attaches it to crun with
+# flags=(unconfined) so rootless userns works): `crun//&k2-app (mixed)`.
+# The stack is the intersection of both, so k2-app's rules hold; only an
+# unconfined crun component is accepted.
+mac_ok() {
+	case "$1" in
+	"k2-app (enforce)") return 0 ;;
+	"crun//&k2-app (mixed)") grep -qx 'crun (unconfined)' /sys/kernel/security/apparmor/profiles ;;
+	*) return 1 ;;
+	esac
+}
 UNIT="$(asapp podman ps --format '{{.Names}}' | grep '^k2app-esc-a--' | head -n1).service"
 CPID="$(asapp podman inspect "${UNIT%.service}" --format '{{.State.Pid}}')"
 if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ]; then
 	grep -q '^k2-app (enforce)' /sys/kernel/security/apparmor/profiles || fail "k2-app profile not loaded: $(grep k2 /sys/kernel/security/apparmor/profiles)"
 	apparmor_parser -Q -K /etc/apparmor.d/k2-app || fail "the canned profile doesn't parse"
-	[ "$(cat "/proc/$CPID/attr/current")" = "k2-app (enforce)" ] || fail "container init not under k2-app: $(cat "/proc/$CPID/attr/current")"
+	mac_ok "$(cat "/proc/$CPID/attr/current")" || fail "container init not under k2-app: $(cat "/proc/$CPID/attr/current")"
 	ok "AppArmor: k2-app loaded (enforce); the container runs under it (pid $CPID)"
 	K2 app doctor --json | python3 -c 'import json,sys; c=[x for x in json.load(sys.stdin)["checks"] if x["id"]=="mac"][0]; assert c["status"]=="ok", c'
 	ok "doctor: mac ok"
@@ -369,10 +381,14 @@ CG="$(asapp systemctl --user show -p ControlGroup --value "$UNIT")"
 grep -q 'wbps=41943040' "/sys/fs/cgroup$CG/io.max" || fail "io.max on $CG: $(cat "/sys/fs/cgroup$CG/io.max" 2>&1)"
 grep -q 'wiops=2000' "/sys/fs/cgroup$CG/io.max" || fail "write IOPS ceiling: $(cat "/sys/fs/cgroup$CG/io.max")"
 ok "io.max on the App's unit: $(tr '\n' ' ' <"/sys/fs/cgroup$CG/io.max")"
-K2 app config esc-a --io-write 20M >/dev/null
+K2 app config esc-a --io-write 20M --json >/tmp/io.json
+jq_ 'assert v["io"]["wbps"] == 20971520, v' /tmp/io.json
 K2 app restart esc-a >/dev/null
 r="$(wait_dep esc-a)"; [ "$r" = live ] || fail "esc-a restart after io change: $r"
-UNIT="$(asapp podman ps --format '{{.Names}}' | grep '^k2app-esc-a--' | head -n1).service"
+# The restarted instance's own unit (the previous one stays warm for the
+# watch window, so "the first container" may be the old one).
+DEPID="$(K2 app deployment esc-a --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["deployment"]["id"])')"
+UNIT="k2app-esc-a--$DEPID.service"
 CG="$(asapp systemctl --user show -p ControlGroup --value "$UNIT")"
 grep -q 'wbps=20971520' "/sys/fs/cgroup$CG/io.max" || fail "io.max after config: $(cat "/sys/fs/cgroup$CG/io.max")"
 ok "k2 app config --io-write 20M reaches io.max at the next restart"
@@ -384,7 +400,8 @@ printf '%s' "$st" | grep -q '^CapEff:\s*0000000000000000' || fail "exec CapEff: 
 printf '%s' "$st" | grep -q '^NoNewPrivs:\s*1' || fail "exec NoNewPrivs: $st"
 printf '%s' "$st" | grep -q '^Seccomp:\s*2' || fail "exec seccomp: $st"
 if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ]; then
-	K2 app exec esc-a -- cat /proc/self/attr/current | grep -q 'k2-app (enforce)' || fail "exec process not under k2-app"
+	XL="$(K2 app exec esc-a -- cat /proc/self/attr/current | tr -d '\0' | grep -m1 -E '^(k2-app|crun|unconfined)')"
+	mac_ok "$XL" || fail "exec process not under k2-app: $XL"
 fi
 set +e
 K2 app exec esc-a -- sh -c 'exit 7' >/dev/null 2>&1; rc=$?

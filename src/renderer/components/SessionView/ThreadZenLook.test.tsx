@@ -59,7 +59,7 @@ vi.mock('./useOverlayThread', () => ({
 
 import { composeRowChromeWidth, TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { composeTextareaHeight } from '@/components/Terminal/terminalCompose'
-import { ThreadAttachmentChip, threadComposeLines, threadComposeStackNext } from '@/components/Thread/ThreadZenKit'
+import { ThreadAttachmentChip, ThreadFooterFade, threadComposeLines, threadComposeStackNext } from '@/components/Thread/ThreadZenKit'
 import { CHAMFER_SCOPE, FOOTER_FADE_PX, THREAD_CHAMFER_CSS, THREAD_COMPOSE_BOX_BORDER, THREAD_COMPOSE_BOX_PAD, THREAD_FOOTER_FADE_CSS, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { primaryScope } from '@/kessel/server-scope'
@@ -622,18 +622,30 @@ describe('chamfered corners in K2\'s square Style', () => {
 // Rosson 2026-10-16, from K2 Companion (7cbf584): the strip behind the box
 // and the activity tab is see-through; messages scroll under it and fade.
 describe('footer fade behind the message box', () => {
-  it('is Companion\'s stack: four masked blur layers and a tint of the window\'s own background', () => {
-    expect(FOOTER_FADE_PX).toBe(24)
-    for (const [n, px] of [[1, 2], [2, 6], [3, 12], [4, 24]] as const) {
-      expect(THREAD_FOOTER_FADE_CSS).toContain(`.thread-footer-blur-${n} { -webkit-backdrop-filter: blur(${px}px); backdrop-filter: blur(${px}px);`)
-    }
-    expect(THREAD_FOOTER_FADE_CSS).toContain('color-mix(in srgb, var(--zen-canvas) 85%, transparent) 0%')
-    expect(THREAD_FOOTER_FADE_CSS).toContain('top: -24px; pointer-events: none;')
-    // Reduced transparency (and no backdrop-filter): no blur, a stronger tint.
-    expect(THREAD_FOOTER_FADE_CSS).toMatch(/prefers-reduced-transparency: reduce\) \{\s*\S+ \.thread-footer-fade > \[class\^="thread-footer-blur-"\] \{ display: none; \}/)
-    expect(THREAD_FOOTER_FADE_CSS).toContain('var(--zen-canvas) 96%')
+  it('is a gradient of the window\'s own background, reaching 32px above the box', () => {
+    expect(FOOTER_FADE_PX).toBe(32)
+    expect(THREAD_FOOTER_FADE_CSS).toContain('top: -32px; pointer-events: none;')
+    expect(THREAD_FOOTER_FADE_CSS).toContain(
+      'background: linear-gradient(to top, color-mix(in srgb, var(--zen-canvas) 96%, transparent) 0%, color-mix(in srgb, var(--zen-canvas) 88%, transparent) 60%, transparent 100%);',
+    )
     // Only in the desktop Thread box.
     expect(THREAD_FOOTER_FADE_CSS.split('\n').filter((l) => l.includes('.thread-footer-')).every((l) => l.includes('[data-k2-thread-zen] .thread-footer-fade'))).toBe(true)
+  })
+
+  // Rosson 2026-10-04: no backdrop-filter / blur in the desktop app (WebKit
+  // leaves stale layers behind it).
+  it('has no blur: no backdrop-filter in its CSS, no blur layers in the strip', () => {
+    expect(THREAD_FOOTER_FADE_CSS).not.toMatch(/backdrop-filter|blur\(/)
+    // One gradient for everyone: no reduced-transparency or no-blur variant.
+    expect(THREAD_FOOTER_FADE_CSS).not.toContain('prefers-reduced-transparency')
+    expect(THREAD_FOOTER_FADE_CSS).not.toContain('@supports')
+    render(<ThreadFooterFade />)
+    const strip = document.querySelector('[data-thread-footer-fade]') as HTMLElement
+    expect(strip.children).toHaveLength(0)
+    expect(strip.className).toBe('thread-footer-fade')
+    expect(document.querySelector('[class*="blur"]')).toBeNull()
+    expect(strip.style.getPropertyValue('backdrop-filter')).toBe('')
+    expect(strip.style.getPropertyValue('-webkit-backdrop-filter')).toBe('')
   })
 
   it('a column without a message box draws no fade', () => {

@@ -889,6 +889,8 @@ pub const ROUTES: &[Route] = &[
     both("/cli/skin/hydra", Owner),
     post("/cli/skin/login", Public),
     post("/cli/skin/logout", Public),
+    // Room-scope R6 (0.46.1): a pass reads its own view; no login uses it.
+    get("/cli/skin/me", NoLogin),
     post("/cli/skin/password/change", Public),
     post("/cli/skin/password/forgot", Public),
     post("/cli/skin/password/reset", Public),

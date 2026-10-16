@@ -8229,6 +8229,22 @@ async fn handle_one_request(
         // Mutations POST-only; GET twins 405. Grants do not change login.
         p if p.starts_with("/cli/skin") => {
             let r = match p {
+                // Room-scope R6 (0.46.1): any live pass reads its own view.
+                crate::skin_me_routes::ROUTE => {
+                    let _ = stream.read(&mut buf).await;
+                    let presented = super::http::extract_token(&query);
+                    if presented.is_some_and(k2_core::skin::is_skin_token) {
+                        let on_link = crate::apps::gateway::current().is_some();
+                        match presented.and_then(crate::apps::gateway::resolve_pass) {
+                            Some(pass) => tokio::task::spawn_blocking(move || crate::skin_me_routes::handle(&pass, on_link))
+                                .await
+                                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e)),
+                            None => crate::skin_routes::revoked_skin_response(),
+                        }
+                    } else {
+                        crate::skin_me_routes::forbidden()
+                    }
+                }
                 "/cli/skin/agents" => {
                     let _ = stream.read(&mut buf).await;
                     let presented = super::http::extract_token(&query);
@@ -10585,18 +10601,9 @@ async fn handle_one_request(
                 .is_some_and(k2_core::remote_sessions::is_grant_token);
             let skin_presented = super::http::extract_token(&query)
                 .is_some_and(k2_core::skin::is_skin_token);
-            // Zen Z41/Z66: previews are a desktop read; app passes never
-            // reach `thread/latest` (not in the gateway allowlist either).
-            if skin_presented && p == "/cli/thread/latest" {
-                super::http::send_response(
-                    &mut *stream,
-                    "403 Forbidden",
-                    "application/json",
-                    r#"{"error":"app passes cannot use thread/latest"}"#,
-                )
-                .await;
-                return DispatchOutcome::Done;
-            }
+            // Zen Z41/Z66 previews; room-scope R5 (0.46.1): a guest or App
+            // pass reads `thread/latest` for its own rooms (the handler
+            // checks each addr's room and thread:read, like `GET /cli/thread`).
             // prd-daemon-activity-and-thread-working-v1 TW9 / AP1: the
             // Thread strip's catch-up carries tool lines; app guests never
             // read it (not in the gateway allowlist either).
@@ -10621,7 +10628,7 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let mut bound_skin = None;
-            let (auth_ok, scoped_principal) = if skin_presented && p == "/cli/thread" {
+            let (auth_ok, scoped_principal) = if skin_presented && (p == "/cli/thread" || p == "/cli/thread/latest") {
                 match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass)

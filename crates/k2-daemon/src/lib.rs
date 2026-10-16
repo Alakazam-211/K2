@@ -247,6 +247,8 @@ pub mod activity_events_ws;
 pub mod chat_overlay_ws;
 pub mod skin_hydra;
 pub mod skin_routes;
+// Room-scope R6: `GET /cli/skin/me` (lane 4, 0.46.1).
+pub mod skin_me_routes;
 pub mod skin_gateway;
 // The boot sequence (was the body of `main.rs`).
 pub mod daemon_main;

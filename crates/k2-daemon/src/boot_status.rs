@@ -323,6 +323,12 @@ pub const FEATURE_GROKBOTS: &str = "grokbots-v1";
 /// `POST /cli/zen/call` on this computer's daemon.
 pub const FEATURE_GARDEN_DATA: &str = "garden-data-v1";
 
+/// The App API (runtime S23, room-scope R1/R5/R6, 0.46.1): the App-facing
+/// routes are catalogued (`contract/catalog.json` rows exposed to `app`;
+/// the gateway table is generated from them), `GET /cli/skin/me` answers,
+/// and a guest or App pass may read `GET /cli/thread/latest` for its rooms.
+pub const FEATURE_APP_API: &str = "app-api-v1";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -354,6 +360,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_SOURCES);
     out.push(FEATURE_GARDEN_DATA);
     out.push(FEATURE_GROKBOTS);
+    out.push(FEATURE_APP_API);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
     }
@@ -400,6 +407,7 @@ mod tests {
                 "sources-v1",
                 "garden-data-v1",
                 "grokbots-v1",
+                "app-api-v1",
                 "thread-push-v1"
             ]
         );

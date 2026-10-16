@@ -1,14 +1,17 @@
 {
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
-  "catalogVersion": 9,
-  "catalogSha256": "5e97098c99895923a755e4fbbf26607e313dce81eb79c166b356d356deed747f",
+  "catalogVersion": 10,
+  "catalogSha256": "c1908a88bfb0312ce08874f073a7e77c99cab951e2e69304d6308095ce10f4ca",
   "runtimeSha256": "3a4b6a97a1b29b52f8dcb05d0fddba5b482bbb71cb077fe2ca6d14b577842a5a",
   "files": {
-    "cli/k2": "5bb6ff23cd0cc72b13b6f75d35cb92c1cd563ced93abbb2c394af3bc42208820",
-    "sdk/generated/k2-frame.js": "9ec5c766497383327be3896aef63aaecc06470e437044fec912764773f4032bb",
-    "sdk/generated/k2.d.ts": "0ab600ddd633677c43e022b816728e7a04016bf05728ba805665638f42e81d94",
+    "cli/k2": "b4eb5bea43371fed4e49392b522bc2b3af2a341ab74c4bb1f1dee1b72c346ced",
+    "cli/k2#study app-api": "ca7dd777b7e954293c139505f4ed2a63821e495c8c57a9270a7e54235e3e5852",
+    "crates/k2-core/src/app_surface.rs": "8e7be62a0a28ccc37d3f781dd6f8bc19167a24fb20fb59a0547bc71620c538b5",
+    "sdk/generated/k2-frame.js": "5629b064a4d6844cb2b4da85bed034811042cb58bdfb8b86cc531a1a3e2edbe3",
+    "sdk/generated/k2.d.ts": "2f9de35b9c0fdd2fecf95f586898349493954e0c1659bb93681e924a0a1afecc",
+    "sdk/server/src/generated/verbs.ts": "84860e3f377731ceab34e1ae78d3d0b2d8e12747b3484f67bdd584142843c219",
     "src/renderer/lib/k2-caps.generated.ts": "a2e55ac3077c7849759ab7a0484646405c33123f64e67c18b51b8ae44a6b3a43",
-    "src/renderer/lib/zen/zen-verbs.generated.ts": "ce12d2ff677de4f7feaef1dc0232112f80a4f9de5beafac1d39a70bcb2e49e63"
+    "src/renderer/lib/zen/zen-verbs.generated.ts": "f80b75146175b27c08b88b548b4720feb5f9a2caa667de2a5a05c18e13ec491e"
   }
 }

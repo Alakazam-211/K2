@@ -27,9 +27,21 @@ export type CatalogRendererImpl = 'builtin' | 'registered' | 'frame'
 export interface CatalogBindings {
   renderer?: { impl: CatalogRendererImpl }
   /** `route` is a `ROUTES` row (UWA2); rows carry no auth (UWB29). */
-  http?: { method: 'GET' | 'POST'; route: string; params?: Record<string, string> }
-  /** Sockets are read-only. */
-  socket?: { path: string; frame: string; refetch?: string }
+  http?: {
+    method: 'GET' | 'POST'
+    route: string
+    params?: Record<string, string>
+    /** `app` rows: catalog response field → live wire field, at any depth (RS7). */
+    responseNames?: Record<string, string>
+    /** `app` POST rows: arguments sent in the query string. */
+    query?: string[]
+    /** `app` rows: the one door that forwards it (absent = both). */
+    door?: 'helper' | 'link'
+    /** `app` GET rows: false = no HEAD twin. */
+    head?: boolean
+  }
+  /** Sockets are read-only. `param` (app rows): the query parameter it needs. */
+  socket?: { path: string; frame: string; refetch?: string; param?: string }
 }
 
 export interface CatalogVerbRow {
@@ -97,6 +109,22 @@ export const CATALOG_ERROR_CODES = [
   'tx_expired',
   'busy',
   'paused',
+  // The App transport (runtime S23): gateway and App-route refusals, plus
+  // the server SDK's own two.
+  'pass_required',
+  'pass_invalid',
+  'pass_wrong_link',
+  'not_on_link',
+  'json_required',
+  'skin_room',
+  'usage',
+  'not_found',
+  'bad_login',
+  'locked',
+  'card_not_pending',
+  'guest_required',
+  'no_app_pass',
+  'no_app_key',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

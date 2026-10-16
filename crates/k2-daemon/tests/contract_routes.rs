@@ -99,12 +99,15 @@ fn exposure_counts_are_pinned() {
     // Garden v3 (contract-sources-v1 §6): + the six sources.* frame rows.
     // Garden data (contract-garden-data-v1 §7.2, catalog v8): + the 15
     // garden-local store.*, save.* and viewer.get rows (never widget/app).
+    // Runtime S23 (catalog v10): + one app row per live App-facing pair
+    // (56: the 53 the hand-written table had, plus thread/latest R5,
+    // skin/me R6 and the link's skin/login) and socket (3).
     let garden_local = c.verbs_exposed_to(Exposure::GardenLocal).len();
-    assert_eq!((widget, app, garden_local), (24, 0, 15), "per-exposure verb counts (widget, app, garden-local)");
+    assert_eq!((widget, app, garden_local), (24, 59, 15), "per-exposure verb counts (widget, app, garden-local)");
     assert_eq!(
         c.verbs.len(),
-        61,
-        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.* and the 15 Garden data rows"
+        120,
+        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows and the 59 app rows"
     );
 }
 
@@ -244,12 +247,23 @@ async fn get_on_every_write_binding_is_405() {
     std::fs::create_dir_all(&home).expect("temp HOME");
     std::env::set_var("HOME", &home);
     let d = k2_daemon::test_harness::start(OWNER_TOKEN).await;
+    // A route that is also a read row's GET binding (`/cli/db/rows`,
+    // `/cli/agent/identity`) answers its GET as that read: it is covered
+    // by the read row, not here.
+    let read_gets: BTreeSet<String> = catalog()
+        .verbs
+        .iter()
+        .filter(|v| v.effect == Effect::Read)
+        .filter_map(|v| v.bindings.http.as_ref().filter(|h| h.method == HttpMethod::Get).map(|h| h.route.clone()))
+        .collect();
     let writes: Vec<(String, String)> = catalog()
         .verbs
         .iter()
         .filter(|v| v.effect == Effect::Write)
         .filter_map(|v| v.bindings.http.as_ref().map(|h| (v.verb.clone(), h.route.clone())))
+        .filter(|(_, route)| !read_gets.contains(route))
         .collect();
+    assert!(read_gets.contains("/cli/db/rows") && read_gets.contains("/cli/agent/identity"), "{read_gets:?}");
     assert!(writes.len() >= 3, "thread.post, thread.answer and thread.void bind routes: {writes:?}");
     for (verb, route) in &writes {
         let path = format!("{route}?token={OWNER_TOKEN}&addr=x&text=x&id=x&answer=x");

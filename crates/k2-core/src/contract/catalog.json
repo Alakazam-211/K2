@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 9,
+  "catalogVersion": 10,
   "caps": [
     {
       "name": "agents:read",
@@ -112,7 +112,21 @@
     {"code": "bad_tx", "doc": "No such transaction for this widget."},
     {"code": "tx_expired", "doc": "The transaction expired (30 s idle, or the daemon restarted); start again."},
     {"code": "busy", "doc": "Too many open transactions; finish or abort one."},
-    {"code": "paused", "doc": "This widget is paused for too many identical writes; the person can resume it."}
+    {"code": "paused", "doc": "This widget is paused for too many identical writes; the person can resume it."},
+    {"code": "pass_required", "doc": "No pass on an App call: send this App's pass (K2_PASS_FILE) or a guest's session pass as Authorization: Bearer."},
+    {"code": "pass_invalid", "doc": "The pass is unknown, expired or revoked: read K2_PASS_FILE again (K2 rotates it), or log the guest in again."},
+    {"code": "pass_wrong_link", "doc": "A pass for another App or link was presented on this App's gateway link."},
+    {"code": "not_on_link", "doc": "The route isn't open to Apps (no app row in the catalog)."},
+    {"code": "json_required", "doc": "An App's write sends Content-Type: application/json."},
+    {"code": "skin_room", "fields": ["room"], "doc": "The pass doesn't hold that room: the same answer as a room that doesn't exist."},
+    {"code": "usage", "doc": "A missing or bad argument; the hint says which."},
+    {"code": "not_found", "doc": "Nothing by that name in a room the pass holds (ticket, note, row, heartbeat, pinned Chat)."},
+    {"code": "bad_login", "doc": "Wrong username, email or password, or no access to this App."},
+    {"code": "locked", "doc": "Too many wrong passwords: the login is locked for retryAfterSecs seconds."},
+    {"code": "card_not_pending", "doc": "The card was already answered, voided or expired."},
+    {"code": "guest_required", "doc": "Server SDK: a call with no guest bound; bind one (asGuest, withGuest) or write asApp()."},
+    {"code": "no_app_pass", "doc": "Server SDK: asApp() where this App has no pass file (K2_PASS_FILE)."},
+    {"code": "no_app_key", "doc": "Server SDK: users and rooms need the App key ($K2_SECRETS_DIR/K2_APP_KEY; the owner mints it with k2 app key mint)."}
   ],
   "bannedFields": [
     "projectPath",
@@ -3550,6 +3564,6618 @@
       ],
       "doc": "Who is looking: the person on this computer, by name.",
       "example": "const {name} = await k2.viewer()"
+    },
+    {
+      "verb": "me.get",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/me"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "AppMe",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "guest",
+              "app",
+              "token"
+            ],
+            "description": "guest: a guest's login; app: this App's own pass on its link; token: an owner-minted platform pass."
+          },
+          "username": {
+            "type": "string"
+          },
+          "app": {
+            "type": "string",
+            "description": "host, or the App's service id this login belongs to ('' for a platform pass)."
+          },
+          "principalId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "title": "AppMeRoom",
+              "type": "object",
+              "properties": {
+                "room": {
+                  "type": "string",
+                  "description": "The room's project id."
+                },
+                "handle": {
+                  "type": "string"
+                },
+                "caps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "room",
+                "handle",
+                "caps"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "This server's /boot-status feature keys."
+          },
+          "catalogVersion": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok",
+          "kind",
+          "username",
+          "app",
+          "principalId",
+          "rooms",
+          "features",
+          "catalogVersion"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "failed"
+      ],
+      "doc": "Who this pass is: guest or App, its rooms with their caps, and this server's features.",
+      "example": "const me = await k2.asGuest(pass).me.get()"
+    },
+    {
+      "verb": "roomAgents.list",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/agents"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "AppRoomAgents",
+        "type": "object",
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "title": "AppRoomAgent",
+              "type": "object",
+              "properties": {
+                "handle": {
+                  "type": "string"
+                },
+                "projectId": {
+                  "type": "string"
+                },
+                "displayName": {
+                  "type": "string"
+                },
+                "color": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "#rrggbb."
+                },
+                "image": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "A data: URL."
+                }
+              },
+              "required": [
+                "handle",
+                "projectId",
+                "displayName",
+                "color",
+                "image"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "agents"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "failed"
+      ],
+      "doc": "The agents in the pass's rooms: handle, name, color and picture.",
+      "example": "const {agents} = await k2.roomAgents.list()"
+    },
+    {
+      "verb": "guests.login",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/login",
+          "responseNames": {
+            "pass": "token"
+          },
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "username": {
+              "type": "string",
+              "description": "A username, or an email (with @)."
+            },
+            "password": {
+              "type": "string"
+            },
+            "app": {
+              "type": "string",
+              "description": "This App's service id (the SDK sends K2_APP_ID); absent = the box login.",
+              "default": ""
+            }
+          },
+          "required": [
+            "username",
+            "password"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppGuestLogin",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "pass": {
+            "type": "string",
+            "description": "The guest's session pass (k2skn_…): send it as Authorization: Bearer."
+          },
+          "username": {
+            "type": "string"
+          },
+          "principalId": {
+            "type": "string"
+          },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Project ids."
+          },
+          "roomHandles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "caps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every cap in any room."
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "roomAccess": {
+            "type": "array",
+            "items": {
+              "title": "AppRoomAccess",
+              "type": "object",
+              "properties": {
+                "handle": {
+                  "type": "string"
+                },
+                "caps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "handle",
+                "caps"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "app": {
+            "type": "string",
+            "description": "host or the App's service id."
+          }
+        },
+        "required": [
+          "ok",
+          "pass",
+          "username",
+          "principalId",
+          "rooms",
+          "roomHandles",
+          "caps",
+          "role",
+          "roomAccess",
+          "app"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "bad_login",
+        "locked",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "Log a guest in through this App; the answer carries the guest's session pass.",
+      "example": "const {pass} = await k2.login({username, password})"
+    },
+    {
+      "verb": "password.change",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/password/change",
+          "door": "helper"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "oldPassword": {
+              "type": "string"
+            },
+            "password": {
+              "type": "string",
+              "description": "At least 8 characters."
+            }
+          },
+          "required": [
+            "oldPassword",
+            "password"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppOk",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "usage",
+        "bad_login",
+        "failed"
+      ],
+      "doc": "A guest changes their own password (browser only: it ends every session of theirs).",
+      "example": "await fetch('/cli/skin/password/change', {method: 'POST', body})"
+    },
+    {
+      "verb": "thread.page",
+      "cap": "thread:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/thread",
+          "params": {
+            "sinceSeq": "since_seq",
+            "beforeSeq": "before_seq"
+          },
+          "responseNames": {
+            "conversation": "conversation_id"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "addr": {
+              "type": "string",
+              "description": "The room's handle (or its pinned Chat's conversation id)."
+            },
+            "sinceSeq": {
+              "type": "integer",
+              "description": "Only items after this seq (catch-up after a socket gap)."
+            },
+            "beforeSeq": {
+              "type": "integer",
+              "description": "Only items before this seq (page back)."
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Default 25, at most 500; 0 = all.",
+              "minimum": 0,
+              "maximum": 500
+            }
+          },
+          "required": [
+            "addr"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppThreadPage",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "collection": {
+            "type": "string"
+          },
+          "addr": {
+            "type": "string"
+          },
+          "conversation": {
+            "type": "string",
+            "description": "The pinned Chat's conversation id: thread.events subscribes with it."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "AppThreadItem",
+              "type": "object",
+              "properties": {
+                "collection": {
+                  "type": "string",
+                  "description": "Always thread."
+                },
+                "seq": {
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "doc": {
+                  "title": "AppThreadDoc",
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "description": "text, choice or secret."
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "created_at": {
+                      "type": "number",
+                      "description": "Seconds since the epoch (not milliseconds)."
+                    },
+                    "body": {
+                      "type": "string",
+                      "description": "The text (redacted); a card's prompt."
+                    },
+                    "via": {
+                      "type": "string",
+                      "description": "Where it came from: thread, compose, card, msg, inbox, v1, …"
+                    },
+                    "choice": {
+                      "title": "AppChoiceCard",
+                      "type": "object",
+                      "properties": {
+                        "prompt": {
+                          "type": "string"
+                        },
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "title": "ChoiceOption",
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "label"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "allow_custom": {
+                          "type": "boolean"
+                        },
+                        "status": {
+                          "type": "string",
+                          "description": "pending, answered, voided or expired."
+                        },
+                        "answer": {
+                          "type": "string"
+                        },
+                        "answeredBy": {
+                          "title": "AppPostAuthor",
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                            },
+                            "login": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "description": "The owner's display name, on an owner's answer only."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "login"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "answeredAt": {
+                          "type": "integer",
+                          "description": "Seconds since the epoch, when answered."
+                        },
+                        "expiresAt": {
+                          "type": "integer",
+                          "description": "Seconds since the epoch, when a pending card expires."
+                        }
+                      },
+                      "required": [
+                        "prompt",
+                        "options",
+                        "allow_custom",
+                        "status"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "secret": {
+                      "title": "AppSecretCard",
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "description": "pending, set, voided or expired."
+                        },
+                        "prompt": {
+                          "type": "string"
+                        },
+                        "scope": {
+                          "type": "string",
+                          "description": "workspace, server or session."
+                        },
+                        "hosts": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "delivery": {
+                          "type": "string",
+                          "description": "fetch, file or env."
+                        },
+                        "secretKind": {
+                          "type": "string"
+                        },
+                        "ref": {
+                          "type": "string",
+                          "description": "A k2v:// reference to the stored secret (never its value)."
+                        },
+                        "answeredBy": {
+                          "title": "AppPostAuthor",
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                            },
+                            "login": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string",
+                              "description": "The owner's display name, on an owner's answer only."
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "login"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "answeredAt": {
+                          "type": "integer",
+                          "description": "Seconds since the epoch, when answered."
+                        },
+                        "expiresAt": {
+                          "type": "integer",
+                          "description": "Seconds since the epoch, when a pending card expires."
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "status"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "widget": {
+                      "title": "AppPostWidget",
+                      "type": "object",
+                      "properties": {
+                        "widget": {
+                          "type": "string"
+                        },
+                        "garden": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "widget",
+                        "garden"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "author": {
+                      "title": "AppPostAuthor",
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                        },
+                        "login": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "The owner's display name, on an owner's answer only."
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "login"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "from",
+                    "created_at"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "seq",
+                "id",
+                "doc"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "Older items exist below this page."
+          },
+          "pastAddresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "addr",
+          "conversation",
+          "items",
+          "has_more"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back.",
+      "example": "const page = await k2.thread.page({addr: 'sales', limit: 50})"
+    },
+    {
+      "verb": "thread.latest",
+      "cap": "thread:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/thread/latest",
+          "responseNames": {
+            "conversation": "conversationId"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "addrs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Up to 50 room handles (sent comma-separated)."
+            }
+          },
+          "required": [
+            "addrs"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppThreadLatest",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "AppThreadLatestItem",
+              "type": "object",
+              "properties": {
+                "addr": {
+                  "type": "string"
+                },
+                "conversation": {
+                  "type": "string"
+                },
+                "seq": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "at": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "description": "Seconds since the epoch."
+                },
+                "from": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "via": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "author": {
+                  "title": "AppPostAuthor",
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                    },
+                    "login": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "The owner's display name, on an owner's answer only."
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "login"
+                  ],
+                  "additionalProperties": false
+                },
+                "kind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "preview": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "One line, at most 140 characters."
+                },
+                "error": {
+                  "title": "AppItemError",
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "hint": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "hint"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "addr"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "The newest Thread item per room, for list previews; a room the pass can't read is an item with error.",
+      "example": "const {items} = await k2.thread.latest({addrs: ['sales', 'ops']})"
+    },
+    {
+      "verb": "thread.send",
+      "cap": "thread:post",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/thread/post",
+          "responseNames": {
+            "conversation": "conversation_id"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "addr": {
+              "type": "string",
+              "description": "The room's handle."
+            },
+            "text": {
+              "type": "string"
+            },
+            "via": {
+              "type": "string",
+              "description": "Where the guest wrote it (default thread; never compose).",
+              "default": "thread"
+            }
+          },
+          "required": [
+            "addr",
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppThreadPosted",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "title": "AppPostAuthor",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+              },
+              "login": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string",
+                "description": "The owner's display name, on an owner's answer only."
+              }
+            },
+            "required": [
+              "kind",
+              "login"
+            ],
+            "additionalProperties": false
+          },
+          "conversation": {
+            "type": "string"
+          },
+          "addr": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "seq",
+          "from",
+          "kind",
+          "conversation",
+          "addr"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Post text to a room's Thread as the guest (or the App); the agent gets it at once.",
+      "example": "await k2.thread.send({addr: 'sales', text: 'Hi'})"
+    },
+    {
+      "verb": "thread.answerCard",
+      "cap": "thread:post",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/thread/answer",
+          "params": {
+            "cardId": "id"
+          },
+          "responseNames": {
+            "conversation": "conversation_id"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "addr": {
+              "type": "string"
+            },
+            "cardId": {
+              "type": "string"
+            },
+            "answer": {
+              "type": "string",
+              "description": "One of the card's option labels (or free text when it allows custom)."
+            },
+            "secret": {
+              "type": "string",
+              "description": "A secret card's value (the guest's own, delivered by fetch)."
+            },
+            "hosts": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "A secret's allowed hosts."
+            },
+            "scope": {
+              "type": "string",
+              "description": "A secret's scope: session for guests."
+            },
+            "delivery": {
+              "type": "string",
+              "description": "A secret's delivery: fetch for guests."
+            },
+            "confirm": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "addr",
+            "cardId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppCardAnswered",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "trimmed": {
+            "type": "boolean"
+          },
+          "agentCanSee": {
+            "type": "boolean"
+          },
+          "conversation": {
+            "type": "string"
+          },
+          "addr": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "kind",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "card_not_pending",
+        "failed"
+      ],
+      "doc": "Answer a choice card (or set a secret card) in a room's Thread.",
+      "example": "await k2.thread.answerCard({addr, cardId, answer: 'Yes'})"
+    },
+    {
+      "verb": "thread.voidCard",
+      "cap": "thread:post",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/thread/void",
+          "params": {
+            "cardId": "id"
+          },
+          "responseNames": {
+            "conversation": "conversation_id"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "addr": {
+              "type": "string"
+            },
+            "cardId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "addr",
+            "cardId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppCardVoided",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "conversation": {
+            "type": "string"
+          },
+          "addr": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "card_not_pending",
+        "failed"
+      ],
+      "doc": "Dismiss a pending card in a room's Thread.",
+      "example": "await k2.thread.voidCard({addr, cardId})"
+    },
+    {
+      "verb": "thread.events",
+      "cap": "thread:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "app-api-v1",
+      "bindings": {
+        "socket": {
+          "path": "/cli/overlay/events",
+          "frame": "thread",
+          "param": "conversation",
+          "refetch": "thread.page"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "conversation": {
+              "type": "string",
+              "description": "The conversation from thread.page."
+            }
+          },
+          "required": [
+            "conversation"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppThreadItem",
+        "type": "object",
+        "properties": {
+          "collection": {
+            "type": "string",
+            "description": "Always thread."
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "doc": {
+            "title": "AppThreadDoc",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "description": "text, choice or secret."
+              },
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "number",
+                "description": "Seconds since the epoch (not milliseconds)."
+              },
+              "body": {
+                "type": "string",
+                "description": "The text (redacted); a card's prompt."
+              },
+              "via": {
+                "type": "string",
+                "description": "Where it came from: thread, compose, card, msg, inbox, v1, …"
+              },
+              "choice": {
+                "title": "AppChoiceCard",
+                "type": "object",
+                "properties": {
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "title": "ChoiceOption",
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "label"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "allow_custom": {
+                    "type": "boolean"
+                  },
+                  "status": {
+                    "type": "string",
+                    "description": "pending, answered, voided or expired."
+                  },
+                  "answer": {
+                    "type": "string"
+                  },
+                  "answeredBy": {
+                    "title": "AppPostAuthor",
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                      },
+                      "login": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string",
+                        "description": "The owner's display name, on an owner's answer only."
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "login"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "answeredAt": {
+                    "type": "integer",
+                    "description": "Seconds since the epoch, when answered."
+                  },
+                  "expiresAt": {
+                    "type": "integer",
+                    "description": "Seconds since the epoch, when a pending card expires."
+                  }
+                },
+                "required": [
+                  "prompt",
+                  "options",
+                  "allow_custom",
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              "secret": {
+                "title": "AppSecretCard",
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "description": "pending, set, voided or expired."
+                  },
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "description": "workspace, server or session."
+                  },
+                  "hosts": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "delivery": {
+                    "type": "string",
+                    "description": "fetch, file or env."
+                  },
+                  "secretKind": {
+                    "type": "string"
+                  },
+                  "ref": {
+                    "type": "string",
+                    "description": "A k2v:// reference to the stored secret (never its value)."
+                  },
+                  "answeredBy": {
+                    "title": "AppPostAuthor",
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                      },
+                      "login": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string",
+                        "description": "The owner's display name, on an owner's answer only."
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "login"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "answeredAt": {
+                    "type": "integer",
+                    "description": "Seconds since the epoch, when answered."
+                  },
+                  "expiresAt": {
+                    "type": "integer",
+                    "description": "Seconds since the epoch, when a pending card expires."
+                  }
+                },
+                "required": [
+                  "name",
+                  "status"
+                ],
+                "additionalProperties": false
+              },
+              "widget": {
+                "title": "AppPostWidget",
+                "type": "object",
+                "properties": {
+                  "widget": {
+                    "type": "string"
+                  },
+                  "garden": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "widget",
+                  "garden"
+                ],
+                "additionalProperties": false
+              },
+              "author": {
+                "title": "AppPostAuthor",
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "description": "owner, user (a Connect login) or guest (an App pass or guest login)."
+                  },
+                  "login": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "The owner's display name, on an owner's answer only."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "login"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "from",
+              "created_at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "seq",
+          "id",
+          "doc"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Live Thread items of one room (new posts and card changes; merge by id); after a gap, thread.page with sinceSeq.",
+      "example": "const off = k2.thread.events({conversation}, (item) => draw(item))"
+    },
+    {
+      "verb": "thread.ensurePinned",
+      "cap": "thread:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/workspace/ensure-pinned-chat"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppPinnedChat",
+        "type": "object",
+        "properties": {
+          "reused": {
+            "type": "boolean"
+          },
+          "resumedExisting": {
+            "type": "boolean"
+          },
+          "freshSpawn": {
+            "type": "boolean"
+          },
+          "pendingSessionDiscovery": {
+            "type": "boolean"
+          },
+          "provider": {
+            "type": "string",
+            "description": "The agent's model CLI ('' when none)."
+          }
+        },
+        "required": [
+          "reused",
+          "resumedExisting",
+          "freshSpawn",
+          "pendingSessionDiscovery",
+          "provider"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Check the room's pinned Chat is live (find-only for Apps: it never starts one).",
+      "example": "await k2.thread.ensurePinned({workspace: 'sales'})"
+    },
+    {
+      "verb": "files.list",
+      "cap": "files:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/fs/read-dir",
+          "params": {
+            "relPath": "path",
+            "showHidden": "show_hidden"
+          },
+          "responseNames": {
+            "relPath": "path"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "relPath": {
+              "type": "string",
+              "description": "Room-relative path (never a host path); '.' is the room's root."
+            },
+            "showHidden": {
+              "type": "boolean",
+              "description": "Include names starting with a dot."
+            }
+          },
+          "required": [
+            "workspace",
+            "relPath"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "type": "array",
+        "items": {
+          "title": "AppFileEntry",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "relPath": {
+              "type": "string"
+            },
+            "isDirectory": {
+              "type": "boolean",
+              "description": "A symlinked folder reads false."
+            },
+            "size": {
+              "type": "integer",
+              "description": "Bytes."
+            },
+            "modifiedAt": {
+              "type": "number",
+              "description": "Milliseconds since the epoch."
+            }
+          },
+          "required": [
+            "name",
+            "relPath",
+            "isDirectory",
+            "size",
+            "modifiedAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "A folder's entries, folders first.",
+      "example": "const entries = await k2.files.list({workspace, relPath: '.'})"
+    },
+    {
+      "verb": "files.read",
+      "cap": "files:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/fs/read-file",
+          "params": {
+            "relPath": "path"
+          },
+          "responseNames": {
+            "relPath": "path"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "relPath": {
+              "type": "string",
+              "description": "Room-relative path (never a host path); '.' is the room's root."
+            }
+          },
+          "required": [
+            "workspace",
+            "relPath"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppFileText",
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "relPath": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content",
+          "relPath",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "A UTF-8 text file (at most 10 MiB).",
+      "example": "const {content} = await k2.files.read({workspace, relPath: 'notes.md'})"
+    },
+    {
+      "verb": "files.readBinary",
+      "cap": "files:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/fs/read-binary",
+          "params": {
+            "relPath": "path"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "relPath": {
+              "type": "string",
+              "description": "Room-relative path (never a host path); '.' is the room's root."
+            }
+          },
+          "required": [
+            "workspace",
+            "relPath"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppFileBase64",
+        "type": "object",
+        "properties": {
+          "base64": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "base64"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "A file as base64 (at most 50 MiB; read-range for more).",
+      "example": "const {base64} = await k2.files.readBinary({workspace, relPath})"
+    },
+    {
+      "verb": "files.readRange",
+      "cap": "files:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/fs/read-range",
+          "params": {
+            "relPath": "path"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "relPath": {
+              "type": "string",
+              "description": "Room-relative path (never a host path); '.' is the room's root."
+            },
+            "offset": {
+              "type": "integer",
+              "description": "Byte offset (default 0).",
+              "minimum": 0
+            },
+            "len": {
+              "type": "integer",
+              "description": "Bytes (default 8 MiB, at most 16 MiB).",
+              "minimum": 1,
+              "maximum": 16777216
+            }
+          },
+          "required": [
+            "workspace",
+            "relPath"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppFileRange",
+        "type": "object",
+        "properties": {
+          "base64": {
+            "type": "string"
+          },
+          "len": {
+            "type": "integer",
+            "description": "Bytes returned."
+          },
+          "size": {
+            "type": "integer",
+            "description": "The file's size in bytes."
+          },
+          "eof": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "base64",
+          "len",
+          "size",
+          "eof"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "A byte range of a file, as base64.",
+      "example": "const r = await k2.files.readRange({workspace, relPath, offset: 0})"
+    },
+    {
+      "verb": "files.write",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/fs/write-file",
+          "params": {
+            "relPath": "path"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "relPath": {
+              "type": "string",
+              "description": "Room-relative path (never a host path); '.' is the room's root."
+            },
+            "content": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace",
+            "relPath",
+            "content"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppFileDone",
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Write (or overwrite) a text file; its folder must exist.",
+      "example": "await k2.files.write({workspace, relPath: 'a.txt', content})"
+    },
+    {
+      "verb": "files.uploadBinary",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/fs/upload-binary",
+          "responseNames": {
+            "relPath": "path"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "dir": {
+              "type": "string",
+              "description": "Room-relative folder (made if missing)."
+            },
+            "filename": {
+              "type": "string"
+            },
+            "base64": {
+              "type": "string",
+              "description": "At most 100 MiB decoded."
+            }
+          },
+          "required": [
+            "workspace",
+            "dir",
+            "filename",
+            "base64"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppFileLanded",
+        "type": "object",
+        "properties": {
+          "relPath": {
+            "type": "string",
+            "description": "Room-relative path where it landed."
+          }
+        },
+        "required": [
+          "relPath"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "too_large",
+        "failed"
+      ],
+      "doc": "Upload a file in one request; a taken name becomes name (1).ext.",
+      "example": "const {relPath} = await k2.files.uploadBinary({workspace, dir: 'in', filename, base64})"
+    },
+    {
+      "verb": "files.uploadChunk",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/fs/upload-chunk",
+          "params": {
+            "uploadId": "upload_id",
+            "isLast": "is_last",
+            "totalBytes": "total_bytes"
+          },
+          "responseNames": {
+            "relPath": "path"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "dir": {
+              "type": "string",
+              "description": "Room-relative folder (made if missing)."
+            },
+            "filename": {
+              "type": "string"
+            },
+            "uploadId": {
+              "type": "string",
+              "description": "Your id for this upload (at most 200 characters)."
+            },
+            "status": {
+              "type": "boolean",
+              "description": "true = ask how many bytes K2 holds (resume)."
+            },
+            "offset": {
+              "type": "integer",
+              "description": "Byte offset of this chunk (0 restarts).",
+              "minimum": 0
+            },
+            "base64": {
+              "type": "string",
+              "description": "This chunk (at most 16 MiB decoded)."
+            },
+            "isLast": {
+              "type": "boolean"
+            },
+            "totalBytes": {
+              "type": "integer",
+              "description": "The whole file's size, on the first chunk."
+            }
+          },
+          "required": [
+            "workspace",
+            "dir",
+            "filename",
+            "uploadId"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppFileChunk",
+        "type": "object",
+        "properties": {
+          "received": {
+            "type": "integer",
+            "description": "Bytes K2 holds."
+          },
+          "done": {
+            "type": "boolean"
+          },
+          "relPath": {
+            "type": "string",
+            "description": "Where the file landed, when done."
+          }
+        },
+        "required": [
+          "done"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "too_large",
+        "conflict",
+        "failed"
+      ],
+      "doc": "Resumable upload, one chunk per request (10 GiB in all); the last chunk lands the file.",
+      "example": "await k2.files.uploadChunk({workspace, dir, filename, uploadId, offset, base64, isLast})"
+    },
+    {
+      "verb": "files.create",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/fs/create",
+          "params": {
+            "relPath": "path",
+            "isDirectory": "is_directory"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "relPath": {
+              "type": "string",
+              "description": "Room-relative path (never a host path); '.' is the room's root."
+            },
+            "isDirectory": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "workspace",
+            "relPath"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppFileDone",
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Create an empty file or a folder.",
+      "example": "await k2.files.create({workspace, relPath: 'in', isDirectory: true})"
+    },
+    {
+      "verb": "files.copy",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/fs/copy"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Room-relative paths."
+            },
+            "destination": {
+              "type": "string",
+              "description": "A room-relative folder (or the new name)."
+            }
+          },
+          "required": [
+            "workspace",
+            "sources",
+            "destination"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppFileDone",
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Copy files or folders (a taken name becomes 'name copy').",
+      "example": "await k2.files.copy({workspace, sources: ['a.txt'], destination: 'out'})"
+    },
+    {
+      "verb": "files.move",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/fs/move"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Room-relative paths."
+            },
+            "destination": {
+              "type": "string",
+              "description": "A room-relative folder (or the new name)."
+            }
+          },
+          "required": [
+            "workspace",
+            "sources",
+            "destination"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppFileDone",
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Move files or folders.",
+      "example": "await k2.files.move({workspace, sources: ['a.txt'], destination: 'out'})"
+    },
+    {
+      "verb": "files.rename",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/fs/rename",
+          "params": {
+            "relPath": "path",
+            "newName": "new_name"
+          },
+          "responseNames": {
+            "relPath": "path"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "relPath": {
+              "type": "string",
+              "description": "Room-relative path (never a host path); '.' is the room's root."
+            },
+            "newName": {
+              "type": "string",
+              "description": "One path segment."
+            }
+          },
+          "required": [
+            "workspace",
+            "relPath",
+            "newName"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppFileLanded",
+        "type": "object",
+        "properties": {
+          "relPath": {
+            "type": "string",
+            "description": "Room-relative path where it landed."
+          }
+        },
+        "required": [
+          "relPath"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Rename a file or folder in place.",
+      "example": "const {relPath} = await k2.files.rename({workspace, relPath: 'a.txt', newName: 'b.txt'})"
+    },
+    {
+      "verb": "files.events",
+      "cap": "files:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "app-api-v1",
+      "bindings": {
+        "socket": {
+          "path": "/cli/fs/events",
+          "frame": "fs_changed",
+          "param": "workspace",
+          "refetch": "files.list"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppFsFrame",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "fs_changed",
+              "workspace_resources_changed"
+            ]
+          },
+          "workspace": {
+            "type": "string"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Room-relative paths that changed ('.' = the root)."
+          },
+          "workspaceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "workspace"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Live file changes in one room (paths only; refetch what you show).",
+      "example": "const off = k2.files.events({workspace}, (f) => refresh(f.paths))"
+    },
+    {
+      "verb": "resources.list",
+      "cap": "files:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/workspace/resources",
+          "head": false
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppResources",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "docs": {
+            "type": "array",
+            "items": {
+              "title": "AppResource",
+              "type": "object",
+              "properties": {
+                "filePath": {
+                  "type": "string",
+                  "description": "Room-relative."
+                },
+                "fileName": {
+                  "type": "string"
+                },
+                "addedAt": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                },
+                "missing": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "filePath",
+                "fileName",
+                "addedAt",
+                "missing"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "workspaceId",
+          "docs"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "The room's pinned resources (its links drawer).",
+      "example": "const {docs} = await k2.resources.list({workspace})"
+    },
+    {
+      "verb": "resources.add",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/workspace/resources/add",
+          "params": {
+            "relPath": "path"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "relPath": {
+              "type": "string",
+              "description": "Room-relative path (never a host path); '.' is the room's root."
+            }
+          },
+          "required": [
+            "workspace",
+            "relPath"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppResourceAdded",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "filePath": {
+            "type": "string"
+          },
+          "fileName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "workspaceId",
+          "filePath",
+          "fileName"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Pin an existing file to the room's resources.",
+      "example": "await k2.resources.add({workspace, relPath: 'plan.pdf'})"
+    },
+    {
+      "verb": "resources.remove",
+      "cap": "files:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/workspace/resources/remove",
+          "params": {
+            "relPath": "path"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "relPath": {
+              "type": "string",
+              "description": "Room-relative path (never a host path); '.' is the room's root."
+            }
+          },
+          "required": [
+            "workspace",
+            "relPath"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppResourceRemoved",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "filePath": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "workspaceId",
+          "filePath"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Unpin a file from the room's resources.",
+      "example": "await k2.resources.remove({workspace, relPath: 'plan.pdf'})"
+    },
+    {
+      "verb": "tickets.list",
+      "cap": "tickets:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/feedback/list"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "status": {
+              "type": "string",
+              "description": "One status (default: the open ones)."
+            },
+            "all": {
+              "type": "boolean",
+              "description": "Every status."
+            }
+          },
+          "required": [
+            "project"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppTickets",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "AppTicket",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "projectId": {
+                  "type": "string"
+                },
+                "agentName": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "description": "question, approval or fyi."
+                },
+                "title": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "options": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "priority": {
+                  "type": "integer",
+                  "description": "1 (low) to 5."
+                },
+                "status": {
+                  "type": "string",
+                  "description": "waiting, answered, resolved, dismissed, planned or needs_discussion."
+                },
+                "answer": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                },
+                "updatedAt": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                },
+                "answeredAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Seconds since the epoch."
+                },
+                "commentCount": {
+                  "type": "integer"
+                },
+                "assignees": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "hasBrief": {
+                  "type": "boolean"
+                },
+                "briefBytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "projectId",
+                "agentName",
+                "kind",
+                "title",
+                "body",
+                "options",
+                "priority",
+                "status",
+                "answer",
+                "createdAt",
+                "updatedAt",
+                "answeredAt",
+                "commentCount",
+                "assignees",
+                "hasBrief",
+                "briefBytes"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "A room's tickets, newest first.",
+      "example": "const {items} = await k2.tickets.list({project: 'sales'})"
+    },
+    {
+      "verb": "tickets.show",
+      "cap": "tickets:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/feedback/show"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "A ticket id (or a unique prefix)."
+            },
+            "brief": {
+              "type": "boolean",
+              "description": "Include the HTML brief."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppTicketDetail",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "agentName": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "question, approval or fyi."
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "options": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "description": "1 (low) to 5."
+          },
+          "status": {
+            "type": "string",
+            "description": "waiting, answered, resolved, dismissed, planned or needs_discussion."
+          },
+          "answer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "updatedAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "answeredAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the epoch."
+          },
+          "commentCount": {
+            "type": "integer"
+          },
+          "assignees": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hasBrief": {
+            "type": "boolean"
+          },
+          "briefBytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "workspace": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The agent's display name."
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "title": "AppTicketComment",
+              "type": "object",
+              "properties": {
+                "author": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                }
+              },
+              "required": [
+                "author",
+                "body",
+                "at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "brief": {
+            "title": "AppTicketBrief",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "html": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "bytes": {
+                "type": "integer"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "sanitizer": {
+                "type": "string"
+              },
+              "createdAt": {
+                "type": "integer",
+                "description": "Seconds since the epoch."
+              }
+            },
+            "required": [
+              "html",
+              "text",
+              "bytes",
+              "sha256",
+              "sanitizer",
+              "createdAt"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "agentName",
+          "kind",
+          "title",
+          "body",
+          "options",
+          "priority",
+          "status",
+          "answer",
+          "createdAt",
+          "updatedAt",
+          "answeredAt",
+          "commentCount",
+          "assignees",
+          "hasBrief",
+          "briefBytes",
+          "ok",
+          "comments"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "One ticket with its comments (and brief).",
+      "example": "const t = await k2.tickets.show({id})"
+    },
+    {
+      "verb": "tickets.create",
+      "cap": "tickets:post",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/feedback/create"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "title": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "description": "question (default), approval or fyi."
+            },
+            "body": {
+              "type": "string"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "priority": {
+              "type": "integer",
+              "description": "1 to 5 (default 3).",
+              "minimum": 1,
+              "maximum": 5
+            },
+            "agentName": {
+              "type": "string"
+            },
+            "assignees": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "briefHtml": {
+              "type": "string",
+              "description": "An HTML brief (cleaned; at most 1 MiB)."
+            }
+          },
+          "required": [
+            "project",
+            "title"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppTicketCreated",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "string"
+          },
+          "agentName": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "question, approval or fyi."
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "options": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "description": "1 (low) to 5."
+          },
+          "status": {
+            "type": "string",
+            "description": "waiting, answered, resolved, dismissed, planned or needs_discussion."
+          },
+          "answer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "updatedAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "answeredAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the epoch."
+          },
+          "commentCount": {
+            "type": "integer"
+          },
+          "assignees": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hasBrief": {
+            "type": "boolean"
+          },
+          "briefBytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "workspace": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "title": "AppTicketWarning",
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "hint"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "agentName",
+          "kind",
+          "title",
+          "body",
+          "options",
+          "priority",
+          "status",
+          "answer",
+          "createdAt",
+          "updatedAt",
+          "answeredAt",
+          "commentCount",
+          "assignees",
+          "hasBrief",
+          "briefBytes",
+          "ok",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "too_large",
+        "failed"
+      ],
+      "doc": "Open a ticket in a room for its agent.",
+      "example": "await k2.tickets.create({project: 'sales', title: 'Quote for J1042?'})"
+    },
+    {
+      "verb": "tickets.comment",
+      "cap": "tickets:post",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/feedback/comment"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string"
+            },
+            "optionPick": {
+              "type": "boolean",
+              "description": "The body is one of the ticket's options (answers it)."
+            }
+          },
+          "required": [
+            "id",
+            "body"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppTicketCommented",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "commentId": {
+            "type": "string"
+          },
+          "author": {
+            "type": "string"
+          },
+          "answered": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "delivered": {
+            "type": "boolean"
+          },
+          "deliveryReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "commentId",
+          "author",
+          "answered",
+          "status",
+          "delivered",
+          "deliveryReason"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Comment on a ticket as the guest (free text moves it to needs_discussion).",
+      "example": "await k2.tickets.comment({id, body: 'Looks right'})"
+    },
+    {
+      "verb": "tickets.answer",
+      "cap": "tickets:post",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/feedback/answer"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "answer": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "answer"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppTicketAnswered",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "answer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "answeredAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seconds since the epoch."
+          },
+          "delivered": {
+            "type": "boolean"
+          },
+          "deliveryReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "status",
+          "answer",
+          "answeredAt",
+          "delivered",
+          "deliveryReason"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Answer a ticket as the guest.",
+      "example": "await k2.tickets.answer({id, answer: 'Approved'})"
+    },
+    {
+      "verb": "tickets.resolve",
+      "cap": "tickets:post",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/feedback/resolve"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "description": "resolved (default), dismissed, waiting, planned or needs_discussion."
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppTicketStatus",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Set a ticket's status (Apps can't set answered).",
+      "example": "await k2.tickets.resolve({id})"
+    },
+    {
+      "verb": "tickets.assign",
+      "cap": "tickets:post",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/feedback/assign"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "usernames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "[] clears every assignee."
+            }
+          },
+          "required": [
+            "id",
+            "usernames"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppTicketAssigned",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "assignees": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "title": "AppTicketWarning",
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "hint"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "assignees",
+          "warnings"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Set a ticket's assignees.",
+      "example": "await k2.tickets.assign({id, usernames: ['dana']})"
+    },
+    {
+      "verb": "wiki.index",
+      "cap": "wiki:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/wiki/index"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            }
+          },
+          "required": [
+            "project"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppWikiIndex",
+        "type": "object",
+        "properties": {
+          "wikiRel": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string",
+            "description": "Seconds since the epoch, as a string."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "title": "AppWikiNode",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "aliases": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "exists": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "aliases",
+                "tags",
+                "exists"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "title": "AppWikiLink",
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string"
+                },
+                "target": {
+                  "type": "string"
+                },
+                "missing": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "source",
+                "target"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "noteCount": {
+            "type": "integer"
+          },
+          "scope": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "wikiRel",
+          "generatedAt",
+          "nodes",
+          "links",
+          "noteCount",
+          "scope"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "A room's wiki: its notes and the links between them.",
+      "example": "const {nodes} = await k2.wiki.index({project: 'sales'})"
+    },
+    {
+      "verb": "wiki.note",
+      "cap": "wiki:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/wiki/note"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "project": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "id": {
+              "type": "string",
+              "description": "A note id, like Home.md."
+            }
+          },
+          "required": [
+            "project",
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppWikiNote",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown without its frontmatter."
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "aliases",
+          "tags",
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "One wiki note's markdown.",
+      "example": "const {body} = await k2.wiki.note({project, id: 'Home.md'})"
+    },
+    {
+      "verb": "storeDocs.collections",
+      "cap": "store:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/store/list"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppStoreCollections",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "collections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "collections"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "The room's store collections (Linux, with the workspace database).",
+      "example": "const {collections} = await k2.storeDocs.collections({workspace})"
+    },
+    {
+      "verb": "storeDocs.get",
+      "cap": "store:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/store/get"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "name": {
+              "type": "string",
+              "description": "The collection."
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace",
+            "name",
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppStoreDoc",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "collection": {
+            "type": "string"
+          },
+          "doc": {
+            "type": "json"
+          }
+        },
+        "required": [
+          "ok",
+          "id",
+          "collection",
+          "doc"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "One store document.",
+      "example": "const {doc} = await k2.storeDocs.get({workspace, name: 'jobs', id: 'J1042'})"
+    },
+    {
+      "verb": "storeDocs.query",
+      "cap": "store:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/store/query"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "name": {
+              "type": "string",
+              "description": "The collection."
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Default 50, at most 500.",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          "required": [
+            "workspace",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppStoreDocs",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "collection": {
+            "type": "string"
+          },
+          "docs": {
+            "type": "array",
+            "items": {
+              "title": "AppStoreDocItem",
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "doc": {
+                  "type": "json"
+                }
+              },
+              "required": [
+                "id",
+                "doc"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "collection",
+          "docs"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Documents of one store collection.",
+      "example": "const {docs} = await k2.storeDocs.query({workspace, name: 'jobs'})"
+    },
+    {
+      "verb": "db.tables",
+      "cap": "store:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/db/tables"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppDbTables",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "tables": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "tables"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "The room database's tables (Linux, with the workspace database).",
+      "example": "const {tables} = await k2.db.tables({workspace})"
+    },
+    {
+      "verb": "db.rows",
+      "cap": "store:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/db/rows"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "table": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string",
+              "description": "One row by its id column."
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Default 50, at most 500.",
+              "minimum": 1,
+              "maximum": 500
+            }
+          },
+          "required": [
+            "workspace",
+            "table"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppDbRows",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "table": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "json"
+              }
+            },
+            "description": "Without id: the rows."
+          },
+          "id": {
+            "type": "string"
+          },
+          "row": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "json"
+            },
+            "description": "With id: that row."
+          }
+        },
+        "required": [
+          "ok",
+          "table"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Rows of a table as the guest (RLS decides which); with id, one row.",
+      "example": "const {rows} = await k2.db.rows({workspace, table: 'jobs'})"
+    },
+    {
+      "verb": "db.insert",
+      "cap": "store:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/db/rows"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "table": {
+              "type": "string"
+            },
+            "row": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "json"
+              },
+              "description": "Column → value; {} inserts defaults."
+            }
+          },
+          "required": [
+            "workspace",
+            "table",
+            "row"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppDbRow",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "table": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "row": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "json"
+            },
+            "description": "The row as Postgres row_to_json writes it."
+          }
+        },
+        "required": [
+          "ok",
+          "table",
+          "row"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Insert one row as the guest (RLS checks it).",
+      "example": "const {row} = await k2.db.insert({workspace, table: 'jobs', row: {name}})"
+    },
+    {
+      "verb": "db.update",
+      "cap": "store:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/db/rows/update"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "table": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "row": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "json"
+              },
+              "description": "Columns to change."
+            }
+          },
+          "required": [
+            "workspace",
+            "table",
+            "id",
+            "row"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppDbRow",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "table": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "row": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "json"
+            },
+            "description": "The row as Postgres row_to_json writes it."
+          }
+        },
+        "required": [
+          "ok",
+          "table",
+          "row"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Update one row by id as the guest.",
+      "example": "await k2.db.update({workspace, table: 'jobs', id, row: {status: 'done'}})"
+    },
+    {
+      "verb": "db.delete",
+      "cap": "store:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/db/rows/delete"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "table": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace",
+            "table",
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppDbRow",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "table": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "row": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "json"
+            },
+            "description": "The row as Postgres row_to_json writes it."
+          }
+        },
+        "required": [
+          "ok",
+          "table",
+          "row"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "Delete one row by id as the guest; answers the deleted row.",
+      "example": "await k2.db.delete({workspace, table: 'jobs', id})"
+    },
+    {
+      "verb": "db.query",
+      "cap": "store:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/db/query"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "sql": {
+              "type": "string",
+              "description": "One SELECT, INSERT, UPDATE or DELETE ($1… placeholders)."
+            },
+            "params": {
+              "type": "array",
+              "items": {
+                "type": "json"
+              },
+              "description": "Strings, numbers, booleans or null, bound to $1…."
+            }
+          },
+          "required": [
+            "workspace",
+            "sql"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppDbQuery",
+        "type": "object",
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The first row's keys (alphabetical); absent for a write with no RETURNING."
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "json"
+              }
+            }
+          },
+          "rowCount": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rows",
+          "rowCount"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "conflict",
+        "failed"
+      ],
+      "doc": "One brokered SQL statement as the guest (store:read to read, store:write to write; 5000 rows, 10 s).",
+      "example": "const {rows} = await k2.db.query({workspace, sql: 'select * from jobs where id = $1', params: [id]})"
+    },
+    {
+      "verb": "heartbeats.list",
+      "cap": "heartbeats:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/heartbeat/list"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "type": "array",
+        "items": {
+          "title": "AppHeartbeat",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "frequency": {
+              "type": "string",
+              "description": "hourly, daily, weekly, monthly, yearly or scheduled."
+            },
+            "spec": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "json"
+              },
+              "description": "The schedule (frequency-specific keys)."
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "createdAt": {
+              "type": "integer",
+              "description": "Seconds since the epoch."
+            },
+            "lastFired": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "RFC 3339."
+            },
+            "nextFireAt": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "RFC 3339."
+            },
+            "waitReason": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why it isn't firing now: scheduled, in_flight, backoff, disabled:user, …"
+            },
+            "waitDetail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "waitSince": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "RFC 3339."
+            },
+            "disabledReason": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "failures, wakeup_missing or wakeup_empty."
+            },
+            "scheduleError": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "firing": {
+              "type": "boolean"
+            },
+            "delivery": {
+              "type": "string",
+              "description": "pinned or own."
+            }
+          },
+          "required": [
+            "name",
+            "frequency",
+            "spec",
+            "enabled",
+            "createdAt",
+            "lastFired",
+            "nextFireAt",
+            "waitReason",
+            "waitDetail",
+            "waitSince",
+            "disabledReason",
+            "scheduleError",
+            "firing",
+            "delivery"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "The room's heartbeats: schedule, next fire, why one waits.",
+      "example": "const rows = await k2.heartbeats.list({workspace})"
+    },
+    {
+      "verb": "heartbeats.show",
+      "cap": "heartbeats:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/heartbeat/show"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppHeartbeatDetail",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "frequency": {
+            "type": "string",
+            "description": "hourly, daily, weekly, monthly, yearly or scheduled."
+          },
+          "spec": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "json"
+            },
+            "description": "The schedule (frequency-specific keys)."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "lastFired": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "nextFireAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "waitReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it isn't firing now: scheduled, in_flight, backoff, disabled:user, …"
+          },
+          "waitDetail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "waitSince": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "disabledReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "failures, wakeup_missing or wakeup_empty."
+          },
+          "scheduleError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "firing": {
+            "type": "boolean"
+          },
+          "delivery": {
+            "type": "string",
+            "description": "pinned or own."
+          },
+          "instructions": {
+            "type": "string",
+            "description": "WAKEUP.md without its frontmatter (with files:read)."
+          },
+          "instructionsHidden": {
+            "type": "boolean",
+            "description": "true when the pass lacks files:read."
+          }
+        },
+        "required": [
+          "name",
+          "frequency",
+          "spec",
+          "enabled",
+          "createdAt",
+          "lastFired",
+          "nextFireAt",
+          "waitReason",
+          "waitDetail",
+          "waitSince",
+          "disabledReason",
+          "scheduleError",
+          "firing",
+          "delivery"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "failed"
+      ],
+      "doc": "One heartbeat, with its instructions when the pass has files:read.",
+      "example": "const hb = await k2.heartbeats.show({workspace, name: 'morning'})"
+    },
+    {
+      "verb": "heartbeats.status",
+      "cap": "heartbeats:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/heartbeat/status"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "name": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Default 10, at most 200.",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          "required": [
+            "workspace",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "type": "array",
+        "items": {
+          "title": "AppHeartbeatFire",
+          "type": "object",
+          "properties": {
+            "firedAt": {
+              "type": "string",
+              "description": "RFC 3339 with offset."
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decision": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "durationMs": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "Milliseconds."
+            },
+            "actor": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "app:<user>, app-token:<name>, agent:<handle>, user:<name>, owner-token, or null for the scheduler."
+            }
+          },
+          "required": [
+            "firedAt",
+            "name",
+            "decision",
+            "reason",
+            "durationMs",
+            "actor"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "One heartbeat's recent fires, newest first.",
+      "example": "const fires = await k2.heartbeats.status({workspace, name})"
+    },
+    {
+      "verb": "heartbeats.fires",
+      "cap": "heartbeats:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/heartbeat/fires-list"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Default 50, at most 200.",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "type": "array",
+        "items": {
+          "title": "AppHeartbeatFire",
+          "type": "object",
+          "properties": {
+            "firedAt": {
+              "type": "string",
+              "description": "RFC 3339 with offset."
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decision": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "durationMs": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "Milliseconds."
+            },
+            "actor": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "app:<user>, app-token:<name>, agent:<handle>, user:<name>, owner-token, or null for the scheduler."
+            }
+          },
+          "required": [
+            "firedAt",
+            "name",
+            "decision",
+            "reason",
+            "durationMs",
+            "actor"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "The room's recent heartbeat fires, newest first.",
+      "example": "const fires = await k2.heartbeats.fires({workspace})"
+    },
+    {
+      "verb": "heartbeats.add",
+      "cap": "heartbeats:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/heartbeat/add"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "name": {
+              "type": "string",
+              "description": "a-z, 0-9 and hyphens."
+            },
+            "frequency": {
+              "type": "string"
+            },
+            "spec": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "json"
+              },
+              "description": "The schedule (hourly: every_seconds ≥ 300)."
+            },
+            "instructions": {
+              "type": "string",
+              "description": "WAKEUP.md text (at most 16 KiB)."
+            }
+          },
+          "required": [
+            "workspace",
+            "name",
+            "frequency",
+            "instructions"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppHeartbeat",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "frequency": {
+            "type": "string",
+            "description": "hourly, daily, weekly, monthly, yearly or scheduled."
+          },
+          "spec": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "json"
+            },
+            "description": "The schedule (frequency-specific keys)."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "lastFired": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "nextFireAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "waitReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it isn't firing now: scheduled, in_flight, backoff, disabled:user, …"
+          },
+          "waitDetail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "waitSince": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "disabledReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "failures, wakeup_missing or wakeup_empty."
+          },
+          "scheduleError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "firing": {
+            "type": "boolean"
+          },
+          "delivery": {
+            "type": "string",
+            "description": "pinned or own."
+          }
+        },
+        "required": [
+          "name",
+          "frequency",
+          "spec",
+          "enabled",
+          "createdAt",
+          "lastFired",
+          "nextFireAt",
+          "waitReason",
+          "waitDetail",
+          "waitSince",
+          "disabledReason",
+          "scheduleError",
+          "firing",
+          "delivery"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "Add a heartbeat (60 changes per guest per room per 10 minutes).",
+      "example": "await k2.heartbeats.add({workspace, name: 'morning', frequency: 'daily', spec: {time: '08:00'}, instructions})"
+    },
+    {
+      "verb": "heartbeats.edit",
+      "cap": "heartbeats:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/heartbeat/edit"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "name": {
+              "type": "string"
+            },
+            "frequency": {
+              "type": "string"
+            },
+            "spec": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "json"
+              }
+            },
+            "instructions": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppHeartbeat",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "frequency": {
+            "type": "string",
+            "description": "hourly, daily, weekly, monthly, yearly or scheduled."
+          },
+          "spec": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "json"
+            },
+            "description": "The schedule (frequency-specific keys)."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "lastFired": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "nextFireAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "waitReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it isn't firing now: scheduled, in_flight, backoff, disabled:user, …"
+          },
+          "waitDetail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "waitSince": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "disabledReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "failures, wakeup_missing or wakeup_empty."
+          },
+          "scheduleError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "firing": {
+            "type": "boolean"
+          },
+          "delivery": {
+            "type": "string",
+            "description": "pinned or own."
+          }
+        },
+        "required": [
+          "name",
+          "frequency",
+          "spec",
+          "enabled",
+          "createdAt",
+          "lastFired",
+          "nextFireAt",
+          "waitReason",
+          "waitDetail",
+          "waitSince",
+          "disabledReason",
+          "scheduleError",
+          "firing",
+          "delivery"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "Change a heartbeat's schedule or instructions.",
+      "example": "await k2.heartbeats.edit({workspace, name, instructions})"
+    },
+    {
+      "verb": "heartbeats.enable",
+      "cap": "heartbeats:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/heartbeat/enable"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "name": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "workspace",
+            "name",
+            "enabled"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppHeartbeat",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "frequency": {
+            "type": "string",
+            "description": "hourly, daily, weekly, monthly, yearly or scheduled."
+          },
+          "spec": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "json"
+            },
+            "description": "The schedule (frequency-specific keys)."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "lastFired": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "nextFireAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "waitReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it isn't firing now: scheduled, in_flight, backoff, disabled:user, …"
+          },
+          "waitDetail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "waitSince": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "disabledReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "failures, wakeup_missing or wakeup_empty."
+          },
+          "scheduleError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "firing": {
+            "type": "boolean"
+          },
+          "delivery": {
+            "type": "string",
+            "description": "pinned or own."
+          }
+        },
+        "required": [
+          "name",
+          "frequency",
+          "spec",
+          "enabled",
+          "createdAt",
+          "lastFired",
+          "nextFireAt",
+          "waitReason",
+          "waitDetail",
+          "waitSince",
+          "disabledReason",
+          "scheduleError",
+          "firing",
+          "delivery"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "Turn a heartbeat on or off.",
+      "example": "await k2.heartbeats.enable({workspace, name, enabled: false})"
+    },
+    {
+      "verb": "heartbeats.rename",
+      "cap": "heartbeats:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/heartbeat/rename"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace",
+            "from",
+            "to"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppHeartbeat",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "frequency": {
+            "type": "string",
+            "description": "hourly, daily, weekly, monthly, yearly or scheduled."
+          },
+          "spec": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "json"
+            },
+            "description": "The schedule (frequency-specific keys)."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "integer",
+            "description": "Seconds since the epoch."
+          },
+          "lastFired": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "nextFireAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "waitReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why it isn't firing now: scheduled, in_flight, backoff, disabled:user, …"
+          },
+          "waitDetail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "waitSince": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339."
+          },
+          "disabledReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "failures, wakeup_missing or wakeup_empty."
+          },
+          "scheduleError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "firing": {
+            "type": "boolean"
+          },
+          "delivery": {
+            "type": "string",
+            "description": "pinned or own."
+          }
+        },
+        "required": [
+          "name",
+          "frequency",
+          "spec",
+          "enabled",
+          "createdAt",
+          "lastFired",
+          "nextFireAt",
+          "waitReason",
+          "waitDetail",
+          "waitSince",
+          "disabledReason",
+          "scheduleError",
+          "firing",
+          "delivery"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "Rename a heartbeat.",
+      "example": "await k2.heartbeats.rename({workspace, from: 'a', to: 'b'})"
+    },
+    {
+      "verb": "heartbeats.archive",
+      "cap": "heartbeats:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/heartbeat/archive"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppHeartbeatArchived",
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "name",
+          "archived"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "Archive a heartbeat.",
+      "example": "await k2.heartbeats.archive({workspace, name})"
+    },
+    {
+      "verb": "heartbeats.fire",
+      "cap": "heartbeats:write",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/heartbeat/fire"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace",
+            "name"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppHeartbeatFired",
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "decision",
+          "reason",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "not_found",
+        "rate_limited",
+        "conflict",
+        "failed"
+      ],
+      "doc": "Fire a heartbeat now (once per 5 minutes per guest).",
+      "example": "await k2.heartbeats.fire({workspace, name})"
+    },
+    {
+      "verb": "activity.snapshot",
+      "cap": "activity:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/activity/snapshot",
+          "head": false
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppActivity",
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "working, permission, idle or unknown."
+          },
+          "since": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Milliseconds since the epoch."
+          },
+          "serverNow": {
+            "type": "integer",
+            "description": "Milliseconds since the epoch."
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "title": "AppActivitySession",
+              "type": "object",
+              "properties": {
+                "agentName": {
+                  "type": "string"
+                },
+                "paneGroupId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "type": "string"
+                },
+                "since": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Milliseconds since the epoch."
+                },
+                "counts": {
+                  "title": "AppActivityCounts",
+                  "type": "object",
+                  "properties": {
+                    "subagents": {
+                      "type": "integer"
+                    },
+                    "tools": {
+                      "type": "integer"
+                    },
+                    "commands": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "subagents",
+                    "tools",
+                    "commands"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "agentName",
+                "paneGroupId",
+                "status",
+                "since",
+                "counts"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "workspace",
+          "status",
+          "since",
+          "serverNow",
+          "sessions"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Whether the room's agent is working now, per session.",
+      "example": "const {status} = await k2.activity.snapshot({workspace})"
+    },
+    {
+      "verb": "activity.events",
+      "cap": "activity:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "subscribe",
+      "feature": "app-api-v1",
+      "bindings": {
+        "socket": {
+          "path": "/cli/activity/events",
+          "frame": "session_activity_changed",
+          "param": "workspace",
+          "refetch": "activity.snapshot"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppActivityFrame",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "session_activity_changed",
+              "heartbeat_changed",
+              "ticket_changed",
+              "rooms_changed",
+              "resync"
+            ]
+          },
+          "workspace": {
+            "type": "string"
+          },
+          "agentName": {
+            "type": "string"
+          },
+          "paneGroupId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "since": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Milliseconds since the epoch."
+          },
+          "counts": {
+            "title": "AppActivityCounts",
+            "type": "object",
+            "properties": {
+              "subagents": {
+                "type": "integer"
+              },
+              "tools": {
+                "type": "integer"
+              },
+              "commands": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "subagents",
+              "tools",
+              "commands"
+            ],
+            "additionalProperties": false
+          },
+          "serverNow": {
+            "type": "integer",
+            "description": "Milliseconds since the epoch."
+          },
+          "name": {
+            "type": "string",
+            "description": "heartbeat_changed: the heartbeat."
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "description": "ticket_changed: the ticket."
+          },
+          "change": {
+            "type": "string"
+          },
+          "via": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hasBrief": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "Live room events: agent working, heartbeats, tickets, rooms_changed; resync then close 4008 when behind.",
+      "example": "const off = k2.activity.events({workspace}, (f) => f.kind === 'resync' ? reload() : apply(f))"
+    },
+    {
+      "verb": "agentIdentity.get",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/agent/identity"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppAgentIdentity",
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string",
+            "description": "The agent's handle."
+          },
+          "handle": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "#rrggbb."
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A data: URL."
+          },
+          "canEditIdentity": {
+            "type": "boolean"
+          },
+          "canEditHandle": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "workspace",
+          "handle",
+          "displayName",
+          "color",
+          "image",
+          "canEditIdentity",
+          "canEditHandle"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "usage",
+        "failed"
+      ],
+      "doc": "The room's agent: name, color, picture, handle, and what the pass may change.",
+      "example": "const id = await k2.agentIdentity.get({workspace})"
+    },
+    {
+      "verb": "agentIdentity.set",
+      "cap": "agent:identity",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/agent/identity"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "displayName": {
+              "type": "string",
+              "description": "At most 64 characters."
+            },
+            "color": {
+              "type": "string",
+              "description": "#rgb or #rrggbb."
+            },
+            "image": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "A PNG/JPEG/WebP data: URL; null clears it."
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppAgentIdentityChanged",
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string",
+            "description": "The agent's handle."
+          },
+          "handle": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "#rrggbb."
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A data: URL."
+          },
+          "canEditIdentity": {
+            "type": "boolean"
+          },
+          "canEditHandle": {
+            "type": "boolean"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "changed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "workspace",
+          "handle",
+          "displayName",
+          "color",
+          "image",
+          "canEditIdentity",
+          "canEditHandle",
+          "ok",
+          "changed"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "too_large",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "Change the room's agent's name, color or picture.",
+      "example": "await k2.agentIdentity.set({workspace, color: '#3366ff'})"
+    },
+    {
+      "verb": "agentIdentity.setHandle",
+      "cap": "agent:handle",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-api-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/agent/handle"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "handle": {
+              "type": "string",
+              "description": "Lower case letters, digits and hyphens."
+            }
+          },
+          "required": [
+            "workspace",
+            "handle"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppAgentHandleChanged",
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string",
+            "description": "The agent's handle."
+          },
+          "handle": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "#rrggbb."
+          },
+          "image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A data: URL."
+          },
+          "canEditIdentity": {
+            "type": "boolean"
+          },
+          "canEditHandle": {
+            "type": "boolean"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "previousHandle": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "workspace",
+          "handle",
+          "displayName",
+          "color",
+          "image",
+          "canEditIdentity",
+          "canEditHandle",
+          "ok",
+          "previousHandle",
+          "changed"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "conflict",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "Change the room's agent's handle (its address).",
+      "example": "await k2.agentIdentity.setHandle({workspace, handle: 'sales-desk'})"
     }
   ]
 }

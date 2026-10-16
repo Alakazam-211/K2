@@ -66,15 +66,17 @@ async fn s6_build_validate_flag_scope_and_tamper() {
     assert_eq!(r.code(), "seed_invalid");
     assert_eq!(r.json()["error"]["report"]["ok"], false);
 
-    // Passports: validate is open to the workspace's agent; build needs
-    // the switch; folders outside the workspace are refused.
+    // Passports: validate is open to the workspace's agent; build without
+    // the switch is held for the owner (S42); folders outside the
+    // workspace are refused.
     let pass = passport(&ws);
     let r = post(d.port, "/cli/app/validate", &pass, json!({"folder": folder})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     allow_manage(&ws, false);
     let r = post(d.port, "/cli/app/build", &pass, json!({"folder": folder})).await;
-    assert_eq!(r.status, 403, "{}", r.body);
-    assert_eq!(r.code(), "apps_manage_off");
+    assert_eq!(r.status, 202, "{}", r.body);
+    assert_eq!(r.json()["status"], "held");
+    assert_eq!(r.json()["kind"], "manage");
     allow_manage(&ws, true);
     let r = post(d.port, "/cli/app/build", &pass, json!({"folder": folder})).await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -299,10 +301,10 @@ async fn s7_passport_rules_and_memory_setting() {
     install(d.port, OWNER, "s7theirs-app", &theirs).await;
     let pass = passport(&mine);
 
-    // Without the switch: refused; with it: own workspace only.
+    // Without the switch: held for the owner (S42); with it: own workspace only.
     allow_manage(&mine, false);
     let r = post(d.port, "/cli/app/install", &pass, json!({"app": "s7mine-app"})).await;
-    assert_eq!(r.code(), "apps_manage_off", "{}", r.body);
+    assert_eq!((r.status, r.json()["status"].as_str(), r.json()["kind"].as_str()), (202, Some("held"), Some("manage")), "{}", r.body);
     allow_manage(&mine, true);
     let r = post(d.port, "/cli/app/install", &pass, json!({"app": "s7mine-app"})).await;
     assert_eq!(r.status, 200, "{}", r.body);

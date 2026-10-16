@@ -196,6 +196,9 @@ export function TicketBoard({
               placement="room"
               name="ticket list"
               testId="ticket-list-expand"
+              // The rail's own border-r is the line; a divider here would
+              // sit mid-rail.
+              divider={false}
               onToggle={() => setCollapsed(false)}
             />
           </div>

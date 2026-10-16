@@ -1011,6 +1011,30 @@ html[data-os]:not([data-os="mac"]) select optgroup {
   --num-gap: 2px;
 }
 
+/* Line-2 chips on agent rows (project tags, the Home machine chip) in K2's
+   square Style: chamfered rectangles, like the presence chips and the
+   Thread (Rosson 2026-10-16). The cut follows the Thread's rule for a 14px
+   control (`chamferCutFor(14)` = 2px). The element is clipped to the cut
+   (so a hover fill is chamfered too) and `::before` draws the 1px edge as
+   an even-odd ring (outer cut 2px; inner contour 1px in, cut 2 − 0.414).
+   Rounded Styles (Bezel, Glass) keep their look. */
+html[data-style="square"] [data-nav-chip] {
+  position: relative;
+  border-color: transparent !important;
+  border-radius: 0 !important;
+  clip-path: polygon(2px 0, calc(100% - 2px) 0, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0 calc(100% - 2px), 0 2px);
+}
+html[data-style="square"] [data-nav-chip]::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--nav-chip-edge, var(--color-accent));
+  clip-path: polygon(evenodd,
+    2px 0, calc(100% - 2px) 0, 100% 2px, 100% calc(100% - 2px), calc(100% - 2px) 100%, 2px 100%, 0 calc(100% - 2px), 0 2px, 2px 0,
+    2.586px 1px, calc(100% - 2.586px) 1px, calc(100% - 1px) 2.586px, calc(100% - 1px) calc(100% - 2.586px), calc(100% - 2.586px) calc(100% - 1px), 2.586px calc(100% - 1px), 1px calc(100% - 2.586px), 1px 2.586px, 2.586px 1px);
+}
+
 /* Working: a 3×3 cell grid; a lit head runs clockwise round the 8 edge
    cells (0.8s a lap, 0.1s per cell) with a fading tail; the centre stays
    dim. Reduced motion: still, the top row + right column lit. */

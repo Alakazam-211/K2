@@ -46,7 +46,7 @@ const REQUIRED_COLOR_SLOTS = [
   'status-working', 'status-error', 'status-ok', 'status-warn',
   'status-ok-soft', 'status-warn-soft', 'status-error-soft', 'neutral', 'control-track-off',
   'status-error-bright', 'status-error-text', 'status-working-soft',
-  'status-warn-text', 'status-warn-amber', 'status-warn-amber-soft', 'status-warn-amber-bright',
+  'status-warn-text', 'status-needs-you', 'status-warn-amber', 'status-warn-amber-soft', 'status-warn-amber-bright',
   'status-ok-hover', 'danger', 'danger-active',
   'wash-1', 'wash-2', 'wash-3', 'scrim', 'danger-muted',
   'diff-add-text', 'diff-remove-text', 'diff-modified-border',

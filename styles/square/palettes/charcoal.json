@@ -79,7 +79,7 @@
       "$description": "Glyphs/knobs drawn on accent or bright fills (checkbox check, slider thumb)."
     },
     "status-working": {
-      "$value": "#f97316",
+      "$value": "#3b82f6",
       "$type": "color"
     },
     "status-error": {
@@ -122,6 +122,11 @@
       "$value": "oklch(85.2% 0.199 91.936)",
       "$type": "color",
       "$description": "Warning text (yellow-400 idiom)."
+    },
+    "status-needs-you": {
+      "$value": "oklch(82.8% 0.189 84.429)",
+      "$type": "color",
+      "$description": "Needs you (plan-agent-status-unify-v1): the only orange; dark palettes use their warn-amber, light ones #c2620a."
     },
     "status-warn-amber": {
       "$value": "oklch(82.8% 0.189 84.429)",

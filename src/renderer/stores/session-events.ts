@@ -669,6 +669,12 @@ export interface ActivityWorkspace {
   counts: Record<ActivityDisplay, number>
   /** The earliest `turnStartedAt` among the `working` sessions. */
   since: number | null
+  /** 0.46.0 (plan-agent-status-unify-v1 D1): live PTYs under the workspace
+   *  (agent rows plus plain shells). Absent from older daemons. */
+  live?: number
+  /** 0.46.0 (D1): rows whose lead is working or that still run subagents,
+   *  whatever their display. Absent from older daemons. */
+  busy?: number
 }
 
 /** APP-LEVEL (RL2, §7.3) — one activity row changed or went away. `seq` is

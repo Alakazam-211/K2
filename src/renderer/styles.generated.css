@@ -48,7 +48,7 @@
   --color-accent-hover: #60a5fa;
   --color-accent-soft: #93c5fd;
   --color-on-accent: #ffffff;
-  --color-status-working: #f97316;
+  --color-status-working: #3b82f6;
   --color-status-error: #ef4444;
   --color-status-ok: #22c55e;
   --color-status-warn: oklch(76.9% 0.188 70.08);
@@ -61,6 +61,7 @@
   --color-status-error-text: #ff6666;
   --color-status-working-soft: oklch(75% 0.183 55.934);
   --color-status-warn-text: oklch(85.2% 0.199 91.936);
+  --color-status-needs-you: oklch(82.8% 0.189 84.429);
   --color-status-warn-amber: oklch(82.8% 0.189 84.429);
   --color-status-warn-amber-soft: oklch(87.9% 0.169 91.605);
   --color-status-warn-amber-bright: oklch(92.4% 0.12 95.746);
@@ -153,7 +154,7 @@
   --color-accent-hover: #ffd54d;
   --color-accent-soft: #ffe38a;
   --color-on-accent: #1a1400;
-  --color-status-working: #f28b3b;
+  --color-status-working: #4c8dff;
   --color-status-error: #ee5757;
   --color-status-ok: #4fbf6f;
   --color-status-warn: #e5b83c;
@@ -166,6 +167,7 @@
   --color-status-error-text: #f07a7a;
   --color-status-working-soft: #f6a967;
   --color-status-warn-text: #eec964;
+  --color-status-needs-you: #e5b83c;
   --color-status-warn-amber: #e5b83c;
   --color-status-warn-amber-soft: #efd382;
   --color-status-warn-amber-bright: #f7e4ad;
@@ -234,7 +236,7 @@
   --color-accent-hover: #c79c00;
   --color-accent-soft: #8a6d00;
   --color-on-accent: #1a1400;
-  --color-status-working: #c05621;
+  --color-status-working: #2f6fe0;
   --color-status-error: #b3261e;
   --color-status-ok: #276b3d;
   --color-status-warn: #9a6a08;
@@ -247,6 +249,7 @@
   --color-status-error-text: #a12b24;
   --color-status-working-soft: #c76a2e;
   --color-status-warn-text: #8a6206;
+  --color-status-needs-you: #c2620a;
   --color-status-warn-amber: #935f04;
   --color-status-warn-amber-soft: #7d5203;
   --color-status-warn-amber-bright: #6b4603;
@@ -347,7 +350,7 @@
   --color-accent-hover: #82b8ff;
   --color-accent-soft: #b3d4ff;
   --color-on-accent: #ffffff;
-  --color-status-working: #ff9d42;
+  --color-status-working: #5aa2ff;
   --color-status-error: #ff5d5d;
   --color-status-ok: #3ddc84;
   --color-status-warn: #ffc043;
@@ -360,6 +363,7 @@
   --color-status-error-text: #ff7a7a;
   --color-status-working-soft: #ffb877;
   --color-status-warn-text: #ffd166;
+  --color-status-needs-you: #ffc043;
   --color-status-warn-amber: #ffc043;
   --color-status-warn-amber-soft: #ffd685;
   --color-status-warn-amber-bright: #ffe7b3;
@@ -424,7 +428,7 @@
   --color-accent-hover: #2258bd;
   --color-accent-soft: #6d9ae8;
   --color-on-accent: #ffffff;
-  --color-status-working: #c05a12;
+  --color-status-working: #2f6fe0;
   --color-status-error: #c22f2f;
   --color-status-ok: #1e7c46;
   --color-status-warn: #a3720a;
@@ -437,6 +441,7 @@
   --color-status-error-text: #a82a2a;
   --color-status-working-soft: #cf7434;
   --color-status-warn-text: #8f6508;
+  --color-status-needs-you: #c2620a;
   --color-status-warn-amber: #99610a;
   --color-status-warn-amber-soft: #7f5407;
   --color-status-warn-amber-bright: #6e4805;
@@ -603,7 +608,7 @@
   --color-accent-hover: #60a5fa;
   --color-accent-soft: #93c5fd;
   --color-on-accent: #ffffff;
-  --color-status-working: #f97316;
+  --color-status-working: #3b82f6;
   --color-status-error: #ef4444;
   --color-status-ok: #22c55e;
   --color-status-warn: oklch(76.9% 0.188 70.08);
@@ -616,6 +621,7 @@
   --color-status-error-text: #ff6666;
   --color-status-working-soft: oklch(75% 0.183 55.934);
   --color-status-warn-text: oklch(85.2% 0.199 91.936);
+  --color-status-needs-you: oklch(82.8% 0.189 84.429);
   --color-status-warn-amber: oklch(82.8% 0.189 84.429);
   --color-status-warn-amber-soft: oklch(87.9% 0.169 91.605);
   --color-status-warn-amber-bright: oklch(92.4% 0.12 95.746);
@@ -676,7 +682,7 @@
   --color-accent-hover: #1b4979;
   --color-accent-soft: #6f9cc4;
   --color-on-accent: #ffffff;
-  --color-status-working: #b45016;
+  --color-status-working: #255a92;
   --color-status-error: #b3261e;
   --color-status-ok: #276b3d;
   --color-status-warn: #9a6a08;
@@ -689,6 +695,7 @@
   --color-status-error-text: #a12b24;
   --color-status-working-soft: #c76a2e;
   --color-status-warn-text: #8a6206;
+  --color-status-needs-you: #c2620a;
   --color-status-warn-amber: #935f04;
   --color-status-warn-amber-soft: #7d5203;
   --color-status-warn-amber-bright: #6b4603;

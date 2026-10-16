@@ -409,7 +409,8 @@ PY
 	# Any change to the App's list reloads its door live (revoking the dummy here).
 	K2 app box-service revoke esc-a e2e-dummy >/dev/null
 fi
-nft list chain inet k2app k2app_apps | grep 'k2apps-esc_a.slice' | grep -q 'tcp dport { 38600, 38900, 8470' || fail "approved: the per-App rule: $(nft list chain inet k2app k2app_apps)"
+# (nft prints a set sorted: { 8470, 9999, 38600, 38900 }.)
+nft list chain inet k2app k2app_apps | grep 'k2apps-esc_a.slice' | grep -qE 'tcp dport \{[^}]*\b8470\b[^}]*\b38600\b' || fail "approved: the per-App rule: $(nft list chain inet k2app k2app_apps)"
 boxprobe "$FA" 33554432 >/tmp/bx2.json
 python3 - /tmp/bx2.json <<'PY'
 import json, sys
@@ -441,6 +442,10 @@ assert "box_service_requested" in ev and "box_service_revoked" in ev, ev
 PY
 ok "revoked: the door shuts at once (nft reloaded, the next connection fails); requested/revoked are in the App's audit chain"
 kill "$ECHO" 2>/dev/null || true
+# Leave esc-a as the later sections expect it (the dummy is approved too on
+# the in-person path).
+K2 app box-service revoke esc-a e2e-dummy >/dev/null
+nft list chain inet k2app k2app_apps | grep -q 'k2apps-esc_a.slice" oifname "lo" tcp dport { 38600, 38900 } accept' || fail "esc-a's rule after the revokes: $(nft list chain inet k2app k2app_apps)"
 
 echo "== zero-downtime switch under load =="
 LOG=/tmp/load.txt

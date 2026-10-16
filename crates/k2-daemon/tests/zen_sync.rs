@@ -1291,7 +1291,8 @@ fn gs52_headless_sync_and_news_routes() {
     let setup_gardens = std::fs::read_dir(zen_dir.join("gardens")).expect("gardens").count();
     assert_eq!(v["gardens"].as_array().expect("rows").len(), setup_gardens, "one row per Garden setup made");
     assert_eq!(v["gardens"][0]["page"]["mode"], "synced");
-    assert_eq!(v["gardens"][0]["themeBase"]["label"], "Basic");
+    // Garden 1 opens on its own default theme, Glass (0.46.0).
+    assert_eq!(v["gardens"][0]["themeBase"]["label"], "Glass");
     let (s, v) = call(port, "GET", &format!("/cli/zen/news?token={tok}"), None);
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["items"], json!([]), "a fresh computer has no news: {v}");

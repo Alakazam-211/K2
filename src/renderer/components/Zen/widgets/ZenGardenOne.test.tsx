@@ -410,6 +410,13 @@ describe('the activity drawer (`activity-drawer`)', () => {
       'cmd',
     ])
     expect(el('[data-zen-drawer-clock]').textContent).toBe('0:08')
+    // Running subagents spin the app's 3×3 cell grid in the working colour
+    // (plan-agent-status-unify-v1), not the braille.
+    const spinner = el('[data-zen-drawer-count="subagents"] [data-zen-drawer-spinner]')
+    expect(spinner.style.color).toBe('var(--zen-working)')
+    expect(spinner.querySelectorAll('svg[data-agent-working] rect')).toHaveLength(9)
+    expect(document.querySelector('[data-zen-drawer] .zen-braille, [data-zen-drawer] .braille-spinner')).toBeNull()
+    expect(el('[data-zen-drawer-count="subagents"]').textContent).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
     act(() => void fireEvent.click(el('[data-zen-drawer-tile]')))
     expect(el('[data-zen-drawer-head]').textContent).toBe('Working · 8s since your message')
     expect(el('[data-zen-drawer-tally]').textContent).toBe('Read 2 files · ran 1 command')

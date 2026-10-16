@@ -16,6 +16,12 @@ import { useProjectGroupsStore, initProjectGroupEvents } from '@/stores/project-
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { withChord } from '@/lib/shortcut-label'
+import {
+  GardenAgentIcon,
+  GardenDashboardIcon,
+  GardenHomeIcon,
+  GardenTicketIcon,
+} from '@/components/icons/GardenPageIcons'
 
 /** The Tickets tab's badge from the feedback store (prd-tickets-badge-
  *  orphans TB8/TB15/TB17 + Appa A3): a fresh count; the last count dimmed
@@ -44,6 +50,20 @@ export const PAGE_TAB_LABELS = {
   feedback: { name: 'Tickets', title: 'Tickets — agents waiting on a human' },
 } as const
 
+/** 0.46.0 experiment (Rosson 2026-10-16): the page tabs are icons, not
+ *  words — Garden 1's nav-rail icons. The word stays as the tooltip and
+ *  the accessible name. 14px: a touch above the cog's 13px because these
+ *  glyphs carry more detail, still well inside the 24px-tall tab. */
+export const PAGE_TAB_ICON_PX = 14
+
+/** The four page tabs in order, with their icons. */
+export const PAGE_TAB_ITEMS = [
+  { page: 'home', Icon: GardenHomeIcon },
+  { page: 'agents', Icon: GardenAgentIcon },
+  { page: 'projects', Icon: GardenDashboardIcon },
+  { page: 'feedback', Icon: GardenTicketIcon },
+] as const satisfies readonly { page: keyof typeof PAGE_TAB_LABELS; Icon: typeof GardenHomeIcon }[]
+
 /** What a tab badge shows: nothing, a number, or `?` (unknown). */
 export function badgeText(badge: number | '?' | undefined): string | null {
   if (badge === '?') return '?'
@@ -59,6 +79,7 @@ export function PageTab({
   badgeStale = false,
   badgeTitle,
   title,
+  ariaLabel,
   children,
 }: {
   selected: boolean
@@ -71,6 +92,8 @@ export function PageTab({
   /** Tooltip on the badge saying why it is dimmed. */
   badgeTitle?: string
   title: string
+  /** Accessible name when the tab shows only an icon. */
+  ariaLabel?: string
   children: ReactNode
 }): React.JSX.Element {
   const text = badgeText(badge)
@@ -87,6 +110,8 @@ export function PageTab({
         WebkitAppRegion: 'no-drag'
       }}
       title={title}
+      aria-label={ariaLabel}
+      aria-pressed={selected}
     >
       {children}
       {text !== null && (
@@ -157,45 +182,38 @@ export default function PageTabs(): React.JSX.Element {
           }
         }}
         title={withChord('Settings', 'Meta+,')}
+        ariaLabel="Settings"
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="3" />
           <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
         </svg>
       </PageTab>
-      <PageTab
-        selected={!settingsOpen && page === 'home'}
-        onSelect={() => select('home')}
-        title={PAGE_TAB_LABELS.home.title}
-      >
-        {PAGE_TAB_LABELS.home.name}
-      </PageTab>
-      <PageTab
-        selected={!settingsOpen && page === 'agents'}
-        onSelect={() => select('agents')}
-        title={PAGE_TAB_LABELS.agents.title}
-      >
-        {PAGE_TAB_LABELS.agents.name}
-      </PageTab>
-      <PageTab
-        selected={!settingsOpen && page === 'projects'}
-        onSelect={() => select('projects')}
-        badge={projectsUnread}
-        title={PAGE_TAB_LABELS.projects.title}
-      >
-        {PAGE_TAB_LABELS.projects.name}
-      </PageTab>
-      <PageTab
-        selected={!settingsOpen && page === 'feedback'}
-        onSelect={() => select('feedback')}
-        badge={ticketsBadge.badge}
-        badgeClass="bg-[var(--color-status-working)]"
-        badgeStale={ticketsBadge.badgeStale}
-        badgeTitle={ticketsBadge.badgeTitle}
-        title={PAGE_TAB_LABELS.feedback.title}
-      >
-        {PAGE_TAB_LABELS.feedback.name}
-      </PageTab>
+      {PAGE_TAB_ITEMS.map(({ page: p, Icon }) => {
+        const badge =
+          p === 'projects'
+            ? { badge: projectsUnread }
+            : p === 'feedback'
+              ? {
+                  badge: ticketsBadge.badge,
+                  badgeClass: 'bg-[var(--color-status-working)]',
+                  badgeStale: ticketsBadge.badgeStale,
+                  badgeTitle: ticketsBadge.badgeTitle,
+                }
+              : {}
+        return (
+          <PageTab
+            key={p}
+            selected={!settingsOpen && page === p}
+            onSelect={() => select(p)}
+            title={PAGE_TAB_LABELS[p].title}
+            ariaLabel={PAGE_TAB_LABELS[p].name}
+            {...badge}
+          >
+            <Icon size={PAGE_TAB_ICON_PX} />
+          </PageTab>
+        )
+      })}
     </div>
   )
 }

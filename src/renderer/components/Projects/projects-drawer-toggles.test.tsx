@@ -30,7 +30,8 @@ vi.mock('@/components/TopBar/DesktopChromeRight', () => ({
   default: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
 }))
 vi.mock('@/components/TopBar/K2MarkButton', () => ({ default: () => null }))
-vi.mock('@/components/Presence/PresenceKickButton', () => ({ fetchViewerRole: vi.fn(async () => null) }))
+const viewerRole = vi.hoisted(() => ({ current: 'member' as 'member' | null }))
+vi.mock('@/components/Presence/PresenceKickButton', () => ({ fetchViewerRole: vi.fn(async () => viewerRole.current) }))
 vi.mock('./ProjectDashboard', () => ({ default: () => <div data-testid="dashboard-stub" /> }))
 vi.mock('./DashboardPresetsMenu', () => ({ default: () => <div data-testid="presets-stub" /> }))
 vi.mock('@/components/Feedback/ProjectFeedbackTab', () => ({ ProjectFeedbackTab: () => null }))
@@ -134,24 +135,46 @@ describe('Projects chat drawer toggle', () => {
     expect(must(chatToggle(), 'chat toggle').querySelector('[data-project-chat-unread]')).not.toBeNull()
   })
 
-  it('open: » at the left end of the chat header; clicking it closes the chat', async () => {
+  it('open: » at the bottom left, across from Send; clicking it closes the chat', async () => {
     await renderPage()
     fireEvent.click(must(chatToggle(), 'chat toggle'))
     expect(useProjectGroupsStore.getState().chatCollapsed).toBe(false)
     expect(document.querySelector('[data-project-chat-toggle-slot]')).toBeNull()
-    const hide = await waitFor(() => must(screen.queryByRole('button', { name: 'Hide project chat' }), 'hide toggle'))
+    // The composer shows once the member role resolves.
+    await waitFor(() => expect(screen.getByText('Send')).toBeTruthy())
+    const hide = must(screen.queryByRole('button', { name: 'Hide chat' }), 'hide toggle')
+    expect(hide.getAttribute('title')).toBe('Hide chat')
     expect(hide.getAttribute('data-placement')).toBe('drawer')
     expect(hide.querySelector('svg')!.getAttribute('data-double-chevron')).toBe('right')
-    const header = must(hide.parentElement!.parentElement, 'chat header')
-    expect(header.firstElementChild).toBe(hide.parentElement)
-    expect(header.textContent).toContain('Project chat')
-    // The chat sits in the sliding drawer box (no border of its own there).
+    // Same row as Send: Hide first (left), Send last (right).
+    const row = must(hide.closest('[data-project-chat-actions]') as HTMLElement | null, 'composer action row')
+    expect(row.firstElementChild).toBe(hide)
+    expect(row.lastElementChild!.textContent).toContain('Send')
+    expect(row.className).toContain('justify-between')
+    // Not in the chat header any more.
+    const header = must(screen.getByText('Project chat').parentElement, 'chat header')
+    expect(header.querySelector('[data-drawer-tabbar-toggle]')).toBeNull()
+    // The chat sits in the sliding drawer box.
     expect(hide.closest('[data-drawer-side="right"]')).not.toBeNull()
 
     fireEvent.click(hide)
     expect(useProjectGroupsStore.getState().chatCollapsed).toBe(true)
-    expect(screen.queryByRole('button', { name: 'Hide project chat' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Hide chat' })).toBeNull()
     expect(chatToggle()).not.toBeNull()
+  })
+
+  it('viewers (no composer) still get the Hide chat button at the bottom', async () => {
+    viewerRole.current = null
+    try {
+      useProjectGroupsStore.setState({ chatCollapsed: false })
+      await renderPage()
+      const hide = await waitFor(() => must(screen.queryByRole('button', { name: 'Hide chat' }), 'hide toggle'))
+      await waitFor(() => expect(screen.getByText(/Viewers can read project chat/)).toBeTruthy())
+      expect(hide.parentElement!.firstElementChild).toBe(hide)
+      expect(screen.queryByText('Send')).toBeNull()
+    } finally {
+      viewerRole.current = 'member'
+    }
   })
 })
 

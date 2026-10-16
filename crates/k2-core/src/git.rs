@@ -827,14 +827,50 @@ pub(crate) fn write_index_with_retry(index: &mut git2::Index) -> Result<(), Stri
     Err("Index locked after retries".to_string())
 }
 
+/// `git init` at exactly `path` (libgit2: a `.git` folder, no commit; the
+/// first branch follows `init.defaultBranch`, else `main`). The caller
+/// checks that no repository already holds `path`.
+pub fn init_repo(path: &str) -> Result<(), String> {
+    let mut opts = git2::RepositoryInitOptions::new();
+    opts.no_reinit(true).mkdir(false).external_template(false);
+    let branch = git2::Config::open_default()
+        .ok()
+        .and_then(|c| c.get_string("init.defaultBranch").ok())
+        .filter(|b| !b.trim().is_empty())
+        .unwrap_or_else(|| "main".to_string());
+    opts.initial_head(&branch);
+    Repository::init_opts(path, &opts).map(|_| ()).map_err(|e| format!("git init {path}: {e}"))
+}
+
 // ── Staging Functions ────────────────────────────────────────────────────
 
-/// Stage a file (git add).
+/// Stage a file (git add). A folder (the Changes tab's collapsed untracked
+/// `x/` row) is added recursively like `git add x/`: every file under it
+/// that .gitignore does not exclude.
 pub fn stage_file(repo_path: &str, file_path: &str) -> Result<(), String> {
     let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
     let mut index = get_index_with_retry(&repo)?;
 
-    let full_path = Path::new(repo_path).join(file_path);
+    let rel = file_path.trim_end_matches('/');
+    // `file_path` is repo-relative (the routes normalise it); resolve it
+    // against the work tree, not the workspace folder (which may be a
+    // sub-folder of the repo).
+    let workdir = repo.workdir().map(Path::to_path_buf).unwrap_or_else(|| Path::new(repo_path).to_path_buf());
+    let dir = workdir.join(rel);
+    if !rel.is_empty() && dir.is_dir() && !dir.is_symlink() {
+        let prefix = format!("{rel}/");
+        let spec = crate::git_changes::pathspec_literal(rel);
+        let mut only_under = |p: &Path, _spec: &[u8]| -> i32 {
+            // 0 = add, 1 = skip: never anything outside the folder.
+            if p.to_str().is_some_and(|s| s.starts_with(&prefix)) { 0 } else { 1 }
+        };
+        index
+            .add_all([spec.as_str()].iter(), git2::IndexAddOption::DEFAULT, Some(&mut only_under))
+            .map_err(|e| format!("Failed to stage folder: {e}"))?;
+        return write_index_with_retry(&mut index);
+    }
+
+    let full_path = workdir.join(file_path);
     if full_path.exists() {
         index.add_path(Path::new(file_path)).map_err(|e| format!("Failed to stage file: {e}"))?;
     } else {

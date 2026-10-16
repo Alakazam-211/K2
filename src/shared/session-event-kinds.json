@@ -37,6 +37,8 @@
   "remote_session_access_denied": "app",
   "fs_changed": "app",
   "git_changed": "app",
+  "git_notes_changed": "app",
+  "open_changes": "app",
   "zen_changed": "app",
   "sources_changed": "app",
   "garden_data_changed": "app",

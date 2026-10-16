@@ -12,7 +12,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => undefined),
 }))
 
-const handlers = vi.hoisted(() => ({ git: new Set<(e: unknown) => void>() }))
+const handlers = vi.hoisted(() => ({ git: new Set<(e: unknown) => void>(), notes: new Set<(e: unknown) => void>() }))
 vi.mock('@/stores/session-events', async () => {
   const actual = await vi.importActual<typeof import('@/stores/session-events')>('@/stores/session-events')
   return {
@@ -20,6 +20,10 @@ vi.mock('@/stores/session-events', async () => {
     onGitChanged: (_scope: unknown, fn: (e: unknown) => void) => {
       handlers.git.add(fn)
       return () => handlers.git.delete(fn)
+    },
+    onGitNotesChanged: (_scope: unknown, fn: (e: unknown) => void) => {
+      handlers.notes.add(fn)
+      return () => handlers.notes.delete(fn)
     },
     onFsChanged: () => () => {},
     onAppHello: () => () => {},
@@ -47,6 +51,7 @@ import { fakeScope } from '@/test-utils/fake-scope'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { viewOnlyScope, type ServerScope } from '@/kessel/server-scope'
 import { __resetGitChangesForTests, type ChangesFile, type GitSnapshot } from '@/stores/git-changes'
+import { __resetGitNotesForTests, type NotesList, type ReviewNote } from '@/stores/git-notes'
 import { useTabsStore, type ChangesItemData } from '@/stores/tabs'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
@@ -96,6 +101,50 @@ function snap(rev: string, files: ChangesFile[] = FILES, over: Partial<GitSnapsh
 }
 
 let snapshots: GitSnapshot[] = []
+
+function note(id: string, extra: Partial<ReviewNote> = {}): ReviewNote {
+  return {
+    id,
+    workspaceId: 'p1',
+    workspacePath: WS,
+    path: 'src/a.rs',
+    side: 'new',
+    startLine: 2,
+    endLine: 2,
+    body: `body of ${id}`,
+    author: 'user:ana',
+    authorName: 'ana',
+    createdAt: 1,
+    updatedAt: 1,
+    sentAt: null,
+    deliveryId: null,
+    resolvedAt: null,
+    resolvedBy: null,
+    rev: 'r1',
+    blob: null,
+    anchorText: 'b',
+    outdated: false,
+    currentStartLine: 2,
+    currentEndLine: 2,
+    ...extra,
+  }
+}
+
+function notesList(notes: ReviewNote[]): NotesList {
+  const open = notes.filter((n) => n.resolvedAt == null)
+  return {
+    workspacePath: WS,
+    counts: {
+      open: open.length,
+      unsent: open.filter((n) => n.sentAt == null).length,
+      sent: open.filter((n) => n.sentAt != null).length,
+      resolved: notes.length - open.length,
+    },
+    notes,
+  }
+}
+
+let notesLists: NotesList[] = []
 
 function sidesFor(params: Record<string, string>) {
   return {
@@ -159,9 +208,12 @@ function posts(): Array<[string, unknown]> {
 
 beforeEach(() => {
   __resetGitChangesForTests()
+  __resetGitNotesForTests()
   handlers.git.clear()
+  handlers.notes.clear()
   slotProps.last = null
   snapshots = [snap('r1')]
+  notesLists = [notesList([])]
   useTabsStore.setState({ tabs: [], activeTabId: null, splitCount: 1, extraGroups: [], activeGroupIndex: 0 })
   useToastStore.setState({ toasts: [] })
   cli.get.mockReset()
@@ -172,6 +224,10 @@ beforeEach(() => {
       return next
     }
     if (route === 'git/diff-file') return sidesFor(params)
+    if (route === 'git/notes') {
+      expect(params).toEqual({ path: WS, status: 'all' })
+      return notesLists.length > 1 ? notesLists.shift()! : notesLists[0]
+    }
     if (route === 'git/branches') return { current: 'feat/x', local: ['main', 'feat/x'], remote: ['origin/main'] }
     throw new Error(`unexpected GET ${route}`)
   })
@@ -180,6 +236,8 @@ beforeEach(() => {
       return { success: true, restored: ['src/a.rs'], trashed: ['src/a.rs'], unstaged: [], skipped: [], failed: [], rev: 'r2' }
     }
     if (route === 'git/commit') return { oid: 'o1', message: 'm' }
+    if (route === 'git/notes/send') return { success: true, sent: 2, ids: ['n1', 'n2'], remaining: 0, deliveryId: 'm_1', target: WS }
+    if (route === 'git/init') return { success: true, repoRoot: WS, rev: 'r9' }
     return { success: true }
   })
 })
@@ -371,7 +429,152 @@ describe('ChangesPane', () => {
     snapshots = [{ isRepo: false, workspacePath: WS, rev: 'r0' }]
     openPane(fakeScope('b'))
     await flush()
-    expect(screen.getByText('Not a git repository')).toBeTruthy()
+    expect(screen.getByText("This workspace isn't a git repository")).toBeTruthy()
+  })
+
+  it('C5: Initialize repository posts git/init on the room scope, then the tab shows the repo', async () => {
+    const scope = fakeScope('b')
+    snapshots = [{ isRepo: false, workspacePath: WS, rev: 'r0' }, snap('r9', [row('readme.md', 'untracked', 'U')], { unborn: true, headOid: null, branch: 'main' })]
+    openPane(scope)
+    await flush()
+    const btn = document.querySelector('[data-changes-init]') as HTMLButtonElement
+    expect(btn.textContent).toBe('Initialize repository')
+    await act(async () => {
+      fireEvent.click(btn)
+    })
+    await flush()
+    expect(cli.post.mock.calls.find((c) => c[1] === 'git/init')).toEqual([scope, 'git/init', { path: WS }])
+    expect(document.querySelector('[data-changes-not-repo]')).toBeNull()
+    expect(rowEl('untracked', 'readme.md')).toBeTruthy()
+  })
+
+  it('C5: a view-only room sees the not-a-repo state without Initialize', async () => {
+    snapshots = [{ isRepo: false, workspacePath: WS, rev: 'r0' }]
+    openPane(viewOnlyScope(fakeScope('b')))
+    await flush()
+    expect(document.querySelector('[data-changes-init]')).toBeNull()
+    expect(screen.getByText(/View only/)).toBeTruthy()
+  })
+
+  it('C5: the Notes list shows open notes (sent, outdated), sends the unsent count, and folds resolved ones', async () => {
+    const scope = fakeScope('b')
+    notesLists = [
+      notesList([
+        note('n1'),
+        note('n2', { path: 'src/deep/b.rs', startLine: 7, endLine: 9, currentStartLine: 8, currentEndLine: 10 }),
+        note('n3', { sentAt: 5, deliveryId: 'm_0' }),
+        note('n4', { outdated: true, currentStartLine: null, currentEndLine: null }),
+        note('n5', { resolvedAt: 9, resolvedBy: 'agent:k2' }),
+      ]),
+    ]
+    openPane(scope)
+    await flush()
+    const send = document.querySelector('[data-notes-send]') as HTMLButtonElement
+    expect(send.textContent).toBe('Send to agent (3)')
+    const rowOf = (id: string) => document.querySelector(`[data-note-row="${id}"]`) as HTMLElement | null
+    expect(rowOf('n2')!.textContent).toContain('src/deep/b.rs:8–10')
+    expect(within(rowOf('n3')!).getByText('sent')).toBeTruthy()
+    expect(rowOf('n4')!.hasAttribute('data-outdated')).toBe(true)
+    expect(rowOf('n5')).toBeNull()
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-notes-resolved-toggle]')!)
+    })
+    expect(rowOf('n5')).toBeTruthy()
+
+    await act(async () => {
+      fireEvent.click(send)
+    })
+    await flush()
+    expect(cli.post.mock.calls.find((c) => c[1] === 'git/notes/send')).toEqual([scope, 'git/notes/send', { path: WS }])
+    expect(useToastStore.getState().toasts.some((t) => t.message === 'Sent 2 notes to the agent')).toBe(true)
+
+    // Clicking a note selects its file.
+    await act(async () => {
+      fireEvent.click(within(rowOf('n2')!).getByTitle('Show src/deep/b.rs'))
+    })
+    const data = useTabsStore.getState().tabs[0].paneGroups.values().next().value!.items[0].data as ChangesItemData
+    expect(data.selectedPath).toBe('src/deep/b.rs')
+  })
+
+  it('C5: resolve, edit and delete a note from the list post the notes routes', async () => {
+    const scope = fakeScope('b')
+    notesLists = [notesList([note('n1')])]
+    openPane(scope)
+    await flush()
+    const r = () => document.querySelector('[data-note-row="n1"]') as HTMLElement
+    await act(async () => {
+      fireEvent.click(within(r()).getByText('Resolve'))
+    })
+    await flush()
+    await act(async () => {
+      fireEvent.click(within(r()).getByText('Edit'))
+    })
+    const box = within(r()).getByLabelText('Edit note') as HTMLTextAreaElement
+    expect(box.value).toBe('body of n1')
+    await act(async () => {
+      fireEvent.change(box, { target: { value: 'sharper' } })
+    })
+    await act(async () => {
+      fireEvent.click(within(r()).getByText('Save'))
+    })
+    await flush()
+    await act(async () => {
+      fireEvent.click(within(r()).getByText('Delete'))
+    })
+    await flush()
+    await act(async () => {
+      expect(useConfirmDialogStore.getState().title).toBe('Delete note?')
+      fireEvent.click(screen.getAllByRole('button', { name: 'Delete' }).find((b) => !r().contains(b))!)
+    })
+    await flush()
+    expect(posts().filter(([route]) => route.startsWith('git/notes/'))).toEqual([
+      ['git/notes/resolve', { ids: ['n1'], resolved: true }],
+      ['git/notes/update', { id: 'n1', body: 'sharper' }],
+      ['git/notes/delete', { ids: ['n1'] }],
+    ])
+  })
+
+  it('C5: git_notes_changed for this workspace refetches the list; another workspace does not', async () => {
+    notesLists = [notesList([]), notesList([note('n1')])]
+    openPane(fakeScope('b'))
+    await flush()
+    expect(document.querySelector('[data-changes-notes]')).toBeNull()
+    const notesGets = () => cli.get.mock.calls.filter((c) => c[1] === 'git/notes').length
+    const before = notesGets()
+    await act(async () => {
+      for (const fn of handlers.notes) fn({ kind: 'git_notes_changed', workspacePath: '/elsewhere' })
+    })
+    expect(notesGets()).toBe(before)
+    await act(async () => {
+      for (const fn of handlers.notes) fn({ kind: 'git_notes_changed', workspacePath: `${WS}/` })
+    })
+    await flush()
+    expect(notesGets()).toBe(before + 1)
+    expect(document.querySelector('[data-note-row="n1"]')).toBeTruthy()
+  })
+
+  it('C5: the slot gets the notes API and a room-aware Open in editor', async () => {
+    const scope = fakeScope('b')
+    notesLists = [notesList([note('n1')])]
+    const { tab } = openPane(scope)
+    await flush()
+    const api = slotProps.last?.notes as { notes: ReviewNote[]; canWrite: boolean; add: (i: unknown) => Promise<void> }
+    expect(api.notes.map((n) => n.id)).toEqual(['n1'])
+    expect(api.canWrite).toBe(true)
+    await act(async () => {
+      await api.add({ filePath: 'src/a.rs', side: 'new', startLine: 3, endLine: 4, body: 'hm', anchorText: 'x\ny', rev: 'r1' })
+    })
+    expect(posts().find(([route]) => route === 'git/notes/add')).toEqual([
+      'git/notes/add',
+      { path: WS, filePath: 'src/a.rs', side: 'new', startLine: 3, endLine: 4, body: 'hm', anchorText: 'x\ny', rev: 'r1' },
+    ])
+    const open = slotProps.last?.onOpenFile as (p: string) => void
+    await act(async () => {
+      open('src/a.rs')
+    })
+    const tabs = useTabsStore.getState().tabs
+    expect(tabs.length).toBe(2)
+    expect(tabs.find((t) => t.id !== tab.id)?.title).toBe('a.rs')
   })
 
   it('a base pick saves base, refetches with base=, and lists branches from the room server', async () => {

@@ -1,9 +1,12 @@
 // One file's diff body: loading / error / fallback cards, or the
 // CodeMirror merge editor for text.
 
+import { useMemo } from 'react'
 import type { DiffContent, DiffView } from './diffQuery'
 import { formatBytes } from './diffQuery'
-import { MergeDiffEditor, type MergeDiffApi } from './MergeDiffEditor'
+import { MergeDiffEditor, type EditorNotes, type MergeDiffApi } from './MergeDiffEditor'
+import { placeNotes } from './notesPlacement'
+import type { ChangesNotesApi } from '../diff-slot-types'
 import type { ChangesDiffFile, ChangesDiffLayout } from './types'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -71,10 +74,57 @@ export interface DiffFileBodyProps {
   onChunks?: (starts: number[]) => void
   onCursor?: (pos: number) => void
   apiRef?: React.MutableRefObject<MergeDiffApi | null>
+  /** Review notes (C5). */
+  notes?: ChangesNotesApi
+  /** The snapshot rev a new note is made on. */
+  rev?: string | null
+}
+
+/** The editor's notes for a text diff of `row` (null without notes). */
+function useEditorNotes(
+  row: ChangesDiffFile,
+  content: DiffContent | null,
+  layout: ChangesDiffLayout,
+  notes: ChangesNotesApi | undefined,
+  rev: string | null | undefined,
+): EditorNotes | undefined {
+  const text = content?.kind === 'text' ? content : null
+  const list = notes?.notes
+  const canWrite = notes?.canWrite ?? false
+  const marks = useMemo(() => {
+    if (!text || !list) return null
+    return {
+      new: placeNotes(list, row.path, 'new', text.newText),
+      // Inline shows only the new text; old-side notes live in the list.
+      old: layout === 'split' ? placeNotes(list, row.oldPath ?? row.path, 'old', text.oldText) : [],
+    }
+  }, [text, list, row.path, row.oldPath, layout])
+  if (!marks || !notes) return undefined
+  return {
+    marks,
+    canWrite,
+    handlers: (side) => ({
+      canWrite,
+      save: (from, to, body, anchor) =>
+        notes.add({
+          filePath: side === 'old' && row.oldPath ? row.oldPath : row.path,
+          side,
+          startLine: from,
+          endLine: to,
+          body,
+          anchorText: anchor,
+          rev: rev ?? null,
+        }),
+      edit: (id, body) => notes.update(id, body),
+      resolve: (id) => notes.resolve(id),
+      remove: (id) => notes.remove(id),
+    }),
+  }
 }
 
 export function DiffFileBody(props: DiffFileBodyProps): React.JSX.Element {
   const { row, state, onOpenFile } = props
+  const editorNotes = useEditorNotes(row, state.content, props.layout, props.notes, props.rev)
   if (state.error) {
     return (
       <Card title="Couldn't load this diff" testId="diff-error">
@@ -140,6 +190,7 @@ export function DiffFileBody(props: DiffFileBodyProps): React.JSX.Element {
           onChunks={props.onChunks}
           onCursor={props.onCursor}
           apiRef={props.apiRef}
+          notes={editorNotes}
         />
       )
   }

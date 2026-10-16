@@ -18,12 +18,9 @@ export type ChangesDiffLayout = ChangesDiffMode
 export type DiffSidesResponse = DiffSides
 export type { DiffSide, DiffSidesState }
 
-/** The slot's props, plus an optional extra C2 may wire later. */
-export interface ChangesDiffViewerProps extends ChangesDiffSlotProps {
-  /** Optional: "Open in editor" (too-large fallback, file headers). The
-   *  buttons only show when this is passed. */
-  onOpenFile?: (repoRelPath: string) => void
-}
+/** The slot's props. `onOpenFile` (too-large fallback, file headers) and
+ *  `notes` (C5 review notes) are optional; their UI shows only when set. */
+export type ChangesDiffViewerProps = ChangesDiffSlotProps
 
 /** A row's identity. A file with staged AND unstaged edits is two rows. */
 export function diffRowKey(row: Pick<ChangesDiffFile, 'group' | 'path'>): string {

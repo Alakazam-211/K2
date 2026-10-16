@@ -45,6 +45,7 @@ import {
   onSessionRemovedApp,
   onAppHello,
   onOpenUrl,
+  onOpenChanges,
   onceRecovered,
   type SessionAddedEvent,
   type SessionRemovedEvent,
@@ -2357,6 +2358,10 @@ export interface TabsRoomApi {
   initApiSandboxTabAdoption(): UnsubscribeFn
   /** Wire the room's server's app-bus `open_url` → browser tab. */
   initOpenUrlBrowserTabs(): UnsubscribeFn
+  /** C5 `k2 changes open`: open (or focus) the Changes tab when the
+   *  daemon's `open_changes` names a workspace this room shows. The primary
+   *  room is wired from App.tsx; a pinned room subscribes in `open()`. */
+  initOpenChangesTabs(): UnsubscribeFn
   /** Apply one `workspace:*` op to this room's tabs. */
   applyWorkspaceOp(op: WorkspaceOp): void
   /** Primary only: the #625 server-switch reset. */
@@ -7191,6 +7196,36 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     })
   }
 
+  /** Does this room show `workspacePath` right now? A pinned room: its one
+   *  workspace (or a folder inside it, e.g. a worktree checkout). The
+   *  primary room: the project the window has selected. */
+  function roomShowsPath(workspacePath: string): boolean {
+    const target = normalizeFsPath(workspacePath)
+    if (!target || target === '/') return false
+    if (binding.workspace) {
+      const root = normalizeFsPath(binding.workspace.path)
+      return target === root || target.startsWith(`${root}/`)
+    }
+    const project = findProjectForPathIn(deps.projectsPathIndex(), target)
+    if (!project) return false
+    const key = store.getState().activeWorkspaceKey
+    const active = key ? key.split(':')[0] : deps.activeProjectId()
+    return project.id === active
+  }
+
+  function initOpenChangesTabs(): UnsubscribeFn {
+    return onOpenChanges(scope, (e) => {
+      const path = typeof e.workspacePath === 'string' ? e.workspacePath.trim() : ''
+      if (!path || !roomShowsPath(path)) return
+      try {
+        const st = store.getState()
+        st.openChangesTab(normalizeFsPath(path), st.activeGroupIndex)
+      } catch (err) {
+        console.warn('[tabs] open_changes tab surface failed:', err)
+      }
+    })
+  }
+
   /** Fetch the daemon-canonical tab titles for a project and apply them to
    *  the surfaced tabs (hydrate labels from the daemon on workspace load +
    *  on reconnect). No-op for tab ids not currently surfaced. Best-effort:
@@ -7685,12 +7720,16 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
   }
 
   let disposed = false
+  /** Pinned rooms: the `open_changes` subscription made in `open()`. */
+  let pinnedOpenChangesOff: UnsubscribeFn | null = null
   /** Pinned rooms: flush the based save, then close sockets, timers and the
    *  autosave subscription. The instance is dead afterwards. */
   async function dispose(): Promise<void> {
     assertPinned('dispose')
     if (disposed) return
     disposed = true
+    pinnedOpenChangesOff?.()
+    pinnedOpenChangesOff = null
     if (persistDebounceTimer) {
       clearTimeout(persistDebounceTimer)
       persistDebounceTimer = null
@@ -7713,6 +7752,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
   async function open(): Promise<void> {
     assertPinned('open')
     const ws = binding.workspace as TabsRoomWorkspace
+    if (!pinnedOpenChangesOff) pinnedOpenChangesOff = initOpenChangesTabs()
     await store.getState().loadLayoutForWorkspace(ws.projectId, ws.workspaceId, ws.path)
   }
 
@@ -7757,6 +7797,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     hydrateApiSandboxSessions,
     initApiSandboxTabAdoption,
     initOpenUrlBrowserTabs,
+    initOpenChangesTabs,
     applyWorkspaceOp,
     resetForHostSwitch,
     open,
@@ -7822,6 +7863,11 @@ export function initApiSandboxTabAdoption(): UnsubscribeFn {
 /** Primary room: app-boot `open_url` consumer (App.tsx). */
 export function initOpenUrlBrowserTabs(): UnsubscribeFn {
   return useTabsStore.room.initOpenUrlBrowserTabs()
+}
+
+/** Primary room: `k2 changes open` → the Changes tab (wired once from App.tsx). */
+export function initOpenChangesTabs(): UnsubscribeFn {
+  return useTabsStore.room.initOpenChangesTabs()
 }
 
 /** Primary room: #625 server-switch reset (tests drive it directly). */

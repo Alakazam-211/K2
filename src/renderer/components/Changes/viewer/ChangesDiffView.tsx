@@ -269,6 +269,8 @@ function SingleDiff(props: ChangesDiffViewerProps & { prefs: DiffPrefsState }): 
             onChunks={(starts) => nav.report(fileKey, { state: 'chunks', starts })}
             onCursor={(pos) => nav.setCursor(fileKey, pos)}
             apiRef={nav.apiRef(fileKey)}
+            notes={props.notes}
+            rev={props.rev}
           />
         ) : (
           <div className="h-full flex items-center justify-center text-xs text-[var(--color-text-muted)]" data-testid="diff-empty">
@@ -367,6 +369,8 @@ function FileSection(props: {
             onChunks={(starts) => nav.report(rowKey, { state: 'chunks', starts })}
             onCursor={(pos) => nav.setCursor(rowKey, pos)}
             apiRef={nav.apiRef(rowKey)}
+            notes={common.notes}
+            rev={common.rev}
           />
         ) : (
           <div className="min-h-[120px]" data-testid="diff-placeholder" />

@@ -227,6 +227,22 @@ fn ip_unverified_stops_before_sew_and_says_k2_retries() {
 }
 
 #[test]
+fn an_install_re_run_reuses_a_valid_cert_and_spends_no_turn_issuance() {
+    let t = t();
+    t.voice();
+    let before = t.state();
+    t.install(InstallRequest::default()).unwrap();
+    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lztek"], "DNS again, no new cert");
+    assert_eq!(t.state().cert_leaf_sha256, before.cert_leaf_sha256);
+    assert_eq!(t.state().turn_key_ref, before.turn_key_ref);
+    // Inside the renewal window an install re-run issues a fresh one.
+    t.ops.cp_calls.lock().unwrap().clear();
+    t.advance(70 * 86_400);
+    t.install(InstallRequest::default()).unwrap();
+    assert_eq!(t.ops.cp_log(), vec!["PUT /turn/dns/lztek", "POST /cert"]);
+}
+
+#[test]
 fn a_cert_for_another_name_or_key_is_never_handed_to_sew() {
     let t = t();
     t.chat();
@@ -338,8 +354,8 @@ fn a_new_box_ip_moves_the_record_and_sews_node_ip() {
     *t.ops.cp_ip.lock().unwrap() = "203.0.113.99".into();
     let out = renew(&t.env(), true).unwrap();
     assert_eq!(out["nodeIpMoved"], "203.0.113.99");
-    assert_eq!(t.ops.effects(), vec!["engine sew media reconfigure", "engine sew media turn-cert"]);
-    assert_eq!(t.stdin_of("engine sew media reconfigure"), json!({"node_ip": "203.0.113.99"}));
+    assert_eq!(t.ops.effects(), vec!["engine sew media reconfigure restart-now", "engine sew media turn-cert"]);
+    assert_eq!(t.stdin_of("engine sew media reconfigure restart-now"), json!({"node_ip": "203.0.113.99"}));
     assert_eq!(t.state().node_ip.as_deref(), Some("203.0.113.99"));
 }
 

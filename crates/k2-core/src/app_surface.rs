@@ -182,6 +182,7 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("HEAD", "/cli/agent/identity"),
     ("POST", "/cli/agent/identity"),
     ("POST", "/cli/agent/handle"),
+    ("POST", "/cli/sew/pass"),
 ];
 
 /// The one table of App-facing sockets (helper and link), and the query
@@ -197,7 +198,7 @@ pub const WS_ALLOWLIST: &[(&str, &str)] = &[
 pub const HELPER_ONLY_HTTP: &[&str] = &["/cli/skin/password/change"];
 
 /// Routes only an App's gateway link serves: a BFF's server-side calls.
-pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login"];
+pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/sew/pass"];
 
 /// The catalog verb behind each App-facing pair and socket
 /// (`(method, path, verb, door)`; sockets are `WS`), for refusals, the
@@ -259,6 +260,7 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("GET", "/cli/agent/identity", "agentIdentity.get", "both"),
     ("POST", "/cli/agent/identity", "agentIdentity.set", "both"),
     ("POST", "/cli/agent/handle", "agentIdentity.setHandle", "both"),
+    ("POST", "/cli/sew/pass", "chat.pass", "link"),
     ("WS", "/cli/overlay/events", "thread.events", "both"),
     ("WS", "/cli/fs/events", "files.events", "both"),
     ("WS", "/cli/activity/events", "activity.events", "both"),

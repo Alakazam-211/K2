@@ -687,6 +687,17 @@ export const APP_VERBS = {
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"canEditHandle":{"type":"boolean"},"canEditIdentity":{"type":"boolean"},"changed":{"items":{"type":"string"},"type":"array"},"color":{"type":["string","null"]},"displayName":{"type":"string"},"handle":{"type":"string"},"image":{"type":["string","null"]},"ok":{"type":"boolean"},"previousHandle":{"type":"string"},"workspace":{"type":"string"}},"type":"object"},
   },
+  'chat.pass': {
+    cap: null,
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-api-v1',
+    door: 'link',
+    http: { method: 'POST', route: '/cli/sew/pass', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"caps":{"items":{"type":"string"},"type":"array"},"expiresAt":{"type":"string"},"expiresInMs":{"type":"integer"},"jti":{"type":"string"},"ok":{"type":"boolean"},"pass":{"type":"string"},"personProof":{"type":"boolean"},"provenance":{"type":"string"},"sewRole":{"type":"string"},"sid":{"type":"string"},"sub":{"type":"string"}},"type":"object"},
+  },
 } as const satisfies Record<string, AppVerbRow>
 
 export type AppVerb = keyof typeof APP_VERBS
@@ -1403,8 +1414,28 @@ export interface AppAgentHandleChanged {
   readonly workspace: string
 }
 
+export interface AppChatPass {
+  readonly app?: string
+  readonly caps?: string[]
+  /** RFC 3339. */
+  readonly expiresAt: string
+  /** Milliseconds the pass lives (a duration). */
+  readonly expiresInMs: number
+  readonly jti: string
+  readonly ok: boolean
+  /** The Sew chat pass (a signed JWT) for this guest; hand it to Sew, never to K2. */
+  readonly pass: string
+  /** Always false: a chat pass never proves a person is present. */
+  readonly personProof: boolean
+  readonly provenance: string
+  readonly sewRole: string
+  readonly sid: string
+  /** k2:principal:<id> for an App guest. */
+  readonly sub: string
+}
+
 /** The shared error codes (catalog `errors`). */
-export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key'] as const
+export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable'] as const
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number]
 
@@ -1469,9 +1500,10 @@ export interface AppVerbs {
   'agentIdentity.get': { args: { workspace: string }; value: AppAgentIdentity }
   'agentIdentity.set': { args: { color?: string; displayName?: string; image?: string | null; workspace: string }; value: AppAgentIdentityChanged }
   'agentIdentity.setHandle': { args: { handle: string; workspace: string }; value: AppAgentHandleChanged }
+  'chat.pass': { args: Record<string, never>; value: AppChatPass }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'chat.pass'
 export type AppSubscribeVerb = 'thread.events' | 'files.events' | 'activity.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -1618,7 +1650,11 @@ export interface AppSurfaces {
     /** Change the room's agent's handle (its address). cap agent:handle · POST /cli/agent/handle. e.g. `await k2.agentIdentity.setHandle({workspace, handle: 'sales-desk'})` */
     setHandle(args: { handle: string; workspace: string }): Promise<AppAgentHandleChanged>
   }
+  readonly chat: {
+    /** Mint a Sew chat pass for the guest of this request (a login with a chat grant; server only, never a handoff code). no cap · POST /cli/sew/pass. e.g. `const {pass} = await k2.withGuest(guestPass, () => k2.chat.pass())` */
+    pass(args?: Record<string, never>): Promise<AppChatPass>
+  }
 }
 
 /** The surface names, in catalog order (the client builds one object each). */
-export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity'] as const
+export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'chat'] as const

@@ -864,6 +864,10 @@ pub const ROUTES: &[Route] = &[
     // ingress, LAN, air-gap) at once — Owner only.
     post("/cli/settings/reset", Owner),
     post("/cli/settings/update", Member),
+    // Sew chat pass (S28 §9, K7): every Connect login role mints its own
+    // member pass; App sessions, the owner token and a handoff code
+    // (no credential) pass the login gate to the handler's own checks.
+    post("/cli/sew/pass", Member),
     // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §5.1).
     get("/cli/sidecar/list", Member),
     post("/cli/sidecar/new", Admin),

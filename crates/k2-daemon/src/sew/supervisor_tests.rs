@@ -157,6 +157,38 @@ fn enable_after_disable_reruns_the_systemd_steps_h4() {
     assert!(t.ops.unit(UNIT_SEW).is_active());
 }
 
+/// The sewlab login: bash, home under /home.
+const SEWLAB_LOGIN: &str = "sew:x:1002:1002::/home/sew:/bin/bash\n";
+/// The account a previous Sew install left: nologin, no keys.
+const SEW_SERVICE: &str = "sew:x:998:998:Sew:/var/lib/sew:/usr/sbin/nologin\n";
+
+fn add_passwd(t: &T, line: &str) {
+    let mut files = t.ops.files.lock().unwrap();
+    let pw = files.get_mut(crate::sew::service_user::PASSWD).expect("the fake box has /etc/passwd");
+    pw.extend_from_slice(line.as_bytes());
+}
+
+/// Re-enable over a previous install's service account works: the guard
+/// only refuses login accounts (shadow and /var/lib/sew unreadable, as for
+/// the unprivileged daemon).
+#[test]
+fn re_enable_with_sews_own_service_account_passes_the_guard() {
+    let t = t();
+    t.enabled();
+    disable(&t.env()).unwrap();
+    add_passwd(&t, SEW_SERVICE);
+    t.ops.unreadable.lock().unwrap().push("/var/lib/sew".into());
+    t.ops.clear();
+    let c = preflight(&t.env(), &t.req()).into_iter().find(|c| c["id"] == "service_user").expect("service_user check");
+    assert_eq!(c["status"], "ok", "{c}");
+    t.enable().expect("re-enable");
+    assert_eq!(t.row().status, "running");
+    // Root-readable shadow with a locked password: same answer.
+    t.ops.files.lock().unwrap().insert(crate::sew::service_user::SHADOW.into(), b"sew:!:20000::::::\n".to_vec());
+    let c = preflight(&t.env(), &t.req()).into_iter().find(|c| c["id"] == "service_user").expect("service_user check");
+    assert_eq!(c["status"], "ok", "{c}");
+}
+
 #[test]
 fn already_enabled_is_a_noop() {
     let t = t();
@@ -185,6 +217,11 @@ fn preflight_hard_stops_refuse_before_any_effect() {
         ("existing_data", Box::new(|t: &T| t.ops.exists.lock().unwrap().push("/var/lib/sew".into()))),
         ("daemon_port", Box::new(|t: &T| *t.ops.port.lock().unwrap() = None)),
         ("vault", Box::new(|t: &T| *t.secrets.fail_store.lock().unwrap() = true)),
+        // sewlab 2026-10-16: a `sew` login made before enable.
+        ("service_user", Box::new(|t: &T| add_passwd(t, SEWLAB_LOGIN))),
+        ("service_user", Box::new(|t: &T| {
+            t.ops.files.lock().unwrap().remove(crate::sew::service_user::PASSWD).expect("passwd");
+        })),
     ];
     for (id, setup) in cases {
         let t = t();
@@ -201,6 +238,21 @@ fn preflight_hard_stops_refuse_before_any_effect() {
         assert!(store::load().is_none(), "{id}: no row");
         assert!(!t.latch.load(std::sync::atomic::Ordering::SeqCst), "{id}: latch released");
     }
+    // The refusal says why in words, not only in the report.
+    let t0 = t();
+    add_passwd(&t0, SEWLAB_LOGIN);
+    t0.ops.exists.lock().unwrap().push("/home/sew/.ssh/authorized_keys".into());
+    let f = enable_begin(&t0.env(), &t0.req()).err().expect("refused");
+    assert_eq!((f.code, f.status), ("preflight_failed", 409));
+    assert_eq!(
+        f.hint,
+        "the box is not ready for Sew; nothing was changed. A login user named 'sew' already exists on this box \
+         (shell /bin/bash, SSH keys present). Sew would adopt it as its service account and give that login full \
+         Sew admin. Rename or remove that user, then run enable again."
+    );
+    assert!(t0.ops.effects().is_empty(), "effects {:?}", t0.ops.effects());
+    assert!(t0.ops.calls.lock().unwrap().iter().all(|c| c.argv == "engine sew status"), "only the read-only status call");
+    drop(t0);
     // No tarball and nothing installed: the SW1 seam names --tarball.
     let t1 = t();
     let f = enable_begin(&t1.env(), &EnableRequest::default()).err().unwrap();
@@ -603,6 +655,7 @@ fn upgrade_machine_with_flip(env: &Env, req: &UpgradeRequest, from: &str, ops: &
         fn unit(&self, u: &str) -> crate::sew::ops::UnitInfo { self.inner.unit(u) }
         fn read_file(&self, p: &std::path::Path, c: usize) -> Result<Vec<u8>, String> { self.inner.read_file(p, c) }
         fn path_exists(&self, p: &str) -> bool { self.inner.path_exists(p) }
+        fn path_probe(&self, p: &str) -> Option<bool> { self.inner.path_probe(p) }
         fn systemd_version(&self) -> Option<u32> { self.inner.systemd_version() }
         fn pg_majors(&self) -> Vec<u32> { self.inner.pg_majors() }
         fn mem_total(&self) -> Option<u64> { self.inner.mem_total() }

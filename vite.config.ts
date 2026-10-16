@@ -57,7 +57,10 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src/renderer'),
-      '@shared': resolve(__dirname, 'src/shared')
+      '@shared': resolve(__dirname, 'src/shared'),
+      // Wiki 3D: three-render-objects statically imports the (unused)
+      // WebGPU renderer; stub it out of the lazy chunk (prd-wiki-3d-view-v1 §6.5).
+      'three/webgpu': resolve(__dirname, 'src/renderer/lib/three-webgpu-stub.ts'),
     }
   },
   root: 'src/renderer',

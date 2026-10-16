@@ -242,6 +242,16 @@ pub fn update_project_setting(
             "wiki_public_chat must be '0' or '1', got {value:?}"
         ));
     }
+    // W0 (0.46.0): agent-backed public wiki chat is disabled until it
+    // returns on the K2 runtime. Only turning it off is accepted, on every
+    // write path (`k2 wiki chat`, `/cli/workspace/set`, …).
+    if field == "wiki_public_chat" && value == "1" {
+        return Err(
+            "public_chat_unavailable: public wiki chat is coming back with the K2 runtime; \
+             it cannot be turned on"
+                .to_string(),
+        );
+    }
     if field == "hide_api_sessions" && value != "0" && value != "1" {
         return Err(format!(
             "hide_api_sessions must be '0' or '1', got {value:?}"
@@ -1806,10 +1816,10 @@ mod tests {
 
     // ── Phase 1 per-workspace public wiki chat ──────────────────────
 
-    /// Fresh row defaults OFF; 0/1 round-trips; settings JSON exposes
-    /// `wikiPublicChat`; unknown path fails closed.
+    /// Fresh row defaults OFF; turning it on is refused (W0, 0.46.0);
+    /// off writes; settings JSON exposes `wikiPublicChat`.
     #[test]
-    fn wiki_public_chat_defaults_off_and_round_trips() {
+    fn wiki_public_chat_defaults_off_and_cannot_turn_on() {
         let path = unique_path("wiki-public-chat");
         let _pid = insert_project(&path);
 
@@ -1820,10 +1830,10 @@ mod tests {
         let settings = get_project_settings(&path).expect("read default");
         assert_eq!(settings["wikiPublicChat"], false);
 
-        update_project_setting(&path, "wiki_public_chat", "1").expect("opt in");
-        assert!(get_wiki_public_chat(&path));
-        let settings = get_project_settings(&path).expect("read on");
-        assert_eq!(settings["wikiPublicChat"], true);
+        let err = update_project_setting(&path, "wiki_public_chat", "1")
+            .expect_err("turning public chat on must be refused");
+        assert!(err.starts_with("public_chat_unavailable"), "{err}");
+        assert!(!get_wiki_public_chat(&path));
 
         update_project_setting(&path, "wiki_public_chat", "0").expect("opt out");
         assert!(!get_wiki_public_chat(&path));

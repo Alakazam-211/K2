@@ -1,35 +1,48 @@
 //! Daemon-side `/cli/wiki/*` routes — workspace knowledge base (brain map).
 //!
-//! GET: index, note, serve status. POST: seed, serve on/off, public chat on/off.
+//! GET: index, note, serve status. POST: seed, serve on/off, public chat off.
 //! When serve is enabled, binds a localhost site on `127.0.0.1` only
-//! (no daemon token): SPA + `/api/index` + `/api/note`, plus optional
-//! public chat gateway `/api/chat*` (Phase 2 of
-//! `prd-wiki-public-chat-api-loopback-v1`).
+//! (no daemon token): SPA + `/api/index` + `/api/note`.
 //!
-//! ## Public chat (opt-in, default OFF — D6)
+//! ## Site lock (W0, 0.46.0)
 //!
-//! Durable gate: `projects.wiki_public_chat` via
-//! [`k2_core::workspace::settings::get_wiki_public_chat`]. Toggle with
-//! `POST /cli/wiki/chat` or `publicChat=` on serve. Serve status reports
-//! `publicChatEnabled` / `publicChatReady` / `publicChatError` (Phase 1).
+//! The site answers only when the `Host` header is this listener's own
+//! loopback `host:port` or a nested Connect subdomain whose target is this
+//! listener (the published wiki). Anything else is refused before routing
+//! (DNS-rebinding guard). There is no CORS: no `Access-Control-Allow-*`
+//! header is ever sent, and a request whose `Origin` is not the requested
+//! host is refused. JSON never carries absolute filesystem paths, and note
+//! ids under dot-folders (e.g. `.archive/`) are not served.
 //!
-//! Credentials: daemon-held `k2sk_` with host_sessions only, stored under
-//! `~/.k2/wiki-public-chat/` ([`k2_core::wiki_public_chat`]). NEVER in
-//! SITE_HTML, ServeStatus, or chat JSON. Gateway calls host-sessions
-//! in-process so the key never leaves the daemon.
+//! ## Public chat (disabled — W0, 0.46.0)
+//!
+//! Agent-backed public chat let an anonymous visitor start this
+//! workspace's real agent, unsandboxed, with auto-approve forced. It is off
+//! everywhere until it comes back on the K2 runtime:
+//! - the site's `/api/chat*` routes answer `410` and never start a session;
+//! - `POST /cli/wiki/chat` (on) answers `410 public_chat_unavailable`;
+//!   off still works;
+//! - serve status always reports `publicChatEnabled:false`;
+//! - [`boot_heal_public_chat`] turns any leftover opt-in off at daemon
+//!   start, reverts `api_skip_permissions` on those workspaces, revokes the
+//!   daemon-held chat keys and writes an auth-audit line per change.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
 use crate::cli_response::CliResponse;
-use crate::routes::http::V1Principal;
 use k2_core::skin::SkinPass;
+
+/// Error code for every refused public-chat request (CLI exit 3).
+pub const PUBLIC_CHAT_UNAVAILABLE: &str = "public_chat_unavailable";
+/// Visitor- and owner-facing reason public chat is off.
+pub const PUBLIC_CHAT_UNAVAILABLE_HINT: &str =
+    "Public chat is coming back with the K2 runtime. It is off on every workspace for now.";
 
 // ── Serve state (process-wide, per workspace) ──────────────────────────
 
@@ -40,11 +53,13 @@ pub struct ServeStatus {
     pub port: Option<u16>,
     pub url: Option<String>,
     pub workspace_path: String,
-    /// Phase 1 — durable owner opt-in (`projects.wiki_public_chat`).
+    /// Always `false` (W0): public chat is disabled until the runtime.
     pub public_chat_enabled: bool,
-    /// Phase 1 — enabled AND API on AND daemon-held key usable.
+    /// Always `false` (W0).
     pub public_chat_ready: bool,
-    /// Phase 1 — human reason when enabled but not ready.
+    /// Always `false` (W0): tells clients the toggle is gone, not just off.
+    pub public_chat_available: bool,
+    /// Kept for older clients; never set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_chat_error: Option<String>,
 }
@@ -68,73 +83,26 @@ fn workspace_key(workspace: &Path) -> String {
         .into_owned()
 }
 
-/// Phase 1 status fields: durable setting + API gate + daemon-held key.
-/// Never includes the raw API key.
-fn public_chat_status_fields(workspace_path: &str) -> (bool, bool, Option<String>) {
-    let enabled = k2_core::workspace::settings::get_wiki_public_chat(workspace_path)
-        || {
-            // Also accept the registered path spelling if workspace_path is
-            // a canonicalize'd variant of projects.path.
-            let project = resolve_project_path_for_settings(workspace_path);
-            project != workspace_path
-                && k2_core::workspace::settings::get_wiki_public_chat(&project)
-        };
-    if !enabled {
-        return (false, false, None);
-    }
-    if !crate::misc_routes::api_enabled() {
-        return (
-            true,
-            false,
-            Some(
-                "Public API is off — enable with `k2 api on` (or Settings → API) so chat can reach the agent"
-                    .into(),
-            ),
-        );
-    }
-    let project = resolve_project_path_for_settings(workspace_path);
-    if k2_core::wiki_public_chat::chat_key_ready(&project)
-        || k2_core::wiki_public_chat::chat_key_ready(workspace_path)
-    {
-        return (true, true, None);
-    }
-    // Best-effort ensure so status after enable is ready without a second call.
-    match k2_core::wiki_public_chat::ensure_chat_key(&project) {
-        Ok(_) => (true, true, None),
-        Err(e) => (
-            true,
-            false,
-            Some(format!("Wiki chat key unavailable: {e}")),
-        ),
+fn status_with(key: String, port: Option<u16>) -> ServeStatus {
+    ServeStatus {
+        enabled: port.is_some(),
+        port,
+        url: port.map(|p| format!("http://127.0.0.1:{p}")),
+        workspace_path: key,
+        public_chat_enabled: false,
+        public_chat_ready: false,
+        public_chat_available: false,
+        public_chat_error: None,
     }
 }
 
 fn status_for(workspace: &Path) -> ServeStatus {
     let key = workspace_key(workspace);
-    let (public_chat_enabled, public_chat_ready, public_chat_error) =
-        public_chat_status_fields(&key);
-    let guard = servers().lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(entry) = guard.get(&key) {
-        ServeStatus {
-            enabled: true,
-            port: Some(entry.port),
-            url: Some(format!("http://127.0.0.1:{}", entry.port)),
-            workspace_path: key,
-            public_chat_enabled,
-            public_chat_ready,
-            public_chat_error,
-        }
-    } else {
-        ServeStatus {
-            enabled: false,
-            port: None,
-            url: None,
-            workspace_path: key,
-            public_chat_enabled,
-            public_chat_ready,
-            public_chat_error,
-        }
-    }
+    let port = {
+        let guard = servers().lock().unwrap_or_else(|e| e.into_inner());
+        guard.get(&key).map(|e| e.port)
+    };
+    status_with(key, port)
 }
 
 fn stop_server(workspace: &Path) {
@@ -177,178 +145,149 @@ fn start_server(workspace: PathBuf, port: u16) -> Result<ServeStatus, String> {
         );
     }
 
-    // Warm the wiki-chat key when durable chat opt-in is on so the first
-    // visitor isn't waiting on a mint. Failures surface via status fields.
-    let (chat_on, _, _) = public_chat_status_fields(&key);
-    if chat_on {
-        let warm_path = resolve_project_path_for_settings(&key);
-        let _ = std::thread::Builder::new()
-            .name("wiki-chat-key-warm".into())
-            .spawn(move || {
-                let _ = k2_core::wiki_public_chat::ensure_chat_key(&warm_path);
-            });
-    }
-
     handle.spawn(async move {
-        run_wiki_site(ws, listener, cancel_rx).await;
+        run_wiki_site(ws, listener, actual_port, cancel_rx).await;
     });
 
-    let (public_chat_enabled, public_chat_ready, public_chat_error) =
-        public_chat_status_fields(&key);
-    Ok(ServeStatus {
-        enabled: true,
-        port: Some(actual_port),
-        url: Some(format!("http://127.0.0.1:{actual_port}")),
-        workspace_path: key,
-        public_chat_enabled,
-        public_chat_ready,
-        public_chat_error,
+    Ok(status_with(key, Some(actual_port)))
+}
+
+// ── Public chat: disabled (W0) + boot heal ─────────────────────────────
+
+/// What [`heal_public_chat_for`] changed on one workspace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicChatHeal {
+    pub path: String,
+    /// `api_skip_permissions` was on (1, or NULL = default on) and is now 0.
+    pub skip_permissions_reverted: bool,
+}
+
+/// Turn public chat off on one `projects` row that has it on, and revert
+/// its `api_skip_permissions`.
+///
+/// **Rule.** Turning chat on always wrote `api_skip_permissions=1`, and
+/// nothing records who set it (the product default is also on), so the
+/// two cannot be told apart. Rule used: for every workspace whose
+/// `wiki_public_chat` is 1, set `wiki_public_chat=0` and, when
+/// `api_skip_permissions` reads on (1, or NULL which reads as the default
+/// on), set it to 0. Workspaces with chat off are never touched. Each
+/// change writes one `wiki-public-chat-heal` line to the auth audit log
+/// (`~/.k2/auth-audit.jsonl`, `k2 users audit`). The owner can turn
+/// skip-permissions back on with `k2 workspace set`.
+///
+/// Returns `None` when the row is unknown or chat is already off
+/// (idempotent).
+pub fn heal_public_chat_for(project_path: &str, ingress: &str) -> Option<PublicChatHeal> {
+    let (name, skip_on) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let row = conn.query_row(
+            "SELECT name, api_skip_permissions FROM projects \
+             WHERE path = ?1 AND wiki_public_chat = 1",
+            rusqlite::params![project_path],
+            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<i64>>(1)?)),
+        );
+        let (name, skip) = match row {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
+        let skip_on = skip.map(|v| v != 0).unwrap_or(true);
+        let sql = if skip_on {
+            "UPDATE projects SET wiki_public_chat = 0, api_skip_permissions = 0 WHERE path = ?1"
+        } else {
+            "UPDATE projects SET wiki_public_chat = 0 WHERE path = ?1"
+        };
+        if let Err(e) = conn.execute(sql, rusqlite::params![project_path]) {
+            k2_core::log_debug!(
+                "[wiki] ERROR could not turn public chat off for {project_path}: {e}"
+            );
+            return None;
+        }
+        (name, skip_on)
+    };
+    let outcome = if skip_on {
+        "public_chat_off;api_skip_permissions_reverted"
+    } else {
+        "public_chat_off;api_skip_permissions_already_off"
+    };
+    let who = name
+        .filter(|n| !n.trim().is_empty())
+        .or_else(|| k2_core::wiki_public_chat::primary_slug(project_path))
+        .unwrap_or_else(|| "workspace".into());
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        "wiki-public-chat-heal",
+        &who,
+        outcome,
+        ingress,
+        "-",
+        "daemon",
+    ));
+    k2_core::log_debug!("[wiki] public chat turned off for {project_path} ({outcome})");
+    Some(PublicChatHeal {
+        path: project_path.to_string(),
+        skip_permissions_reverted: skip_on,
     })
 }
 
-// ── Public chat gate + credentials (Phase 1 durable + Phase 2 gateway) ─
-//
-// Durable opt-in: projects.wiki_public_chat (default OFF).
-// Secret: k2_core::wiki_public_chat (~/.k2/wiki-public-chat/, 0600).
-// NEVER put the raw key in SITE_HTML, ServeStatus, or chat JSON.
-
-/// Simple per-IP rate limit for the public chat gateway.
-struct RateBucket {
-    window_start: Instant,
-    count: u32,
+/// Result of [`boot_heal_public_chat`].
+#[derive(Debug, Clone, Default)]
+pub struct PublicChatBootHeal {
+    pub workspaces: Vec<PublicChatHeal>,
+    pub keys_revoked: Vec<String>,
 }
 
-fn chat_rate_limits() -> &'static Mutex<HashMap<String, RateBucket>> {
-    static R: OnceLock<Mutex<HashMap<String, RateBucket>>> = OnceLock::new();
-    R.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-const CHAT_RATE_LIMIT: u32 = 20;
-const CHAT_RATE_WINDOW: Duration = Duration::from_secs(60);
-
-fn env_truthy(name: &str) -> bool {
-    matches!(
-        std::env::var(name).ok().as_deref().map(str::trim),
-        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("on")
-    )
-}
-
-/// Durable public-chat opt-in (plus test-only env override).
-fn public_chat_flag(workspace: &Path) -> bool {
-    if env_truthy("K2_WIKI_PUBLIC_CHAT") {
-        return true;
-    }
-    let key = workspace_key(workspace);
-    let project = resolve_project_path_for_settings(&key);
-    k2_core::workspace::settings::get_wiki_public_chat(&project)
-        || k2_core::workspace::settings::get_wiki_public_chat(&key)
-}
-
-/// Combined gate for visitor-facing chat (SPA + /api/chat*).
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ChatStatus {
-    enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<String>,
-}
-
-fn chat_gate(workspace: &Path) -> ChatStatus {
-    if !public_chat_flag(workspace) {
-        return ChatStatus {
-            enabled: false,
-            reason: Some("public chat is off".into()),
-        };
-    }
-    if !crate::misc_routes::api_enabled() {
-        return ChatStatus {
-            enabled: false,
-            reason: Some("API is off — enable with `k2 api on` (or K2_API=1)".into()),
-        };
-    }
-    match ensure_chat_key(workspace) {
-        Ok(_) => ChatStatus {
-            enabled: true,
-            reason: None,
-        },
-        Err(e) => ChatStatus {
-            enabled: false,
-            reason: Some(e),
-        },
-    }
-}
-
-/// Slug candidates for `/v1/w/<slug>/host-sessions`: folder basename first
-/// (always on the Phase 1 grant), then registered display name.
-fn slug_candidates(workspace: &Path) -> Vec<String> {
-    let key = workspace_key(workspace);
-    let project = resolve_project_path_for_settings(&key);
-    let mut out = Vec::new();
-    if let Some(base) = k2_core::wiki_public_chat::primary_slug(&project) {
-        out.push(base);
-    } else if let Some(base) = workspace.file_name().map(|s| s.to_string_lossy().into_owned()) {
-        if !base.is_empty() {
-            out.push(base);
+/// Idempotent daemon-start heal (W0): every workspace with public chat on
+/// is switched off per [`heal_public_chat_for`], and every daemon-held
+/// wiki chat key is revoked (an injected agent could have read it). A
+/// second run finds nothing to do.
+pub fn boot_heal_public_chat() -> PublicChatBootHeal {
+    let paths: Vec<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut out = Vec::new();
+        match conn.prepare("SELECT path FROM projects WHERE wiki_public_chat = 1") {
+            Ok(mut stmt) => match stmt.query_map([], |r| r.get::<_, String>(0)) {
+                Ok(rows) => out.extend(rows.flatten()),
+                Err(e) => k2_core::log_debug!("[wiki] ERROR public chat heal query: {e}"),
+            },
+            Err(e) => k2_core::log_debug!("[wiki] ERROR public chat heal prepare: {e}"),
         }
+        out
+    };
+    let workspaces = paths
+        .iter()
+        .filter_map(|p| heal_public_chat_for(p, "boot"))
+        .collect();
+    let keys_revoked = k2_core::wiki_public_chat::revoke_all_chat_keys();
+    if !keys_revoked.is_empty() {
+        k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+            "wiki-public-chat-heal",
+            "-",
+            format!("chat_keys_revoked:{}", keys_revoked.len()),
+            "boot",
+            "-",
+            "daemon",
+        ));
     }
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    for s in k2_core::workspace::handle::slug_candidates_for_path(&conn, &project) {
-        if !s.contains('/') && !out.iter().any(|x| x == &s) {
-            out.push(s);
-        }
+    PublicChatBootHeal {
+        workspaces,
+        keys_revoked,
     }
-    out
 }
 
-/// Load/mint the server-held wiki-public-chat key for `workspace`.
-/// Returns (raw_key, slug, principal). Raw key never leaves this module
-/// except into the in-process host-sessions principal.
-fn ensure_chat_key(workspace: &Path) -> Result<(String, String, V1Principal), String> {
-    let key = workspace_key(workspace);
-    let project = resolve_project_path_for_settings(&key);
-
-    // Ensure durable secret under ~/.k2/wiki-public-chat/ (host_sessions only).
-    k2_core::wiki_public_chat::ensure_chat_key(&project)
-        .or_else(|_| k2_core::wiki_public_chat::ensure_chat_key(&key))?;
-    let raw = k2_core::wiki_public_chat::load_raw_key(&project)
-        .or_else(|| k2_core::wiki_public_chat::load_raw_key(&key))
-        .ok_or_else(|| "wiki chat key missing after ensure".to_string())?;
-
-    let p = k2_core::api_keys::resolve_api_key(&raw)
-        .ok_or_else(|| "wiki chat key failed to resolve".to_string())?;
-    if !p.capabilities.host_sessions {
-        return Err("wiki chat key lacks host_sessions capability".into());
+fn public_chat_unavailable_response() -> CliResponse {
+    CliResponse {
+        status: "410 Gone",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": PUBLIC_CHAT_UNAVAILABLE,
+                "hint": PUBLIC_CHAT_UNAVAILABLE_HINT,
+            },
+        })
+        .to_string(),
     }
-    // Prefer a slug the key authorizes (Phase 1 grants basename + display name).
-    let slug = slug_candidates(workspace)
-        .into_iter()
-        .find(|s| p.authorizes_workspace(s))
-        .ok_or_else(|| {
-            "wiki chat key does not authorize this workspace (grant mismatch)".to_string()
-        })?;
-    Ok((raw, slug, V1Principal::Api(p)))
-}
-
-/// Returns true if the IP is under the rate limit (and consumes one token).
-fn chat_rate_allow(ip: &str) -> bool {
-    let mut guard = chat_rate_limits()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let now = Instant::now();
-    let entry = guard.entry(ip.to_string()).or_insert(RateBucket {
-        window_start: now,
-        count: 0,
-    });
-    if now.duration_since(entry.window_start) >= CHAT_RATE_WINDOW {
-        entry.window_start = now;
-        entry.count = 0;
-    }
-    if entry.count >= CHAT_RATE_LIMIT {
-        return false;
-    }
-    entry.count += 1;
-    true
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -587,8 +526,8 @@ pub fn handle_seed_post(params: &HashMap<String, String>) -> CliResponse {
 }
 
 /// POST /cli/wiki/serve — query/form: enabled=true|false, port? (0 = ephemeral).
-/// Optional: publicChat / chat / wikiPublicChat to also set the durable
-/// Phase 1 public-chat opt-in (same semantics as POST /cli/wiki/chat).
+/// Optional: publicChat / chat / wikiPublicChat — `off` turns public chat
+/// off, `on` is refused (same semantics as POST /cli/wiki/chat).
 pub fn handle_serve_post(params: &HashMap<String, String>) -> CliResponse {
     let workspace = match need_project_path(params) {
         Ok(p) => p,
@@ -633,8 +572,9 @@ pub fn handle_serve_post(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
-/// If params carry publicChat / public_chat / chat, apply the durable setting.
-/// Returns `Some(err_response)` on failure; `None` when absent or applied OK.
+/// If params carry publicChat / public_chat / chat: `on` is refused with
+/// [`PUBLIC_CHAT_UNAVAILABLE`] (W0); `off` turns it off.
+/// Returns `Some(err_response)` on refusal/failure; `None` when absent or OK.
 fn apply_public_chat_param(
     workspace: &Path,
     params: &HashMap<String, String>,
@@ -652,39 +592,26 @@ fn apply_public_chat_param(
     let Some(k) = key else {
         return None;
     };
-    let on = bool_param(params, k);
-    match set_public_chat(workspace, on) {
+    if bool_param(params, k) {
+        return Some(public_chat_unavailable_response());
+    }
+    match set_public_chat_off(workspace) {
         Ok(()) => None,
         Err(e) => Some(CliResponse::bad_request(e)),
     }
 }
 
-/// Persist opt-in + ensure daemon-held key when turning ON.
-/// Never returns the raw key. Disabling only flips the setting (key kept).
-///
-/// Enabling public chat also opts the workspace into
-/// [`api_skip_permissions`](k2_core::workspace::settings::get_api_skip_permissions):
-/// host-session spawns otherwise **strip** the agent preset's
-/// `--dangerously-skip-permissions` / yolo flags (default safety for
-/// attended API use). Public chat is unattended — without that opt-in the
-/// visitor's first turn dies on HITL. Disabling chat does **not** clear
-/// skip-permissions (owner may still want API keys unattended).
-fn set_public_chat(workspace: &Path, enabled: bool) -> Result<(), String> {
+/// Turn public chat off (the only direction left, W0). When chat was on,
+/// applies the same rule as the boot heal ([`heal_public_chat_for`]):
+/// `api_skip_permissions` is reverted too and the change is audited.
+/// Unregistered paths fail loudly.
+fn set_public_chat_off(workspace: &Path) -> Result<(), String> {
     let key = workspace_key(workspace);
     let project_path = resolve_project_path_for_settings(&key);
-    let value = if enabled { "1" } else { "0" };
-    k2_core::workspace::settings::update_project_setting(&project_path, "wiki_public_chat", value)?;
-    if enabled {
-        // Unattended public chat needs the agent preset's auto-approve flags
-        // preserved on host-session spawn (see v1_host_sessions::policy).
-        k2_core::workspace::settings::update_project_setting(
-            &project_path,
-            "api_skip_permissions",
-            "1",
-        )?;
-        k2_core::wiki_public_chat::ensure_chat_key(&project_path)?;
+    if heal_public_chat_for(&project_path, "owner").is_some() {
+        return Ok(());
     }
-    Ok(())
+    k2_core::workspace::settings::update_project_setting(&project_path, "wiki_public_chat", "0")
 }
 
 /// Map a workspace filesystem path to the `projects.path` string used for
@@ -722,14 +649,10 @@ fn resolve_project_path_for_settings(workspace_path: &str) -> String {
 }
 
 /// POST /cli/wiki/chat — enabled=true|false or mode=on|off.
-/// Owner opt-in for public wiki chat. Ensures daemon-held host_sessions key
-/// when enabling. Response is ServeStatus (never includes raw key).
+/// W0 (0.46.0): `on` always answers `410 public_chat_unavailable` and
+/// changes nothing; `off` still works (and reverts skip-permissions when
+/// chat was on). Response for off is ServeStatus.
 pub fn handle_chat_post(params: &HashMap<String, String>) -> CliResponse {
-    let workspace = match need_project_path(params) {
-        Ok(p) => p,
-        Err(r) => return r,
-    };
-
     let mode = str_param(params, "mode").to_ascii_lowercase();
     let action = str_param(params, "action").to_ascii_lowercase();
     let enabled = if !mode.is_empty() {
@@ -743,8 +666,15 @@ pub fn handle_chat_post(params: &HashMap<String, String>) -> CliResponse {
     } else {
         return CliResponse::bad_request("Missing enabled (true/false) or mode=on|off");
     };
+    if enabled {
+        return public_chat_unavailable_response();
+    }
 
-    match set_public_chat(&workspace, enabled) {
+    let workspace = match need_project_path(params) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    match set_public_chat_off(&workspace) {
         Ok(()) => {
             let st = status_for(&workspace);
             CliResponse::ok_json(serde_json::to_string(&st).unwrap_or_else(|_| "{}".to_string()))
@@ -790,6 +720,7 @@ pub fn dispatch_post(path: &str, params: &HashMap<String, String>) -> CliRespons
 async fn run_wiki_site(
     workspace: PathBuf,
     listener: TcpListener,
+    port: u16,
     mut cancel: watch::Receiver<bool>,
 ) {
     loop {
@@ -804,7 +735,7 @@ async fn run_wiki_site(
                     Ok((stream, _)) => {
                         let ws = workspace.clone();
                         tokio::spawn(async move {
-                            handle_site_conn(ws, stream).await;
+                            handle_site_conn(ws, port, stream).await;
                         });
                     }
                     Err(_) => break,
@@ -814,12 +745,136 @@ async fn run_wiki_site(
     }
 }
 
-async fn handle_site_conn(workspace: PathBuf, mut stream: tokio::net::TcpStream) {
-    let peer_ip = stream
-        .peer_addr()
-        .map(|a| a.ip().to_string())
-        .unwrap_or_else(|_| "unknown".into());
+/// First value of header `name` (case-insensitive) in a raw request head.
+fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines().skip(1).find_map(|l| {
+        let (k, v) = l.split_once(':')?;
+        if k.trim().eq_ignore_ascii_case(name) {
+            Some(v.trim())
+        } else {
+            None
+        }
+    })
+}
 
+/// `host:port` → (`host`, `Some(port)`); bracketed IPv6 kept with brackets.
+fn split_host_port(authority: &str) -> (String, Option<u16>) {
+    let a = authority.trim().trim_end_matches('/').to_ascii_lowercase();
+    if let Some(rest) = a.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            let host = format!("[{}]", &rest[..end]);
+            let port = rest[end + 1..].strip_prefix(':').and_then(|p| p.parse().ok());
+            return (host, port);
+        }
+    }
+    match a.rsplit_once(':') {
+        Some((h, p)) if !h.contains(':') => (h.to_string(), p.parse().ok()),
+        _ => (a, None),
+    }
+}
+
+fn is_loopback_name(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "[::1]" | "::1")
+}
+
+/// Does a Connect subdomain target (`127.0.0.1:7420`, `localhost:7420`,
+/// `http://127.0.0.1:7420/`) point at this wiki listener?
+fn target_points_at_port(target: &str, port: u16) -> bool {
+    let t = target.trim();
+    let t = t
+        .strip_prefix("http://")
+        .or_else(|| t.strip_prefix("https://"))
+        .unwrap_or(t);
+    let authority = t.split('/').next().unwrap_or("");
+    let (host, p) = split_host_port(authority);
+    is_loopback_name(&host) && p == Some(port)
+}
+
+/// DNS-rebinding guard. Allowed `Host` values: this listener's loopback
+/// `host:port` (`127.0.0.1`, `localhost`, `[::1]`), or a nested Connect
+/// subdomain (`<label>.<you>.k2.dev`) whose routing target is this
+/// listener — the published wiki. Everything else (an attacker's domain
+/// rebound to 127.0.0.1, another port, no Host) is refused.
+fn site_host_allowed(
+    host: Option<&str>,
+    port: u16,
+    map: &k2_core::tunnel::subdomains::SubdomainMap,
+) -> bool {
+    let Some(host) = host.map(str::trim).filter(|h| !h.is_empty()) else {
+        return false;
+    };
+    let (name, p) = split_host_port(host);
+    if is_loopback_name(&name) {
+        return p == Some(port);
+    }
+    match map.route_for_host(&name) {
+        k2_core::tunnel::subdomains::Route::Internal(target) => {
+            target_points_at_port(&target, port)
+        }
+        _ => false,
+    }
+}
+
+/// Same-origin only: a request that names an `Origin` must name the host
+/// it was sent to. No `Origin` (plain navigation, same-origin GET) is fine.
+fn site_origin_allowed(origin: Option<&str>, host: &str) -> bool {
+    let Some(origin) = origin.map(str::trim).filter(|o| !o.is_empty()) else {
+        return true;
+    };
+    let rest = origin
+        .strip_prefix("http://")
+        .or_else(|| origin.strip_prefix("https://"));
+    match rest {
+        Some(authority) => authority
+            .trim_end_matches('/')
+            .eq_ignore_ascii_case(host.trim()),
+        None => false, // `null`, odd schemes
+    }
+}
+
+/// Public site JSON never carries absolute filesystem paths: drop every
+/// `workspacePath` key (top level and per node) before it leaves.
+fn scrub_site_json(mut v: serde_json::Value) -> String {
+    fn scrub(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(map) => {
+                map.remove("workspacePath");
+                for (_, child) in map.iter_mut() {
+                    scrub(child);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items.iter_mut() {
+                    scrub(child);
+                }
+            }
+            _ => {}
+        }
+    }
+    scrub(&mut v);
+    v.to_string()
+}
+
+/// Error text for the public site with the workspace path cut out.
+fn site_error(workspace: &Path, e: &str) -> String {
+    let mut out = e.to_string();
+    for p in [workspace_key(workspace), workspace.to_string_lossy().into_owned()] {
+        if !p.is_empty() {
+            out = out.replace(&p, "<workspace>");
+        }
+    }
+    out
+}
+
+/// Note ids under dot-folders (`.archive/x.md`) or dot-files are hidden
+/// from the index, so the site does not serve them either.
+fn site_note_id_hidden(id: &str) -> bool {
+    id.replace('\\', "/")
+        .split('/')
+        .any(|seg| seg.starts_with('.'))
+}
+
+async fn handle_site_conn(workspace: PathBuf, port: u16, mut stream: tokio::net::TcpStream) {
     let mut buf = vec![0u8; 64 * 1024];
     let n = match stream.read(&mut buf).await {
         Ok(0) | Err(_) => return,
@@ -830,76 +885,64 @@ async fn handle_site_conn(workspace: PathBuf, mut stream: tokio::net::TcpStream)
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .map(|i| i + 4);
-    let (header_bytes, early_body) = match header_end {
-        Some(end) => (&raw[..end], &raw[end..]),
-        None => (raw, &raw[0..0]),
+    let header_bytes = match header_end {
+        Some(end) => &raw[..end],
+        None => raw,
     };
-    let head = String::from_utf8_lossy(header_bytes);
+    let head = String::from_utf8_lossy(header_bytes).into_owned();
     let first = head.lines().next().unwrap_or("");
     let mut parts = first.split_whitespace();
-    let method = parts.next().unwrap_or("GET");
-    let target = parts.next().unwrap_or("/");
+    let method = parts.next().unwrap_or("GET").to_string();
+    let target = parts.next().unwrap_or("/").to_string();
 
-    let content_length = head
-        .lines()
-        .find_map(|l| {
-            let l = l.trim();
-            let lower = l.to_ascii_lowercase();
-            lower
-                .strip_prefix("content-length:")
-                .and_then(|v| v.trim().parse::<usize>().ok())
-        })
-        .unwrap_or(0);
-
-    let mut body_bytes = early_body.to_vec();
-    if body_bytes.len() < content_length {
-        let need = content_length - body_bytes.len();
-        let mut more = vec![0u8; need];
-        let mut got = 0;
-        while got < need {
-            match stream.read(&mut more[got..]).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => got += n,
-            }
-        }
-        body_bytes.extend_from_slice(&more[..got]);
+    let host = header_value(&head, "host").map(str::to_string);
+    let map = k2_core::tunnel::subdomains::current();
+    if !site_host_allowed(host.as_deref(), port, &map) {
+        write_site_response(
+            &mut stream,
+            "421 Misdirected Request",
+            "application/json",
+            r#"{"error":"host not allowed"}"#,
+        )
+        .await;
+        return;
     }
-    if body_bytes.len() > content_length {
-        body_bytes.truncate(content_length);
-    }
-
-    if method == "OPTIONS" {
-        write_site_options(&mut stream).await;
+    if !site_origin_allowed(header_value(&head, "origin"), host.as_deref().unwrap_or("")) {
+        write_site_response(
+            &mut stream,
+            "403 Forbidden",
+            "application/json",
+            r#"{"error":"cross-origin requests are not allowed"}"#,
+        )
+        .await;
         return;
     }
 
     let (path, query) = match target.split_once('?') {
-        Some((p, q)) => (p, q),
-        None => (target, ""),
+        Some((p, q)) => (p.to_string(), q.to_string()),
+        None => (target.clone(), String::new()),
     };
 
-    // Chat gateway (POST allowed). Everything else stays read-only.
-    match (method, path) {
-        ("GET", "/api/chat/status") | ("HEAD", "/api/chat/status") => {
-            let st = chat_gate(&workspace);
-            let body = serde_json::to_string(&st).unwrap_or_else(|_| {
-                r#"{"enabled":false,"reason":"serialize error"}"#.into()
-            });
+    // Public chat (W0): gone until the runtime. Never starts a session.
+    if path == "/api/chat" || path.starts_with("/api/chat/") {
+        if path == "/api/chat/status" && (method == "GET" || method == "HEAD") {
+            let body = serde_json::json!({
+                "enabled": false,
+                "reason": PUBLIC_CHAT_UNAVAILABLE_HINT,
+                "code": PUBLIC_CHAT_UNAVAILABLE,
+            })
+            .to_string();
             write_site_response(&mut stream, "200 OK", "application/json", &body).await;
             return;
         }
-        ("POST", "/api/chat") => {
-            let (status, body) =
-                handle_public_chat_post(&workspace, &peer_ip, &body_bytes).await;
-            write_site_response(&mut stream, status, "application/json", &body).await;
-            return;
-        }
-        ("GET", "/api/chat/messages") | ("HEAD", "/api/chat/messages") => {
-            let (status, body) = handle_public_chat_messages(&workspace, query).await;
-            write_site_response(&mut stream, status, "application/json", &body).await;
-            return;
-        }
-        _ => {}
+        let body = serde_json::json!({
+            "error": PUBLIC_CHAT_UNAVAILABLE_HINT,
+            "code": PUBLIC_CHAT_UNAVAILABLE,
+            "enabled": false,
+        })
+        .to_string();
+        write_site_response(&mut stream, "410 Gone", "application/json", &body).await;
+        return;
     }
 
     if method != "GET" && method != "HEAD" {
@@ -913,7 +956,7 @@ async fn handle_site_conn(workspace: PathBuf, mut stream: tokio::net::TcpStream)
         return;
     }
 
-    match path {
+    match path.as_str() {
         "/api/index" => {
             let body = match tokio::task::spawn_blocking({
                 let ws = workspace.clone();
@@ -921,13 +964,16 @@ async fn handle_site_conn(workspace: PathBuf, mut stream: tokio::net::TcpStream)
             })
             .await
             {
-                Ok(Ok(idx)) => serde_json::to_string(&idx).unwrap_or_else(|_| "{}".into()),
+                Ok(Ok(idx)) => match serde_json::to_value(&idx) {
+                    Ok(v) => scrub_site_json(v),
+                    Err(_) => "{}".into(),
+                },
                 Ok(Err(e)) => {
                     write_site_response(
                         &mut stream,
                         "400 Bad Request",
                         "application/json",
-                        &serde_json::json!({"error": e}).to_string(),
+                        &serde_json::json!({"error": site_error(&workspace, &e)}).to_string(),
                     )
                     .await;
                     return;
@@ -946,7 +992,7 @@ async fn handle_site_conn(workspace: PathBuf, mut stream: tokio::net::TcpStream)
             write_site_response(&mut stream, "200 OK", "application/json", &body).await;
         }
         "/api/note" => {
-            let id = query_param(query, "id").unwrap_or_default();
+            let id = query_param(&query, "id").unwrap_or_default();
             if id.is_empty() {
                 write_site_response(
                     &mut stream,
@@ -958,7 +1004,17 @@ async fn handle_site_conn(workspace: PathBuf, mut stream: tokio::net::TcpStream)
                 return;
             }
             // Percent-decode minimal id
-            let id = percent_decode(&id);
+            let id = percent_decode(id);
+            if site_note_id_hidden(&id) {
+                write_site_response(
+                    &mut stream,
+                    "404 Not Found",
+                    "application/json",
+                    r#"{"error":"note not found"}"#,
+                )
+                .await;
+                return;
+            }
             let body = match tokio::task::spawn_blocking({
                 let ws = workspace.clone();
                 let id = id.clone();
@@ -966,13 +1022,16 @@ async fn handle_site_conn(workspace: PathBuf, mut stream: tokio::net::TcpStream)
             })
             .await
             {
-                Ok(Ok(note)) => serde_json::to_string(&note).unwrap_or_else(|_| "{}".into()),
+                Ok(Ok(note)) => match serde_json::to_value(&note) {
+                    Ok(v) => scrub_site_json(v),
+                    Err(_) => "{}".into(),
+                },
                 Ok(Err(e)) => {
                     write_site_response(
                         &mut stream,
                         "400 Bad Request",
                         "application/json",
-                        &serde_json::json!({"error": e}).to_string(),
+                        &serde_json::json!({"error": site_error(&workspace, &e)}).to_string(),
                     )
                     .await;
                     return;
@@ -1011,305 +1070,20 @@ async fn handle_site_conn(workspace: PathBuf, mut stream: tokio::net::TcpStream)
     }
 }
 
-/// POST /api/chat — visitor text → host-sessions (server-held key, in-process).
-/// Body: `{ "text": "...", "sessionId": "optional" }`.
-/// Never returns k2sk_ / stream tokens / owner credentials.
-async fn handle_public_chat_post(
-    workspace: &Path,
-    peer_ip: &str,
-    body: &[u8],
-) -> (&'static str, String) {
-    let gate = chat_gate(workspace);
-    if !gate.enabled {
-        return (
-            "403 Forbidden",
-            serde_json::json!({
-                "error": gate.reason.unwrap_or_else(|| "chat disabled".into()),
-                "enabled": false,
-            })
-            .to_string(),
-        );
-    }
-    if !chat_rate_allow(peer_ip) {
-        return (
-            "429 Too Many Requests",
-            serde_json::json!({"error":"rate limit exceeded — try again shortly"}).to_string(),
-        );
-    }
-
-    let req: serde_json::Value = match serde_json::from_slice(body) {
-        Ok(v) => v,
-        Err(_) if body.is_empty() => serde_json::json!({}),
-        Err(_) => {
-            return (
-                "400 Bad Request",
-                serde_json::json!({"error":"invalid JSON body"}).to_string(),
-            );
-        }
-    };
-    let text = req
-        .get("text")
-        .or_else(|| req.get("prompt"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if text.is_empty() {
-        return (
-            "400 Bad Request",
-            serde_json::json!({"error":"Missing text"}).to_string(),
-        );
-    }
-    // Strip any client-supplied secrets / policy fields — only visitor text.
-    let session_id = req
-        .get("sessionId")
-        .or_else(|| req.get("session"))
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-    // Cursor of messages the SPA already showed. Follow-ups MUST pass this so
-    // we don't re-return the previous turn's final and falsely mark `done`
-    // (which stops the client poll and swallows the new answer).
-    let since: u64 = req
-        .get("since")
-        .and_then(|v| v.as_u64())
-        .or_else(|| {
-            req.get("since")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok())
-        })
-        .unwrap_or(0);
-
-    let ws = workspace.to_path_buf();
-    let result = tokio::task::spawn_blocking(move || {
-        proxy_host_session_chat(&ws, &text, session_id.as_deref(), since)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(payload)) => ("200 OK", payload),
-        Ok(Err((status, err))) => (status, serde_json::json!({"error": err}).to_string()),
-        Err(e) => (
-            "500 Internal Server Error",
-            serde_json::json!({"error": format!("join: {e}")}).to_string(),
-        ),
-    }
-}
-
-/// GET /api/chat/messages?session=&since=
-async fn handle_public_chat_messages(workspace: &Path, query: &str) -> (&'static str, String) {
-    let gate = chat_gate(workspace);
-    if !gate.enabled {
-        return (
-            "403 Forbidden",
-            serde_json::json!({
-                "error": gate.reason.unwrap_or_else(|| "chat disabled".into()),
-                "enabled": false,
-            })
-            .to_string(),
-        );
-    }
-    let session = query_param(query, "session")
-        .or_else(|| query_param(query, "sessionId"))
-        .map(percent_decode)
-        .unwrap_or_default();
-    if session.is_empty() {
-        return (
-            "400 Bad Request",
-            serde_json::json!({"error":"Missing session"}).to_string(),
-        );
-    }
-    let since: u64 = query_param(query, "since")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-
-    let ws = workspace.to_path_buf();
-    let result = tokio::task::spawn_blocking(move || {
-        proxy_host_session_messages(&ws, &session, since)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(payload)) => ("200 OK", payload),
-        Ok(Err((status, err))) => (status, serde_json::json!({"error": err}).to_string()),
-        Err(e) => (
-            "500 Internal Server Error",
-            serde_json::json!({"error": format!("join: {e}")}).to_string(),
-        ),
-    }
-}
-
-/// In-process host-sessions spawn/continue. Only visitor `prompt` is passed;
-/// guest policy + frozen preamble are applied by v1_host_sessions.
-///
-/// `since` is the SPA's message cursor: only `k2 respond` lines with seq > since
-/// are returned. Using 0 on every follow-up re-emits the previous final, marks
-/// `done`, and the client never polls for the new turn.
-fn proxy_host_session_chat(
-    workspace: &Path,
-    text: &str,
-    session_id: Option<&str>,
-    since: u64,
-) -> Result<String, (&'static str, String)> {
-    let (_raw, slug, principal) = ensure_chat_key(workspace).map_err(|e| {
-        (
-            "503 Service Unavailable",
-            e,
-        )
-    })?;
-
-    let mut body = serde_json::json!({
-        "prompt": text,
-        // Public chat turns can run longer than the default idle reaper.
-        // (Host-session idle reap; 600s keeps visitor sessions warm across
-        // multi-turn wiki chat. Floor is sandbox_reaper MIN 30.)
-        "timeout_secs": 600,
-    });
-    if let Some(sid) = session_id {
-        body["session"] = serde_json::Value::String(sid.to_string());
-    }
-    let body_bytes = body.to_string().into_bytes();
-
-    let resp = crate::v1_host_sessions::handle_v1_host_new(&principal, &slug, &body_bytes);
-    if !resp.status.starts_with('2') {
-        // Surface a clean visitor-facing error (never stream tokens / internals).
-        let err = serde_json::from_str::<serde_json::Value>(&resp.body)
-            .ok()
-            .and_then(|v| {
-                v.get("error")
-                    .and_then(|e| e.as_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| "host session request failed".into());
-        let status = if resp.status.starts_with("429") {
-            "429 Too Many Requests"
-        } else if resp.status.starts_with("404") {
-            "404 Not Found"
-        } else if resp.status.starts_with("4") {
-            "400 Bad Request"
-        } else {
-            "502 Bad Gateway"
-        };
-        return Err((status, err));
-    }
-
-    let v: serde_json::Value =
-        serde_json::from_str(&resp.body).map_err(|_| {
-            (
-                "502 Bad Gateway",
-                "malformed host-session response".into(),
-            )
-        })?;
-    let sid = v
-        .get("sessionId")
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .to_string();
-    if sid.is_empty() {
-        return Err(("502 Bad Gateway", "no sessionId from host-sessions".into()));
-    }
-
-    // Best-effort immediate drain of NEW lines only (agent usually still thinking).
-    let drain =
-        crate::v1_host_sessions::handle_v1_host_messages(&principal, &slug, &sid, since);
-    let (messages, latest_seq, done) = parse_messages_drain(&drain.body, since);
-
-    Ok(serde_json::json!({
-        "sessionId": sid,
-        "messages": messages,
-        "latest_seq": latest_seq,
-        "done": done,
-    })
-    .to_string())
-}
-
-fn proxy_host_session_messages(
-    workspace: &Path,
-    session_id: &str,
-    since: u64,
-) -> Result<String, (&'static str, String)> {
-    let (_raw, slug, principal) = ensure_chat_key(workspace).map_err(|e| {
-        (
-            "503 Service Unavailable",
-            e,
-        )
-    })?;
-    let drain =
-        crate::v1_host_sessions::handle_v1_host_messages(&principal, &slug, session_id, since);
-    if !drain.status.starts_with('2') {
-        let err = serde_json::from_str::<serde_json::Value>(&drain.body)
-            .ok()
-            .and_then(|v| {
-                v.get("error")
-                    .and_then(|e| e.as_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| "messages drain failed".into());
-        let status = if drain.status.starts_with("404") {
-            "404 Not Found"
-        } else {
-            "502 Bad Gateway"
-        };
-        return Err((status, err));
-    }
-    let (messages, latest_seq, done) = parse_messages_drain(&drain.body, since);
-    Ok(serde_json::json!({
-        "sessionId": session_id,
-        "messages": messages,
-        "latest_seq": latest_seq,
-        "done": done,
-    })
-    .to_string())
-}
-
-/// Parse a host-sessions / sandbox messages drain body.
-/// `since` is the caller's cursor: `done` is true only when a **new** line
-/// (seq > since) carries `final: true`. Historical finals must not stop a
-/// follow-up turn's poll.
-fn parse_messages_drain(body: &str, since: u64) -> (Vec<serde_json::Value>, u64, bool) {
-    let v: serde_json::Value = match serde_json::from_str(body) {
-        Ok(v) => v,
-        Err(_) => return (vec![], since, false),
-    };
-    let raw = v
-        .get("messages")
-        .and_then(|m| m.as_array())
-        .cloned()
-        .unwrap_or_default();
-    // Defense in depth: only seq > since (drain already filters; re-apply).
-    let messages: Vec<serde_json::Value> = raw
-        .into_iter()
-        .filter(|m| {
-            m.get("seq")
-                .and_then(|s| s.as_u64())
-                .map(|seq| seq > since)
-                .unwrap_or(true)
-        })
-        .collect();
-    let latest_seq = messages
-        .iter()
-        .filter_map(|m| m.get("seq").and_then(|s| s.as_u64()))
-        .max()
-        .or_else(|| v.get("latest_seq").and_then(|x| x.as_u64()))
-        .unwrap_or(since);
-    let done = messages.iter().any(|m| {
-        m.get("final")
-            .and_then(|f| f.as_bool())
-            .unwrap_or(false)
-    });
-    (messages, latest_seq, done)
-}
-
-async fn write_site_options(stream: &mut tokio::net::TcpStream) {
-    let resp = "HTTP/1.1 204 No Content\r\n\
-         Access-Control-Allow-Origin: *\r\n\
-         Access-Control-Allow-Methods: GET, POST, HEAD, OPTIONS\r\n\
-         Access-Control-Allow-Headers: Content-Type\r\n\
-         Access-Control-Max-Age: 600\r\n\
-         Content-Length: 0\r\n\
-         Connection: close\r\n\r\n";
-    let _ = stream.write_all(resp.as_bytes()).await;
+/// One site response. No `Access-Control-*` headers: the site is
+/// same-origin only (W0).
+fn site_response_bytes(status: &str, ct: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\n\
+         Content-Type: {ct}\r\n\
+         Content-Length: {}\r\n\
+         Cache-Control: no-store\r\n\
+         X-Content-Type-Options: nosniff\r\n\
+         {frame}\
+         Connection: close\r\n\r\n{body}",
+        body.len(),
+        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
+    )
 }
 
 async fn write_site_response(
@@ -1318,19 +1092,7 @@ async fn write_site_response(
     ct: &str,
     body: &str,
 ) {
-    let resp = format!(
-        "HTTP/1.1 {status}\r\n\
-         Content-Type: {ct}\r\n\
-         Content-Length: {}\r\n\
-         Access-Control-Allow-Origin: *\r\n\
-         Access-Control-Allow-Methods: GET, POST, HEAD, OPTIONS\r\n\
-         Access-Control-Allow-Headers: Content-Type\r\n\
-         Cache-Control: no-store\r\n\
-         {frame}\
-         Connection: close\r\n\r\n{body}",
-        body.len(),
-        frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
-    );
+    let resp = site_response_bytes(status, ct, body);
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 
@@ -2639,121 +2401,415 @@ mod tests {
         assert_eq!(percent_decode("a+b"), "a b");
     }
 
-    /// Phase 1 — chat status defaults OFF; enabling without a registered
-    /// project fails loudly (settings write needs projects.path).
+    // ── W0 (0.46.0): public chat disabled, site locked ─────────────────
+
+    fn insert_project_flags(path: &str, chat: i64, skip: Option<i64>) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let name = format!("w0-{}", &id[..8]);
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, wiki_public_chat, api_skip_permissions) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![id, name, path, chat, skip],
+        )
+        .expect("insert project row");
+        id
+    }
+
+    fn flags(path: &str) -> (i64, Option<i64>) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT wiki_public_chat, api_skip_permissions FROM projects WHERE path = ?1",
+            rusqlite::params![path],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?)),
+        )
+        .expect("project row")
+    }
+
+    fn json(body: &str) -> serde_json::Value {
+        serde_json::from_str(body).expect("JSON body")
+    }
+
+    fn assert_unavailable(r: &CliResponse, what: &str) {
+        assert_eq!(r.status, "410 Gone", "{what}: {}", r.body);
+        let v = json(&r.body);
+        assert_eq!(v["error"]["code"], PUBLIC_CHAT_UNAVAILABLE, "{what}: {}", r.body);
+        assert_eq!(v["error"]["hint"], PUBLIC_CHAT_UNAVAILABLE_HINT, "{what}: {}", r.body);
+    }
+
+    /// Status always reports chat off and unavailable.
     #[test]
-    fn public_chat_status_defaults_off() {
-        let ws = temp_ws("chat-default");
+    fn wiki_public_chat_status_always_off() {
+        let ws = temp_ws("chat-status");
         let path = ws.to_string_lossy().into_owned();
+        // Even a leftover DB opt-in reports off.
+        insert_project_flags(&path, 1, Some(1));
         let st = status_for(&ws);
-        assert!(!st.public_chat_enabled, "default OFF");
+        assert!(!st.public_chat_enabled);
         assert!(!st.public_chat_ready);
+        assert!(!st.public_chat_available);
         assert!(st.public_chat_error.is_none());
-        assert_eq!(st.workspace_path, workspace_key(&ws));
-
-        // Unregistered path → set_public_chat errors (no silent success).
-        let err = set_public_chat(&ws, true).expect_err("unregistered project must fail");
-        assert!(
-            err.contains("not found") || err.contains("Project"),
-            "expected project-not-found style error, got {err:?}"
-        );
-
-        let _ = fs::remove_dir_all(&ws);
-        let _ = path;
-    }
-
-    #[test]
-    fn chat_gate_off_when_setting_off() {
-        let ws = temp_ws("chat-gate-off");
-        let gate_env = k2_core::test_env::EnvVar::remove("K2_WIKI_PUBLIC_CHAT");
-        let st = chat_gate(&ws);
-        assert!(!st.enabled);
-        assert!(
-            st.reason.as_deref().unwrap_or("").contains("off"),
-            "reason={:?}",
-            st.reason
-        );
-        drop(gate_env);
+        let r = handle_serve_status(&wiki_params(&path, &[]));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v = json(&r.body);
+        assert_eq!(v["publicChatEnabled"], false, "{}", r.body);
+        assert_eq!(v["publicChatAvailable"], false, "{}", r.body);
         let _ = fs::remove_dir_all(&ws);
     }
 
+    /// `POST /cli/wiki/chat` on (every spelling) and `serve publicChat=on`
+    /// answer 410 public_chat_unavailable and change nothing.
     #[test]
-    fn site_html_has_chat_ui_but_no_secrets() {
-        assert!(SITE_HTML.contains("Ask this wiki"));
+    fn wiki_chat_on_route_refused() {
+        let ws = temp_ws("chat-on");
+        let path = ws.to_string_lossy().into_owned();
+        insert_project_flags(&path, 0, Some(0));
+
+        for (route, extra) in [
+            ("/cli/wiki/chat", vec![("enabled", "true")]),
+            ("/cli/wiki/chat", vec![("mode", "on")]),
+            ("/cli/wiki/chat", vec![("action", "enable")]),
+            ("/cli/wiki/chat", vec![("publicChat", "1")]),
+            ("/cli/wiki/chat/on", vec![]),
+            ("/cli/wiki/serve", vec![("enabled", "true"), ("publicChat", "true")]),
+            ("/cli/wiki/serve", vec![("enabled", "false"), ("chat", "on")]),
+        ] {
+            let r = dispatch_post(route, &wiki_params(&path, &extra));
+            assert_unavailable(&r, &format!("{route} {extra:?}"));
+            assert_eq!(flags(&path), (0, Some(0)), "{route} {extra:?} must change nothing");
+        }
+        // Refused before any lookup: an unknown project gets the same answer.
+        let r = dispatch_post(
+            "/cli/wiki/chat",
+            &wiki_params("/tmp/no-such-k2-wiki-chat-proj", &[("enabled", "true")]),
+        );
+        assert_unavailable(&r, "unknown project");
+
+        // Off still works.
+        let r = dispatch_post("/cli/wiki/chat/off", &wiki_params(&path, &[]));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(json(&r.body)["publicChatEnabled"], false, "{}", r.body);
+        // Off on an unregistered path fails loudly.
+        let r = dispatch_post(
+            "/cli/wiki/chat",
+            &wiki_params("/tmp/no-such-k2-wiki-chat-proj", &[("enabled", "false")]),
+        );
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    /// Off on a workspace that still has chat on reverts the
+    /// skip-permissions the old toggle wrote (hole 2).
+    #[test]
+    fn wiki_chat_off_reverts_skip_permissions_when_chat_was_on() {
+        let _home = crate::test_support::TempHome::new();
+        let ws = temp_ws("chat-off-revert");
+        let path = ws.to_string_lossy().into_owned();
+        insert_project_flags(&path, 1, Some(1));
+        let r = dispatch_post("/cli/wiki/chat", &wiki_params(&path, &[("enabled", "false")]));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(flags(&path), (0, Some(0)));
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    /// Boot heal: chat on → off everywhere; skip-permissions reverted when
+    /// it read on (1 or NULL); untouched when chat was off; chat keys
+    /// revoked; one audit line per change; second run is a no-op.
+    #[test]
+    fn wiki_boot_heal_turns_chat_off_and_reverts_skip_permissions() {
+        let _home = crate::test_support::TempHome::new();
+        let a = temp_ws("heal-a");
+        let b = temp_ws("heal-b");
+        let c = temp_ws("heal-c");
+        let d = temp_ws("heal-d");
+        let (pa, pb, pc, pd) = (
+            a.to_string_lossy().into_owned(),
+            b.to_string_lossy().into_owned(),
+            c.to_string_lossy().into_owned(),
+            d.to_string_lossy().into_owned(),
+        );
+        insert_project_flags(&pa, 1, Some(1));
+        insert_project_flags(&pb, 1, None);
+        insert_project_flags(&pc, 1, Some(0));
+        insert_project_flags(&pd, 0, Some(1));
+        // A leftover daemon-held chat key (minted by the old toggle).
+        let meta = k2_core::wiki_public_chat::ensure_chat_key(&pa).expect("mint chat key");
+        let raw = k2_core::wiki_public_chat::load_raw_key(&pa).expect("raw key on file");
+        assert!(k2_core::api_keys::resolve_api_key(&raw).is_some(), "key live before heal");
+
+        let report = boot_heal_public_chat();
+        let find = |p: &str| report.workspaces.iter().find(|h| h.path == p).cloned();
+        assert!(find(&pa).expect("A healed").skip_permissions_reverted);
+        assert!(find(&pb).expect("B healed").skip_permissions_reverted);
+        assert!(!find(&pc).expect("C healed").skip_permissions_reverted);
+        assert!(find(&pd).is_none(), "chat-off workspace must not be touched");
+        assert_eq!(flags(&pa), (0, Some(0)));
+        assert_eq!(flags(&pb), (0, Some(0)));
+        assert_eq!(flags(&pc), (0, Some(0)));
+        assert_eq!(flags(&pd), (0, Some(1)), "skip-permissions kept when chat was off");
+
+        assert!(report.keys_revoked.contains(&meta.key_id), "{:?}", report.keys_revoked);
+        assert!(k2_core::api_keys::resolve_api_key(&raw).is_none(), "key revoked");
+        assert!(k2_core::wiki_public_chat::chat_key_meta(&pa).is_none(), "key file removed");
+
+        let audit = fs::read_to_string(k2_core::auth_audit::path()).expect("audit log");
+        let heal_lines: Vec<&str> = audit
+            .lines()
+            .filter(|l| l.contains("\"wiki-public-chat-heal\""))
+            .collect();
+        assert!(
+            heal_lines
+                .iter()
+                .filter(|l| l.contains("api_skip_permissions_reverted"))
+                .count()
+                >= 2,
+            "{audit}"
+        );
+        assert!(
+            heal_lines.iter().any(|l| l.contains("api_skip_permissions_already_off")),
+            "{audit}"
+        );
+        assert!(heal_lines.iter().any(|l| l.contains("chat_keys_revoked:")), "{audit}");
+
+        let again = boot_heal_public_chat();
+        for p in [&pa, &pb, &pc, &pd] {
+            assert!(
+                !again.workspaces.iter().any(|h| &h.path == p),
+                "second heal must be a no-op for {p}"
+            );
+        }
+        assert!(!again.keys_revoked.contains(&meta.key_id));
+        assert_eq!(flags(&pd), (0, Some(1)));
+        for w in [a, b, c, d] {
+            let _ = fs::remove_dir_all(&w);
+        }
+    }
+
+    /// Host-session spawns no longer treat a leftover chat opt-in as
+    /// consent to skip permissions (`policy.rs`), and the wiki module
+    /// never reaches host sessions or the chat key.
+    #[test]
+    fn wiki_public_chat_has_no_spawn_path() {
+        let src = include_str!("wiki_routes.rs");
+        let prod = &src[..src.find("#[cfg(test)]").expect("test module")];
+        for needle in [
+            "v1_host_sessions",
+            "handle_v1_host_new",
+            "load_raw_key",
+            "ensure_chat_key",
+        ] {
+            assert!(!prod.contains(needle), "wiki_routes must not call {needle}");
+        }
+        let policy = include_str!("v1_host_sessions/policy.rs");
+        assert!(
+            !policy.contains("get_wiki_public_chat"),
+            "host-session policy must not read wiki_public_chat"
+        );
+    }
+
+    /// `k2 wiki chat on` is refused by the CLI itself (exit 3, never sent —
+    /// an older remote daemon would still accept it), human and JSON.
+    #[test]
+    fn wiki_cli_chat_on_exits_3() {
+        let cli = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
+        let home = temp_ws("cli-home");
+        for args in [
+            vec!["wiki", "chat", "on"],
+            vec!["wiki", "chat", "enable"],
+            vec!["wiki", "chat", "on", "--json"],
+        ] {
+            let out = std::process::Command::new("bash")
+                .arg(&cli)
+                .args(&args)
+                .env_clear()
+                .env("HOME", &home)
+                .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+                .output()
+                .expect("run cli/k2");
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(3), "{args:?}: {stderr}");
+            assert!(stderr.contains("K2 runtime"), "{args:?}: {stderr}");
+            assert!(out.stdout.is_empty(), "{args:?}");
+            if args.contains(&"--json") {
+                let v: serde_json::Value =
+                    serde_json::from_str(stderr.trim()).expect("JSON error on stderr");
+                assert_eq!(v["error"]["code"], PUBLIC_CHAT_UNAVAILABLE, "{stderr}");
+            }
+        }
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// The SPA only shows chat when `/api/chat/status` says enabled (it
+    /// never does now) and never carries keys or auth headers.
+    #[test]
+    fn site_html_gates_chat_on_status_and_has_no_secrets() {
         assert!(SITE_HTML.contains("/api/chat/status"));
-        assert!(SITE_HTML.contains("/api/chat"));
-        assert!(SITE_HTML.contains("/api/chat/messages"));
-        // Visitor continuity without login: session + transcript in localStorage.
-        assert!(SITE_HTML.contains("localStorage"));
-        assert!(SITE_HTML.contains("k2-wiki-chat-v"));
-        assert!(SITE_HTML.contains("chatCacheSave"));
-        assert!(SITE_HTML.contains("restoreChatFromCache"));
+        assert!(SITE_HTML.contains("j && j.enabled"));
         assert!(!SITE_HTML.contains("k2sk_"), "SITE_HTML must never embed API keys");
-        assert!(
-            !SITE_HTML.contains("Authorization"),
-            "SITE_HTML must not set auth headers for chat"
-        );
+        assert!(!SITE_HTML.contains("Authorization"));
     }
 
     #[test]
-    fn chat_rate_limit_basic() {
-        let ip = format!("test-rate-{}", std::process::id());
-        {
-            let mut g = chat_rate_limits().lock().unwrap_or_else(|e| e.into_inner());
-            g.remove(&ip);
+    fn wiki_site_host_guard() {
+        use k2_core::tunnel::subdomains::SubdomainMap;
+        let mut map = SubdomainMap::default();
+        map.primary = "rosson".into();
+        map.targets.insert("brain".into(), "127.0.0.1:7420".into());
+        map.targets.insert("other".into(), "127.0.0.1:9999".into());
+        map.targets.insert("lh".into(), "http://localhost:7420/".into());
+        let ok = |h: &str| site_host_allowed(Some(h), 7420, &map);
+        assert!(ok("127.0.0.1:7420"));
+        assert!(ok("localhost:7420"));
+        assert!(ok("LOCALHOST:7420"));
+        assert!(ok("[::1]:7420"));
+        assert!(ok("brain.rosson.k2.dev"), "the published label");
+        assert!(ok("brain.rosson.k2.dev:443"));
+        assert!(ok("lh.rosson.k2.dev"));
+        assert!(!ok("127.0.0.1:7421"), "another port");
+        assert!(!ok("127.0.0.1"), "no port");
+        assert!(!ok("evil.example:7420"), "rebinding name");
+        assert!(!ok("evil.example"));
+        assert!(!ok("other.rosson.k2.dev"), "label for a different listener");
+        assert!(!ok("rosson.k2.dev"), "primary routes to the daemon");
+        assert!(!ok("nope.rosson.k2.dev"), "unknown label");
+        assert!(!site_host_allowed(None, 7420, &map));
+        assert!(!site_host_allowed(Some(" "), 7420, &map));
+
+        assert!(site_origin_allowed(None, "127.0.0.1:7420"));
+        assert!(site_origin_allowed(Some("http://127.0.0.1:7420"), "127.0.0.1:7420"));
+        assert!(site_origin_allowed(Some("https://brain.rosson.k2.dev"), "brain.rosson.k2.dev"));
+        assert!(!site_origin_allowed(Some("http://evil.example"), "127.0.0.1:7420"));
+        assert!(!site_origin_allowed(Some("null"), "127.0.0.1:7420"));
+        assert!(!site_origin_allowed(Some("http://127.0.0.1:7421"), "127.0.0.1:7420"));
+    }
+
+    async fn site_req(port: u16, raw: String) -> (String, String) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("connect site");
+        s.write_all(raw.as_bytes()).await.expect("write");
+        let mut out = Vec::new();
+        s.read_to_end(&mut out).await.expect("read");
+        let text = String::from_utf8_lossy(&out).into_owned();
+        let (head, body) = text.split_once("\r\n\r\n").expect("http response");
+        (head.to_string(), body.to_string())
+    }
+
+    fn get(path: &str, host: &str, extra: &str) -> String {
+        format!("GET {path} HTTP/1.1\r\nHost: {host}\r\n{extra}Connection: close\r\n\r\n")
+    }
+
+    /// The real listener: chat endpoints are gone, no CORS, Host/Origin
+    /// guard, and no absolute paths in any JSON route.
+    #[tokio::test]
+    async fn wiki_site_locked_end_to_end() {
+        let ws = temp_ws("site-lock");
+        // Hand-written vault (seed_wiki would also touch $HOME's host index).
+        fs::create_dir_all(ws.join(".k2/wiki/.archive")).expect("archive dir");
+        fs::write(ws.join(".k2/wiki/Home.md"), "# Home\n\nSee [[Other]].\n").expect("home");
+        fs::write(ws.join(".k2/wiki/Other.md"), "# Other\n").expect("other");
+        fs::write(ws.join(".k2/wiki/.archive/Secret.md"), "# secret").expect("secret note");
+        let path = ws.to_string_lossy().into_owned();
+        let canon = workspace_key(&ws);
+        // A leftover opt-in must not revive chat on the site.
+        insert_project_flags(&path, 1, Some(1));
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let (tx, rx) = watch::channel(false);
+        tokio::spawn(run_wiki_site(ws.clone(), listener, port, rx));
+        let me = format!("127.0.0.1:{port}");
+
+        // Same-origin OK; no CORS headers anywhere.
+        let (head, body) = site_req(port, get("/api/index", &me, "")).await;
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        assert!(!head.to_ascii_lowercase().contains("access-control-"), "{head}");
+        assert!(body.contains("Home.md"), "{body}");
+        assert!(!body.contains("workspacePath"), "{body}");
+        assert!(!body.contains(&canon) && !body.contains(&path), "{body}");
+        assert!(!body.contains("Secret.md"), "{body}");
+
+        let (head, body) = site_req(port, get("/api/note?id=Home.md", &me, "")).await;
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        assert!(!body.contains("workspacePath"), "{body}");
+        assert!(!body.contains(&canon) && !body.contains(&path), "{body}");
+        let note = json(&body);
+        assert_eq!(note["path"], ".k2/wiki/Home.md", "{body}");
+
+        let (head, body) = site_req(port, get("/api/note?id=nope.md", &me, "")).await;
+        assert!(head.starts_with("HTTP/1.1 400"), "{head}");
+        assert!(!body.contains(&canon) && !body.contains(&path), "{body}");
+
+        for id in [".archive/Secret.md", ".archive%2FSecret.md"] {
+            let (head, body) =
+                site_req(port, get(&format!("/api/note?id={id}"), &me, "")).await;
+            assert!(head.starts_with("HTTP/1.1 404"), "{id}: {head}");
+            assert!(!body.contains("secret"), "{body}");
         }
-        for i in 0..CHAT_RATE_LIMIT {
-            assert!(chat_rate_allow(&ip), "request {i} under limit");
+
+        let (head, _) = site_req(port, get("/", &format!("localhost:{port}"), "")).await;
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+
+        // Host guard (DNS rebinding) and Origin guard.
+        for host in [format!("evil.example:{port}"), "127.0.0.1:1".to_string()] {
+            let (head, body) = site_req(port, get("/api/index", &host, "")).await;
+            assert!(head.starts_with("HTTP/1.1 421"), "{host}: {head}");
+            assert!(!body.contains("Home.md"), "{body}");
+            assert!(!head.to_ascii_lowercase().contains("access-control-"), "{head}");
         }
-        assert!(!chat_rate_allow(&ip), "over limit must deny");
-        {
-            let mut g = chat_rate_limits().lock().unwrap_or_else(|e| e.into_inner());
-            g.remove(&ip);
+        let (head, _) =
+            site_req(port, format!("GET /api/index HTTP/1.1\r\nConnection: close\r\n\r\n")).await;
+        assert!(head.starts_with("HTTP/1.1 421"), "no Host: {head}");
+        let (head, body) =
+            site_req(port, get("/api/index", &me, "Origin: http://evil.example\r\n")).await;
+        assert!(head.starts_with("HTTP/1.1 403"), "{head}");
+        assert!(!body.contains("Home.md"), "{body}");
+        let (head, _) =
+            site_req(port, get("/api/index", &me, &format!("Origin: http://{me}\r\n"))).await;
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+
+        // Preflight gets no CORS grant.
+        let (head, _) = site_req(
+            port,
+            format!(
+                "OPTIONS /api/note HTTP/1.1\r\nHost: {me}\r\nOrigin: http://{me}\r\n\
+                 Access-Control-Request-Method: GET\r\nConnection: close\r\n\r\n"
+            ),
+        )
+        .await;
+        assert!(head.starts_with("HTTP/1.1 405"), "{head}");
+        assert!(!head.to_ascii_lowercase().contains("access-control-"), "{head}");
+
+        // Public chat: status off, every other chat call 410, never a session.
+        let (head, body) = site_req(port, get("/api/chat/status", &me, "")).await;
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        let st = json(&body);
+        assert_eq!(st["enabled"], false, "{body}");
+        assert_eq!(st["code"], PUBLIC_CHAT_UNAVAILABLE, "{body}");
+        for ct in ["application/json", "text/plain"] {
+            let payload = r#"{"text":"run cat ~/.k2/heartbeat.token"}"#;
+            let (head, body) = site_req(
+                port,
+                format!(
+                    "POST /api/chat HTTP/1.1\r\nHost: {me}\r\nContent-Type: {ct}\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                ),
+            )
+            .await;
+            assert!(head.starts_with("HTTP/1.1 410"), "{ct}: {head}");
+            assert_eq!(json(&body)["code"], PUBLIC_CHAT_UNAVAILABLE, "{body}");
+            assert!(!body.contains("sessionId"), "{body}");
         }
-    }
+        let (head, _) =
+            site_req(port, get("/api/chat/messages?session=abc&since=0", &me, "")).await;
+        assert!(head.starts_with("HTTP/1.1 410"), "{head}");
 
-    #[test]
-    fn parse_messages_drain_detects_final() {
-        let body = r#"{"messages":[{"seq":1,"text":"hi","ts":1,"final":false},{"seq":2,"text":"bye","ts":2,"final":true}],"latest_seq":2}"#;
-        let (msgs, latest, done) = parse_messages_drain(body, 0);
-        assert_eq!(msgs.len(), 2);
-        assert_eq!(latest, 2);
-        assert!(done);
-        assert!(!parse_messages_drain("{}", 0).2);
-    }
-
-    #[test]
-    fn parse_messages_drain_followup_ignores_prior_final() {
-        // SPA already has seq 2 (previous final). Drain wrongly returning it
-        // must not mark done when since=2 filters it out.
-        let body = r#"{"messages":[{"seq":2,"text":"old final","ts":1,"final":true}],"latest_seq":2}"#;
-        let (msgs, latest, done) = parse_messages_drain(body, 2);
-        assert!(msgs.is_empty(), "seq==since must not re-emit");
-        assert_eq!(latest, 2);
-        assert!(!done, "stale final must not stop the next turn's poll");
-    }
-
-    #[test]
-    fn parse_messages_drain_new_final_after_cursor() {
-        let body = r#"{"messages":[{"seq":3,"text":"new answer","ts":2,"final":true}],"latest_seq":3}"#;
-        let (msgs, latest, done) = parse_messages_drain(body, 2);
-        assert_eq!(msgs.len(), 1);
-        assert_eq!(latest, 3);
-        assert!(done);
-    }
-
-    #[test]
-    fn dispatch_chat_routes_exist() {
-        let mut params = HashMap::new();
-        params.insert("project".into(), "/tmp/no-such-k2-wiki-chat-proj".into());
-        params.insert("enabled".into(), "true".into());
-        let r = dispatch_post("/cli/wiki/chat", &params);
-        // Unregistered project → 400, not 404 (route exists).
-        assert_ne!(r.status, "404 Not Found", "chat route must be registered");
-        let r2 = dispatch_post("/cli/wiki/chat/on", &params);
-        assert_ne!(r2.status, "404 Not Found");
-        let r3 = dispatch_post("/cli/wiki/chat/off", &params);
-        assert_ne!(r3.status, "404 Not Found");
+        let _ = tx.send(true);
+        let _ = fs::remove_dir_all(&ws);
     }
 
     fn insert_project_handle(name: &str, path: &str, handle: &str) -> String {

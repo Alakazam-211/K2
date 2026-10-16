@@ -106,6 +106,15 @@ describe('isOwnThreadPost', () => {
     expect(isOwnThreadPost(doc({ kind: 'owner', login: 'owner' }), null)).toBe(false)
   })
 
+  it('a post that came with a clone is never "You", even for the owner on the source login', () => {
+    const imported = (login: string) => ({ via: 'import', author: { kind: 'imported', login, name: `${login} (Connect, src.k2.dev)` } })
+    expect(isOwnThreadPost(imported('owner'), owner)).toBe(false)
+    expect(isOwnThreadPost(imported('alice'), alice)).toBe(false)
+    expect(isOwnThreadPost(imported('rosson'), owner)).toBe(false)
+    expect(cardAnswererLabel({ kind: 'imported', login: 'owner', name: 'Rosson' }, owner)).toBe('Rosson')
+    expect(cardAnswererLabel({ kind: 'imported', login: 'alice' }, alice)).toBe('alice')
+  })
+
   it('a doc without an author keeps the old via=compose rule', () => {
     expect(isOwnThreadPost(doc(undefined), alice)).toBe(true)
     expect(isOwnThreadPost(doc(undefined), null)).toBe(true)

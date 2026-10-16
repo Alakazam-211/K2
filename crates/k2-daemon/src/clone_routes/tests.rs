@@ -8,6 +8,7 @@
 
 use super::*;
 use k2_core::clone;
+use k2_core::overlay::transfer::ThreadsChoice;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -404,6 +405,8 @@ fn pack_job_builds_bundle_and_cleanup_removes_it() {
         size_bytes: None,
         entry_count: None,
         scrubbed_secret_count: None,
+        clone_id: None,
+        threads: None,
         error: None,
     });
     let opts = clone::CloneOptions {
@@ -416,6 +419,8 @@ fn pack_job_builds_bundle_and_cleanup_removes_it() {
         &opts,
         &home,
         k2_core::fs_commands::MAX_TRANSFER_SIZE,
+        k2_core::overlay::transfer::ThreadsChoice::All,
+        None,
     );
 
     let job = super::get_pack_job(&job_id).expect("job stays in the map");
@@ -459,6 +464,8 @@ fn pack_job_enforces_transfer_ceiling() {
         size_bytes: None,
         entry_count: None,
         scrubbed_secret_count: None,
+        clone_id: None,
+        threads: None,
         error: None,
     });
     let opts = clone::CloneOptions {
@@ -466,7 +473,15 @@ fn pack_job_enforces_transfer_ceiling() {
         ..Default::default()
     };
     // 1-byte ceiling: any real bundle is over it.
-    super::run_pack_job(&job_id, &project.to_string_lossy(), &opts, &home, 1);
+    super::run_pack_job(
+        &job_id,
+        &project.to_string_lossy(),
+        &opts,
+        &home,
+        1,
+        k2_core::overlay::transfer::ThreadsChoice::All,
+        None,
+    );
 
     let job = super::get_pack_job(&job_id).expect("job stays in the map");
     assert_eq!(job.phase, "failed");
@@ -512,6 +527,8 @@ fn pack_cleanup_rejects_unknown_job_and_running_job() {
         size_bytes: None,
         entry_count: None,
         scrubbed_secret_count: None,
+        clone_id: None,
+        threads: None,
         error: None,
     });
     let resp = super::handle_clone_pack_cleanup(br#"{"job_id":"pack-test-running"}"#);
@@ -622,4 +639,136 @@ fn filetime_set(path: &Path, when: std::time::SystemTime) {
     let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
     let rc = unsafe { libc::utimes(cpath.as_ptr(), tv.as_ptr()) };
     assert_eq!(rc, 0, "utimes failed for {}", path.display());
+}
+
+// ── 0.46.0 slice B: the bundle carries the Threads; unpack imports them ──
+
+/// A registered source workspace with a pinned Chat that has Thread lines
+/// and Chatter, and its Claude session on disk under `src_home`.
+fn threads_source(root: &TempDir, name: &str) -> (PathBuf, PathBuf, String, String) {
+    let project = root.path().join("source").join(name);
+    let src_home = root.path().join("src-home");
+    fs::create_dir_all(&project).unwrap();
+    write(&project.join("README.md"), "# threads source\n");
+    let canon = fs::canonicalize(&project).unwrap();
+    let slug = k2_core::chat_history::claude_project_hash(&canon.to_string_lossy());
+    let sid = uuid::Uuid::new_v4().to_string();
+    write(&src_home.join(".claude/projects").join(&slug).join(format!("{sid}.jsonl")), "{\"type\":\"live\"}\n");
+    let p = pops::projects_add_without_git(&canon.to_string_lossy()).expect("register source");
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::WorkspaceSession::upsert(&conn, &uuid::Uuid::new_v4().to_string(), &p.id, None, Some(&sid), "claude", "system", "stopped")
+        .unwrap();
+    let handle = k2_core::workspace_session_handles::workspace_address_name(&conn, &p.id).unwrap();
+    k2_core::overlay::post_thread(&conn, &sid, &p.id, &handle, &handle, "first line", "thread").unwrap();
+    k2_core::overlay::post_thread_with_origin(
+        &conn, &sid, &p.id, "Rosson", &handle, "owner line", "compose", None,
+        Some(k2_core::overlay::PostAuthor::owner()),
+    )
+    .unwrap();
+    k2_core::overlay::record_chatter(&conn, &sid, &p.id, None, "peer", &handle, "ct chatter never travels", "msg", "accepted")
+        .unwrap();
+    (canon, src_home, p.id, sid)
+}
+
+/// Same daemon (the clone re-pins the source's session id): the Threads
+/// land as pending history under `import:<id>` and the source Thread is
+/// untouched (CL11). The manifest carries the clone id + summary.
+#[test]
+fn bundle_carries_threads_and_unpack_imports_them_without_touching_the_source() {
+    let root = TempDir::new("ct-daemon-threads");
+    let (project, src_home, src_id, sid) = threads_source(&root, "Threads Agent");
+    let opts = clone::CloneOptions { home_override: Some(src_home.clone()), ..Default::default() };
+    let out = match super::build_workspace_bundle(
+        &project.to_string_lossy(),
+        &opts,
+        &src_home,
+        ThreadsChoice::All,
+        Some("ct-clone-daemon-1".into()),
+    ) {
+        Ok(o) => o,
+        Err(super::BundleError::BadRequest(e)) | Err(super::BundleError::Internal(e)) => panic!("bundle: {e}"),
+    };
+    assert_eq!(out.clone_id, "ct-clone-daemon-1");
+    let summary = out.threads.expect("threads summary");
+    assert_eq!((summary.conversations, summary.docs), (1, 2), "Thread lines only, no Chatter");
+    let m = clone::read_manifest_from_bundle(&out.bundle_path).unwrap();
+    assert_eq!(m.clone_id.as_deref(), Some("ct-clone-daemon-1"));
+    assert_eq!(m.threads, Some(summary));
+
+    let dest_parent = root.path().join("dest");
+    let remote_home = root.path().join("remote-home");
+    fs::create_dir_all(&dest_parent).unwrap();
+    fs::create_dir_all(&remote_home).unwrap();
+    let res = super::unpack_and_register_with_threads(&out.bundle_path, &dest_parent, &remote_home)
+        .expect("unpack + register");
+    assert_eq!(res.threads_error, None);
+    assert_eq!(res.clone_id.as_deref(), Some("ct-clone-daemon-1"));
+    let rep = res.threads.expect("threads imported");
+    assert_eq!((rep.docs_imported, rep.docs_skipped), (2, 0));
+    assert!(rep.pending, "the shared pin belongs to the source: waits for the clone's own pin");
+    let key = &rep.conversations[0].local_conversation_id;
+    assert!(k2_core::overlay::transfer::is_import_key(key), "{key}");
+    let docs = k2_core::overlay::read_thread(key, 0).unwrap();
+    assert_eq!(docs.len(), 3, "divider + 2 lines");
+    assert!(docs[0].doc.imported.as_ref().unwrap().divider);
+    assert!(docs.iter().all(|i| !i.doc.body.as_deref().unwrap_or("").contains("chatter")));
+    let src_docs = k2_core::overlay::read_thread(&sid, 0).unwrap();
+    assert_eq!(src_docs.len(), 2, "source Thread untouched");
+    assert!(src_docs.iter().all(|i| i.doc.imported.is_none()));
+    // A second import of the same bundle's Threads adds nothing.
+    let json = k2_core::overlay::transfer::ThreadsExport::parse(
+        &super::export_threads_for_clone(&project.to_string_lossy(), ThreadsChoice::All, "ct-clone-daemon-1", None)
+            .unwrap()
+            .expect("export")
+            .0,
+    )
+    .unwrap();
+    let again = super::import_threads_for_clone(&res.project.id, &m, &json.to_json().unwrap(), &Default::default()).unwrap();
+    assert_eq!((again.docs_imported, again.docs_skipped), (0, 2));
+    // An export from another clone id is refused for this bundle.
+    let mut other = json.clone();
+    other.clone_id = "someone-else".into();
+    let err = super::import_threads_for_clone(&res.project.id, &m, &other.to_json().unwrap(), &Default::default())
+        .unwrap_err();
+    assert!(err.contains("belongs to clone"), "{err}");
+
+    let _ = pops::projects_delete(&res.project.id);
+    let _ = pops::projects_delete(&src_id);
+}
+
+/// "Bring the Thread" unticked: no threads file, no summary, nothing
+/// imported, and the clone still lands.
+#[test]
+fn threads_none_leaves_them_behind() {
+    let root = TempDir::new("ct-daemon-nothreads");
+    let (project, src_home, src_id, _sid) = threads_source(&root, "Quiet Agent");
+    let opts = clone::CloneOptions { home_override: Some(src_home.clone()), ..Default::default() };
+    let out = match super::build_workspace_bundle(&project.to_string_lossy(), &opts, &src_home, ThreadsChoice::None, None) {
+        Ok(o) => o,
+        Err(super::BundleError::BadRequest(e)) | Err(super::BundleError::Internal(e)) => panic!("bundle: {e}"),
+    };
+    assert!(out.threads.is_none());
+    assert!(!out.clone_id.is_empty(), "a clone id is always minted");
+    let m = clone::read_manifest_from_bundle(&out.bundle_path).unwrap();
+    assert_eq!(m.threads, None);
+    let dest_parent = root.path().join("dest");
+    let remote_home = root.path().join("remote-home");
+    fs::create_dir_all(&dest_parent).unwrap();
+    fs::create_dir_all(&remote_home).unwrap();
+    let res = super::unpack_and_register_with_threads(&out.bundle_path, &dest_parent, &remote_home).unwrap();
+    assert!(res.threads.is_none() && res.threads_error.is_none());
+    let _ = pops::projects_delete(&res.project.id);
+    let _ = pops::projects_delete(&src_id);
+}
+
+#[test]
+fn bundle_body_threads_defaults_to_all_and_parses_every_form() {
+    let b: super::BundleBody = serde_json::from_str(r#"{"project_path":"/x"}"#).unwrap();
+    assert_eq!(b.threads, ThreadsChoice::All, "Bring the Thread is ticked by default (D3)");
+    let b: super::BundleBody = serde_json::from_str(r#"{"project_path":"/x","threads":"none"}"#).unwrap();
+    assert_eq!(b.threads, ThreadsChoice::None);
+    let b: super::BundleBody = serde_json::from_str(r#"{"project_path":"/x","threads":{"sinceDays":30},"clone_id":"c1"}"#).unwrap();
+    assert_eq!((b.threads, b.clone_id.as_deref()), (ThreadsChoice::SinceDays(30), Some("c1")));
+    assert!(serde_json::from_str::<super::BundleBody>(r#"{"project_path":"/x","threads":"maybe"}"#).is_err());
 }

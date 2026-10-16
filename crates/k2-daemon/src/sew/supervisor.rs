@@ -1248,29 +1248,19 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
 
 // ── config ───────────────────────────────────────────────────────────────
 
-/// `sew config set server.public_url | identity.standalone.setup_url`
-/// (each on this box's own k2.dev label or a bound custom domain), then a
-/// `sew.service` restart (Sew reads them at start). For the 0.46.0 demo:
-/// `https://<hearth origin>` and `https://<hearth origin>/setup`, so setup
-/// links point at the App.
-pub fn server_config(env: &Env, public_url: Option<&str>, setup_url: Option<&str>) -> R<Value> {
+/// `sew config set server.public_url` (a host on this box's own k2.dev
+/// label or a bound custom domain), then a `sew.service` restart (Sew reads
+/// it at start). Sew builds setup links as `<public_url>/setup`, so for the
+/// 0.46.0 demo `https://<hearth origin>` points them at the App. The
+/// setup-link key is not on Sew's settable list and is never sent;
+/// `voice.public_url` goes through `sew media install` (voice::set_url).
+pub fn server_config(env: &Env, public_url: &str) -> R<Value> {
     if !env.ops.linux() {
         return Err(unsupported());
     }
-    let row = need_row(false)?;
+    need_row(false)?;
     let mut body = serde_json::Map::new();
-    if let Some(u) = public_url {
-        body.insert("server.public_url".into(), json!(super::voice::check_https_url(env, u, false)?));
-    }
-    if let Some(u) = setup_url {
-        if row_provider(&row) != pin::PROVIDER_STANDALONE {
-            return Err(no("provider_is_k2", 409, "setup links exist on standalone installs only"));
-        }
-        body.insert("identity.standalone.setup_url".into(), json!(super::voice::check_https_url(env, u, true)?));
-    }
-    if body.is_empty() {
-        return Err(no("bad_request", 400, "name publicUrl and/or setupUrl"));
-    }
+    body.insert("server.public_url".into(), json!(super::voice::check_https_url(env, public_url)?));
     helper_check(env)?;
     let _l = begin(env)?;
     let v = Value::Object(body.clone());
@@ -1291,7 +1281,7 @@ pub fn server_config(env: &Env, public_url: Option<&str>, setup_url: Option<&str
         false
     };
     changed("config");
-    Ok(json!({"ok": true, "set": body, "restarted": restarted}))
+    Ok(json!({"ok": true, "set": body, "restarted": restarted, "setupLinks": format!("{public_url}/setup")}))
 }
 
 // ── upgrade / rollback ───────────────────────────────────────────────────

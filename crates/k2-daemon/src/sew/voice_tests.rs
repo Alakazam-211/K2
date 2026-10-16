@@ -506,31 +506,37 @@ fn a_k2_install_refuses_to_link_a_standalone_sew() {
 // ── config ───────────────────────────────────────────────────────────────
 
 #[test]
-fn server_config_sets_public_and_setup_urls_on_this_box_then_restarts_sew() {
+fn server_config_sets_only_the_public_url_and_setup_links_follow_it() {
     let t = t();
     t.ops.mgmt_status.lock().unwrap()["provider"] = json!("standalone");
     t.enable_with(Some("standalone")).unwrap();
     t.ops.clear();
-    let out = crate::sew::supervisor::server_config(&t.env(), Some("https://hearth.lztek.k2.dev"), Some("https://hearth.lztek.k2.dev/setup")).unwrap();
+    let out = crate::sew::supervisor::server_config(&t.env(), "https://hearth.lztek.k2.dev").unwrap();
     assert_eq!(out["restarted"], true);
+    assert_eq!(out["setupLinks"], "https://hearth.lztek.k2.dev/setup");
     assert_eq!(t.ops.effects(), vec!["engine sew config", "engine sew systemctl restart"]);
     let body = t.stdin_of("engine sew config");
-    assert_eq!(body, json!({"server.public_url": "https://hearth.lztek.k2.dev", "identity.standalone.setup_url": "https://hearth.lztek.k2.dev/setup"}));
+    assert_eq!(body, json!({"server.public_url": "https://hearth.lztek.k2.dev"}), "never identity.standalone.setup_url");
     let req: k2_root_proto::sew::ConfigRequest = serde_json::from_value(body).unwrap();
     req.validate().unwrap();
     t.ops.clear();
-    for (p, s) in [(Some("https://evil.example"), None), (None, Some("https://hearth.lztek.k2.dev/login")), (None, None)] {
-        assert!(crate::sew::supervisor::server_config(&t.env(), p, s).is_err());
+    for bad in ["https://evil.example", "https://hearth.lztek.k2.dev/setup", "http://hearth.lztek.k2.dev", ""] {
+        assert!(crate::sew::supervisor::server_config(&t.env(), bad).is_err(), "{bad}");
     }
     assert!(t.ops.effects().is_empty());
 }
 
 #[test]
-fn setup_urls_are_refused_on_a_k2_identity_install() {
+fn the_voice_url_never_rides_config_set() {
     let t = t();
-    t.chat();
-    let f = crate::sew::supervisor::server_config(&t.env(), None, Some("https://hearth.lztek.k2.dev/setup")).unwrap_err();
-    assert_eq!(f.code, "provider_is_k2");
+    t.voice();
+    set_url(&t.env(), "wss://hearth.lztek.k2.dev").unwrap();
+    assert!(!t.ops.effects().iter().any(|e| e == "engine sew config"), "{:?}", t.ops.effects());
+    // `media reconfigure` is `sew media install --reconfigure` with the
+    // URL in its JSON input (the helper's own test pins that argv).
+    let req: k2_root_proto::sew::MediaRequest = serde_json::from_value(t.stdin_of("engine sew media reconfigure")).unwrap();
+    req.validate_reconfigure().unwrap();
+    assert_eq!(req.public_url.as_deref(), Some("wss://hearth.lztek.k2.dev"));
 }
 
 // ── users (standalone) ───────────────────────────────────────────────────

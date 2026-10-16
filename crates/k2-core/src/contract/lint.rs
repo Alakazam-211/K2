@@ -65,6 +65,7 @@ pub fn lint(c: &Catalog) -> Vec<String> {
             out.push(format!("{}: listed twice", v.verb));
         }
         lint_row(c, v, &mut out);
+        super::app::lint_row(v, &mut out);
         if !v.exposure.is_empty() {
             for a in request_items(v) {
                 // An argument's own title is its name, not a type.
@@ -73,6 +74,7 @@ pub fn lint(c: &Catalog) -> Vec<String> {
             collect_titles(&v.verb, &v.response, &mut titles, &mut out, false);
         }
     }
+    super::app::lint_catalog(c, &mut out);
     out
 }
 

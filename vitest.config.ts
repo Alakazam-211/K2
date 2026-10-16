@@ -19,7 +19,8 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    // sdk/server: the App server SDK's unit tests (runtime S23).
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'sdk/server/test/**/*.test.ts'],
     environment: 'node',
   },
 })

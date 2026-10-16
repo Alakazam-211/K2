@@ -218,7 +218,8 @@ async fn t2_1_thread_latest_previews_errors_limits_and_refusals() {
         assert_eq!(r.status, 403, "{}", r.body);
         assert_eq!(r.json()["error"], "zen_local_only");
 
-        // An app pass: refused on thread/latest and on /cli/zen/*.
+        // An app pass: thread/latest for its own rooms only (room-scope R5,
+        // 0.46.1); still refused on /cli/zen/*.
         let r = http(port, "POST", &format!("/cli/skin/users?token={OWNER_TOKEN}"), Some(r#"{"username":"zlguest"}"#));
         assert_eq!(r.status, 200, "skin user: {}", r.body);
         let r = http(
@@ -232,8 +233,15 @@ async fn t2_1_thread_latest_previews_errors_limits_and_refusals() {
         assert!(pass.starts_with("k2skn_"), "{pass}");
         let r = http(port, "GET", &format!("/cli/thread?token={pass}&addr={h1}"), None);
         assert_eq!(r.status, 200, "the pass itself works on /cli/thread: {}", r.body);
-        let r = http(port, "GET", &format!("/cli/thread/latest?token={pass}&addrs={h1}"), None);
-        assert_eq!(r.status, 403, "app pass on thread/latest: {}", r.body);
+        let r = http(port, "GET", &format!("/cli/thread/latest?token={pass}&addrs={h1},{h2}"), None);
+        assert_eq!(r.status, 200, "app pass on thread/latest: {}", r.body);
+        let items = r.json()["items"].as_array().expect("items").clone();
+        assert_eq!(items.len(), 2, "{}", r.body);
+        assert_eq!(items[0]["addr"], h1.as_str());
+        assert!(items[0].get("error").is_none(), "its own room previews: {}", r.body);
+        assert_eq!(items[1]["addr"], h2.as_str());
+        assert_eq!(items[1]["error"]["code"], "skin_room", "a room the pass doesn't hold: {}", r.body);
+        assert!(items[1].get("preview").is_none(), "no preview leaks for another room: {}", r.body);
         for p in ["/cli/zen/get", "/cli/zen/status", "/cli/zen/validate"] {
             let r = http(port, "GET", &format!("{p}?token={pass}"), None);
             assert_eq!(r.status, 403, "app pass on {p}: {}", r.body);

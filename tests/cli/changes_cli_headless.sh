@@ -366,5 +366,137 @@ has "$OUT" "Compared with main" "list --base"
 has "$OUT" "Changed vs base (1)" "list --base"
 ok "agent: list --base main (branch review)"
 
+echo "== C5: untracked folder stages recursively (gitignore respected) =="
+mkdir -p "$REPO/newdir/deep"
+printf 'x\n' >"$REPO/newdir/x.txt"
+printf 'y\n' >"$REPO/newdir/deep/y.txt"
+printf 'noise\n' >"$REPO/newdir/deep/noise.log"
+printf '*.log\n' >>"$REPO/.git/info/exclude"
+run owner changes --json
+jok "$OUT" 'any(f["path"] == "newdir/" and f["dir"] for f in j["files"])' "the folder is one untracked row"
+run owner changes stage newdir/
+want_rc 0 "stage newdir/"
+run owner changes --json
+jok "$OUT" 'sorted(f["path"] for f in j["files"] if f["group"] == "staged") == ["newdir/deep/y.txt", "newdir/x.txt"]' "stage newdir/ adds its files, not the ignored one"
+run owner changes commit -m "folder"
+want_rc 0 "commit the folder"
+
+echo "== C5: review notes (owner writes, agent reads + resolves) =="
+run owner changes notes add a.txt --line 2 -m "Why two?" -m "Say why."
+want_rc 0 "owner notes add"
+has "$OUT" "Added note n_" "notes add"
+NOTE_ID="$(sed -n 's/^Added note \(n_[0-9a-f]*\) .*/\1/p' <<<"$OUT")"
+[ -n "$NOTE_ID" ] || fail "no note id in: $OUT"
+ok "owner: notes add → $NOTE_ID"
+run owner changes notes add a.txt --line 40 -m "past the end"
+want_rc 3 "notes add past the end"
+[ "$(errcode)" = "bad_request" ] || fail "past-the-end code: $ERR"
+ok "notes add past the end → exit 3 bad_request"
+run owner changes notes add a.txt -m "no line"
+want_rc 2 "notes add without --line"
+run owner changes notes --json
+want_rc 0 "owner notes list"
+jok "$OUT" 'j["counts"]["open"] == 1 and j["counts"]["unsent"] == 1 and j["notes"][0]["body"] == "Why two?\n\nSay why." and j["notes"][0]["anchorText"] == "two" and j["notes"][0]["outdated"] is False' "owner: notes list (--json)"
+
+run agent changes notes
+want_rc 0 "agent notes list"
+has "$OUT" "$NOTE_ID  a.txt:2" "agent notes list"
+has "$OUT" "Why two?" "agent notes list"
+ok "agent: reads the notes left on its workspace"
+run agent changes notes add a.txt --line 1 -m "agent note"
+want_rc 3 "agent notes add"
+[ "$(errcode)" = "forbidden" ] || fail "agent add code: $ERR"
+run agent changes notes send
+want_rc 3 "agent notes send"
+[ "$(errcode)" = "forbidden" ] || fail "agent send code: $ERR"
+ok "agent: add / send → exit 3 forbidden"
+run agent changes notes --workspace "$OTHER"
+want_rc 3 "agent notes on another workspace"
+[ "$(errcode)" = "forbidden" ] || fail "agent other notes code: $ERR"
+ok "agent: notes on another workspace → forbidden"
+
+run owner changes notes send
+want_rc 0 "owner notes send"
+has "$OUT" "Sent 1 note to the agent of $REPO" "notes send"
+run owner changes notes --status sent --json
+jok "$OUT" 'len(j["notes"]) == 1 and j["notes"][0]["sentAt"] and (j["notes"][0]["deliveryId"] or "").startswith("m_")' "owner: send delivered once through the msg path (delivery id) and marked the note sent"
+run owner changes notes send
+want_rc 3 "send again"
+[ "$(errcode)" = "nothing_to_send" ] || fail "send again code: $ERR"
+ok "a second send has nothing to send (no double delivery)"
+
+run agent changes notes resolve "$NOTE_ID"
+want_rc 0 "agent resolve"
+has "$OUT" "Resolved $NOTE_ID" "agent resolve"
+run owner changes notes --status resolved --json
+jok "$OUT" 'j["notes"][0]["resolvedBy"].startswith("agent:")' "agent: resolve (resolvedBy = the agent)"
+run agent changes notes reopen "$NOTE_ID"
+want_rc 3 "agent reopen"
+[ "$(errcode)" = "forbidden" ] || fail "agent reopen code: $ERR"
+run owner changes notes reopen "$NOTE_ID"
+want_rc 0 "owner reopen"
+run owner changes notes edit "$NOTE_ID" -m "Explain the two."
+want_rc 0 "owner edit"
+run owner changes notes --json
+jok "$OUT" 'j["counts"]["unsent"] == 1 and j["notes"][0]["body"] == "Explain the two."' "owner: reopen (goes out again) + edit"
+printf 'zero\none\ntwo\nagent\n' >"$REPO/a.txt"
+run owner changes notes --json
+jok "$OUT" 'j["notes"][0]["currentStartLine"] == 3 and not j["notes"][0]["outdated"]' "a moved line is followed"
+printf 'one\nTWO\nagent\n' >"$REPO/a.txt"
+# The index still has "two" (a staged row's new side); stage the rewrite too.
+run owner changes stage a.txt
+want_rc 0 "stage the rewrite"
+run owner changes notes --json
+jok "$OUT" 'j["notes"][0]["outdated"] is True' "a rewritten line is outdated"
+run owner changes notes delete "$NOTE_ID"
+want_rc 0 "owner delete"
+run owner changes notes --status all --json
+jok "$OUT" 'j["notes"] == []' "owner: delete"
+code="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/cli/git/notes/send?token=$DTOKEN")"
+[ "$code" = "405" ] || fail "GET notes/send → $code"
+ok "GET /cli/git/notes/send → 405"
+
+echo "== C5: open + init =="
+run owner changes open
+want_rc 0 "owner open"
+has "$OUT" "Asked K2 to open the Changes tab for $REPO" "owner open"
+run agent changes open --json
+want_rc 0 "agent open"
+jok "$OUT" 'j["workspacePath"].endswith("/repo")' "agent: changes open on its own workspace"
+code="$(curl -s -o /dev/null -w '%{http_code}' "$BASE/cli/git/open-changes?token=$DTOKEN")"
+[ "$code" = "405" ] || fail "GET open-changes → $code"
+ok "GET /cli/git/open-changes → 405"
+
+info="$(curl -s "$BASE/cli/git/info?token=$DTOKEN&path=$PLAIN")"
+jok "$info" 'j["isRepo"] is False and j["gitAvailable"] is True and isinstance(j["gitCli"], bool)' "git/info reports git available (the + menu offers Changes)"
+run owner changes init --workspace "$PLAIN"
+want_rc 3 "init a folder that is no workspace"
+[ "$(errcode)" = "not_found" ] || fail "init unregistered code: $ERR"
+reg="$(curl -s -X POST -H 'Content-Type: application/json' \
+    -d "$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1], "seedWiki": False, "seedAgentsMd": False}))' "$PLAIN")" \
+    "$BASE/cli/projects/add-from-path?token=$DTOKEN")"
+case "$reg" in *"$PLAIN"*) ;; *) fail "register plain: $reg" ;; esac
+mkdir -p "$PLAIN/sub"
+run owner changes init --workspace "$PLAIN/sub"
+want_rc 3 "init below a workspace root"
+[ "$(errcode)" = "bad_path" ] || fail "init sub code: $ERR"
+[ ! -e "$PLAIN/sub/.git" ] || fail "sub got a .git"
+run owner changes init --workspace "$PLAIN"
+want_rc 0 "owner init"
+has "$OUT" "Initialized a git repository in" "init"
+[ -d "$PLAIN/.git" ] || fail "no .git after init"
+run owner changes --workspace "$PLAIN" --json
+jok "$OUT" 'j["isRepo"] and j["unborn"]' "init: the workspace is now a repo (no commits yet)"
+run owner changes init --workspace "$PLAIN"
+want_rc 3 "init twice"
+[ "$(errcode)" = "already_a_repo" ] || fail "init twice code: $ERR"
+run agent changes init
+want_rc 3 "agent init in a repo"
+[ "$(errcode)" = "already_a_repo" ] || fail "agent init code: $ERR"
+run agent changes init --workspace "$PLAIN"
+want_rc 3 "agent init elsewhere"
+[ "$(errcode)" = "forbidden" ] || fail "agent init other code: $ERR"
+ok "init: root only, once; agents only their own workspace"
+
 echo
 echo "PASS: $pass checks"

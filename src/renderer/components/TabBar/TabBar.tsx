@@ -64,7 +64,7 @@ function presetMenuIcon(preset: AgentPreset): ReactNode {
   return <AgentIcon agent={preset.label} size={14} />
 }
 
-/** Terminal, New File, Browser, Changes (git repos only), then enabled
+/** Terminal, New File, Browser, Changes (when the server can do git; C5), then enabled
  *  presets in store order. No separator when none are enabled. */
 function buildPlusMenuItems(
   presets: AgentPreset[],

@@ -21899,6 +21899,10 @@ cmd_schema() {
     {"name": "changes stage", "usage": "k2 changes stage <path>... | --all  ·  k2 changes unstage <path>...", "description": "Stage (git add, including deletions) or unstage files; stage --all stages everything. Same routes as the Changes tab (POST /cli/git/stage|unstage|stage-all). A path outside the repo is bad_path (exit 3).", "args": [{"name": "path", "required": true}], "flags": [{"name": "--all", "arg": null, "description": "stage only: every change."}, {"name": "--json", "arg": null, "description": "{success, staged|unstaged:[...]}."}]},
     {"name": "changes discard", "usage": "k2 changes discard <path>... [--staged] [--yes] [--json]", "description": "Throw away edits. Nothing is deleted: every working copy that would be lost, and every untracked file, goes to the Trash first. Edited files go back to the staged copy (--staged: back to HEAD, staged edits too). Asks on a terminal; without a terminal --yes is required (exit 2 confirm_required). A conflicted file refuses the whole call (409 conflicted, exit 3). Exit 1 when a file could not be trashed (left untouched, listed in failed).", "args": [{"name": "path", "required": true}], "flags": [{"name": "--yes", "arg": null, "description": "Don't ask (required off a terminal)."}, {"name": "--staged", "arg": null, "description": "Also throw away staged edits (restore from HEAD)."}, {"name": "--json", "arg": null, "description": "POST /cli/git/discard's answer: restored, trashed, unstaged, skipped, failed, rev."}]},
     {"name": "changes commit", "usage": "k2 changes commit -m \"message\" [--all] [--json]", "description": "Commit what is staged (the daemon's git user.name / user.email is the author). Refuses with nothing_staged (exit 3) instead of an empty commit. --all stages everything first.", "args": [], "flags": [{"name": "-m", "arg": "message", "description": "Commit message (repeat for more paragraphs)."}, {"name": "--all", "arg": null, "description": "Stage every change first."}, {"name": "--json", "arg": null, "description": "{oid, message}."}]},
+    {"name": "changes notes", "usage": "k2 changes notes [list] [--status open|unsent|sent|resolved|all] [--file <path>] [--json]  ·  k2 changes notes resolve <id>...", "description": "Review notes people left on changed lines in the Changes tab (GET /cli/git/notes). Each note: id, path, side (new|old), startLine/endLine, body, author, sent/resolved, outdated (its lines changed) and where it is now (currentStartLine/currentEndLine). Agents (passport) can list the notes on their own workspace and resolve them when fixed; add / edit / delete / reopen / send are for people. Notes reach the agent as one message (File / Line(s) / Comment / Note id).", "args": [], "flags": [{"name": "--status", "arg": "open|unsent|sent|resolved|all", "description": "Default open (sent or not)."}, {"name": "--file", "arg": "path", "description": "Only notes on this file."}, {"name": "--json", "arg": null, "description": "{workspacePath, counts:{open,unsent,sent,resolved}, notes:[...]}."}]},
+    {"name": "changes notes add", "usage": "k2 changes notes add <path> --line <n>[-<m>] [--old] -m \"comment\"  ·  edit <id> -m \"...\"  ·  delete <id>...  ·  reopen <id>...  ·  send [<id>...] [--no-wake]", "description": "People only (owner token or a Connect login; an agent passport gets forbidden). add = a note on lines of a changed file (--old: the text before the change); edit/delete = the author or an Admin; send = the open unsent notes, batched into one message to this workspace's agent through the k2 msg path (wakes it unless --no-wake), then marked sent (nothing_to_send, not_delivered and send_in_progress exit 3).", "args": [{"name": "path", "required": true}], "flags": [{"name": "--line", "arg": "n[-m]", "description": "1-based line or range."}, {"name": "--old", "arg": null, "description": "Note the old side."}, {"name": "-m", "arg": "comment", "description": "The note (repeat for paragraphs)."}, {"name": "--no-wake", "arg": null, "description": "send: do not wake a sleeping agent (fails with not_delivered instead)."}]},
+    {"name": "changes open", "usage": "k2 changes open [--workspace <path>] [--json]", "description": "Ask a K2 window that shows this workspace to open (or focus) its Changes tab (daemon event open_changes). Agents: their own workspace. 200 means asked; a window opens it only while it shows that workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, workspacePath}."}]},
+    {"name": "changes init", "usage": "k2 changes init [--workspace <path>] [--json]", "description": "Make the workspace root a git repository (git init, no commit), like the Changes tab's Initialize repository. Only a workspace root; refused inside an existing repository (already_a_repo) or for a folder that is not a workspace root (bad_path / not_found). Agents: their own workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, repoRoot, rev}."}]},
     {"name": "store --widget", "usage": "k2 store get|put|rm|list|changes|batch|grants|grant|revoke|export --widget <name> ...", "description": "A Garden widget's own data on this computer. Agents read and write only the keys they were granted; grant/revoke are for a grant admin. Exit 3 not granted, 4 not found, 5 conflict.", "args": [{"name": "verb", "required": true}], "flags": [{"name": "--widget", "arg": "name", "description": "The widget whose data this is."}, {"name": "--if-rev", "arg": "n", "description": "Write only if the key's rev is n (0 = only if missing)."}, {"name": "--prefix", "arg": "prefix", "description": "Only keys under this prefix."}, {"name": "--since", "arg": "rev", "description": "changes: after this rev."}, {"name": "--wait", "arg": "secs", "description": "changes: wait up to 30 s for a change."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "zen data", "usage": "k2 zen data list|show|grant|revoke|admin|unadmin|delete|move|export|import ...", "description": "The person's admin for widget data: grants (agent = a wall; project = a convenience), grant admins, delete, move, export, import. Refused inside a K2 terminal (exit 3).", "args": [{"name": "verb", "required": true}], "flags": [{"name": "--agent", "arg": "handle", "description": "The agent."}, {"name": "--project", "arg": "name", "description": "A K2 project (any agent can join it)."}, {"name": "--level", "arg": "read|write", "description": "The grant level."}, {"name": "--prefix", "arg": "prefix", "description": "Only keys under this prefix (default: all)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {
@@ -24810,6 +24814,17 @@ DISCARD NEVER DELETES
   (exit 2 confirm_required). A conflicted file refuses the whole call
   (conflicted). A file that could not be trashed is left untouched and
   listed under failed (exit 1).
+
+REVIEW NOTES (people → you)
+  Your human can leave notes on changed lines in the Changes tab and send
+  them to you as one message: File / Line(s) / Comment / Note id. Then:
+  k2 changes notes                  the open notes (outdated = the lines changed)
+  k2 changes notes resolve <id>...  when a note is fixed (people see it live)
+  You can't write, edit or send notes; those are your human's.
+
+OPEN AND INIT
+  k2 changes open    open the Changes tab in the window showing your workspace
+  k2 changes init    git init your workspace root (not inside an existing repo)
 
 AUTHOR
   Commits use this server's git user.name / user.email, not your name.
@@ -31865,6 +31880,8 @@ CHANGES (git: the Changes tab from the CLI; agents = their own workspace)
   changes stage|unstage <path>...       Stage or unstage (stage --all for everything)
   changes discard <path>... --yes       Throw away edits; old copies go to the Trash
   changes commit -m "..." [--all]       Commit what is staged (`k2 changes --help`)
+  changes notes [resolve <id>...]       Review notes left for you on changed lines
+  changes open | init                   Open the Changes tab · git init the workspace
 
 REVIEW IN-FLIGHT WORK
   reviews                               Pending merge reviews for worktrees
@@ -50975,6 +50992,13 @@ k2 changes — review, stage and commit this workspace's git changes
                                               everything first). Author = this server's
                                               git user.name / user.email
 
+  k2 changes notes [list|add|resolve|reopen|edit|delete|send]
+                                              review notes on changed lines; agents
+                                              list and resolve theirs (k2 changes notes --help)
+  k2 changes open                             open the Changes tab in the K2 window that
+                                              shows this workspace
+  k2 changes init                             make the workspace root a git repository
+
 Every command takes --workspace <path> (default: the git checkout you are in,
 else this workspace) and --json (the daemon's JSON as is).
 Agents (inside a K2 terminal) can only use their own workspace and folders
@@ -51222,7 +51246,7 @@ else:
     print("%d change%s" % (c.get("total", len(files)), "" if c.get("total", len(files)) == 1 else "s"))
 ' || rc=$?
     if [ "$rc" = 4 ]; then
-        _changes_die not_a_repo "not a git repository" 3
+        _changes_die not_a_repo "not a git repository (make one with: k2 changes init)" 3
     fi
     return "$rc"
 }
@@ -51560,11 +51584,332 @@ r = json.load(sys.stdin)
 print("Committed %s: %s" % ((r.get("oid") or "")[:7], (r.get("message") or "").splitlines()[0] if r.get("message") else ""))'
 }
 
+# ── k2 changes open | init (C5) ─────────────────────────────────────
+
+# k2 changes open: ask a K2 window that shows this workspace to open (or
+# focus) its Changes tab (daemon event open_changes). 200 = asked; no
+# window may be listening.
+_changes_open() {
+    local ws=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _CH_JSON=1; shift ;;
+            --workspace|-w) [ $# -ge 2 ] || _changes_die usage "--workspace needs a path" 2; ws="$2"; shift 2 ;;
+            --workspace=*) ws="${1#*=}"; shift ;;
+            *) _changes_die usage "unknown argument for k2 changes open: $1" 2 ;;
+        esac
+    done
+    _changes_target "$ws"
+    _changes_call POST /cli/git/open-changes "$(_changes_body all)"
+    if [ "${_CH_JSON:-0}" = "1" ]; then
+        printf '%s\n' "$_CH_BODY"
+        return 0
+    fi
+    printf '%s' "$_CH_BODY" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+print("Asked K2 to open the Changes tab for %s (any window showing that workspace opens it)." % r.get("workspacePath", ""))'
+}
+
+# k2 changes init: make the workspace root a git repository (git init; no
+# commit). Refused inside an existing repo (already_a_repo) or below/above
+# a workspace root (bad_path).
+_changes_init() {
+    local ws=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _CH_JSON=1; shift ;;
+            --workspace|-w) [ $# -ge 2 ] || _changes_die usage "--workspace needs a path" 2; ws="$2"; shift 2 ;;
+            --workspace=*) ws="${1#*=}"; shift ;;
+            *) _changes_die usage "unknown argument for k2 changes init: $1" 2 ;;
+        esac
+    done
+    _changes_target "$ws"
+    # Inside a checkout the target is that checkout (already a repo); init
+    # is about the workspace root, so outside a cell send the workspace.
+    if [ -z "$ws" ] && ! _changes_in_cell; then
+        _CH_PATH="$PROJECT"
+    elif [ -z "$ws" ]; then
+        _CH_PATH=""
+    fi
+    _changes_call POST /cli/git/init "$(_changes_body all)"
+    if [ "${_CH_JSON:-0}" = "1" ]; then
+        printf '%s\n' "$_CH_BODY"
+        return 0
+    fi
+    printf '%s' "$_CH_BODY" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+print("Initialized a git repository in %s (no commits yet)." % r.get("repoRoot", ""))'
+}
+
+# ── k2 changes notes (C5 review notes) ──────────────────────────────
+
+_changes_notes_usage() {
+    cat <<'EOF'
+k2 changes notes — review notes people left on changed lines (the Changes tab)
+
+  k2 changes notes [list] [--status open|unsent|sent|resolved|all] [--file <path>] [--json]
+                                      the notes on this workspace (default: open)
+  k2 changes notes resolve <id>...    mark notes fixed (agents: the notes left for you)
+  k2 changes notes reopen <id>...     people only: open a resolved note again
+  k2 changes notes add <path> --line <n>[-<m>] [--old] -m "comment"
+                                      people only: a note on lines of a changed file
+                                      (--old = the text before the change)
+  k2 changes notes edit <id> -m "comment"     people only (author or Admin)
+  k2 changes notes delete <id>...             people only (author or Admin)
+  k2 changes notes send [<id>...] [--no-wake] people only: send the open unsent
+                                      notes to this workspace's agent as one message
+
+The loop for an agent: notes arrive as one message (File / Line / Comment /
+Note id). Fix each one, then `k2 changes notes resolve <id>`. Every command
+takes --workspace <path> and --json. Exit 3 + code when the daemon refuses
+(forbidden, not_found, not_author, nothing_to_send, not_delivered, …).
+EOF
+}
+
+# _changes_json KEY=VALUE... → a JSON object; `path` from _CH_PATH when set.
+# A KEY ending in [] collects a list, a KEY ending in # is a number, ? a bool.
+_changes_json() {
+    python3 - "$_CH_PATH" "$@" <<'PY'
+import json, sys
+path, pairs = sys.argv[1], sys.argv[2:]
+d = {}
+if path:
+    d["path"] = path
+for p in pairs:
+    k, _, v = p.partition("=")
+    if k.endswith("[]"):
+        d.setdefault(k[:-2], []).append(v)
+    elif k.endswith("#"):
+        d[k[:-1]] = int(v)
+    elif k.endswith("?"):
+        d[k[:-1]] = v == "1"
+    else:
+        d[k] = v
+print(json.dumps(d))
+PY
+}
+
+_changes_notes_list() {
+    local ws="" status="" file="" q
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _CH_JSON=1; shift ;;
+            --workspace|-w) [ $# -ge 2 ] || _changes_die usage "--workspace needs a path" 2; ws="$2"; shift 2 ;;
+            --workspace=*) ws="${1#*=}"; shift ;;
+            --status) [ $# -ge 2 ] || _changes_die usage "--status needs open|unsent|sent|resolved|all" 2; status="$2"; shift 2 ;;
+            --status=*) status="${1#*=}"; shift ;;
+            --all) status="all"; shift ;;
+            --file) [ $# -ge 2 ] || _changes_die usage "--file needs a path" 2; file="$2"; shift 2 ;;
+            --file=*) file="${1#*=}"; shift ;;
+            *) _changes_die usage "unknown argument for k2 changes notes: $1 (see k2 changes notes --help)" 2 ;;
+        esac
+    done
+    _changes_target "$ws"
+    q="$(_changes_q)"
+    [ -n "$status" ] && q="${q}status=$(urlencode "$status")&"
+    if [ -n "$file" ]; then
+        _changes_files "$file"
+        q="${q}file_path=$(urlencode "${_CH_FILES[0]}")&"
+    fi
+    _changes_call GET /cli/git/notes "${q%&}"
+    if [ "${_CH_JSON:-0}" = "1" ]; then
+        printf '%s\n' "$_CH_BODY"
+        return 0
+    fi
+    printf '%s' "$_CH_BODY" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+notes, c = r.get("notes") or [], r.get("counts") or {}
+print("Review notes on %s: %d open (%d not sent yet), %d resolved" % (
+    r.get("workspacePath", ""), c.get("open", 0), c.get("unsent", 0), c.get("resolved", 0)))
+if not notes:
+    print("No notes to show.")
+    sys.exit(0)
+for n in notes:
+    s = n.get("currentStartLine") or n.get("startLine")
+    e = n.get("currentEndLine") or n.get("endLine")
+    where = "%s:%s" % (n.get("path"), s if s == e else "%s-%s" % (s, e))
+    if n.get("side") == "old":
+        where += " (before the change)"
+    tags = []
+    if n.get("resolvedAt"):
+        tags.append("resolved by %s" % (n.get("resolvedBy") or "?"))
+    elif n.get("sentAt"):
+        tags.append("sent")
+    if n.get("outdated") and not n.get("resolvedAt"):
+        tags.append("outdated: the lines changed")
+    print()
+    print("%s  %s  by %s%s" % (n.get("id"), where, n.get("authorName") or n.get("author"), ("  [" + ", ".join(tags) + "]") if tags else ""))
+    for line in (n.get("body") or "").splitlines() or [""]:
+        print("    " + line)
+'
+}
+
+_changes_notes_ids() {
+    local verb="$1" route="$2" extra="$3"; shift 3
+    local ws="" ids=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _CH_JSON=1; shift ;;
+            --workspace|-w) [ $# -ge 2 ] || _changes_die usage "--workspace needs a path" 2; ws="$2"; shift 2 ;;
+            --workspace=*) ws="${1#*=}"; shift ;;
+            -*) _changes_die usage "unknown flag for k2 changes notes $verb: $1" 2 ;;
+            *) ids+=("ids[]=$1"); shift ;;
+        esac
+    done
+    [ "${#ids[@]}" -gt 0 ] || _changes_die usage "usage: k2 changes notes $verb <note id>..." 2
+    _changes_target "$ws"
+    if [ -n "$extra" ]; then
+        _changes_call POST "$route" "$(_changes_json "${ids[@]}" "$extra")"
+    else
+        _changes_call POST "$route" "$(_changes_json "${ids[@]}")"
+    fi
+    if [ "${_CH_JSON:-0}" = "1" ]; then
+        printf '%s\n' "$_CH_BODY"
+        return 0
+    fi
+    printf '%s' "$_CH_BODY" | python3 -c '
+import json, sys
+verb, r = sys.argv[1], json.load(sys.stdin)
+if verb == "delete":
+    print("Deleted %s" % ", ".join(r.get("deleted") or []))
+else:
+    done = r.get("changed") or []
+    same = r.get("unchanged") or []
+    word = "Resolved" if verb == "resolve" else "Reopened"
+    if done:
+        print("%s %s" % (word, ", ".join(done)))
+    if same:
+        print("Already %s: %s" % ("resolved" if verb == "resolve" else "open", ", ".join(same)))
+' "$verb"
+}
+
+_changes_notes_add() {
+    local ws="" file="" lines="" side="new" msg="" have_msg=0 start end
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _CH_JSON=1; shift ;;
+            --workspace|-w) [ $# -ge 2 ] || _changes_die usage "--workspace needs a path" 2; ws="$2"; shift 2 ;;
+            --workspace=*) ws="${1#*=}"; shift ;;
+            --line|--lines|-L) [ $# -ge 2 ] || _changes_die usage "--line needs <n> or <n>-<m>" 2; lines="$2"; shift 2 ;;
+            --line=*|--lines=*) lines="${1#*=}"; shift ;;
+            --old) side="old"; shift ;;
+            -m|--message) [ $# -ge 2 ] || _changes_die usage "-m needs the comment" 2
+                if [ "$have_msg" = "1" ]; then msg="${msg}"$'\n\n'"$2"; else msg="$2"; fi
+                have_msg=1; shift 2 ;;
+            -*) _changes_die usage "unknown flag for k2 changes notes add: $1" 2 ;;
+            *) [ -z "$file" ] || _changes_die usage "k2 changes notes add takes one file" 2; file="$1"; shift ;;
+        esac
+    done
+    if [ -z "$file" ] || [ -z "$lines" ] || [ "$have_msg" != "1" ]; then
+        _changes_die usage "usage: k2 changes notes add <path> --line <n>[-<m>] [--old] -m \"comment\"" 2
+    fi
+    case "$lines" in
+        *-*) start="${lines%%-*}"; end="${lines#*-}" ;;
+        *) start="$lines"; end="$lines" ;;
+    esac
+    [[ "$start" =~ ^[0-9]+$ && "$end" =~ ^[0-9]+$ ]] || _changes_die usage "--line takes <n> or <n>-<m> (numbers)" 2
+    _changes_target "$ws"
+    _changes_files "$file"
+    _changes_call POST /cli/git/notes/add "$(_changes_json "filePath=${_CH_FILES[0]}" "side=$side" "startLine#=$start" "endLine#=$end" "body=$msg")"
+    if [ "${_CH_JSON:-0}" = "1" ]; then
+        printf '%s\n' "$_CH_BODY"
+        return 0
+    fi
+    printf '%s' "$_CH_BODY" | python3 -c '
+import json, sys
+n = json.load(sys.stdin).get("note") or {}
+s, e = n.get("startLine"), n.get("endLine")
+print("Added note %s on %s:%s" % (n.get("id"), n.get("path"), s if s == e else "%s-%s" % (s, e)))'
+}
+
+_changes_notes_edit() {
+    local ws="" id="" msg="" have_msg=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _CH_JSON=1; shift ;;
+            --workspace|-w) [ $# -ge 2 ] || _changes_die usage "--workspace needs a path" 2; ws="$2"; shift 2 ;;
+            --workspace=*) ws="${1#*=}"; shift ;;
+            -m|--message) [ $# -ge 2 ] || _changes_die usage "-m needs the comment" 2
+                if [ "$have_msg" = "1" ]; then msg="${msg}"$'\n\n'"$2"; else msg="$2"; fi
+                have_msg=1; shift 2 ;;
+            -*) _changes_die usage "unknown flag for k2 changes notes edit: $1" 2 ;;
+            *) [ -z "$id" ] || _changes_die usage "k2 changes notes edit takes one note id" 2; id="$1"; shift ;;
+        esac
+    done
+    [ -n "$id" ] && [ "$have_msg" = "1" ] || _changes_die usage "usage: k2 changes notes edit <id> -m \"comment\"" 2
+    _changes_target "$ws"
+    _CH_PATH=""
+    _changes_call POST /cli/git/notes/update "$(_changes_json "id=$id" "body=$msg")"
+    if [ "${_CH_JSON:-0}" = "1" ]; then
+        printf '%s\n' "$_CH_BODY"
+        return 0
+    fi
+    echo "Updated note $id"
+}
+
+_changes_notes_send() {
+    local ws="" wake=1 ids=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _CH_JSON=1; shift ;;
+            --workspace|-w) [ $# -ge 2 ] || _changes_die usage "--workspace needs a path" 2; ws="$2"; shift 2 ;;
+            --workspace=*) ws="${1#*=}"; shift ;;
+            --no-wake) wake=0; shift ;;
+            -*) _changes_die usage "unknown flag for k2 changes notes send: $1" 2 ;;
+            *) ids+=("ids[]=$1"); shift ;;
+        esac
+    done
+    _changes_target "$ws"
+    [ -z "$_CH_PATH" ] && _CH_PATH="$PROJECT"
+    _changes_call POST /cli/git/notes/send "$(_changes_json ${ids[@]+"${ids[@]}"} "wake?=$wake")"
+    if [ "${_CH_JSON:-0}" = "1" ]; then
+        printf '%s\n' "$_CH_BODY"
+        return 0
+    fi
+    printf '%s' "$_CH_BODY" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+n = r.get("sent", 0)
+line = "Sent %d note%s to the agent of %s" % (n, "" if n == 1 else "s", r.get("target", ""))
+if r.get("deliveryId"):
+    line += " (delivery %s)" % r["deliveryId"]
+print(line)
+if r.get("remaining"):
+    print("%d more did not fit in one message; send again." % r["remaining"])'
+}
+
+_changes_notes() {
+    local sub="${1:-}"
+    case "$sub" in
+        -h|--help|help) _changes_notes_usage; return 0 ;;
+    esac
+    case "$sub" in
+        ""|-*) _changes_notes_list "$@" ;;
+        list|ls) shift; _changes_notes_list "$@" ;;
+        resolve|done) shift; _changes_notes_ids resolve /cli/git/notes/resolve "" "$@" ;;
+        reopen) shift; _changes_notes_ids reopen /cli/git/notes/resolve "resolved?=0" "$@" ;;
+        delete|rm) shift; _changes_notes_ids delete /cli/git/notes/delete "" "$@" ;;
+        add) shift; _changes_notes_add "$@" ;;
+        edit|update) shift; _changes_notes_edit "$@" ;;
+        send) shift; _changes_notes_send "$@" ;;
+        *)
+            echo "Error: unknown k2 changes notes command: $sub (list, add, resolve, reopen, edit, delete, send)" >&2
+            _changes_notes_usage >&2
+            exit 2 ;;
+    esac
+}
+
 cmd_changes() {
     _CH_JSON=0
     local sub="${1:-}"
     if _wants_help "$@"; then
-        _changes_usage
+        case "$sub" in
+            notes|note) _changes_notes_usage ;;
+            *) _changes_usage ;;
+        esac
         return 0
     fi
     case "$sub" in
@@ -51575,9 +51920,12 @@ cmd_changes() {
         unstage) shift; _changes_stage unstage "$@" ;;
         discard) shift; _changes_discard "$@" ;;
         commit) shift; _changes_commit "$@" ;;
+        notes|note) shift; _changes_notes "$@" ;;
+        open) shift; _changes_open "$@" ;;
+        init) shift; _changes_init "$@" ;;
         help) _changes_usage ;;
         *)
-            echo "Error: unknown k2 changes command: $sub (list, diff, stage, unstage, discard, commit)" >&2
+            echo "Error: unknown k2 changes command: $sub (list, diff, stage, unstage, discard, commit, notes, open, init)" >&2
             _changes_usage >&2
             exit 2 ;;
     esac

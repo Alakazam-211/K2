@@ -21,7 +21,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ThreadTurn } from '@/components/SessionView/overlayThread'
-import { THREAD_ZEN_SCOPE_ATTR } from '@/components/Thread/ThreadZenKit'
+import { CHAMFER_CUT, THREAD_ZEN_SCOPE_ATTR, chamferVars } from '@/components/Thread/ThreadZenKit'
 import {
   COUNTER_CHECK_PX,
   COUNTER_GAP_PX,
@@ -411,6 +411,9 @@ export function ZenActivityDrawer({
           ref={tileRef}
           type="button"
           data-zen-drawer-tile=""
+          // K2's square Style (desktop Thread): chamfered, top corners only
+          // when it sits on the message box.
+          data-chamfer=""
           aria-expanded={expanded}
           aria-label={display.ariaLabel}
           title={expanded ? 'Show less' : 'Show the detail'}
@@ -427,6 +430,13 @@ export function ZenActivityDrawer({
             ...(attached
               ? { borderBottom: 'none', borderRadius: 'calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0' }
               : { borderRadius: 'calc(var(--zen-radius) + 2px)' }),
+            ...chamferVars({
+              cut: attached ? [CHAMFER_CUT.button, CHAMFER_CUT.button, 0, 0] : CHAMFER_CUT.button,
+              fill: 'var(--zen-surface-raised)',
+              edge: 'var(--zen-border)',
+              border: 1,
+              outset: attached ? '-1px -1px 0 -1px' : undefined,
+            }),
           }}
         >
           {expanded ? (

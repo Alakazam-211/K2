@@ -425,6 +425,9 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // remote Settings→Email page refetches live.
         SessionEvent::MailChanged { .. } => None,
 
+        // Sew on K2 (S29 K14) — APP-LEVEL: one Sew server per box.
+        SessionEvent::SewChanged { .. } => None,
+
         // prd-dns-pending-and-cutover-safety-v1 DN12e — APP-LEVEL: custom
         // domains are host-wide (Settings → Network → Custom Domains), not tied
         // to one workspace.
@@ -818,6 +821,7 @@ mod tests {
                 has_brief: false,
             },
             SessionEvent::MailChanged { reason: "send-decided".into() },
+            SessionEvent::SewChanged { reason: "voice-installed".into() },
             SessionEvent::DomainsChanged { reason: "status_changed".into(), apex: Some("example.com".into()) },
             SessionEvent::FederationPeersChanged {
                 fingerprint: "ab".into(),

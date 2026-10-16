@@ -18,6 +18,10 @@
 //!   boxes where agents have root this is evidence, not prevention (KM13
 //!   §19a).
 //!
+//! Voice (K13, `/cli/sew/media/*`) and Sew's own users on a standalone
+//! install (`/cli/sew/users*`) sit behind the same Manage Sew gate. A
+//! setup link is returned to the caller only, never logged.
+//!
 //! Route floors (Connect logins) live in `route_policy::ROUTES`; every
 //! mutation is POST-only (405 on GET before auth).
 
@@ -36,8 +40,15 @@ pub const MAX_BODY: usize = 64 * 1024;
 pub const ROUTES: &[&str] = &[
     "/cli/sew/backups",
     "/cli/sew/job",
+    "/cli/sew/media/install",
+    "/cli/sew/media/preflight",
+    "/cli/sew/media/probe",
+    "/cli/sew/media/renew",
+    "/cli/sew/media/uninstall",
+    "/cli/sew/media/url",
     "/cli/sew/preflight",
     "/cli/sew/server/backup",
+    "/cli/sew/server/config",
     "/cli/sew/server/disable",
     "/cli/sew/server/doctor",
     "/cli/sew/server/enable",
@@ -48,10 +59,23 @@ pub const ROUTES: &[&str] = &[
     "/cli/sew/server/uninstall",
     "/cli/sew/server/upgrade",
     "/cli/sew/status",
+    "/cli/sew/users",
+    "/cli/sew/users/invite",
+    "/cli/sew/users/owner",
+    "/cli/sew/users/reactivate",
+    "/cli/sew/users/reset",
+    "/cli/sew/users/revoke",
+    "/cli/sew/users/role",
 ];
 
 pub const POST_ROUTES: &[&str] = &[
+    "/cli/sew/media/install",
+    "/cli/sew/media/probe",
+    "/cli/sew/media/renew",
+    "/cli/sew/media/uninstall",
+    "/cli/sew/media/url",
     "/cli/sew/server/backup",
+    "/cli/sew/server/config",
     "/cli/sew/server/disable",
     "/cli/sew/server/doctor",
     "/cli/sew/server/enable",
@@ -61,6 +85,12 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/sew/server/rotate-master",
     "/cli/sew/server/uninstall",
     "/cli/sew/server/upgrade",
+    "/cli/sew/users/invite",
+    "/cli/sew/users/owner",
+    "/cli/sew/users/reactivate",
+    "/cli/sew/users/reset",
+    "/cli/sew/users/revoke",
+    "/cli/sew/users/role",
 ];
 
 /// Vault confirm actions (`vault_routes::CONFIRM_ACTIONS`).
@@ -88,6 +118,8 @@ fn status_line(code: u16) -> &'static str {
         405 => "405 Method Not Allowed",
         409 => "409 Conflict",
         413 => "413 Payload Too Large",
+        429 => "429 Too Many Requests",
+        502 => "502 Bad Gateway",
         503 => "503 Service Unavailable",
         _ => "500 Internal Server Error",
     }
@@ -229,6 +261,39 @@ fn abs_path(v: &Value, k: &str) -> R<Option<PathBuf>> {
     }
 }
 
+/// `{publicUrl?, nodeIp?, mediaTarballPath? | tarballPath?}`.
+fn voice_request(v: &Value) -> R<super::voice::InstallRequest> {
+    Ok(super::voice::InstallRequest {
+        public_url: s(v, "publicUrl").map(str::to_string),
+        node_ip: s(v, "nodeIp").map(str::to_string),
+        tarball_path: match abs_path(v, "mediaTarballPath")? {
+            Some(p) => Some(p),
+            None => abs_path(v, "tarballPath")?,
+        },
+    })
+}
+
+/// Begin the voice install; run it on a thread (`background`) or inline.
+fn voice_install(env: Env<'static>, req: &super::voice::InstallRequest, background: bool) -> R<Value> {
+    let latch = super::voice::install_begin(&env, req)?;
+    if background {
+        let req = req.clone();
+        std::thread::Builder::new()
+            .name("sew-voice".into())
+            .spawn(move || {
+                let _l = latch;
+                if let Err(f) = super::voice::install_machine(&env, &req) {
+                    k2_core::log_debug!("[sew] voice install: {}", f.code);
+                }
+            })
+            .map_err(|e| no("spawn", 500, e.to_string()))?;
+        return Ok(json!({"ok": true, "voice": "installing", "hint": "poll GET /cli/sew/status (voice.progress)"}));
+    }
+    let r = super::voice::install_machine(&env, req);
+    drop(latch);
+    r
+}
+
 // ── entry ────────────────────────────────────────────────────────────────
 
 /// Route a Sew request (blocking). Machines run on a background thread.
@@ -256,6 +321,7 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
             let req = sup::EnableRequest {
                 tarball_path: params.get("tarballPath").filter(|p| p.starts_with('/')).map(PathBuf::from),
                 recovery_key_file: None,
+                ..Default::default()
             };
             let checks = sup::preflight(&env, &req);
             let ready = !checks.iter().any(|c| c["status"] == "fail");
@@ -272,28 +338,133 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         "/cli/sew/server/enable" => {
             need_manage(who)?;
             let v = json_body(body)?;
-            let req = sup::EnableRequest { tarball_path: abs_path(&v, "tarballPath")?, recovery_key_file: abs_path(&v, "recoveryKeyFile")? };
+            let provider = match s(&v, "identity") {
+                None | Some("k2") => None,
+                Some("standalone") => Some(k2_root_proto::sew::PROVIDER_STANDALONE.to_string()),
+                Some(_) => return Err(no("bad_request", 400, "identity is k2 or standalone")),
+            };
+            let voice = match v.get("voice") {
+                None | Some(Value::Null) => None,
+                Some(o) if o.is_object() => Some(voice_request(o)?),
+                Some(_) => return Err(no("bad_request", 400, "voice is an object {publicUrl?, nodeIp?, mediaTarballPath?}")),
+            };
+            if let Some(vr) = &voice {
+                super::voice::check_request(&env, vr)?;
+            }
+            let req = sup::EnableRequest {
+                tarball_path: abs_path(&v, "tarballPath")?,
+                recovery_key_file: abs_path(&v, "recoveryKeyFile")?,
+                provider,
+                voice,
+            };
+            let with_voice = req.voice.is_some();
             match sup::enable_begin(&env, &req)? {
+                Err(done) if with_voice => {
+                    // Chat already runs: only the voice step is left.
+                    let vr = req.voice.clone().unwrap_or_default();
+                    let mut r = voice_install(env, &vr, background)?;
+                    r["chat"] = done;
+                    Ok(r)
+                }
                 Err(done) => Ok(done),
                 Ok(latch) if background => {
                     std::thread::Builder::new()
                         .name("sew-enable".into())
                         .spawn(move || {
-                            let _l = latch;
-                            if let Err(e) = sup::enable_machine(&env, &req) {
-                                k2_core::log_debug!("[sew] enable: {e}");
+                            let r = sup::enable_machine(&env, &req);
+                            drop(latch);
+                            match r {
+                                Err(e) => k2_core::log_debug!("[sew] enable: {e}"),
+                                Ok(()) => {
+                                    if let Some(vr) = &req.voice {
+                                        if let Err(f) = voice_install(env, vr, false) {
+                                            k2_core::log_debug!("[sew] voice: {}", f.code);
+                                        }
+                                    }
+                                }
                             }
                         })
                         .map_err(|e| no("spawn", 500, e.to_string()))?;
-                    Ok(json!({"ok": true, "state": "installing", "hint": "poll GET /cli/sew/status (k2 hostchat status)"}))
+                    Ok(json!({"ok": true, "state": "installing", "voice": with_voice, "hint": "poll GET /cli/sew/status (k2 hostchat status)"}))
                 }
                 Ok(latch) => {
                     let r = sup::enable_machine(&env, &req);
                     drop(latch);
                     match r {
-                        Ok(()) => Ok(json!({"ok": true, "state": "running"})),
+                        Ok(()) => match &req.voice {
+                            Some(vr) => {
+                                let mut out = voice_install(env, vr, false)?;
+                                out["state"] = json!("running");
+                                Ok(out)
+                            }
+                            None => Ok(json!({"ok": true, "state": "running"})),
+                        },
                         Err(e) => Err(no("enable_failed", 500, e)),
                     }
+                }
+            }
+        }
+        "/cli/sew/server/config" => {
+            need_manage(who)?;
+            let v = json_body(body)?;
+            sup::server_config(&env, s(&v, "publicUrl"), s(&v, "setupUrl"))
+        }
+        "/cli/sew/media/preflight" => {
+            need_credential(who)?;
+            let checks = super::voice::preflight(&env);
+            let ready = !checks.iter().any(|c| c["status"] == "fail");
+            Ok(json!({"ok": true, "ready": ready, "checks": checks}))
+        }
+        "/cli/sew/media/install" => {
+            need_manage(who)?;
+            let v = json_body(body)?;
+            let req = voice_request(&v)?;
+            voice_install(env, &req, background)
+        }
+        "/cli/sew/media/url" => {
+            need_manage(who)?;
+            let v = json_body(body)?;
+            let url = s(&v, "publicUrl").ok_or_else(|| no("bad_request", 400, "name the voice URL (publicUrl, wss://<host>)"))?;
+            super::voice::set_url(&env, url)
+        }
+        "/cli/sew/media/renew" => {
+            need_manage(who)?;
+            super::voice::renew(&env, true)
+        }
+        "/cli/sew/media/probe" => {
+            need_manage(who)?;
+            let v = json_body(body)?;
+            let r = |k: &str| match s(&v, k) {
+                Some("ok") => Ok(true),
+                Some("fail") => Ok(false),
+                _ => Err(no("bad_request", 400, format!("{k} is ok or fail"))),
+            };
+            super::voice::probe_record(&env, r("udp")?, r("tcp")?, r("turnTls")?)
+        }
+        "/cli/sew/media/uninstall" => {
+            need_manage(who)?;
+            super::voice::uninstall(&env)
+        }
+        "/cli/sew/users" => {
+            need_manage(who)?;
+            super::users::list(&env)
+        }
+        "/cli/sew/users/owner" | "/cli/sew/users/invite" | "/cli/sew/users/reset" | "/cli/sew/users/revoke"
+        | "/cli/sew/users/reactivate" | "/cli/sew/users/role" => {
+            need_manage(who)?;
+            let v = json_body(body)?;
+            let user = s(&v, "user").ok_or_else(|| no("bad_request", 400, "name the user (user: a username, a name or an email)"))?;
+            match path {
+                "/cli/sew/users/owner" => super::users::owner(&env, user, s(&v, "displayName")),
+                "/cli/sew/users/invite" => {
+                    super::users::invite(&env, user, s(&v, "displayName"), s(&v, "role").unwrap_or("member"), s(&v, "email"))
+                }
+                "/cli/sew/users/reset" => super::users::reset(&env, user),
+                "/cli/sew/users/revoke" => super::users::revoke(&env, user),
+                "/cli/sew/users/reactivate" => super::users::reactivate(&env, user),
+                _ => {
+                    let role = s(&v, "role").ok_or_else(|| no("bad_request", 400, "name the role (admin or member)"))?;
+                    super::users::role(&env, user, role)
                 }
             }
         }

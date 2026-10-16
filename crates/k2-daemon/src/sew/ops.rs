@@ -87,6 +87,104 @@ pub trait SewOps: Send + Sync {
     fn mgmt(&self, method: &str, path: &str, token: &str, body: Option<&Value>) -> Result<Value, MgmtError>;
     fn now(&self) -> i64;
     fn sleep_ms(&self, ms: u64);
+
+    // ── voice (K13) ──────────────────────────────────────────────────────
+    /// This box's k2.dev label (the tunnel's primary label), `None` without
+    /// K2 Connect.
+    fn box_label(&self) -> Option<String>;
+    /// Custom domains bound to this box (apexes, lowercase).
+    fn bound_apexes(&self) -> Vec<String>;
+    /// Public addresses on this box's interfaces (IPv4 and global IPv6).
+    fn public_ips(&self) -> Vec<String>;
+    /// One call to the K2 Connect control plane with the box's tunnel
+    /// token (`PUT|DELETE /turn/dns/<label>`, `POST /cert` turn mode).
+    fn cp(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, CpError>;
+    /// Point a box-level nested label at `target` (`None` deletes it).
+    fn nested_label(&self, label: &str, target: Option<&str>) -> Result<(), String>;
+    /// The leaf sha256 `connect:port` presents for SNI `sni` (`None` = no
+    /// handshake).
+    fn served_leaf(&self, connect: &str, sni: &str, port: u16) -> Option<String>;
+    /// frpc logins since the daemon started (a TURN DNS `ip_unverified`
+    /// retries after the next one).
+    fn frpc_logins(&self) -> u64;
+    /// The voice state record (`~/.k2/sew/voice.json`, 0600); `None` = none.
+    fn voice_load(&self) -> Option<Value>;
+    /// Write the voice record (`None` removes it).
+    fn voice_save(&self, v: Option<&Value>) -> Result<(), String>;
+}
+
+/// A control-plane answer that was not 2xx (`status` 0 = unreachable).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CpError {
+    pub status: u16,
+    pub code: String,
+    pub detail: String,
+}
+
+impl std::fmt::Display for CpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.status == 0 {
+            write!(f, "K2 Connect is unreachable: {}", self.detail)
+        } else {
+            write!(f, "K2 Connect answered {} {}: {}", self.status, self.code, self.detail)
+        }
+    }
+}
+
+/// The control plane's base URL: the cert broker's (`K2_CERT_BROKER_URL`,
+/// default `https://cert.k2.dev/cert`) without its `/cert` path.
+pub fn cp_base_url() -> String {
+    let b = k2_core::tunnel::cert_broker::broker_url();
+    b.strip_suffix("/cert").unwrap_or(&b).trim_end_matches('/').to_string()
+}
+
+/// `PUT|DELETE|POST <base><path>` with `Authorization: Bearer <token>`, on
+/// a thread with no ambient tokio runtime (reqwest blocking).
+pub fn cp_http(method: &str, path: &str, token: &str, body: Option<&Value>) -> Result<Value, CpError> {
+    let url = format!("{}{path}", cp_base_url());
+    let (m, t, b) = (method.to_string(), token.to_string(), body.cloned());
+    let joined = std::thread::Builder::new()
+        .name("k2-sew-cp".into())
+        .spawn(move || -> Result<(u16, String), String> {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(90))
+                .build()
+                .map_err(|e| e.to_string())?;
+            let method = reqwest::Method::from_bytes(m.as_bytes()).map_err(|e| e.to_string())?;
+            let mut req = client.request(method, &url).header("Authorization", format!("Bearer {t}"));
+            if let Some(b) = b {
+                req = req.header("Content-Type", "application/json").body(b.to_string());
+            }
+            let resp = req.send().map_err(|e| e.to_string())?;
+            let status = resp.status().as_u16();
+            Ok((status, resp.text().unwrap_or_default()))
+        })
+        .map_err(|e| CpError { status: 0, code: "spawn".into(), detail: e.to_string() })?
+        .join()
+        .map_err(|_| CpError { status: 0, code: "panic".into(), detail: "control-plane request thread panicked".into() })?;
+    let (status, text) = joined.map_err(|e| CpError { status: 0, code: "unreachable".into(), detail: e })?;
+    cp_answer(status, &text)
+}
+
+/// Map a control-plane answer: 2xx JSON, else `{error, detail}`.
+pub fn cp_answer(status: u16, text: &str) -> Result<Value, CpError> {
+    let v: Option<Value> = serde_json::from_str(text).ok();
+    if (200..300).contains(&status) {
+        return v.ok_or_else(|| CpError { status, code: "bad_answer".into(), detail: "answer is not JSON".into() });
+    }
+    let code = v.as_ref().and_then(|v| v.get("error")).and_then(Value::as_str).unwrap_or("http_error").to_string();
+    let detail = v
+        .as_ref()
+        .and_then(|v| v.get("detail"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| text.chars().take(200).collect());
+    Err(CpError { status, code, detail })
+}
+
+/// `~/.k2/sew/voice.json`.
+pub fn voice_state_path() -> std::path::PathBuf {
+    k2_core::paths::k2_home().join("sew").join("voice.json")
 }
 
 // ── production ───────────────────────────────────────────────────────────
@@ -199,6 +297,95 @@ impl SewOps for RealOps {
     }
     fn sleep_ms(&self, ms: u64) {
         std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+    fn box_label(&self) -> Option<String> {
+        let primary = k2_core::tunnel::subdomains::current().primary.trim().to_ascii_lowercase();
+        let label = if primary.is_empty() {
+            k2_core::tunnel::config::load().ok()?.subdomain.trim().to_ascii_lowercase()
+        } else {
+            primary
+        };
+        let label = label.strip_suffix(".k2.dev").map(str::to_string).unwrap_or(label);
+        (!label.is_empty() && !label.contains('.')).then_some(label)
+    }
+    fn bound_apexes(&self) -> Vec<String> {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::list_bindings(&conn)
+            .map(|b| b.into_iter().map(|d| d.apex.to_ascii_lowercase()).collect())
+            .unwrap_or_default()
+    }
+    fn public_ips(&self) -> Vec<String> {
+        let (v4, v6) = crate::mail::cert_names::local_interface_addrs();
+        v4.iter().map(ToString::to_string).chain(v6.iter().map(ToString::to_string)).collect()
+    }
+    fn cp(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, CpError> {
+        let cfg = k2_core::tunnel::config::load()
+            .map_err(|e| CpError { status: 0, code: "no_tunnel_config".into(), detail: e })?;
+        if let Some(e) = cfg.token_read_error.as_deref() {
+            return Err(CpError { status: 0, code: "vault_unreadable".into(), detail: e.to_string() });
+        }
+        let token = cfg.token.trim().to_string();
+        if token.is_empty() {
+            return Err(CpError { status: 0, code: "no_tunnel_token".into(), detail: "K2 Connect is not set up on this box".into() });
+        }
+        cp_http(method, path, &token, body)
+    }
+    fn nested_label(&self, label: &str, target: Option<&str>) -> Result<(), String> {
+        if k2_core::airgap::enabled() {
+            return Err("air-gapped: no K2 Connect nested labels".into());
+        }
+        let cfg = k2_core::tunnel::config::load()?;
+        let token = cfg.token.trim();
+        if token.is_empty() {
+            return Err("K2 Connect is not set up on this box".into());
+        }
+        let owner = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::db::schema::SubdomainWorkspace::owner_of(&conn, label).map_err(|e| e.to_string())?
+        };
+        if owner.is_some() {
+            return Err(format!("'{label}' is attributed to a workspace on this server; release it first (k2 publish subdomain unclaim {label})"));
+        }
+        match target {
+            Some(t) => match k2_core::tunnel::subdomains::create_subdomain(token, label, t) {
+                Ok(()) => Ok(()),
+                Err(e) if e.contains("label_taken") => k2_core::tunnel::subdomains::point_subdomain(token, label, t),
+                Err(e) => Err(e),
+            },
+            None => k2_core::tunnel::subdomains::delete_subdomain(token, label),
+        }
+    }
+    fn served_leaf(&self, connect: &str, sni: &str, port: u16) -> Option<String> {
+        match crate::domains::status::served_leaf_at(connect, sni, port) {
+            crate::domains::status::Served::Leaf(s) => Some(s),
+            crate::domains::status::Served::Nothing => None,
+        }
+    }
+    fn frpc_logins(&self) -> u64 {
+        k2_core::tunnel::connector::frpc_login_count()
+    }
+    fn voice_load(&self) -> Option<Value> {
+        let text = std::fs::read_to_string(voice_state_path()).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+    fn voice_save(&self, v: Option<&Value>) -> Result<(), String> {
+        let p = voice_state_path();
+        match v {
+            Some(v) => {
+                if let Some(d) = p.parent() {
+                    std::fs::create_dir_all(d).map_err(|e| format!("mkdir {}: {e}", d.display()))?;
+                }
+                k2_core::fs_atomic::atomic_write_mode(&p, v.to_string().as_bytes(), 0o600)
+                    .map_err(|e| format!("write {}: {e}", p.display()))
+            }
+            None => match std::fs::remove_file(&p) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(format!("remove {}: {e}", p.display())),
+            },
+        }
     }
 }
 
@@ -359,6 +546,31 @@ pub mod fake {
         pub port: Mutex<Option<u16>>,
         pub clock: Mutex<i64>,
         pub linux: bool,
+        /// Bodies of every mgmt call, in order (`None` = no body).
+        pub mgmt_bodies: Mutex<Vec<Option<Value>>>,
+        // voice (K13)
+        pub label: Mutex<Option<String>>,
+        pub apexes: Mutex<Vec<String>>,
+        pub ips: Mutex<Vec<String>>,
+        /// "METHOD path" of every control-plane call, with its body.
+        pub cp_calls: Mutex<Vec<(String, Option<Value>)>>,
+        /// "METHOD path" → queued control-plane answers (before the canned).
+        pub cp_answers: Mutex<HashMap<String, VecDeque<Result<Value, CpError>>>>,
+        /// The IPv4 the control plane observes for this box.
+        pub cp_ip: Mutex<String>,
+        /// Days the canned turn certificate is valid from `clock`.
+        pub cert_days: Mutex<i64>,
+        pub nested: Mutex<Vec<(String, Option<String>)>>,
+        /// What the TURN TLS port serves: `Some(true)` = the last cert K2
+        /// issued, `Some(false)` = another cert, `None` = nothing.
+        pub serves_ours: Mutex<Option<bool>>,
+        pub logins: Mutex<u64>,
+        pub voice: Mutex<Option<Value>>,
+        /// The leaf sha256 of the last canned turn cert.
+        pub last_leaf: Mutex<Option<String>>,
+        /// `engine sew stage-media` happened (status reports it staged).
+        pub media_staged: Mutex<bool>,
+        pub media_state: Mutex<Value>,
     }
 
     pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -415,7 +627,79 @@ pub mod fake {
                 port: Mutex::new(Some(38471)),
                 clock: Mutex::new(1_800_000_000),
                 linux: true,
+                mgmt_bodies: Mutex::new(vec![]),
+                label: Mutex::new(Some("lztek".into())),
+                apexes: Mutex::new(vec!["acme.dev".into()]),
+                ips: Mutex::new(vec!["203.0.113.7".into()]),
+                cp_calls: Mutex::new(vec![]),
+                cp_answers: Mutex::new(HashMap::new()),
+                cp_ip: Mutex::new("203.0.113.7".into()),
+                cert_days: Mutex::new(90),
+                nested: Mutex::new(vec![]),
+                serves_ours: Mutex::new(Some(true)),
+                logins: Mutex::new(1),
+                voice: Mutex::new(None),
+                last_leaf: Mutex::new(None),
+                media_staged: Mutex::new(false),
+                media_state: Mutex::new(json!({"installed": true, "enabled": true, "state": "running", "alarms": ["port_443_unavailable"]})),
             }
+        }
+
+        pub fn queue_cp(&self, call: &str, answer: Result<Value, CpError>) {
+            self.cp_answers.lock().unwrap().entry(call.to_string()).or_default().push_back(answer);
+        }
+
+        pub fn cp_log(&self) -> Vec<String> {
+            self.cp_calls.lock().unwrap().iter().map(|(c, _)| c.clone()).collect()
+        }
+
+        /// A certificate the fake control plane signs for `csr_pem` (rcgen,
+        /// self-signed by a throwaway CA; the SAN and key are the CSR's).
+        pub fn sign_csr(&self, csr_pem: &str) -> String {
+            use chrono::Datelike;
+            use x509_parser::extensions::{GeneralName, ParsedExtension};
+            use x509_parser::prelude::FromDer;
+            struct Foreign(Vec<u8>);
+            impl rcgen::PublicKeyData for Foreign {
+                fn der_bytes(&self) -> &[u8] {
+                    &self.0
+                }
+                fn algorithm(&self) -> &rcgen::SignatureAlgorithm {
+                    &rcgen::PKCS_ECDSA_P256_SHA256
+                }
+            }
+            let mut reader = csr_pem.as_bytes();
+            let (pem, _) = x509_parser::pem::Pem::read(std::io::Cursor::new(&mut reader)).expect("CSR PEM");
+            let (_, csr) = x509_parser::certification_request::X509CertificationRequest::from_der(&pem.contents).expect("CSR DER");
+            let info = &csr.certification_request_info;
+            let raw = info.subject_pki.subject_public_key.data.to_vec();
+            let mut sans = Vec::new();
+            for ext in csr.requested_extensions().into_iter().flatten() {
+                if let ParsedExtension::SubjectAlternativeName(san) = ext {
+                    for n in &san.general_names {
+                        if let GeneralName::DNSName(d) = n {
+                            sans.push(d.to_string());
+                        }
+                    }
+                }
+            }
+            let ca_key = rcgen::KeyPair::generate().unwrap();
+            let mut ca_params = rcgen::CertificateParams::new(vec!["fake-ca.k2.dev".to_string()]).unwrap();
+            ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+            let ca = ca_params.self_signed(&ca_key).unwrap();
+            let now = *self.clock.lock().unwrap();
+            let days = *self.cert_days.lock().unwrap();
+            let ymd = |t: i64| {
+                let d = chrono::DateTime::from_timestamp(t, 0).unwrap().date_naive();
+                rcgen::date_time_ymd(d.year(), d.month() as u8, d.day() as u8)
+            };
+            let mut params = rcgen::CertificateParams::new(sans).unwrap();
+            params.not_before = ymd(now - 86_400);
+            params.not_after = ymd(now + days * 86_400);
+            let leaf = params.signed_by(&Foreign(raw), &ca, &ca_key).unwrap();
+            let chain = format!("{}{}", leaf.pem(), ca.pem());
+            *self.last_leaf.lock().unwrap() = crate::domains::status::pem_leaf_sha256(&chain);
+            chain
         }
 
         pub fn queue(&self, argv: &str, answer: Result<Value, String>) {
@@ -469,11 +753,30 @@ pub mod fake {
                                 "error": "sew helper: /usr/local/bin/sew is not root-owned or is writable by others"}),
                             Some(v) => json!({"present": true, "known": true, "version": v}),
                         },
-                        "staged": {"core": null},
+                        "staged": {"core": null, "media": if *self.media_staged.lock().unwrap() {
+                            k2_root_proto::sew::pinned().media.as_ref().map(|m| json!(m.version)).unwrap_or(Value::Null)
+                        } else { Value::Null }},
                         "units": {"sewDb": st(UNIT_DB), "sew": st(UNIT_SEW)},
                     })
                 }
                 "engine sew stage" => json!({"staged": pin}),
+                "engine sew stage-media" => {
+                    *self.media_staged.lock().unwrap() = true;
+                    json!({"staged": pin, "kind": "media"})
+                }
+                "engine sew media install" => {
+                    active(UNIT_MEDIA);
+                    Self::sew_exit(0, json!({"changed": ["sew-media"], "warnings": []}))
+                }
+                "engine sew media reconfigure" => Self::sew_exit(0, json!({"changed": ["/etc/sew/sew.toml [voice]"]})),
+                "engine sew media turn-cert" => Self::sew_exit(0, json!({"changed": ["turn-tls/fullchain.pem"]})),
+                "engine sew media status" => Self::sew_exit(0, self.media_state.lock().unwrap().clone()),
+                "engine sew media uninstall" => {
+                    inactive(UNIT_MEDIA);
+                    Self::sew_exit(0, json!({"removed": ["sew-media"]}))
+                }
+                a if a.starts_with("engine sew media probe-record ") => Self::sew_exit(0, json!({"recorded": true})),
+                "engine sew config" => json!({"sewExit": 0, "results": []}),
                 "engine sew unstage" => json!({"removed": []}),
                 "engine sew install-bin" => {
                     *self.on_disk.lock().unwrap() = Some(pin.into());
@@ -606,8 +909,9 @@ pub mod fake {
         fn hostname(&self) -> String {
             "lztek".into()
         }
-        fn mgmt(&self, method: &str, path: &str, token: &str, _body: Option<&Value>) -> Result<Value, MgmtError> {
+        fn mgmt(&self, method: &str, path: &str, token: &str, body: Option<&Value>) -> Result<Value, MgmtError> {
             self.mgmt_calls.lock().unwrap().push(format!("{method} {path}"));
+            self.mgmt_bodies.lock().unwrap().push(body.cloned());
             if token != TOKEN {
                 return Err(MgmtError::Unauthorized);
             }
@@ -662,6 +966,63 @@ pub mod fake {
         }
         fn sleep_ms(&self, ms: u64) {
             *self.clock.lock().unwrap() += (ms / 1000).max(1) as i64;
+        }
+        fn box_label(&self) -> Option<String> {
+            self.label.lock().unwrap().clone()
+        }
+        fn bound_apexes(&self) -> Vec<String> {
+            self.apexes.lock().unwrap().clone()
+        }
+        fn public_ips(&self) -> Vec<String> {
+            self.ips.lock().unwrap().clone()
+        }
+        fn cp(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, CpError> {
+            let call = format!("{method} {path}");
+            self.cp_calls.lock().unwrap().push((call.clone(), body.cloned()));
+            if let Some(a) = self.cp_answers.lock().unwrap().get_mut(&call).and_then(VecDeque::pop_front) {
+                return a;
+            }
+            let label = self.label.lock().unwrap().clone().unwrap_or_default();
+            if method == "PUT" && path == format!("/turn/dns/{label}") {
+                let ip = body
+                    .and_then(|b| b.get("ipv4"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| self.cp_ip.lock().unwrap().clone());
+                return Ok(json!({"host": format!("turn-{label}.k2.dev"), "ipv4": ip, "ipv6": null, "proxied": false,
+                    "ttl": 60, "verified_by": {"ipv4": "request_source"}, "changes": {"a": "created", "aaaa": null}}));
+            }
+            if method == "DELETE" && path == format!("/turn/dns/{label}") {
+                return Ok(json!({"host": format!("turn-{label}.k2.dev"), "removed": ["A"]}));
+            }
+            if method == "POST" && path == "/cert" {
+                let b = body.expect("cert body");
+                assert_eq!(b["mode"], "turn");
+                assert_eq!(b["subdomain"], label.as_str());
+                return Ok(json!({"cert": self.sign_csr(b["csr"].as_str().unwrap())}));
+            }
+            Err(CpError { status: 404, code: "not_found".into(), detail: call })
+        }
+        fn nested_label(&self, label: &str, target: Option<&str>) -> Result<(), String> {
+            self.nested.lock().unwrap().push((label.to_string(), target.map(str::to_string)));
+            Ok(())
+        }
+        fn served_leaf(&self, _connect: &str, _sni: &str, _port: u16) -> Option<String> {
+            match *self.serves_ours.lock().unwrap() {
+                Some(true) => self.last_leaf.lock().unwrap().clone(),
+                Some(false) => Some("0".repeat(64)),
+                None => None,
+            }
+        }
+        fn frpc_logins(&self) -> u64 {
+            *self.logins.lock().unwrap()
+        }
+        fn voice_load(&self) -> Option<Value> {
+            self.voice.lock().unwrap().clone()
+        }
+        fn voice_save(&self, v: Option<&Value>) -> Result<(), String> {
+            *self.voice.lock().unwrap() = v.cloned();
+            Ok(())
         }
     }
 }

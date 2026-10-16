@@ -18,10 +18,17 @@
 //! - [`routes`]: `/cli/sew/*` with the gates (owner/admin, or an agent whose
 //!   workspace has "Manage Sew" on; person-only steps need a vault confirm).
 //!
-//! Not here yet (later work items): the grant hook target and owner
-//! provisioning (S27 K2–K4), the chat pass link (S28 K6/K7), the voice
-//! media flow and TURN cert (K13), `k2 hostchat` and the `SewChanged` event
-//! mirror (K14), host / mirror / ship / app-url routes (S32).
+//! - [`voice`]: `sew-media` with TURN over TLS (K13): ports preflight,
+//!   node IP, the TURN host + cert from K2 Connect's turn mode, renewal,
+//!   `voice.public_url`, status mapping.
+//! - [`users`]: Sew's own users on a standalone install (setup links).
+//!
+//! `k2 hostchat` (K14) drives all of it; [`supervisor::changed`] fires the
+//! `sew:changed` hook, mirrored as the app-level `sew_changed` event.
+//!
+//! Not here yet (0.46.1+): the grant hook target and owner provisioning
+//! (S27 K2–K4), the chat pass link (S28 K6/K7), host / mirror / ship /
+//! app-url routes (S32).
 
 pub mod ops;
 pub mod routes;
@@ -29,6 +36,8 @@ pub mod secrets;
 pub mod sew_wire;
 pub mod store;
 pub mod supervisor;
+pub mod users;
+pub mod voice;
 
 /// Sew runs on Linux only (a runtime check, so the machines are testable
 /// on a Mac through the fakes).

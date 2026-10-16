@@ -236,21 +236,36 @@ fn parse_leaf(der: &[u8]) -> Option<(String, String, i64, Vec<String>)> {
 }
 
 fn probe_port(host: &str, port: u16) -> Raw {
-    if host.trim().is_empty() {
+    probe_port_at(host, host, port)
+}
+
+/// Connect to `connect` (a name or a literal IP) and present SNI `sni`.
+fn probe_port_at(connect: &str, sni: &str, port: u16) -> Raw {
+    if connect.trim().is_empty() || sni.trim().is_empty() {
         return Raw::Missing;
     }
-    let host = host.to_string();
+    let (connect, sni) = (connect.to_string(), sni.to_string());
     let (tx, rx) = std::sync::mpsc::channel();
     let _ = std::thread::Builder::new()
         .name("k2-cert-probe".into())
         .spawn(move || {
-            let _ = tx.send(probe_inner(&host, port));
+            let _ = tx.send(probe_inner(&connect, &sni, port));
         });
     rx.recv_timeout(PROBE_TIMEOUT + Duration::from_millis(400))
         .unwrap_or(Raw::Missing)
 }
 
-fn probe_inner(host: &str, port: u16) -> Raw {
+/// The leaf `connect:port` presents for SNI `sni` (Sew voice: the TURN TLS
+/// listener on the box's public IP, SNI `turn-<label>.k2.dev`). Capture
+/// only, like [`served_leaf`].
+pub fn served_leaf_at(connect: &str, sni: &str, port: u16) -> Served {
+    match probe_port_at(connect, sni, port) {
+        Raw::Handshake { leaf_der } => Served::Leaf(der_sha256_hex(&leaf_der)),
+        Raw::Missing => Served::Nothing,
+    }
+}
+
+fn probe_inner(host: &str, sni: &str, port: u16) -> Raw {
     use std::net::ToSocketAddrs;
 
     #[derive(Debug)]
@@ -324,7 +339,7 @@ fn probe_inner(host: &str, port: u16) -> Raw {
         .dangerous()
         .with_custom_certificate_verifier(capture.clone())
         .with_no_client_auth();
-    let Ok(server_name) = ServerName::try_from(host.to_string()) else {
+    let Ok(server_name) = ServerName::try_from(sni.to_string()) else {
         return Raw::Missing;
     };
     let mut conn = match ClientConnection::new(Arc::new(config), server_name) {

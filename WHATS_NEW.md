@@ -3,6 +3,18 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.1
+
+### Door (lane 2)
+- **Stop an App in one step.** `k2 app suspend <app>` ends every pass the App holds at once, so its very next call to K2 is refused, stops it and freezes its deploys and starts. Anyone who can see the App may do it, its agent included; only you bring it back, with `k2 app resume <app>` from a terminal outside K2.
+- **See every call an App makes.** Each call an App makes through its door is recorded: who, what, which room, the answer, the bytes and how long it took. `k2 app audit <app>` shows them (`--since 1h`, `--denied`, `--verb`), and `--verify` checks that no line was changed or removed. The record lives in its own file, `~/.k2/apps/app-audit.db`; after 30 days it is kept as daily totals for a year.
+- **Limits per App.** Each App may make 50 calls a second (bursts of 200), hold 64 connections and 256 live subscriptions, and send bodies up to 8 MB (100 MB for uploads). Over a limit it gets a clear answer with the limit and when to retry. `k2 app quota <app>` shows them; lowering one applies at once, raising one is yours (an agent's raise waits for you).
+- **Its agent hears about trouble.** An App's agent is told when the App is refused more than 20 times in 5 minutes, uses a write action for the first time, shows a pass at the wrong door, or hits a limit.
+- **New permissions wait for you.** An App's first install, and any later deploy that asks for permissions you haven't approved, wait in `k2 app approvals` while the running version keeps serving, even when you deploy it yourself. The App's pass carries only what you approved. Apps already behind the wall keep what they have.
+- **Agents without "Allow this agent to manage Apps" ask instead.** Their install, deploy, stop and other changes now become one request you approve or deny, and run as asked when you approve.
+- **Approvals in Settings.** Settings → Apps → Approvals lists what is waiting, in plain words, with Approve (Touch ID or your password) and Deny with a note. On a server where you can't confirm in person yet (no vault password and no owner login), it says so, and `k2 app doctor` does too.
+- **Apps hosted elsewhere.** `k2 app token rotate <app>` gives an App that runs on another machine its own pass for K2: it expires (30 days by default), carries only the App's approved permissions, works on K2's main address and tunnel but never at an App's door, and is ended by suspend. `k2 app remote-pass <app>` lists and ends them.
+
 ## 0.46.0 — Runtime for Apps
 
 **Getting your Apps ready for 0.46.1 (nothing is taken away yet)**

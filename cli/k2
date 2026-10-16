@@ -7145,6 +7145,14 @@ See and run it:
                                        caps/rooms, expiry, rotation, counters.
                                        --rotate hands the App a new pass now.
   k2 app stop|start|restart <app-id>   restart is zero-downtime.
+  k2 app suspend <app-id> [--reason T] Revoke every pass now, freeze deploys
+                                       (anyone may); k2 app resume (owner).
+  k2 app audit <app-id> [--since 1h] [--denied] [--verify]
+                                       Every gateway call, hash-chained.
+  k2 app quota <app-id> [--rps N] [--body 8M] [--reset]
+                                       Per-App gateway quotas (raise: owner).
+  k2 app token rotate <app-id>         Owner: a remote App pass (Apps hosted
+                                       elsewhere). k2 app door --help.
   k2 app uninstall <app-id> [--purge]  --purge also deletes its data (owner).
   k2 app config <app-id> [--memory 8G|512M|none] [--cpu-weight N] [--tasks N]
                  [--disk 2G] [--egress add|rm HOST:PORT] [--egress-mode allowlist|broad]
@@ -9118,6 +9126,255 @@ v = json.load(sys.stdin)
 print("%s: manage Apps %s, publish open Apps %s" % (v.get("workspace"), "on" if v.get("agentsCanManageApps") else "off", "on" if v.get("agentsCanPublishOpenApps") else "off"))'
 }
 
+# ── The 0.46.1 door (lane 2: S19, AR10) ──────────────────────────────
+# k2 app suspend|resume|audit|quota, k2 app token rotate, k2 app remote-pass.
+# Exit codes: 0 done, 2 held for the owner (or usage), 3 refused or infra.
+
+_app_door_usage() {
+    cat <<'EOF'
+k2 app — the App door (quotas, audit, suspend, remote passes)
+
+  k2 app suspend <app-id> [--reason TEXT]
+                                       Stop it now: every pass it holds is
+                                       revoked (its next call is 401), deploys
+                                       and starts are frozen. Anyone who can see
+                                       the App may (it only narrows).
+  k2 app resume <app-id> [--start]     Owner only, from a terminal outside K2.
+  k2 app audit <app-id> [--since 1h] [--verb V] [--denied] [--limit N]
+                 [--verify] [--json]   Every call the App made through its
+                                       gateway (who, verb, room, result, bytes,
+                                       latency), hash-chained per day.
+                                       --verify checks the chain.
+  k2 app quota <app-id> [--rps N] [--burst N] [--sockets N] [--body 8M]
+                 [--upload 100M] [--subscriptions N] [--reset] [--reason TEXT]
+                                       Per-App gateway quotas. No flags: show.
+                                       Lowering applies now; raising is the
+                                       owner's (anyone else's is held, exit 2).
+  k2 app token rotate <app-id> [--ttl 30d] [--keep-old] [--caps a,b]
+                                       Owner: a remote App pass (an App hosted
+                                       elsewhere), shown once. Works on the main
+                                       port and the tunnel, never on a link.
+                                       The old pass is revoked unless --keep-old.
+  k2 app remote-pass <app-id> [--revoke [PASS-ID]] [--json]
+                                       List remote passes; --revoke ends them.
+EOF
+}
+
+cmd_app_suspend() {
+    local app="" reason="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --reason) reason="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_door_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app suspend <app-id> [--reason TEXT]" >&2; exit 2; }
+    _compute_call POST /cli/app/suspend "$(_compute_json K2_CJ_app="$app" K2_CJ_reason="$reason")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s suspended%s: %s passes revoked, deploys frozen" % (v["app"], " (already)" if v.get("already") else "", v.get("passesRevoked")))
+st = v.get("stopped")
+if isinstance(st, dict):
+    print("  not stopped yet: %s" % st.get("hint"))
+print("  %s" % v.get("hint", ""))'
+}
+
+cmd_app_resume() {
+    local app="" start=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --start) start=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_door_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app resume <app-id> [--start]   (the owner, outside K2)" >&2; exit 2; }
+    if _compute_in_session; then
+        echo '{"error":{"code":"owner_only","hint":"only the owner resumes a suspended App: k2 app resume <app> from a terminal outside K2"}}' >&2
+        exit 3
+    fi
+    _compute_call POST /cli/app/resume "$(_compute_json K2_CJ_app="$app" K2_CJ_start_b="$start")" tcp
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("already"):
+    print("%s: %s" % (v["app"], v["already"])); sys.exit(0)
+print("%s resumed" % v["app"])
+if v.get("deployment"):
+    print("  starting: deployment %s (k2 app deployment %s)" % (v["deployment"], v["app"]))
+elif v.get("hint") or v.get("note"):
+    print("  %s" % (v.get("hint") or v.get("note")))'
+}
+
+cmd_app_audit() {
+    local app="" since="" verb="" denied=0 limit="" verify=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --since) since="${2:-}"; shift 2 ;;
+            --verb) verb="${2:-}"; shift 2 ;;
+            --denied) denied=1; shift ;;
+            --limit) limit="${2:-}"; shift 2 ;;
+            --verify) verify=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_door_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app audit <app-id> [--since 1h] [--verb V] [--denied] [--limit N] [--verify] [--json]" >&2; exit 2; }
+    local q="app=$(urlencode "$app")"
+    [ -n "$since" ] && q="${q}&since=$(urlencode "$since")"
+    [ -n "$verb" ] && q="${q}&verb=$(urlencode "$verb")"
+    [ -n "$limit" ] && q="${q}&limit=$(urlencode "$limit")"
+    [ "$denied" = 1 ] && q="${q}&denied=1"
+    [ "$verify" = 1 ] && q="${q}&verify=1"
+    _compute_call GET /cli/app/audit "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+t = v.get("totals") or {}
+print("%s: %s calls, %s refused, %s B in, %s B out" % (v["app"], t.get("calls"), t.get("denied"), t.get("bytesIn"), t.get("bytesOut")))
+for c in v.get("calls") or []:
+    at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(c["atMs"] / 1000))
+    code = (" " + c["code"]) if c.get("code") else ""
+    print("%s  %3s%s  %s  %s  in %s out %s  %s ms" % (at, c.get("result"), code, c.get("actor"), c.get("verb"), c.get("bytesIn"), c.get("bytesOut"), c.get("latencyMs")))
+for d in v.get("chain") or []:
+    print("chain %s: %s" % (d["day"], ("ok, %s rows" % d["rows"]) if d.get("ok") else ("BROKEN at row %s" % d.get("brokenAt"))))'
+    fi
+    # --verify: a broken chain is a failed check (exit 1).
+    if [ "$verify" = 1 ]; then
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if all(d.get("ok") for d in json.load(sys.stdin).get("chain") or []) else 1)'
+    fi
+}
+
+cmd_app_quota() {
+    local app="" json_out=0 reset=0 reason="" rps="" burst="" sockets="" body="" upload="" subs="" any=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --rps) rps="${2:-}"; any=1; shift 2 ;;
+            --burst) burst="${2:-}"; any=1; shift 2 ;;
+            --sockets) sockets="${2:-}"; any=1; shift 2 ;;
+            --body) body="${2:-}"; any=1; shift 2 ;;
+            --upload) upload="${2:-}"; any=1; shift 2 ;;
+            --subscriptions) subs="${2:-}"; any=1; shift 2 ;;
+            --reset) reset=1; any=1; shift ;;
+            --reason) reason="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_door_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app quota <app-id> [--rps N] [--burst N] [--sockets N] [--body 8M] [--upload 100M] [--subscriptions N] [--reset]" >&2; exit 2; }
+    local n
+    for n in "$rps" "$burst" "$sockets" "$subs"; do
+        case "$n" in ''|*[!0-9]*) [ -z "$n" ] || { echo "usage: --rps/--burst/--sockets/--subscriptions take whole numbers" >&2; exit 2; } ;; esac
+    done
+    if [ "$any" = 1 ]; then
+        _app_rt_post /cli/app/quota/set "$(_compute_json K2_CJ_app="$app" K2_CJ_rps_n="$rps" K2_CJ_burst_n="$burst" \
+            K2_CJ_sockets_n="$sockets" K2_CJ_bodyBytes="$body" K2_CJ_uploadBytes="$upload" K2_CJ_subscriptions_n="$subs" \
+            K2_CJ_reset_b="$([ "$reset" = 1 ] && echo 1)" K2_CJ_reason="$reason")"
+        _app_grace_done "$json_out"
+    else
+        _compute_call GET /cli/app/quota "app=$(urlencode "$app")"
+    fi
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+q = v.get("quotas") or {}
+o = v.get("override") or {}
+def mark(k):
+    return " (override)" if k in o else ""
+print("%s quotas:" % v["app"])
+print("  calls/s        %s sustained, bursts of %s%s" % (q.get("rps"), q.get("burst"), mark("rps") or mark("burst")))
+print("  sockets        %s%s" % (q.get("sockets"), mark("sockets")))
+print("  body           %s bytes (uploads %s)%s" % (q.get("bodyBytes"), q.get("uploadBytes"), mark("bodyBytes") or mark("uploadBytes")))
+print("  subscriptions  %s%s" % (q.get("subscriptions"), mark("subscriptions")))
+live = v.get("live")
+if live:
+    print("  now            %s connections, %s subscriptions" % (live.get("connections"), live.get("subscriptions")))
+if v.get("raised"):
+    print("  raised: " + ", ".join(v["raised"]))'
+}
+
+# k2 app token rotate <app> — a remote App pass (AR10). Owner, outside K2.
+cmd_app_token_rotate() {
+    local app="" ttl="" keep=0 caps="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --ttl) ttl="${2:-}"; shift 2 ;;
+            --keep-old) keep=1; shift ;;
+            --caps) caps="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_door_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app token rotate <app-id> [--ttl 30d] [--keep-old] [--caps a,b]" >&2; exit 2; }
+    if _compute_in_session; then
+        echo '{"error":{"code":"owner_only","hint":"a remote App pass is a long-lived credential: the owner mints it from a terminal outside K2"}}' >&2
+        exit 3
+    fi
+    local caps_j=""
+    [ -n "$caps" ] && caps_j="$(K2_CAPS="$caps" python3 -c 'import json,os; print(json.dumps([c.strip() for c in os.environ["K2_CAPS"].split(",") if c.strip()]))')"
+    _compute_call POST /cli/app/remote-pass/rotate "$(_compute_json K2_CJ_app="$app" K2_CJ_ttl="$ttl" \
+        K2_CJ_keepOld_b="$([ "$keep" = 1 ] && echo 1)" K2_CJ_caps_j="$caps_j")" tcp
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+print(v["pass"])
+sys.stderr.write("%s: remote pass %s, caps %s, rooms %s, expires %s; %s old revoked\n" % (
+    v["app"], v.get("prefix"), ", ".join(v.get("caps") or []) or "none", ", ".join(v.get("rooms") or []),
+    time.strftime("%Y-%m-%d %H:%M", time.localtime(v["expiresAt"])), v.get("revoked")))
+if v.get("withheld"):
+    sys.stderr.write("  withheld until the owner approves them: %s\n" % ", ".join(v["withheld"]))
+sys.stderr.write("  %s\n" % v.get("note", ""))'
+}
+
+cmd_app_remote_pass() {
+    local app="" revoke=0 id="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --revoke) revoke=1; shift; case "${1:-}" in ''|-*) ;; *) id="$1"; shift ;; esac ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_door_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app remote-pass <app-id> [--revoke [PASS-ID]] [--json]" >&2; exit 2; }
+    if [ "$revoke" = 1 ]; then
+        _compute_call POST /cli/app/remote-pass/revoke "$(_compute_json K2_CJ_app="$app" K2_CJ_id="$id")"
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+        printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s: %s remote passes revoked" % (v["app"], v["revoked"]))'
+        return 0
+    fi
+    _compute_call GET /cli/app/remote-pass "app=$(urlencode "$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+ps = v.get("passes") or []
+if not ps:
+    print("%s: no remote passes (k2 app token rotate %s, the owner)" % (v["app"], v["app"])); sys.exit(0)
+now = time.time()
+for p in ps:
+    state = "revoked" if p.get("revokedAt") else ("expired" if p["expiresAt"] <= now else "live")
+    print("%s  %-7s %s  expires %s  caps %s" % (p["id"][:8], state, p["prefix"], time.strftime("%Y-%m-%d %H:%M", time.localtime(p["expiresAt"])), ", ".join(p.get("caps") or []) or "none"))'
+}
+
 cmd_app() {
     case "${1:-}" in
         validate) shift; cmd_app_validate "$@" ;;
@@ -9149,12 +9406,18 @@ cmd_app() {
         approve) shift; cmd_app_approve "$@" ;;
         deny) shift; cmd_app_deny "$@" ;;
         access) shift; cmd_app_access "$@" ;;
+        suspend) shift; cmd_app_suspend "$@" ;;
+        resume) shift; cmd_app_resume "$@" ;;
+        audit) shift; cmd_app_audit "$@" ;;
+        quota|quotas) shift; cmd_app_quota "$@" ;;
+        remote-pass) shift; cmd_app_remote_pass "$@" ;;
+        door) shift; _app_door_usage ;;
         grace|crossover) shift; _app_grace_usage ;;
         egress) shift; cmd_app_egress "$@" ;;
         box-service|box-services) shift; cmd_app_box_service "$@" ;;
         token|tokens)
             shift || true
-            cmd_skin_token "$@"
+            if [ "${1:-}" = rotate ]; then shift; cmd_app_token_rotate "$@"; else cmd_skin_token "$@"; fi
             ;;
         *)
             cmd_skin "$@"

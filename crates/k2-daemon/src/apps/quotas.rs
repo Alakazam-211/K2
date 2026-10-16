@@ -286,14 +286,21 @@ fn u(v: &J, k: &str) -> R<Option<u64>> {
     match v.get(k) {
         None | Some(J::Null) => Ok(None),
         Some(J::Number(n)) => n.as_u64().map(Some).ok_or_else(|| no(codes::BAD_REQUEST, 400, format!("{k} is a whole number"))),
-        Some(J::String(s)) => deploy::parse_memory(s)
-            .ok()
-            .flatten()
-            .map(|b| Some(b as u64))
-            .or_else(|| s.trim().parse::<u64>().ok().map(Some))
-            .ok_or_else(|| no(codes::BAD_REQUEST, 400, format!("{k}: '{s}' isn't a number or a size"))),
+        Some(J::String(s)) => parse_size(s).map(Some).ok_or_else(|| no(codes::BAD_REQUEST, 400, format!("{k}: '{s}' isn't a number or a size (512K, 8M, 1G)"))),
         _ => Err(no(codes::BAD_REQUEST, 400, format!("{k} is a number"))),
     }
+}
+
+/// `4096`, `512K`, `8M`, `1G` → bytes.
+pub fn parse_size(raw: &str) -> Option<u64> {
+    let t = raw.trim();
+    let (num, mult) = match t.chars().last()? {
+        'K' | 'k' => (&t[..t.len() - 1], 1u64 << 10),
+        'M' | 'm' => (&t[..t.len() - 1], 1u64 << 20),
+        'G' | 'g' => (&t[..t.len() - 1], 1u64 << 30),
+        _ => (t, 1),
+    };
+    num.trim().parse::<u64>().ok()?.checked_mul(mult)
 }
 
 fn u32f(v: &J, k: &str) -> R<Option<u32>> {
@@ -393,6 +400,12 @@ mod tests {
         let up = Override { rps: Some(100), subscriptions: Some(10), ..Default::default() }.apply(DEFAULTS);
         assert_eq!(raises(&DEFAULTS, &up), vec!["rps 50 → 100".to_string()]);
         assert_eq!(body_limit(&DEFAULTS, "/cli/fs/upload-chunk"), 100 * MIB);
+        assert_eq!(parse_size("1K"), Some(1024));
+        assert_eq!(parse_size("8M"), Some(8 * MIB));
+        assert_eq!(parse_size("2g"), Some(2 << 30));
+        assert_eq!(parse_size("4096"), Some(4096));
+        assert_eq!(parse_size("lots"), None);
+        assert_eq!(parse_size(""), None);
         assert_eq!(body_limit(&DEFAULTS, "/cli/thread"), 8 * MIB);
     }
 

@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { DialogScrim, Input, Surface } from '@/components/ui'
 import { daemonCliGet } from '@/lib/daemon-cli'
-import { primaryScope } from '@/kessel/server-scope'
+import { windowTopBarTarget } from '@/components/TopBar/top-bar-scope'
 import catalogJson from '@shared/cli-catalog.generated.json'
 import {
   buildExplorerModel,
@@ -237,7 +237,7 @@ export default function HelpExplorer({ onClose }: { onClose: () => void }): Reac
   // of Help still works.
   useEffect(() => {
     let live = true
-    daemonCliGet<GlossaryEntry[]>(primaryScope(), 'glossary')
+    daemonCliGet<GlossaryEntry[]>(windowTopBarTarget().scope, 'glossary')
       .then((rows) => {
         if (!live) return
         if (!Array.isArray(rows)) throw new Error('glossary: not a list')
@@ -264,7 +264,7 @@ export default function HelpExplorer({ onClose }: { onClose: () => void }): Reac
   useEffect(() => {
     if (!openTerm || definitions[openTerm] !== undefined) return
     let live = true
-    daemonCliGet<{ definition?: string; summary?: string }>(primaryScope(), 'glossary/get', { term: openTerm })
+    daemonCliGet<{ definition?: string; summary?: string }>(windowTopBarTarget().scope, 'glossary/get', { term: openTerm })
       .then((row) => {
         if (live) setDefinitions((d) => ({ ...d, [openTerm]: fixK2Name(row.definition ?? row.summary ?? '') }))
       })

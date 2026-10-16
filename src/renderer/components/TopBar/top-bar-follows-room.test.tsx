@@ -296,7 +296,9 @@ function expectNoServerName(): void {
   const chip = screen.getByTestId('subscription-usage')
   expect(chip.querySelectorAll('[data-top-bar-pipe]')).toHaveLength(0)
   expect(chip.textContent?.startsWith('B')).toBe(false)
-  expect(chip.getAttribute('title')).toBe("B's subscription usage")
+  // Usage v2 (P8): the tooltip leads with whose numbers, then one line per
+  // row saying how fresh it is.
+  expect(chip.getAttribute('title')?.split('\n')[0]).toBe("B's subscription usage")
 }
 
 describe('usage chip follows the room (Z16, Z19, T3.2)', () => {

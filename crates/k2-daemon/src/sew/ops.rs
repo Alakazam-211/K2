@@ -520,6 +520,8 @@ pub mod fake {
                 "engine sew rotate-master" => Self::sew_exit(0, json!({"restarted": true})),
                 "engine sew drop-prev" => Self::sew_exit(0, json!({"dropped": true})),
                 a if a.starts_with("engine sew restore ") => {
+                    // The helper always starts sew again.
+                    active(UNIT_SEW);
                     let mut v = Self::sew_exit(0, json!({"restored": true, "safety_bundle": "20260103T000000Z-safety"}));
                     v["restarted"] = json!(true);
                     v

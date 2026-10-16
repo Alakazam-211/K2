@@ -122,7 +122,7 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
   it('Sidecars is now Cores (label only; the Apps, Database and Email Hosting ids stay)', () => {
     const nav = settingsNav({ zenGardens: true })
     expect(titles(nav)).not.toContain('Sidecars')
-    expect(group(nav, 'Cores').items.map((i) => i.id)).toEqual(['email-hosting', undefined, 'compute', 'data', 'skin-access'])
+    expect(group(nav, 'Cores').items.map((i) => i.id)).toEqual(['email-hosting', undefined, 'compute', 'data', 'skin-access', 'app-approvals'])
     const chat = group(nav, 'Cores').items[1]
     expect(chat.label).toBe('Chat Hosting')
     expect(chat.soon).toBe(true)
@@ -140,6 +140,24 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
     const top = nav.flatMap((b) => (b.kind === 'item' ? [b.id] : []))
     expect(top).not.toContain('keybindings')
     expect(top).not.toContain('compute')
+  })
+
+  it('App Approvals (0.46.1 door) sits right under Apps in Cores, opens, searches and is labelled', () => {
+    for (const zenGardens of [true, false]) {
+      const items = group(settingsNav({ zenGardens }), 'Cores').items
+      const apps = items.findIndex((i) => i.id === 'skin-access')
+      expect(items[apps + 1]).toEqual({ id: 'app-approvals', label: 'App Approvals' })
+      expect(leafIds(settingsNav({ zenGardens })).filter((x) => x === 'app-approvals').length).toBe(1)
+    }
+    expect(SECTION_LABELS['app-approvals']).toBe('App Approvals')
+    const s = useSettingsStore.getState()
+    s.openSettings('app-approvals')
+    expect(useSettingsStore.getState().activeSection).toBe('app-approvals')
+    s.closeSettings()
+    const settingsSrc = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8')
+    expect(settingsSrc).toContain("activeSection === 'app-approvals'")
+    expect(settingsSrc).toContain('<AppApprovalsSection />')
+    expect(settingsSrc).toContain('...APP_APPROVALS_MANIFEST,')
   })
 
   it('old ids still open the same pages', () => {

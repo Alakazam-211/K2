@@ -42,6 +42,7 @@ import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSecti
 import { DataSection, DATA_MANIFEST } from './sections/DataSection'
 import { ComputeSection, COMPUTE_MANIFEST } from './sections/ComputeSection'
 import { SkinAccessSection, SKIN_ACCESS_MANIFEST } from './sections/SkinAccessSection'
+import { AppApprovalsSection, APP_APPROVALS_MANIFEST } from './sections/AppApprovalsSection'
 import { PeopleSection, PEOPLE_MANIFEST } from './sections/PeopleSection'
 import { UserTemplatesSection, USER_TEMPLATES_MANIFEST } from './sections/UserTemplatesSection'
 // The Projects (project GROUPS) section — §6.5 relocation. NOT to be
@@ -237,6 +238,8 @@ export function settingsNav({
         { id: 'compute', label: 'Compute', beta: true },
         { id: 'data', label: 'Database' },
         { id: 'skin-access', label: 'Apps', beta: true },
+        // 0.46.1 door: held App requests, right under Apps (Settings → Apps → Approvals).
+        { id: 'app-approvals', label: 'App Approvals' },
       ],
     },
     {
@@ -307,6 +310,7 @@ export default function Settings(): React.JSX.Element {
       ...DATA_MANIFEST,
       ...COMPUTE_MANIFEST,
       ...SKIN_ACCESS_MANIFEST,
+      ...APP_APPROVALS_MANIFEST,
       ...COMING_SOON_BOTS_MANIFEST,
       ...PEOPLE_MANIFEST,
       ...USER_TEMPLATES_MANIFEST,
@@ -696,6 +700,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'skin-access' && (
           <SectionErrorBoundary>
             <SkinAccessSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'app-approvals' && (
+          <SectionErrorBoundary>
+            <AppApprovalsSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'wake-scheduler' && (

@@ -139,6 +139,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'email-link': 'Email Link',
   data: 'Database',
   'skin-access': 'Apps',
+  'app-approvals': 'App Approvals',
   compute: 'Compute',
 }
 

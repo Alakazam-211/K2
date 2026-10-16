@@ -17387,8 +17387,8 @@ k2 tunnel is the device pipe to your primary *.k2.dev. Nested names ride that
 same pipe. This command does not start k2 tunnel.
 
 USAGE
-  k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>] [--transfer]
-  k2 publish run <name> --skin [<dir>] --port <n> [--no-tunnel] [--transfer]
+  k2 publish run <name> --cmd <shell> --port <n> [--no-tunnel] [--cwd <path>] [--transfer] [--probe-timeout <dur>]
+  k2 publish run <name> --skin [<dir>] --port <n> [--no-tunnel] [--transfer] [--probe-timeout <dur>]
   k2 publish start|stop|logs <name>
   k2 publish rm <name> [--keep-hostname]
   k2 publish ps|status [--json]       (ps = list)
@@ -17408,6 +17408,16 @@ run
   (label_owned_by_other_workspace). --transfer: owner/admin only, moves it
   here on purpose; recorded in the access audit log.
   --cmd and --skin are mutually exclusive. --cwd is for --cmd only.
+
+  --probe-timeout <dur>  how long the service may take to open --port
+                   (default 15s, at most 15m): 90s, 10m, 1m30s, 1500ms.
+                   Saved on the service: start, restarts and boot use it.
+                   A re-run without it keeps the saved value; `default` resets.
+                   While it waits the status is "starting (waiting for port
+                   N, 4m12s left)"; with a tunnel the nested URL is published
+                   only once the port answers. Never answered in time: the
+                   run is rolled back (tunnel) or shows unhealthy (local,
+                   still re-checked, so a late bind turns running).
 
   --skin [<dir>]   Static HTML host (an app). Prefer Next in cwd for new apps.
                    No dir = bundled UI. Dir = your static files + same BFF.
@@ -17617,6 +17627,27 @@ def url_or_target(s):
         return "localhost:%s" % port
     return "-"
 
+def fmt_left(ms):
+    try:
+        secs = max(0, int(ms) // 1000)
+    except Exception:
+        return "?"
+    m, s = divmod(secs, 60)
+    if m and s:
+        return "%dm%02ds" % (m, s)
+    if m:
+        return "%dm" % m
+    return "%ds" % s
+
+def status_text(s):
+    # "starting (waiting for port 3047, 4m12s left)" while inside the grace.
+    if not isinstance(s, dict):
+        return "-"
+    st = str(s.get("status") or s.get("desired") or "-")
+    if st == "starting" and s.get("startingLeftMs") is not None:
+        return "starting (waiting for port %s, %s left)" % (s.get("port"), fmt_left(s.get("startingLeftMs")))
+    return st
+
 def frame_label(s):
     # --skin: the policy K2 sends. --cmd: the App's own job.
     if not isinstance(s, dict):
@@ -17651,7 +17682,7 @@ if mode == "list":
             u += "  [legacy env (ends %s)]" % ends
         rows.append((
             str(s.get("name") or "?"),
-            str(s.get("status") or s.get("desired") or "-"),
+            status_text(s),
             port_s,
             frame_label(s),
             u,
@@ -17682,7 +17713,7 @@ if mode == "list":
 
 svc = d.get("service") if isinstance(d.get("service"), dict) else d
 name = str(svc.get("name") or "?") if isinstance(svc, dict) else "?"
-status = str(svc.get("status") or svc.get("desired") or "") if isinstance(svc, dict) else ""
+status = status_text(svc) if isinstance(svc, dict) else ""
 port = svc.get("port") if isinstance(svc, dict) else None
 url = url_or_target(svc) if isinstance(svc, dict) else "-"
 if verb == "frame" and isinstance(svc, dict):
@@ -17702,6 +17733,8 @@ if port is not None and str(port) != "":
 print(line)
 if url and url != "-":
     print("  %s" % url)
+if isinstance(svc, dict) and svc.get("hostnamePending"):
+    print("  public URL is published once port %s answers (k2 publish status %s)" % (port, name))
 if isinstance(svc, dict) and svc.get("error"):
     print("  error: %s" % svc.get("error"))
 if isinstance(svc, dict) and env_legacy(svc) and verb not in ("run", "start"):
@@ -17709,6 +17742,30 @@ if isinstance(svc, dict) and env_legacy(svc) and verb not in ("run", "start"):
     print("  deprecated: inherits the daemon environment; ends in K2 %s (k2 publish env %s clean)" % (env_ends(svc), name))
 sys.exit(0)
 PY
+}
+
+# `--probe-timeout` check, same rules as the daemon: 90s, 10m, 1m30s,
+# 1500ms, bare seconds, or `default`; > 0 and at most 15m. Prints the
+# error and returns 1 when it is not.
+_publish_probe_timeout_check() {
+    P_PT="$1" python3 -c '
+import os, re, sys
+raw = os.environ.get("P_PT", "").strip().lower()
+bad = "--probe-timeout must be a duration like 90s, 10m or 1500ms (at most 15m), got \x27%s\x27" % os.environ.get("P_PT", "").strip()
+if raw == "default":
+    sys.exit(0)
+if re.fullmatch(r"[0-9]+", raw):
+    ms = int(raw) * 1000
+elif re.fullmatch(r"([0-9]+(ms|s|m|h))+", raw):
+    unit = {"ms": 1, "s": 1000, "m": 60000, "h": 3600000}
+    ms = sum(int(n) * unit[u] for n, u in re.findall(r"([0-9]+)(ms|s|m|h)", raw))
+else:
+    print(bad); sys.exit(1)
+if ms <= 0:
+    print(bad); sys.exit(1)
+if ms > 15 * 60 * 1000:
+    print("--probe-timeout is at most 15m (got %s); a service that needs longer should open its port first and build behind it" % os.environ.get("P_PT", "").strip()); sys.exit(1)
+'
 }
 
 _publish_is_port() {
@@ -17788,9 +17845,14 @@ cmd_publish() {
 # `k2 publish run <name> --skin [<dir>] --port <n> [--no-tunnel]`
 cmd_publish_run() {
     if _wants_help "$@"; then _publish_usage; exit 0; fi
-    local name="" cmd="" port="" cwd="" no_tunnel=0 as_json=false skin=0 skin_root="" transfer=0
+    local name="" cmd="" port="" cwd="" no_tunnel=0 as_json=false skin=0 skin_root="" transfer=0 probe_timeout=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --probe-timeout)
+                [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--probe-timeout needs a duration (90s, 10m, at most 15m) or 'default'"; exit 2; }
+                probe_timeout="$2"; shift 2 ;;
+            --probe-timeout=*)
+                probe_timeout="${1#--probe-timeout=}"; shift ;;
             --cmd)
                 [ $# -ge 2 ] || { as_json="$as_json" _publish_err "usage" "--cmd needs a shell string"; exit 2; }
                 cmd="$2"; shift 2 ;;
@@ -17827,7 +17889,7 @@ cmd_publish_run() {
             --help|-h) _publish_usage; exit 0 ;;
             -*)
                 as_json="$as_json" _publish_err "usage" \
-                    "unknown flag '$1' — usage: k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--transfer]"
+                    "unknown flag '$1' — usage: k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--transfer] [--probe-timeout <dur>]"
                 exit 2 ;;
             *)
                 if [ -z "$name" ]; then
@@ -17860,6 +17922,13 @@ cmd_publish_run() {
         as_json="$as_json" _publish_err "usage" "--port must be an integer 1-65535"
         exit 2
     fi
+    if [ -n "$probe_timeout" ]; then
+        local pt_err
+        if ! pt_err=$(_publish_probe_timeout_check "$probe_timeout"); then
+            as_json="$as_json" _publish_err "usage" "$pt_err"
+            exit 2
+        fi
+    fi
     if [ "$skin" = 1 ] && [ -n "$skin_root" ]; then
         case "$skin_root" in
             /*|~*|[A-Za-z]:*)
@@ -17880,7 +17949,7 @@ cmd_publish_run() {
     local body RESP
     body=$(P_NAME="$name" P_CMD="$cmd" P_PORT="$port" P_CWD="$cwd" \
            P_PROJECT="$PROJECT" P_NO_TUNNEL="$no_tunnel" P_TRANSFER="$transfer" \
-           P_SKIN="$skin" P_SKIN_ROOT="$skin_root" python3 -c '
+           P_SKIN="$skin" P_SKIN_ROOT="$skin_root" P_PROBE_TIMEOUT="$probe_timeout" python3 -c '
 import json, os
 b = {
     "name": os.environ["P_NAME"],
@@ -17897,6 +17966,9 @@ if os.environ.get("P_NO_TUNNEL") == "1":
     b["noTunnel"] = True
 if os.environ.get("P_TRANSFER") == "1":
     b["transfer"] = True
+pt = (os.environ.get("P_PROBE_TIMEOUT") or "").strip()
+if pt:
+    b["probeTimeout"] = pt
 if os.environ.get("P_SKIN") == "1":
     b["skin"] = True
     root = os.environ.get("P_SKIN_ROOT") or ""
@@ -18138,12 +18210,21 @@ if svc is None:
            "suggestion": "no published App named %s in this workspace: k2 publish ps lists them" % name}
 else:
     st = str(svc.get("status") or "")
+    st_label = st
     err = svc.get("error")
     code = svc.get("lastExitCode")
     if st == "running":
         exit_code, sug = 0, "it is up" + (" at %s" % svc["url"] if svc.get("url") else "")
     elif st == "starting":
+        left = svc.get("startingLeftMs")
+        if left is not None:
+            secs = max(0, int(left) // 1000)
+            m, s = divmod(secs, 60)
+            left_s = ("%dm%02ds" % (m, s)) if m and s else (("%dm" % m) if m else ("%ds" % s))
+            st_label = "starting (waiting for port %s, %s left)" % (svc.get("port"), left_s)
         exit_code, sug = 2, "still starting: run k2 publish status %s again in a few seconds" % name
+        if svc.get("hostnamePending"):
+            sug += " (the public URL is published once the port answers)"
     elif st == "stopped":
         exit_code, sug = 1, "it is stopped: k2 publish start %s" % name
     elif st == "unhealthy":
@@ -18152,11 +18233,16 @@ else:
         exit_code, sug = 1, "it exited%s: read k2 publish logs %s, fix it, check the code with k2 app validate %s, then k2 publish start %s" % (
             " with code %s" % code if code is not None else "", name, name, name)
     out = {"name": name, "status": st, "desired": svc.get("desired"), "error": err,
-           "lastExitCode": code, "url": svc.get("url"), "suggestion": sug, "exit": exit_code}
+           "lastExitCode": code, "url": svc.get("url"), "suggestion": sug, "exit": exit_code,
+           "probeTimeoutMs": svc.get("probeTimeoutMs"),
+           "probeTimeoutEffectiveMs": svc.get("probeTimeoutEffectiveMs"),
+           "startingLeftMs": svc.get("startingLeftMs"),
+           "hostnamePending": bool(svc.get("hostnamePending")),
+           "statusText": st_label}
 if as_json:
     print(json.dumps(out, indent=2))
 else:
-    line = "%s: %s" % (name, out["status"])
+    line = "%s: %s" % (name, out.get("statusText") or out["status"])
     if out.get("error"):
         line += " (%s)" % out["error"]
     print(line)
@@ -18181,7 +18267,9 @@ USAGE
 
 FLAGS
   --json                 JSON: {connected, host, plan, tier, nested_subdomains}
-                         <name>: {name, status, desired, error, lastExitCode, suggestion, exit}
+                         <name>: {name, status, statusText, desired, error, lastExitCode,
+                                  probeTimeoutMs, probeTimeoutEffectiveMs, startingLeftMs,
+                                  hostnamePending, suggestion, exit}
 
 EXIT CODES
   without <name>: 0 ok, 1 error (no tunnel token / control plane)
@@ -23579,13 +23667,14 @@ cmd_schema() {
     },
     {
       "name": "publish run",
-      "usage": "k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--json]",
+      "usage": "k2 publish run <name> (--cmd <shell>|--skin [<dir>]) --port <n> [--no-tunnel] [--cwd <path>] [--probe-timeout <dur>] [--json]",
       "description": "Start a daemon-owned process for this workspace. Default (Pro) also creates nested https://<name>.<host>.k2.dev. --skin is a static HTML host (an app); prefer Next in cwd for new apps. Not k2 app (guests/roles/tokens). --no-tunnel is process-only (no Pro, no public URL). Same name already running: error — stop first. <name> is always required.",
       "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--cmd", "arg": "shell", "description": "Shell command to run (sh -c / cmd.exe /c). Mutually exclusive with --skin."},
         {"name": "--skin", "arg": "dir", "description": "Static HTML host (an app). Prefer Next in cwd for new apps. Optional dir = static files + same BFF; omit = bundled UI. Mutually exclusive with --cmd/--cwd. Not k2 app (guests/roles/tokens)."},
         {"name": "--port", "arg": "n", "description": "Required listen port."},
+        {"name": "--probe-timeout", "arg": "dur", "description": "How long the service may take to open --port (default 15s, at most 15m; 90s, 10m, 1500ms; 'default' resets). Saved on the service for start/restart/boot. Status reads starting (waiting for port N, time left); with a tunnel the nested URL is published only once the port answers, and the run is rolled back if it never does."},
         {"name": "--no-tunnel", "arg": null, "description": "Do not create/point a nested hostname (local only)."},
         {"name": "--cwd", "arg": "path", "description": "Working directory (default: this workspace). For --cmd only."},
         {"name": "--json", "arg": null, "description": "JSON service object on stdout."}
@@ -26169,6 +26258,10 @@ HOW TO MAKE ONE (copy this)
        k2 publish run <label> --skin <dir> --port N
      → https://<label>.<your-sub>.k2.dev  (Pro parent)
      Local only: add --no-tunnel.
+     A --cmd server that builds before it listens: add
+     --probe-timeout 10m (default 15s, at most 15m). It shows
+     "starting (waiting for port N, …left)" and the URL goes live
+     when the port answers; k2 publish status <label> exits 2 meanwhile.
   2. Owner adds guests and passwords (Settings → Cores →
      Apps, or `k2 app user add` / `password` / `email`; leftover
      `k2 skin user …`).

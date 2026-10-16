@@ -1474,8 +1474,9 @@ pub fn backup_run(env: &Env) -> R<Value> {
     Ok(json!({"ok": true, "jobId": job, "backup": r}))
 }
 
-/// Replace ALL Sew data with a backup. K2 takes a fresh backup first (and
-/// Sew keeps its own safety bundle); anything newer than the bundle is lost.
+/// Replace ALL Sew data with a backup. Sew takes its own `pre-restore`
+/// safety bundle first (no bundle, no restore); anything newer than the
+/// restored bundle is lost from the live data.
 pub fn restore(env: &Env, bundle_id: &str) -> R<Value> {
     if !env.ops.linux() {
         return Err(unsupported());
@@ -1484,14 +1485,25 @@ pub fn restore(env: &Env, bundle_id: &str) -> R<Value> {
         return Err(no("bad_request", 400, "name a backup id from k2 hostchat backup list"));
     }
     let row = need_row(false)?;
-    if !matches!(row.status.as_str(), "running" | "degraded") {
-        return Err(no("not_running", 409, format!("Sew is '{}': restore needs a running server (it backs up first)", row.status)));
+    // A stopped or failed Sew is when a restore is needed most (S29 VM
+    // cycle: a broken restore left schema sew empty and sew-migrate
+    // failing). Sew needs only sew-db up; the helper stops sew and starts
+    // it again.
+    if !matches!(row.status.as_str(), "running" | "degraded" | "stopped" | "error") {
+        return Err(no("not_installed", 409, format!("Sew is '{}': there is no install to restore into", row.status)));
     }
     helper_check(env)?;
-    let listed = backups(env)?;
-    let exists = listed["backups"].as_array().is_some_and(|a| a.iter().any(|b| b["id"] == bundle_id));
-    if !exists {
-        return Err(no("bundle_not_found", 404, format!("no backup '{bundle_id}' (k2 hostchat backup list)")));
+    // The list is a mgmt read: with Sew down, `sew restore` checks the id
+    // itself (exit 4, nothing touched); bundle_id_ok keeps it an id.
+    match backups(env) {
+        Ok(listed) => {
+            let exists = listed["backups"].as_array().is_some_and(|a| a.iter().any(|b| b["id"] == bundle_id));
+            if !exists {
+                return Err(no("bundle_not_found", 404, format!("no backup '{bundle_id}' (k2 hostchat backup list)")));
+            }
+        }
+        Err(f) if f.code == "mgmt_unreachable" => {}
+        Err(f) => return Err(f),
     }
     let _l = begin(env)?;
     let now = env.ops.now();
@@ -1507,21 +1519,15 @@ pub fn restore(env: &Env, bundle_id: &str) -> R<Value> {
             }
         });
     };
-    save_enable(env, |r| r.restore_progress = Some(json!({"bundle": bundle_id, "startedAt": now, "current": "pre-backup", "result": null})));
-    // 1. The pre-restore backup (Sew's mgmt backup job): no backup, no
-    // restore.
-    let pre_id = match backup_job(env) {
-        Ok((_, r)) => r.id,
-        Err(f) => {
-            note(env, "pre-backup", Some("refused"));
-            return Err(no(
-                "pre_restore_backup_failed",
-                409,
-                format!("K2 takes a backup before every restore and it failed: {}. Nothing was changed", f.hint),
-            ));
-        }
-    };
-    // 2. Sew restores (sew stopped, sew-db up; Sew's own safety bundle too).
+    save_enable(env, |r| r.restore_progress = Some(json!({"bundle": bundle_id, "startedAt": now, "current": "restore", "result": null})));
+    // No K2 pre-restore backup: the only backup mgmt makes is kind
+    // `manual`, and Sew's retention (newest bundle per UTC day) then
+    // deletes an older same-day bundle, the very one being restored (found
+    // in the S29 VM cycle). Sew's own `pre-restore` safety bundle (a
+    // special kind, kept 30 days; K2 never passes --no-safety-backup) is
+    // the "no backup, no restore" guarantee: when it fails, Sew restores
+    // nothing.
+    // Sew restores (sew stopped, sew-db up, its safety bundle first).
     note(env, "restore", None);
     let v = helper(env, &["restore", bundle_id], None).map_err(|e| no("helper_error", 500, e))?;
     let exit = sew_exit(&v).unwrap_or(0);
@@ -1529,7 +1535,21 @@ pub fn restore(env: &Env, bundle_id: &str) -> R<Value> {
     let serving = healthy.is_ok();
     let ok = exit == 0 && serving;
     let err = if exit != 0 {
-        Some(format!("sew restore: exit {exit}: {} (the data was not replaced)", sew_message(&v)))
+        // Only Sew's refusals (usage, precondition, not found, unavailable,
+        // busy, no access) leave the data alone. Exit 1 is a runtime error
+        // that can come after Sew dropped the schema (S29 VM cycle: "schema
+        // sew is now empty"); never claim the data is untouched then.
+        let untouched = matches!(exit, 2 | 3 | 4 | 69 | 75 | 77);
+        let tail = if untouched {
+            "(the data was not replaced)".to_string()
+        } else {
+            let safety = v.pointer("/sew/safety_bundle").and_then(Value::as_str).map(|s| format!(" {s}")).unwrap_or_default();
+            format!(
+                "(the restore stopped partway: Sew's data may be changed or empty; restore Sew's pre-restore safety \
+                 bundle{safety} from k2 hostchat backup list)"
+            )
+        };
+        Some(format!("sew restore: exit {exit}: {} {tail}", sew_message(&v)))
     } else {
         healthy.err().map(|e| format!("restored, but Sew is unhealthy: {e}"))
     };
@@ -1543,7 +1563,6 @@ pub fn restore(env: &Env, bundle_id: &str) -> R<Value> {
         "ok": ok,
         "restored": exit == 0,
         "bundle": bundle_id,
-        "preRestoreBackup": pre_id,
         "safetyBundle": v.pointer("/sew/safety_bundle"),
         "error": err,
     });

@@ -36,7 +36,8 @@ fail() {
 ok() { echo "  ok $*"; pass=$((pass + 1)); }
 info() { echo "  info $*"; }
 # Name the line a `set -e` exit happens on (not inside `set +e` blocks).
-trap 'rc=$?; [[ $- == *e* ]] && fail "line $LINENO: $BASH_COMMAND (exit $rc)"' ERR
+# Its own variable: the checks below use rc themselves.
+trap '_erc=$?; [[ $- == *e* ]] && fail "line $LINENO: $BASH_COMMAND (exit $_erc)"' ERR
 jq_() { python3 -c "import json,sys; v=json.load(open(sys.argv[1])); $1" "$2"; }
 
 ARCH="$(uname -m)"

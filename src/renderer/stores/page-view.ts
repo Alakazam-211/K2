@@ -17,6 +17,7 @@
 // flag keeps working.
 
 import { create } from 'zustand'
+import { readWikiViewPref, writeWikiViewPref, type WikiView } from '@/lib/wiki-view-pref'
 
 export type AppPage = 'home' | 'agents' | 'projects' | 'feedback' | 'wiki'
 
@@ -54,6 +55,13 @@ interface PageViewState {
   openWiki: (projectPath: string | null) => void
   /** Close the wiki and return to the page it was opened from. */
   closeWiki: () => void
+  /** The Wiki page's view: standard reading view, 2D graph or 3D graph.
+   *  Per window and persisted (`lib/wiki-view-pref.ts`); open/close/setPage
+   *  never touch it (prd-wiki-3d-view-v1 §6.6). It lives here, not in
+   *  WikiPage state, because WikiPage unmounts while Settings is open and
+   *  resets its state on close. */
+  wikiView: WikiView
+  setWikiView: (view: WikiView) => void
 }
 
 export const usePageViewStore = create<PageViewState>((set) => ({
@@ -61,6 +69,11 @@ export const usePageViewStore = create<PageViewState>((set) => ({
   wikiProjectPath: null,
   wikiReturnPage: 'agents',
   lastWikiPath: null,
+  wikiView: readWikiViewPref(),
+  setWikiView: (view) => {
+    writeWikiViewPref(view)
+    set({ wikiView: view })
+  },
   setPage: (page) =>
     set((s) => ({
       page,

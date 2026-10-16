@@ -6,7 +6,13 @@
 // Wiki tab (the wiki of the workspace on screen, `lib/wiki-open.ts`), the
 // drawer's View Wiki, or the nav menus. The header's workspace picker
 // switches the wiki shown (its "All workspaces" row is the server-wide
-// `k2` map). Esc (or close) returns to the page it was opened from.
+// `k2` map). Esc goes back to Home, then a second Esc closes and returns
+// to the page it was opened from (W6).
+//
+// Three views (prd-wiki-3d-view-v1 §3.1, §12), switched in the header and
+// kept per window: Wiki (the standard reading view: note list + note +
+// "Linked from"), 2D graph, and 3D graph. Selection, search, the picker and
+// every filter are WikiPage state, so they carry across all three.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import remarkGfm from 'remark-gfm'
@@ -25,6 +31,11 @@ import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
 import { Surface } from '@/components/ui'
 import Markdown from '@/components/Markdown/Markdown'
 import WikiGraph from './WikiGraph'
+import WikiNoteList from './WikiNoteList'
+import { WikiViewToggle } from './WikiViewToggle'
+import { localCenterIdFor, type WikiGraphOpts } from './wiki-graph-data'
+import { wikiBacklinks } from './wiki-standard'
+import type { WikiView } from '@/lib/wiki-view-pref'
 import { FocusGroupFilterDropdown } from './FocusGroupFilterDropdown'
 import { WikiWorkspacePicker, WIKI_ALL_WORKSPACES, type WikiPickerWorkspace } from './WikiWorkspacePicker'
 import {
@@ -58,6 +69,8 @@ export default function WikiPage(): React.JSX.Element | null {
   const wikiProjectPath = usePageViewStore((s) => s.wikiProjectPath)
   const closeWiki = usePageViewStore((s) => s.closeWiki)
   const openWiki = usePageViewStore((s) => s.openWiki)
+  const view = usePageViewStore((s) => s.wikiView)
+  const setWikiView = usePageViewStore((s) => s.setWikiView)
   const isOpen = page === 'wiki'
   const projects = useProjectsStore((s) => s.projects)
 
@@ -248,18 +261,24 @@ export default function WikiPage(): React.JSX.Element | null {
     }
   }, [isOpen, index, selectedId, mode])
 
-  // Esc → close wiki (or clear selection first).
+  // Esc → back to Home; on Home (or nothing selected) → close (W6). Clearing
+  // the selection used to be step one, but the auto-select above re-picks
+  // Home at once, so Esc never closed a wiki that had notes.
   useEffect(() => {
     if (!isOpen) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
       e.preventDefault()
-      if (selectedId !== null) setSelectedId(null)
-      else closeWiki()
+      const home = index && index.nodes.length > 0 ? findWikiHomeNode(index.nodes) : null
+      if (selectedId !== null && home && selectedId !== home.id) {
+        setSelectedId(home.id)
+        return
+      }
+      closeWiki()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [isOpen, selectedId, closeWiki])
+  }, [isOpen, selectedId, closeWiki, index])
 
   // Reset transient state when closed.
   useEffect(() => {
@@ -302,6 +321,16 @@ export default function WikiPage(): React.JSX.Element | null {
     },
     [index],
   )
+
+  /** A pick in the note list (Wiki view). */
+  const selectFromList = useCallback((id: string): void => {
+    setSelectedId(id)
+  }, [])
+
+  /** A "Linked from" click in the reader: same as a wikilink click. */
+  const selectFromReader = useCallback((id: string): void => {
+    setSelectedId(id)
+  }, [])
 
   const onSeed = async (): Promise<void> => {
     if (!projectPath || seedBusy) return
@@ -409,6 +438,23 @@ export default function WikiPage(): React.JSX.Element | null {
     [index, selectedId],
   )
 
+  /** "Linked from": notes whose wikilinks point at the open note. */
+  const backlinks = useMemo(
+    () => (selectedId && index ? wikiBacklinks(index, selectedId) : []),
+    [index, selectedId],
+  )
+
+  /** Same visible-set inputs for the note list and both graphs. */
+  const localCenterId = localCenterIdFor(mode, selectedId)
+  const graphOpts = useMemo(
+    (): WikiGraphOpts => ({ mode, depth, k2Lens, focusGroupFilter, projectFilter, search, localCenterId }),
+    [mode, depth, k2Lens, focusGroupFilter, projectFilter, search, localCenterId],
+  )
+
+  const onPickView = (next: WikiView): void => {
+    setWikiView(next)
+  }
+
   /** Live article count for toolbar tag — follows search + K2/Global/Local + filters. */
   const articleCount = useMemo(() => {
     if (!index) return null
@@ -467,6 +513,11 @@ export default function WikiPage(): React.JSX.Element | null {
 
   const isEmpty = index !== null && index.noteCount === 0 && index.nodes.filter((n) => n.exists).length === 0
 
+  /** Wiki view with notes: list | reader. Otherwise the graph layout. */
+  const showList = view === 'wiki' && index !== null && !isEmpty && !loadError
+  /** Wiki view with nothing to list gives the whole body to the empty state. */
+  const hideReader = view === 'wiki' ? !showList : readerCollapsed
+
   if (!isOpen) return null
 
   return (
@@ -492,6 +543,7 @@ export default function WikiPage(): React.JSX.Element | null {
             value={allWorkspaces ? WIKI_ALL_WORKSPACES : projectPath}
             onChange={onPickWorkspace}
           />
+          <WikiViewToggle value={view} onChange={onPickView} views={['wiki', '2d']} />
         </div>
 
         <DesktopChromeRight>
@@ -708,6 +760,7 @@ export default function WikiPage(): React.JSX.Element | null {
           </a>
         )}
 
+        {view !== 'wiki' && (
         <button
           type="button"
           onClick={() => setReaderCollapsed((c) => !c)}
@@ -731,21 +784,27 @@ export default function WikiPage(): React.JSX.Element | null {
           </svg>
           {readerCollapsed ? 'Show article' : 'Hide article'}
         </button>
+        )}
       </div>
 
-      {/* Body: graph | reader */}
+      {/* Body: graph | reader, or (Wiki view) note list | reader */}
       <div
+        data-wiki-body={view}
         className={`flex-1 min-h-0 grid ${
-          readerCollapsed
-            ? 'grid-cols-1 grid-rows-[minmax(0,1fr)]'
-            : 'grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.9fr)] lg:grid-rows-[minmax(0,1fr)]'
+          showList
+            ? 'grid-cols-[minmax(180px,280px)_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]'
+            : hideReader
+              ? 'grid-cols-1 grid-rows-[minmax(0,1fr)]'
+              : 'grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.9fr)] lg:grid-rows-[minmax(0,1fr)]'
         }`}
       >
         <div
           className={`relative min-h-0 min-w-0 bg-[var(--color-bg)] ${
-            readerCollapsed
-              ? ''
-              : 'border-b lg:border-b-0 lg:border-r border-[var(--color-border)]'
+            showList
+              ? 'border-r border-[var(--color-border)]'
+              : hideReader
+                ? ''
+                : 'border-b lg:border-b-0 lg:border-r border-[var(--color-border)]'
           }`}
         >
           {!projectPath && !allWorkspaces && (
@@ -788,7 +847,10 @@ export default function WikiPage(): React.JSX.Element | null {
               </button>
             </div>
           )}
-          {index && !isEmpty && !loadError && (
+          {showList && index && (
+            <WikiNoteList index={index} opts={graphOpts} selectedId={selectedId} onSelect={selectFromList} />
+          )}
+          {index && !isEmpty && !loadError && view !== 'wiki' && (
             <WikiGraph
               index={index}
               selectedId={selectedId}
@@ -810,12 +872,12 @@ export default function WikiPage(): React.JSX.Element | null {
         </div>
 
         {/* Reader */}
-        {!readerCollapsed && (
+        {!hideReader && (
         <div className="flex flex-col min-h-0 min-w-0 bg-[var(--color-bg-surface)]">
           {!selectedId && (
             <div className="flex-1 flex items-center justify-center px-6">
               <p className="text-[11px] text-[var(--color-text-muted)] text-center border border-dashed border-[var(--color-border)] px-6 py-8 w-full max-w-sm">
-                Select a note on the graph to read it here.
+                {view === 'wiki' ? 'Select a note to read it here.' : 'Select a note on the graph to read it here.'}
               </p>
             </div>
           )}
@@ -893,6 +955,35 @@ export default function WikiPage(): React.JSX.Element | null {
                       {renderedBody || '*Empty note*'}
                     </Markdown>
                   </div>
+                )}
+                {backlinks.length > 0 && (
+                  <section
+                    aria-label="Linked from"
+                    data-wiki-backlinks
+                    className="mt-6 pt-3 border-t border-[var(--color-border)]"
+                  >
+                    <h3 className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] mb-1.5">
+                      Linked from
+                      <span className="ml-1 tabular-nums opacity-70">{backlinks.length}</span>
+                    </h3>
+                    <ul className="flex flex-col gap-0.5">
+                      {backlinks.map((b) => (
+                        <li key={b.id}>
+                          <button
+                            type="button"
+                            data-wiki-backlink={b.id}
+                            onClick={() => selectFromReader(b.id)}
+                            className="text-left text-[11px] text-[var(--color-accent)] hover:underline cursor-pointer"
+                          >
+                            {b.title || b.id}
+                            {allWorkspaces && b.workspaceName && b.workspaceId !== selectedNode?.workspaceId && (
+                              <span className="ml-1.5 text-[var(--color-text-muted)]">· {b.workspaceName}</span>
+                            )}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
                 )}
               </div>
             </>

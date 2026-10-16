@@ -1335,16 +1335,39 @@ fn engine_json(ctx: &Ctx) -> J {
     })
 }
 
+/// AppArmor's userspace for this distro, when the kernel has AppArmor on
+/// (and SELinux isn't the enforcing LSM) but `apparmor_parser` is missing:
+/// `Some(packages)` to add to the install, `Some(&[])` when K2 has no
+/// fixed package name for this package manager, `None` when nothing is
+/// needed.
+fn apparmor_packages(ctx: &Ctx, pm: Pm) -> Option<&'static [&'static str]> {
+    if lsm(ctx) != Lsm::AppArmor || apparmor_parser(ctx).is_some() {
+        return None;
+    }
+    Some(match pm {
+        Pm::Apt => APT_APPARMOR_PACKAGES,
+        Pm::Pacman => PACMAN_APPARMOR_PACKAGES,
+        Pm::Dnf => &[],
+    })
+}
+
+/// `apps packages install`: the engine's distro packages, plus AppArmor's
+/// userspace where the kernel has AppArmor on but the parser is missing
+/// (so `apps apparmor on` can load `k2-app` next). Fixed names only;
+/// idempotent (a second run finds the parser and adds nothing).
 pub fn packages_install(ctx: &Ctx) -> HResult<J> {
     let pm = package_manager(ctx)
         .ok_or_else(|| Fail::state("no supported package manager (apt-get, dnf, pacman)"))?;
-    let pkgs = match pm {
+    let base = match pm {
         Pm::Apt => APT_PACKAGES,
         Pm::Dnf => DNF_PACKAGES,
         Pm::Pacman => PACMAN_PACKAGES,
     };
-    install(ctx, pm, pkgs)?;
-    let v = engine_json(ctx);
+    let aa = apparmor_packages(ctx, pm);
+    let mut pkgs: Vec<&str> = base.to_vec();
+    pkgs.extend_from_slice(aa.unwrap_or(&[]));
+    install(ctx, pm, &pkgs)?;
+    let mut v = engine_json(ctx);
     if v["podmanOk"] != true {
         return Err(Fail::state(format!(
             "podman_too_old: the distro ships Podman {} (Apps need {PODMAN_MIN_MAJOR}+: Debian 13, Ubuntu 26.04, Fedora 40+, Arch)",
@@ -1356,6 +1379,28 @@ pub fn packages_install(ctx: &Ctx) -> HResult<J> {
             "pasta_missing: the distro's passt package did not install /usr/bin/pasta",
         ));
     }
+    v["apparmor"] = match aa {
+        None => json!({ "needed": false, "parser": apparmor_parser(ctx) }),
+        Some([]) => json!({
+            "needed": true,
+            "installed": [],
+            "parser": null,
+            "note": format!(
+                "AppArmor is on in the kernel but K2 has no fixed AppArmor package for {}: install apparmor_parser with the distro's tools, then prepare again",
+                pm_name(pm)
+            ),
+        }),
+        Some(p) => {
+            let parser = apparmor_parser(ctx).ok_or_else(|| {
+                Fail::state(format!(
+                    "apparmor_missing: installed the distro's {} package, but apparmor_parser isn't at {}",
+                    p.join(" "),
+                    APPARMOR_PARSER.join(" or ")
+                ))
+            })?;
+            json!({ "needed": true, "installed": p, "parser": parser })
+        }
+    };
     Ok(v)
 }
 
@@ -1653,7 +1698,10 @@ pub fn apparmor(ctx: &Ctx, on: bool) -> HResult<J> {
             return Ok(v);
         }
         let parser = apparmor_parser(ctx).ok_or_else(|| {
-            Fail::state("apparmor_missing: AppArmor is on but apparmor_parser isn't installed")
+            Fail::state(
+                "apparmor_missing: AppArmor is on but apparmor_parser isn't installed; box prep installs it \
+                 (apps packages install, on apt and pacman boxes: k2 app box prepare)",
+            )
         })?;
         let ad = ctx
             .dir(APPARMOR_DIR)

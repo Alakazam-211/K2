@@ -515,6 +515,10 @@ pub enum Verb {
     /// journald keeps its lines in the system journal, which only root
     /// (or the systemd-journal group, which k2app never gets) reads.
     AppsLogs { id: AppId, deployment: String, lines: u32 },
+    /// `apps packages install` (open): the engine's distro packages, plus
+    /// the fixed `apparmor` package (apt, pacman) where the kernel has
+    /// AppArmor on but `apparmor_parser` is missing. Never a package name
+    /// from argv.
     AppsPackagesInstall,
     AppsPackagesInstallYouki,
     AppsRuntime(OciRuntime),

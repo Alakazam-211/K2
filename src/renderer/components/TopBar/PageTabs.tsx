@@ -1,5 +1,5 @@
 // Projects V1 P4 (prd-projects-v1 §6.0) — the top bar's page switcher:
-// ⚙ | Home | Agents | Projects | Tickets. Replaces the standalone
+// ⚙ | Home | Agents | Projects | Tickets | Wiki. Replaces the standalone
 // v0.40.26 FeedbackTopBarButton: its waiting-count badge moves onto the
 // Feedback tab (same count, same show/hide semantics) and its event
 // wiring (initFeedbackEvents + the badge re-count on projects changes)
@@ -23,7 +23,9 @@ import {
   ProjectsIcon,
   SettingsIcon,
   TicketsIcon,
+  WikiIcon,
 } from '@/components/icons/K2Icons'
+import { openWikiForView } from '@/lib/wiki-open'
 
 /** The Tickets tab's badge from the feedback store (prd-tickets-badge-
  *  orphans TB8/TB15/TB17 + Appa A3): a fresh count; the last count dimmed
@@ -50,6 +52,7 @@ export const PAGE_TAB_LABELS = {
   agents: { name: 'Agents', title: 'Agents — the workspace view' },
   projects: { name: 'Projects', title: 'Projects — grouped agents, shared dashboards (⌘P)' },
   feedback: { name: 'Tickets', title: 'Tickets — agents waiting on a human' },
+  wiki: { name: 'Wiki', title: 'Wiki' },
 } as const
 
 /** 0.46.0 experiment (Rosson 2026-10-16): the page tabs are icons, not
@@ -58,12 +61,15 @@ export const PAGE_TAB_LABELS = {
  *  top-bar icon, the cog included, inside the 24px-tall tab. */
 export const PAGE_TAB_ICON_PX = K2_ICON_PX
 
-/** The four page tabs in order, with their A3 icons. */
+/** The five page tabs in order, with their A3 icons. Wiki (0.46.0, Rosson
+ *  2026-10-16) opens the wiki of the workspace on screen
+ *  (`lib/wiki-open.ts`), not a bare page switch. */
 export const PAGE_TAB_ITEMS = [
   { page: 'home', Icon: HomeIcon },
   { page: 'agents', Icon: AgentsIcon },
   { page: 'projects', Icon: ProjectsIcon },
   { page: 'feedback', Icon: TicketsIcon },
+  { page: 'wiki', Icon: WikiIcon },
 ] as const satisfies readonly { page: keyof typeof PAGE_TAB_LABELS; Icon: typeof HomeIcon }[]
 
 /** What a tab badge shows: nothing, a number, or `?` (unknown). */
@@ -170,6 +176,11 @@ export default function PageTabs(): React.JSX.Element {
   const select = (p: AppPage): void => {
     if (useSettingsStore.getState().settingsOpen) {
       useSettingsStore.getState().closeSettings()
+    }
+    if (p === 'wiki') {
+      // Already on the wiki: keep the wiki shown (the picker switches it).
+      if (usePageViewStore.getState().page !== 'wiki') openWikiForView()
+      return
     }
     setPage(p)
   }

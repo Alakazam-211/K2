@@ -2,9 +2,11 @@
 // (prd-workspace-kb-brain-map-and-publish §7.2).
 //
 // Pattern mirrors FeedbackPage / ProjectsPage: fixed-inset overlay with
-// its own top bar (ServerSwitcher + PageTabs). Opened
-// only from WorkspacePanel → View Wiki; not a permanent PageTabs entry.
-// Esc (or close) returns to Agents.
+// its own top bar (ServerSwitcher + PageTabs). Opened from the top bar's
+// Wiki tab (the wiki of the workspace on screen, `lib/wiki-open.ts`), the
+// drawer's View Wiki, or the nav menus. The header's workspace picker
+// switches the wiki shown (its "All workspaces" row is the server-wide
+// `k2` map). Esc (or close) returns to the page it was opened from.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import remarkGfm from 'remark-gfm'
@@ -24,6 +26,7 @@ import { Surface } from '@/components/ui'
 import Markdown from '@/components/Markdown/Markdown'
 import WikiGraph from './WikiGraph'
 import { FocusGroupFilterDropdown } from './FocusGroupFilterDropdown'
+import { WikiWorkspacePicker, WIKI_ALL_WORKSPACES, type WikiPickerWorkspace } from './WikiWorkspacePicker'
 import {
   WorkspaceFilterDropdown,
   type FilterableWorkspace,
@@ -54,14 +57,11 @@ export default function WikiPage(): React.JSX.Element | null {
   const page = usePageViewStore((s) => s.page)
   const wikiProjectPath = usePageViewStore((s) => s.wikiProjectPath)
   const closeWiki = usePageViewStore((s) => s.closeWiki)
+  const openWiki = usePageViewStore((s) => s.openWiki)
   const isOpen = page === 'wiki'
   const projects = useProjectsStore((s) => s.projects)
 
   const projectPath = wikiProjectPath
-  const workspace = useMemo(
-    () => (projectPath ? projects.find((p) => p.path === projectPath) ?? null : null),
-    [projects, projectPath],
-  )
 
   const [index, setIndex] = useState<WikiIndex | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -439,6 +439,32 @@ export default function WikiPage(): React.JSX.Element | null {
     }))
   }, [projects])
 
+  /** The header picker's rows: this window's server's workspaces. */
+  const pickerWorkspaces = useMemo((): WikiPickerWorkspace[] => {
+    return projects.map((p) => ({
+      id: p.id,
+      name: p.name,
+      path: p.path,
+      color: p.color,
+      iconUrl: p.iconUrl ?? null,
+      focusGroupId: p.focusGroupId ?? null,
+      worktreePaths: (p.workspaces ?? []).flatMap((w) => (w.worktreePath ? [w.worktreePath] : [])),
+    }))
+  }, [projects])
+
+  /** Picker: All workspaces = the server-wide map; a workspace = its wiki
+   *  (Global, or Local when that lens is on). The room is not touched. */
+  const onPickWorkspace = (value: string): void => {
+    if (value === WIKI_ALL_WORKSPACES) {
+      setMode('k2')
+      return
+    }
+    if (mode === 'k2') setMode('global')
+    if (value !== projectPath) openWiki(value)
+  }
+
+  const allWorkspaces = mode === 'k2'
+
   const isEmpty = index !== null && index.noteCount === 0 && index.nodes.filter((n) => n.exists).length === 0
 
   if (!isOpen) return null
@@ -461,14 +487,11 @@ export default function WikiPage(): React.JSX.Element | null {
           <K2MarkButton />
           <ServerSwitcher />
           <PageTabs />
-          <span className="no-drag text-[11px] text-[var(--color-text-muted)] truncate ml-2">
-            Wiki
-            {workspace ? (
-              <span className="text-[var(--color-text-secondary)]"> · {workspace.name}</span>
-            ) : projectPath ? (
-              <span className="text-[var(--color-text-secondary)]"> · {projectPath.split('/').pop()}</span>
-            ) : null}
-          </span>
+          <WikiWorkspacePicker
+            workspaces={pickerWorkspaces}
+            value={allWorkspaces ? WIKI_ALL_WORKSPACES : projectPath}
+            onChange={onPickWorkspace}
+          />
         </div>
 
         <DesktopChromeRight>
@@ -525,44 +548,34 @@ export default function WikiPage(): React.JSX.Element | null {
           </div>
         )}
 
-        <div className="flex items-center gap-0.5 border border-[var(--color-border)]">
-          <button
-            type="button"
-            onClick={() => setMode('k2')}
-            className={`px-2 py-1 text-[10px] font-medium transition-colors cursor-pointer ${
-              mode === 'k2'
-                ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
-            }`}
-            title="All workspace brains (host ~/.k2/wiki registry)"
-          >
-            K2
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('global')}
-            className={`px-2 py-1 text-[10px] font-medium transition-colors cursor-pointer ${
-              mode === 'global'
-                ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
-            }`}
-            title="Full knowledge graph for this workspace"
-          >
-            Global
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('local')}
-            className={`px-2 py-1 text-[10px] font-medium transition-colors cursor-pointer ${
-              mode === 'local'
-                ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
-            }`}
-            title="Neighborhood of the selected note"
-          >
-            Local
-          </button>
-        </div>
+        {!allWorkspaces && (
+          <div className="flex items-center gap-0.5 border border-[var(--color-border)]">
+            <button
+              type="button"
+              onClick={() => setMode('global')}
+              className={`px-2 py-1 text-[10px] font-medium transition-colors cursor-pointer ${
+                mode === 'global'
+                  ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+              }`}
+              title="Full knowledge graph for this workspace"
+            >
+              Global
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('local')}
+              className={`px-2 py-1 text-[10px] font-medium transition-colors cursor-pointer ${
+                mode === 'local'
+                  ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
+                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+              }`}
+              title="Neighborhood of the selected note"
+            >
+              Local
+            </button>
+          </div>
+        )}
 
         {mode === 'k2' && (
           <div className="flex items-center gap-0.5 border border-[var(--color-border)] flex-shrink-0">
@@ -633,7 +646,7 @@ export default function WikiPage(): React.JSX.Element | null {
 
         <button
           type="button"
-          disabled={seedBusy || !projectPath}
+          disabled={seedBusy || !projectPath || allWorkspaces}
           onClick={() => void onSeed()}
           className="px-2 py-1 text-[10px] font-medium border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer disabled:opacity-50"
           title="Create Home.md and _Index.md under .k2/wiki/"
@@ -643,7 +656,7 @@ export default function WikiPage(): React.JSX.Element | null {
 
         <button
           type="button"
-          disabled={serveBusy || !projectPath}
+          disabled={serveBusy || !projectPath || allWorkspaces}
           onClick={() => void onToggleServe()}
           className={`px-2 py-1 text-[10px] font-medium border transition-colors cursor-pointer disabled:opacity-50 ${
             serve?.enabled
@@ -657,7 +670,7 @@ export default function WikiPage(): React.JSX.Element | null {
 
         <button
           type="button"
-          disabled={chatBusy || !projectPath}
+          disabled={chatBusy || !projectPath || allWorkspaces}
           onClick={() => void onTogglePublicChat()}
           className={`px-2 py-1 text-[10px] font-medium border transition-colors cursor-pointer disabled:opacity-50 ${
             serve?.publicChatEnabled
@@ -735,12 +748,12 @@ export default function WikiPage(): React.JSX.Element | null {
               : 'border-b lg:border-b-0 lg:border-r border-[var(--color-border)]'
           }`}
         >
-          {!projectPath && (
+          {!projectPath && !allWorkspaces && (
             <div className="absolute inset-0 flex items-center justify-center">
               <p className="text-sm text-[var(--color-text-muted)]">No workspace selected.</p>
             </div>
           )}
-          {projectPath && loading && !index && (
+          {(projectPath || allWorkspaces) && loading && !index && (
             <div className="absolute inset-0 flex items-center justify-center">
               <p className="text-sm text-[var(--color-text-muted)]">Loading knowledge base…</p>
             </div>
@@ -752,7 +765,12 @@ export default function WikiPage(): React.JSX.Element | null {
               </p>
             </div>
           )}
-          {index && isEmpty && !loadError && (
+          {index && isEmpty && !loadError && allWorkspaces && (
+            <div className="absolute inset-0 flex items-center justify-center px-6">
+              <p className="text-sm text-[var(--color-text-muted)]">No workspace wikis on this server yet.</p>
+            </div>
+          )}
+          {index && isEmpty && !loadError && !allWorkspaces && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6">
               <p className="text-sm text-[var(--color-text-primary)]">No knowledge base yet</p>
               <p className="text-[11px] text-[var(--color-text-muted)] text-center max-w-sm">

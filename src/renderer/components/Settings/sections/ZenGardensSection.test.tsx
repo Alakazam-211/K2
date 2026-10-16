@@ -473,8 +473,8 @@ describe('Settings → Gardens: where it shows', () => {
   it('0.45.7: a Gardens group (Gardens, Local Data, External Data), right after Access', () => {
     const nav = settingsNav({ zenGardens: true })
     const groups = nav.flatMap((b) => (b.kind === 'group' ? [b.title] : []))
-    // LLMs, Access, then Gardens (Rosson 2026-10-15), then Network.
-    expect(groups.slice(0, 4)).toEqual(['LLMs', 'Access', 'Gardens', 'Network'])
+    // Language Models, Access, then Gardens (Rosson 2026-10-15), then Network.
+    expect(groups.slice(0, 4)).toEqual(['Language Models', 'Access', 'Gardens', 'Network'])
     const at = nav.findIndex((b) => b.kind === 'group' && b.title === 'Gardens')
     expect(nav[at - 1]).toMatchObject({ kind: 'group', title: 'Access' })
     expect(nav[at + 1]).toMatchObject({ kind: 'group', title: 'Network' })

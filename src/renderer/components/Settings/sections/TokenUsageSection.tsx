@@ -20,9 +20,9 @@ export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
   {
     id: 'token-usage.machine',
     section: 'token-usage',
-    label: 'Token Usage',
+    label: 'Usage',
     description: 'Token counts for this machine, by workspace, harness, and model',
-    keywords: ['tokens', 'usage', 'claude', 'codex', 'grok', 'cache', 'input', 'output'],
+    keywords: ['token usage', 'tokens', 'usage', 'llm', 'llms', 'language models', 'claude', 'codex', 'grok', 'cache', 'input', 'output'],
   },
 ]
 
@@ -520,7 +520,7 @@ export function TokenUsageSection(): React.JSX.Element {
   return (
     <div className="flex flex-col lg:flex-row gap-8">
       <div className="max-w-3xl flex-1 min-w-0">
-      <h2 className="text-base font-medium text-[var(--color-text-primary)] mb-1">Token Usage</h2>
+      <h2 className="text-base font-medium text-[var(--color-text-primary)] mb-1">Usage</h2>
       <p className="text-xs text-[var(--color-text-muted)] mb-2">
         Counts stored on this machine from Claude, Codex, and Grok transcripts. One row per counted
         turn. No prices. No subscription percents.

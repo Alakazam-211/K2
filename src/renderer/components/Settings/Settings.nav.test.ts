@@ -23,7 +23,7 @@ describe('Settings nav Apps', () => {
     const accessStart = src.indexOf("title: 'Access'")
     const networkStart = src.indexOf("title: 'Network'")
     const editors = src.indexOf("title: 'Editors / Fonts'")
-    expect(accessStart).toBeGreaterThan(src.indexOf("title: 'LLMs'"))
+    expect(accessStart).toBeGreaterThan(src.indexOf("title: 'Language Models'"))
     expect(networkStart).toBeGreaterThan(accessStart)
     expect(editors).toBeGreaterThan(networkStart)
     // Gardens sits between Access and Network (Rosson 2026-10-15).
@@ -122,18 +122,18 @@ describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own sect
   })
 })
 
-describe('Settings nav LLMs group (0.45.7, Rosson: LLMs · Tokens · Token Usage)', () => {
-  it('LLMs is a group: LLMs, Tokens, Token Usage, before Access; Gardens follows Access', () => {
-    const start = src.indexOf("title: 'LLMs'")
+describe('Settings nav Language Models group (0.46, Rosson: Models · Subscriptions / Tokens · Usage; was LLMs · Tokens · Token Usage)', () => {
+  it('Language Models is a group: Models, Subscriptions / Tokens, Usage, before Access; Gardens follows Access', () => {
+    const start = src.indexOf("title: 'Language Models'")
     const gardens = src.indexOf("title: 'Gardens'")
     const server = src.indexOf("title: 'Access'")
     expect(server).toBeGreaterThan(start)
     expect(gardens).toBeGreaterThan(server)
     expect(src.slice(start, server)).toContain(
       [
-        "{ id: 'agents', label: 'LLMs' },",
-        "{ id: 'llm-tokens', label: 'Tokens' },",
-        "{ id: 'token-usage', label: 'Token Usage' },",
+        "{ id: 'agents', label: 'Models' },",
+        "{ id: 'llm-tokens', label: 'Subscriptions / Tokens' },",
+        "{ id: 'token-usage', label: 'Usage' },",
       ].join('\n        '),
     )
     // No longer top-level pages; the old ids are the leaves, so deep links
@@ -149,8 +149,10 @@ describe('Settings nav LLMs group (0.45.7, Rosson: LLMs · Tokens · Token Usage
     expect(src).toContain('...AGENTS_MANIFEST,')
     expect(src).toContain('...LLM_TOKENS_MANIFEST,')
     expect(src).toContain('...TOKEN_USAGE_MANIFEST,')
-    expect(SECTION_LABELS.agents).toBe('LLMs')
-    expect(SECTION_LABELS['llm-tokens']).toBe('Tokens')
-    expect(SECTION_LABELS['token-usage']).toBe('Token Usage')
+    expect(src).not.toContain("title: 'LLMs'")
+    expect(SECTION_LABELS.agents).toBe('Models')
+    expect(SECTION_LABELS['llm-tokens']).toBe('Subscriptions / Tokens')
+    expect(SECTION_LABELS['token-usage']).toBe('Usage')
+    expect(SECTION_LABELS['editors-agents']).toBe('Models')
   })
 })

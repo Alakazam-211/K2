@@ -1,4 +1,4 @@
-// Settings → LLMs → Tokens — subscriptions and API tokens (its own page
+// Settings → Language Models → Subscriptions / Tokens — subscriptions and API tokens (its own page
 // from 0.45.7, LlmTokensSection; before, the right column of Settings → LLMs).
 // (Internally: the LLM login wallet; routes and types keep those names.)
 //
@@ -478,7 +478,7 @@ export function AgentAccountsColumn(): React.JSX.Element {
 
   return (
     <div className="w-full" data-settings-id="agents.accounts">
-      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Tokens</h2>
+      <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Subscriptions / Tokens</h2>
       {/* Hosted web is one server and its primary scope reads "This
           computer", so the line is desktop-only. */}
       {!isWebClient() && (

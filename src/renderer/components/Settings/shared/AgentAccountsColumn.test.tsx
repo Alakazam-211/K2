@@ -158,9 +158,9 @@ async function renderColumn(): Promise<void> {
 }
 
 describe('Tokens column', () => {
-  it('renders the Tokens heading, plain token names, states, the Server default badge, usage and the switch note', async () => {
+  it('renders the Subscriptions / Tokens heading, plain token names, states, the Server default badge, usage and the switch note', async () => {
     await renderColumn()
-    expect(screen.getByRole('heading', { name: 'Tokens' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Subscriptions / Tokens' })).toBeTruthy()
     expect(screen.getByTestId('llm-switch-note').textContent).toBe(SWITCH_NOTE)
     const work = screen.getByTestId('llm-account-acc_work')
     expect(screen.getByTestId('llm-name-acc_work').textContent).toBe('Claude · Max · work')
@@ -235,7 +235,7 @@ describe('Tokens column', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('another change is in progress')
   })
 
-  it('the search manifest has the Tokens entries on Settings → LLMs → Tokens, not the old credentials row', () => {
+  it('the search manifest has the Tokens entries on Settings → Language Models → Subscriptions / Tokens, not the old credentials row', () => {
     // 0.45.7: Tokens is its own page (id llm-tokens); the entry ids are unchanged.
     expect(LLM_TOKENS_MANIFEST.map((e) => e.id)).toEqual(['agents.accounts', 'agents.add-login'])
     expect(LLM_TOKENS_MANIFEST.every((e) => e.section === 'llm-tokens')).toBe(true)
@@ -245,18 +245,19 @@ describe('Tokens column', () => {
     expect(llms).not.toContain('agents.credentials')
     expect(AGENTS_MANIFEST.every((e) => e.section === 'agents')).toBe(true)
     const acc = LLM_TOKENS_MANIFEST.find((e) => e.id === 'agents.accounts')!
-    expect(acc.label).toBe('Tokens')
-    expect(acc.keywords).toEqual(expect.arrayContaining(['token', 'subscription', 'api token', 'login', 'switch']))
+    expect(acc.label).toBe('Subscriptions / Tokens')
+    // Old words still find it (was Settings → LLMs → Tokens).
+    expect(acc.keywords).toEqual(expect.arrayContaining(['token', 'tokens', 'subscription', 'api token', 'login', 'switch', 'llm', 'llms', 'language models']))
   })
 
-  it('Settings → LLMs → Tokens is the same column on its own page', async () => {
+  it('Settings → Language Models → Subscriptions / Tokens is the same column on its own page', async () => {
     render(<LlmTokensSection />)
     await screen.findByTestId('llm-account-acc_work')
     const page = document.querySelector('[data-llm-tokens-section]') as HTMLElement
     expect(page.className).toBe('max-w-3xl')
     expect(page.children.length).toBe(1)
     expect(page.firstElementChild?.getAttribute('data-settings-id')).toBe('agents.accounts')
-    expect(within(page).getByRole('heading', { name: 'Tokens' })).toBeTruthy()
+    expect(within(page).getByRole('heading', { name: 'Subscriptions / Tokens' })).toBeTruthy()
     expect(page.querySelector('[data-settings-id="agents.add-login"]')).not.toBeNull()
   })
 })

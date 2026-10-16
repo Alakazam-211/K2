@@ -111,7 +111,7 @@ function thirdPartyBotLeaves(): NavLeaf[] {
   return [...live, ...soon]
 }
 
-/** The sidebar. Top-level pages, then groups: LLMs, Access, Gardens,
+/** The sidebar. Top-level pages, then groups: Language Models, Access, Gardens,
  *  Network, Editors / Fonts, Logs, Cores (Sidecars before 0.45.7; ids
  *  unchanged), 3rd Party Bots. Gardens sits right after Access (Rosson
  *  2026-10-15: "Move Gardens beneath Access").
@@ -120,6 +120,10 @@ function thirdPartyBotLeaves(): NavLeaf[] {
  *  default agent, launch bar, presets, CLI install), Tokens (id
  *  `llm-tokens`: the subscriptions and API tokens that were the LLMs page's
  *  right half) and Token Usage (id `token-usage`).
+ *  Renamed 0.46 (Rosson: "change the "LLMs" section to say "Language
+ *  Models" … call the first tab "models". Then do Subscriptions / Tokens.
+ *  Then do Usage"): Language Models → Models · Subscriptions / Tokens ·
+ *  Usage. Ids unchanged, so deep links still land on the same pages.
  *  K2 Server split in two in 0.45.7 (Rosson): Access (who may get in and
  *  with what: Admin Access, User Access, User Templates, API Keys, Vault;
  *  the login log stays in Logs → Access Audit, which each Access page links
@@ -163,11 +167,11 @@ export function settingsNav({
       : []),
     {
       kind: 'group',
-      title: 'LLMs',
+      title: 'Language Models',
       items: [
-        { id: 'agents', label: 'LLMs' },
-        { id: 'llm-tokens', label: 'Tokens' },
-        { id: 'token-usage', label: 'Token Usage' },
+        { id: 'agents', label: 'Models' },
+        { id: 'llm-tokens', label: 'Subscriptions / Tokens' },
+        { id: 'token-usage', label: 'Usage' },
       ],
     },
     {

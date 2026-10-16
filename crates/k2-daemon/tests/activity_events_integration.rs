@@ -757,8 +757,8 @@ fn snapshot_rollup(project_id: &str) -> serde_json::Value {
 /// mid-turn or with a subagent still running, so a lead asking permission
 /// while its subagent works is busy AND waiting. Every change reaches the
 /// `activity_changed` rollup, which matches the snapshot.
-#[test]
-fn live_and_busy_roll_up_across_sessions_and_follow_reaping() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_and_busy_roll_up_across_sessions_and_follow_reaping() {
     let _g = lock();
     let _home = TempHome::new();
     activity_events::spawn();

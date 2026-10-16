@@ -38,6 +38,7 @@ import {
   type K2User,
 } from './connect-user-roles'
 import { WasViewerBadge, WasViewerNotice } from './WasViewerNotice'
+import { CanCloneToggle, setCanCloneOptimistic } from './CanCloneToggle'
 import {
   OWNER_LINK_EXPLAINER,
   OwnerAccountToggle,
@@ -881,6 +882,19 @@ export function K2ConnectSection({
       setUsersError(e instanceof Error ? e.message : 'Failed to remove user')
     }
   }
+
+  // Settings → Admin Access → "Can clone" (0.46.0, Owner-only;
+  // POST /cli/users/set-can-clone). Optimistic with revert-on-failure.
+  const changeCanClone = (username: string, canClone: boolean): Promise<void> =>
+    setCanCloneOptimistic({
+      username,
+      next: canClone,
+      post: userPost,
+      apply: (u, v) => setUsers((prev) => prev.map((x) => (x.username === u ? { ...x, canClone: v } : x))),
+      errText,
+      onError: (msg) => setUsersError(msg),
+      refresh: refreshUsers,
+    })
 
   // K2 #629: change a user's role (Owner-only; POST /cli/users/set-role).
   // Optimistic with revert-on-failure, mirroring toggleDisabled.
@@ -1945,6 +1959,16 @@ export function K2ConnectSection({
                             {u.role ?? 'member'}
                           </span>
                         )}
+                        <CanCloneToggle
+                          username={u.username}
+                          rowRole={u.role}
+                          canClone={u.canClone}
+                          myRole={myRole}
+                          onChange={(v) => {
+                            setUsersError(null)
+                            void changeCanClone(u.username, v)
+                          }}
+                        />
                         {/* Disable / Enable — peer-checked checkbox (matches auto-start) */}
                         <label className="flex items-center gap-1.5 cursor-pointer select-none no-drag">
                           <input

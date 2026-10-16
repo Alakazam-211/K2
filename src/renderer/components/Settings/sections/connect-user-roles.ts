@@ -33,6 +33,9 @@ export interface K2User {
   role?: string
   /** True for an account disabled by the Viewer removal. */
   wasViewer?: boolean
+  /** Settings → Admin Access → "Can clone" (0.46.0). Owner rows are always
+   *  true; absent from an older daemon (= allowed, today's behaviour). */
+  canClone?: boolean
 }
 
 /** Whether the row should offer "Enable as Member": a former Viewer that

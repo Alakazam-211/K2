@@ -22,11 +22,38 @@ import {
   defaultClonePullDeps,
   type ClonePullDeps,
 } from './clone-pull'
-import { useCloneToDialogStore } from '@/stores/clone-to-dialog'
+import { useCloneToDialogStore, type CloneOptionDeps } from '@/stores/clone-to-dialog'
+import {
+  cloneCarryConfirm,
+  envConfirmSecretId,
+  fetchClonePreview,
+  getVaultConfirmToken,
+  type CloneExtras,
+} from './clone-options'
+import type { ServerScope } from '@/kessel/server-scope'
 import { useProjectsStore } from '@/stores/projects'
 import { useToastStore } from '@/stores/toast'
 import type { ConnectHost } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
+
+/**
+ * The options-phase collaborators (0.46.0) bound to the SOURCE server's
+ * scope, captured when the dialog opens — before a push switches the
+ * window to the destination. Preview and both confirms run on the source,
+ * where `clone/bundle` / `clone/pack` check the tokens.
+ */
+export function defaultCloneOptionDeps(scope: ServerScope, projectPath: string, projectName: string): CloneOptionDeps {
+  const post = async <T = unknown>(s: ServerScope, route: string, body?: unknown): Promise<T> => {
+    const { daemonCliPost } = await import('./daemon-cli')
+    return daemonCliPost<T>(s, route, body)
+  }
+  return {
+    fetchPreview: () => fetchClonePreview(post, scope, projectPath),
+    envConfirm: (ask) =>
+      getVaultConfirmToken(post, scope, 'clone-env', envConfirmSecretId(projectPath), `.env files of ${projectName}`, ask),
+    carryConfirm: (secrets, ask) => cloneCarryConfirm({ post, scope, projectPath, secrets, askPassword: ask }),
+  }
+}
 
 /**
  * Open the "Clone to" modal at its pre-flight options phase. The actual run
@@ -40,14 +67,16 @@ export function startCloneTo(
   projectName: string,
   host: ConnectHost,
   deps: CloneDeps = defaultCloneDeps(),
+  optionDeps: CloneOptionDeps = defaultCloneOptionDeps(primaryScope(), projectPath, projectName),
 ): void {
   const store = useCloneToDialogStore.getState()
   store.start({
     projectPath,
     projectName,
     host,
-    onConfirm: (carrySecrets, includeAllHistory) => {
-      void runClone(projectPath, host, deps, carrySecrets, includeAllHistory)
+    optionDeps,
+    onConfirm: (carrySecrets, includeAllHistory, extras) => {
+      void runClone(projectPath, host, deps, carrySecrets, includeAllHistory, extras)
     },
   })
 }
@@ -66,6 +95,7 @@ export function startCloneToThisComputer(
   projectPath: string,
   projectName: string,
   deps: ClonePullDeps = defaultClonePullDeps(),
+  optionDeps: CloneOptionDeps = defaultCloneOptionDeps(primaryScope(), projectPath, projectName),
 ): void {
   const store = useCloneToDialogStore.getState()
   store.start({
@@ -73,8 +103,9 @@ export function startCloneToThisComputer(
     projectName,
     host: null,
     pull: true,
-    onConfirm: (carrySecrets, includeAllHistory) => {
-      void runPull(projectPath, projectName, deps, carrySecrets, includeAllHistory)
+    optionDeps,
+    onConfirm: (carrySecrets, includeAllHistory, extras) => {
+      void runPull(projectPath, projectName, deps, carrySecrets, includeAllHistory, extras)
     },
   })
 }
@@ -98,6 +129,7 @@ async function runPull(
   deps: ClonePullDeps,
   carrySecrets: boolean,
   includeAllHistory: boolean,
+  extras?: CloneExtras,
 ): Promise<void> {
   let lastStage: CloneStage = 'packing'
   try {
@@ -116,6 +148,7 @@ async function runPull(
       },
       carrySecrets,
       includeAllHistory,
+      extras,
     )
     const localName = result.project?.name ?? projectName
     useToastStore.getState().addToast(
@@ -148,6 +181,7 @@ async function runClone(
   deps: CloneDeps,
   carrySecrets: boolean,
   includeAllHistory: boolean,
+  extras?: CloneExtras,
 ): Promise<void> {
   try {
     await cloneWorkspaceTo(primaryScope(),
@@ -162,6 +196,7 @@ async function runClone(
       },
       carrySecrets,
       includeAllHistory,
+      extras,
     )
     // The clone unpacked + registered the workspace on the remote daemon, but
     // the renderer's project list (already pointed at that host) won't reflect

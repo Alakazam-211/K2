@@ -27,6 +27,7 @@
 
 import type { ConnectHost } from '@/stores/connect-host'
 import type { ServerScope } from '@/kessel/server-scope'
+import type { CloneExtras } from './clone-options'
 
 /** Manifest summary the daemon returns from `clone/bundle`. */
 export interface CloneManifestSummary {
@@ -60,6 +61,13 @@ export interface ClonedProject {
 export interface CloneUnpackResult {
   project: ClonedProject
   dest_path: string
+  /** Clone carries Threads and vault (0.46.0): optional counts the
+   *  destination reports; older daemons omit them. */
+  threads_imported?: number
+  threads_skipped?: number
+  vault_imported?: number
+  vault_skipped?: number
+  cards_posted?: number
 }
 
 /** Host filesystem info (`fs/info`). */
@@ -215,6 +223,9 @@ export async function cloneWorkspaceTo(
    * call as `live_only` (the daemon's inverse-of-this flag).
    */
   includeAllHistory = true,
+  /** Thread / per-secret choices + person-confirm tokens (0.46.0,
+   *  clone-options.ts). Spread into the `clone/bundle` body. */
+  extras?: CloneExtras,
 ): Promise<CloneUnpackResult> {
   // This flow SWITCHES THE WINDOW to the destination (step 2) and keeps
   // talking to "the window's server" across that switch: bundle on the
@@ -231,6 +242,7 @@ export async function cloneWorkspaceTo(
       project_path: projectPath,
       carry_secrets: carrySecrets,
       live_only: !includeAllHistory,
+      ...(extras ?? {}),
     })
     if (!bundle?.bundle_path) {
       throw new Error('Bundle step returned no bundle_path.')

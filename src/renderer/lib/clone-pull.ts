@@ -36,6 +36,7 @@ import type {
   CloneUnpackResult,
 } from './clone-to'
 import { CloneCancelledError } from './clone-to'
+import type { CloneExtras } from './clone-options'
 // Static import is safe in headless tests: the store module only pulls
 // zustand (no Tauri / daemon side effects at import time).
 import { useTransferProgressStore } from '@/stores/transfer-progress'
@@ -136,6 +137,8 @@ export async function cloneWorkspaceToThisComputer(
    *  into the pack job. */
   carrySecrets = true,
   includeAllHistory = true,
+  /** Thread / per-secret choices + confirm tokens, spread into `clone/pack`. */
+  extras?: CloneExtras,
 ): Promise<CloneUnpackResult> {
   const { onStage, onBundled, onDone, onError } = hooks
   try {
@@ -145,6 +148,7 @@ export async function cloneWorkspaceToThisComputer(
       project_path: projectPath,
       carry_secrets: carrySecrets,
       live_only: !includeAllHistory,
+      ...(extras ?? {}),
     })
     if (!job_id) {
       throw new Error('Packing failed on the server: no job id returned.')

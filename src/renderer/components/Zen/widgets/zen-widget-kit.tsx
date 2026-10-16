@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenAgentRow, ZenThreadView } from '@/lib/zen/zen-data'
 import { agentLookColor, agentLookTextOn } from '@/lib/agent-look'
+import { THREAD_ZEN_CSS } from '@/components/Thread/ThreadZenKit'
 
 /** The Home's rows, live (`agents.list` + `agents.subscribe`). */
 export function useZenRows(bridge: ZenWidgetBridge): ZenAgentRow[] {
@@ -129,25 +130,13 @@ export const ZEN_WIDGET_CSS = `
 [data-zen-root] [data-zen-agent-row]:hover { background: var(--zen-surface-raised); }
 [data-zen-root] [data-zen-agent-row][data-selected] { background: var(--zen-surface-raised); box-shadow: inset 0 0 0 1px var(--zen-border); }
 [data-zen-root] [data-zen-agent-row] { animation: zen-row-in ${anim('rowIn', 220)} both; }
-[data-zen-root] [data-zen-message] { animation: zen-message-in ${anim('messageIn', 220)} both; }
 [data-zen-root] [data-zen-conversation-body] { animation: zen-fade-in ${anim('conversationSwitch', 180)} both; }
-[data-zen-root] [data-zen-pulse] { animation: zen-pulse var(--zen-anim-workingPulse-duration, 1400ms) var(--zen-anim-workingPulse-ease, ease-in-out) infinite; }
-[data-zen-root] [data-zen-typing] span { animation: zen-typing var(--zen-anim-workingPulse-duration, 1400ms) var(--zen-anim-workingPulse-ease, ease-in-out) infinite; }
-[data-zen-root] [data-zen-typing] span:nth-child(2) { animation-delay: 160ms; }
-[data-zen-root] [data-zen-typing] span:nth-child(3) { animation-delay: 320ms; }
-[data-zen-root] [data-zen-soft-button] { transition: background-color ${anim('rowMove', 140)}, opacity ${anim('rowMove', 140)}; }
-[data-zen-root] [data-zen-soft-button]:hover:not(:disabled) { background: var(--zen-surface-raised); }
-[data-zen-root] [data-zen-soft-button]:disabled { opacity: 0.45; }
-[data-zen-root] [data-zen-compose-input]::placeholder { color: var(--zen-text-muted); }
-[data-zen-root] [data-zen-compose-input]:focus { outline: none; }
+${THREAD_ZEN_CSS}
 [data-zen-root] [data-zen-home-menu] [data-zen-home-option]:hover { background: var(--zen-surface); }
 [data-zen-root] [data-zen-focus-group-picker] [data-focus-group-trigger] { border-radius: 999px; padding: 2px 10px; background: transparent; }
 [data-zen-root] [data-zen-focus-group-menu] { border-radius: var(--zen-radius); overflow: hidden; background: var(--zen-surface-raised); }
 @keyframes zen-row-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-@keyframes zen-message-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
 @keyframes zen-fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes zen-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.82); } }
-@keyframes zen-typing { 0%, 80%, 100% { opacity: 0.25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
 @media (prefers-reduced-motion: reduce) {
   [data-zen-root] [data-zen-agent-row], [data-zen-root] [data-zen-message], [data-zen-root] [data-zen-conversation-body],
   [data-zen-root] [data-zen-pulse], [data-zen-root] [data-zen-typing] span { animation: none !important; transition: none !important; }

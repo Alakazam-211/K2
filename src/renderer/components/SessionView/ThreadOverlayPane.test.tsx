@@ -13,6 +13,7 @@ import { coerceThreadTurn, overlayItemFromThreadPost, type OverlayThreadItem, ty
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { primaryScope as overlayPrimaryScope } from '@/kessel/server-scope'
 import { resetThreadViewersForTests, setThreadViewerForTests, type ThreadViewer } from '@/lib/thread-viewer'
+import { zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
 
 // Home M4: room components read their scope from their room.
 const overlayRoom = testRoom({ tabs: {}, scope: overlayPrimaryScope() })
@@ -100,7 +101,7 @@ describe('Thread overlay pane', () => {
     expect(screen.queryByTestId('overlay-load-older')).toBeNull()
   })
 
-  it('empty list shows the centered title and names the agent', () => {
+  it('empty list shows the Zen Thread widget\'s centered line and names the agent', () => {
     renderInRoom(
       overlayRoom,
       <ThreadOverlayPane addr="sales" conversationId="c" agentName="Sales Bot" />,
@@ -108,15 +109,15 @@ describe('Thread overlay pane', () => {
     const empty = screen.getByTestId('thread-overlay-empty')
     expect(empty.className).toContain('items-center')
     expect(empty.className).toContain('justify-center')
-    expect(screen.getByText('No Thread messages yet')).not.toBeNull()
-    expect(empty.textContent).toContain('Send a message to Sales Bot in the box below.')
+    expect(empty.textContent).toBe(zenEmptyThreadText('Sales Bot'))
+    expect(empty.textContent).toBe('Message Sales Bot. It reads this like a text.')
     expect(empty.textContent).not.toContain('the agent')
   })
 
   it('empty list with no name falls back to "the agent"', () => {
     renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
     const empty = screen.getByTestId('thread-overlay-empty')
-    expect(empty.textContent).toContain('Send a message to the agent in the box below.')
+    expect(empty.textContent).toBe('Message the agent. It reads this like a text.')
   })
 
   it('blank name also falls back to "the agent"', () => {
@@ -125,7 +126,7 @@ describe('Thread overlay pane', () => {
       <ThreadOverlayPane addr="sales" conversationId="c" agentName="   " />,
     )
     const empty = screen.getByTestId('thread-overlay-empty')
-    expect(empty.textContent).toContain('Send a message to the agent in the box below.')
+    expect(empty.textContent).toBe('Message the agent. It reads this like a text.')
   })
 
   it('shows nothing before the first load finishes', () => {
@@ -135,7 +136,7 @@ describe('Thread overlay pane', () => {
       <ThreadOverlayPane addr="sales" conversationId="c" agentName="Sales Bot" />,
     )
     expect(screen.queryByTestId('thread-overlay-empty')).toBeNull()
-    expect(screen.queryByText('No Thread messages yet')).toBeNull()
+    expect(screen.queryByText(/It reads this like a text/)).toBeNull()
   })
 
   it('error replaces the empty state', () => {
@@ -239,13 +240,14 @@ describe('Thread overlay choice chips + secret field', () => {
     })
     const ownerViewer: ThreadViewer = { principal: 'owner', aliases: [] }
     const aliceViewer: ThreadViewer = { principal: 'alice', aliases: [] }
-    /** The author line's text; "You" (and only "You") gets the own-post accent. */
+    /** The author line's text; "You" (and only "You") is my bubble, on the right. */
     const authorText = (): string => {
       const row = screen.getByTestId('thread-item')
-      const el = row.querySelector('span.font-semibold')
+      const el = row.querySelector('[data-thread-author]')
       if (!el) throw new Error(`no author element in ${row.innerHTML}`)
       const text = el.textContent ?? ''
-      expect(el.className.includes('text-[var(--color-accent)]')).toBe(text.startsWith('You'))
+      expect(row.hasAttribute('data-mine')).toBe(text.startsWith('You'))
+      expect(row.querySelector('[data-zen-bubble]')?.getAttribute('data-zen-bubble')).toBe(text.startsWith('You') ? 'me' : 'agent')
       return text
     }
 
@@ -850,9 +852,12 @@ describe('Thread overlay list scroll restore', () => {
   })
 })
 
-// prd-daemon-activity-and-thread-working-v1 S7 (T-S7a, T-S7b): the working
-// strip under the last message, drawn from the hook's `turn`.
-describe('Thread working strip (S7)', () => {
+// prd-daemon-activity-and-thread-working-v1 S7 (T-S7a, T-S7b), drawn the Zen
+// Thread widget's way (Rosson 2026-10-16, "match mobile/the zen garden"): the
+// activity drawer (`ZenActivityDrawer`) from the hook's `turn`, in place of
+// the strip under the last message. Alone (no message box) the pane draws it
+// under the list; the strip's Stop (Esc to the agent's PTY) is kept.
+describe('Thread activity drawer (S7, the Zen look)', () => {
   /** This client's clock; the server's runs 2 s ahead of it. */
   const CLIENT_NOW = 1_000_070_000
   const SERVER_NOW = CLIENT_NOW + 2_000
@@ -887,16 +892,18 @@ describe('Thread working strip (S7)', () => {
   // The pane is memoized and the mocked hook is one mutable object: a fresh
   // prop per render stands in for the hook's state change.
   let renders = 0
-  function pane(props: { onStop?: () => void } = {}) {
+  function pane(props: { onStop?: () => void; onTurn?: (t: ThreadTurn | null) => void } = {}) {
     renders += 1
     return createElement(ThreadOverlayPane, { addr: 'sales', conversationId: 'c', agentName: `k2-${renders}`, ...props })
   }
 
-  const strip = () => screen.queryByTestId('thread-working-strip')
-  const text = (id: string) => {
-    const el = screen.getByTestId(id)
+  const drawer = (): Element | null => document.querySelector('[data-zen-drawer]')
+  const text = (sel: string): string => {
+    const el = document.querySelector(sel)
+    if (!el) throw new Error(`no ${sel}`)
     return (el.textContent ?? '').replace(/\s+/g, ' ').trim()
   }
+  const stop = (): HTMLElement | null => screen.queryByTestId('thread-strip-stop')
 
   beforeEach(() => {
     vi.useFakeTimers({ now: CLIENT_NOW })
@@ -911,25 +918,22 @@ describe('Thread working strip (S7)', () => {
     threadHook.turnsReported = true
   })
 
-  it('T-S7a: a tool frame reads the pulse, time since your message on the server clock, the line, the tally', () => {
+  it('T-S7a: a tool frame draws the drawer under the list: pulse, the line, the clock on the server clock', () => {
     threadHook.turn = turnOf()
     renderInRoom(overlayRoom, pane())
-    expect(strip()?.getAttribute('data-tone')).toBe('working')
-    // The step line says what it's doing: no state word in the header.
-    expect(screen.queryByTestId('thread-strip-state')).toBeNull()
+    expect(drawer()?.getAttribute('data-tone')).toBe('working')
+    // No message box here: a free tile, outside the scrolling list.
+    expect(drawer()?.getAttribute('data-zen-drawer-attached')).toBe('false')
+    expect(overlayList().contains(drawer())).toBe(false)
+    expect(text('[data-zen-drawer-step]')).toBe('Running cargo test')
+    expect(document.querySelector('[data-zen-drawer-step] code')?.textContent).toBe('cargo test')
     // 72 s on the server's clock; this client's own clock would say 70 s.
-    expect(text('thread-strip-since')).toBe('1m 12s')
-    expect(screen.getByTestId('thread-strip-since').getAttribute('title')).toBe('since your message')
-    expect(strip()?.getAttribute('aria-label')).toBe('Agent working, 1m 12s since your message: Running cargo test')
-    expect(text('thread-strip-step-text')).toBe('Running cargo test')
-    expect(screen.getByTestId('thread-strip-step-text').querySelector('code')?.textContent).toBe('cargo test')
-    expect(text('thread-strip-step')).toContain('12s')
-    expect(text('thread-strip-tally')).toBe('Read 3 files · ran 2 commands · 2 subagents running, 1 done · 1 background task')
-    // "working" is said at most once, and never "subagents working".
-    expect((strip()?.textContent ?? '').match(/working/gi)).toBeNull()
-    // The strip sits under the last message.
-    const content = screen.getByTestId('thread-item').parentElement
-    expect(content?.lastElementChild).toBe(strip())
+    expect(text('[data-zen-drawer-clock]')).toBe('1:12')
+    expect(document.querySelector('[data-zen-drawer-tile]')?.getAttribute('aria-label')).toBe(
+      'Agent working, 1m 12s since your message: Running cargo test',
+    )
+    // The drawer stands in for the three dots.
+    expect(document.querySelector('[data-zen-typing]')).toBeNull()
   })
 
   it('T-S7a: the clock counts on locally at 1 Hz without a new frame', () => {
@@ -938,151 +942,118 @@ describe('Thread working strip (S7)', () => {
     act(() => {
       vi.advanceTimersByTime(8_000)
     })
-    expect(text('thread-strip-since')).toBe('1m 20s')
-    expect(text('thread-strip-step')).toContain('20s')
+    expect(text('[data-zen-drawer-clock]')).toBe('1:20')
   })
 
-  it('T-S7a: thinking reads "Thinking… 8s" and shimmers', () => {
-    threadHook.turn = turnOf({ phase: 'thinking', line: null, phaseSince: SERVER_NOW - 8_000 })
-    renderInRoom(overlayRoom, pane())
-    expect(text('thread-strip-step-text')).toBe('Thinking… 8s')
-    expect(screen.getByTestId('thread-strip-step-text').className).toContain('thread-strip-shimmer')
-    expect(screen.queryByTestId('thread-strip-state')).toBeNull()
-  })
-
-  it('T-S7a: delivering reads its own line; an unknown step says "Working" once, in the header', () => {
-    threadHook.turn = turnOf({ phase: 'delivering', line: null, subagents: 0, subagentsDone: 0, background: 0, tally: {} })
-    const view = renderInRoom(overlayRoom, pane())
-    expect(text('thread-strip-step-text')).toBe('Delivering…')
-    expect(screen.queryByTestId('thread-strip-state')).toBeNull()
-    expect(strip()?.textContent).not.toMatch(/working/i)
-    expect(screen.queryByTestId('thread-strip-tally')).toBeNull()
-    for (const [phase, rev] of [['working', 4], ['tool', 5]] as const) {
-      threadHook.turn = turnOf({ phase, line: null, rev })
-      view.rerender(pane())
-      expect(text('thread-strip-state'), phase).toBe('Working')
-      expect(text('thread-strip-since'), phase).toBe('· 1m 12s')
-      expect(screen.queryByTestId('thread-strip-step'), phase).toBeNull()
-      expect((strip()?.textContent ?? '').match(/working/gi), phase).toHaveLength(1)
-      expect(strip()?.getAttribute('aria-label'), phase).toBe('Agent working, 1m 12s since your message')
-    }
-  })
-
-  it('T-S7a: an end removes the strip (no stored row, no trace; Q8)', () => {
+  it('a click opens the detail in words (the strip\'s words) and keeps it on this computer', () => {
+    localStorage.removeItem('k2.zen.activityDrawerExpanded')
     threadHook.turn = turnOf()
-    const view = renderInRoom(overlayRoom, pane())
-    expect(strip()).not.toBeNull()
+    renderInRoom(overlayRoom, pane())
+    const tile = document.querySelector('[data-zen-drawer-tile]') as HTMLElement
+    fireEvent.click(tile)
+    expect(text('[data-zen-drawer-head]')).toBe('Working · 1m 12s since your message')
+    expect(text('[data-zen-drawer-tally]')).toBe('Read 3 files · ran 2 commands')
+    expect(localStorage.getItem('k2.zen.activityDrawerExpanded')).toBe('1')
+    fireEvent.click(tile)
+    expect(document.querySelector('[data-zen-drawer-head]')).toBeNull()
+    expect(localStorage.getItem('k2.zen.activityDrawerExpanded')).toBe('0')
+  })
+
+  it('T-S7a: an end takes the drawer away (no stored row, no trace; Q8)', () => {
     for (const reason of ['reply', 'done', 'session_gone', 'superseded']) {
+      threadHook.turn = turnOf()
+      const view = renderInRoom(overlayRoom, pane())
+      expect(drawer(), reason).not.toBeNull()
       threadHook.turn = turnOf({ state: reason === 'reply' || reason === 'done' ? 'idle' : 'stopped', rev: 9, end: { reason, detail: null, at: SERVER_NOW } })
       view.rerender(pane())
-      expect(strip(), reason).toBeNull()
+      act(() => {
+        vi.advanceTimersByTime(400)
+      })
+      expect(drawer(), reason).toBeNull()
+      // The message keeps its own row; nothing was added.
+      expect(screen.getAllByTestId('thread-item'), reason).toHaveLength(1)
+      cleanup()
     }
-    // The message keeps its own row; nothing was added.
-    expect(screen.getAllByTestId('thread-item')).toHaveLength(1)
   })
 
-  it('an interrupt reads "Stopped" (muted) for a moment, then goes', () => {
+  it('an interrupt reads "Stopped" for a moment, with no Stop, then goes', () => {
     threadHook.turn = turnOf({ state: 'stopped', rev: 9, end: { reason: 'interrupted', detail: null, at: SERVER_NOW } })
     renderInRoom(overlayRoom, pane({ onStop: () => {} }))
-    expect(strip()?.getAttribute('data-tone')).toBe('stopped')
-    expect(text('thread-strip-state')).toBe('Stopped')
-    expect(text('thread-strip-since')).toBe('· you stopped it after 1m 12s')
-    expect(screen.queryByTestId('thread-strip-stop')).toBeNull()
-    expect(screen.queryByTestId('thread-strip-tally')).toBeNull()
+    expect(drawer()?.getAttribute('data-tone')).toBe('stopped')
+    expect(text('[data-zen-drawer-step]')).toBe('Stopped')
+    expect(stop()).toBeNull()
     act(() => {
       vi.advanceTimersByTime(3_100)
     })
-    expect(strip()).toBeNull()
-  })
-
-  it('needs-you is amber with no Stop; monitoring is blue', () => {
-    threadHook.turn = turnOf({ state: 'needs-you', phase: 'waiting', line: null })
-    const view = renderInRoom(overlayRoom, pane({ onStop: () => {} }))
-    expect(strip()?.getAttribute('data-tone')).toBe('needs-you')
-    expect(strip()?.className).toContain('--color-status-warn-amber')
-    expect(text('thread-strip-state')).toBe('Needs you')
-    expect(text('thread-strip-since')).toBe('· 1m 12s')
-    // A fact, with no call to action and no pointer to the terminal.
-    expect(text('thread-strip-step-text')).toBe('Stuck on a permission prompt')
-    expect(strip()?.textContent).not.toMatch(/terminal|approve/i)
-    expect(screen.queryByTestId('thread-strip-stop')).toBeNull()
-    threadHook.turn = turnOf({ state: 'needs-you', phase: 'waiting', line: null, waitingOn: 'question', rev: 4 })
-    view.rerender(pane({ onStop: () => {} }))
-    expect(text('thread-strip-step-text')).toBe('Stuck on a question')
-
-    threadHook.turn = turnOf({ state: 'monitoring', rev: 5 })
-    view.rerender(pane({ onStop: () => {} }))
-    expect(strip()?.getAttribute('data-tone')).toBe('monitoring')
-    expect(strip()?.className).toContain('--color-accent')
-    // Monitoring keeps its word: it says something the pulse doesn't.
-    expect(text('thread-strip-state')).toBe('Monitoring')
-    expect(screen.getByTestId('thread-strip-stop')).not.toBeNull()
-  })
-
-  it('after a reply, live subagents keep the strip: counts and clock in the header, the tally, no step, no Stop', () => {
-    threadHook.items = [textItem('t1', 1), textItem('t2', 2)]
-    threadHook.turn = turnOf({ phase: 'children', line: null, subagents: 2, subagentsDone: 1, background: 0, phaseSince: SERVER_NOW - 5_000 })
-    const view = renderInRoom(overlayRoom, pane({ onStop: () => {} }))
-    expect(strip()?.getAttribute('data-tone')).toBe('working')
-    expect(strip()?.getAttribute('data-phase')).toBe('children')
-    expect(text('thread-strip-state')).toBe('2 subagents running, 1 done')
-    expect(text('thread-strip-since')).toBe('· 1m 12s')
-    expect(screen.getByTestId('thread-strip-since').getAttribute('title')).toBe('since your message')
-    expect(screen.queryByTestId('thread-strip-step')).toBeNull()
-    expect(text('thread-strip-tally')).toBe('Read 3 files · ran 2 commands')
-    expect(screen.queryByTestId('thread-strip-stop')).toBeNull()
-    expect(strip()?.textContent).not.toMatch(/working/i)
-    expect(strip()?.getAttribute('aria-label')).toBe('Agent replied; 2 subagents running, 1 done, 1m 12s since your message')
-    // It sits under the reply.
-    const content = screen.getAllByTestId('thread-item')[1].parentElement
-    expect(content?.lastElementChild).toBe(strip())
-
-    // Only a background task left: monitoring.
-    threadHook.turn = turnOf({ state: 'monitoring', phase: 'children', line: null, subagents: 0, subagentsDone: 2, background: 1, rev: 5 })
-    view.rerender(pane({ onStop: () => {} }))
-    expect(strip()?.getAttribute('data-tone')).toBe('monitoring')
-    expect(text('thread-strip-state')).toBe('2 subagents done · 1 background task')
-    expect(screen.queryByTestId('thread-strip-stop')).toBeNull()
-
-    // The children finish: the reply's end takes the strip away.
-    threadHook.turn = turnOf({ state: 'idle', phase: 'children', line: null, subagents: 0, background: 0, rev: 6, end: { reason: 'reply', detail: null, at: SERVER_NOW } })
-    view.rerender(pane({ onStop: () => {} }))
-    expect(strip()).toBeNull()
-  })
-
-  it('"No update in Nm" uses a dashed rule and no step line', () => {
-    // A24: phase `stale` starts at the row's staleSince (30 min after the
-    // last evidence); 4 more minutes have passed since.
-    threadHook.turn = turnOf({ state: 'unverifiable', phase: 'stale', line: null, phaseSince: SERVER_NOW - 4 * 60_000 })
-    renderInRoom(overlayRoom, pane())
-    expect(strip()?.getAttribute('data-tone')).toBe('unverifiable')
-    expect(strip()?.className).toContain('border-dashed')
-    expect(text('thread-strip-state')).toBe('No update in 34m')
-    expect(text('thread-strip-since')).toBe('· the session is still open')
-    expect(screen.queryByTestId('thread-strip-step')).toBeNull()
+    // The linger is over: it slides away.
+    expect(drawer()?.getAttribute('data-phase')).toBe('out')
+    act(() => {
+      vi.advanceTimersByTime(400)
+    })
+    expect(drawer()).toBeNull()
   })
 
   it('Stop sends the pane\'s Esc; without a way to type there is no Stop', () => {
     threadHook.turn = turnOf()
     const onStop = vi.fn()
     const view = renderInRoom(overlayRoom, pane({ onStop }))
-    fireEvent.click(screen.getByTestId('thread-strip-stop'))
+    const button = stop()
+    if (!button) throw new Error('no Stop on a working turn')
+    expect(button.getAttribute('title')).toBe('Sends Esc to the agent')
+    // A press keeps the caret in the message box (no focus steal).
+    expect(fireEvent.mouseDown(button)).toBe(false)
+    fireEvent.click(button)
     expect(onStop).toHaveBeenCalledTimes(1)
     view.rerender(pane())
-    expect(strip()).not.toBeNull()
-    expect(screen.queryByTestId('thread-strip-stop')).toBeNull()
+    expect(drawer()).not.toBeNull()
+    expect(stop()).toBeNull()
   })
 
-  it('T-S7b: no turn (an older server reports none) draws no strip', () => {
+  it('Stop follows the strip\'s rule: monitoring yes; needs-you and a reply\'s subagents no', () => {
+    threadHook.turn = turnOf({ state: 'needs-you', phase: 'waiting', line: null })
+    const view = renderInRoom(overlayRoom, pane({ onStop: () => {} }))
+    expect(drawer()?.getAttribute('data-tone')).toBe('needs-you')
+    // A fact, with no call to action and no pointer to the terminal.
+    expect(text('[data-zen-drawer-step]')).toBe('Stuck on a permission prompt')
+    expect(drawer()?.textContent).not.toMatch(/terminal|approve/i)
+    expect(stop()).toBeNull()
+
+    threadHook.turn = turnOf({ state: 'monitoring', rev: 5 })
+    view.rerender(pane({ onStop: () => {} }))
+    expect(drawer()?.getAttribute('data-tone')).toBe('monitoring')
+    expect(stop()).not.toBeNull()
+
+    threadHook.turn = turnOf({ phase: 'children', line: null, subagents: 2, subagentsDone: 1, background: 0, rev: 6 })
+    view.rerender(pane({ onStop: () => {} }))
+    expect(text('[data-zen-drawer-step]')).toBe('Replied')
+    expect(stop()).toBeNull()
+  })
+
+  it('T-S7b: no turn (an older server reports none) draws no drawer', () => {
     threadHook.turn = null
     threadHook.turnsReported = false
     renderInRoom(overlayRoom, pane())
     expect(screen.getAllByTestId('thread-item')).toHaveLength(1)
-    expect(strip()).toBeNull()
+    expect(drawer()).toBeNull()
+  })
+
+  it('with a message box (onTurn) the pane hands the turn up and draws no drawer itself', () => {
+    const t = turnOf()
+    threadHook.turn = t
+    const seen: (ThreadTurn | null)[] = []
+    const onTurn = (x: ThreadTurn | null): void => {
+      seen.push(x)
+    }
+    const view = renderInRoom(overlayRoom, pane({ onTurn }))
+    expect(drawer()).toBeNull()
+    expect(seen.at(-1)).toBe(t)
+    view.unmount()
+    // Gone: the box drops its drawer too.
+    expect(seen.at(-1)).toBeNull()
   })
 })
 
-describe('Thread working strip keeps the scroll pin (S7)', () => {
+describe('Thread activity drawer keeps the scroll pin (S7)', () => {
   beforeEach(() => {
     FakeResizeObserver.instances = []
     vi.stubGlobal('ResizeObserver', FakeResizeObserver)
@@ -1117,7 +1088,7 @@ describe('Thread working strip keeps the scroll pin (S7)', () => {
     )
   }
 
-  it('a pinned list stays at the bottom as the strip appears and grows', () => {
+  it('a pinned list stays at the bottom as the drawer appears and the list shrinks', () => {
     const view = renderOverlay()
     const list = overlayList()
     const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
@@ -1125,29 +1096,19 @@ describe('Thread working strip keeps the scroll pin (S7)', () => {
     act(() => observerOf(list).fire())
     expect(box.scrollTop).toBe(800)
 
-    // The strip shows up under the last message (a render, no new item).
     threadHook.turn = turnAt(1)
-    box.scrollHeight = 850
     rerenderPane(view)
-    expect(screen.getByTestId('thread-working-strip')).not.toBeNull()
-    expect(box.scrollTop).toBe(850)
-
-    // It grows a tally line on a later frame.
-    threadHook.turn = turnAt(2, { phase: 'tool', line: 'Reading `a.rs`', tally: { read: 1 } })
-    box.scrollHeight = 870
-    rerenderPane(view)
-    expect(box.scrollTop).toBe(870)
-
-    // A height change the renders don't see (the strip's own 1 Hz text, a
-    // wrap) re-pins through the content's ResizeObserver.
-    const content = screen.getByTestId('thread-working-strip').parentElement
-    if (!content) throw new Error('no content wrapper')
-    box.scrollHeight = 900
-    act(() => observerOf(content).fire())
-    expect(box.scrollTop).toBe(900)
+    expect(document.querySelector('[data-zen-drawer]')).not.toBeNull()
+    // The drawer takes room under the list: the list gets shorter.
+    box.clientHeight = 168
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(800)
+    box.scrollHeight = 860
+    act(() => observerOf(list).fire())
+    expect(box.scrollTop).toBe(860)
   })
 
-  it('a list the user scrolled up stays put when the strip changes', () => {
+  it('a list the user scrolled up stays put when the drawer changes', () => {
     const view = renderOverlay()
     const list = overlayList()
     const box: ListBox = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
@@ -1157,8 +1118,9 @@ describe('Thread working strip keeps the scroll pin (S7)', () => {
     fireEvent.scroll(list)
 
     threadHook.turn = turnAt(1)
-    box.scrollHeight = 850
     rerenderPane(view)
+    box.clientHeight = 168
+    act(() => observerOf(list).fire())
     expect(box.scrollTop).toBe(120)
   })
 })
@@ -1170,7 +1132,7 @@ describe('own post time on the author line', () => {
   const ownerViewer: ThreadViewer = { principal: 'owner', aliases: [] }
   const timeText = (): string => {
     const row = screen.getByTestId('thread-item')
-    const el = row.querySelector('span.tabular-nums')
+    const el = row.querySelector('[data-thread-time]')
     if (!el) throw new Error(`no time element in ${row.innerHTML}`)
     return el.textContent ?? ''
   }

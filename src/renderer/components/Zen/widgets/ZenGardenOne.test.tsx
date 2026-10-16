@@ -222,6 +222,12 @@ describe('Garden settings (`settings`): Recent agents first', () => {
     render(<ZenAgentsWidget bridge={fb.bridge} decl={agentsDecl({ pins: true, settings: true })} />)
     // Off by default: the Home's order.
     expect(listRows()).toEqual(['alpha::local', 'beta::local', 'gamma::local'])
+    // The cog is K2's one Settings icon, style A3 (Lucide `settings`, round caps).
+    const cog = el('[data-zen-agents-settings] svg')
+    expect(cog.getAttribute('data-k2-icon')).toBe('settings')
+    expect(cog.getAttribute('width')).toBe('16')
+    expect(cog.getAttribute('stroke-width')).toBe('1.75')
+    expect(cog.getAttribute('stroke-linecap')).toBe('round')
     await act(async () => void fireEvent.click(el('[data-zen-agents-settings]')))
     const dialog = el('[data-testid="zen-garden-settings"]')
     expect(dialog.getAttribute('aria-label')).toBe('Garden settings')

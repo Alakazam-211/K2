@@ -18,6 +18,7 @@
 //     (the widget's `recent-first` prop; Garden 1 starts it on), else off.
 
 import { useEffect, useState } from 'react'
+import { SettingsIcon } from '@/components/icons/K2Icons'
 import { useZenRecentFirst, useZenRecentFirstStore } from '@/lib/zen/zen-recent-first'
 import { loadZenGardenThemes, setZenTheme } from '@/lib/zen/zen-theme-switch'
 import type { ZenThemeEntry } from '@/lib/zen/zen-page'
@@ -271,10 +272,8 @@ export function ZenGardenSettingsButton(props: ZenGardenSettingsProps): React.JS
         className="no-drag flex flex-shrink-0 items-center justify-center cursor-pointer"
         style={{ width: 24, height: 24, borderRadius: 999, color: 'var(--zen-text-muted)' }}
       >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-        </svg>
+        {/* K2's one icon set, style A3 (Rosson 2026-10-16): Lucide `settings`, round caps. */}
+        <SettingsIcon />
       </button>
       {open && <ZenGardenSettings {...props} onClose={() => setOpen(false)} />}
     </>

@@ -897,6 +897,9 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                     "via": item.doc.via,
                     "widget": item.doc.widget,
                     "author": item.doc.author,
+                    // The client stamps its own post with the server's time
+                    // ("You · just now"), falling back to its send time.
+                    "created_at": item.doc.created_at,
                     "conversation_id": resolved.conversation_id,
                     "addr": resolved.addr,
                 }),
@@ -2174,6 +2177,9 @@ mod tests {
         assert_eq!(items[0]["doc"]["body"], "hi");
         assert_eq!(items[0]["doc"]["from"], handle);
         assert_eq!(items[0]["seq"], posted["seq"]);
+        let created_at = posted["created_at"].as_i64().expect("post json must carry created_at (ms)");
+        assert!(created_at > 0, "created_at must be the stored time: {posted}");
+        assert_eq!(items[0]["doc"]["created_at"], posted["created_at"]);
     }
 
     #[test]

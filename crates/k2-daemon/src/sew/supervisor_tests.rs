@@ -648,16 +648,81 @@ fn manual_rollback_never_passes_a_data_loss_flag_and_explains_a_schema_refusal()
 
 // ── backups / restore ────────────────────────────────────────────────────
 
+fn queue_mgmt(t: &T, key: &str, a: Result<Value, crate::sew::ops::MgmtError>) {
+    t.ops.mgmt_answers.lock().unwrap().entry(key.to_string()).or_default().push_back(a);
+}
+
 #[test]
-fn backups_list_and_run() {
+fn backups_list_and_run_over_mgmt_not_the_helper() {
+    use crate::sew::ops::MgmtError;
     let t = t();
     t.enabled();
     let b = backups(&t.env()).unwrap();
     assert_eq!(b["backups"].as_array().unwrap().len(), 2);
-    assert_eq!(b["latest"]["id"], "20260102T031500Z");
-    assert_eq!(backup_run(&t.env()).unwrap()["ok"], true);
-    t.ops.queue("engine sew backup", Ok(json!({"sewExit": 75, "sew": null})));
+    assert_eq!(b["latest"]["id"], "20260102T031500Z", "Sew lists newest first");
+    assert_eq!(b["backups"][0]["schema_version"], 920002);
+    let r = backup_run(&t.env()).unwrap();
+    assert_eq!(r["ok"], true);
+    let id = r["backup"]["id"].as_str().unwrap().to_string();
+    assert_eq!(r["jobId"], format!("bk_{id}"));
+    assert_eq!(backups(&t.env()).unwrap()["latest"]["id"], id.as_str());
+    let calls = t.ops.mgmt_calls.lock().unwrap().clone();
+    assert!(calls.contains(&"POST /mgmt/v1/backup".to_string()), "{calls:?}");
+    assert!(calls.contains(&format!("GET /mgmt/v1/jobs/bk_{id}")), "{calls:?}");
+    assert!(t.ops.effects().iter().all(|a| !a.contains("backup")), "no root helper for backups: {:?}", t.ops.effects());
+
+    // 409 backup_running (the timer or a CLI backup holds the lock).
+    queue_mgmt(&t, "POST /mgmt/v1/backup", Err(MgmtError::Status(409, r#"{"error":{"kind":"conflict","reason":"backup_running"}}"#.into())));
     assert_eq!(backup_run(&t.env()).unwrap_err().code, "backup_busy");
+    // A job that loses the race fails with that reason.
+    queue_mgmt(&t, "POST /mgmt/v1/backup", Ok(json!({"job_id": "77"})));
+    queue_mgmt(
+        &t,
+        "GET /mgmt/v1/jobs/77",
+        Ok(json!({"id": "77", "kind": "backup", "state": "dead", "attempts": 1, "last_error": "backup_running", "created_at": "x"})),
+    );
+    assert_eq!(backup_run(&t.env()).unwrap_err().code, "backup_busy");
+    // A dead job is a failure with Sew's words; a running one is polled.
+    queue_mgmt(&t, "POST /mgmt/v1/backup", Ok(json!({"job_id": "78"})));
+    for st in ["queued", "running"] {
+        queue_mgmt(&t, "GET /mgmt/v1/jobs/78", Ok(json!({"id": "78", "kind": "backup", "state": st, "attempts": 1, "created_at": "x"})));
+    }
+    queue_mgmt(
+        &t,
+        "GET /mgmt/v1/jobs/78",
+        Ok(json!({"id": "78", "kind": "backup", "state": "dead", "attempts": 3, "last_error": "pg_dump: disk full", "created_at": "x"})),
+    );
+    let f = backup_run(&t.env()).unwrap_err();
+    assert_eq!(f.code, "backup_failed");
+    assert!(f.hint.contains("disk full"), "{}", f.hint);
+    // No backup engine.
+    queue_mgmt(&t, "POST /mgmt/v1/backup", Err(MgmtError::Status(503, r#"{"error":{"reason":"backups_unavailable"}}"#.into())));
+    assert_eq!(backup_run(&t.env()).unwrap_err().code, "backups_unavailable");
+    // Sew down: the list needs the mgmt socket.
+    t.ops.set_unit(pin::UNIT_SEW, "inactive", 0);
+    assert_eq!(backups(&t.env()).unwrap_err().code, "mgmt_unreachable");
+}
+
+#[test]
+fn status_carries_sews_backup_and_drill_state() {
+    let t = t();
+    t.enabled();
+    let s = status(&t.env(), false);
+    assert_eq!(s["backup"]["ship"]["kind"], "none");
+    assert!(s["backup"]["lastOkAt"].is_null(), "Sew has not reported one");
+    t.ops.mgmt_status.lock().unwrap()["backup"] =
+        json!({"last_ok_at": "2026-10-16T12:00:00Z", "last_id": "20261016T120000Z", "age_ms": 5000, "last_kind": "manual"});
+    t.ops.mgmt_status.lock().unwrap()["drill"] = json!({"last_ok": false, "last_error": "restore drill: checksum", "age_ms": 1});
+    t.ops.mgmt_status.lock().unwrap()["alarms"] = json!(["drill_failed", "backup_stale"]);
+    let s = status(&t.env(), false);
+    assert_eq!(s["backup"]["lastId"], "20261016T120000Z");
+    assert_eq!(s["backup"]["lastKind"], "manual");
+    assert_eq!(s["backup"]["ageMs"], 5000);
+    assert_eq!(s["backup"]["alarms"], json!(["backup_stale"]));
+    assert_eq!(s["drill"]["lastOk"], false);
+    assert_eq!(s["drill"]["alarms"], json!(["drill_failed"]));
+    assert!(s["alarms"].as_array().unwrap().iter().any(|a| a == "drill_failed"));
+    assert_eq!(s["state"], "degraded");
 }
 
 #[test]
@@ -667,17 +732,25 @@ fn restore_takes_a_backup_first_and_refuses_without_one() {
     assert_eq!(restore(&t.env(), "20990101T000000Z").unwrap_err().code, "bundle_not_found");
     assert_eq!(restore(&t.env(), "../etc").unwrap_err().code, "bad_request");
     t.ops.clear();
-    t.ops.queue("engine sew backup", Ok(json!({"sewExit": 1, "sew": {"error": {"message": "disk full"}}})));
+    queue_mgmt(&t, "POST /mgmt/v1/backup", Ok(json!({"job_id": "90"})));
+    queue_mgmt(
+        &t,
+        "GET /mgmt/v1/jobs/90",
+        Ok(json!({"id": "90", "kind": "backup", "state": "dead", "attempts": 3, "last_error": "disk full", "created_at": "x"})),
+    );
     let f = restore(&t.env(), "20260101T031500Z").unwrap_err();
     assert_eq!(f.code, "pre_restore_backup_failed");
+    assert!(f.hint.contains("disk full"), "{}", f.hint);
     assert!(!t.ops.argvs().iter().any(|a| a.starts_with("engine sew restore")), "no restore without a backup");
     t.ops.clear();
     let r = restore(&t.env(), "20260101T031500Z").unwrap();
     assert_eq!(r["restored"], true);
     assert_eq!(r["safetyBundle"], "20260103T000000Z-safety");
-    let eff = t.ops.effects();
-    let pos = |s: &str| eff.iter().position(|e| e == s).unwrap_or_else(|| panic!("{s} missing: {eff:?}"));
-    assert!(pos("engine sew backup") < pos("engine sew restore 20260101T031500Z"));
+    // The pre-restore backup is Sew's mgmt job, and it came first.
+    let pre = r["preRestoreBackup"].as_str().unwrap().to_string();
+    assert_eq!(backups(&t.env()).unwrap()["latest"]["id"], pre.as_str());
+    assert!(t.ops.mgmt_calls.lock().unwrap().contains(&"POST /mgmt/v1/backup".to_string()));
+    assert_eq!(t.ops.effects().iter().filter(|e| e.starts_with("engine sew restore")).count(), 1);
     assert_eq!(t.row().restore_progress.unwrap()["result"], "done");
 }
 

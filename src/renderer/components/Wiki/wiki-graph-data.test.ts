@@ -2,7 +2,7 @@
 // 3D renderers. Pure (node env).
 
 import { describe, expect, it } from 'vitest'
-import type { WikiIndex, WikiLink, WikiNode } from './wiki-api'
+import { WIKI_LOCAL_DEPTH, type WikiIndex, type WikiLink, type WikiNode } from './wiki-api'
 import {
   buildWikiGraphData,
   countWikiGraphNodes,
@@ -22,7 +22,6 @@ function link(source: string, target: string, extra: Partial<WikiLink> = {}): Wi
 
 const OPTS: WikiGraphOpts = {
   mode: 'global',
-  depth: 2,
   k2Lens: 'projects',
   focusGroupFilter: 'all',
   projectFilter: 'all',
@@ -113,9 +112,10 @@ describe('buildWikiGraphData: modes', () => {
     expect(data.links.find((l) => l.target === 'A')?.missing).toBe(false)
   })
 
-  it('local depth 1 and 2 show the neighbourhood of the centre', () => {
-    expect(ids(workspaceIndex(), opts({ mode: 'local', depth: 1, localCenterId: 'B' }))).toEqual(['A', 'B', 'C'])
-    expect(ids(workspaceIndex(), opts({ mode: 'local', depth: 2, localCenterId: 'B' }))).toEqual(['A', 'B', 'C', 'Ghost', 'Home'])
+  it('local shows the centre\'s neighbourhood, a fixed 2 hops deep', () => {
+    expect(WIKI_LOCAL_DEPTH).toBe(2)
+    expect(ids(workspaceIndex(), opts({ mode: 'local', localCenterId: 'C' }))).toEqual(['A', 'B', 'C'])
+    expect(ids(workspaceIndex(), opts({ mode: 'local', localCenterId: 'B' }))).toEqual(['A', 'B', 'C', 'Ghost', 'Home'])
   })
 
   it('local with no centre (or an unknown one) shows everything', () => {
@@ -205,10 +205,10 @@ describe('buildWikiGraphData: search', () => {
   })
 
   it('pins W7: neighbours can fall outside the Local set', () => {
-    // Local depth 1 around C = {B, C}; searching "B" adds A (B's neighbour), outside the set.
+    // Local around Ghost (2 hops) = {Ghost, A, Home, B}; searching "B" adds C (B's neighbour), outside the set.
     const data = buildWikiGraphData(
       workspaceIndex(),
-      opts({ mode: 'local', depth: 1, localCenterId: 'C', search: 'B' }),
+      opts({ mode: 'local', localCenterId: 'Ghost', search: 'B' }),
       new Map(),
       2,
     )

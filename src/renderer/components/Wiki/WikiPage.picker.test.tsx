@@ -2,7 +2,7 @@
 //
 // 0.46.0 (Rosson 2026-10-16): the Wiki header's workspace picker and the
 // close path. The picker lists this window's server's workspaces grouped by
-// focus group, "All workspaces" (the server-wide `k2` map) first; picking
+// focus group, "All of K2" (the server-wide `k2` map) first; picking
 // one switches the wiki shown without changing the room. Close (Esc or the
 // X) returns to the page the wiki was opened from.
 
@@ -147,7 +147,7 @@ describe('Wiki header workspace picker', () => {
 
     const menu = openMenu()
     expect(rowValues(menu)).toEqual(['all', '/w/alpha', '/w/bravo', '/w/cortana'])
-    expect(within(menu).getAllByRole('option')[0].textContent).toBe('All workspaces')
+    expect(within(menu).getAllByRole('option')[0].textContent).toBe('All of K2')
     const groups = Array.from(menu.querySelectorAll('[data-agent-list-section]')).map((g) => g.getAttribute('aria-label'))
     expect(groups).toEqual([null, 'Work', 'Play', 'Ungrouped'])
     expect(menu.querySelector('[data-ws-filter-value="/w/alpha"]')?.getAttribute('aria-selected')).toBe('true')
@@ -176,7 +176,7 @@ describe('Wiki header workspace picker', () => {
     expect(screen.queryByRole('button', { name: 'K2' })).toBeNull()
     fireEvent.click(openMenu().querySelector('[data-ws-filter-value="all"]') as HTMLElement)
     await waitFor(() => expect(h.indexCalls).toContainEqual({ project: '/w/alpha', scope: 'k2' }))
-    expect(trigger().getAttribute('aria-label')).toBe('Wiki workspace: All workspaces')
+    expect(trigger().getAttribute('aria-label')).toBe('Wiki workspace: All of K2')
     expect(screen.queryByRole('button', { name: 'Global' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Local' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Projects' })).toBeTruthy()

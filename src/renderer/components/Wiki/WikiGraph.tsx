@@ -67,7 +67,6 @@ export default function WikiGraph({
   selectedId,
   search,
   mode,
-  depth,
   k2Lens = 'groups',
   focusGroupFilter = 'all',
   projectFilter = 'all',
@@ -77,7 +76,6 @@ export default function WikiGraph({
   selectedId: string | null
   search: string
   mode: 'k2' | 'local' | 'global'
-  depth: 1 | 2
   /** K2 only: Projects map vs Focus Groups map. */
   k2Lens?: 'projects' | 'groups'
   /** K2 groups lens: `all` | `ungrouped` | focus group id. */
@@ -159,12 +157,12 @@ export default function WikiGraph({
   const graphData = useMemo(() => {
     const { nodes, links } = buildWikiGraphData(
       index,
-      { mode, depth, k2Lens, focusGroupFilter, projectFilter, search, localCenterId },
+      { mode, k2Lens, focusGroupFilter, projectFilter, search, localCenterId },
       simNodesRef.current,
       2,
     )
     return { nodes, links }
-  }, [index, localCenterId, search, mode, depth, k2Lens, focusGroupFilter, projectFilter])
+  }, [index, localCenterId, search, mode, k2Lens, focusGroupFilter, projectFilter])
 
   const structureKey = `${graphData.nodes.length}:${graphData.links.length}`
   const prevStructureRef = useRef(structureKey)

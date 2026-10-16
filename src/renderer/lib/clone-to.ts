@@ -33,6 +33,7 @@ import {
   vaultOutcome,
   vaultUnpackFields,
   type CloneVaultCarryReport,
+  type CloneVaultOptions,
   type CloneVaultOutcome,
   type CloneVaultUnpackFields,
   type VaultRecipientLookup,
@@ -55,7 +56,7 @@ export interface CloneManifestSummary {
 export interface CloneBundleResult {
   bundle_path: string
   manifest_summary: CloneManifestSummary
-  /** Opaque sealed vault carry for the destination (0.45.2), when the
+  /** Opaque sealed vault carry for the destination (0.46.0), when the
    *  vault checkbox was ticked and the source had secrets to move. */
   vault_carry_b64?: string
   /** Names-only report of that carry (or why there is none). */
@@ -202,7 +203,7 @@ export class CloneCancelledError extends Error {
  *
  * Step order (each targets the THEN-active host):
  *   0. [dest]    vault/recipient over the destination's saved login — only
- *                when `carryVault` (the owner's own move, 0.45.2)
+ *                when `carryVault` (0.46.0)
  *   1. [local]   clone/bundle  → { bundle_path, manifest_summary[, vault_carry_b64] }
  *   1b.[local]   read_local_file_base64(bundle_path) → base64
  *   2. [switch]  pickHost(dest) + waitForHostConnected(dest)
@@ -241,13 +242,16 @@ export async function cloneWorkspaceTo(
    */
   includeAllHistory = true,
   /**
-   * The owner is moving THEIR OWN workspace to THEIR OWN server: also move
-   * the workspace's vault secrets (0.45.2). Default `false`. When set, the
-   * destination is asked for its vault recipient before bundling, the
-   * source seals the secrets into the bundle response, and the opaque carry
-   * rides to `clone/unpack`. Any problem is a note, never a failed clone.
+   * Bring vault secrets (0.46.0, per-secret choices). Default `false`. When
+   * set, the destination is asked for its vault recipient before bundling,
+   * the source seals the chosen secrets into the bundle response, and the
+   * opaque carry rides to `clone/unpack`. Any problem is a note, never a
+   * failed clone.
    */
   carryVault = false,
+  /** The Secrets block's choices, clone id and `clone-carry` confirm
+   *  token (any copy needs one; see `clone/vault/plan`). */
+  vaultOptions: CloneVaultOptions = {},
 ): Promise<CloneUnpackResult> {
   // This flow SWITCHES THE WINDOW to the destination (step 2) and keeps
   // talking to "the window's server" across that switch: bundle on the
@@ -269,7 +273,7 @@ export async function cloneWorkspaceTo(
       project_path: projectPath,
       carry_secrets: carrySecrets,
       live_only: !includeAllHistory,
-      ...vaultBundleFields(vaultLookup),
+      ...vaultBundleFields(vaultLookup, vaultOptions),
     })
     if (!bundle?.bundle_path) {
       throw new Error('Bundle step returned no bundle_path.')

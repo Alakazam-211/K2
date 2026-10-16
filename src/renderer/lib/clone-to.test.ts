@@ -510,18 +510,19 @@ describe('cloneWorkspaceTo — large bundle (chunked streaming, GH #3)', () => {
   })
 })
 
-// ── Vault secrets on the owner's own move (0.45.2) ───────────────────────
+// ── Vault secrets ride the clone (0.46.0) ────────────────────────────────
 //
 // The renderer only carries opaque values between the two daemons: it asks
-// the DESTINATION for its vault recipient before bundling, hands it to the
-// source's clone/bundle with own_box_move, and passes the sealed carry to
-// clone/unpack. Every vault problem is a note — never a failed clone.
+// the DESTINATION for its vault recipient before bundling, hands it (with
+// the Secrets block's choices, the clone id and the confirm token) to the
+// source's clone/bundle, and passes the sealed carry to clone/unpack.
+// Every vault problem is a note — never a failed clone.
 
-describe('cloneWorkspaceTo — vault carry (own move)', () => {
+describe('cloneWorkspaceTo — vault carry', () => {
   const VAULT_BUNDLE: CloneBundleResult = {
     ...BUNDLE,
     vault_carry_b64: 'SEALED-CARRY',
-    vault_carry: { sealed: true, count: 1, secrets: ['STRIPE_KEY'] },
+    vault_carry: { sealed: true, copied: ['STRIPE_KEY'], blank: [], skipped: [] },
   }
 
   function vaultDeps(
@@ -569,8 +570,7 @@ describe('cloneWorkspaceTo — vault carry (own move)', () => {
       project_path: '/Users/rosson/myworkspace',
       carry_secrets: true,
       live_only: false,
-      vault_target: { recipient: 'age1destrecipient', vault_id: 'vault-dest-1' },
-      own_box_move: true,
+      vault_target: { recipient: 'age1destrecipient', vault_id: 'vault-dest-1', label: DEST.label },
     })
     expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/unpack', {
       bundle_path: '/home/rosson/.k2/clone-tmp/myworkspace.tar.gz',
@@ -578,7 +578,7 @@ describe('cloneWorkspaceTo — vault carry (own move)', () => {
       vault_carry_b64: 'SEALED-CARRY',
     })
     expect(onVaultCarry).toHaveBeenCalledTimes(1)
-    expect(onVaultCarry).toHaveBeenCalledWith({ imported: ['STRIPE_KEY'], skipped: [], note: null })
+    expect(onVaultCarry).toHaveBeenCalledWith({ imported: ['STRIPE_KEY'], skipped: [], blank: [], note: null })
     expect(onDone).toHaveBeenCalledTimes(1)
   })
 
@@ -654,13 +654,7 @@ describe('cloneWorkspaceTo — vault carry (own move)', () => {
     const { deps, spies } = vaultDeps(order, {
       bundle: {
         ...BUNDLE,
-        vault_carry: {
-          sealed: false,
-          count: 0,
-          secrets: [],
-          reason: 'no_secrets',
-          note: 'This workspace has no vault secrets to move.',
-        },
+        vault_carry: { sealed: false, copied: [], blank: [], skipped: [], reason: 'no_secrets' },
       },
     })
     const onVaultCarry = vi.fn()
@@ -674,7 +668,8 @@ describe('cloneWorkspaceTo — vault carry (own move)', () => {
     expect(onVaultCarry).toHaveBeenCalledWith({
       imported: [],
       skipped: [],
-      note: 'This workspace has no vault secrets to move.',
+      blank: [],
+      note: 'This workspace has no vault secrets to copy.',
     })
   })
 
@@ -716,7 +711,29 @@ describe('cloneWorkspaceTo — vault carry (own move)', () => {
     expect(onVaultCarry).toHaveBeenCalledWith({
       imported: ['STRIPE_KEY'],
       skipped: ['OPENAI_KEY: already here (kept this box\'s)'],
+      blank: [],
       note: null,
+    })
+  })
+
+  it('sends the Secrets block (choices, clone id, confirm token) with the target', async () => {
+    const order: string[] = []
+    const { deps, spies } = vaultDeps(order)
+
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, {}, true, true, true, {
+      cloneId: 'clone-7',
+      secrets: { GMAIL_TOKEN: 'skip', OPENAI_KEY: 'copy' },
+      confirmToken: 'k2vc_x',
+    })
+
+    expect(spies.daemonCliPost).toHaveBeenNthCalledWith(1, 'clone/bundle', {
+      project_path: '/Users/rosson/myworkspace',
+      carry_secrets: true,
+      live_only: false,
+      vault_target: { recipient: 'age1destrecipient', vault_id: 'vault-dest-1', label: DEST.label },
+      clone_id: 'clone-7',
+      secrets: { GMAIL_TOKEN: 'skip', OPENAI_KEY: 'copy' },
+      confirm_token: 'k2vc_x',
     })
   })
 })

@@ -42,6 +42,7 @@ import {
   vaultOutcome,
   vaultUnpackFields,
   type CloneVaultCarryReport,
+  type CloneVaultOptions,
   type VaultRecipientLookup,
   type VaultRecipientResponse,
 } from './clone-vault'
@@ -59,7 +60,7 @@ export interface ClonePackStatus {
   entry_count?: number
   scrubbed_secret_count?: number
   error?: string
-  /** Opaque sealed vault carry for this computer's vault (0.45.2). */
+  /** Opaque sealed vault carry for this computer's vault (0.46.0). */
   vault_carry_b64?: string
   /** Names-only report of that carry (or why there is none). */
   vault_carry?: CloneVaultCarryReport
@@ -152,9 +153,11 @@ export async function cloneWorkspaceToThisComputer(
    *  into the pack job. */
   carrySecrets = true,
   includeAllHistory = true,
-  /** The owner is bringing THEIR OWN workspace home: also move its vault
-   *  secrets into this computer's vault (0.45.2). See `cloneWorkspaceTo`. */
+  /** Bring vault secrets into this computer's vault (0.46.0). See
+   *  `cloneWorkspaceTo`. */
   carryVault = false,
+  /** See `cloneWorkspaceTo`. */
+  vaultOptions: CloneVaultOptions = {},
 ): Promise<CloneUnpackResult> {
   const { onStage, onBundled, onDone, onError, onVaultCarry } = hooks
   try {
@@ -169,7 +172,7 @@ export async function cloneWorkspaceToThisComputer(
       project_path: projectPath,
       carry_secrets: carrySecrets,
       live_only: !includeAllHistory,
-      ...vaultBundleFields(vaultLookup),
+      ...vaultBundleFields(vaultLookup, vaultOptions),
     })
     if (!job_id) {
       throw new Error('Packing failed on the server: no job id returned.')

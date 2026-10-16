@@ -310,13 +310,13 @@ describe('cloneWorkspaceToThisComputer', () => {
   })
 })
 
-// ── Vault secrets on the owner's own move (0.45.2) ───────────────────────
+// ── Vault secrets ride the clone (0.46.0) ────────────────────────────────
 //
 // Pull: THIS computer's vault is the destination, so its recipient comes
 // from the LOCAL daemon; the server seals into the pack job's status; the
 // opaque carry rides to the LOCAL unpack.
 
-describe('cloneWorkspaceToThisComputer — vault carry (own move)', () => {
+describe('cloneWorkspaceToThisComputer — vault carry', () => {
   function vaultDeps(
     order: string[],
     packed: ClonePackStatus,
@@ -347,12 +347,21 @@ describe('cloneWorkspaceToThisComputer — vault carry (own move)', () => {
     const order: string[] = []
     const { deps, spies } = vaultDeps(
       order,
-      { ...PACKED, vault_carry_b64: 'SEALED-CARRY', vault_carry: { sealed: true, count: 2, secrets: ['A_KEY', 'B_KEY'] } },
+      {
+        ...PACKED,
+        vault_carry_b64: 'SEALED-CARRY',
+        vault_carry: { sealed: true, copied: ['A_KEY', 'B_KEY'], blank: ['C_KEY'], skipped: [] },
+      },
       { ...UNPACK, vault_imported: ['A_KEY', 'B_KEY'], vault_skipped: [] },
     )
     const onVaultCarry = vi.fn()
 
-    await cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps, { onVaultCarry }, true, true, true)
+    await cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps, { onVaultCarry }, true, true, true, {
+      cloneId: 'clone-1',
+      secrets: { C_KEY: 'blank' },
+      confirmToken: 'k2vc_token',
+      ownBoxMove: true,
+    })
 
     expect(order[0]).toBe('local-vault-recipient')
     expect(order[1]).toBe('post:clone/pack')
@@ -360,7 +369,10 @@ describe('cloneWorkspaceToThisComputer — vault carry (own move)', () => {
       project_path: '/srv/work/myws',
       carry_secrets: true,
       live_only: false,
-      vault_target: { recipient: 'age1localrecipient', vault_id: 'vault-local-1' },
+      vault_target: { recipient: 'age1localrecipient', vault_id: 'vault-local-1', label: 'This computer' },
+      clone_id: 'clone-1',
+      secrets: { C_KEY: 'blank' },
+      confirm_token: 'k2vc_token',
       own_box_move: true,
     })
     expect(spies.localDaemonCliPost).toHaveBeenCalledWith('clone/unpack', {
@@ -368,7 +380,7 @@ describe('cloneWorkspaceToThisComputer — vault carry (own move)', () => {
       dest_parent: '/Users/rosson/work',
       vault_carry_b64: 'SEALED-CARRY',
     })
-    expect(onVaultCarry).toHaveBeenCalledWith({ imported: ['A_KEY', 'B_KEY'], skipped: [], note: null })
+    expect(onVaultCarry).toHaveBeenCalledWith({ imported: ['A_KEY', 'B_KEY'], skipped: [], blank: ['C_KEY'], note: null })
   })
 
   it('sends no vault fields when the box is unticked', async () => {

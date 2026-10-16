@@ -249,6 +249,9 @@ const FROZEN: &[(&str, &str)] = &[
     // the Glass theme (`theme`), nine pins (`pin-limit`) and Recent agents
     // first (`recent-first`; both props unset by default in widget-props).
     ("template:k2.texting@1", "8889bebc10e1786c"),
+    // 0.46.0 (GS45, plan-agent-status-unify-v1, Rosson 2026-10-16): working
+    // is the theme accent in basic, midnight and paper, and the bone text
+    // colour in haunted (its accent sits too near the needs-you orange).
     ("theme:basic", "7fc5a1fb5062b263"),
     // 0.46.0 (GS45, Rosson 2026-10-16): K2 Companion's look, Garden 1's
     // default theme.

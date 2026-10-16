@@ -58,6 +58,7 @@ vi.mock('./useOverlayThread', () => ({
 }))
 
 import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
+import { composeTextareaHeight } from '@/components/Terminal/terminalCompose'
 import { CHAMFER_SCOPE, THREAD_CHAMFER_CSS, THREAD_COMPOSE_BOX_BORDER, THREAD_COMPOSE_BOX_PAD, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { primaryScope } from '@/kessel/server-scope'
@@ -258,8 +259,15 @@ describe('the Thread\'s message box (Zen look)', () => {
     const plusToSlash = px(plus.style.paddingRight) + px(tools.style.gap) + px(slash.style.paddingLeft)
     expect(edgeToPlus).toBe(10)
     expect(plusToSlash).toBe(edgeToPlus)
-    // Hit areas: the buttons keep their pads (22px and 18px wide, 32px tall).
-    expect(plus.style.height).toBe('32px')
+    // Hit areas: the buttons keep their pads (22px and 18px wide, 26px tall).
+    expect(plus.style.height).toBe('26px')
+    expect(slash.style.height).toBe('26px')
+    // Rosson: the field is 6px shorter (46 → 40): 26px controls + 2×6 padding + 2×1 border.
+    const sendBtn = screen.getByRole('button', { name: 'Send message' })
+    expect([sendBtn.style.width, sendBtn.style.height]).toEqual(['26px', '26px'])
+    expect(26 + 2 * THREAD_COMPOSE_BOX_PAD + 2 * THREAD_COMPOSE_BOX_BORDER).toBe(40)
+    // The one-line textarea is 26px at the default 13px font (13 × 1.4 + 8).
+    expect(composeTextareaHeight({ value: '', scrollHeight: 0, fontSize: 13 })).toBe(26)
     expect(px(plus.style.paddingLeft) + 12 + px(plus.style.paddingRight)).toBe(22)
     const send = screen.getByRole('button', { name: 'Send message' })
     expect(send.hasAttribute('data-zen-send')).toBe(true)
@@ -508,13 +516,13 @@ describe('chamfered corners in K2\'s square Style', () => {
     ]) {
       expect(small.hasAttribute('data-chamfer')).toBe(false)
     }
-    // The cuts: 4px on surfaces (a bubble tail corner stays sharp), 5px on Send, 3px on the drawer.
+    // The cuts: 4px on surfaces (a bubble tail corner stays sharp), Send 4px (5px at 32px, scaled to its 26px), 3px on the drawer.
     const mine = el('[data-zen-bubble="me"]')
     expect(['tl', 'tr', 'br', 'bl'].map((k) => mine.style.getPropertyValue(`--ch-${k}`))).toEqual(['4px', '4px', '0px', '4px'])
     expect(el('[data-zen-bubble="agent"]').style.getPropertyValue('--ch-bl')).toBe('0px')
     expect(el('[data-zen-compose-box]').style.getPropertyValue('--ch-tl')).toBe('4px')
     expect(el('[data-zen-compose-box]').style.getPropertyValue('--ch-bw')).toBe('1px')
-    expect(el('[data-zen-send]').style.getPropertyValue('--ch-tl')).toBe('5px')
+    expect(el('[data-zen-send]').style.getPropertyValue('--ch-tl')).toBe('4px')
     // On the box's top edge: top corners cut, the bottom runs into the field.
     const tile = el('[data-zen-drawer-tile]')
     expect(['tl', 'tr', 'br', 'bl'].map((k) => tile.style.getPropertyValue(`--ch-${k}`))).toEqual(['3px', '3px', '0px', '0px'])

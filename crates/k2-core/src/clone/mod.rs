@@ -131,6 +131,11 @@ pub struct CloneOptions {
     /// uses `dirs::home_dir()`. Tests set this to a temp dir so the
     /// real home is never touched.
     pub home_override: Option<PathBuf>,
+
+    /// This clone's id (0.46.0, CL26): written to the manifest as
+    /// `clone_id`. A vault carry (and the Threads export) is bound to it.
+    /// `None` writes no id (older callers).
+    pub clone_id: Option<String>,
 }
 
 impl Default for CloneOptions {
@@ -139,6 +144,7 @@ impl Default for CloneOptions {
             include_all_history: true,
             carry_secrets: false,
             home_override: None,
+            clone_id: None,
         }
     }
 }
@@ -238,6 +244,10 @@ pub struct CloneManifest {
     /// unpack into `chat_session_names`.
     #[serde(default)]
     pub chat_pins: Vec<ChatPinEntry>,
+    /// This clone's id (0.46.0, CL26). A vault carry opens only for the
+    /// bundle with the same id. Absent in bundles from older daemons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clone_id: Option<String>,
 }
 
 impl CloneInventory {
@@ -285,6 +295,7 @@ impl CloneInventory {
             settings,
             pinned_chat,
             chat_pins,
+            clone_id: opts.clone_id.clone(),
         }
     }
 }

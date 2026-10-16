@@ -814,6 +814,7 @@ fn manual_manifest(source_project_path: &str) -> CloneManifest {
         settings: None,
         pinned_chat: None,
         chat_pins: vec![],
+        clone_id: None,
     }
 }
 

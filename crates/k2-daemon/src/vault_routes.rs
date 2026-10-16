@@ -968,11 +968,16 @@ fn get_value(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, 
 
 // ── confirm, reveal, recovery, keys ─────────────────────────────────
 
-fn human_admin(c: &VaultCaller) -> Result<(), VaultError> {
+pub(crate) fn human_admin(c: &VaultCaller) -> Result<(), VaultError> {
     if c.is_passport() || !c.actor.is_admin_human() {
         return Err(err("owner_only", 403, "this needs the owner or an admin"));
     }
     Ok(())
+}
+
+/// Confirm methods this caller can use now (the clone plan shows them).
+pub(crate) fn confirm_methods(vault: &LocalVault, c: &VaultCaller) -> Vec<&'static str> {
+    methods(vault, c)
 }
 
 /// Confirm methods this caller can use now.
@@ -999,6 +1004,10 @@ struct ConfirmBody {
     password: Option<String>,
     /// Shown in the macOS sheet ("reveal STRIPE_KEY").
     label: Option<String>,
+    /// `clone-carry` only: the clone request the confirm is for. The
+    /// daemon rebuilds the plan from it, binds the token to its digest and
+    /// writes the sheet's reason itself (CL14); `label` is ignored.
+    clone_plan: Option<crate::clone_vault::CarryAsk>,
 }
 
 const CONFIRM_ACTIONS: &[&str] = &[
@@ -1031,6 +1040,10 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // App runtime (prd-k2-app-runtime-v1 §4.3): moving one App out of its
     // guarded container into the process exception (`secretId` = App id).
     "app-process-exception",
+    // Clone carries vault secrets (prd-clone-carries-threads-and-vault-v1
+    // §6.4, CL14): copying secrets (or sending .env files) to a clone;
+    // `secretId` = `clone:<sha256(plan)>`, reason written by the daemon.
+    crate::clone_vault::CONFIRM_ACTION,
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
@@ -1058,14 +1071,52 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
     if !CONFIRM_ACTIONS.contains(&action) {
         return Err(err("bad_action", 400, "unknown confirm action"));
     }
+    // CL14: a clone-carry confirm is bound to the plan the daemon builds
+    // from the request, and the sheet says what the plan does.
+    let (secret_id, reason) = if action == crate::clone_vault::CONFIRM_ACTION {
+        let ask = b.clone_plan.as_ref().ok_or_else(|| err("clone_plan_required", 400, "a clone-carry confirm needs the clone request (clonePlan)"))?;
+        let (sid, reason, _) = crate::clone_vault::confirm_binding(vault, c, ask)?;
+        if b.secret_id.as_deref().is_some_and(|s| s != sid) {
+            return Err(err("clone_plan_mismatch", 400, "the plan changed; preview the clone again"));
+        }
+        (Some(sid), reason)
+    } else {
+        let label = b.label.as_deref().map(|l| format!(" {}", l.chars().take(64).collect::<String>())).unwrap_or_default();
+        (b.secret_id.clone(), format!("{}{label}", action.replace('-', " ")))
+    };
+    let t = confirm_check(vault, c, action, secret_id.as_deref(), b.method.as_deref().unwrap_or(""), b.password.as_deref(), &reason, ingress)?;
+    let mut out = json!({ "token": t, "expiresIn": 60 });
+    if let Some(s) = secret_id.filter(|_| action == crate::clone_vault::CONFIRM_ACTION) {
+        out["secretId"] = json!(s);
+    }
+    Ok(out)
+}
+
+/// Check one person-confirm method and mint a token bound to (action,
+/// secret, caller). `reason` is the macOS sheet's text after "K2 vault: ".
+/// Shared by `/cli/vault/confirm/finish` and `/cli/clone/vault/confirm`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn confirm_check(
+    vault: &LocalVault,
+    c: &VaultCaller,
+    action: &str,
+    secret_id: Option<&str>,
+    method: &str,
+    password: Option<&str>,
+    reason: &str,
+    ingress: &str,
+) -> Result<String, VaultError> {
+    human_admin(c)?;
+    if !CONFIRM_ACTIONS.contains(&action) {
+        return Err(err("bad_action", 400, "unknown confirm action"));
+    }
     let stamp = c.actor.stamp();
-    let method = b.method.as_deref().unwrap_or("");
     let res: Result<(), VaultError> = match method {
-        "vault-password" => vault.check_confirm_password(b.password.as_deref().unwrap_or(""), &stamp),
+        "vault-password" => vault.check_confirm_password(password.unwrap_or(""), &stamp),
         "connect-password" => match &c.actor {
             Actor::Login { username, .. } => {
                 vault.throttle.check()?;
-                match k2_core::connect_users::check_and_record(username, b.password.as_deref().unwrap_or("")) {
+                match k2_core::connect_users::check_and_record(username, password.unwrap_or("")) {
                     k2_core::connect_users::LoginOutcome::Ok => {
                         vault.throttle.record(true);
                         Ok(())
@@ -1079,18 +1130,14 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
             }
             _ => Err(err("bad_method", 400, "connect-password is for a Connect login")),
         },
-        "local-auth" => local_auth(&format!(
-            "K2 vault: {}{}",
-            action.replace('-', " "),
-            b.label.as_deref().map(|l| format!(" {}", l.chars().take(64).collect::<String>())).unwrap_or_default()
-        )),
+        "local-auth" => local_auth(&format!("K2 vault: {}", reason.chars().filter(|ch| !ch.is_control()).take(160).collect::<String>())),
         _ => Err(err("bad_method", 400, "method is vault-password, connect-password or local-auth")),
     };
     match res {
         Ok(()) => {
-            let t = vault.confirm.mint(action, b.secret_id.as_deref(), &stamp, method);
+            let t = vault.confirm.mint(action, secret_id, &stamp, method);
             crate::vault::auth_audit("vault-confirm", &stamp, &format!("ok {action} via {method}"), ingress);
-            Ok(json!({ "token": t, "expiresIn": 60 }))
+            Ok(t)
         }
         Err(e) => {
             crate::vault::auth_audit("vault-confirm", &stamp, &format!("deny {action} via {method}: {}", e.code), ingress);

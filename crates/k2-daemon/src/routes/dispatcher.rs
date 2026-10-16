@@ -5790,6 +5790,43 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
                 .await;
         }
+        // Clone carries vault secrets (prd-clone-carries-threads-and-vault-v1
+        // §6, slice A): POST /cli/clone/vault/{plan,confirm,export,import,copy}.
+        // People only: agent passports never reach `/cli/clone/` (the deny
+        // prefix in session_token); the handler refuses a passport again and
+        // narrows copy/confirm to Owner/Admin. Matched on path alone so a
+        // stray GET gets require_post's 405.
+        p if crate::clone_vault::is_route(p) => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::clone_vault::MAX_BODY).await {
+                Ok(b) => b,
+                Err(_) => {
+                    let r = crate::vault_routes::too_large();
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let caller = crate::vault::actor::from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str());
+            let p_owned = p.to_string();
+            let ingress_label = ingress.as_str().to_string();
+            let r = tokio::task::spawn_blocking(move || crate::clone_vault::handle(&p_owned, caller, &body_bytes, &ingress_label))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // K2 Connect "Clone to" P2 — POST /cli/clone/bundle + /cli/clone/unpack.
         //
         // `bundle` (SOURCE side) builds the scrubbed tar.gz + captures the

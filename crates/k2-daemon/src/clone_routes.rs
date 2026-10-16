@@ -26,10 +26,12 @@
 //!   the client has downloaded it (job-id-keyed — the route never takes a
 //!   path, so it can only ever delete a bundle THIS daemon packed).
 //!
-//! 0.45.2: on the owner's own move, `bundle` / `pack` also seal the
-//! workspace's vault secrets to the destination vault (`vault_target` +
-//! `own_box_move`) and `unpack` adds them to the newly registered project
-//! (`vault_carry_b64`). See `clone_vault`.
+//! 0.46.0 (prd-clone-carries-threads-and-vault-v1 §6): `bundle` / `pack`
+//! also seal the chosen vault secrets to the destination vault
+//! (`vault_target`, per-secret `secrets`, `clone_id`, and a `clone-carry`
+//! `confirm_token` for any copy) and `unpack` adds them to the newly
+//! registered project by id (`vault_carry_b64`). `.env` files as files
+//! (`carry_secrets`) need the same confirm (D4). See `clone_vault`.
 //!
 //! All POSTs are gated by `token_ok` in the dispatcher (the same
 //! isolated-gate pattern as `fs/upload-binary`), so these handlers assume
@@ -58,31 +60,40 @@ struct BundleBody {
     /// Carry secrets over the (encrypted) link instead of scrubbing them.
     #[serde(default)]
     carry_secrets: bool,
-    /// The destination vault (its `GET /cli/vault/recipient`): seal this
-    /// workspace's vault secrets to it (0.45.2, see `clone_vault`).
+    /// The destination vault (its `GET /cli/vault/recipient`): seal the
+    /// chosen vault secrets to it (0.46.0, see `clone_vault`).
     #[serde(default)]
     vault_target: Option<crate::clone_vault::VaultTarget>,
-    /// The owner is moving their own workspace to their own server.
-    /// Required with `vault_target` (a clone for another owner never
-    /// carries vault secrets).
+    /// "This is my own server/computer": keeps "given by a person" marks.
     #[serde(default)]
     own_box_move: bool,
+    /// Per-secret choices by name (`copy` | `blank` | `skip`); unnamed
+    /// rows keep their defaults (`clone/vault/plan`).
+    #[serde(default)]
+    secrets: std::collections::BTreeMap<String, crate::clone_vault::Choice>,
+    /// The clone's id (written to the manifest; the carry is bound to it).
+    /// The client makes it before the confirm; minted here when absent.
+    #[serde(default)]
+    clone_id: Option<String>,
+    /// The `clone-carry` confirm, when any secret is copied or `.env`
+    /// files are sent (`carry_secrets`, D4).
+    #[serde(default)]
+    confirm_token: Option<String>,
 }
 
 impl BundleBody {
-    /// The carry request for this body, or the teaching 400.
-    fn carry_request(
-        &self,
-        vault_caller: Option<crate::vault::actor::VaultCaller>,
-    ) -> Result<Option<crate::clone_vault::CarryRequest>, CliResponse> {
-        if let Some(r) = crate::clone_vault::refuse_unless_own_move(self.vault_target.as_ref(), self.own_box_move) {
-            return Err(r);
+    /// The vault half of this request (`clone_vault::CarryAsk`).
+    fn carry_ask(&self) -> crate::clone_vault::CarryAsk {
+        crate::clone_vault::CarryAsk {
+            project_path: Some(self.project_path.clone()),
+            project_id: None,
+            vault_target: self.vault_target.clone(),
+            clone_id: self.clone_id.clone(),
+            secrets: self.secrets.clone(),
+            own_box_move: self.own_box_move,
+            send_env_files: self.carry_secrets,
+            confirm_token: self.confirm_token.clone(),
         }
-        Ok(self.vault_target.clone().map(|target| crate::clone_vault::CarryRequest {
-            target,
-            caller: vault_caller,
-            vault: crate::vault::get(),
-        }))
     }
 }
 
@@ -224,9 +235,11 @@ fn build_workspace_bundle(
 /// `~/.k2so/clone-tmp/<name>-<ts>.tar.gz`, and returns the bundle path + a
 /// summary (entry count, scrubbed-secret count, byte size).
 ///
-/// With `vault_target` + `own_box_move`, also seals this workspace's vault
-/// secrets to the destination vault and returns them as the opaque
-/// `vault_carry_b64`, plus a names-only `vault_carry` report.
+/// With `vault_target`, also seals the chosen vault secrets to the
+/// destination vault and returns them as the opaque `vault_carry_b64`,
+/// plus a names-only `vault_carry` report. A copy (or `.env` files) without
+/// a valid `clone-carry` confirm refuses the whole request (403
+/// `vault_confirm_required`): nothing is bundled or sealed.
 pub fn handle_clone_bundle(
     body: &[u8],
     vault_caller: Option<crate::vault::actor::VaultCaller>,
@@ -235,15 +248,17 @@ pub fn handle_clone_bundle(
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
-    let carry = match b.carry_request(vault_caller) {
-        Ok(c) => c,
+    let prepared = match crate::clone_vault::prepare(&b.carry_ask(), vault_caller.as_ref()) {
+        Ok(p) => p,
         Err(r) => return r,
     };
+    let clone_id = clone_id_for(prepared.as_ref(), b.clone_id.as_deref());
 
     let opts = clone::CloneOptions {
         include_all_history: !b.live_only,
         carry_secrets: b.carry_secrets,
         home_override: None,
+        clone_id: Some(clone_id.clone()),
     };
 
     let home = match dirs::home_dir() {
@@ -265,16 +280,26 @@ pub fn handle_clone_bundle(
             "size_bytes": out.size_bytes,
             "include_all_history": !b.live_only,
             "carry_secrets": b.carry_secrets,
-        }
+        },
+        "clone_id": clone_id,
     });
-    if let Some(req) = &carry {
-        let sealed = crate::clone_vault::seal_for_workspace(req, &b.project_path);
+    if let Some(p) = prepared.as_ref().filter(|p| p.ask.vault_target.is_some()) {
+        let sealed = crate::clone_vault::seal_prepared(p, vault_caller.as_ref());
         resp["vault_carry"] = sealed.report;
         if let Some(c) = sealed.carry_b64 {
             resp["vault_carry_b64"] = serde_json::Value::String(c);
         }
     }
     CliResponse::ok_json(resp.to_string())
+}
+
+/// The clone id for a bundle: the prepared carry's, else the client's,
+/// else a fresh one.
+fn clone_id_for(prepared: Option<&crate::clone_vault::Prepared>, given: Option<&str>) -> String {
+    prepared
+        .map(|p| p.clone_id.clone())
+        .or_else(|| given.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string))
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
 }
 
 #[derive(Deserialize)]
@@ -308,22 +333,26 @@ pub fn handle_clone_unpack(
         None => return CliResponse::internal_error("cannot resolve home directory"),
     };
 
-    match unpack_and_register(
+    match unpack_and_register_ex(
         std::path::Path::new(&b.bundle_path),
         std::path::Path::new(&b.dest_parent),
         &home,
     ) {
-        Ok((project, dest_path)) => {
+        Ok((project, dest_path, manifest_clone_id)) => {
             let mut resp = serde_json::json!({
                 "project": project,
                 "dest_path": dest_path,
+                "clone_id": manifest_clone_id,
             });
             if let Some(carry) = b.vault_carry_b64.as_deref().filter(|c| !c.trim().is_empty()) {
+                // By the new project's id and the bundle's clone id only
+                // (CL12, CL26).
                 let out = crate::clone_vault::import_into_project(
                     crate::vault::get(),
                     vault_caller.as_ref(),
                     carry,
                     &project.id,
+                    manifest_clone_id.as_deref(),
                 );
                 if let (Some(dst), Some(src)) = (resp.as_object_mut(), out.as_object()) {
                     for (k, v) in src {
@@ -345,6 +374,16 @@ pub fn unpack_and_register(
     dest_parent: &std::path::Path,
     home: &std::path::Path,
 ) -> Result<(Project, String), String> {
+    unpack_and_register_ex(bundle_path, dest_parent, home).map(|(p, d, _)| (p, d))
+}
+
+/// [`unpack_and_register`], also returning the manifest's `clone_id`
+/// (0.46.0; `None` for a bundle from an older daemon).
+pub fn unpack_and_register_ex(
+    bundle_path: &std::path::Path,
+    dest_parent: &std::path::Path,
+    home: &std::path::Path,
+) -> Result<(Project, String, Option<String>), String> {
     // 1. Extract files at recomputed paths; get the manifest back.
     let (result, manifest) = clone::unpack_bundle(bundle_path, dest_parent, home)?;
     let dest_path = result.dest_path.to_string_lossy().to_string();
@@ -456,7 +495,7 @@ pub fn unpack_and_register(
         }
     }
 
-    Ok((project, dest_path))
+    Ok((project, dest_path, manifest.clone_id.clone()))
 }
 
 // ── pull pack job (0.40.22 "Clone to this computer") ──────────────────
@@ -497,6 +536,9 @@ pub struct PackJob {
     /// Names-only report of the vault carry (or why there is none).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vault_carry: Option<serde_json::Value>,
+    /// The bundle manifest's `clone_id` (0.46.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clone_id: Option<String>,
 }
 
 impl PackJob {
@@ -511,6 +553,7 @@ impl PackJob {
             error: None,
             vault_carry_b64: None,
             vault_carry: None,
+            clone_id: None,
         }
     }
 }
@@ -573,11 +616,6 @@ pub fn handle_clone_pack(
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
-    let carry = match b.carry_request(vault_caller) {
-        Ok(c) => c,
-        Err(r) => return r,
-    };
-
     // Path validation, same chokepoint as the fs routes (empty / traversal
     // relative paths / nonexistent → 400, and the path is canonicalized so
     // the registered-workspace comparison below can't be dodged with `..`).
@@ -602,17 +640,31 @@ pub fn handle_clone_pack(
         None => return CliResponse::internal_error("cannot resolve home directory"),
     };
 
+    // The vault half (plan + confirm) is checked here, before the job, so
+    // a missing confirm is a 403 and nothing is packed or sealed.
+    let prepared = match crate::clone_vault::prepare(&b.carry_ask(), vault_caller.as_ref()) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let clone_id = clone_id_for(prepared.as_ref(), b.clone_id.as_deref());
+
     let opts = clone::CloneOptions {
         include_all_history: !b.live_only,
         carry_secrets: b.carry_secrets,
         home_override: None,
+        clone_id: Some(clone_id.clone()),
     };
 
     let job_id = new_pack_job_id();
-    insert_pack_job(PackJob::running(job_id.clone()));
+    let mut job = PackJob::running(job_id.clone());
+    job.clone_id = Some(clone_id.clone());
+    insert_pack_job(job);
 
     let project_path = canonical.to_string_lossy().to_string();
     let worker_job_id = job_id.clone();
+    let carry = prepared
+        .filter(|p| p.ask.vault_target.is_some())
+        .map(|prepared| crate::clone_vault::PackCarry { prepared, caller: vault_caller });
     std::thread::spawn(move || {
         run_pack_job(
             &worker_job_id,
@@ -624,7 +676,7 @@ pub fn handle_clone_pack(
         );
     });
 
-    CliResponse::ok_json(serde_json::json!({ "job_id": job_id }).to_string())
+    CliResponse::ok_json(serde_json::json!({ "job_id": job_id, "clone_id": clone_id }).to_string())
 }
 
 /// `canonical` equals a registered project's path? Registered paths are
@@ -652,7 +704,7 @@ fn run_pack_job(
     opts: &clone::CloneOptions,
     home: &std::path::Path,
     max_bytes: u64,
-    carry: Option<&crate::clone_vault::CarryRequest>,
+    carry: Option<&crate::clone_vault::PackCarry>,
 ) {
     match build_workspace_bundle(project_path, opts, home) {
         Ok(out) => {
@@ -676,7 +728,7 @@ fn run_pack_job(
                 });
                 return;
             }
-            let sealed = carry.map(|req| crate::clone_vault::seal_for_workspace(req, project_path));
+            let sealed = carry.map(|c| crate::clone_vault::seal_prepared(&c.prepared, c.caller.as_ref()));
             update_pack_job(job_id, |j| {
                 if let Some(s) = sealed {
                     j.vault_carry = Some(s.report);

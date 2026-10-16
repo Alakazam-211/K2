@@ -14142,7 +14142,9 @@ except Exception:
         echo "Error: no answer from the K2 daemon (status ${status:-none})" >&2
     fi
     case "$code" in
-        person_only|owner_only|confirm_required|lan_owner_only|field_person_only)
+        # vault_confirm_required is the one confirm code (0.46.0);
+        # confirm_required is what a 0.45.x daemon answers.
+        person_only|owner_only|vault_confirm_required|confirm_required|lan_owner_only|field_person_only)
             echo "This needs a person. Run it outside K2, or use Settings → Gardens → External Data." >&2
             exit 3 ;;
         source_not_found|trigger_not_found|removed) exit 4 ;;

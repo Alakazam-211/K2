@@ -85,6 +85,9 @@ class H(BaseHTTPRequestHandler):
             return self.reply(200, {"token": "rd-tok-1"})
         if u.path == "/cli/app/exception":
             return self.reply(403, {"error": {"code": "vault_confirm_required", "hint": "confirm again: a confirm works once, for this App, within 60 seconds"}})
+        if u.path == "/cli/sources/remove":
+            code = "confirm_required" if mode() == "old" else "vault_confirm_required"
+            return self.reply(403, {"error": {"code": code, "hint": "binding a secret needs a vault confirm"}})
         if u.path == "/cli/app/clean-mode":
             out = {"ok": True, "app": {"handle": "shop"}, "cleanMode": True, "envMode": "clean", "restart": "applies at the next start",
                    "ownerTokenAttribution": "on" if mode() == "linux" else "not available on macOS"}
@@ -160,6 +163,18 @@ expect_eq "exception on refused without a valid confirm exits 3" "$rc" "3"
 expect_has "the CLI surfaces vault_confirm_required" "$err" '"error": "vault_confirm_required"'
 expect_not "never the retired owner_confirm_required" "$err" '"owner_confirm_required"'
 expect_eq "the confirm token rode the request" "$(last_body)" '{"app": "shop", "confirmToken": "rd-tok-1", "devices": [], "on": true}'
+# External Data (sources): the same code; a 0.45.x daemon's confirm_required
+# is still read as "needs a person" for one release.
+for m in new old; do
+    echo "$m" > "$MODE"
+    set +e
+    err="$("$K2" sources remove fleet --yes 2>&1 >/dev/null)"; rc=$?
+    set -e
+    expect_eq "sources: a confirm refusal ($m daemon) exits 3" "$rc" "3"
+    expect_has "sources: it says a person is needed ($m daemon)" "$err" "This needs a person."
+done
+expect_has "sources: a 0.46 daemon's code is shown" "$(echo new > "$MODE"; "$K2" sources remove fleet --yes 2>&1 || true)" "vault_confirm_required"
+echo mac > "$MODE"
 
 echo "== 3. warn-only publish run + Linux-only tracing =="
 set +e

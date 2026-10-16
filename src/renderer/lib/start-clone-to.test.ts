@@ -23,6 +23,7 @@ vi.mock('./clone-to', () => ({
 }))
 
 import { startCloneTo } from './start-clone-to'
+import type { CloneOptionDeps } from '@/stores/clone-to-dialog'
 import { useCloneToDialogStore } from '@/stores/clone-to-dialog'
 import type { ConnectHost } from '@/stores/connect-host'
 
@@ -49,6 +50,21 @@ describe('startCloneTo → runClone post-clone refresh', () => {
 
     expect(cloneWorkspaceTo).toHaveBeenCalledTimes(1)
     expect(fetchProjects).toHaveBeenCalledTimes(1)
+  })
+
+  it('hands the dialog\'s vault run and extras to cloneWorkspaceTo in order', async () => {
+    const stub: CloneOptionDeps = {
+      lookupTarget: async () => ({ note: 'no vault in this test' }),
+      fetchPreview: async () => ({ threads: { available: false }, secrets: { available: false, rows: [], notCarried: [] }, envFiles: [], callerCanCopySecrets: true }),
+      carryConfirm: async () => 't',
+    }
+    startCloneTo('/local/ws', 'ws', HOST, undefined, stub)
+    const onConfirm = useCloneToDialogStore.getState().onConfirm
+    const vaultOptions = { cloneId: 'c1', secrets: { A: 'copy' as const }, confirmToken: 't' }
+    onConfirm?.(false, true, { threads: 'all', clone_id: 'c1' }, { carryVault: true, vaultOptions })
+    await flush()
+    const args = cloneWorkspaceTo.mock.calls[0]
+    expect(args.slice(5)).toEqual([false, true, true, vaultOptions, { threads: 'all', clone_id: 'c1' }])
   })
 
   it('does NOT refresh when the clone fails', async () => {

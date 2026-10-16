@@ -20,16 +20,12 @@ import {
 import {
   cloneWorkspaceToThisComputer,
   defaultClonePullDeps,
+  PULL_VAULT_LABEL,
   type ClonePullDeps,
 } from './clone-pull'
-import { useCloneToDialogStore, type CloneOptionDeps } from '@/stores/clone-to-dialog'
-import {
-  cloneCarryConfirm,
-  envConfirmSecretId,
-  fetchClonePreview,
-  getVaultConfirmToken,
-  type CloneExtras,
-} from './clone-options'
+import { useCloneToDialogStore, type CloneOptionDeps, type CloneVaultRun } from '@/stores/clone-to-dialog'
+import { cloneVaultConfirm, fetchClonePreview, type CloneExtras } from './clone-options'
+import { askVaultRecipient, type VaultRecipientLookup } from './clone-vault'
 import type { ServerScope } from '@/kessel/server-scope'
 import { useProjectsStore } from '@/stores/projects'
 import { useToastStore } from '@/stores/toast'
@@ -39,19 +35,26 @@ import { primaryScope } from '@/kessel/server-scope'
 /**
  * The options-phase collaborators (0.46.0) bound to the SOURCE server's
  * scope, captured when the dialog opens — before a push switches the
- * window to the destination. Preview and both confirms run on the source,
- * where `clone/bundle` / `clone/pack` check the tokens.
+ * window to the destination. The preview (slice A's plan) and the
+ * `clone-carry` confirm run on the source, where `clone/bundle` /
+ * `clone/pack` check the token. `lookupTarget` names the destination vault
+ * (never throws; a note means no secrets this time).
  */
-export function defaultCloneOptionDeps(scope: ServerScope, projectPath: string, projectName: string): CloneOptionDeps {
+export function defaultCloneOptionDeps(
+  scope: ServerScope,
+  projectPath: string,
+  projectName: string,
+  lookupTarget: () => Promise<VaultRecipientLookup>,
+): CloneOptionDeps {
   const post = async <T = unknown>(s: ServerScope, route: string, body?: unknown): Promise<T> => {
     const { daemonCliPost } = await import('./daemon-cli')
     return daemonCliPost<T>(s, route, body)
   }
   return {
-    fetchPreview: () => fetchClonePreview(post, scope, projectPath),
-    envConfirm: (ask) =>
-      getVaultConfirmToken(post, scope, 'clone-env', envConfirmSecretId(projectPath), `.env files of ${projectName}`, ask),
-    carryConfirm: (secrets, ask) => cloneCarryConfirm({ post, scope, projectPath, secrets, askPassword: ask }),
+    lookupTarget,
+    fetchPreview: (carry, sinceDays) => fetchClonePreview(post, scope, projectPath, carry, sinceDays),
+    carryConfirm: (carry, methods, askPassword) =>
+      cloneVaultConfirm(post, scope, projectPath, carry, methods, `clone ${projectName}`, askPassword),
   }
 }
 
@@ -67,7 +70,11 @@ export function startCloneTo(
   projectName: string,
   host: ConnectHost,
   deps: CloneDeps = defaultCloneDeps(),
-  optionDeps: CloneOptionDeps = defaultCloneOptionDeps(primaryScope(), projectPath, projectName),
+  optionDeps: CloneOptionDeps = defaultCloneOptionDeps(primaryScope(), projectPath, projectName, () =>
+    // The destination's vault over its saved login (the window is still on
+    // the source); labelled as the run labels it (part of the plan).
+    askVaultRecipient(() => deps.destVaultRecipient(host), host.label),
+  ),
 ): void {
   const store = useCloneToDialogStore.getState()
   store.start({
@@ -75,8 +82,8 @@ export function startCloneTo(
     projectName,
     host,
     optionDeps,
-    onConfirm: (carrySecrets, includeAllHistory, extras) => {
-      void runClone(projectPath, host, deps, carrySecrets, includeAllHistory, extras)
+    onConfirm: (carrySecrets, includeAllHistory, extras, vault) => {
+      void runClone(projectPath, host, deps, carrySecrets, includeAllHistory, extras, vault)
     },
   })
 }
@@ -95,7 +102,9 @@ export function startCloneToThisComputer(
   projectPath: string,
   projectName: string,
   deps: ClonePullDeps = defaultClonePullDeps(),
-  optionDeps: CloneOptionDeps = defaultCloneOptionDeps(primaryScope(), projectPath, projectName),
+  optionDeps: CloneOptionDeps = defaultCloneOptionDeps(primaryScope(), projectPath, projectName, () =>
+    askVaultRecipient(() => deps.localVaultRecipient(), PULL_VAULT_LABEL),
+  ),
 ): void {
   const store = useCloneToDialogStore.getState()
   store.start({
@@ -104,8 +113,8 @@ export function startCloneToThisComputer(
     host: null,
     pull: true,
     optionDeps,
-    onConfirm: (carrySecrets, includeAllHistory, extras) => {
-      void runPull(projectPath, projectName, deps, carrySecrets, includeAllHistory, extras)
+    onConfirm: (carrySecrets, includeAllHistory, extras, vault) => {
+      void runPull(projectPath, projectName, deps, carrySecrets, includeAllHistory, extras, vault)
     },
   })
 }
@@ -130,6 +139,7 @@ async function runPull(
   carrySecrets: boolean,
   includeAllHistory: boolean,
   extras?: CloneExtras,
+  vault?: CloneVaultRun,
 ): Promise<void> {
   let lastStage: CloneStage = 'packing'
   try {
@@ -145,9 +155,12 @@ async function runPull(
         onBundled: (summary) => useCloneToDialogStore.getState().setSummary(summary),
         onDone: (r) => useCloneToDialogStore.getState().setDone(r),
         onError: (message) => useCloneToDialogStore.getState().setError(message),
+        onVaultCarry: (outcome) => useCloneToDialogStore.getState().setVaultOutcome(outcome),
       },
       carrySecrets,
       includeAllHistory,
+      vault?.carryVault ?? false,
+      vault?.vaultOptions ?? {},
       extras,
     )
     const localName = result.project?.name ?? projectName
@@ -182,6 +195,7 @@ async function runClone(
   carrySecrets: boolean,
   includeAllHistory: boolean,
   extras?: CloneExtras,
+  vault?: CloneVaultRun,
 ): Promise<void> {
   try {
     await cloneWorkspaceTo(primaryScope(),
@@ -193,9 +207,12 @@ async function runClone(
         onBundled: (summary) => useCloneToDialogStore.getState().setSummary(summary),
         onDone: (result) => useCloneToDialogStore.getState().setDone(result),
         onError: (message) => useCloneToDialogStore.getState().setError(message),
+        onVaultCarry: (outcome) => useCloneToDialogStore.getState().setVaultOutcome(outcome),
       },
       carrySecrets,
       includeAllHistory,
+      vault?.carryVault ?? false,
+      vault?.vaultOptions ?? {},
       extras,
     )
     // The clone unpacked + registered the workspace on the remote daemon, but

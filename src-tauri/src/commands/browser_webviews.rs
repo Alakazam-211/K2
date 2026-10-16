@@ -13,10 +13,12 @@
 //! and so second windows no longer dock onto hard-coded `"main"`.
 //!
 //! The renderer drives these commands through a bounds-bridge (ResizeObserver
-//! → rAF-throttled `browser_set_bounds`) and an overlay registry that calls
-//! `browser_set_visible(false)` whenever any DOM overlay (modal, palette,
-//! dropdown, drag) must render above pane content — native child views float
-//! over the DOM unconditionally, so over-hiding is the only correct bias.
+//! → rAF-throttled `browser_set_bounds`) and the overlay arbiter
+//! (`src/renderer/lib/browser-overlay.ts`): every DOM overlay (modal,
+//! palette, menu, dropdown, toast, drag) claims its box, and a pane whose
+//! dock intersects a claim calls `browser_set_visible(false)` — native child
+//! views float over the DOM unconditionally, so over-hiding is the only
+//! correct bias.
 
 #![allow(clippy::module_inception)]
 

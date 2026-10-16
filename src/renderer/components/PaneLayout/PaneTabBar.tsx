@@ -10,6 +10,7 @@ import { SetiFileIcon } from '@/lib/seti-file-icons'
 import { isAgentPtyTerminalItem } from '@/lib/chat-session-tab'
 import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
+import { beginBrowserMotion } from '@/lib/browser-overlay'
 
 // ── Types (from tabs store — will be available after store refactor) ──
 
@@ -218,10 +219,14 @@ export function PaneTabBar({
       const startX = e.clientX
       const startY = e.clientY
       let dragging = false
+      let endBrowserFreeze: (() => void) | null = null
 
       const onMouseMove = (ev: MouseEvent): void => {
         if (!dragging && (Math.abs(ev.clientX - startX) > 5 || Math.abs(ev.clientY - startY) > 5)) {
           dragging = true
+          // Drop targets include Browser panes: freeze their native pages
+          // so the drag reaches the DOM under them.
+          endBrowserFreeze = beginBrowserMotion('drag')
           document.body.style.cursor = 'grabbing'
           document.body.style.userSelect = 'none'
         }
@@ -238,6 +243,8 @@ export function PaneTabBar({
       const onMouseUp = (ev: MouseEvent): void => {
         document.removeEventListener('mousemove', onMouseMove)
         document.removeEventListener('mouseup', onMouseUp)
+        endBrowserFreeze?.()
+        endBrowserFreeze = null
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
 

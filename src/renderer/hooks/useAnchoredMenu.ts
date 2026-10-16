@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { menuLayerForTrigger } from '@/components/Settings/controls/SettingControls'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 /** Above every Zen layer (cluster 3, content 1, Add agent picker 30). */
 export const ZEN_ANCHORED_MENU_LAYER = 40
@@ -182,6 +183,9 @@ export function useAnchoredMenu<A extends HTMLElement = HTMLElement>({
       document.removeEventListener('keydown', onKey)
     }
   }, [open])
+
+  // Every anchored menu claims its box over a native Browser page.
+  useBrowserOverlay({ active: open, ref: menuEl, kind: 'menu', watch: box })
 
   // Refs attach before layout effects run, so the first placement already
   // measures the menu; later size changes come through the ResizeObserver.

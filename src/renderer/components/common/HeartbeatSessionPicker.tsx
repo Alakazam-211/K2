@@ -16,6 +16,7 @@ import {
   type HeartbeatSessionCandidate,
 } from '@/lib/heartbeat-delivery'
 import { primaryScope } from '@/kessel/server-scope'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 /**
  * Per-heartbeat delivery drop-down — answers "where does this
@@ -82,6 +83,7 @@ export function HeartbeatSessionPicker({
   const buttonRef = useRef<HTMLButtonElement | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
   const [menuBox, setMenuBox] = useState<{ top: number; left: number; zIndex: number } | null>(null)
+  useBrowserOverlay({ active: open && menuBox !== null, ref: menuRef, kind: 'menu', watch: menuBox })
 
   // The closed trigger shows the explicit session's TITLE, which only
   // chat/list knows — so that one case also warrants a mount fetch.

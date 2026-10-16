@@ -38,6 +38,7 @@ import type { RemoteRecoveryState } from '@/lib/remote-recovery'
 import { webFeatures } from '@/web/features'
 import { LOCAL_SCOPE_LABEL } from '@/kessel/server-scope'
 import { useTopBarScope } from './top-bar-scope'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 function statusColor(status: ConnectionStatus): string {
   switch (status) {
@@ -215,6 +216,9 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
   const [highlighted, setHighlighted] = useState(0)
   const searchRef = useRef<HTMLInputElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  // The dropdown hangs over the room; a Browser page under it freezes.
+  const popoverRef = useRef<HTMLDivElement | null>(null)
+  useBrowserOverlay({ active: open, ref: popoverRef, kind: 'menu' })
 
   // Close on Escape per copy (idempotent). Outside click is one shared
   // listener — see retainServerSwitcherOutsideClick.
@@ -456,6 +460,7 @@ export default function ServerSwitcher({ followRoom = false }: { followRoom?: bo
 
       {open && (
         <div
+          ref={popoverRef}
           className="absolute left-0 top-7 z-50 w-[260px] rounded border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg py-1 text-[12px] flex flex-col"
         >
           {roomServer !== null && (

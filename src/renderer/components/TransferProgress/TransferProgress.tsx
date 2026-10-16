@@ -6,8 +6,10 @@
 // it never fights the Toast stack (bottom-right); mounted alongside
 // <Toast /> at each app root.
 
+import { useRef } from 'react'
 import { useTransferProgressStore } from '@/stores/transfer-progress'
 import type { Transfer } from '@/stores/transfer-progress'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 const KIND_LABEL: Record<Transfer['kind'], string> = {
   upload: 'Uploading',
@@ -57,10 +59,12 @@ function TransferItem({ transfer }: { transfer: Transfer }): React.JSX.Element {
 
 export default function TransferProgress(): React.JSX.Element | null {
   const transfers = useTransferProgressStore((s) => s.transfers)
+  const stackRef = useRef<HTMLDivElement>(null)
+  useBrowserOverlay({ active: transfers.length > 0, ref: stackRef, kind: 'toast' })
   if (transfers.length === 0) return null
 
   return (
-    <div className="fixed bottom-4 left-3 z-[9999] flex flex-col items-start gap-2 pointer-events-auto">
+    <div ref={stackRef} className="fixed bottom-4 left-3 z-[9999] flex flex-col items-start gap-2 pointer-events-auto">
       {transfers.map((t) => (
         <TransferItem key={t.id} transfer={t} />
       ))}

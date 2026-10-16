@@ -1354,6 +1354,16 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0170_app_walls_lite",
             include_str!("../../drizzle_sql/0170_app_walls_lite.sql"),
         ),
+        // 0178 — Design mode per-workspace switch (prd-browser-design-mode-v1
+        // late decision, Rosson 2026-10-16): `projects.design_mode_enabled`,
+        // DEFAULT 1. 0171–0175 are held for the 0.46.1 runtime lanes, 0176
+        // is the integrator spare and 0177 is the publish probe timeout.
+        // Additive only: renumber freely on a slip (and edit the two
+        // migration-order tests below).
+        (
+            "0178_workspace_design_mode",
+            include_str!("../../drizzle_sql/0178_workspace_design_mode.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -2014,7 +2024,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0170_app_walls_lite",
+            last_name, "0178_workspace_design_mode",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2051,6 +2061,7 @@ mod tests {
                 "0168_app_grace",
                 "0169_app_egress",
                 "0170_app_walls_lite",
+                "0178_workspace_design_mode",
             ],
             "tail migrations out of order: {names:?}"
         );

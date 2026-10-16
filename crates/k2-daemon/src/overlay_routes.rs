@@ -1685,9 +1685,9 @@ fn deliver_thread_to_pty(
     via: &str,
     command: &str,
     turn: Option<ThreadTurn<'_>>,
-) {
+) -> ThreadDelivery {
     if cfg!(test) && tokio::runtime::Handle::try_current().is_err() {
-        return;
+        return test_delivery(addr, payload);
     }
     if let Some(t) = turn {
         crate::thread_activity::start_turn(t.conversation_id, addr, t.turn_id, t.started_at);
@@ -1713,6 +1713,67 @@ fn deliver_thread_to_pty(
         // strip follows the Thread the clients now read.
         let now_conversation = resolve_addr(addr).ok().map(|r| r.conversation_id);
         crate::thread_activity::delivered(t.conversation_id, t.turn_id, target, now_conversation.as_deref());
+    }
+    ThreadDelivery {
+        success: resp.success,
+        target_session_id: resp.target_session_id.filter(|_| resp.success),
+    }
+}
+
+/// What [`deliver_thread_to_pty`] did: whether the wake + inject reached a
+/// live session, and which one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ThreadDelivery {
+    pub success: bool,
+    pub target_session_id: Option<String>,
+}
+
+/// Unit tests have no Tokio reactor, so a delivery is recorded instead of
+/// run (`(addr, payload)`), and succeeds only for addrs a test armed with
+/// [`arm_test_delivery`].
+#[cfg(test)]
+static TEST_DELIVERIES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+#[cfg(test)]
+static TEST_DELIVERY_OK: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn recorded_deliveries(addr: &str) -> Vec<String> {
+    TEST_DELIVERIES
+        .lock()
+        .expect("deliveries lock")
+        .iter()
+        .filter(|(a, _)| a == addr)
+        .map(|(_, p)| p.clone())
+        .collect()
+}
+
+/// `ok`: later test deliveries to `addr` succeed (true) or fail (false).
+#[cfg(test)]
+pub(crate) fn arm_test_delivery(addr: &str, ok: bool) {
+    let mut g = TEST_DELIVERY_OK.lock().expect("delivery ok lock");
+    g.retain(|a| a != addr);
+    if ok {
+        g.push(addr.to_string());
+    }
+}
+
+fn test_delivery(addr: &str, payload: &str) -> ThreadDelivery {
+    #[cfg(test)]
+    {
+        TEST_DELIVERIES
+            .lock()
+            .expect("deliveries lock")
+            .push((addr.to_string(), payload.to_string()));
+        let ok = TEST_DELIVERY_OK.lock().expect("delivery ok lock").iter().any(|a| a == addr);
+        ThreadDelivery {
+            success: ok,
+            target_session_id: ok.then(|| format!("test-session-{addr}")),
+        }
+    }
+    #[cfg(not(test))]
+    {
+        let _ = (addr, payload);
+        ThreadDelivery::default()
     }
 }
 
@@ -1775,6 +1836,177 @@ fn handle_get_thread_activity(params: &HashMap<String, String>) -> CliResponse {
         }),
         &resolved,
     ))
+}
+
+/// The outcome of a Design-notes post or redelivery (D-A10).
+#[derive(Debug, Clone)]
+pub(crate) struct DesignDelivery {
+    pub thread_item_id: String,
+    pub seq: i64,
+    pub delivered: bool,
+    pub target_session_id: Option<String>,
+    pub addr: String,
+    pub conversation_id: String,
+    pub from: String,
+}
+
+/// Who a Design-notes post is from, from the credential: a bound agent's
+/// stamp, else the session (owner display name or Connect login). Never
+/// the body. Returns `(from, author, via)`.
+fn design_sender(
+    params: &HashMap<String, String>,
+    resolved: &ResolvedOverlay,
+    session_author: &str,
+) -> (String, Option<overlay::PostAuthor>, &'static str) {
+    if principal_is_bound(params) {
+        (overlay_sender_from(params, resolved), None, "thread")
+    } else {
+        (
+            compose_from_for_session(session_author),
+            Some(compose_author_for_session(session_author)),
+            "compose",
+        )
+    }
+}
+
+/// One audit line per Design-notes post or redelivery (`design.note.post`
+/// / `design.note.redeliver`), like a Garden widget's: who, where, which
+/// page, how many notes, how long. Never the text.
+fn audit_design(event: &str, origin: &overlay::DesignOrigin, from: &str, addr: &str, text: &str) {
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        event,
+        from,
+        format!(
+            "to={addr} url={} notes={} item={} chars={}",
+            origin.url,
+            origin.notes,
+            origin.item_id.as_deref().unwrap_or("-"),
+            text.chars().count()
+        ),
+        "-",
+        "-",
+        "cli",
+    ));
+}
+
+/// `POST /cli/browser/notes` core (prd-browser-design-mode-v1 D-A9/D-A10):
+/// ONE Thread item with a `design` origin, then the same wake + inject a
+/// person's Thread post gets (`[from <name>] [thread:<addr>] …` into the
+/// pinned Chat, a Thread turn for the activity strip). Never send-message,
+/// never a second item, never compose history. `text` is already clamped
+/// and formatted (`k2_core::browser_notes`). App passes are refused.
+pub(crate) fn design_post(
+    params: &HashMap<String, String>,
+    addr: &str,
+    text: &str,
+    origin: overlay::DesignOrigin,
+    session_author: &str,
+) -> Result<DesignDelivery, CliResponse> {
+    let received_at = chrono::Utc::now().timestamp_millis();
+    if request_skin().is_some() {
+        return Err(forbidden("app passes cannot send design notes"));
+    }
+    if text.trim().is_empty() {
+        return Err(usage("missing text"));
+    }
+    let resolved = resolve_addr(addr)?;
+    let principal = crate::caller_workspace::principal_from_params(params);
+    let (from, author, via) = design_sender(params, &resolved, session_author);
+    authorize_write(principal.as_ref(), &resolved, &from)?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let (item, links) = overlay::post_thread_design(
+        &conn,
+        &resolved.conversation_id,
+        &resolved.project_id,
+        &from,
+        &resolved.addr,
+        text,
+        via,
+        origin.clone(),
+        author,
+    )
+    .map_err(|e| error_json("500 Internal Server Error", "store", e))?;
+    crate::overlay_ws::emit_links(&links, &item.doc);
+    drop(conn);
+    audit_design("design.note.post", &origin, &from, &resolved.addr, text);
+    let delivery = deliver_design(&resolved, &item.id, &from, via, text, received_at);
+    Ok(DesignDelivery {
+        thread_item_id: item.id,
+        seq: item.seq,
+        delivered: delivery.success,
+        target_session_id: delivery.target_session_id,
+        addr: resolved.addr.clone(),
+        conversation_id: resolved.conversation_id.clone(),
+        from,
+    })
+}
+
+fn deliver_design(
+    resolved: &ResolvedOverlay,
+    item_id: &str,
+    from: &str,
+    via: &str,
+    text: &str,
+    started_at: i64,
+) -> ThreadDelivery {
+    record_test_inject(&format_thread_compose_pty_line(from, &resolved.addr, text));
+    deliver_thread_to_pty(
+        &resolved.addr,
+        &format!("[thread:{}] {text}", resolved.addr),
+        from,
+        via,
+        "",
+        Some(ThreadTurn::new(resolved, item_id, started_at)),
+    )
+}
+
+/// `POST /cli/browser/notes/redeliver` core (D-A10 Retry): deliver an
+/// already-stored Design-notes item again. Never posts a second item. The
+/// caller must be allowed to write this Thread and be the item's sender
+/// (the owner token may retry anyone's).
+pub(crate) fn design_redeliver(
+    params: &HashMap<String, String>,
+    addr: &str,
+    thread_item_id: &str,
+    session_author: &str,
+) -> Result<DesignDelivery, CliResponse> {
+    let started_at = chrono::Utc::now().timestamp_millis();
+    if request_skin().is_some() {
+        return Err(forbidden("app passes cannot send design notes"));
+    }
+    let id = thread_item_id.trim();
+    if id.is_empty() {
+        return Err(usage("missing threadItemId"));
+    }
+    let resolved = resolve_addr(addr)?;
+    let principal = crate::caller_workspace::principal_from_params(params);
+    let (caller_from, _, _) = design_sender(params, &resolved, session_author);
+    authorize_write(principal.as_ref(), &resolved, &caller_from)?;
+    let item = overlay::find_thread_item(&resolved.conversation_id, id)
+        .map_err(|e| error_json("500 Internal Server Error", "store", e))?
+        .ok_or_else(|| not_found(format!("no Thread item {id} in {}", resolved.addr)))?;
+    let Some(origin) = item.doc.design.clone() else {
+        return Err(usage("only a design-notes post can be redelivered"));
+    };
+    let owner_token = !principal_is_bound(params)
+        && (session_author.trim().is_empty() || session_author.trim().eq_ignore_ascii_case("owner"));
+    if !owner_token && item.doc.from != caller_from {
+        return Err(forbidden("only the sender can redeliver these notes"));
+    }
+    let text = item.doc.body.clone().unwrap_or_default();
+    let via = item.doc.via.clone().unwrap_or_else(|| "compose".to_string());
+    audit_design("design.note.redeliver", &origin, &caller_from, &resolved.addr, &text);
+    let delivery = deliver_design(&resolved, &item.id, &item.doc.from, &via, &text, started_at);
+    Ok(DesignDelivery {
+        thread_item_id: item.id,
+        seq: item.seq,
+        delivered: delivery.success,
+        target_session_id: delivery.target_session_id,
+        addr: resolved.addr.clone(),
+        conversation_id: resolved.conversation_id.clone(),
+        from: item.doc.from,
+    })
 }
 
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {

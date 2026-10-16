@@ -554,6 +554,12 @@ pub fn is_agent_verb(path: &str) -> bool {
         // filesystem and never shells out. Not under any DENY_PREFIX
         // (`/cli/browser/` is new with this verb).
         "/cli/browser/open-url",
+        // Design mode (prd-browser-design-mode-v1 D-A13): `k2 browser note`
+        // from an agent files page notes into ITS OWN workspace's Thread
+        // (authorize_write refuses another workspace). No escalation: a
+        // Thread post plus the same wake + inject a person's post gets.
+        "/cli/browser/notes",
+        "/cli/browser/notes/redeliver",
         // C1 (0.40.45): workspace connections list/add/remove. Mutate is
         // further gated by agents_can_create_connections_for_path (owner
         // always bypasses; agents need the effective toggle ON). List is
@@ -1851,6 +1857,14 @@ mod tests {
         );
         // Do not open a broad /cli/session/ prefix.
         assert!(!is_agent_verb("/cli/session/anything-else"));
+    }
+
+    #[test]
+    fn is_agent_verb_allows_design_notes_exact_only() {
+        assert!(is_agent_verb("/cli/browser/notes"));
+        assert!(is_agent_verb("/cli/browser/notes/redeliver"));
+        assert!(!is_agent_verb("/cli/browser/notes/other"));
+        assert!(!is_agent_verb("/cli/browser/"));
     }
 
     #[test]

@@ -882,6 +882,20 @@ mod unix_impl {
                 }
                 from_cli(crate::browser_routes::handle_open_url(params, body, "shim"))
             }
+            // Design mode (D-A13): `k2 browser note` from a cell. The params
+            // already carry this session's stamp (principal_bound), so the
+            // post is the agent's own and only lands in its own workspace.
+            "/cli/browser/notes" | "/cli/browser/notes/redeliver" => {
+                if !is_post {
+                    return from_cli(crate::cli_response::CliResponse::method_not_allowed());
+                }
+                let caller = crate::browser_routes::NotesCaller::Agent;
+                if path == "/cli/browser/notes" {
+                    from_cli(crate::browser_routes::handle_notes(params, body, &caller))
+                } else {
+                    from_cli(crate::browser_routes::handle_notes_redeliver(params, body, &caller))
+                }
+            }
             "/cli/awareness/publish" => {
                 let restamped = restamp_awareness_from(body, principal);
                 let r = crate::awareness_ws::handle_publish(&restamped);

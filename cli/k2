@@ -26865,7 +26865,9 @@ MOVING TO ANOTHER BOX
   --workspace <id>` with the workspace id on the new box (it lists first;
   add --apply). Secrets go to a workspace by id, never by name. The file
   opens only in that vault. The
-  recovery key is never used for this.
+  recovery key is never used for this. Every export is logged with who
+  ran it, the secret names and the target key, and your owner sees it
+  (k2 vault audit, Settings → Access).
 
 PUBLISHED SERVICES
   New services start clean (base env + granted secrets). Ones from before

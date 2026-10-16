@@ -46,7 +46,7 @@ pub const CONFIRM_ACTION: &str = "node-admin";
 pub mod codes {
     pub const OPERATE_OFF: &str = "operate_off";
     pub const APPROVAL_REQUIRED: &str = "approval_required";
-    pub const OWNER_CONFIRM_REQUIRED: &str = "owner_confirm_required";
+    pub const VAULT_CONFIRM_REQUIRED: &str = "vault_confirm_required";
     pub const REQUEST_NOT_FOUND: &str = "request_not_found";
     pub const NOT_PENDING: &str = "not_pending";
     pub const APPROVAL_EXPIRED: &str = "approval_expired";

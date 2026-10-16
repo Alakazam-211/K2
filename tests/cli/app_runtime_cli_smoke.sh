@@ -196,8 +196,12 @@ expect_eq "shell into a preview App is refused before the upgrade (exit 3)" "$rc
 expect_has "shell says why" "$(cat "$SANDBOX/out")" "exec_unavailable"
 expect_has "exception off on a guarded/preview App is a no-op" "$(k2 app exception smoke off)" "(no change)"
 resp="$(curl -s -X POST -H 'Content-Type: application/json' --data '{"app":"smoke","on":true}' "http://127.0.0.1:$PORT/cli/app/exception?token=$OWNER_TOKEN")"
+# One confirm code (Rosson 2026-10-16): vault_confirm_required on Linux;
+# off Linux the process exception isn't available at all.
+if [ "$(uname -s)" = Linux ]; then want_code=vault_confirm_required; else want_code=engine_unavailable; fi
 case "$resp" in
-    *owner_confirm_required*|*engine_unavailable*) ok "exception on without an owner confirm is refused ($(printf '%s' "$resp" | head -c 80))" ;;
+    *owner_confirm_required*) bad "exception on answers the retired owner_confirm_required: $resp" ;;
+    *"\"$want_code\""*) ok "exception on without an owner confirm is refused ($want_code)" ;;
     *) bad "exception on without a confirm: $resp" ;;
 esac
 expect_has "audit has the io change" "$(k2 app history smoke --json)" '"event":"config"'

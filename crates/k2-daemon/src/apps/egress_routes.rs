@@ -36,7 +36,7 @@ pub mod codes {
     pub const HELD: &str = "held";
     pub const OWNER_ONLY: &str = "owner_only";
     /// The house code for "this needs a fresh vault confirm".
-    pub const OWNER_CONFIRM_REQUIRED: &str = "vault_confirm_required";
+    pub const VAULT_CONFIRM_REQUIRED: &str = "vault_confirm_required";
     pub const REQUEST_NOT_FOUND: &str = "request_not_found";
     pub const NOT_PENDING: &str = "not_pending";
     pub const REQUEST_EXPIRED: &str = "request_expired";

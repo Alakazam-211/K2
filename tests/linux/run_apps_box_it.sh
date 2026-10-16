@@ -115,7 +115,7 @@ REMOTE
 }
 
 echo "== images =="
-"${SSH[@]}" "set -e; podman build -q -t localhost/k2rh-it:rts2 -f $R/it/tests/Containerfile.root-helper-it $R/it/tests >/dev/null; podman build -q -t localhost/k2-apps-box-it:rts2 -f $R/it/tests/Containerfile.apps-box-it $R/it/tests >/dev/null; echo built"
+"${SSH[@]}" "set -e; podman build -q -t localhost/k2rh-it:rts2 -f $R/it/tests/Containerfile.root-helper-it $R/it/tests >/dev/null; podman build -q -t localhost/k2-apps-box-it:rts2 -f $R/it/tests/Containerfile.apps-box-it $R/it/tests >/dev/null; printf 'N\n' >$R/it/apparmor-off; echo built"
 
 # Own user namespace (8M ids at 2^31: no host user or other container
 # lives there), so every capability is held in THAT namespace only.
@@ -124,10 +124,13 @@ echo "== images =="
 # /proc/sys unmasked and AppArmor off (Podman's profile denies every
 # /proc/sys write): host-wide sysctls stay owned by the host's root
 # ("nobody" in here) and the kernel refuses them — checked in the probes
-# and by host-before/after below.
+# and by host-before/after below. The host kernel's AppArmor is hidden
+# (enabled = N): a container can't load profiles; the k2-app profile is
+# checked in the guarded VM e2e (tests/linux/apps_guarded_e2e.sh).
 USERNS=(--network=none --uidmap 0:2147483648:8388608 --gidmap 0:2147483648:8388608
 	--security-opt unmask=/proc/sys --security-opt apparmor=unconfined
-	--cap-add NET_ADMIN --cap-add SYS_PTRACE)
+	--cap-add NET_ADMIN --cap-add SYS_PTRACE
+	-v "$R/it/apparmor-off:/sys/module/apparmor/parameters/enabled:ro")
 
 rc=0
 echo "== existing helper IT (protocol 6) in Ubuntu 24.04 =="

@@ -172,6 +172,13 @@ pub const APT_PACKAGES: &[&str] = &["podman", "crun", "passt", "uidmap", "dbus-u
 pub const DNF_PACKAGES: &[&str] = &["podman", "crun", "passt", "shadow-utils", "skopeo", "catatonit"];
 pub const PACMAN_PACKAGES: &[&str] = &["podman", "crun", "passt", "skopeo", "catatonit"];
 pub const YOUKI_PACKAGE: &str = "youki";
+/// AppArmor's userspace (`apparmor_parser`), added to box prep's install
+/// when the kernel has AppArmor on and the parser is missing (Rosson
+/// 2026-10-16). Debian/Ubuntu and Arch name it `apparmor` (the parser is in
+/// it; `apparmor-utils` isn't needed). dnf distros run SELinux, so K2 has
+/// no fixed name there and says so instead.
+pub const APT_APPARMOR_PACKAGES: &[&str] = &["apparmor"];
+pub const PACMAN_APPARMOR_PACKAGES: &[&str] = &["apparmor"];
 
 /// Bounds for the numeric tokens.
 pub const CORES_MIN_MIB: (u64, u64) = (128, 65_536);

@@ -258,6 +258,13 @@ fn audit(
             }
         }
     }
+    // Box prep added AppArmor's userspace: say which fixed package.
+    if let (Some(Verb::AppsPackagesInstall), Some(x)) = (verb, extra) {
+        let p = x.pointer("/apparmor/installed").filter(|p| p.as_array().is_some_and(|a| !a.is_empty()));
+        if let Some(p) = p {
+            line["apparmorInstalled"] = p.clone();
+        }
+    }
     if let Some(Verb::PgPsql { db, .. }) = verb {
         line["db"] = serde_json::json!(db.as_str());
     }

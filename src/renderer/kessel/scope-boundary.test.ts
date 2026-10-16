@@ -215,6 +215,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'stores/subscription-usage.ts',
   'stores/tabs.ts',
   'stores/timer.ts',
+  // Usage v2: a server switch drops the window's limits doc.
+  'stores/usage-limits.ts',
 ]
 
 describe('MS79 scope boundary ratchets', () => {

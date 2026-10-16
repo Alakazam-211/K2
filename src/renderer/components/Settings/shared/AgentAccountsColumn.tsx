@@ -13,14 +13,17 @@
 // click.
 
 import React from 'react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { primaryScope } from '@/kessel/server-scope'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 import { isWebClient } from '@/lib/is-web'
-import { formatResetsIn } from '@/lib/subscription-usage'
+import { formatResetsIn, limitState, limitStateText, sourceText } from '@/lib/subscription-usage'
 import { USAGE_CACHE_POLL_MS } from '@/stores/subscription-usage'
+import { findLimitsLogin, type LimitsLogin } from '@/lib/usage-limits'
+import { useUsageLimitsStore, watchUsageLimits } from '@/stores/usage-limits'
+import { LimitBar } from '@/components/Usage/LimitBar'
 import {
   addApiKey,
   checkedAgoText,
@@ -98,24 +101,92 @@ const STATE_COLORS: Record<string, string> = {
   unknown: '#6b7280',
 }
 
-function UsageMeter({ account }: { account: LlmAccount }): React.JSX.Element | null {
-  const usage = account.usage
+/** Usage v2 (Q4, P8): each token's subscription windows as T3-style bars
+ *  (all of them, B30: model-scoped weeks too), with the pace mark, amber /
+ *  red bands, "reset — re-checking", how old the reading is, why there are
+ *  no numbers, and a Refresh for this one login. The reading is the
+ *  daemon's `/cli/usage/limits` row for this token when this login may read
+ *  it (Owner, Admin), else the wallet's own last reading. */
+function UsageMeter({
+  account,
+  limits,
+  onRefresh,
+}: {
+  account: LlmAccount
+  limits: LimitsLogin | null
+  /** Re-check this login now; absent when this login may not. */
+  onRefresh?: () => Promise<void>
+}): React.JSX.Element | null {
+  const [now, setNow] = useState(() => Date.now())
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshError, setRefreshError] = useState<string | null>(null)
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), USAGE_CACHE_POLL_MS)
+    return () => clearInterval(id)
+  }, [])
+  const usage = limits ?? account.usage
   // API tokens: the row name already says "billed per token".
   if (!usage || account.kind === 'api_key') return null
   const windows = usage.windows ?? []
   // Each token's own last reading, with its age: a failed check keeps the
   // old time and says so, so old numbers never read as just checked.
-  const age = checkedAgoText(usageCheckedAtSecs(account))
+  const checkedSecs = limits ? rfc3339Secs(limits.checkedAt) : usageCheckedAtSecs(account)
+  const age = checkedAgoText(checkedSecs, now)
+  const state = limitState(usage)
+  const why = state === 'ok' || state === 'probe_failed' || state === 'no_window' ? null : limitStateText(usage)
+  const live = sourceText(usage.source)
+  const nextProbe = usage.nextProbeAt ? Date.parse(usage.nextProbeAt) : NaN
   return (
     <div className="mt-1" data-testid={`llm-usage-${account.id}`}>
-      {windows.length > 0 && <UsageWindows accountId={account.id} windows={windows} />}
-      <div className="text-[9px] text-[var(--color-text-muted)] mt-0.5" data-testid={`llm-usage-age-${account.id}`}>
-        {windows.length === 0 && usage.status ? `${usage.status} · ` : ''}
-        Usage {age}
+      {windows.length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1">
+          {windows.map((w) => (
+            <div key={w.id ?? w.label} className="w-32">
+              <LimitBar window={w} nowMs={now} dense labelTestId={`llm-usage-window-${account.id}-${w.label}`} />
+            </div>
+          ))}
+        </div>
+      )}
+      {why && (
+        <div
+          className={`text-[9px] mt-0.5 ${state === 'expired' ? 'text-amber-400' : 'text-[var(--color-text-muted)]'}`}
+          data-testid={`llm-usage-state-${account.id}`}
+        >
+          {why}
+        </div>
+      )}
+      <div className="text-[9px] text-[var(--color-text-muted)] mt-0.5 flex flex-wrap items-center gap-x-1" data-testid={`llm-usage-age-${account.id}`}>
+        <span>
+          {windows.length === 0 && !why && usage.status ? `${usage.status} · ` : ''}
+          Usage {age}
+          {live ? ` · ${live}` : ''}
+          {Number.isFinite(nextProbe) && nextProbe > now ? ` · next check ${formatResetsIn(usage.nextProbeAt ?? '', now)}` : ''}
+        </span>
         {usage.error && (
           <span className="text-amber-400" data-testid={`llm-usage-error-${account.id}`}>
-            {' '}
             · last check failed ({usage.error})
+          </span>
+        )}
+        {onRefresh && (
+          <button
+            type="button"
+            className="text-[var(--color-accent)] disabled:opacity-40"
+            data-testid={`llm-usage-refresh-${account.id}`}
+            disabled={refreshing}
+            onClick={() => {
+              setRefreshing(true)
+              setRefreshError(null)
+              onRefresh()
+                .catch((e: unknown) => setRefreshError(errorText(e)))
+                .finally(() => setRefreshing(false))
+            }}
+          >
+            · {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
+        )}
+        {refreshError && (
+          <span className="text-red-400" role="alert">
+            · {refreshError}
           </span>
         )}
       </div>
@@ -123,48 +194,9 @@ function UsageMeter({ account }: { account: LlmAccount }): React.JSX.Element | n
   )
 }
 
-/** Each window also says when it refreshes, the top bar's way ("Session
- *  42% · 3h", "· now" once the reset time has passed, nothing when
- *  unknown). The time comes from that token's own last reading, so every
- *  row counts down to its own reset. Ticks once a minute (the top bar's
- *  usage cadence). */
-function UsageWindows({
-  accountId,
-  windows,
-}: {
-  accountId: string
-  windows: NonNullable<LlmAccount['usage']>['windows']
-}): React.JSX.Element {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), USAGE_CACHE_POLL_MS)
-    return () => clearInterval(id)
-  }, [])
-  return (
-    <div className="flex gap-3">
-      {windows.slice(0, 2).map((w) => {
-        const pct = Math.max(0, Math.min(100, Math.round(w.used * 100)))
-        const until = formatResetsIn(w.resetsAt, now)
-        return (
-          <div key={w.label} className="min-w-0 w-28">
-            <div
-              className="text-[9px] text-[var(--color-text-muted)] truncate"
-              data-testid={`llm-usage-window-${accountId}-${w.label}`}
-              title={until ? `${w.label} ${pct}% used · refreshes ${until === 'now' ? 'now' : `in ${until}`}` : undefined}
-            >
-              {w.label} {pct}%{until ? ` · ${until}` : ''}
-            </div>
-            <div className="h-0.5 bg-[var(--color-border)]">
-              <div
-                className="h-0.5"
-                style={{ width: `${pct}%`, backgroundColor: pct >= 90 ? '#ef4444' : 'var(--color-accent)' }}
-              />
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
+function rfc3339Secs(iso: string): number | null {
+  const t = iso ? Date.parse(iso) : NaN
+  return Number.isFinite(t) ? Math.floor(t / 1000) : null
 }
 
 function pinLabel(a: LlmAccount): string {
@@ -177,12 +209,17 @@ function AccountRow({
   account,
   tool,
   doc,
+  limits,
+  onRefreshLimits,
   onLoginAgain,
   onError,
 }: {
   account: LlmAccount
   tool: LlmTool
   doc: LlmAccountsDoc
+  /** This token's `/cli/usage/limits` row (Owner/Admin), else null. */
+  limits: LimitsLogin | null
+  onRefreshLimits?: (accountId: string) => Promise<void>
   onLoginAgain: (a: LlmAccount) => void
   onError: (msg: string) => void
 }): React.JSX.Element {
@@ -334,7 +371,11 @@ function AccountRow({
       {account.detail && account.state !== 'signed_in' && (
         <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">{account.detail}</div>
       )}
-      <UsageMeter account={account} />
+      <UsageMeter
+        account={account}
+        limits={limits}
+        onRefresh={onRefreshLimits ? () => onRefreshLimits(account.id) : undefined}
+      />
     </div>
   )
 }
@@ -442,6 +483,15 @@ export function AgentAccountsColumn(): React.JSX.Element {
 
 
   useEffect(() => watchLlmAccounts(scope), [scope])
+  // Usage v2: every login's limits for the bars (Owner/Admin; a Member's
+  // 403 leaves each row on its wallet reading). One watcher per server.
+  const limitsTarget = useMemo(() => ({ key: scope.id, scope }), [scope])
+  useEffect(() => watchUsageLimits(limitsTarget), [limitsTarget])
+  const limitsDoc = useUsageLimitsStore((s) => s.entries[scope.id]?.doc ?? null)
+  const refreshLimits = useCallback(
+    (accountId: string) => useUsageLimitsStore.getState().refresh(limitsTarget, { accountId }),
+    [limitsTarget],
+  )
   useEffect(() => {
     setSheet(null)
     setKeyDialog(null)
@@ -597,6 +647,8 @@ export function AgentAccountsColumn(): React.JSX.Element {
                       account={a}
                       tool={tool}
                       doc={doc}
+                      limits={findLimitsLogin(limitsDoc, a.id)}
+                      onRefreshLimits={limitsDoc ? refreshLimits : undefined}
                       onError={setError}
                       onLoginAgain={(acc) =>
                         setSheet({ kind: 'relogin', tool: row.id, toolLabel: row.label, accountId: acc.id, label: acc.label })

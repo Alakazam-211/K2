@@ -123,6 +123,15 @@ mod real {
     /// otherwise both pass "label free" and race `add_child`.
     struct BrowserCreateLock(tokio::sync::Mutex<()>);
 
+    /// Design views (prd-browser-design-mode-v1 D-A11): which registry keys
+    /// get the picker, and each one's page-load number. Plain Browser views
+    /// are never in here.
+    struct DesignState(Mutex<super::super::design_pick::DesignRegistry>);
+
+    fn design_state(app: &AppHandle) -> tauri::State<'_, DesignState> {
+        app.state::<DesignState>()
+    }
+
     fn views(app: &AppHandle) -> tauri::State<'_, BrowserViews> {
         app.state::<BrowserViews>()
     }
@@ -135,6 +144,7 @@ mod real {
     pub fn init(app: &AppHandle) {
         app.manage(BrowserViews(Mutex::new(HashMap::new())));
         app.manage(BrowserCreateLock(tokio::sync::Mutex::new(())));
+        app.manage(DesignState(Mutex::new(Default::default())));
     }
 
     /// Only http(s) may load in a browser pane (§6.5): never `file:`, `tauri:`,
@@ -605,6 +615,7 @@ mod real {
         rect: Rect,
         parent_window: Option<String>,
         appearance: Option<Appearance>,
+        design: Option<bool>,
     ) -> Result<(), String> {
         // Serialize all creates so two concurrent creates for the same label
         // cannot both pass "label free" and race add_child.
@@ -614,6 +625,14 @@ mod real {
         let parent = resolve_parent(parent_window.as_deref()).to_string();
         let key = registry_key(&parent, &item_id);
         let label = tauri_label(&parent, &item_id);
+        // A Design tab (D-A4: a Browser tab with a `design` field) gets the
+        // picker; a plain Browser tab never does. Older renderers send no
+        // flag: plain Browser.
+        design_state(&app)
+            .0
+            .lock()
+            .unwrap()
+            .set_design(&key, design.unwrap_or(false));
 
         let parsed = parse_pane_url(&url)?;
         let window = app
@@ -666,6 +685,7 @@ mod real {
             let title_parent = parent.clone();
             let icon_item = item_id.clone();
             let icon_parent = parent.clone();
+            let design_key = key.clone();
             let builder = WebviewBuilder::new(&label, WebviewUrl::External(u))
                 .on_navigation(|url| matches!(url.scheme(), "http" | "https"))
                 .on_new_window(|_url, _features| NewWindowResponse::Deny)
@@ -682,6 +702,10 @@ mod real {
                     );
                 })
                 .on_page_load(move |webview, payload| {
+                    // Design views: a new load voids picks from the old page
+                    // (Started), and the picker is re-injected so the S key
+                    // works on the new page (Finished).
+                    design_page_load(&webview, &design_key, payload.event());
                     if payload.event() != PageLoadEvent::Finished {
                         return;
                     }
@@ -856,6 +880,7 @@ mod real {
         let key = registry_key(parent, &item_id);
         let label = tauri_label(parent, &item_id);
         reap_browser_label(&app, &key, &label);
+        design_state(&app).0.lock().unwrap().remove(&key);
         let _ = wait_label_free(&app, &label).await;
         Ok(())
     }
@@ -1123,6 +1148,123 @@ mod real {
         Ok(tauri::ipc::Response::new(jpeg))
     }
 
+    // ── Design mode picker (D-A11) ───────────────────────────────────────
+
+    fn design_page_load(webview: &Webview, key: &str, event: PageLoadEvent) {
+        let app = webview.app_handle();
+        let nav = {
+            let state = design_state(app);
+            let mut reg = state.0.lock().unwrap();
+            if event == PageLoadEvent::Started {
+                reg.bump(key);
+                return;
+            }
+            match reg.nav(key) {
+                Ok(n) => n,
+                Err(_) => return,
+            }
+        };
+        let http = webview
+            .url()
+            .map(|u| matches!(u.scheme(), "http" | "https"))
+            .unwrap_or(false);
+        if http {
+            let _ = webview.eval(super::super::design_pick::install_script(nav));
+        }
+    }
+
+    /// The design view for this item and its page-load number, or
+    /// `not a design view` (plain Browser tabs never get the picker).
+    fn design_view(
+        app: &AppHandle,
+        item_id: &str,
+        parent_window: Option<&str>,
+    ) -> Result<(Webview, u64), String> {
+        let parent = resolve_parent(parent_window);
+        let key = registry_key(parent, item_id);
+        let nav = design_state(app).0.lock().unwrap().nav(&key)?;
+        let view = browser_view(app, item_id, parent_window).ok_or("no such browser view")?;
+        Ok((view, nav))
+    }
+
+    /// Select on: hover highlights, click picks. Installs the picker first
+    /// if this page load does not have it yet.
+    #[tauri::command]
+    pub async fn browser_pick_arm(
+        app: AppHandle,
+        item_id: String,
+        parent_window: Option<String>,
+    ) -> Result<(), String> {
+        let (view, nav) = design_view(&app, &item_id, parent_window.as_deref())?;
+        view.eval(super::super::design_pick::arm_script(nav, true))
+            .map_err(|e| e.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn browser_pick_disarm(
+        app: AppHandle,
+        item_id: String,
+        parent_window: Option<String>,
+    ) -> Result<(), String> {
+        let (view, nav) = design_view(&app, &item_id, parent_window.as_deref())?;
+        view.eval(super::super::design_pick::arm_script(nav, false))
+            .map_err(|e| e.to_string())
+    }
+
+    /// Drain the page's picks and key presses (`S`, Esc). `null` when there
+    /// is nothing. Sync eval result only (Windows/Linux do not await a
+    /// Promise), so the renderer polls: ~120 ms while armed, ~400 ms while
+    /// the Design tab is shown. Works while the pane is frozen (hidden).
+    #[tauri::command]
+    pub async fn browser_pick_poll(
+        app: AppHandle,
+        item_id: String,
+        parent_window: Option<String>,
+    ) -> Result<Option<serde_json::Value>, String> {
+        use super::super::design_pick::{drain_script, install_script, parse_drain, Drained};
+        let (view, nav) = design_view(&app, &item_id, parent_window.as_deref())?;
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        let tx = std::sync::Mutex::new(Some(tx));
+        view.eval_with_callback(drain_script(), move |raw| {
+            if let Some(tx) = tx.lock().ok().and_then(|mut g| g.take()) {
+                let _ = tx.send(raw);
+            }
+        })
+        .map_err(|e| e.to_string())?;
+        let raw = match tokio::time::timeout(std::time::Duration::from_secs(1), rx).await {
+            Ok(Ok(raw)) => raw,
+            Ok(Err(_)) => return Err("browser view closed before the poll".into()),
+            Err(_) => return Err("design poll timed out".into()),
+        };
+        // Re-read: a navigation during the eval voids what it returned.
+        let (_, nav_now) = design_view(&app, &item_id, parent_window.as_deref())?;
+        if nav_now != nav {
+            return Ok(None);
+        }
+        let current = view.url().ok().map(|u| u.to_string());
+        match parse_drain(&raw, nav, current.as_deref()) {
+            Drained::Events(poll) => serde_json::to_value(poll).map(Some).map_err(|e| e.to_string()),
+            Drained::Missing => {
+                let _ = view.eval(install_script(nav));
+                Ok(None)
+            }
+            Drained::Nothing => Ok(None),
+        }
+    }
+
+    /// Numbered badges on the page for the notes in the tray (visual only).
+    #[tauri::command]
+    pub async fn browser_design_badges(
+        app: AppHandle,
+        item_id: String,
+        parent_window: Option<String>,
+        badges: Vec<super::super::design_pick::Badge>,
+    ) -> Result<(), String> {
+        let (view, nav) = design_view(&app, &item_id, parent_window.as_deref())?;
+        view.eval(super::super::design_pick::badges_script(nav, &badges))
+            .map_err(|e| e.to_string())
+    }
+
     fn capture_on_platform(
         webview: tauri::webview::PlatformWebview,
         handler: super::super::browser_snapshot::SnapshotHandler,
@@ -1222,6 +1364,7 @@ mod stub {
         _rect: Rect,
         _parent_window: Option<String>,
         _appearance: Option<super::Appearance>,
+        _design: Option<bool>,
     ) -> Result<(), String> {
         Err(OFF.into())
     }
@@ -1316,6 +1459,42 @@ mod stub {
         _parent_window: Option<String>,
     ) -> Result<tauri::ipc::Response, String> {
         Err(OFF.into())
+    }
+
+    const DESIGN_OFF: &str = "design picker unsupported";
+
+    #[tauri::command]
+    pub async fn browser_pick_arm(
+        _app: AppHandle,
+        _item_id: String,
+        _parent_window: Option<String>,
+    ) -> Result<(), String> {
+        Err(DESIGN_OFF.into())
+    }
+    #[tauri::command]
+    pub async fn browser_pick_disarm(
+        _app: AppHandle,
+        _item_id: String,
+        _parent_window: Option<String>,
+    ) -> Result<(), String> {
+        Err(DESIGN_OFF.into())
+    }
+    #[tauri::command]
+    pub async fn browser_pick_poll(
+        _app: AppHandle,
+        _item_id: String,
+        _parent_window: Option<String>,
+    ) -> Result<Option<serde_json::Value>, String> {
+        Err(DESIGN_OFF.into())
+    }
+    #[tauri::command]
+    pub async fn browser_design_badges(
+        _app: AppHandle,
+        _item_id: String,
+        _parent_window: Option<String>,
+        _badges: Vec<super::super::design_pick::Badge>,
+    ) -> Result<(), String> {
+        Err(DESIGN_OFF.into())
     }
 }
 

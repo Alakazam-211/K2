@@ -15,6 +15,8 @@ export function MachineChip({ place, reach }: { place: string; reach?: RowReach 
       title={reach ? `On ${place} · ${REACH_COPY[reach]}` : `On ${place}`}
       data-machine-chip=""
       data-reach={reach}
+      data-nav-chip="machine"
+      style={{ '--nav-chip-edge': 'var(--color-border-strong)' } as React.CSSProperties}
     >
       <ServerIcon size={9} ledColor={reach ? REACH_LED[reach] : undefined} />
       <span className="truncate">{place}</span>

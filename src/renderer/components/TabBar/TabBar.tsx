@@ -1,4 +1,4 @@
-import { useCallback, useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
+import { useCallback, useState, useRef, useEffect, useLayoutEffect, useMemo, type ReactNode } from 'react'
 import type { BrowserItemData, TerminalItemData } from '@/stores/tabs'
 import { useRoom, useRoomProjects, useRoomTabs } from '@/components/Room/RoomContext'
 import { workingAgentsInTab } from '@/lib/room-close-guard'
@@ -790,6 +790,26 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     }
   }, [groupIndex, removeTabFromGroup, handleUnpin, cwd])
 
+  // True while the tabs overflow their scroller, i.e. the + sits against
+  // the bar's edge: then the + square gets a line on each side, like the
+  // pinned tabs' dividers. Re-measured on scroller resize and on tab
+  // add/remove/rename.
+  const [tabsOverflow, setTabsOverflow] = useState(false)
+  useLayoutEffect(() => {
+    const el = tabBarRef.current
+    if (!el) return
+    const measure = (): void => setTabsOverflow(el.scrollWidth > el.clientWidth + 1)
+    measure()
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null
+    ro?.observe(el)
+    const mo = typeof MutationObserver !== 'undefined' ? new MutationObserver(measure) : null
+    mo?.observe(el, { childList: true, subtree: true, characterData: true })
+    return () => {
+      ro?.disconnect()
+      mo?.disconnect()
+    }
+  }, [])
+
   // Scroll active tab into view when it changes
   useEffect(() => {
     if (!activeTabId || !tabBarRef.current) return
@@ -1234,8 +1254,13 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       {!room.readOnly && <button
         type="button"
         data-tab-add=""
+        data-tabs-overflow={tabsOverflow ? 'true' : 'false'}
         aria-haspopup="menu"
-        className="flex h-full w-9 flex-shrink-0 items-center justify-center text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-secondary)]"
+        // The side lines are always there (border-box, so no width change);
+        // only their colour switches on while the tabs overflow.
+        className={`flex h-full w-9 flex-shrink-0 items-center justify-center border-x text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-secondary)] ${
+          tabsOverflow ? 'border-[var(--color-border)]' : 'border-transparent'
+        }`}
         onClick={(e) => { void openPlusMenu(e) }}
         title="New tab"
       >

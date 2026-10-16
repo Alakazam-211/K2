@@ -507,6 +507,9 @@ async fn async_main() {
     // A vault that can't open leaves the daemon running; status says why.
     crate::vault::boot(&k2so_dir);
     crate::vault::human::serve(&k2so_dir);
+    // Clone slice A × B (CL18): a pending imported Thread settling onto
+    // the clone's pin posts the clone's deferred "Leave blank" cards.
+    crate::clone_vault::install_settle_listener();
 
     // P5.3: clear stale heartbeat leases left behind by a daemon that
     // crashed mid-spawn. Without this, a row's `in_flight_started_at`
@@ -2295,6 +2298,13 @@ fn run_settle_imported_threads() {
         Ok(done) if done.is_empty() => {}
         Ok(done) => log_debug!("[daemon/clone-threads] settled {} pending imported Thread(s)", done.len()),
         Err(e) => log_debug!("[daemon/clone-threads] WARN: settle pending imports: {e}"),
+    }
+    drop(conn);
+    // Leave-blank cards kept for clones that have a Thread of their own by
+    // now (pinned without a pending import, e.g. "Bring the Thread" off).
+    let posted = crate::clone_vault::sweep_deferred_cards();
+    if posted > 0 {
+        log_debug!("[daemon/clone-vault] posted {posted} deferred leave-blank card(s)");
     }
 }
 

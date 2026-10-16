@@ -458,6 +458,8 @@ pub(crate) struct SealedCarry {
     pub file: Vec<u8>,
     pub names: Vec<(String, String)>,
     pub target_fingerprint: String,
+    /// Named secrets left out because their kind never travels (CL13).
+    pub never: Vec<String>,
 }
 
 /// Seal `user` secrets to a target vault: the workspace-scope ones of every
@@ -479,6 +481,7 @@ pub(crate) fn seal_carry(
     }
     let all = vault.list(&k2_vault::ListFilter::default(), &k2_vault::Actor::System("carry".into()))?;
     let mut items = vec![];
+    let mut never = vec![];
     for m in all {
         if m.namespace != k2_vault::Namespace::User {
             continue;
@@ -491,6 +494,11 @@ pub(crate) fn seal_carry(
             k2_vault::ScopeKind::Server if server.contains(&m.name) => (String::new(), None),
             _ => continue,
         };
+        // CL13: K2 logins, App passes and engine credentials never travel.
+        if k2_vault::carry::never_carried_kind(m.kind.as_str()) {
+            never.push(m.name.clone());
+            continue;
+        }
         let v = vault.resolve(&k2_vault::Selector::Id(m.id.clone()), Use::System, &Requester::System("carry".into()))?;
         items.push(k2_vault::carry::CarryItem {
             scope_kind: m.scope.kind.as_str().into(),
@@ -505,11 +513,13 @@ pub(crate) fn seal_carry(
             description: m.description.clone(),
             human_given: m.human_given,
             value_b64: k2_vault::carry::CarryItem::encode_value(v.value.expose()),
+            source_scope: None,
+            grants: vec![],
         });
     }
     let names: Vec<(String, String)> = items.iter().map(|i| (i.scope_label.clone(), i.name.clone())).collect();
     let file = vault.carry_seal_for(&target, target_vault_id, own_box_move, target_workspace_id, items)?;
-    Ok(SealedCarry { file, names, target_fingerprint: target.fingerprint() })
+    Ok(SealedCarry { file, names, target_fingerprint: target.fingerprint(), never })
 }
 
 fn carry_export(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
@@ -537,6 +547,7 @@ fn carry_export(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result
         "carryB64": base64::engine::general_purpose::STANDARD.encode(&sealed.file),
         "targetFingerprint": sealed.target_fingerprint,
         "targetWorkspaceId": target_ws,
+        "notCarried": sealed.never,
     }))
 }
 
@@ -682,6 +693,11 @@ pub(crate) fn apply_carry(
     let mut imported = vec![];
     let mut skipped = vec![];
     for (i, t) in p.items.iter().zip(targets) {
+        // CL13 on import too: whatever a carry holds, these never land.
+        if k2_vault::carry::never_carried_kind(&i.kind) || i.scope_kind == "session" {
+            skipped.push(format!("{}: {} never travels; make it again here", i.name, i.kind));
+            continue;
+        }
         let scope = match t {
             ItemTarget::Server => k2_vault::Scope::server(),
             ItemTarget::Workspace(id) => k2_vault::Scope::workspace(id.clone()),

@@ -71,6 +71,10 @@ interface ThreadOverlayPaneProps {
    *  box's top edge (the column hands it the live turn). Absent: the pane
    *  draws the drawer itself, under the list. */
   onTurn?: (turn: ThreadTurn | null) => void
+  /** Height (px) of a message box floating over the list's bottom: the
+   *  list pads by it, so messages scroll under the box (Companion's footer
+   *  fade) and the newest still rests right above it. */
+  bottomInset?: number
 }
 
 /** Overlay log only — Message-the-agent compose stays on TerminalPane. */
@@ -81,6 +85,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   agentName,
   onStop,
   onTurn,
+  bottomInset = 0,
 }: ThreadOverlayPaneProps): JSX.Element {
   const roomScope = useRoom().scope
   // A Thread is shared: "You" only on this viewer's own posts.
@@ -170,7 +175,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     const el = listRef.current
     if (!el) return
     syncListScrollRef.current(el)
-  }, [items, turn, isTabVisible])
+  }, [items, turn, isTabVisible, bottomInset])
 
   useEffect(() => {
     if (!isTabVisible) return
@@ -228,7 +233,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         data-zen-conversation-body=""
         className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
         // The browser's own scroll anchoring would fight the pin.
-        style={{ padding: '14px var(--zen-gap) 8px', overflowAnchor: 'none' }}
+        style={{ padding: '14px var(--zen-gap) 8px', paddingBottom: 8 + bottomInset, overflowAnchor: 'none' }}
         onScroll={(e) => {
           const el = e.currentTarget
           if (!listScrollLive(el)) return

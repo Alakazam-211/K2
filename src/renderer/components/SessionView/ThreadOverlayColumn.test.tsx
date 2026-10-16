@@ -76,14 +76,24 @@ describe('ThreadOverlayColumn', () => {
         composeBar={<div data-testid="fake-compose">compose</div>}
       />,
     )
+    // The bar floats over the list (Companion's footer fade): the list fills
+    // the column and pads its bottom by the bar's height (+ its own 8px).
     const slot = screen.getByTestId('agent-session-thread-list-slot')
-    expect(slot.style.bottom).toBe('40px')
+    expect(slot.className).toContain('inset-0')
+    const list = screen.getByTestId('thread-overlay-list')
+    expect(list.style.paddingBottom).toBe('48px')
+    // The fade sits behind the bar, under it in paint order, and takes no clicks.
+    const compose = screen.getByTestId('agent-session-thread-compose-slot')
+    const fade = compose.querySelector('[data-thread-footer-fade]')
+    expect(fade?.getAttribute('aria-hidden')).toBe('true')
+    expect(compose.firstElementChild).toBe(fade)
+    expect((screen.getByTestId('fake-compose').parentElement as HTMLElement).style.zIndex).toBe('1')
 
     height = 96
     act(() => {
       for (const o of observers) o.fire()
     })
-    expect(slot.style.bottom).toBe('96px')
+    expect(list.style.paddingBottom).toBe('104px')
 
     Element.prototype.getBoundingClientRect = orig
     vi.unstubAllGlobals()

@@ -4,8 +4,9 @@
 // the top bar's Run and drawer toggles draw the shared `K2Icons` (squared
 // Lucide, 16px, 1.75 stroke). Buttons keep their size, hover, tooltip and
 // accessible name; the drawer icon still shows open (solid divider) vs
-// closed (dashed divider). The stopwatch (clock) and the K2 cheat sheet
-// draw theirs too (Rosson: "the clock, mug, and cheat sheet"). The page
+// closed (dashed divider). The stopwatch (clock) and Help (was the K2
+// cheat sheet) draw theirs too (Rosson: "the clock, mug, and cheat sheet";
+// Help 2026-10-16). The page
 // tabs, Settings cog, server switcher, Admin profile and the Keep awake
 // mug's fill levels are covered in their own test files.
 
@@ -38,15 +39,15 @@ vi.mock('./TopBarUtilities', () => ({
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import TopBar from './TopBar'
 import TimerButton from '@/components/Timer/TimerButton'
-import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
+import HelpButton from '@/components/Help/HelpButton'
 import { useTimerStore } from '@/stores/timer'
 import {
   AdminIcon,
   AgentsIcon,
-  CheatSheetIcon,
   ClockIcon,
   MugIcon,
   DrawerIcon,
+  HelpIcon,
   HomeIcon,
   K2_ICON_PX,
   K2_ICON_STROKE,
@@ -89,7 +90,7 @@ describe('K2Icons (A3)', () => {
       ['run', RunIcon],
       ['clock', ClockIcon],
       ['mug', () => <MugIcon fill="half" />],
-      ['cheat-sheet', CheatSheetIcon],
+      ['help', HelpIcon],
     ] as const
     for (const [name, Icon] of squared) {
       const { container } = render(<Icon />)
@@ -202,8 +203,8 @@ describe('TopBar Run draws its A3 icon; no drawer toggles', () => {
   })
 })
 
-describe('the clock, mug and cheat sheet draw A3 icons', () => {
-  it('Lucide clock / coffee / file-text bodies, squared', () => {
+describe('the clock, mug and Help draw A3 icons', () => {
+  it('Lucide clock / coffee / circle-help bodies, squared (circles stay round)', () => {
     const clock = svgIn(render(<ClockIcon />).container)
     expect(clock.querySelector('circle')?.getAttribute('r')).toBe('10')
     expect(clock.querySelector('path')?.getAttribute('d')).toBe('M12 6v6l4 2')
@@ -217,14 +218,14 @@ describe('the clock, mug and cheat sheet draw A3 icons', () => {
       'M17 8h1a4 4 0 0 1 0 8h-1',
     ])
     cleanup()
-    const sheet = svgIn(render(<CheatSheetIcon />).container)
-    expect(Array.from(sheet.querySelectorAll('path')).map((p) => p.getAttribute('d'))).toEqual([
-      'M4 2h10l6 6v14H4Z',
-      'M14 2v6h6',
-      'M10 9H8',
-      'M16 13H8',
-      'M16 17H8',
+    const help = svgIn(render(<HelpIcon />).container)
+    const ring = help.querySelector('circle')
+    expect([ring?.getAttribute('cx'), ring?.getAttribute('cy'), ring?.getAttribute('r')]).toEqual(['12', '12', '10'])
+    expect(Array.from(help.querySelectorAll('path')).map((p) => p.getAttribute('d'))).toEqual([
+      'M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3',
+      'M12 17h.01',
     ])
+    expect([help.getAttribute('stroke-linecap'), help.getAttribute('stroke-linejoin')]).toEqual(['square', 'miter'])
   })
 
   it('the stopwatch button draws the A3 clock; same button, tooltip and colours', () => {
@@ -256,13 +257,14 @@ describe('the clock, mug and cheat sheet draw A3 icons', () => {
     useTimerStore.setState({ status: 'idle', pausedElapsed: 0, resumeTime: null })
   })
 
-  it('the cheat sheet button draws the A3 file-text; same label, tooltip and size', () => {
-    render(<K2NounsCheatSheet />)
-    const button = screen.getByRole('button', { name: 'K2 cheat sheet' })
-    expect(button.getAttribute('title')).toBe('K2 cheat sheet')
+  it('the Help button draws the A3 circle-help; label and tooltip "Help", same size', () => {
+    render(<HelpButton />)
+    const button = screen.getByRole('button', { name: 'Help' })
+    expect(button.getAttribute('title')).toBe('Help')
+    expect(screen.queryByRole('button', { name: 'K2 cheat sheet' })).toBeNull()
     const svg = svgIn(button)
     expect([svg.getAttribute('data-k2-icon'), svg.getAttribute('width'), svg.getAttribute('aria-hidden')]).toEqual([
-      'cheat-sheet',
+      'help',
       '16',
       'true',
     ])
@@ -270,7 +272,7 @@ describe('the clock, mug and cheat sheet draw A3 icons', () => {
       expect([cls, button.classList.contains(cls)]).toEqual([cls, true])
     }
     expect(button.getAttribute('aria-pressed')).toBe('false')
-    // Open: the brighter active colour while the sheet is up.
+    // Open: the brighter active colour while the explorer is up.
     fireEvent.click(button)
     expect(button.getAttribute('aria-pressed')).toBe('true')
     for (const cls of TOP_BAR_ICON_ACTIVE_CLASS.split(' ')) expect([cls, button.classList.contains(cls)]).toEqual([cls, true])

@@ -30,7 +30,7 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ label: h.l
 vi.mock('@/components/Timer/TimerButton', () => ({ default: () => <span data-stub="timer" /> }))
 vi.mock('@/components/Timer/UsageButton', () => ({ default: () => <span data-stub="usage" /> }))
 vi.mock('@/components/Timer/KeepAwakeButton', () => ({ default: () => <span data-stub="keep-awake" /> }))
-vi.mock('@/components/CheatSheet/K2NounsCheatSheet', () => ({ default: () => <span data-stub="cheat-sheet" /> }))
+vi.mock('@/components/Help/HelpButton', () => ({ default: () => <span data-stub="help" /> }))
 vi.mock('@/components/Presence/PresenceRoster', () => ({ default: () => <span data-stub="presence" /> }))
 vi.mock('@/components/Presence/ModeToggle', () => ({ default: () => <span data-stub="mode" /> }))
 vi.mock('@/lib/daemon-cli', () => ({

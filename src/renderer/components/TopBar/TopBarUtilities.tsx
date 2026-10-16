@@ -2,7 +2,7 @@ import { Children, type ReactNode } from 'react'
 import TimerButton from '@/components/Timer/TimerButton'
 import UsageButton from '@/components/Timer/UsageButton'
 import KeepAwakeButton from '@/components/Timer/KeepAwakeButton'
-import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
+import HelpButton from '@/components/Help/HelpButton'
 import PresenceRoster from '@/components/Presence/PresenceRoster'
 import ModeToggle from '@/components/Presence/ModeToggle'
 import { zenAvailable } from '@/lib/zen/zen-platform'
@@ -18,7 +18,7 @@ export function hasTopBarPageToggles(children: ReactNode): boolean {
 
 /**
  * Right-cluster body shared with TopBar: presence, usage, pipe, timer,
- * keep awake, cheat sheet, pipe, mode, then a pipe only when that page has
+ * keep awake, Help, pipe, mode, then a pipe only when that page has
  * its own toggles, then (where Zen exists) a pipe and the Zen toggle as the
  * LAST item: right of the drawer toggles on Agents and Home
  * (prd-zen-gardens-v1 G5, G63). The Admin profile button sits right of
@@ -48,7 +48,7 @@ export default function TopBarUtilities({
       <TopBarPipe />
       <TimerButton />
       <KeepAwakeButton />
-      <K2NounsCheatSheet />
+      <HelpButton />
       <TopBarPipe />
       <ModeToggle />
       {pageToggles ? <TopBarPipe /> : null}

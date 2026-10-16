@@ -4,9 +4,9 @@
 // `currentColor`.
 //
 //   Home, Agents, Projects, Tickets, Server, Admin, Run, Drawer, Clock,
-//   Mug, Cheat sheet
+//   Mug, Help
 //     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `server`,
-//     `circle-user`, `play`, `panel-left`, `clock`, `coffee`, `file-text`),
+//     `circle-user`, `play`, `panel-left`, `clock`, `coffee`, `circle-help`),
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
 //   Settings
@@ -245,15 +245,13 @@ export function MugIcon({ fill, ...props }: K2IconProps & { fill: MugFill }): Re
   )
 }
 
-/** K2 cheat sheet: Lucide `file-text`, squared (folded corner kept). */
-export function CheatSheetIcon(props: K2IconProps = {}): React.JSX.Element {
+/** Help: Lucide `circle-help`, squared (the circle stays round). */
+export function HelpIcon(props: K2IconProps = {}): React.JSX.Element {
   return (
-    <svg {...iconProps('cheat-sheet', props)}>
-      <path d="M4 2h10l6 6v14H4Z" />
-      <path d="M14 2v6h6" />
-      <path d="M10 9H8" />
-      <path d="M16 13H8" />
-      <path d="M16 17H8" />
+    <svg {...iconProps('help', props)}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+      <path d="M12 17h.01" />
     </svg>
   )
 }

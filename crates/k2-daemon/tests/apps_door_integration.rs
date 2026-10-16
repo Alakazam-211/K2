@@ -267,3 +267,131 @@ async fn door_quotas_audit_alerts_and_suspend_on_a_live_link() {
     gateway::close("dooroth", None, true);
     k2_daemon::apps::alerts::set_sink(None);
 }
+
+fn published(ws: &Ws, name: &str) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let dir = ws.path.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    k2_core::published_services::insert(&conn, &ws.id, name, "node server.mjs", &dir.to_string_lossy(), 47_011, "local", "stopped", "cmd", "")
+        .expect("insert service")
+        .id
+}
+
+fn on_link(port: u16, method: &str, path: &str, auth: &str) -> (u16, String) {
+    let len = if method == "POST" { "Content-Length: 0\r\n" } else { "" };
+    send(&mut conn(port), &format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:8730\r\nAuthorization: Bearer {auth}\r\n{len}Connection: close\r\n\r\n"))
+}
+
+/// AR50: the link admits a guest session of its own App (with the guest's
+/// rooms and caps) and refuses sessions of other Apps, the box login,
+/// remote passes and other links' passes. S45 in the wall:
+/// `/v1/apps/<own id>/…` works on the link with the App key, another id is
+/// not on the link, and the routes keep working outside.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ar50_app_sessions_and_the_app_key_on_the_link() {
+    let env = setup(&[]);
+    k2_daemon::apps::alerts::set_sink(Some(Box::new(|_: &str, _: &str| {})));
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
+    let ws = seed_ws(&env, "ar50ws");
+    let svc = published(&ws, "ar50app");
+    let other_svc = published(&ws, "ar50sister");
+
+    // Guests: one of this App, one of the sister App, one box login.
+    k2_core::skin::add_principal_for_app("gina", None, &svc, None, "owner").unwrap();
+    let mine = k2_core::skin::create_app_session_token("gina", &svc).unwrap();
+    assert_eq!(mine.app, svc);
+    k2_core::skin::add_principal_for_app("sid", None, &other_svc, None, "owner").unwrap();
+    let theirs = k2_core::skin::create_app_session_token("sid", &other_svc).unwrap();
+    k2_core::skin::add_principal_with_email("boxer", None).unwrap();
+    let (_, host) = k2_core::skin::create_session_token("boxer").unwrap();
+    let remote = k2_core::skin::link::mint_remote_pass(&svc, "ar50app", &["thread:read".to_string()], &[ws.id.clone()], 3600).unwrap();
+
+    let pass = gateway::open(
+        LinkSpec { app_id: "ar50app".into(), service_id: svc.clone(), workspace_id: ws.id.clone(), port: 0, caps: vec!["thread:read".into()], rooms: vec![ws.id.clone()] },
+        None,
+    )
+    .unwrap();
+    let port = gateway::port_of("ar50app").unwrap();
+    let sister_pass = gateway::open(
+        LinkSpec { app_id: "ar50sister".into(), service_id: other_svc.clone(), workspace_id: ws.id.clone(), port: 0, caps: vec![], rooms: vec![ws.id.clone()] },
+        None,
+    )
+    .unwrap();
+
+    let (raw_mine, raw_theirs, raw_remote) = (mine.raw.clone(), theirs.raw.clone(), remote.raw.clone());
+    let (me_guest, agents_guest, refusals) = blocking(move || {
+        let me_guest = on_link(port, "GET", "/gw/me", &raw_mine);
+        let agents_guest = on_link(port, "GET", "/cli/skin/agents", &raw_mine);
+        let refusals: Vec<(&str, (u16, String))> = vec![
+            ("another App's guest session", on_link(port, "GET", "/gw/me", &raw_theirs)),
+            ("the box login", on_link(port, "GET", "/gw/me", &host)),
+            ("a remote App pass", on_link(port, "GET", "/gw/me", &raw_remote)),
+            ("another link's pass", on_link(port, "GET", "/gw/me", &sister_pass)),
+            ("another App's guest on an App route", on_link(port, "GET", "/cli/skin/agents", &raw_theirs)),
+        ];
+        (me_guest, agents_guest, refusals)
+    })
+    .await;
+    assert_eq!(me_guest.0, 200, "{}", me_guest.1);
+    let v: Value = serde_json::from_str(&me_guest.1).unwrap();
+    assert_eq!((v["as"].as_str(), v["appServiceId"].as_str()), (Some("guest"), Some(svc.as_str())), "{v}");
+    assert_eq!(v["rooms"], json!([]), "the guest's own rooms, not the App's: {v}");
+    assert_eq!(agents_guest.0, 200, "the route's handler accepts the guest session: {}", agents_guest.1);
+    for (what, (st, body)) in refusals {
+        assert_eq!((st, err(&body)["code"].as_str().map(str::to_string)), (403, Some("pass_wrong_link".to_string())), "{what}: {body}");
+    }
+    // Outside the link a guest session works as before; a link pass doesn't.
+    let r = get(d.port, "/cli/skin/agents", &mine.raw, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = get(d.port, "/cli/skin/agents", &pass, "").await;
+    assert_eq!(r.status, 401, "{}", r.body);
+
+    // The App key (minted by the owner in person).
+    let confirm = k2_daemon::vault::get().expect("vault").confirm.mint("app-key-mint", Some(&svc), "owner", "local-auth");
+    let r = post(d.port, "/cli/app/key/mint", OWNER, json!({"app": svc, "scopes": ["users"], "deliver": "show", "confirmToken": confirm})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let key = r.json()["key"].as_str().unwrap().to_string();
+    let (svc2, other2, key2, pass2) = (svc.clone(), other_svc.clone(), key.clone(), pass.clone());
+    let (own, other_id, with_pass, no_cred, bogus) = blocking(move || {
+        (
+            on_link(port, "GET", &format!("/v1/apps/{svc2}/whoami"), &key2),
+            on_link(port, "GET", &format!("/v1/apps/{other2}/whoami"), &key2),
+            on_link(port, "GET", &format!("/v1/apps/{svc2}/whoami"), &pass2),
+            send(&mut conn(port), &format!("GET /v1/apps/{svc2}/whoami HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")),
+            on_link(port, "GET", &format!("/v1/apps/{svc2}/whoami"), "k2sk_notakey000000000000000000000000000000000"),
+        )
+    })
+    .await;
+    assert_eq!(own.0, 200, "/v1/apps/<own id> on the link: {}", own.1);
+    assert_eq!((other_id.0, err(&other_id.1)["code"].as_str()), (404, Some("not_on_link")), "{}", other_id.1);
+    assert_eq!((with_pass.0, err(&with_pass.1)["code"].as_str()), (401, Some("wrong_credential")), "{}", with_pass.1);
+    assert_eq!((no_cred.0, err(&no_cred.1)["code"].as_str()), (401, Some("pass_required")), "{}", no_cred.1);
+    assert_eq!(bogus.0, 404, "the handler's uniform 404 for a key it doesn't know: {}", bogus.1);
+    // Outside the link it works as before.
+    let (k, p, s) = (key.clone(), d.port, svc.clone());
+    let outside = blocking(move || {
+        send(&mut conn(p), &format!("GET /v1/apps/{s}/whoami HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {k}\r\nConnection: close\r\n\r\n"))
+    })
+    .await;
+    assert_eq!(outside.0, 200, "{}", outside.1);
+
+    // The audit names who called (no App row here: read the file).
+    let mut actors: Vec<String> = Vec::new();
+    for _ in 0..50 {
+        k2_daemon::apps::audit::flush();
+        let c = k2_core::app_audit::open(&k2_core::app_audit::db_path()).unwrap();
+        let rows = k2_core::app_audit::list(&c, &k2_core::app_audit::Query { app_id: "ar50app", limit: 100, ..Default::default() }).unwrap();
+        actors = rows.iter().map(|r| r.call.actor.clone()).collect();
+        if actors.iter().any(|a| a == "app-key") && actors.iter().any(|a| a.starts_with("guest:")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(actors.iter().any(|a| a.starts_with("guest:")), "{actors:?}");
+    assert!(actors.iter().any(|a| a == "app-key"), "{actors:?}");
+    gateway::close("ar50app", None, true);
+    gateway::close("ar50sister", None, true);
+    k2_daemon::apps::alerts::set_sink(None);
+}

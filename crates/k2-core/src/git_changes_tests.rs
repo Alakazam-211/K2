@@ -96,6 +96,10 @@ fn normalize_rel_path_accepts_inside_and_refuses_escapes() {
     assert_eq!(normalize_rel_path(&wd, "newdir/").expect("dir row"), "newdir");
     let abs = wd.join("src/b.rs");
     assert_eq!(normalize_rel_path(&wd, s(&abs)).expect("abs inside"), "src/b.rs");
+    // git2 may report the workdir canonical (/private/var/…) while the
+    // client spells it as given (/var/…): still inside.
+    let canon_wd = fs::canonicalize(&wd).expect("canon");
+    assert_eq!(normalize_rel_path(&canon_wd, s(&abs)).expect("other spelling"), "src/b.rs");
     for bad in ["", "   ", "../x", "src/../../etc/passwd", "/etc/passwd", ".git/config", ".GIT/HEAD", "a\0b", "."] {
         let err = normalize_rel_path(&wd, bad).expect_err(bad);
         assert_eq!(err.code, codes::BAD_PATH, "{bad:?} → {err}");

@@ -216,5 +216,6 @@ ok "git_changed {workspacePath, repoRoot, rev} over /cli/sessions/events ($((aft
 total="$(grep -c '"git_changed"' "$WSLOG" || true)"
 echo "  (git_changed frames seen in total: $total)"
 kill "$WS_PID" 2>/dev/null || true
+wait "$WS_PID" 2>/dev/null || true
 
 echo "PASS: $pass checks"

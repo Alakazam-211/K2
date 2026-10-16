@@ -1067,7 +1067,9 @@ pub fn discard(
     // ── act ──
     let checkout = |repo: &Repository, rel: &str| -> Result<(), String> {
         let mut cb = git2::build::CheckoutBuilder::new();
-        cb.force().disable_pathspec_match(true).path(rel);
+        // Checkout paths are pathspecs: escape glob characters so a file
+        // named `*.rs` restores only itself.
+        cb.force().path(pathspec_literal(rel));
         repo.checkout_index(None, Some(&mut cb)).map_err(|e| format!("checkout {rel}: {e}"))
     };
     for (rel, action) in plan {
@@ -1195,12 +1197,40 @@ impl RepoDirs {
     }
 }
 
+/// A pathspec that matches `rel` literally (`\` before `* ? [ ] \`).
+fn pathspec_literal(rel: &str) -> String {
+    let mut out = String::with_capacity(rel.len());
+    for c in rel.chars() {
+        if matches!(c, '*' | '?' | '[' | ']' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The shared git dir: a linked worktree's `<gitdir>/commondir` file
+/// (relative to its git dir), else the git dir itself. (git2 0.19 has no
+/// `Repository::commondir`.)
+fn common_dir(repo: &Repository, gitdir: &Path) -> PathBuf {
+    if repo.is_worktree() {
+        if let Ok(s) = std::fs::read_to_string(gitdir.join("commondir")) {
+            let rel = s.trim();
+            if !rel.is_empty() {
+                let p = gitdir.join(rel);
+                return std::fs::canonicalize(&p).unwrap_or(p);
+            }
+        }
+    }
+    gitdir.to_path_buf()
+}
+
 /// The dirs of the non-bare repo holding `path`.
 pub fn repo_dirs(path: &str) -> Option<RepoDirs> {
     let repo = Repository::discover(path).ok()?;
     let workdir = repo.workdir()?.to_path_buf();
     let gitdir = repo.path().to_path_buf();
-    let commondir = repo.commondir().to_path_buf();
+    let commondir = common_dir(&repo, &gitdir);
     Some(RepoDirs {
         workdir_forms: forms(&workdir),
         gitdir_forms: forms(&gitdir),

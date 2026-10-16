@@ -121,10 +121,10 @@ export default function WorkspacePanel(): React.JSX.Element {
   return (
     <div className="h-full min-h-0 flex flex-col overflow-hidden">
       {/* ── Status ── The agent's name, handle, picture and color live on
-          the Agent drawer tab (0.46.0). Here: View Wiki, then the
-          completion bell at the top right. */}
+          the Agent drawer tab (0.46.0). Here: View Wiki on the left, the
+          completion bell on the right (Rosson 2026-10-16). */}
       <div className="flex-shrink-0 px-3 py-2 border-b border-[var(--color-border)]">
-        <div className="flex items-center justify-end gap-1.5" data-testid="workspace-panel-header">
+        <div className="flex items-center gap-1.5" data-testid="workspace-panel-header">
           {/* Workspace knowledge base / brain map (prd-workspace-kb). The Wiki
               page reads the window's server, so a room on another server
               does not offer it (MS3: B's path means nothing on A). */}
@@ -144,7 +144,9 @@ export default function WorkspacePanel(): React.JSX.Element {
               <span className="text-[11px] text-[var(--color-text-primary)]">View Wiki</span>
             </button>
           )}
-          <WorkspaceCompletionSoundBell project={activeProject} />
+          <div className="ml-auto flex items-center" data-testid="workspace-panel-bell">
+            <WorkspaceCompletionSoundBell project={activeProject} />
+          </div>
         </div>
 
         {/* Off mode inbox shortcut — navigation affordance when the

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 0.46.0 (Rosson 2026-10-16): the Workspace tab no longer shows the agent's
-// display name or handle (they live on the Agent tab). Its header keeps the
-// notifications bell at the top right with View Wiki immediately to its left.
+// display name or handle (they live on the Agent tab). Its header puts View
+// Wiki on the left and keeps the notifications bell on the right.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, screen } from '@testing-library/react'
 import { createStore } from 'zustand/vanilla'
@@ -69,20 +69,23 @@ describe('Workspace tab header', () => {
     expect(screen.queryByText('cortana-handle')).toBeNull()
   })
 
-  it('keeps the bell at the top right with View Wiki immediately to its left', () => {
+  it('puts View Wiki on the left and keeps the bell on the right', () => {
     render(true)
     const header = screen.getByTestId('workspace-panel-header')
     const kids = Array.from(header.children)
     expect(kids).toHaveLength(2)
     expect(kids[0].textContent).toBe('View Wiki')
-    expect(kids[1]).toBe(screen.getByTestId('completion-bell'))
-    expect(header.className).toContain('justify-end')
+    expect(kids[1]).toBe(screen.getByTestId('workspace-panel-bell'))
+    expect(kids[1].className).toContain('ml-auto')
+    expect(kids[1].contains(screen.getByTestId('completion-bell'))).toBe(true)
+    expect(header.className).not.toContain('justify-end')
   })
 
   it('a room on another server keeps the bell and offers no Wiki', () => {
     render(false)
     const header = screen.getByTestId('workspace-panel-header')
-    expect(Array.from(header.children)).toEqual([screen.getByTestId('completion-bell')])
+    expect(Array.from(header.children)).toEqual([screen.getByTestId('workspace-panel-bell')])
+    expect(screen.getByTestId('workspace-panel-bell').className).toContain('ml-auto')
     expect(screen.queryByText('View Wiki')).toBeNull()
   })
 })

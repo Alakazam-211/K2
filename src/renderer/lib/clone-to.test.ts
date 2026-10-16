@@ -735,27 +735,50 @@ describe('cloneWorkspaceTo — vault carry', () => {
       secrets: { GMAIL_TOKEN: 'skip', OPENAI_KEY: 'copy' },
       confirm_token: 'k2vc_x',
     })
-describe('cloneWorkspaceTo — 0.46.0 Thread / secrets / confirm extras', () => {
-  it('passes threads, per-secret choices and the confirm tokens through to clone/bundle', async () => {
+  })
+})
+
+describe('cloneWorkspaceTo — 0.46.0 Thread extras and the dialog-made vault target', () => {
+  it('passes threads, clone_id and proposal_id through to clone/bundle (no secrets or tokens in extras)', async () => {
     const order: string[] = []
     const { deps, spies } = makeDeps(order)
-    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/ws', DEST, deps, {}, true, true, {
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/ws', DEST, deps, {}, false, true, false, {}, {
       threads: { sinceDays: 30 },
-      secrets: { STRIPE_KEY: 'copy', GMAIL_TOKEN: 'skip' },
-      confirm_token: 'carry-tok',
-      env_confirm_token: 'env-tok',
+      clone_id: 'clone-1',
       proposal_id: 'cp_1',
     })
     const bundleCall = spies.daemonCliPost.mock.calls.find((c) => c[0] === 'clone/bundle')
     expect(bundleCall?.[1]).toEqual({
       project_path: '/Users/rosson/ws',
-      carry_secrets: true,
+      carry_secrets: false,
       live_only: false,
       threads: { sinceDays: 30 },
-      secrets: { STRIPE_KEY: 'copy', GMAIL_TOKEN: 'skip' },
-      confirm_token: 'carry-tok',
-      env_confirm_token: 'env-tok',
+      clone_id: 'clone-1',
       proposal_id: 'cp_1',
+    })
+  })
+
+  it('uses the target the dialog confirmed for (no second recipient lookup) and the vault fields win', async () => {
+    const order: string[] = []
+    const { deps, spies } = makeDeps(order)
+    const target = { recipient: 'age1dialog', vault_id: 'vault-d', label: DEST.label }
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/ws', DEST, deps, {}, true, true, true, {
+      target,
+      cloneId: 'clone-2',
+      secrets: { STRIPE_KEY: 'copy' },
+      confirmToken: 'k2vc_final',
+    }, { threads: 'all', clone_id: 'clone-2' })
+    expect(spies.destVaultRecipient).not.toHaveBeenCalled()
+    const bundleCall = spies.daemonCliPost.mock.calls.find((c) => c[0] === 'clone/bundle')
+    expect(bundleCall?.[1]).toEqual({
+      project_path: '/Users/rosson/ws',
+      carry_secrets: true,
+      live_only: false,
+      threads: 'all',
+      vault_target: target,
+      clone_id: 'clone-2',
+      secrets: { STRIPE_KEY: 'copy' },
+      confirm_token: 'k2vc_final',
     })
   })
 
@@ -771,7 +794,7 @@ describe('cloneWorkspaceTo — 0.46.0 Thread / secrets / confirm extras', () => 
     })
     const onError = vi.fn()
     await expect(
-      cloneWorkspaceTo(primaryScope(), '/Users/rosson/ws', DEST, deps, { onError }, false, true, { threads: 'none' }),
+      cloneWorkspaceTo(primaryScope(), '/Users/rosson/ws', DEST, deps, { onError }, false, true, false, {}, { threads: 'none' }),
     ).rejects.toThrow(hint)
     expect(onError).toHaveBeenCalledWith(hint)
     expect(spies.pickHost).not.toHaveBeenCalled()

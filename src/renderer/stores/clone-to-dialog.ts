@@ -8,25 +8,46 @@ import type {
 import type { ConnectHost } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import {
-  anyCopy,
+  buildCarryAsk,
   buildCloneExtras,
   CloneConfirmCancelled,
   initialSecretChoices,
+  MEMBER_NO_COPY_LINE,
+  needsCarryConfirm,
   type AskPassword,
+  type CloneCarryAsk,
   type CloneExtras,
   type ClonePreview,
   type SecretChoice,
 } from '@/lib/clone-options'
+import type { CloneVaultOptions, CloneVaultOutcome, CloneVaultTarget, VaultRecipientLookup } from '@/lib/clone-vault'
 
-/** Source-side collaborators for the options phase (0.46.0): the preview
- *  and the two person confirms. Injected by `start` (start-clone-to.ts
- *  binds the source scope) so the store is testable with mocks. */
+/** Collaborators for the options phase (0.46.0), injected by `start`
+ *  (start-clone-to.ts binds the source scope and the destination) so the
+ *  store is testable with mocks. */
 export interface CloneOptionDeps {
-  fetchPreview: () => Promise<ClonePreview>
-  /** `clone-env` confirm for sending `.env` files as files (D4). */
-  envConfirm: (askPassword: AskPassword) => Promise<string>
-  /** Vault slice's plan-bound `clone-carry` confirm for Copy rows. */
-  carryConfirm: (secrets: Record<string, SecretChoice>, askPassword: AskPassword) => Promise<string>
+  /** The destination vault (push: the destination's `vault/recipient` over
+   *  its saved login; pull: this computer's). Never throws: an older or
+   *  closed vault answers a note and the clone goes on without secrets. */
+  lookupTarget: () => Promise<VaultRecipientLookup>
+  /** `clone/preview` on the SOURCE for this ask (slice A's plan inside). */
+  fetchPreview: (ask: CloneCarryAsk, sinceDays: number | null) => Promise<ClonePreview>
+  /** Slice A's `clone-carry` confirm for the FINAL ask (Copy rows and/or
+   *  `.env` files), on the source. */
+  carryConfirm: (ask: CloneCarryAsk, methods: string[], askPassword: AskPassword) => Promise<string>
+}
+
+/** What the run needs for the vault half (slice A's lib fields). */
+export interface CloneVaultRun {
+  carryVault: boolean
+  vaultOptions: CloneVaultOptions
+}
+
+/** A fresh clone id (the manifest's; the confirm is bound to it). */
+export function newCloneId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto
+  if (c?.randomUUID) return c.randomUUID()
+  return `clone-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`
 }
 
 /** The password field the dialog shows while a confirm waits on it. */
@@ -88,7 +109,7 @@ interface CloneToDialogState {
   /** Runner that starts the orchestration; set by `start`, invoked by
    *  `confirm` with the chosen toggle value. Held so the dialog's Clone
    *  button can kick off the run without re-plumbing deps through the UI. */
-  onConfirm: ((carrySecrets: boolean, includeAllHistory: boolean, extras?: CloneExtras) => void) | null
+  onConfirm: ((carrySecrets: boolean, includeAllHistory: boolean, extras?: CloneExtras, vault?: CloneVaultRun) => void) | null
   /** Names-only plan from `clone/preview` (null until loaded / on error). */
   preview: ClonePreview | null
   previewLoading: boolean
@@ -108,6 +129,14 @@ interface CloneToDialogState {
   /** Agent proposal being run, if any (passed through as proposal_id). */
   proposalId: string | null
   optionDeps: CloneOptionDeps | null
+  /** This clone's id (minted when the dialog opens). */
+  cloneId: string | null
+  /** The destination vault, or the note saying why secrets can't travel. */
+  vaultLookup: VaultRecipientLookup | null
+  /** "This is my own server/computer" (keeps "given by a person" marks). */
+  ownBoxMove: boolean
+  /** Names-only vault result for the done screen. */
+  vaultOutcome: CloneVaultOutcome | null
 
   /** Open the modal at the 'options' phase for a given source + host.
    *  `host: null` + `pull: true` is the "Clone to this computer" run. */
@@ -116,13 +145,15 @@ interface CloneToDialogState {
     projectName: string
     host: ConnectHost | null
     pull?: boolean
-    onConfirm: (carrySecrets: boolean, includeAllHistory: boolean, extras?: CloneExtras) => void
+    onConfirm: (carrySecrets: boolean, includeAllHistory: boolean, extras?: CloneExtras, vault?: CloneVaultRun) => void
     optionDeps?: CloneOptionDeps
     proposalId?: string | null
   }) => void
   setBringThread: (bring: boolean) => void
   setSinceDays: (days: number | null) => void
   setSecretChoice: (name: string, choice: SecretChoice) => void
+  setOwnBoxMove: (own: boolean) => void
+  setVaultOutcome: (outcome: CloneVaultOutcome) => void
   /** The dialog's password field answers the pending confirm (null = cancel). */
   answerPassword: (password: string | null) => void
   /** Toggle the "Include secrets" checkbox (options phase only). */
@@ -175,6 +206,15 @@ const RESET = {
   passwordPrompt: null,
   proposalId: null,
   optionDeps: null,
+  cloneId: null as string | null,
+  vaultLookup: null as VaultRecipientLookup | null,
+  ownBoxMove: false,
+  vaultOutcome: null as CloneVaultOutcome | null,
+}
+
+/** The destination vault, when the lookup found one. */
+export function targetOf(lookup: VaultRecipientLookup | null): CloneVaultTarget | null {
+  return lookup && 'target' in lookup ? lookup.target : null
 }
 
 // The resolver for the pending password prompt (module-level: functions
@@ -200,22 +240,34 @@ export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
       previewLoading: !!optionDeps,
     })
     if (!optionDeps) return
-    void optionDeps.fetchPreview().then(
-      (preview) => {
-        // A newer start (or close) replaced this run: drop the answer.
-        if (get().optionDeps !== optionDeps) return
-        set({ preview, previewLoading: false, secretChoices: initialSecretChoices(preview) })
-      },
-      (e: unknown) => {
-        if (get().optionDeps !== optionDeps) return
-        set({ previewLoading: false, previewError: e instanceof Error ? e.message : String(e) })
-      },
-    )
+    const cloneId = newCloneId()
+    set({ cloneId })
+    // A newer start (or close) replaced this run: drop the answers.
+    const stale = (): boolean => get().optionDeps !== optionDeps
+    void (async () => {
+      // The destination vault first: the plan's choices (and the confirm)
+      // are for that vault. A note means no secrets this time.
+      const vaultLookup = await optionDeps.lookupTarget()
+      if (stale()) return
+      set({ vaultLookup })
+      const target = targetOf(vaultLookup)
+      const preview = await optionDeps.fetchPreview(
+        { clone_id: cloneId, ...(target ? { vault_target: target } : {}) },
+        null,
+      )
+      if (stale()) return
+      set({ preview, previewLoading: false, secretChoices: target ? initialSecretChoices(preview) : {} })
+    })().catch((e: unknown) => {
+      if (stale()) return
+      set({ previewLoading: false, previewError: e instanceof Error ? e.message : String(e) })
+    })
   },
 
   setCarrySecrets: (carrySecrets) => set({ carrySecrets, optionsError: null }),
   setIncludeAllHistory: (includeAllHistory) => set({ includeAllHistory }),
   setBringThread: (bringThread) => set({ bringThread }),
+  setOwnBoxMove: (ownBoxMove) => set({ ownBoxMove }),
+  setVaultOutcome: (vaultOutcome) => set({ vaultOutcome }),
   setSinceDays: (sinceDays) => set({ sinceDays }),
   setSecretChoice: (name, choice) => {
     const { preview, secretChoices } = get()
@@ -234,28 +286,44 @@ export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
   confirm: async () => {
     const st = get()
     if (st.phase !== 'options' || st.confirming) return
+    const target = targetOf(st.vaultLookup)
+    const cloneId = st.cloneId ?? newCloneId()
     const extras = buildCloneExtras({
       bringThread: st.bringThread,
       sinceDays: st.sinceDays,
-      secretChoices: st.secretChoices,
+      cloneId,
       proposalId: st.proposalId,
     })
-    const ask: AskPassword = (method, label) =>
+    // Secrets travel only to a destination vault; without one every row
+    // stays behind (the Secrets block isn't shown).
+    const secretChoices = target ? st.secretChoices : {}
+    const ask = buildCarryAsk({
+      target,
+      cloneId,
+      secretChoices,
+      ownBoxMove: st.ownBoxMove,
+      sendEnvFiles: st.carrySecrets,
+    })
+    const askPassword: AskPassword = (method, label) =>
       new Promise<string | null>((resolve) => {
         pendingPassword = resolve
         set({ passwordPrompt: { method, label } })
       })
-    const needsEnv = st.carrySecrets
-    const needsCarry = anyCopy(st.secretChoices)
-    if (needsEnv || needsCarry) {
+    let confirmToken: string | undefined
+    if (needsCarryConfirm(secretChoices, st.carrySecrets)) {
       if (!st.optionDeps) {
         set({ optionsError: 'This clone needs a person confirm, and none is available here.' })
         return
       }
       set({ confirming: true, optionsError: null })
       try {
-        if (needsEnv) extras.env_confirm_token = await st.optionDeps.envConfirm(ask)
-        if (needsCarry) extras.confirm_token = await st.optionDeps.carryConfirm(st.secretChoices, ask)
+        // The plan for the FINAL choices: its confirm binding (methods,
+        // who may confirm) is what the token is minted for.
+        const plan = await st.optionDeps.fetchPreview(ask, st.sinceDays)
+        const binding = plan.secrets.confirm
+        if (!binding) throw new Error("The source didn't offer a confirm for this clone (is its vault open?).")
+        if (!binding.allowed) throw new Error(MEMBER_NO_COPY_LINE)
+        confirmToken = await st.optionDeps.carryConfirm(ask, binding.methods, askPassword)
       } catch (e) {
         set({
           confirming: false,
@@ -267,10 +335,25 @@ export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
       // Closed while the confirm ran: don't start.
       if (!get().isOpen) return
     }
+    // `.env` files with no destination vault: the token rides the extras
+    // (the vault fields only go with a target).
+    if (confirmToken && !target) extras.confirm_token = confirmToken
+    const vault: CloneVaultRun = {
+      carryVault: !!target,
+      vaultOptions: target
+        ? {
+            target,
+            cloneId,
+            secrets: secretChoices,
+            ...(confirmToken ? { confirmToken } : {}),
+            ...(st.ownBoxMove ? { ownBoxMove: true } : {}),
+          }
+        : {},
+    }
     // A pull opens on ITS first stage (packing on the server); the
     // orchestration's first onStage overwrites either way.
     set({ phase: 'running', confirming: false, stage: st.pull ? 'packing' : 'bundling' })
-    st.onConfirm?.(st.carrySecrets, st.includeAllHistory, extras)
+    st.onConfirm?.(st.carrySecrets, st.includeAllHistory, extras, vault)
   },
 
   setStage: (stage) => set({ stage }),

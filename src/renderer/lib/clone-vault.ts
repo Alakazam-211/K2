@@ -38,6 +38,9 @@ export interface CloneVaultOptions {
   confirmToken?: string
   /** "This is my own server/computer": keeps person-given marks. */
   ownBoxMove?: boolean
+  /** The destination vault the dialog already asked for (the confirm was
+   *  minted for it): skips the second recipient lookup. */
+  target?: CloneVaultTarget
 }
 
 /** The source's names-only report (`vault_carry`). */

@@ -5,7 +5,7 @@
 // Settings; from Settings it closes Settings first (same as every tab).
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 const h = vi.hoisted(() => {
   const settings = {
@@ -17,7 +17,14 @@ const h = vi.hoisted(() => {
       settings.settingsOpen = false
     }),
   }
-  return { settings }
+  const feedback = {
+    waitingCount: 0,
+    waitingStale: false,
+    waitingUnsupported: false,
+    refreshWaitingCount: async () => undefined,
+  }
+  const groups = { unreadGroupIds: new Set<string>() }
+  return { settings, feedback, groups }
 })
 
 function hookOf<T extends object>(state: T): ((sel: (s: T) => unknown) => unknown) & { getState: () => T } {
@@ -35,23 +42,25 @@ vi.mock('@/stores/settings', () => ({
   useSettingsStore: hookOf(h.settings),
 }))
 vi.mock('@/stores/feedback', () => ({
-  useFeedbackStore: hookOf({ waitingCount: 0, refreshWaitingCount: async () => undefined }),
+  useFeedbackStore: hookOf(h.feedback),
   initFeedbackEvents: vi.fn(),
 }))
 vi.mock('@/stores/project-groups', () => ({
-  useProjectGroupsStore: hookOf({ unreadGroupIds: new Set<string>() }),
+  useProjectGroupsStore: hookOf(h.groups),
   initProjectGroupEvents: vi.fn(),
 }))
 vi.mock('@/stores/projects', () => ({
   useProjectsStore: hookOf({ projects: [] as { id: string }[] }),
 }))
 
-import PageTabs from './PageTabs'
+import PageTabs, { PAGE_TAB_ICON_PX, PAGE_TAB_ITEMS } from './PageTabs'
 import { usePageViewStore, isRoomPage, type AppPage } from '@/stores/page-view'
 
 afterEach(() => {
   cleanup()
   h.settings.settingsOpen = false
+  h.feedback.waitingCount = 0
+  h.groups.unreadGroupIds = new Set<string>()
   usePageViewStore.getState().setPage('agents')
 })
 
@@ -70,7 +79,70 @@ describe('PageTabs — Home tab', () => {
       'Projects',
       'Tickets',
     ])
-    expect(list.slice(1).map((b) => b.textContent)).toEqual(['My Home', 'Agents', 'Projects', 'Tickets'])
+    expect(list.map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Settings',
+      'My Home',
+      'Agents',
+      'Projects',
+      'Tickets',
+    ])
+  })
+
+  it('the page tabs are icons only: one 14px svg each, no words, word in title + aria-label', () => {
+    const { container } = render(<PageTabs />)
+    const pages = tabs(container).slice(1)
+    expect(pages).toHaveLength(4)
+    for (const b of pages) {
+      expect(b.textContent).toBe('')
+      const svgs = b.querySelectorAll('svg')
+      expect(svgs).toHaveLength(1)
+      expect(svgs[0].getAttribute('width')).toBe(String(PAGE_TAB_ICON_PX))
+      expect(svgs[0].getAttribute('aria-hidden')).toBe('true')
+      const name = b.getAttribute('aria-label')
+      expect(name).toBeTruthy()
+      expect(b.getAttribute('title')?.startsWith(name as string)).toBe(true)
+    }
+    expect(PAGE_TAB_ICON_PX).toBe(14)
+    expect(screen.getByRole('button', { name: 'Tickets' })).toBe(pages[3])
+  })
+
+  it('each page draws its Garden icon (home, agent, dashboard, ticket)', () => {
+    const { container } = render(<PageTabs />)
+    const pages = tabs(container).slice(1)
+    PAGE_TAB_ITEMS.forEach(({ Icon }, i) => {
+      const { container: one } = render(<Icon size={PAGE_TAB_ICON_PX} />)
+      expect(pages[i].innerHTML).toBe(one.innerHTML)
+    })
+    expect(PAGE_TAB_ITEMS.map((x) => x.page)).toEqual(['home', 'agents', 'projects', 'feedback'])
+  })
+
+  it('the active tab is marked (aria-pressed + accent underline) and only that one', () => {
+    usePageViewStore.getState().setPage('projects')
+    const { container } = render(<PageTabs />)
+    const list = tabs(container)
+    expect(list.map((b) => b.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'false', 'true', 'false'])
+    expect(list[3].className).toContain('shadow-[inset_0_-2px_0_var(--color-accent)]')
+    expect(list[2].className).not.toContain('shadow-[inset_0_-2px_0_var(--color-accent)]')
+  })
+
+  it('badges stay on the icon tabs: Projects unread, Tickets waiting (status colour)', () => {
+    h.feedback.waitingCount = 3
+    h.groups.unreadGroupIds = new Set(['g1', 'g2'])
+    const { container } = render(<PageTabs />)
+    const list = tabs(container)
+    const projectsBadge = list[3].querySelector('[data-testid="page-tab-badge"]')
+    const ticketsBadge = list[4].querySelector('[data-testid="page-tab-badge"]')
+    expect(projectsBadge?.textContent).toBe('2')
+    expect(ticketsBadge?.textContent).toBe('3')
+    expect(ticketsBadge?.className).toContain('bg-[var(--color-status-working)]')
+    expect(list[1].querySelector('[data-testid="page-tab-badge"]')).toBeNull()
+    expect(list[2].querySelector('[data-testid="page-tab-badge"]')).toBeNull()
+  })
+
+  it('with Settings open only the cog is active', () => {
+    h.settings.settingsOpen = true
+    const { container } = render(<PageTabs />)
+    expect(tabs(container).map((b) => b.getAttribute('aria-pressed'))).toEqual(['true', 'false', 'false', 'false', 'false'])
   })
 
   it('selecting Home sets the page and does not open Settings', () => {

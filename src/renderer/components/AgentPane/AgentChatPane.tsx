@@ -44,6 +44,7 @@ import {
 } from '@/lib/chat-spawn-breaker'
 import type { ServerScope } from '@/kessel/server-scope'
 import { SessionTokenPicker } from '@/components/Settings/shared/LlmLoginPicker'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 interface AgentChatPaneProps {
   agentName: string
@@ -251,6 +252,9 @@ function ChatHeader({
   ])
   const [historySessions, setHistorySessions] = useState<HistorySession[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
+  // The history dropdown can hang over a Browser pane beside this one.
+  const historyMenuRef = useRef<HTMLDivElement>(null)
+  useBrowserOverlay({ active: historyOpen, ref: historyMenuRef, kind: 'menu' })
   const [historyEpoch, setHistoryEpoch] = useState(0)
 
   useEffect(() => onChatHistoryChanged(room.scope, () => {
@@ -364,7 +368,7 @@ function ChatHeader({
         </svg>
       </button>
       {historyOpen && (
-        <div className="absolute right-12 top-full mt-1 z-20 w-[36ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl">
+        <div ref={historyMenuRef} className="absolute right-12 top-full mt-1 z-20 w-[36ch] bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl">
           <button
             type="button"
             data-testid="pinned-continue-new-chat"

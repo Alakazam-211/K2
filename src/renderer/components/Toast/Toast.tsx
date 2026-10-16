@@ -5,6 +5,7 @@ import { useToastStore } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
 import { usePageViewStore, type AppPage } from '@/stores/page-view'
 import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 import type { Toast as ToastData } from '@/stores/toast'
 
 const ACCENT_COLORS: Record<ToastData['type'], string> = {
@@ -212,6 +213,16 @@ export default function Toast(): React.JSX.Element | null {
   const page = usePageViewStore((s) => s.page)
   const [anchor, setAnchor] = useState<ToastAnchor | null>(null)
   const installNotice = installing ? installingCliLabel(installing) : null
+  const stackRef = useRef<HTMLDivElement>(null)
+  const stackLive = settingsOpen ? 'settings' : anchor
+  // The stack docks in the visible pane; over a Browser page it claims its
+  // own box so the page freezes under it instead of hiding the toast.
+  useBrowserOverlay({
+    active: (toasts.length > 0 || installNotice !== null) && stackLive != null,
+    ref: stackRef,
+    kind: 'toast',
+    watch: stackLive,
+  })
 
   useLayoutEffect(() => {
     if (toasts.length === 0 && !installNotice) return
@@ -239,6 +250,7 @@ export default function Toast(): React.JSX.Element | null {
 
   const stack = (
     <div
+      ref={stackRef}
       data-toast-stack=""
       className={
         live === 'settings'

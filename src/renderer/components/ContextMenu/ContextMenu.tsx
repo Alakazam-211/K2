@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useLayoutEffect, useState } from 'react'
 import { KeyCombo } from '@/components/KeySymbol'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 import {
   clientToCssPx,
   isSelectableItem,
@@ -209,6 +210,8 @@ function Submenu({
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [focused, setFocused] = useState(-1)
+  // Its own box: a submenu that swings over the Browser page freezes it.
+  useBrowserOverlay({ active: true, ref, kind: 'menu' })
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
@@ -262,6 +265,10 @@ export default function ContextMenu(): React.JSX.Element | null {
   const [openSub, setOpenSub] = useState<number | null>(null)
 
   const menuRef = useRef<HTMLDivElement>(null)
+
+  // Only the menu's own box covers the Browser page (the backdrop is
+  // invisible), so a menu on the far side leaves the page live.
+  useBrowserOverlay({ active: isOpen, ref: menuRef, kind: 'menu' })
 
   useEffect(() => {
     setOpenSub(null)

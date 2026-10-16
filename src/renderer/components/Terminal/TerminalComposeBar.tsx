@@ -73,6 +73,7 @@ import { useSessionViewChrome } from '@/components/SessionView/sessionViewChrome
 import { postThreadCompose } from '@/components/SessionView/overlayThread'
 import { loadHostImageObjectUrl, revokeObjectUrl } from '@/lib/load-host-binary'
 import { scopedKey } from '@/kessel/server-scope'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 /** Shown when Thread Send runs before this cell has its own address. The draft stays. */
 const THREAD_ADDR_NOT_READY = "This session isn't ready yet. Your draft is still here."
@@ -517,6 +518,13 @@ export function TerminalComposeBar({
       ? filterComposeSlashCommands(slashTypeaheadQuery)
       : COMPOSE_SLASH_COMMANDS
   const slashMatchKey = slashMatches.map((item) => item.command).join(',')
+  // The slash menu opens upward over whatever pane sits above the bar.
+  useBrowserOverlay({
+    active: slashMenuOpen && slashMenuPos !== null && slashMatches.length > 0,
+    ref: slashMenuRef,
+    kind: 'menu',
+    watch: slashMenuPos,
+  })
 
   const placeSlashMenu = useCallback(() => {
     const rect = slashBtnRef.current?.getBoundingClientRect()
@@ -1012,6 +1020,8 @@ function ComposeImageThumb({
   const [url, setUrl] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
   const urlRef = useRef<string | null>(null)
+  const lightboxRef = useRef<HTMLDivElement>(null)
+  useBrowserOverlay({ active: open && url !== null, ref: lightboxRef, fullscreen: true, kind: 'modal' })
 
   useEffect(() => {
     let cancelled = false
@@ -1085,6 +1095,7 @@ function ComposeImageThumb({
     </div>
     {open && url && createPortal(
       <div
+        ref={lightboxRef}
         className="fixed inset-0 z-[99999] flex items-center justify-center bg-[var(--color-scrim)] p-6"
         role="dialog"
         aria-modal="true"

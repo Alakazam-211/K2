@@ -16,6 +16,7 @@ import {
   useTopBarScope,
 } from '@/components/TopBar/top-bar-scope'
 import { TOP_BAR_ICON_STROKE_WIDTH } from './topBarIcon'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 /** While Keep awake is on, re-read the daemon's truth this often (agents
  *  start and stop, the power source changes). Off: no polling. */
@@ -134,6 +135,8 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
   const rimClipId = `keep-awake-rim-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   const close = useCallback(() => setOpen(false), [])
   useCloseOnOutside(open, rootRef, close)
+  const popoverRef = useRef<HTMLDivElement>(null)
+  useBrowserOverlay({ active: open, ref: popoverRef, kind: 'popover' })
 
   // Only the shown server is read and polled (Z17). An offline room, one
   // that needs a sign-in, or a server without power routes (Z35) is never
@@ -195,6 +198,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
         </button>
         {open && (
           <div
+            ref={popoverRef}
             role="dialog"
             aria-label="Keep awake"
             data-testid="keep-awake-menu"
@@ -294,6 +298,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
       </button>
       {open && (
         <div
+          ref={popoverRef}
           role="dialog"
           aria-label="Keep awake"
           data-testid="keep-awake-menu"

@@ -8,7 +8,7 @@ import { usePageViewStore, isRoomPage, type AppPage } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
 import { useRoom } from '@/components/Room/RoomContext'
 import { useStore } from 'zustand'
-import { useContextMenuStore } from '@/stores/context-menu'
+import { useBrowserCovered } from '@/lib/browser-overlay'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import {
   LOOPBACK_ON_REMOTE_ERROR,
@@ -37,9 +37,12 @@ export { normalizeUrl }
  *    active in its pane group) plus Settings / full-page overlays drive
  *    `browser_set_visible` — native child webviews float OVER the DOM, so
  *    hiding the workspace with `display:none` is not enough (Settings
- *    was showing Google sign-in still painted on Companion). Non-standalone
- *    panes also hide when this window loses OS focus so a blurred
- *    window's children do not paint over the focused window.
+ *    was showing Google sign-in still painted on Companion). Window focus
+ *    is not a term.
+ *  - overlays: DOM menus, dialogs, toasts and drags claim their box in the
+ *    overlay arbiter (`lib/browser-overlay.ts`). Only a claim that
+ *    intersects this dock covers (hides) the page; a menu on the far side
+ *    of the window leaves it live.
  *  - lifecycle: the webview is created lazily on FIRST visibility (so a
  *    restored background layout doesn't load pages invisibly) and
  *    `browser_close`d on unmount (item/tab close).
@@ -168,10 +171,12 @@ export function BrowserPane({
   const settingsOpen = useSettingsStore((s) => s.settingsOpen)
   const appPage = usePageViewStore((s) => s.page)
   const windowFocused = useWindowFocusStore((s) => s.isFocused)
-  // The + menu and other context menus are DOM. The native page paints
-  // over them, so hide the page while a menu is open. OS focus does not.
-  const menuOpen = useContextMenuStore((s) => s.isOpen)
   const parked = useRoomParked()
+  // Content area the native view docks onto (below the chrome bar).
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  // A DOM overlay (menu, dialog, toast, drag) whose box intersects the
+  // dock. The native page paints over DOM, so it gives way. OS focus does not.
+  const covered = useBrowserCovered(contentRef)
   const visible = browserPaneVisible({
     standalone,
     tabVisible,
@@ -179,14 +184,11 @@ export function BrowserPane({
     page: appPage,
     windowFocused,
     parked,
-  }) && !menuOpen
+  }) && !covered
   const setBrowserItemState = useStore(room.tabs, (s) => s.setBrowserItemState)
 
   // Parent window for all browser_* invokes (main / window-{uuid}).
   const parentWindow = useMemo(() => currentParentWindow(), [])
-
-  // Content area the native view docks onto (below the chrome bar).
-  const contentRef = useRef<HTMLDivElement | null>(null)
 
   const [created, setCreated] = useState(false)
   const createdRef = useRef(false)

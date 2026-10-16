@@ -14,6 +14,7 @@ import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { agentNameFromId } from '@/lib/terminal-id'
 import { Surface } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
+import { BrowserOverlayClaim } from '@/lib/browser-overlay'
 
 interface RunningAgentInfo {
   terminalId: string
@@ -343,6 +344,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
       }}
       onKeyDown={handleKeyDown}
     >
+      <BrowserOverlayClaim />
       <Surface
         role2="surface"
         className="w-[600px] max-h-[60vh] flex flex-col overflow-hidden"

@@ -5,6 +5,7 @@ import { usePresetsStore } from '@/stores/presets'
 import { showContextMenu } from '@/lib/context-menu'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { useRoom } from '@/components/Room/RoomContext'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 interface PresetsBarProps {
   cwd: string
@@ -49,6 +50,8 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
   const presetsBarRef = useRef<HTMLDivElement>(null)
   const addButtonRef = useRef<HTMLButtonElement>(null)
   const [formBox, setFormBox] = useState<{ top: number; left: number; zIndex: number } | null>(null)
+  const formRef = useRef<HTMLDivElement>(null)
+  useBrowserOverlay({ active: form.visible && formBox !== null, ref: formRef, kind: 'popover', watch: formBox })
 
   const handleReorderMouseDown = useCallback((e: React.MouseEvent, idx: number) => {
     if (e.button !== 0) return
@@ -356,6 +359,7 @@ export function PresetsBar({ cwd }: PresetsBarProps): React.JSX.Element | null {
       {/* Inline form — portaled so the bar's overflow-y clip cannot hide it. */}
       {form.visible && formBox && createPortal(
         <div
+          ref={formRef}
           data-testid="presets-bar-form"
           onKeyDown={handleFormKeyDown}
           className="bg-[var(--color-bg)]"

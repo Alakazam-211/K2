@@ -11,6 +11,7 @@ import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
 import { applyColumnResize } from './columnResize'
 import { readColumnFlexes, writeColumnFlexes } from '@/lib/column-sizes'
 import { scopedKey } from '@/kessel/server-scope'
+import { beginBrowserMotion } from '@/lib/browser-overlay'
 
 interface TerminalAreaProps {
   cwd: string
@@ -41,6 +42,9 @@ function notifyDragListeners(): void {
 export function startTabDrag(data: { room: Room; groupIndex: number; tabId: string; tabTitle: string; mouseX: number; mouseY: number }): void {
   globalDrag = data
   notifyDragListeners()
+  // The ghost and the drop columns are DOM: freeze any Browser page so it
+  // neither paints over them nor swallows the mouse.
+  const endBrowserFreeze = beginBrowserMotion('drag')
 
   const handleMouseMove = (e: MouseEvent): void => {
     if (!globalDrag) return
@@ -67,6 +71,7 @@ export function startTabDrag(data: { room: Room; groupIndex: number; tabId: stri
 
     globalDrag = null
     notifyDragListeners()
+    endBrowserFreeze()
     document.removeEventListener('mousemove', handleMouseMove)
     document.removeEventListener('mouseup', handleMouseUp)
     document.body.style.cursor = ''

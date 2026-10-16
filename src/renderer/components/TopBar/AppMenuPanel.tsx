@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { useZenShown } from '@/lib/zen/zen-view'
 import { zenAvailable } from '@/lib/zen/zen-platform'
 import {
@@ -5,6 +6,7 @@ import {
   handleAppMenuAction,
   type AppMenuActionId,
 } from '@/lib/app-menu-actions'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 type MenuEntry =
   | { kind: 'item'; id: AppMenuActionId; label: string }
@@ -74,6 +76,8 @@ void APP_MENU_ACTION_IDS.every((id) => _menuIds.has(id))
 export default function AppMenuPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
   const zenShown = useZenShown()
   const showZen = zenAvailable()
+  const panelRef = useRef<HTMLDivElement>(null)
+  useBrowserOverlay({ active: true, ref: panelRef, kind: 'menu' })
   const run = (id: AppMenuActionId): void => {
     onClose()
     void handleAppMenuAction(id).catch(() => {})
@@ -81,6 +85,7 @@ export default function AppMenuPanel({ onClose }: { onClose: () => void }): Reac
 
   return (
     <div
+      ref={panelRef}
       role="menu"
       className="absolute left-0 top-full z-[100] mt-0.5 min-w-[200px] border border-[var(--color-border)] bg-[var(--color-bg)] py-1 shadow-lg"
     >

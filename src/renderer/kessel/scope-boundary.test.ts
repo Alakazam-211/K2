@@ -138,7 +138,6 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/ProjectsSection.tsx',
   'components/Settings/sections/RoleSkillEditor.tsx',
   'components/Settings/sections/SkinAccessSection.tsx',
-  'components/Settings/sections/TokenUsageSection.tsx',
   'components/Settings/sections/TunnelUrlsPanel.tsx',
   'components/Settings/sections/UserTemplatesSection.tsx',
   'components/Settings/sections/WakeSchedulerSection.tsx',

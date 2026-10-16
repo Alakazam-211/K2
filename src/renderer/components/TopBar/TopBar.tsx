@@ -24,6 +24,9 @@ interface TopBarProps {
   rightPanelVisible?: boolean
   onToggleLeftPanel?: () => void
   onToggleRightPanel?: () => void
+  /** False on pages where the drawers open from edge handles instead
+   *  (drawer-handles experiment, `Layout/drawer-handles.ts`). */
+  showDrawerToggles?: boolean
   onRunCommand?: (command: string) => void
 }
 
@@ -35,6 +38,7 @@ export default function TopBar({
   rightPanelVisible = false,
   onToggleLeftPanel,
   onToggleRightPanel,
+  showDrawerToggles = true,
   onRunCommand
 }: TopBarProps): React.JSX.Element {
   const [hasRun, setHasRun] = useState(false)
@@ -101,7 +105,7 @@ export default function TopBar({
           <>
             <span className="text-[var(--color-text-secondary)]">{projectName}</span>
             {workspaceName && (
-              <>
+            <>
                 <span className="text-[var(--color-text-muted)]">/</span>
                 <span className="text-[var(--color-text-primary)] font-medium">
                   {workspaceName}
@@ -144,75 +148,79 @@ export default function TopBar({
             ) : null
           }
         >
-          {/* Left panel toggle (opens panel to the left of terminal) */}
-          <button
-            onClick={onToggleLeftPanel}
-            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
-            style={{
-              // @ts-expect-error -- Electron-specific CSS property
-              WebkitAppRegion: 'no-drag'
-            }}
-            title="Toggle left panel"
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 14 14"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.3"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              {leftPanelVisible ? (
-                <>
-                  <rect x="1" y="2" width="12" height="10" rx="0" />
-                  <line x1="5.5" y1="2" x2="5.5" y2="12" />
-                  <line x1="3" y1="5" x2="3" y2="9" strokeWidth="1.5" />
-                </>
-              ) : (
-                <>
-                  <rect x="1" y="2" width="12" height="10" rx="0" />
-                  <line x1="5.5" y1="2" x2="5.5" y2="12" strokeDasharray="1.5 1.5" />
-                </>
-              )}
-            </svg>
-          </button>
+          {showDrawerToggles ? (
+            <>
+              {/* Left panel toggle (opens panel to the left of terminal) */}
+              <button
+                onClick={onToggleLeftPanel}
+                className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
+                style={{
+                  // @ts-expect-error -- Electron-specific CSS property
+                  WebkitAppRegion: 'no-drag'
+                }}
+                title="Toggle left panel"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  {leftPanelVisible ? (
+                    <>
+                      <rect x="1" y="2" width="12" height="10" rx="0" />
+                      <line x1="5.5" y1="2" x2="5.5" y2="12" />
+                      <line x1="3" y1="5" x2="3" y2="9" strokeWidth="1.5" />
+                    </>
+                  ) : (
+                    <>
+                      <rect x="1" y="2" width="12" height="10" rx="0" />
+                      <line x1="5.5" y1="2" x2="5.5" y2="12" strokeDasharray="1.5 1.5" />
+                    </>
+                  )}
+                </svg>
+              </button>
 
-          {/* Right panel toggle (opens panel to the right of terminal) */}
-          <button
-            onClick={onToggleRightPanel}
-            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
-            style={{
-              // @ts-expect-error -- Electron-specific CSS property
-              WebkitAppRegion: 'no-drag'
-            }}
-            title="Toggle right panel"
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 14 14"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.3"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              {rightPanelVisible ? (
-                <>
-                  <rect x="1" y="2" width="12" height="10" rx="0" />
-                  <line x1="8.5" y1="2" x2="8.5" y2="12" />
-                  <line x1="11" y1="5" x2="11" y2="9" strokeWidth="1.5" />
-                </>
-              ) : (
-                <>
-                  <rect x="1" y="2" width="12" height="10" rx="0" />
-                  <line x1="8.5" y1="2" x2="8.5" y2="12" strokeDasharray="1.5 1.5" />
-                </>
-              )}
-            </svg>
-          </button>
+              {/* Right panel toggle (opens panel to the right of terminal) */}
+              <button
+                onClick={onToggleRightPanel}
+                className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors no-drag"
+                style={{
+                  // @ts-expect-error -- Electron-specific CSS property
+                  WebkitAppRegion: 'no-drag'
+                }}
+                title="Toggle right panel"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 14 14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  {rightPanelVisible ? (
+                    <>
+                      <rect x="1" y="2" width="12" height="10" rx="0" />
+                      <line x1="8.5" y1="2" x2="8.5" y2="12" />
+                      <line x1="11" y1="5" x2="11" y2="9" strokeWidth="1.5" />
+                    </>
+                  ) : (
+                    <>
+                      <rect x="1" y="2" width="12" height="10" rx="0" />
+                      <line x1="8.5" y1="2" x2="8.5" y2="12" strokeDasharray="1.5 1.5" />
+                    </>
+                  )}
+                </svg>
+              </button>
+            </>
+          ) : null}
         </TopBarUtilities>
       </DesktopChromeRight>
     </Surface>

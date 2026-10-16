@@ -44,6 +44,7 @@ import {
   togglePinnedResource,
 } from './member-pins'
 import { primaryScope } from '@/kessel/server-scope'
+import NavPageRow from '@/components/Sidebar/NavPageRow'
 
 export const PROJECT_NAV_WIDTH = 280
 /** Collapsed-rail width (IconRail's RAIL_WIDTH). */
@@ -1034,6 +1035,8 @@ export function ProjectNavRail({
       className="flex flex-col items-center h-full bg-[var(--color-bg-surface)] border-r border-[var(--color-border)] py-2 flex-shrink-0"
       style={{ width: PROJECT_NAV_RAIL_WIDTH }}
     >
+      {/* 0.46.0 experiment: page icons along the top of the nav. */}
+      <NavPageRow orientation="column" />
       {pinned.length > 0 && (
         <div className="flex flex-col items-center gap-0.5 pb-1.5 w-full">
           {pinned.map((group) => (
@@ -1263,6 +1266,8 @@ export default function ProjectNav({
       className="relative flex flex-col h-full flex-shrink-0 border-r border-[var(--color-border)] bg-[var(--color-bg-surface)]"
       style={{ width: PROJECT_NAV_WIDTH }}
     >
+      {/* 0.46.0 experiment: page icons along the top of the nav. */}
+      <NavPageRow />
       {/* Pinned projects — canonical section, always on top (Q4). */}
       {pinned.length > 0 && (
         <div className="border-b border-[var(--color-border)]">

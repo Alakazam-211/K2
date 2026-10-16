@@ -4,9 +4,13 @@
 // Feedback tab (same count, same show/hide semantics) and its event
 // wiring (initFeedbackEvents + the badge re-count on projects changes)
 // moves here unchanged. The Projects tab carries the unread-groups badge
-// (§4.4). The settings cog is a fourth tab with the same selected
-// underline. Rendered in the workspace TopBar, overlay pages, AND
+// (§4.4). Rendered in the workspace TopBar, overlay pages, AND
 // Settings so the switcher stays available while Settings is open.
+//
+// 0.46.0 experiment (Rosson 2026-10-16): the ⚙ tab moved out of the top
+// bar into the nav bar's page row (`components/Sidebar/NavPageRow.tsx`),
+// which reuses `PageTab`, `SettingsCogIcon` and `openSettingsTab` from
+// here. The top bar now reads Home | Agents | Projects | Tickets.
 
 import { useEffect, type ReactNode } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -15,7 +19,6 @@ import { useFeedbackStore, initFeedbackEvents } from '@/stores/feedback'
 import { useProjectGroupsStore, initProjectGroupEvents } from '@/stores/project-groups'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
-import { withChord } from '@/lib/shortcut-label'
 
 /** The Tickets tab's badge from the feedback store (prd-tickets-badge-
  *  orphans TB8/TB15/TB17 + Appa A3): a fresh count; the last count dimmed
@@ -59,9 +62,15 @@ export function PageTab({
   badgeStale = false,
   badgeTitle,
   title,
+  ariaLabel,
+  current = false,
   children,
 }: {
   selected: boolean
+  /** Accessible name when the tab shows only an icon. */
+  ariaLabel?: string
+  /** Mark the selected tab `aria-current="page"` (the nav bar's row). */
+  current?: boolean
   onSelect: () => void
   /** A count (0 hides) or `?` when the server cannot give one. */
   badge?: number | '?'
@@ -87,6 +96,8 @@ export function PageTab({
         WebkitAppRegion: 'no-drag'
       }}
       title={title}
+      aria-label={ariaLabel}
+      aria-current={current && selected ? 'page' : undefined}
     >
       {children}
       {text !== null && (
@@ -103,9 +114,34 @@ export function PageTab({
   )
 }
 
+/** The settings cog (13px, the top bar's ⚙ tab; Gardens draw the same). */
+export function SettingsCogIcon({ size = 13 }: { size?: number } = {}): React.JSX.Element {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+    </svg>
+  )
+}
+
+/** What the ⚙ tab does on click: open Settings (no-op when already open). */
+export function openSettingsTab(): void {
+  if (!useSettingsStore.getState().settingsOpen) {
+    useSettingsStore.getState().openSettings()
+  }
+}
+
+/** What a page tab does on click: close Settings if it is open, then show
+ *  the page. Shared by the top bar and the nav bar's page row. */
+export function selectPage(p: AppPage): void {
+  if (useSettingsStore.getState().settingsOpen) {
+    useSettingsStore.getState().closeSettings()
+  }
+  usePageViewStore.getState().setPage(p)
+}
+
 export default function PageTabs(): React.JSX.Element {
   const page = usePageViewStore((s) => s.page)
-  const setPage = usePageViewStore((s) => s.setPage)
   const settingsOpen = useSettingsStore((s) => s.settingsOpen)
   const waitingCount = useFeedbackStore((s) => s.waitingCount)
   const waitingStale = useFeedbackStore((s) => s.waitingStale)
@@ -140,29 +176,13 @@ export default function PageTabs(): React.JSX.Element {
     initProjectGroupEvents()
   }, [])
 
-  const select = (p: AppPage): void => {
-    if (useSettingsStore.getState().settingsOpen) {
-      useSettingsStore.getState().closeSettings()
-    }
-    setPage(p)
-  }
+  const select = selectPage
 
   return (
     <div className="no-drag flex items-center gap-0.5">
-      <PageTab
-        selected={settingsOpen}
-        onSelect={() => {
-          if (!useSettingsStore.getState().settingsOpen) {
-            useSettingsStore.getState().openSettings()
-          }
-        }}
-        title={withChord('Settings', 'Meta+,')}
-      >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
-        </svg>
-      </PageTab>
+      {/* 0.46.0 experiment (Rosson 2026-10-16): the ⚙ tab moved to the
+          nav bar's page row (`NavPageRow`). ⌘, and the app menu still
+          open Settings. */}
       <PageTab
         selected={!settingsOpen && page === 'home'}
         onSelect={() => select('home')}

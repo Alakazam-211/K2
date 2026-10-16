@@ -18,6 +18,7 @@ import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButton'
 import { useHomeAddPickerStore, useRowStatus } from './home-room'
 import { OTHER_SERVER_AVATAR_COLOR, homeRowContextMenu } from './HomeSidebar'
+import NavPageRow from '@/components/Sidebar/NavPageRow'
 
 const RAIL_WIDTH = 48
 
@@ -80,6 +81,8 @@ export default function HomeIconRail(): React.JSX.Element {
       style={{ width: RAIL_WIDTH }}
       data-home-rail=""
     >
+      {/* 0.46.0 experiment: page icons along the top of the nav. */}
+      <NavPageRow orientation="column" />
       <button
         className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors mb-1"
         onClick={() => useCommandPaletteStore.getState().toggle()}

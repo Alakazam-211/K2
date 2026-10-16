@@ -145,9 +145,17 @@ export function useTicketsPageData(active: boolean): TicketsPageData {
 }
 
 /** The board (list + filter + detail) over `useTicketsPageData`. */
-export function TicketsPageBoardView({ data }: { data: TicketsPageData }): React.JSX.Element {
+export function TicketsPageBoardView({
+  data,
+  pageNav = false,
+}: {
+  data: TicketsPageData
+  /** The nav bar's page row at the top of the list (Tickets page only). */
+  pageNav?: boolean
+}): React.JSX.Element {
   return (
     <TicketBoard
+      pageNav={pageNav}
       rows={data.scoped}
       allRows={data.rows}
       error={data.error}
@@ -201,7 +209,7 @@ export default function FeedbackPage(): React.JSX.Element | null {
         </DesktopChromeRight>
       </Surface>
 
-      <TicketsPageBoardView data={data} />
+      <TicketsPageBoardView data={data} pageNav />
       <div
         data-toast-host="feedback"
         className="pointer-events-none overflow-hidden"

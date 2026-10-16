@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react'
 import TopBar from '../TopBar/TopBar'
 import IconRail from '../Sidebar/IconRail'
+import NavPageRow from '../Sidebar/NavPageRow'
 import { Surface } from '../ui'
 import { useSidebarStore } from '../../stores/sidebar'
 import { usePanelsStore } from '../../stores/panels'
@@ -66,10 +67,12 @@ export default function Layout({
             <Surface
               role2="surface"
               bordered={false}
-              className="relative flex-shrink-0 overflow-y-auto border-r border-[var(--color-border)]"
+              className="relative flex flex-shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)]"
               style={{ width: sidebarWidth }}
             >
-              {sidebar}
+              {/* 0.46.0 experiment: page icons along the top of the nav. */}
+              <NavPageRow />
+              <div className="relative min-h-0 flex-1 overflow-y-auto">{sidebar}</div>
             </Surface>
           </>
         )}

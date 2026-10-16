@@ -3458,7 +3458,10 @@ describe('S6 source ratchets', () => {
     // Rosson 2026-10-04: no background gradient behind the Tickets view.
     expect(view).not.toMatch(/gradient\(/)
     const page = read('components/Feedback/FeedbackPage.tsx')
-    expect(page).toContain('<TicketsPageBoardView data={data} />')
+    // The page draws the nav bar's page row (0.46.0 experiment); Zen's
+    // board does not (Zen has its own nav rail).
+    expect(page).toContain('<TicketsPageBoardView data={data} pageNav />')
+    expect(page).toContain('return <TicketsPageBoardView data={useTicketsPageData(true)} />')
     // The Agents view uses the app's own focus-group dropdown.
     expect(read('components/Zen/widgets/ZenAgentsWidget.tsx')).toContain(
       "import FocusGroupDropdown from '@/components/Sidebar/FocusGroupDropdown'",

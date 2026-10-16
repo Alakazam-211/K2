@@ -39,6 +39,12 @@ import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
 import { REDUCED_MOTION_QUERY, zenMediaMatches } from '@/lib/zen/zen-theme'
 import { zenRailOrientation } from '@/lib/zen/zen-rail-views'
 import type { ZenWidgetProps } from '../zen-registry'
+import {
+  GardenAgentIcon as AgentIcon,
+  GardenDashboardIcon as DashboardIcon,
+  GardenHomeIcon as HomeIcon,
+  GardenTicketIcon as TicketIcon,
+} from '@/components/icons/GardenPageIcons'
 
 /** The rail's width (CSS px). */
 export const ZEN_NAV_RAIL_WIDTH_PX = 44
@@ -106,58 +112,8 @@ export const ZEN_NAV_RAIL_CSS = `
 }
 `
 
-const ICON = {
-  width: 18,
-  height: 18,
-  viewBox: '0 0 24 24',
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 1.7,
-  strokeLinecap: 'round' as const,
-  strokeLinejoin: 'round' as const,
-  'aria-hidden': true,
-}
-
-function HomeIcon(): React.JSX.Element {
-  return (
-    <svg {...ICON}>
-      <path d="M3 10.5 12 3l9 7.5" />
-      <path d="M5 9.5V20h5v-6h4v6h5V9.5" />
-    </svg>
-  )
-}
-
-function AgentIcon(): React.JSX.Element {
-  return (
-    <svg {...ICON}>
-      <rect x="4" y="7" width="16" height="12" rx="3" />
-      <path d="M12 3v4" />
-      <circle cx="9" cy="13" r="1" />
-      <circle cx="15" cy="13" r="1" />
-      <path d="M2 12v3M22 12v3" />
-    </svg>
-  )
-}
-
-function DashboardIcon(): React.JSX.Element {
-  return (
-    <svg {...ICON}>
-      <rect x="3" y="3" width="7" height="9" rx="1" />
-      <rect x="14" y="3" width="7" height="5" rx="1" />
-      <rect x="14" y="12" width="7" height="9" rx="1" />
-      <rect x="3" y="16" width="7" height="5" rx="1" />
-    </svg>
-  )
-}
-
-function TicketIcon(): React.JSX.Element {
-  return (
-    <svg {...ICON}>
-      <path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4Z" />
-      <path d="M14 6v2M14 11v2M14 16v2" />
-    </svg>
-  )
-}
+// The four icons live in `components/icons/GardenPageIcons.tsx` (shared
+// with the desktop nav bar's page row).
 
 interface RailItem {
   page: ZenAppPage

@@ -181,6 +181,15 @@ struct StoredConnectUser {
     must_change_password: bool,
     #[serde(default)]
     was_viewer: bool,
+    #[serde(default = "default_can_clone")]
+    can_clone: bool,
+}
+
+/// Clone permissions (prd-clone-carries-threads-and-vault-v1 D2, Rosson
+/// 2026-10-16): "Can clone" defaults ON, so a row stored before 0.46.0 (no
+/// field) keeps today's behaviour; the Owner turns it off per person.
+fn default_can_clone() -> bool {
+    true
 }
 
 impl From<StoredConnectUser> for ConnectUser {
@@ -204,6 +213,7 @@ impl From<StoredConnectUser> for ConnectUser {
             must_change_password: s.must_change_password,
             was_viewer: s.was_viewer || legacy_viewer,
             legacy_viewer_unmigrated: legacy_viewer,
+            can_clone: s.can_clone,
         }
     }
 }
@@ -265,6 +275,13 @@ pub struct ConnectUser {
     /// persists the rewrite and writes the audit line. Never serialized.
     #[serde(skip)]
     pub legacy_viewer_unmigrated: bool,
+    /// Settings → Admin Access → "Can clone" (prd-clone-carries-threads-
+    /// and-vault-v1 §7.6, D2). Defaults ON (an absent field loads as
+    /// `true`). Owner-role accounts are always allowed whatever this says;
+    /// for Admin/Member logins the daemon's clone gate reads it on every
+    /// clone door. Changed only by `POST /cli/users/set-can-clone` (Owner).
+    #[serde(default = "default_can_clone")]
+    pub can_clone: bool,
 }
 
 /// Redacted projection of a [`ConnectUser`] safe to return over the
@@ -282,6 +299,11 @@ pub struct ConnectUserView {
     /// daemon update. Settings offers "Enable as Member".
     #[serde(default)]
     pub was_viewer: bool,
+    /// "Can clone" as stored (Owner-role rows are always allowed; the UI
+    /// shows them on and locked). Absent on the wire from an older daemon
+    /// → `true` (today's behaviour).
+    #[serde(default = "default_can_clone")]
+    pub can_clone: bool,
 }
 
 impl From<&ConnectUser> for ConnectUserView {
@@ -292,6 +314,7 @@ impl From<&ConnectUser> for ConnectUserView {
             disabled: u.disabled,
             role: u.role,
             was_viewer: u.was_viewer,
+            can_clone: u.can_clone,
         }
     }
 }
@@ -594,6 +617,8 @@ pub fn add_user(username: &str, password: &str) -> Result<(), String> {
             must_change_password: false,
             was_viewer: false,
             legacy_viewer_unmigrated: false,
+            // D2: "Can clone" starts ON; the Owner narrows per person.
+            can_clone: true,
         });
         Ok(())
     })?;
@@ -693,6 +718,42 @@ pub fn set_disabled(username: &str, disabled: bool) -> Result<(), String> {
     }
     crate::workspace::context_layers::refresh_users_roster_after_people_change();
     Ok(())
+}
+
+/// Settings → Admin Access → "Can clone" (prd-clone-carries-threads-and-
+/// vault-v1 §7.6). Authorization (Owner only) is the route's job; this is
+/// the raw store mutation. No session revoke: the clone gate reads the
+/// flag on every request, so a change applies to the next clone call.
+/// Errors when the user doesn't exist.
+pub fn set_can_clone(username: &str, can_clone: bool) -> Result<(), String> {
+    let username = normalize_username(username)?;
+    update_store(|store| {
+        let user = store
+            .users
+            .iter_mut()
+            .find(|u| u.username == username)
+            .ok_or_else(|| format!("user '{username}' not found"))?;
+        user.can_clone = can_clone;
+        Ok(())
+    })
+}
+
+/// Whether `username` may use the clone doors on this server: Owner-role
+/// accounts always; Admin/Member when their "Can clone" is on. Unknown
+/// users, disabled accounts and an unreadable store → `false` (fail
+/// closed).
+pub fn can_clone(username: &str) -> bool {
+    let Ok(normalized) = normalize_username(username) else {
+        return false;
+    };
+    let Ok(store) = load_store() else {
+        return false;
+    };
+    store
+        .users
+        .iter()
+        .find(|u| u.username == normalized)
+        .is_some_and(|u| !u.disabled && (u.role == Role::Owner || u.can_clone))
 }
 
 /// Set a user's permission role (K2SO #629). Authorization (only an

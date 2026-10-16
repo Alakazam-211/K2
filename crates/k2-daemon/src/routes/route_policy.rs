@@ -281,10 +281,21 @@ pub const ROUTES: &[Route] = &[
     post("/cli/claude-auth/refresh-now", Member),
     get("/cli/claude-auth/status", Member),
     post("/cli/claude-auth/uninstall-scheduler", Member),
+    // Agent clone proposals (prd-clone-carries-threads-and-vault-v1 CL21).
+    // A passport proposes/lists/withdraws its own; approve/deny/finish are
+    // Owner/Admin people (the handler refuses passports).
+    post("/cli/clone-proposal/approve", Admin),
+    post("/cli/clone-proposal/deny", Admin),
+    post("/cli/clone-proposal/finish", Admin),
+    get("/cli/clone-proposal/list", Member),
+    post("/cli/clone-proposal/new", Member),
+    post("/cli/clone-proposal/withdraw", Member),
     post("/cli/clone/bundle", Member),
     post("/cli/clone/pack", Member),
     post("/cli/clone/pack-cleanup", Member),
     get("/cli/clone/pack-status", Member),
+    // Names-only clone plan (CL25); the clone gate narrows in the arm.
+    post("/cli/clone/preview", Member),
     post("/cli/clone/unpack", Member),
     // Clone carries vault secrets (0.46.0 slice A): Member floor like the
     // other clone doors; the handler narrows copies and confirms to
@@ -1093,6 +1104,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/users/audit", Owner),
     split("/cli/users/policy", Member, NoLogin),
     post("/cli/users/remove", Owner),
+    post("/cli/users/set-can-clone", Owner),
     post("/cli/users/set-disabled", Admin),
     post("/cli/users/set-password", Owner),
     post("/cli/users/set-role", Owner),

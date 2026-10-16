@@ -37,6 +37,9 @@ pub fn handle_list() -> CliResponse {
                         "disabled": v.disabled,
                         "role": v.role.as_wire(),
                         "wasViewer": v.was_viewer,
+                        // Settings → Admin Access → "Can clone" (D2).
+                        // Owner rows are always allowed (shown locked on).
+                        "canClone": v.can_clone || v.role == connect_users::Role::Owner,
                     })
                 })
                 .collect();
@@ -343,6 +346,36 @@ pub fn handle_set_role(body: &[u8]) -> CliResponse {
         Err(e) => return CliResponse::bad_request(e),
     };
     match connect_users::set_role(&req.username, role) {
+        Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct SetCanCloneReq {
+    username: String,
+    #[serde(rename = "canClone")]
+    can_clone: bool,
+}
+
+/// `POST /cli/users/set-can-clone` `{username, canClone}` →
+/// `{"success":true}` (prd-clone-carries-threads-and-vault-v1 §7.1, CL23).
+///
+/// Owner-only: the dispatcher gates it like set-role (owner token or an
+/// Owner-role login). An Owner-role account always may clone, so turning
+/// it off for one is a 400 with that reason rather than a silent no-op.
+pub fn handle_set_can_clone(body: &[u8]) -> CliResponse {
+    let req: SetCanCloneReq = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    if connect_users::role_for_user(&req.username) == Some(connect_users::Role::Owner) && !req.can_clone {
+        return CliResponse::bad_request(format!(
+            "'{}' is an Owner: Owners can always clone (change the role first)",
+            req.username
+        ));
+    }
+    match connect_users::set_can_clone(&req.username, req.can_clone) {
         Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
         Err(e) => CliResponse::bad_request(e),
     }
@@ -888,12 +921,23 @@ pub fn handle_whoami(
         .as_deref()
         .map(connect_users::must_change_password)
         .unwrap_or(false);
+    // Clone permissions (prd-clone-carries-threads-and-vault-v1 §4.2):
+    // the client hides "Clone to This Computer" / the Clone dialog when
+    // these are false. The daemon's clone gate is the real check.
+    let can_clone = owner
+        || role == connect_users::Role::Owner
+        || username.as_deref().is_some_and(connect_users::can_clone);
+    let personal = owner
+        || role == connect_users::Role::Owner
+        || k2_core::app_settings::load().allow_clone_personal_computers;
     CliResponse::ok_json(
         serde_json::json!({
             "username": username,
             "owner": owner,
             "role": role.as_wire(),
             "mustChangePassword": must_change,
+            "canClone": can_clone,
+            "clonePersonalComputers": personal,
         })
         .to_string(),
     )

@@ -16,6 +16,11 @@ path = "src/lib.rs"
 # Test-only minisign signer (ring + blake2) so daemon and helper tests can
 # make signed fixture builds with the TEST key. Never a release feature.
 test-signer = ["dep:ring", "dep:blake2", "dep:base64"]
+# TEST ONLY: Sew's test-build pins (`sew::SEW_TEST_PINS`) for the S29 VM
+# cycle, until Sew SW1 publishes a release. Never a release feature.
+sew-test-pins = []
+# ...plus 0.1.1 as the pin (0.1.0 stays known): the upgrade half of the cycle.
+sew-test-pins-upgrade = ["sew-test-pins"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

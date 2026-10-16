@@ -161,12 +161,94 @@ pub const TEST_RELEASES: &[SewRelease] = &[
     },
 ];
 
-/// The table this build uses: the real pins, or the fixtures in a
-/// `test-signer` build.
+/// Sew's TEST builds (`/Users/Shared/sew-test-builds/<v>/K2-PIN.txt`, Sew
+/// main `901b20c7` = 0.1.0 and `aa355dbe` = 0.1.1, aarch64 only), for the
+/// S29 cycle in a throwaway VM before SW1 publishes a release. Compiled
+/// ONLY with the `sew-test-pins` feature, which release builds never enable
+/// (`sign-root-helper.sh` refuses a helper carrying [`SEW_TEST_PINS_FLAG`];
+/// `k2-root-helper/tests/binary.rs` proves a default build carries neither
+/// these hashes nor the flag). The media binary sha comes from Sew's
+/// `release.json` (`sidecars[media].artifacts[].binary_sha256`).
+///
+/// Two tables, like two K2 releases: `sew-test-pins` pins 0.1.0 (enable),
+/// `sew-test-pins-upgrade` appends 0.1.1 as the pin (the upgrade source
+/// 0.1.0 stays known, as a real pin bump keeps it).
+#[cfg(feature = "sew-test-pins")]
+const SEW_TEST_0_1_0: SewRelease = SewRelease {
+    version: "0.1.0",
+    artifacts: &[SewArtifact {
+        arch: "aarch64",
+        triple: "aarch64-unknown-linux-gnu",
+        tarball_sha256: "922f8f285a87bd22309eab916d000874004c02765a77d8abc7a74349a99b9006",
+        binary_sha256: "4dfe51382507e748830a0e008fb96a19cecc7c6d2adb9063c0b2dc533f669837",
+    }],
+    media: Some(SewSidecar {
+        version: "0.1.0",
+        artifacts: &[SewArtifact {
+            arch: "aarch64",
+            triple: "aarch64-unknown-linux-gnu",
+            tarball_sha256: "2ebb00641837b17a7253d7984656c62a4c102705a0002cc18a8645f827d596a6",
+            binary_sha256: "5edf44e592c28ec3831b495434b98323133ab6438cd5ed74e43e84cea10883d6",
+        }],
+    }),
+};
+
+#[cfg(feature = "sew-test-pins-upgrade")]
+const SEW_TEST_0_1_1: SewRelease = SewRelease {
+    version: "0.1.1",
+    artifacts: &[SewArtifact {
+        arch: "aarch64",
+        triple: "aarch64-unknown-linux-gnu",
+        tarball_sha256: "82fe9e196887b9cfa34528275e535df1b82f7f26309c97025767ee6821e189ba",
+        binary_sha256: "35d334be98c5610d45f72c3d19e82eaca02ea3b17ecc37910532f26f9f3f0ade",
+    }],
+    media: Some(SewSidecar {
+        version: "0.1.1",
+        artifacts: &[SewArtifact {
+            arch: "aarch64",
+            triple: "aarch64-unknown-linux-gnu",
+            tarball_sha256: "a7d01cae2b5da55b0dfd5541a61833a03a175ccdc408dbe78f3ea6d8f187c328",
+            binary_sha256: "35958529b04ccf31a70bfbf147ee64f9803c44fb935c2523c76cc69030423355",
+        }],
+    }),
+};
+
+/// The test pin table this build uses (the last entry is the pin).
+#[cfg(all(feature = "sew-test-pins", not(feature = "sew-test-pins-upgrade")))]
+pub const SEW_TEST_PINS: &[SewRelease] = &[SEW_TEST_0_1_0];
+#[cfg(feature = "sew-test-pins-upgrade")]
+pub const SEW_TEST_PINS: &[SewRelease] = &[SEW_TEST_0_1_0, SEW_TEST_0_1_1];
+
+/// Present only in a `sew-test-pins` build; release signing refuses it.
+#[cfg(feature = "sew-test-pins")]
+#[used]
+pub static SEW_TEST_PINS_FLAG: &str = "K2_SEW_TEST_PINS_ENABLED";
+
+/// `Some(flag)` in a `sew-test-pins` build (`helper version` reports it,
+/// which also keeps the flag string in the binary for the signing check).
+pub fn test_pins_flag() -> Option<&'static str> {
+    #[cfg(feature = "sew-test-pins")]
+    {
+        Some(SEW_TEST_PINS_FLAG)
+    }
+    #[cfg(not(feature = "sew-test-pins"))]
+    {
+        None
+    }
+}
+
+/// The table this build uses: the fixtures in a `test-signer` build, Sew's
+/// test builds in a `sew-test-pins` build, else the real pins.
 pub fn releases() -> &'static [SewRelease] {
     if cfg!(feature = "test-signer") {
-        TEST_RELEASES
-    } else {
+        return TEST_RELEASES;
+    }
+    #[cfg(feature = "sew-test-pins")]
+    {
+        SEW_TEST_PINS
+    }
+    #[cfg(not(feature = "sew-test-pins"))]
+    {
         SEW_RELEASES
     }
 }
@@ -555,11 +637,57 @@ mod tests {
             assert_eq!(known_binary(&"0".repeat(64), "x86_64"), None);
             // A tarball sha is never a binary sha.
             assert_eq!(known_binary(pin.artifacts[0].tarball_sha256, "x86_64"), None);
-        } else {
+        } else if !cfg!(feature = "sew-test-pins") {
             assert_eq!(pinned().version, "0.1.0");
             assert!(pinned_artifact("x86_64").is_err());
             assert_eq!(known_binary(&"0".repeat(64), "x86_64"), None);
         }
+    }
+
+    /// A default build never selects Sew's test pins (`sew-test-pins` is a
+    /// test-only feature; `k2-root-helper/tests/binary.rs` checks the
+    /// built binary's bytes).
+    #[cfg(not(feature = "sew-test-pins"))]
+    #[test]
+    fn default_build_has_no_sew_test_pins() {
+        assert!(test_pins_flag().is_none());
+        // Compare contents: a `const` slice has no stable address.
+        let want = if cfg!(feature = "test-signer") { TEST_RELEASES } else { SEW_RELEASES };
+        let key = |t: &[SewRelease]| -> Vec<(&str, Vec<&str>)> {
+            t.iter().map(|r| (r.version, r.artifacts.iter().map(|a| a.tarball_sha256).collect())).collect()
+        };
+        assert_eq!(key(releases()), key(want));
+        for r in releases() {
+            for a in r.artifacts {
+                assert_ne!(a.binary_sha256, "4dfe51382507e748830a0e008fb96a19cecc7c6d2adb9063c0b2dc533f669837");
+                assert_ne!(a.binary_sha256, "35d334be98c5610d45f72c3d19e82eaca02ea3b17ecc37910532f26f9f3f0ade");
+            }
+        }
+    }
+
+    #[cfg(all(feature = "sew-test-pins", not(feature = "test-signer")))]
+    #[test]
+    fn sew_test_pins_are_aarch64_only_and_the_upgrade_table_keeps_0_1_0() {
+        assert_eq!(test_pins_flag(), Some("K2_SEW_TEST_PINS_ENABLED"));
+        let (pin, tar) = if cfg!(feature = "sew-test-pins-upgrade") {
+            ("0.1.1", "82fe9e196887b9cfa34528275e535df1b82f7f26309c97025767ee6821e189ba")
+        } else {
+            ("0.1.0", "922f8f285a87bd22309eab916d000874004c02765a77d8abc7a74349a99b9006")
+        };
+        assert_eq!(pinned().version, pin);
+        assert_eq!(pinned_artifact("aarch64").unwrap().tarball_sha256, tar);
+        assert!(pinned_artifact("x86_64").unwrap_err().contains("unsupported"));
+        assert_eq!(known_binary("4dfe51382507e748830a0e008fb96a19cecc7c6d2adb9063c0b2dc533f669837", "aarch64"), Some("0.1.0"));
+        let v011 = known_binary("35d334be98c5610d45f72c3d19e82eaca02ea3b17ecc37910532f26f9f3f0ade", "aarch64");
+        assert_eq!(v011, cfg!(feature = "sew-test-pins-upgrade").then_some("0.1.1"));
+        assert_eq!(pinned_media_artifact("aarch64").unwrap().0, pin);
+        for r in SEW_TEST_PINS {
+            for a in r.artifacts.iter().chain(r.media.iter().flat_map(|m| m.artifacts)) {
+                assert!(!checksum_is_placeholder(a), "{a:?}");
+            }
+        }
+        // The real table stays placeholders until SW1.
+        assert!(SEW_RELEASES.iter().flat_map(|r| r.artifacts).all(checksum_is_placeholder));
     }
 
     #[test]

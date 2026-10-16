@@ -130,6 +130,8 @@ pub fn version_json(ctx: &Ctx) -> serde_json::Value {
         // old helper from a bad download (S29 G8, `k2_helper_pin_mismatch`).
         "sewPin": k2_root_proto::sew::pinned().version,
         "sewPinSha256": k2_root_proto::sew::pinned_artifact(ctx.arch).map(|a| a.tarball_sha256).ok(),
+        // Sew's TEST builds pinned (never in a release; signing refuses it).
+        "sewTestPins": k2_root_proto::sew::test_pins_flag(),
         "refused": refused,
         "daemons": daemons,
         "build": crate::BUILD_MARKER,

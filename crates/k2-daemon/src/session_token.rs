@@ -766,6 +766,13 @@ pub fn is_agent_verb(path: &str) -> bool {
         // vault confirm.
         "/cli/app/approvals",
         "/cli/app/deny",
+        // Clone proposals (prd-clone-carries-threads-and-vault-v1 CL21):
+        // an agent proposes a clone of its own workspace, lists and
+        // withdraws its own. `/cli/clone/*` stays DENY (agents never clone)
+        // and approve/deny/finish are people only (not here).
+        "/cli/clone-proposal/new",
+        "/cli/clone-proposal/list",
+        "/cli/clone-proposal/withdraw",
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",

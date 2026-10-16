@@ -376,13 +376,14 @@ mod tests {
             if t.contains("clone_gate::check(") || t.contains("clone_gate_check(") {
                 last_gate = Some(i);
             }
-            if t.contains("clone_routes::handle_clone_") {
+            if t.contains("clone_routes::handle_clone_") || t.contains("clone_preview::handle(") {
                 calls += 1;
                 let gated = last_gate.is_some_and(|g| g > last_arm);
                 assert!(gated, "dispatcher.rs:{} reaches a clone handler without clone_gate::check in its arm", i + 1);
             }
         }
-        assert!(calls >= 6, "expected the six clone handlers in the dispatcher, saw {calls}");
+        // bundle, unpack, pack, pack-cleanup, pack-status, preview.
+        assert!(calls >= 6, "expected the six clone doors in the dispatcher, saw {calls}");
         // The per-cell socket never serves `/cli/clone/*` (deny prefix).
         assert!(!crate::session_token::is_agent_verb("/cli/clone/bundle"));
         assert!(!crate::session_token::is_agent_verb("/cli/clone/preview"));

@@ -442,6 +442,11 @@ fn approve(who: &Who, body: &[u8], ingress: &str) -> R<J> {
     );
     let ws = ws_by_id(&done.project_id);
     let copies = done.options.secrets.values().filter(|c| **c == SecretChoice::Copy).count();
+    let hint = if copies > 0 {
+        "approved: run it now (k2 clone approve runs it for you). Copying secrets asks you to confirm once more."
+    } else {
+        "approved: run it now (k2 clone approve runs it for you)."
+    };
     Ok(json!({
         "ok": true,
         "proposal": proposal_json(&done),
@@ -453,11 +458,7 @@ fn approve(who: &Who, body: &[u8], ingress: &str) -> R<J> {
             "options": done.options,
             "proposalId": done.id,
         },
-        "hint": if copies > 0 {
-            "approved: run it now (k2 clone approve runs it for you). Copying secrets asks you to confirm once more."
-        } else {
-            "approved: run it now (k2 clone approve runs it for you)."
-        },
+        "hint": hint,
     }))
 }
 

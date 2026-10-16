@@ -213,9 +213,9 @@ async fn app_session_owner_token_and_connect_logins_get_their_own_passes() {
     assert!(c.sid.starts_with("own_"), "{}", c.sid);
     assert_eq!(r.body["provenance"], "owner-token");
 
-    // Connect logins: the Owner role is its own admin member (ruling);
-    // Admin and Member are members. sid = cu_<digest>.
-    for (name, role, sew_role) in [("olga", Role::Owner, "admin"), ("adam", Role::Admin, "member"), ("mia", Role::Member, "member")] {
+    // Connect logins: every role is its own member (Owner included: K2
+    // Connect Owner is server control, not Sew admin). sid = cu_<digest>.
+    for (name, role, sew_role) in [("olga", Role::Owner, "member"), ("adam", Role::Admin, "member"), ("mia", Role::Member, "member")] {
         let tok = login(name, role);
         let uuid = connect_users::user_uuid(name).expect("uuid").expect("exists");
         let r = pass(d.port, Some(&tok), "{}");

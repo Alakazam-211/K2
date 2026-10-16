@@ -67,7 +67,9 @@ pub const JWKS_CACHE_CONTROL: &str = "public, max-age=300";
 /// The App-wide chat caps a pass may carry (S28 vs-live, K7/K9). A
 /// ceiling Sew enforces (SW3), never a grant: `voice:join` only lets the
 /// holder through to Sew's own media token (rev 144: K2 never mints one).
-pub const CHAT_CAPS: &[&str] = &["chat:read", "chat:post", "chat:respond", "voice:join"];
+pub const CHAT_CAPS: &[&str] = &[CAP_CHAT_READ, "chat:post", "chat:respond", "voice:join"];
+/// Every present `caps` claim holds this one (Sew SW3).
+pub const CAP_CHAT_READ: &str = "chat:read";
 
 /// The seven claims of a chat pass (S28 §6), plus the optional `caps`
 /// ceiling (K7). `caps` is omitted (not `[]`) when the caller's App role
@@ -120,9 +122,26 @@ impl ChatPassClaims {
         Ok(c)
     }
 
-    /// Attach the `caps` ceiling. Empty → no claim at all.
+    /// Attach the `caps` ceiling. Empty → no claim at all. Sew's rule
+    /// (SW3): a present `caps` always holds `chat:read`, so a role that
+    /// grants only `voice:join` (or `chat:post`) still reads; it is added
+    /// here, so no App role can produce a pass Sew refuses. Order follows
+    /// [`CHAT_CAPS`], duplicates dropped.
     pub fn with_caps(mut self, caps: Vec<String>) -> Result<ChatPassClaims, String> {
-        self.caps = if caps.is_empty() { None } else { Some(caps) };
+        if caps.is_empty() {
+            self.caps = None;
+        } else {
+            if let Some(bad) = caps.iter().find(|c| !CHAT_CAPS.contains(&c.as_str())) {
+                return Err(format!("unknown chat cap {bad}"));
+            }
+            self.caps = Some(
+                CHAT_CAPS
+                    .iter()
+                    .filter(|c| **c == CAP_CHAT_READ || caps.iter().any(|x| x == *c))
+                    .map(|c| c.to_string())
+                    .collect(),
+            );
+        }
         self.validate()?;
         Ok(self)
     }
@@ -155,6 +174,9 @@ impl ChatPassClaims {
             }
             if let Some(bad) = caps.iter().find(|c| !CHAT_CAPS.contains(&c.as_str())) {
                 return Err(format!("unknown chat cap {bad}"));
+            }
+            if !caps.iter().any(|c| c == CAP_CHAT_READ) {
+                return Err("caps, when present, must include chat:read (Sew SW3)".into());
             }
         }
         Ok(())

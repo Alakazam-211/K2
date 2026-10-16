@@ -19,8 +19,10 @@
 //! (2026-10-15): K2 Connect owners and admins control the Sew install and
 //! its management on the runtime; inside Sew the top level is delegated
 //! through the App's own user roles. So an Owner-role Connect login gets
-//! its OWN member identity (`k2:connect:<uuid>`) marked
-//! [`SewRole::Admin`], never `k2:owner`. `k2:owner` comes only from the
+//! its OWN member identity (`k2:connect:<uuid>`), never `k2:owner`, and
+//! its `sewRole` is `member` like every Connect login: K2 Connect Owner is
+//! server control only, not Sew install admin (pending Rosson; the field
+//! must not suggest admin). `k2:owner` comes only from the
 //! box owner token (provenance `owner-token`, never person proof) or a
 //! person-confirmed owner handoff.
 //!
@@ -32,7 +34,7 @@ use sha2::{Digest, Sha256};
 use k2_core::connect_users::Role;
 
 /// The single switch for the Owner-role Connect ruling. `false` (decided,
-/// Rosson 2026-10-15): own member identity with admin rights. `true` would
+/// Rosson 2026-10-15): own member identity, `sewRole` member. `true` would
 /// mint `k2:owner` (with the same `cu_` sid) for an Owner-role Connect
 /// login.
 pub const OWNER_CONNECT_GETS_K2_OWNER: bool = false;
@@ -70,8 +72,6 @@ impl Provenance {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SewRole {
     Member,
-    /// Sew admin rights (an Owner-role Connect login).
-    Admin,
     /// Sew's install owner (`k2:owner`).
     InstallOwner,
 }
@@ -80,7 +80,6 @@ impl SewRole {
     pub fn as_str(self) -> &'static str {
         match self {
             SewRole::Member => "member",
-            SewRole::Admin => "admin",
             SewRole::InstallOwner => "install-owner",
         }
     }
@@ -147,8 +146,6 @@ pub fn connect_identity(
     let sid = k2_core::connect_users::session_sid(session_token);
     let (sub, sew_role) = if role == Role::Owner && owner_connect_is_k2_owner {
         (OWNER_SUB.to_string(), SewRole::InstallOwner)
-    } else if role == Role::Owner {
-        (format!("k2:connect:{user_uuid}"), SewRole::Admin)
     } else {
         (format!("k2:connect:{user_uuid}"), SewRole::Member)
     };

@@ -50,6 +50,8 @@ pub mod zen_sync_routes;
 pub mod zen_watch;
 pub mod grid_emitter;
 pub mod git_routes;
+/// Changes tab v1: debounced `git_changed` events (watcher + git routes).
+pub mod git_live;
 pub mod heartbeat_app_routes;
 // 0.45.5 app identity surface: `/cli/agent/identity` + `/cli/agent/handle`.
 pub mod agent_identity_routes;

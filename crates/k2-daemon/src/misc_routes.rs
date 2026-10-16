@@ -1438,6 +1438,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/git/branches" => crate::git_routes::handle_git_branches(params),
         "/cli/git/worktrees" => crate::git_routes::handle_git_worktrees(params),
         "/cli/git/changes" => crate::git_routes::handle_git_changes(params),
+        // Changes tab v1 (prd-changes-tab-v1): one snapshot for the tab.
+        "/cli/git/snapshot" => crate::git_routes::handle_git_snapshot(params),
+        // POST-only; the central guard 405s a GET first. Belt.
+        "/cli/git/discard" => crate::git_routes::handle_git_discard(false, &[]),
         "/cli/git/diff-file" => crate::git_routes::handle_git_diff_file(params),
         "/cli/git/diff-summary" => crate::git_routes::handle_git_diff_summary(params),
         "/cli/git/diff-between" => crate::git_routes::handle_git_diff_between_branches(params),

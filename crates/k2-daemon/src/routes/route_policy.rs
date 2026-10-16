@@ -468,6 +468,8 @@ pub const ROUTES: &[Route] = &[
     get("/cli/git/diff-between", Member),
     get("/cli/git/diff-file", Member),
     get("/cli/git/diff-summary", Member),
+    // Changes tab v1: untracked files and lost copies go to the Trash.
+    post("/cli/git/discard", Member),
     get("/cli/git/file-at-ref", Member),
     get("/cli/git/info", Member),
     post("/cli/git/merge-branch", Member),
@@ -476,6 +478,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/git/remove-worktree", Member),
     post("/cli/git/reopen-worktree", Member),
     post("/cli/git/resolve", Member),
+    // Changes tab v1: status + branch + counts + rev in one read.
+    get("/cli/git/snapshot", Member),
     post("/cli/git/stage", Member),
     post("/cli/git/stage-all", Member),
     post("/cli/git/unstage", Member),

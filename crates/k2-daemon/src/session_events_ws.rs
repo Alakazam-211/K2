@@ -446,6 +446,10 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // guaranteed for the Files drawer.
         SessionEvent::FsChanged { .. } => None,
 
+        // Changes tab v1 — APP-LEVEL like FsChanged: the Changes tab and
+        // a pinned room filter on workspacePath themselves.
+        SessionEvent::GitChanged { .. } => None,
+
         // 0.39.39 WORKSPACE-SCOPED events — each carries a project path
         // in `workspace_path`; the cwd-prefix filter routes them to the
         // matching subscriber exactly like SessionAdded/Removed.
@@ -830,6 +834,11 @@ mod tests {
                 ts: 0,
             },
             SessionEvent::FsChanged { workspace_path: "/x/foo".into(), paths: vec!["/x/foo/a".into()] },
+            SessionEvent::GitChanged {
+                workspace_path: "/x/foo".into(),
+                repo_root: "/x/foo".into(),
+                rev: "n:1".into(),
+            },
         ]
     }
 

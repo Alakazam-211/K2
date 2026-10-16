@@ -624,7 +624,7 @@ fn approve(who: &Who, body: &[u8]) -> R<Value> {
     let req = request_or_404(s(&v, "request"))?;
     let Some(token) = s(&v, "confirmToken") else {
         return Err(no(
-            acodes::OWNER_CONFIRM_REQUIRED,
+            acodes::VAULT_CONFIRM_REQUIRED,
             403,
             "approving needs a fresh owner confirm (Touch ID, your login or vault password): k2 compute node admin approve <id> asks for it",
         ));
@@ -634,10 +634,10 @@ fn approve(who: &Who, body: &[u8]) -> R<Value> {
     let proof = vault
         .confirm
         .take(token, admin::CONFIRM_ACTION, Some(&req.id), &stamp)
-        .map_err(|_| no(acodes::OWNER_CONFIRM_REQUIRED, 403, "confirm again: a confirm works once, for this request, within 60 seconds"))?;
+        .map_err(|_| no(acodes::VAULT_CONFIRM_REQUIRED, 403, "confirm again: a confirm works once, for this request, within 60 seconds"))?;
     let via = match proof {
         k2_vault::HumanProof::Confirmed { method } => method,
-        k2_vault::HumanProof::None => return Err(no(acodes::OWNER_CONFIRM_REQUIRED, 403, "no owner confirm")),
+        k2_vault::HumanProof::None => return Err(no(acodes::VAULT_CONFIRM_REQUIRED, 403, "no owner confirm")),
     };
     let node = {
         let db = k2_core::db::shared();

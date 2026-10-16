@@ -8115,8 +8115,10 @@ DEBUGGING A GUARDED APP
 THE PROCESS EXCEPTION
   An owner can move one App out of its container to reach a device
   (GPU): k2 app exception <app-id> on --device dri-render128. Agents
-  can't; ask your owner. Label "Open (process)". exec and shell don't
-  reach it yet.
+  can't (owner_only); ask your owner. It needs the owner's confirm: a
+  call without one answers vault_confirm_required, like every other
+  confirm in K2. Label "Open (process)". exec and shell don't reach it
+  yet.
 
 EGRESS (guarded Apps, --engine guarded)
   A guarded App reaches the internet only through its own proxy

@@ -57,12 +57,12 @@ fn seed_source(conn: &Connection) -> (String, String, String) {
     overlay::post_thread_with_origin(conn, &p, &pid, "bob", to, "guest post", "thread", None, Some(PostAuthor::guest("bob")))
         .unwrap();
     overlay::post_thread(conn, &p, &pid, "Rosson", to, "old compose post", "compose").unwrap();
-    overlay::post_choice(conn, &p, &pid, &handle, to, "Ship it?", vec!["Go".into(), "Wait".into()], false, Some(now_secs() + 3600))
+    overlay::post_choice(conn, &p, &pid, &handle, to, "Ship it?", vec!["Go".into(), "Wait".into()], false, Some(now_secs() + 30 * 86_400))
         .unwrap();
     let (answered, _) =
         overlay::post_choice(conn, &p, &pid, &handle, to, "Lunch?", vec!["Yes".into()], false, None).unwrap();
     overlay::answer_card(&p, &pid, &answered.id, Some("Yes"), None, Some(PostAuthor::owner_named("Rosson"))).unwrap();
-    overlay::post_secret(conn, &p, &pid, &handle, to, "STRIPE_KEY", Some("need it"), Default::default(), Some(now_secs() + 3600))
+    overlay::post_secret(conn, &p, &pid, &handle, to, "STRIPE_KEY", Some("need it"), Default::default(), Some(now_secs() + 30 * 86_400))
         .unwrap();
     let (set, _) =
         overlay::post_secret(conn, &p, &pid, &handle, to, "DB_URL", None, Default::default(), None).unwrap();

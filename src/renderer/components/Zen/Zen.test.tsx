@@ -310,7 +310,7 @@ describe('Zen is a mode of the window (G1–G5)', () => {
     mount()
     const toggle = el('[data-zen-enter]')
     expect(toggle.getAttribute('aria-pressed')).toBe('false')
-    expect(toggle.getAttribute('title')).toBe('Zen Mode (⌃⌘Z). Hold Shift for safe mode.')
+    expect(toggle.getAttribute('title')).toBe('Gardens — Zen Mode (⌃⌘Z). Hold Shift for safe mode.')
     expect(zenRoot()).toBeNull()
 
     await enterViaTopBar()
@@ -918,7 +918,7 @@ describe('the Zen toggles after the icon pick', () => {
     const enter = Array.from(document.querySelectorAll('[data-zen-enter]'))
     expect(enter.length).toBe(1)
     expect(enter[0].querySelector('svg')?.getAttribute('data-zen-icon')).toBe('enso')
-    expect(enter[0].getAttribute('title')).toBe('Zen Mode (⌃⌘Z). Hold Shift for safe mode.')
+    expect(enter[0].getAttribute('title')).toBe('Gardens — Zen Mode (⌃⌘Z). Hold Shift for safe mode.')
     expect(enter[0].classList.contains('cursor-pointer')).toBe(true)
     await enterViaTopBar()
     await pageReady()

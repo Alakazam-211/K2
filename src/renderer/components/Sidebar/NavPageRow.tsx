@@ -1,7 +1,8 @@
 // 0.46.0 UI experiment (Rosson 2026-10-16, may be reversed): the page
-// switcher's Home / Agents / Projects / Tickets / Settings as icon-only
-// buttons along the top of the nav bar, using the Garden nav rail's icons
-// (Settings is the app's cog, which Gardens draw too). The same row
+// switcher's Home / Agents / Projects / Tickets / Gardens / Settings as
+// icon-only buttons along the top of the nav bar, using the Garden nav
+// rail's icons (Gardens is the Zen toggle's ensō; Settings is the app's
+// cog, which Gardens draw too). Gardens shows only where Zen exists. The same row
 // sits at the top of the left nav on all four pages (Home and Agents
 // sidebars, the Projects nav, the Tickets list), expanded or collapsed.
 // The top-bar tabs stay as they are for now.
@@ -30,6 +31,7 @@ import {
   ticketsBadgeProps,
 } from '@/components/TopBar/PageTabs'
 import { withChord } from '@/lib/shortcut-label'
+import ZenTopBarToggle from '@/components/TopBar/ZenTopBarToggle'
 import {
   GardenAgentIcon,
   GardenDashboardIcon,
@@ -103,6 +105,10 @@ export default function NavPageRow({
           </PageTab>
         )
       })}
+      {/* Gardens (Rosson 2026-10-16): the Zen toggle, moved here from the
+          top bar. Renders nothing where Zen doesn't exist (web, Windows,
+          Focus and ticket windows), so the row is five icons there. */}
+      <ZenTopBarToggle />
       {/* Settings last (Rosson 2026-10-16): the top bar's cog, same action. */}
       <PageTab
         selected={settingsOpen}

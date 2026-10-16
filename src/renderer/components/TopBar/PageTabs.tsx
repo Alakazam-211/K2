@@ -54,6 +54,17 @@ export function badgeText(badge: number | '?' | undefined): string | null {
   return badge > 99 ? '99+' : String(badge)
 }
 
+/** A page tab's classes (size, hover, selected underline). Shared with
+ *  buttons that are not a `PageTab` but sit in the same row (the nav
+ *  bar's Gardens button). */
+export function pageTabClass(selected: boolean): string {
+  return `relative flex h-6 items-center justify-center px-2 text-[11px] font-medium transition-colors ${
+    selected
+      ? 'text-[var(--color-text-primary)] bg-white/[0.08] shadow-[inset_0_-2px_0_var(--color-accent)]'
+      : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]'
+  }`
+}
+
 export function PageTab({
   selected,
   onSelect,
@@ -86,11 +97,7 @@ export function PageTab({
   return (
     <button
       onClick={onSelect}
-      className={`relative flex h-6 items-center justify-center px-2 text-[11px] font-medium transition-colors ${
-        selected
-          ? 'text-[var(--color-text-primary)] bg-white/[0.08] shadow-[inset_0_-2px_0_var(--color-accent)]'
-          : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]'
-      }`}
+      className={pageTabClass(selected)}
       style={{
         // @ts-expect-error -- Electron-specific CSS property
         WebkitAppRegion: 'no-drag'

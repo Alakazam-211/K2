@@ -247,6 +247,13 @@ function buildUndirectedAdj(links: WikiLink[]): Map<string, Set<string>> {
   return adj
 }
 
+/**
+ * Local mode shows the selected note's neighbourhood this many hops deep.
+ * Fixed (Rosson 2026-10-16: the Depth 1|2 control is gone; almost nobody
+ * used it). 2 = the old default.
+ */
+export const WIKI_LOCAL_DEPTH = 2
+
 /** BFS neighborhood of `centerId` up to `depth` hops (undirected). */
 export function neighborhoodIds(
   links: WikiLink[],
@@ -372,7 +379,6 @@ export function countVisibleWikiArticles(
   opts: {
     search: string
     mode: 'k2' | 'local' | 'global'
-    depth: 1 | 2
     selectedId: string | null
     focusGroupFilter?: string
     /** K2 sub-tab: projects | groups */
@@ -383,7 +389,7 @@ export function countVisibleWikiArticles(
 ): number {
   let ids: Set<string> | null = null
   if (opts.mode === 'local' && opts.selectedId) {
-    ids = neighborhoodIds(index.links, opts.selectedId, opts.depth)
+    ids = neighborhoodIds(index.links, opts.selectedId, WIKI_LOCAL_DEPTH)
   }
   let wsFilter: Set<string> | null = null
   if (opts.mode === 'k2') {

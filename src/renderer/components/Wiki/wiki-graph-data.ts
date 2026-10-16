@@ -16,6 +16,7 @@ import {
   neighborhoodIds,
   nodeMatchesSearch,
   projectFilterWorkspaceIds,
+  WIKI_LOCAL_DEPTH,
 } from './wiki-api'
 
 /** Fallback color for focus-group / project membership edges. */
@@ -42,7 +43,6 @@ export type WikiGraphLink = {
 
 export type WikiGraphOpts = {
   mode: 'k2' | 'local' | 'global'
-  depth: 1 | 2
   k2Lens: 'projects' | 'groups'
   focusGroupFilter: string
   projectFilter: string
@@ -89,7 +89,7 @@ function visibleIds(
   catalog: Map<string, WikiNode>,
   opts: WikiGraphOpts,
 ): { visible: Set<string>; matchedIds: Set<string> | null } {
-  const { mode, k2Lens, projectFilter, focusGroupFilter, localCenterId, depth, search } = opts
+  const { mode, k2Lens, projectFilter, focusGroupFilter, localCenterId, search } = opts
   let visible = new Set(catalog.keys())
 
   // K2: pick lens (projects vs groups) and apply org filter.
@@ -143,7 +143,7 @@ function visibleIds(
   }
 
   if (mode === 'local' && localCenterId && catalog.has(localCenterId)) {
-    visible = neighborhoodIds(index.links, localCenterId, depth)
+    visible = neighborhoodIds(index.links, localCenterId, WIKI_LOCAL_DEPTH)
   }
 
   let matchedIds: Set<string> | null = null

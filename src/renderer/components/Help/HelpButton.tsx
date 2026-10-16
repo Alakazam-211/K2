@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useState } from 'react'
 import { HelpIcon, TOP_BAR_ICON_ACTIVE_CLASS, TOP_BAR_ICON_REST_CLASS } from '@/components/icons/K2Icons'
+import { useTopBarScope } from '@/components/TopBar/top-bar-scope'
 
 // The explorer and its generated CLI catalog load on first open, not with
 // the top bar.
@@ -14,6 +15,9 @@ const noDrag = {
 export default function HelpButton(): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const close = useCallback(() => setOpen(false), [])
+  // The glossary is the top bar's server's (a followed room's, else the
+  // window's), like Keep awake: never a hard-wired primary scope.
+  const { scope } = useTopBarScope()
 
   return (
     <>
@@ -33,7 +37,7 @@ export default function HelpButton(): React.JSX.Element {
       </button>
       {open ? (
         <Suspense fallback={null}>
-          <HelpExplorer onClose={close} />
+          <HelpExplorer scope={scope} onClose={close} />
         </Suspense>
       ) : null}
     </>

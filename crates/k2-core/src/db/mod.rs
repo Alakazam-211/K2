@@ -1354,6 +1354,15 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
             "0170_app_walls_lite",
             include_str!("../../drizzle_sql/0170_app_walls_lite.sql"),
         ),
+        // 0177 — `k2 publish run --probe-timeout`: per-service startup grace
+        // and the tunnel "hostname not yet published" mark on
+        // `published_services`. New columns only. 0171–0175 are the 0.46.1
+        // runtime lanes' and 0176 the integrator's spare (plan-0461-lanes-v1);
+        // the integrator renumbers on slips.
+        (
+            "0177_published_services_probe_timeout",
+            include_str!("../../drizzle_sql/0177_published_services_probe_timeout.sql"),
+        ),
     ];
 
     for (name, sql) in migrations {
@@ -2014,7 +2023,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0170_app_walls_lite",
+            last_name, "0177_published_services_probe_timeout",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2051,6 +2060,7 @@ mod tests {
                 "0168_app_grace",
                 "0169_app_egress",
                 "0170_app_walls_lite",
+                "0177_published_services_probe_timeout",
             ],
             "tail migrations out of order: {names:?}"
         );

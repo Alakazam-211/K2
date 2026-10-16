@@ -239,10 +239,10 @@ pub enum SewVerb {
     RotateMaster,
     /// `sew keys drop-prev`.
     DropPrev,
-    /// `sew backup now`.
-    Backup,
-    /// `sew backup list`.
-    Backups,
+    // No backup verbs: since Sew SW15 the daemon makes and lists backups
+    // over Sew's mgmt socket (`POST /mgmt/v1/backup`, `GET /mgmt/v1/backups`)
+    // as itself; only restore needs root (`sew restore`, Sew has no mgmt
+    // restore).
     /// Stop `sew.service`, `sew restore <id> --replace` (Sew takes its
     /// safety bundle first), start it again.
     Restore(String),
@@ -279,8 +279,6 @@ impl SewVerb {
             ["doctor"] => Self::Doctor,
             ["rotate-master"] => Self::RotateMaster,
             ["drop-prev"] => Self::DropPrev,
-            ["backup"] => Self::Backup,
-            ["backups"] => Self::Backups,
             ["restore", id] if crate::sew::bundle_id_ok(id) => Self::Restore(id.to_string()),
             ["token"] => Self::Token,
             ["media", "install"] => Self::MediaInstall,
@@ -308,8 +306,6 @@ impl SewVerb {
             Self::Doctor => s(&["doctor"]),
             Self::RotateMaster => s(&["rotate-master"]),
             Self::DropPrev => s(&["drop-prev"]),
-            Self::Backup => s(&["backup"]),
-            Self::Backups => s(&["backups"]),
             Self::Restore(id) => s(&["restore", id]),
             Self::Token => s(&["token"]),
             Self::MediaInstall => s(&["media", "install"]),
@@ -318,7 +314,7 @@ impl SewVerb {
     }
 
     /// `open`: read-only, sha-pin gated, or converging to what K2 sets
-    /// anyway (start, restart, enable, a backup). `daemon`: sets a
+    /// anyway (start, restart, enable). `daemon`: sets a
     /// credential, hands over a secret, changes config, stops or removes
     /// the service, migrates or replaces data, or swaps the binary.
     fn class(&self) -> Class {
@@ -330,8 +326,6 @@ impl SewVerb {
             | Self::Unstage
             | Self::InstallBin
             | Self::Doctor
-            | Self::Backup
-            | Self::Backups
             | Self::Systemctl(S::Enable | S::StartDb | S::Start | S::Restart) => Class::Open,
             Self::Install
             | Self::Config
@@ -359,7 +353,7 @@ impl SewVerb {
     }
 
     fn reads_only(&self) -> bool {
-        matches!(self, Self::Status | Self::Doctor | Self::Backups)
+        matches!(self, Self::Status | Self::Doctor)
     }
 
     /// One of each (tests, docs).
@@ -380,8 +374,6 @@ impl SewVerb {
             Self::Doctor,
             Self::RotateMaster,
             Self::DropPrev,
-            Self::Backup,
-            Self::Backups,
             Self::Restore("20260927T031512Z".into()),
             Self::Token,
             Self::MediaInstall,
@@ -1723,8 +1715,6 @@ mod tests {
             &["engine", "sew", "unstage"],
             &["engine", "sew", "install-bin"],
             &["engine", "sew", "doctor"],
-            &["engine", "sew", "backup"],
-            &["engine", "sew", "backups"],
             &["engine", "sew", "systemctl", "enable"],
             &["engine", "sew", "systemctl", "start-db"],
             &["engine", "sew", "systemctl", "start"],
@@ -1759,7 +1749,7 @@ mod tests {
             assert!(v.takes_lock(), "{a:?}");
         }
         assert_eq!(open.len() + daemon.len(), SewVerb::catalog().len(), "every sew verb is in one table");
-        for read in [&["engine", "sew", "status"][..], &["engine", "sew", "doctor"], &["engine", "sew", "backups"]] {
+        for read in [&["engine", "sew", "status"][..], &["engine", "sew", "doctor"]] {
             assert!(!Verb::parse(read).unwrap().takes_lock(), "{read:?}");
         }
         assert!(Verb::parse(&["engine", "sew", "stage"]).unwrap().takes_lock());

@@ -1310,9 +1310,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/fs/extract-status" => crate::fs_routes::handle_extract_status(params),
         // 0.40.22 — ranged file read; the download-to-local stream loops it.
         "/cli/fs/read-range" => crate::fs_routes::handle_read_range(params),
-        // 0.40.22 — poll a "Clone to this computer" pull-pack job (start =
-        // POST /cli/clone/pack in the dispatcher).
-        "/cli/clone/pack-status" => crate::clone_routes::handle_clone_pack_status(params),
+        // `/cli/clone/pack-status` has its own gated arm in the dispatcher
+        // (clone gate, prd-clone-carries-threads-and-vault-v1 CL4).
 
         // ── Phase 2 Unit 6: chat history (GET) ────────────────────
         "/cli/chat/list" => crate::chat_routes::handle_list(params),

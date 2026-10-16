@@ -1044,6 +1044,12 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // §6.4, CL14): copying secrets (or sending .env files) to a clone;
     // `secretId` = `clone:<sha256(plan)>`, reason written by the daemon.
     crate::clone_vault::CONFIRM_ACTION,
+    // Clone proposals (prd-clone-carries-threads-and-vault-v1 CL14):
+    // approving an agent's clone proposal (`secretId` = the proposal id).
+    "clone-approve",
+    // D4: sending a workspace's `.env` files as files inside a clone
+    // bundle (`secretId` = `env-files:<project_path>`).
+    "clone-env",
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

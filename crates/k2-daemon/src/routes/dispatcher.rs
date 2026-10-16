@@ -3651,6 +3651,36 @@ async fn handle_one_request(
             let r = crate::connect_users_routes::handle_set_role(&body_bytes);
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // POST /cli/users/set-can-clone — Settings → Admin Access → "Can
+        // clone" (prd-clone-carries-threads-and-vault-v1 CL23). Owner-only,
+        // the set-role gate (owner token or an Owner-role login).
+        "/cli/users/set-can-clone" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }
+            let actor_role = super::http::actor_role(&query, state.token.as_str());
+            if !actor_role.map(k2_core::connect_users::can_change_roles).unwrap_or(false) {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let target_for_audit = crate::connect_users_routes::login_body_username(&body_bytes);
+            let r = crate::connect_users_routes::handle_set_can_clone(&body_bytes);
+            k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+                "set-can-clone",
+                &target_for_audit,
+                if r.status.starts_with("200") { "ok".to_string() } else { format!("rejected:{}", r.status.split_whitespace().next().unwrap_or("?")) },
+                ingress.as_str(),
+                "-",
+                if web_client_header { "web" } else { "api" },
+            ));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // ── K2SO #620 — password policy ─────────────────────────────────
         //
         // GET /cli/users/policy — AUTHORIZED (owner OR connect-user
@@ -5763,6 +5793,101 @@ async fn handle_one_request(
         // Matched on path ALONE (no is_post guard) so a stray GET hits
         // require_post's explicit 405 per feedback_post_only_route_guards.
         // Same isolated `token_ok` gate as the clone bundle/unpack arm.
+        // 0.40.22 pull-pack status poll (was a plain misc GET). Own arm so
+        // the clone gate runs on it like every other clone door (CL4).
+        "/cli/clone/pack-status" => {
+            let _ = stream.read(&mut buf).await;
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            let clone_who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            if let Err(r) = crate::clone_gate::check(&clone_who, crate::clone_gate::Door::PackStatus, ingress.as_str()) {
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let params = super::http::parse_params(&path, &query);
+            let result = crate::clone_routes::handle_clone_pack_status(&params);
+            super::http::send_response(&mut *stream, result.status, "application/json", &result.body).await;
+        }
+        // POST /cli/clone/preview — the names-only plan for the Clone dialog
+        // and `k2 clone preview` (prd-clone-carries-threads-and-vault-v1
+        // CL25). Clone gate first; the inventory walk runs off the loop.
+        p if p == "/cli/clone/preview" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            }
+            // Clone gate (prd-clone-carries-threads-and-vault-v1 §7.6): the
+            // owner, or a login with "Can clone" (+ the master switch for
+            // the personal-computer doors). Agents propose instead.
+            let clone_who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            if let Err(r) = crate::clone_gate::check(
+                &clone_who,
+                crate::clone_gate::Door::for_path(p).unwrap_or(crate::clone_gate::Door::Bundle),
+                ingress.as_str(),
+            ) {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let r = tokio::task::spawn_blocking(move || crate::clone_preview::handle(&clone_who, &body_bytes))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // Agent clone proposals (prd-clone-carries-threads-and-vault-v1
+        // §4.4, CL21): outside `/cli/clone/` so a passport can propose,
+        // list and withdraw its own; approve/deny/finish are people only
+        // (the handler classifies the caller; approve runs the clone gate).
+        p if crate::clone_proposal_routes::is_route(p) => {
+            if crate::clone_proposal_routes::is_post_route(p)
+                && !super::http::require_post(&mut *stream, &mut buf, is_post).await
+            {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::clone_proposal_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::clone_proposal_routes::too_large();
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body)
+                            .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let ingress_s = ingress.as_str().to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::clone_proposal_routes::handle(&p_owned, who, &body_bytes, &params, &ingress_s)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if p == "/cli/clone/pack" || p == "/cli/clone/pack-cleanup" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
@@ -5776,6 +5901,19 @@ async fn handle_one_request(
                     r#"{"error":"invalid or missing token"}"#,
                 )
                 .await;
+                return DispatchOutcome::Done;
+            }
+            // Clone gate (prd-clone-carries-threads-and-vault-v1 §7.6): the
+            // owner, or a login with "Can clone" (+ the master switch for
+            // the personal-computer doors). Agents propose instead.
+            let clone_who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            if let Err(r) = crate::clone_gate::check(
+                &clone_who,
+                crate::clone_gate::Door::for_path(p).unwrap_or(crate::clone_gate::Door::Bundle),
+                ingress.as_str(),
+            ) {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
@@ -5852,6 +5990,19 @@ async fn handle_one_request(
                     r#"{"error":"invalid or missing token"}"#,
                 )
                 .await;
+                return DispatchOutcome::Done;
+            }
+            // Clone gate (prd-clone-carries-threads-and-vault-v1 §7.6): the
+            // owner, or a login with "Can clone" (+ the master switch for
+            // the personal-computer doors). Agents propose instead.
+            let clone_who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            if let Err(r) = crate::clone_gate::check(
+                &clone_who,
+                crate::clone_gate::Door::for_path(p).unwrap_or(crate::clone_gate::Door::Bundle),
+                ingress.as_str(),
+            ) {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;

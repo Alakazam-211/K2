@@ -382,6 +382,18 @@ pub struct AppSettings {
     /// survives the load/update round-trip.
     #[serde(default)]
     pub listen_lan: bool,
+    /// Settings → General → "Allow cloning agents to people's personal
+    /// computers" (prd-clone-carries-threads-and-vault-v1 §4.2, D2 as
+    /// decided by Rosson 2026-10-16: **defaults ON**, so today's behaviour
+    /// holds until the owner restricts it). When off, the clone doors that
+    /// hand a bundle to a person's computer (`clone/pack`, and `clone/bundle`
+    /// called by a login) refuse Admin/Member logins with
+    /// `clone_personal_computers_off`; the owner token and Owner-role logins
+    /// are never blocked. Owner-only to change (`OWNER_ONLY_KEYS`); read per
+    /// request by the daemon's clone gate. Typed so the key survives the
+    /// load/update round-trip.
+    #[serde(default = "default_true")]
+    pub allow_clone_personal_computers: bool,
     /// Remote Session Layer 0 — master switch for remote shell/PTY sessions
     /// driven over Connect / API. **Defaults OFF** (fail-closed): independent
     /// of grants; when this is off, every remote-session drive attempt is
@@ -930,6 +942,7 @@ impl Default for AppSettings {
             api_enabled: false,
             airgap: false,
             listen_lan: false,
+            allow_clone_personal_computers: true,
             remote_sessions_enabled: false,
             web_client_enabled: true,
             agent_hooks: true,

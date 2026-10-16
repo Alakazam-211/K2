@@ -83,6 +83,9 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // App runtime preview (prd-k2-app-runtime-v1 AR28): runs App code as
     // the daemon user on the process engine, so only the Owner turns it on.
     "appsPreview",
+    // Clone permissions (prd-clone-carries-threads-and-vault-v1 CL22): the
+    // master switch for cloning agents to people's personal computers.
+    "allowClonePersonalComputers",
 ];
 
 /// Who is writing settings, resolved by the dispatcher from the request

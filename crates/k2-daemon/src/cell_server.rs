@@ -677,6 +677,19 @@ mod unix_impl {
             // passport (the handler refuses mutations with owner_only).
             // Agent hire over the cell socket: the bound session's passport.
             // Only the agent-verb hire paths pass require_hook here.
+            // Clone proposals: this cell's passport proposes, lists and
+            // withdraws for its own workspace (approve/deny/finish never
+            // pass require_hook on this socket).
+            p if crate::clone_proposal_routes::is_route(p) => {
+                if crate::clone_proposal_routes::is_post_route(p) && !is_post {
+                    return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());
+                }
+                if body.len() > crate::clone_proposal_routes::MAX_BODY {
+                    return from_cli(crate::clone_proposal_routes::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::clone_proposal_routes::handle(p, who, body, params, "cell"))
+            }
             p if crate::hire_routes::is_route(p) => {
                 if body.len() > crate::hire_routes::MAX_BODY {
                     return from_cli(crate::hire_routes::too_large());

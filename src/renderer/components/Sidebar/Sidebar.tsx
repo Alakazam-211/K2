@@ -33,6 +33,7 @@ import WorktreeDialog from './WorktreeDialog'
 import ProjectAvatar from './ProjectAvatar'
 import PresenceWorkspaceAvatars from '@/components/Presence/PresenceWorkspaceAvatars'
 import FocusGroupDropdown from './FocusGroupDropdown'
+import { RowDropLine, reorderedZoneIds, useRowDragReorder } from './row-drag-reorder'
 import ActiveBar from './ActiveBar'
 import { NavProjectTags } from './NavProjectTags'
 import { KeyCombo } from '@/components/KeySymbol'
@@ -688,6 +689,9 @@ function FocusGroupSelector(): React.JSX.Element {
 
 // ── Sidebar ──────────────────────────────────────────────────────────────────
 
+/** The nav's two reorderable lists. */
+type NavZone = 'pinned' | 'unpinned'
+
 export default function Sidebar(): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
@@ -757,86 +761,41 @@ export default function Sidebar(): React.JSX.Element {
     )
   }, [projects.length, focusGroupsEnabled])
 
-  // ── Drag-to-reorder state ──────────────────────────────────────────
-  const [dragId, setDragId] = useState<string | null>(null)
-  const [dragZone, setDragZone] = useState<'pinned' | 'unpinned' | null>(null)
-  const [dropIndex, setDropIndex] = useState<number | null>(null)
-  // 0.39.0: agentsRef retired — Agents drag zone no longer exists.
+  // ── Drag-to-reorder (shared with Home: same ghost, line, cursor) ──
+  // Writes the daemon's canonical workspace order (`projects/reorder`,
+  // optimistic in the store), the order Settings → Workspaces shows. A row
+  // moves only within its own list: Pinned, or the list under the focus
+  // group picker. Rows of other focus groups (not on screen) keep their
+  // slots; moving a workspace into another group stays a Settings drop.
+  const rowDrag = useRowDragReorder<NavZone>()
+  const startRowDrag = rowDrag.onRowMouseDown
   const pinnedRef = useRef<HTMLDivElement>(null)
   const unpinnedRef = useRef<HTMLDivElement>(null)
-  const dropIndexRef = useRef<number | null>(null)
+  // The lists as painted, read at drop time (the closure is from mousedown).
+  const zoneIdsRef = useRef<Record<NavZone, string[]>>({ pinned: [], unpinned: [] })
+  zoneIdsRef.current = {
+    pinned: pinnedProjects.map((p) => p.id),
+    unpinned: filteredProjects.map((p) => p.id),
+  }
 
   const handleProjectMouseDown = useCallback((
     e: React.MouseEvent,
     projectId: string,
-    zone: 'pinned' | 'unpinned'
+    zone: NavZone,
+    index: number,
   ) => {
-    if (e.button !== 0) return
-    if ((e.target as HTMLElement).closest('button')) return
-
-    const startX = e.clientX
-    const startY = e.clientY
-    let started = false
-
-    const handleMouseMove = (ev: MouseEvent): void => {
-      if (!started && (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 5)) {
-        started = true
-        setDragId(projectId)
-        setDragZone(zone)
-        document.body.style.cursor = 'grabbing'
-        document.body.style.userSelect = 'none'
-      }
-
-      if (!started) return
-
-      // Determine drop index based on mouse Y
-      const containerEl = (zone === 'pinned' ? pinnedRef : unpinnedRef).current
-      if (!containerEl) return
-
-      const items = containerEl.querySelectorAll('[data-project-id]')
-      let idx = 0
-      for (let i = 0; i < items.length; i++) {
-        const rect = items[i].getBoundingClientRect()
-        if (ev.clientY > rect.top + rect.height / 2) {
-          idx = i + 1
-        }
-      }
-      dropIndexRef.current = idx
-      setDropIndex(idx)
-    }
-
-    const handleMouseUp = (): void => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-
-      if (started) {
-        const allProjects = useProjectsStore.getState().projects
-        // 0.39.0: 'agents' drag zone retired; pinned zone now accepts ALL
-        // pinned workspaces regardless of agentMode.
-        const list = zone === 'pinned'
-          ? [...allProjects.filter((p) => p.pinned)]
-          : [...allProjects.filter((p) => !p.pinned)]
-        const di = dropIndexRef.current
-        const fromIdx = list.findIndex((p) => p.id === projectId)
-        if (fromIdx >= 0 && di !== null && fromIdx !== di && fromIdx !== di - 1) {
-          const item = list.splice(fromIdx, 1)[0]
-          const insertAt = di > fromIdx ? di - 1 : di
-          list.splice(insertAt, 0, item)
-          reorderProjects(list.map((p) => p.id))
-        }
-      }
-
-      setDragId(null)
-      setDragZone(null)
-      setDropIndex(null)
-      dropIndexRef.current = null
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-  }, [reorderProjects])
+    startRowDrag(e, {
+      zone,
+      index,
+      container: () => (zone === 'pinned' ? pinnedRef : unpinnedRef).current,
+      rowSelector: '[data-project-id]',
+      onDrop: (_from, gap) => {
+        const allIds = useProjectsStore.getState().projects.map((p) => p.id)
+        const ids = reorderedZoneIds(allIds, zoneIdsRef.current[zone], projectId, gap)
+        if (ids) void reorderProjects(ids)
+      },
+    })
+  }, [startRowDrag, reorderProjects])
 
   // Worktree dialog state
   const [worktreeDialog, setWorktreeDialog] = useState<{
@@ -1056,12 +1015,11 @@ export default function Sidebar(): React.JSX.Element {
               <div
                 key={project.id}
                 data-project-id={project.id}
-                style={{ opacity: dragId === project.id ? 0.4 : 1 }}
-                onMouseDown={(e) => handleProjectMouseDown(e, project.id, 'pinned')}
+                style={{ opacity: rowDrag.isDragging('pinned', idx) ? 0.4 : 1 }}
+                onMouseDown={(e) => handleProjectMouseDown(e, project.id, 'pinned', idx)}
+                onClickCapture={rowDrag.onRowClickCapture}
               >
-                {dragZone === 'pinned' && dropIndex === idx && (
-                  <div className="h-[2px] bg-[var(--color-accent)] mx-3" />
-                )}
+                {rowDrag.showsDropLineAt('pinned', idx) && <RowDropLine />}
                 <div>
                   <SingleProjectItem
                     project={project}
@@ -1074,9 +1032,7 @@ export default function Sidebar(): React.JSX.Element {
                 )
               })
             })()}
-            {dragZone === 'pinned' && dropIndex === pinnedProjects.length && (
-              <div className="h-[2px] bg-[var(--color-accent)] mx-3" />
-            )}
+            {rowDrag.showsDropLineAt('pinned', pinnedProjects.length) && <RowDropLine />}
           </div>
             </div>{/* scroll wrapper */}
           </div>{/* collapse wrapper */}
@@ -1094,25 +1050,22 @@ export default function Sidebar(): React.JSX.Element {
             <div
               key={project.id}
               data-project-id={project.id}
-              style={{ opacity: dragId === project.id ? 0.4 : 1 }}
-              onMouseDown={(e) => handleProjectMouseDown(e, project.id, 'unpinned')}
+              style={{ opacity: rowDrag.isDragging('unpinned', idx) ? 0.4 : 1 }}
+              onMouseDown={(e) => handleProjectMouseDown(e, project.id, 'unpinned', idx)}
+              onClickCapture={rowDrag.onRowClickCapture}
             >
-              {dragZone === 'unpinned' && dropIndex === idx && (
-                <div className="h-[2px] bg-[var(--color-accent)] mx-3" />
-              )}
+              {rowDrag.showsDropLineAt('unpinned', idx) && <RowDropLine />}
               <SingleProjectItem
                 project={project}
                 isActive={project.id === activeProjectId}
                 onContextMenu={handleContextMenu}
               />
-              {idx < filteredProjects.length - 1 && !(dragZone === 'unpinned' && dropIndex === idx + 1) && (
+              {idx < filteredProjects.length - 1 && !rowDrag.showsDropLineAt('unpinned', idx + 1) && (
                 <div className="border-b border-[var(--color-border)]" />
               )}
             </div>
           ))}
-          {dragZone === 'unpinned' && dropIndex === filteredProjects.length && (
-            <div className="h-[2px] bg-[var(--color-accent)] mx-3" />
-          )}
+          {rowDrag.showsDropLineAt('unpinned', filteredProjects.length) && <RowDropLine />}
         </div>
 
         {filteredProjects.length === 0 && (

@@ -69,6 +69,7 @@ import { SquareCheckbox } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
 import { computeErrorMessage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
 import { metaChordLabel } from '@/lib/shortcut-label'
+import { reorderedZoneIds } from '@/components/Sidebar/row-drag-reorder'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -278,7 +279,6 @@ export function ProjectsSection(): React.JSX.Element {
   const [reorderDropIndex, setReorderDropIndex] = useState<number | null>(null)
   const [reorderZone, setReorderZone] = useState<string | null>(null)
   const reorderDropRef = useRef<number | null>(null)
-  const reorderZoneRef = useRef<string | null>(null)
   const dragOverGroupRef = useRef<string | null>(null)
 
   // Auto-focus search when navigating to Workspaces page
@@ -319,7 +319,6 @@ export function ProjectsSection(): React.JSX.Element {
         started = true
         setReorderDragId(projectId)
         setReorderZone(zone)
-        reorderZoneRef.current = zone
         document.body.style.cursor = 'grabbing'
         document.body.style.userSelect = 'none'
       }
@@ -367,31 +366,19 @@ export function ProjectsSection(): React.JSX.Element {
         } else if (hoveredGroupId === '__ungrouped__') {
           await assignProjectToGroup(projectId, null)
         } else {
-          // Within-zone reorder
-          const currentProjects = useProjectsStore.getState().projects
-          let list: typeof projects = []
-          const z = reorderZoneRef.current
-          if (z === 'pinned') {
-            // 0.39.0: pinned zone includes ALL pinned workspaces
-            // regardless of agentMode. The pre-0.39.0 'agents' zone
-            // was retired — agent-mode workspaces now flow through
-            // the same zones as any other workspace.
-            list = [...currentProjects.filter((p) => p.pinned)]
-          } else if (z === 'ungrouped' || z === 'flat') {
-            list = [...currentProjects.filter((p) => !p.pinned && !p.focusGroupId)]
-          } else if (z?.startsWith('group:')) {
-            const gid = z.slice(6)
-            list = [...currentProjects.filter((p) => p.focusGroupId === gid)]
-          }
-
+          // Within-zone reorder. The zone is the rows as painted (search
+          // and focus-group filters included) — the drop gap counts those.
+          // Send the full order (the Agents nav does the same) so no two
+          // workspaces end up on one tab order.
+          const container = document.querySelector(containerSelector)
+          const zoneIds = container
+            ? Array.from(container.querySelectorAll<HTMLElement>('[data-settings-project-id]'))
+                .map((el) => el.dataset.settingsProjectId ?? '')
+            : []
           const di = reorderDropRef.current
-          const fromIdx = list.findIndex((p) => p.id === projectId)
-          if (fromIdx >= 0 && di !== null && fromIdx !== di && fromIdx !== di - 1) {
-            const item = list.splice(fromIdx, 1)[0]
-            const insertAt = di > fromIdx ? di - 1 : di
-            list.splice(insertAt, 0, item)
-            reorderProjects(list.map((p) => p.id))
-          }
+          const allIds = useProjectsStore.getState().projects.map((p) => p.id)
+          const ids = di === null ? null : reorderedZoneIds(allIds, zoneIds, projectId, di)
+          if (ids) void reorderProjects(ids)
         }
       }
 
@@ -400,7 +387,6 @@ export function ProjectsSection(): React.JSX.Element {
       setReorderDropIndex(null)
       setDragOverGroupId(null)
       reorderDropRef.current = null
-      reorderZoneRef.current = null
     }
 
     document.addEventListener('mousemove', handleMouseMove)

@@ -191,10 +191,21 @@ fn live() -> &'static Mutex<HashMap<String, Vec<BoxForward>>> {
 pub(crate) fn record_live(app: &str, answer: &J) {
     let f: Vec<BoxForward> = serde_json::from_value(answer["boxForwards"].clone()).unwrap_or_default();
     live().lock().unwrap_or_else(|e| e.into_inner()).insert(app.to_string(), f);
+    if let Some(gw) = answer["gwPort"].as_u64().and_then(|g| u16::try_from(g).ok()) {
+        live_gw().lock().unwrap_or_else(|e| e.into_inner()).insert(app.to_string(), gw);
+    }
+}
+
+/// The gateway port a running guarded App was started on (its nft rule's
+/// key), for a reload when its link isn't open.
+fn live_gw() -> &'static Mutex<HashMap<String, u16>> {
+    static G: OnceLock<Mutex<HashMap<String, u16>>> = OnceLock::new();
+    G.get_or_init(Default::default)
 }
 
 pub(crate) fn forget_live(app: &str) {
     live().lock().unwrap_or_else(|e| e.into_inner()).remove(app);
+    live_gw().lock().unwrap_or_else(|e| e.into_inner()).remove(app);
 }
 
 fn live_of(app: &str) -> Option<Vec<BoxForward>> {
@@ -257,7 +268,8 @@ pub(crate) fn allowed_ports(app: &str) -> Vec<u16> {
 /// rule now when it runs (its gateway link is open). `Ok(None)` when the
 /// App isn't running (its next start installs the rule).
 pub(crate) fn changed(app: &str) -> Result<Option<Vec<u16>>, String> {
-    let Some(gw) = super::gateway::port_of(app) else { return Ok(None) };
+    let gw = super::gateway::port_of(app).or_else(|| live_gw().lock().unwrap_or_else(|e| e.into_inner()).get(app).copied());
+    let Some(gw) = gw else { return Ok(None) };
     super::guarded::install_gateway_rule(app, gw)?;
     Ok(Some(allowed_ports(app)))
 }

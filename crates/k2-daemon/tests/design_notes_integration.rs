@@ -153,6 +153,20 @@ fn thread_len(conv: &str) -> usize {
     k2_core::overlay::read_thread(conv, 0).expect("read thread").len()
 }
 
+/// Every Thread item of the room: the first post's wake starts a fresh
+/// session and may re-pin the Chat to a new conversation, so later posts
+/// land there while the first stays where it was posted.
+fn room_items(port: u16, room: &Room) -> usize {
+    let r = http(port, "GET", &format!("/cli/thread?token={OWNER_TOKEN}&addr={}&limit=1", room.handle), None, None);
+    assert_eq!(r.status, 200, "{}", r.body);
+    let now = r.json()["conversation_id"].as_str().expect("conversation_id").to_string();
+    if now == room.conv {
+        thread_len(&room.conv)
+    } else {
+        thread_len(&room.conv) + thread_len(&now)
+    }
+}
+
 fn notes(workspace: &str) -> String {
     serde_json::json!({
         "workspace": workspace,
@@ -242,7 +256,7 @@ async fn design_notes_gates_single_item_and_retry() {
         let r = http(port, "POST", &format!("/cli/browser/notes/redeliver?token={OWNER_TOKEN}"), None, Some(&retry));
         assert_eq!(r.status, 200, "redeliver: {}", r.body);
         assert_eq!(r.json()["threadItemId"], item_id.as_str());
-        assert_eq!(thread_len(&room.conv), 1, "Retry never posts a second item");
+        assert_eq!(room_items(port, &room), 1, "Retry never posts a second item");
 
         // The member, once the workspace opts in.
         k2_core::workspace::settings::update_project_setting(&room.path.to_string_lossy(), "allow_remote_instruct", "1")
@@ -250,7 +264,7 @@ async fn design_notes_gates_single_item_and_retry() {
         let r = http(port, "POST", &format!("/cli/browser/notes?token={member}"), None, Some(&body));
         assert_eq!(r.status, 200, "member with opt-in: {}", r.body);
         assert_eq!(r.json()["from"], "dmmember", "{}", r.body);
-        assert_eq!(thread_len(&room.conv), 2);
+        assert_eq!(room_items(port, &room), 2);
 
         // An agent passport: its own workspace yes, another no.
         let principal = HookPrincipal {
@@ -266,7 +280,7 @@ async fn design_notes_gates_single_item_and_retry() {
         );
         let r = http(port, "POST", "/cli/browser/notes", Some(&agent), Some(&body));
         assert_eq!(r.status, 200, "agent, own workspace: {}", r.body);
-        assert_eq!(thread_len(&room.conv), 3);
+        assert_eq!(room_items(port, &room), 3);
         let r = http(port, "POST", "/cli/browser/notes", Some(&agent), Some(&notes(&other.handle)));
         assert_eq!(r.status, 403, "agent, another workspace: {}", r.body);
         assert_eq!(thread_len(&other.conv), 0);

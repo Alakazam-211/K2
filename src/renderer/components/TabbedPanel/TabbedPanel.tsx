@@ -10,7 +10,7 @@ import { Surface } from '@/components/ui'
 
 type PanelTab = 'files' | 'changes' | 'history' | 'workspace'
 
-const TAB_LABELS: Record<PanelTab, string> = {
+export const TAB_LABELS: Record<PanelTab, string> = {
   files: 'Files',
   changes: 'Changes',
   history: 'Chats',

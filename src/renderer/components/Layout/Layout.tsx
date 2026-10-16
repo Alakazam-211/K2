@@ -4,6 +4,10 @@ import IconRail from '../Sidebar/IconRail'
 import { Surface } from '../ui'
 import { useSidebarStore } from '../../stores/sidebar'
 import { usePanelsStore } from '../../stores/panels'
+import { usePageViewStore } from '../../stores/page-view'
+import { TAB_LABELS } from '../TabbedPanel/TabbedPanel'
+import DrawerHandle from './DrawerHandle'
+import { drawerHandlesOn } from './drawer-handles'
 
 interface LayoutProps {
   /** Content for the primary sidebar (projects list) — shown when expanded */
@@ -39,6 +43,13 @@ export default function Layout({
   const rightPanelOpen = usePanelsStore((s) => s.rightPanelOpen)
   const toggleLeftPanel = usePanelsStore((s) => s.toggleLeftPanel)
   const toggleRightPanel = usePanelsStore((s) => s.toggleRightPanel)
+  const leftTabs = usePanelsStore((s) => s.leftPanelTabs)
+  const rightTabs = usePanelsStore((s) => s.rightPanelTabs)
+  // Drawer-handles experiment: on these pages the drawers open from edge
+  // handles and the top bar drops its drawer buttons.
+  const handles = usePageViewStore((s) => drawerHandlesOn(s.page))
+  const leftHandle = handles && !!leftPanel && leftTabs.length > 0
+  const rightHandle = handles && !!rightPanel && rightTabs.length > 0
 
   // App shell — ST3: window inset + canvas layer (both flush/0 in Square)
   return (
@@ -51,6 +62,7 @@ export default function Layout({
         rightPanelVisible={rightPanelOpen}
         onToggleLeftPanel={toggleLeftPanel}
         onToggleRightPanel={toggleRightPanel}
+        showDrawerToggles={!handles}
       />
 
       {/* Content area — ST3: sidebar | panes gap (0 in Square) */}
@@ -81,8 +93,27 @@ export default function Layout({
           </div>
         )}
 
-        {/* Main content (terminal) */}
-        <div className="flex-1 overflow-hidden">{children}</div>
+        {/* Main content (terminal). The outer box does not clip, so an
+            open drawer's handle can sit across the drawer border; the
+            inner box clips the room. Same tree with or without handles,
+            so switching page never remounts the room. */}
+        <div className="relative min-w-0 flex-1">
+          {leftHandle && (
+            <DrawerHandle
+              side="left"
+              open={leftPanelOpen}
+              label={leftTabs.map((t) => TAB_LABELS[t]).join(', ')}
+            />
+          )}
+          <div className="h-full w-full overflow-hidden">{children}</div>
+          {rightHandle && (
+            <DrawerHandle
+              side="right"
+              open={rightPanelOpen}
+              label={rightTabs.map((t) => TAB_LABELS[t]).join(', ')}
+            />
+          )}
+        </div>
 
         {/* Right auxiliary panel (tabbed) */}
         {rightPanelOpen && rightPanel && (

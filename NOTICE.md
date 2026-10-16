@@ -116,6 +116,19 @@ widget library below). That copy is a pre-bundled classic script for sealed
 widget frames, ships with the desktop app only, and lacks the 3MF and PLY
 loaders, so the file viewer bundles its own ES-module copy.
 
+## Third-party: CodeMirror merge view (MIT)
+
+The Changes tab's diff viewer (inline and side-by-side) uses
+`@codemirror/merge`, bundled into a lazy chunk that loads only when a
+Changes tab shows a diff.
+
+| | |
+|--|--|
+| **What** | `@codemirror/merge` 6.12.2, used by `src/renderer/components/Changes/viewer/` |
+| **Upstream** | [codemirror/merge](https://github.com/codemirror/merge) |
+| **License** | **MIT** (Copyright (C) 2018-2022 by Marijn Haverbeke and others) — full text in the package's `LICENSE` |
+| **K2 code** | Remains **FSL-1.1-Apache-2.0**. This package does **not** relicense the product. |
+
 ## Third-party: Zen widget library
 
 <!-- zen-lib:begin (generated from src/shared/zen-lib.json by scripts/vendor-zen-lib.sh; do not edit by hand) -->

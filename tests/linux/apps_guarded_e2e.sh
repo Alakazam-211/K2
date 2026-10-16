@@ -416,7 +416,11 @@ printf '%s' "$sh_out" | grep -q 'shell-42' || fail "shell output: $sh_out"
 printf '%s' "$sh_out" | grep -q 'start of k2 app shell' || fail "shell banner: $sh_out"
 [ "$rc" = 5 ] || fail "shell exit code (got $rc)"
 sh_out="$(printf 'printf "\\033]52;c;ZXZpbA==\\007x\\033]0;t\\007y\\n"\nexit\n' | K2 app shell esc-a 2>&1 | od -c)"
-printf '%s' "$sh_out" | grep -q ']   5   2' && fail "OSC 52 reached the client: $sh_out"
+# The terminal echoes the typed command (the literal text \033]52…, which
+# od shows as `\   0   3   3`); only a real ESC byte (od `033`) followed
+# by `]` is an OSC sequence. Stripped, the output keeps "xy".
+printf '%s' "$sh_out" | grep -q '033   ]' && fail "an OSC sequence (52 or title) reached the client: $sh_out"
+printf '%s' "$sh_out" | grep -q 'x   y' || fail "the printed text around the stripped sequences is missing: $sh_out"
 ok "k2 app shell: piped session, banners, exit code, OSC 52/title stripped"
 K2 app history esc-a --json | python3 -c 'import json,sys; ev=[a["event"] for a in json.load(sys.stdin)["audit"]]; assert "exec" in ev and "shell_start" in ev and "shell_end" in ev, ev'
 grep -q '"event":"app-exec"' "$K2HOME/.k2/auth-audit.jsonl" || fail "Access Audit has no app-exec"
@@ -568,6 +572,48 @@ req helper "pg hba-app remove esc-a" >/tmp/hba3.json
 jq_ 'assert v["rc"]==0, v' /tmp/hba3.json
 grep -q app_esc_a "$HBA" && fail "hba line left"
 ok "pg hba-app: the line lands above every rule, Postgres reloads it, the daemon's child is refused (77), remove restores the file"
+
+echo "== the process exception's sandbox under real systemd (helper level) =="
+# Last: a stand-in replaces the engine binary (this VM is thrown away).
+hreq() { req helper "$1" >/tmp/h.json; jq_ "assert v['rc']==0, v" /tmp/h.json || fail "helper $1: $(cat /tmp/h.json)"; }
+hreq "apps ensure-process-user"
+hreq "apps nft apply 38600-38899 38900-38999 5432"
+hreq "apps process-unit on"
+cat >/usr/local/libexec/k2-app-engine <<'SH'
+#!/bin/bash
+[ "$1" = process-run ] || exit 2
+{
+	echo "user=$(id -un)"
+	if ls /home/k2 >/dev/null 2>&1; then echo home=visible; else echo home=hidden; fi
+	if unshare -U true 2>/dev/null; then echo userns=ok; else echo userns=denied; fi
+	grep CapBnd /proc/self/status | awk '{print "capbnd="$2}'
+	if touch ./w 2>/dev/null; then echo code=writable; else echo code=ro; fi
+	if ls /var/lib/k2app/engine >/dev/null 2>&1; then echo k2apphome=visible; else echo k2apphome=hidden; fi
+	if timeout 3 bash -c 'echo >/dev/tcp/1.1.1.1/443' 2>/dev/null; then echo internet=open; else echo internet=denied; fi
+	if [ -e /dev/vda ] || [ -e /dev/sda ]; then echo disks=visible; else echo disks=hidden; fi
+	echo "mac=$(tr -d '\0' </proc/self/attr/current)"
+} >"$STATE_DIRECTORY/report.tmp" && mv "$STATE_DIRECTORY/report.tmp" "$STATE_DIRECTORY/report"
+exec sleep 300
+SH
+chmod 0755 /usr/local/libexec/k2-app-engine
+install -d -o k2app -g k2app -m 0755 /var/lib/k2app/apps/pxe/process/code
+hreq "apps process caps pxe 256 -.41943040.-.2000"
+hreq "apps process start pxe"
+R=/var/lib/k2appx/pxe/report
+for _ in $(seq 1 50); do [ -f "$R" ] && break; sleep 0.2; done
+[ -f "$R" ] || fail "the process unit did not start: $(systemctl status k2app-process@pxe.service --no-pager 2>&1 | tail -n 6)"
+sed 's/^/    /' "$R"
+for want in user=k2appx home=hidden userns=denied capbnd=0000000000000000 code=ro k2apphome=hidden internet=denied disks=hidden; do
+	grep -qx "$want" "$R" || fail "process exception sandbox: want $want: $(tr '\n' ' ' <"$R")"
+done
+if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ]; then
+	mac_ok "$(sed -n 's/^mac=//p' "$R")" || fail "the process exception is not under k2-app: $(grep '^mac=' "$R")"
+fi
+PCG="$(systemctl show -p ControlGroup --value k2app-process@pxe.service)"
+grep -q 'wbps=41943040' "/sys/fs/cgroup$PCG/io.max" || fail "io.max on the process unit: $(cat "/sys/fs/cgroup$PCG/io.max" 2>&1)"
+hreq "apps process stop pxe"
+systemctl is-active --quiet k2app-process@pxe.service && fail "the process unit still runs after stop"
+ok "k2app-process@pxe: k2appx, home and engine state hidden, code read-only, no userns, no capabilities, no internet, no disks, k2-app MAC, io.max ceiling; stop works"
 
 echo
 echo "apps_guarded_e2e: $pass checks passed"

@@ -243,7 +243,11 @@ expect_rc 0 "nft re-apply"
 kill "$L1" "$L2" "$L3" "$L4"
 ok "k2app: gateway and proxy ports without a per-App rule, other loopback and this host's address ($MYIP) no (control without the table: yes); the daemon user unaffected"
 
-echo "== the process exception (system unit, User=k2app) =="
+echo "== the process exception (system unit, User=k2appx) =="
+# Lane D: the exception runs as its own system user, never k2app.
+req daemon apps ensure-process-user
+expect_rc 0 "ensure-process-user"
+id k2appx >/dev/null || fail "k2appx user"
 req daemon apps process-unit on
 expect_rc 0 "process-unit on"
 systemctl cat k2app-process@.service >/dev/null || fail "unit not loaded"
@@ -260,23 +264,30 @@ cat >/usr/local/libexec/k2-app-engine <<'SH'
 	if unshare -U true 2>/dev/null; then echo userns=ok; else echo userns=denied; fi
 	grep CapBnd /proc/self/status | awk '{print "capbnd="$2}'
 	echo "pwd=$(pwd)"
-} >report.tmp && mv report.tmp report
+	if touch ./w 2>/dev/null; then echo code=writable; else echo code=ro; fi
+	if ls /var/lib/k2app/engine >/dev/null 2>&1; then echo k2apphome=visible; else echo k2apphome=hidden; fi
+} >"$STATE_DIRECTORY/report.tmp" && mv "$STATE_DIRECTORY/report.tmp" "$STATE_DIRECTORY/report"
 exec sleep 300
 SH
 chmod 0755 /usr/local/libexec/k2-app-engine
+# What the engine stages (process-stage/activate): the code folder the
+# unit binds read-only, and a stand-in for the engine's own state.
+install -d -o k2app -g k2app -m 0755 /var/lib/k2app/apps/jobs/process/code /var/lib/k2app/engine
 req agent apps process start jobs
 expect_rc 77 "an agent starting an App"
 req daemon apps process start jobs
 expect_rc 0 "process start jobs"
-R=/var/lib/k2app/apps/jobs/report
+R=/var/lib/k2appx/jobs/report
 for _ in $(seq 1 50); do [ -f "$R" ] && break; sleep 0.2; done
 if [ -f "$R" ]; then
 	sed 's/^/    /' "$R"
-	grep -q '^user=k2app$' "$R" || fail "runs as k2app"
+	grep -q '^user=k2appx$' "$R" || fail "runs as k2appx"
+	grep -q '^code=ro$' "$R" || fail "the staged code is writable"
+	grep -q '^k2apphome=hidden$' "$R" || fail "k2app's home (engine state) is visible"
 	grep -q '^home=hidden$' "$R" || fail "ProtectHome not applied"
 	grep -q '^userns=denied$' "$R" || fail "RestrictNamespaces not applied"
 	grep -q '^capbnd=0000000000000000$' "$R" || fail "capabilities not dropped"
-	ok "k2app-process@jobs: user k2app, home hidden, userns denied, no capabilities"
+	ok "k2app-process@jobs: user k2appx, home hidden, code read-only, k2app's home hidden, userns denied, no capabilities"
 else
 	info "the unit did not start inside this container: $(systemctl status k2app-process@jobs.service --no-pager 2>&1 | tail -n 4 | tr '\n' ' ')"
 	journalctl -u k2app-process@jobs.service --no-pager 2>/dev/null | tail -n 5 | sed 's/^/    /' || true

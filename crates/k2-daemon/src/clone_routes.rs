@@ -26,6 +26,13 @@
 //!   the client has downloaded it (job-id-keyed — the route never takes a
 //!   path, so it can only ever delete a bundle THIS daemon packed).
 //!
+//! 0.46.0 (prd-clone-carries-threads-and-vault-v1 §6): `bundle` / `pack`
+//! also seal the chosen vault secrets to the destination vault
+//! (`vault_target`, per-secret `secrets`, `clone_id`, and a `clone-carry`
+//! `confirm_token` for any copy) and `unpack` adds them to the newly
+//! registered project by id (`vault_carry_b64`). `.env` files as files
+//! (`carry_secrets`) need the same confirm (D4). See `clone_vault`.
+//!
 //! All POSTs are gated by `token_ok` in the dispatcher (the same
 //! isolated-gate pattern as `fs/upload-binary`), so these handlers assume
 //! the caller is already authenticated.
@@ -59,10 +66,41 @@ struct BundleBody {
     /// dialog's "Bring the Thread" is ticked by default, D3).
     #[serde(default)]
     threads: ThreadsChoice,
-    /// The clone id to stamp (a proposal or the dialog may pick it so the
-    /// vault carry can bind to it). Absent = minted here.
+    /// The destination vault (its `GET /cli/vault/recipient`): seal the
+    /// chosen vault secrets to it (0.46.0, see `clone_vault`).
+    #[serde(default)]
+    vault_target: Option<crate::clone_vault::VaultTarget>,
+    /// "This is my own server/computer": keeps "given by a person" marks.
+    #[serde(default)]
+    own_box_move: bool,
+    /// Per-secret choices by name (`copy` | `blank` | `skip`); unnamed
+    /// rows keep their defaults (`clone/vault/plan`).
+    #[serde(default)]
+    secrets: std::collections::BTreeMap<String, crate::clone_vault::Choice>,
+    /// The clone's id (written to the manifest; the carry is bound to it).
+    /// The client makes it before the confirm; minted here when absent.
     #[serde(default)]
     clone_id: Option<String>,
+    /// The `clone-carry` confirm, when any secret is copied or `.env`
+    /// files are sent (`carry_secrets`, D4).
+    #[serde(default)]
+    confirm_token: Option<String>,
+}
+
+impl BundleBody {
+    /// The vault half of this request (`clone_vault::CarryAsk`).
+    fn carry_ask(&self) -> crate::clone_vault::CarryAsk {
+        crate::clone_vault::CarryAsk {
+            project_path: Some(self.project_path.clone()),
+            project_id: None,
+            vault_target: self.vault_target.clone(),
+            clone_id: self.clone_id.clone(),
+            secrets: self.secrets.clone(),
+            own_box_move: self.own_box_move,
+            send_env_files: self.carry_secrets,
+            confirm_token: self.confirm_token.clone(),
+        }
+    }
 }
 
 /// How a bundle build failed — carried out of [`build_workspace_bundle`]
@@ -292,11 +330,25 @@ fn build_workspace_bundle(
 /// K2 settings from the projects DB row, tar.gz's everything to
 /// `~/.k2so/clone-tmp/<name>-<ts>.tar.gz`, and returns the bundle path + a
 /// summary (entry count, scrubbed-secret count, byte size).
-pub fn handle_clone_bundle(body: &[u8]) -> CliResponse {
+///
+/// With `vault_target`, also seals the chosen vault secrets to the
+/// destination vault and returns them as the opaque `vault_carry_b64`,
+/// plus a names-only `vault_carry` report. A copy (or `.env` files) without
+/// a valid `clone-carry` confirm refuses the whole request (403
+/// `vault_confirm_required`): nothing is bundled or sealed.
+pub fn handle_clone_bundle(
+    body: &[u8],
+    vault_caller: Option<crate::vault::actor::VaultCaller>,
+) -> CliResponse {
     let b: BundleBody = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
+    let prepared = match crate::clone_vault::prepare(&b.carry_ask(), vault_caller.as_ref()) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let clone_id = clone_id_for(prepared.as_ref(), b.clone_id.as_deref());
 
     let opts = clone::CloneOptions {
         include_all_history: !b.live_only,
@@ -309,27 +361,41 @@ pub fn handle_clone_bundle(body: &[u8]) -> CliResponse {
         None => return CliResponse::internal_error("cannot resolve home directory"),
     };
 
-    let out = match build_workspace_bundle(&b.project_path, &opts, &home, b.threads, b.clone_id.clone()) {
+    let out = match build_workspace_bundle(&b.project_path, &opts, &home, b.threads, Some(clone_id)) {
         Ok(o) => o,
         Err(BundleError::BadRequest(e)) => return CliResponse::bad_request(e),
         Err(BundleError::Internal(e)) => return CliResponse::internal_error(e),
     };
 
-    CliResponse::ok_json(
-        serde_json::json!({
-            "bundle_path": out.bundle_path.to_string_lossy(),
-            "clone_id": out.clone_id,
-            "manifest_summary": {
-                "entry_count": out.entry_count,
-                "scrubbed_secret_count": out.scrubbed_count,
-                "size_bytes": out.size_bytes,
-                "include_all_history": !b.live_only,
-                "carry_secrets": b.carry_secrets,
-                "threads": out.threads,
-            }
-        })
-        .to_string(),
-    )
+    let mut resp = serde_json::json!({
+        "bundle_path": out.bundle_path.to_string_lossy(),
+        "clone_id": out.clone_id,
+        "manifest_summary": {
+            "entry_count": out.entry_count,
+            "scrubbed_secret_count": out.scrubbed_count,
+            "size_bytes": out.size_bytes,
+            "include_all_history": !b.live_only,
+            "carry_secrets": b.carry_secrets,
+            "threads": out.threads,
+        },
+    });
+    if let Some(p) = prepared.as_ref().filter(|p| p.ask.vault_target.is_some()) {
+        let sealed = crate::clone_vault::seal_prepared(p, vault_caller.as_ref());
+        resp["vault_carry"] = sealed.report;
+        if let Some(c) = sealed.carry_b64 {
+            resp["vault_carry_b64"] = serde_json::Value::String(c);
+        }
+    }
+    CliResponse::ok_json(resp.to_string())
+}
+
+/// The clone id for a bundle: the prepared carry's, else the client's,
+/// else a fresh one.
+fn clone_id_for(prepared: Option<&crate::clone_vault::Prepared>, given: Option<&str>) -> String {
+    prepared
+        .map(|p| p.clone_id.clone())
+        .or_else(|| given.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string))
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
 }
 
 #[derive(Deserialize)]
@@ -338,11 +404,21 @@ struct UnpackBody {
     bundle_path: String,
     /// Parent folder under which to create `<source-name>/`.
     dest_parent: String,
+    /// The source's sealed vault carry for this workspace (opaque; see
+    /// `clone_vault`). Imported into the newly registered project.
+    #[serde(default)]
+    vault_carry_b64: Option<String>,
 }
 
 /// `POST /cli/clone/unpack` — extract + register + configure on the
 /// DESTINATION daemon. Returns the new project row + the final dest path.
-pub fn handle_clone_unpack(body: &[u8]) -> CliResponse {
+/// With `vault_carry_b64`, also adds the moved vault secrets to the new
+/// project and reports `vault_imported` / `vault_skipped` (names only); a
+/// carry problem never fails the unpack.
+pub fn handle_clone_unpack(
+    body: &[u8],
+    vault_caller: Option<crate::vault::actor::VaultCaller>,
+) -> CliResponse {
     let b: UnpackBody = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
@@ -353,25 +429,63 @@ pub fn handle_clone_unpack(body: &[u8]) -> CliResponse {
         None => return CliResponse::internal_error("cannot resolve home directory"),
     };
 
-    match unpack_and_register_with_threads(
+    // The vault carry lands after the clone's identity and BEFORE its
+    // Threads, so the Threads import knows which secrets were copied (its
+    // secret-card references then point at the clone's copies).
+    let mut vault_out: Option<serde_json::Value> = None;
+    let carry = b.vault_carry_b64.as_deref().filter(|c| !c.trim().is_empty());
+    let mut carry_hook = |project: &Project, manifest: &clone::CloneManifest| -> std::collections::HashSet<String> {
+        let Some(carry) = carry else { return Default::default() };
+        // By the new project's id and the bundle's clone id only (CL12,
+        // CL26). Its leave-blank cards wait until the Threads are in.
+        let out = crate::clone_vault::with_cards_deferred(|| {
+            crate::clone_vault::import_into_project(
+                crate::vault::get(),
+                vault_caller.as_ref(),
+                carry,
+                &project.id,
+                manifest.clone_id.as_deref(),
+            )
+        });
+        let copied = crate::clone_vault::imported_names(&out);
+        vault_out = Some(out);
+        copied
+    };
+    match unpack_and_register_with_carry(
         std::path::Path::new(&b.bundle_path),
         std::path::Path::new(&b.dest_parent),
         &home,
+        &mut carry_hook,
     ) {
         Ok(out) => {
             let threads = out.threads.as_ref();
-            CliResponse::ok_json(
-                serde_json::json!({
-                    "project": out.project,
-                    "dest_path": out.dest_path,
-                    "clone_id": out.clone_id,
-                    "threads_imported": threads.map_or(0, |r| r.docs_imported),
-                    "threads_skipped": threads.map_or(0, |r| r.docs_skipped),
-                    "threads": out.threads,
-                    "threads_error": out.threads_error,
-                })
-                .to_string(),
-            )
+            let mut resp = serde_json::json!({
+                "project": out.project,
+                "dest_path": out.dest_path,
+                "clone_id": out.clone_id,
+                "threads_imported": threads.map_or(0, |r| r.docs_imported),
+                "threads_skipped": threads.map_or(0, |r| r.docs_skipped),
+                "threads": out.threads,
+                "threads_error": out.threads_error,
+            });
+            if let Some(mut v) = vault_out {
+                // The Threads are in: post the leave-blank cards on the
+                // clone's own Thread now, or keep them until a pending
+                // import settles onto its pin (CL18).
+                let posted = crate::clone_vault::post_deferred_cards(&out.project.id);
+                if !crate::clone_vault::has_deferred_cards(&out.project.id) {
+                    v["vault_cards_deferred"] = serde_json::json!([]);
+                }
+                if !posted.is_empty() {
+                    v["vault_cards_posted"] = serde_json::json!(posted);
+                }
+                if let (Some(dst), Some(src)) = (resp.as_object_mut(), v.as_object()) {
+                    for (k, val) in src {
+                        dst.insert(k.clone(), val.clone());
+                    }
+                }
+            }
+            CliResponse::ok_json(resp.to_string())
         }
         Err(e) => CliResponse::bad_request(e),
     }
@@ -409,6 +523,19 @@ pub fn unpack_and_register_with_threads(
     bundle_path: &std::path::Path,
     dest_parent: &std::path::Path,
     home: &std::path::Path,
+) -> Result<UnpackOutcome, String> {
+    unpack_and_register_with_carry(bundle_path, dest_parent, home, &mut |_, _| Default::default())
+}
+
+/// [`unpack_and_register_with_threads`] with the vault carry (slice A) in
+/// between: `carry` runs after the clone's identity is applied and before
+/// its Threads import, and returns the secret names it copied, so the
+/// imported secret cards can point at the clone's copies.
+pub fn unpack_and_register_with_carry(
+    bundle_path: &std::path::Path,
+    dest_parent: &std::path::Path,
+    home: &std::path::Path,
+    carry: &mut dyn FnMut(&Project, &clone::CloneManifest) -> std::collections::HashSet<String>,
 ) -> Result<UnpackOutcome, String> {
     // 1. Extract files at recomputed paths; get the manifest back.
     let (result, manifest) = clone::unpack_bundle(bundle_path, dest_parent, home)?;
@@ -521,11 +648,14 @@ pub fn unpack_and_register_with_threads(
         }
     }
 
-    // 5. Threads (slice B): import `threads/threads.json` under the clone's
+    // 5. Vault carry (slice A), before the Threads: the names it copied.
+    let copied = carry(&project, &manifest);
+
+    // 6. Threads (slice B): import `threads/threads.json` under the clone's
     //    pin / sidecar keys / pending key. Never fails the unpack.
     let (threads, threads_error) = match result.threads_json.as_deref() {
         None => (None, None),
-        Some(bytes) => match import_threads_for_clone(&project.id, &manifest, bytes, &Default::default()) {
+        Some(bytes) => match import_threads_for_clone(&project.id, &manifest, bytes, &copied) {
             Ok(rep) => {
                 log_debug!(
                     "[daemon/clone] imported {} Thread line(s) into {} conversation(s) (pending: {}, detached: {})",
@@ -643,6 +773,31 @@ pub struct PackJob {
     pub threads: Option<ThreadsSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The sealed vault carry for the destination (opaque), when one was
+    /// asked for and sealed. Cleared by `pack-cleanup`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault_carry_b64: Option<String>,
+    /// Names-only report of the vault carry (or why there is none).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault_carry: Option<serde_json::Value>,
+}
+
+impl PackJob {
+    fn running(job_id: String) -> Self {
+        PackJob {
+            job_id,
+            phase: "running",
+            bundle_path: None,
+            size_bytes: None,
+            entry_count: None,
+            scrubbed_secret_count: None,
+            clone_id: None,
+            threads: None,
+            error: None,
+            vault_carry_b64: None,
+            vault_carry: None,
+        }
+    }
 }
 
 fn pack_jobs() -> &'static Mutex<std::collections::HashMap<String, PackJob>> {
@@ -695,12 +850,14 @@ fn new_pack_job_id() -> String {
 /// Validation that would make the job fail instantly happens HERE so the
 /// caller gets a 400 instead of a job that flips to `failed`; the deep
 /// work runs on a worker thread. Returns `{ job_id }`.
-pub fn handle_clone_pack(body: &[u8]) -> CliResponse {
+pub fn handle_clone_pack(
+    body: &[u8],
+    vault_caller: Option<crate::vault::actor::VaultCaller>,
+) -> CliResponse {
     let b: BundleBody = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
-
     // Path validation, same chokepoint as the fs routes (empty / traversal
     // relative paths / nonexistent → 400, and the path is canonicalized so
     // the registered-workspace comparison below can't be dodged with `..`).
@@ -725,6 +882,14 @@ pub fn handle_clone_pack(body: &[u8]) -> CliResponse {
         None => return CliResponse::internal_error("cannot resolve home directory"),
     };
 
+    // The vault half (plan + confirm) is checked here, before the job, so
+    // a missing confirm is a 403 and nothing is packed or sealed.
+    let prepared = match crate::clone_vault::prepare(&b.carry_ask(), vault_caller.as_ref()) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let clone_id = clone_id_for(prepared.as_ref(), b.clone_id.as_deref());
+
     let opts = clone::CloneOptions {
         include_all_history: !b.live_only,
         carry_secrets: b.carry_secrets,
@@ -732,22 +897,17 @@ pub fn handle_clone_pack(body: &[u8]) -> CliResponse {
     };
 
     let threads = b.threads;
-    let clone_id = b.clone_id.clone();
     let job_id = new_pack_job_id();
-    insert_pack_job(PackJob {
-        job_id: job_id.clone(),
-        phase: "running",
-        bundle_path: None,
-        size_bytes: None,
-        entry_count: None,
-        scrubbed_secret_count: None,
-        clone_id: None,
-        threads: None,
-        error: None,
-    });
+    let mut job = PackJob::running(job_id.clone());
+    job.clone_id = Some(clone_id.clone());
+    insert_pack_job(job);
 
     let project_path = canonical.to_string_lossy().to_string();
     let worker_job_id = job_id.clone();
+    let worker_clone_id = Some(clone_id.clone());
+    let carry = prepared
+        .filter(|p| p.ask.vault_target.is_some())
+        .map(|prepared| crate::clone_vault::PackCarry { prepared, caller: vault_caller });
     std::thread::spawn(move || {
         run_pack_job(
             &worker_job_id,
@@ -756,11 +916,12 @@ pub fn handle_clone_pack(body: &[u8]) -> CliResponse {
             &home,
             k2_core::fs_commands::MAX_TRANSFER_SIZE,
             threads,
-            clone_id,
+            worker_clone_id,
+            carry.as_ref(),
         );
     });
 
-    CliResponse::ok_json(serde_json::json!({ "job_id": job_id }).to_string())
+    CliResponse::ok_json(serde_json::json!({ "job_id": job_id, "clone_id": clone_id }).to_string())
 }
 
 /// `canonical` equals a registered project's path? Registered paths are
@@ -790,6 +951,7 @@ fn run_pack_job(
     max_bytes: u64,
     threads: ThreadsChoice,
     clone_id: Option<String>,
+    carry: Option<&crate::clone_vault::PackCarry>,
 ) {
     match build_workspace_bundle(project_path, opts, home, threads, clone_id) {
         Ok(out) => {
@@ -813,7 +975,12 @@ fn run_pack_job(
                 });
                 return;
             }
+            let sealed = carry.map(|c| crate::clone_vault::seal_prepared(&c.prepared, c.caller.as_ref()));
             update_pack_job(job_id, |j| {
+                if let Some(s) = sealed {
+                    j.vault_carry = Some(s.report);
+                    j.vault_carry_b64 = s.carry_b64;
+                }
                 j.phase = "done";
                 j.bundle_path = Some(out.bundle_path.to_string_lossy().to_string());
                 j.size_bytes = Some(out.size_bytes);
@@ -884,6 +1051,7 @@ pub fn handle_clone_pack_cleanup(body: &[u8]) -> CliResponse {
         }
         update_pack_job(&parsed.job_id, |j| j.bundle_path = None);
     }
+    update_pack_job(&parsed.job_id, |j| j.vault_carry_b64 = None);
     CliResponse::ok_json(r#"{"success":true}"#.to_string())
 }
 

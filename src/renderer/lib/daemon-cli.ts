@@ -492,6 +492,29 @@ export async function localDaemonCliPost<T = unknown>(
 }
 
 /**
+ * GET /cli/<route>?<params> against the LOCAL daemon, regardless of the
+ * active host — the read twin of {@link localDaemonCliPost}. "Clone to this
+ * computer" asks this computer's vault for its carry recipient while the
+ * remote host stays active (0.45.2).
+ */
+export async function localDaemonCliGet<T = unknown>(
+  route: string,
+  params?: Record<string, string | number | boolean | undefined | null>,
+): Promise<T> {
+  const { res, text } = await withConnRetry(async () => {
+    const creds = await getLocalDaemonWs()
+    const search = new URLSearchParams()
+    for (const [k, v] of Object.entries(params ?? {})) {
+      if (v !== undefined && v !== null) search.set(k, String(v))
+    }
+    search.set('token', creds.token)
+    const res = await fetch(`${daemonHttpBase(creds)}/cli/${route}?${search.toString()}`, { method: 'GET' })
+    return { res, text: await res.text() }
+  })
+  return parseDaemonResponse<T>(res, text)
+}
+
+/**
  * Run `op`, retrying on a connection-level error (a caught `fetch` failure —
  * distinct from a non-2xx response). Connected `/cli/*` uses delay-0 only
  * (original + immediate eviction retry); CORS/ACAO rethrows immediately

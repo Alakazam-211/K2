@@ -62,7 +62,79 @@ fn item(name: &str, value: &str) -> CarryItem {
         description: String::new(),
         human_given: true,
         value_b64: CarryItem::encode_value(value.as_bytes()),
+        source_scope: None,
+        grants: vec![],
     }
+}
+
+fn binding(clone_id: &str, ttl_secs: i64) -> k2_vault::carry::CloneBinding {
+    k2_vault::carry::CloneBinding {
+        clone_id: clone_id.into(),
+        source_workspace_id: "ws-src".into(),
+        source_label: "sales".into(),
+        ttl_secs,
+    }
+}
+
+/// CL26: a clone carry (`/2`) opens only for its clone, only within its
+/// hour, and the generic opener refuses it once expired.
+#[test]
+fn clone_carries_are_bound_to_one_clone_and_expire() {
+    let t = TestDir::new("carry-v2");
+    let (src, _) = open(&t, "src");
+    let (dst, _) = open(&t, "dst");
+    let r = dst.carry_recipient().expect("recipient");
+    let blank = vec![k2_vault::carry::CarryBlank {
+        name: "OPENAI_KEY".into(),
+        kind: "api_key".into(),
+        hosts: vec![],
+        delivery: "fetch".into(),
+        env_names: vec!["OPENAI_API_KEY".into()],
+        source_scope: "server".into(),
+    }];
+    let file = src
+        .carry_seal_clone(&r, dst.vault_id(), false, binding("clone-1", k2_vault::carry::CLONE_CARRY_TTL_SECS), vec![item("STRIPE_KEY", "k2test_V2_1")], blank)
+        .expect("seal");
+    let p = dst.carry_open_clone(&file, "clone-1").expect("open for its clone");
+    assert_eq!(p.format, k2_vault::carry::FORMAT_V2);
+    assert_eq!(p.clone_id.as_deref(), Some("clone-1"));
+    assert_eq!(p.blank[0].name, "OPENAI_KEY");
+    assert_eq!(p.source_label.as_deref(), Some("sales"));
+    assert_eq!(dst.carry_open_clone(&file, "clone-2").expect_err("other clone").code, "carry_clone_mismatch");
+    assert_eq!(dst.carry_open_clone(&file, "").expect_err("no clone id").code, "carry_clone_mismatch");
+    // A /1 carry is not a clone carry.
+    let v1 = src.carry_seal(&r, dst.vault_id(), false, vec![item("X", "y")]).expect("seal v1");
+    assert_eq!(dst.carry_open_clone(&v1, "clone-1").expect_err("v1").code, "carry_not_for_clone");
+    // Expired: refused by every opener.
+    let old = src.carry_seal_clone(&r, dst.vault_id(), false, binding("clone-1", -1), vec![item("STRIPE_KEY", "v")], vec![]).expect("seal");
+    assert_eq!(dst.carry_open(&old).expect_err("expired").code, "carry_expired");
+    assert_eq!(dst.carry_open_clone(&old, "clone-1").expect_err("expired").code, "carry_expired");
+    // No clone id: never sealed.
+    assert_eq!(src.carry_seal_clone(&r, dst.vault_id(), false, binding(" ", 60), vec![], vec![]).expect_err("id").code, "clone_id_required");
+}
+
+/// CL13: K2 logins, App passes, engine credentials and chat secrets are
+/// never sealed, by either carry.
+#[test]
+fn never_carried_kinds_are_refused_at_seal() {
+    let t = TestDir::new("carry-deny");
+    let (src, _) = open(&t, "src");
+    let (dst, _) = open(&t, "dst");
+    let r = dst.carry_recipient().expect("recipient");
+    for kind in ["login_slot", "app_pass", "engine_cred"] {
+        let mut i = item("LOGIN", "k2test_DENY");
+        i.kind = kind.into();
+        assert_eq!(src.carry_seal(&r, dst.vault_id(), false, vec![i.clone()]).expect_err(kind).code, "never_carried");
+        assert_eq!(
+            src.carry_seal_clone(&r, dst.vault_id(), false, binding("c", 60), vec![i], vec![]).expect_err(kind).code,
+            "never_carried"
+        );
+    }
+    let mut s = item("CHAT_ONLY", "v");
+    s.scope_kind = "session".into();
+    assert_eq!(src.carry_seal(&r, dst.vault_id(), false, vec![s]).expect_err("session").code, "never_carried");
+    assert!(k2_vault::carry::never_carried_kind("login_slot"));
+    assert!(!k2_vault::carry::never_carried_kind("api_key"));
 }
 
 #[test]

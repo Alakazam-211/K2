@@ -5,6 +5,7 @@
 # Contract: .k2/prds/prd-changes-tab-v1.md (routes) + the CLI parity table.
 #
 #   cargo build -p k2-daemon && bash tests/cli/changes_cli_headless.sh
+#   bash tests/cli/changes_cli_headless.sh --build   (builds first)
 #
 # Discards go to $K2_GIT_TRASH_DIR (a temp dir), never the OS Trash.
 # Every check fails loudly with the command output.
@@ -111,6 +112,10 @@ _cli_tool_is_locked changes || fail "changes locked"
 ok "changes is an id + locked tool (passport inside K2, never the owner token)"
 
 echo "== daemon =="
+# `--build`: build this worktree's daemon first (one compute job runs both).
+if [ "${1:-}" = "--build" ]; then
+    (cd "$PROJECT_ROOT" && CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}" cargo build -p k2-daemon) || fail "cargo build -p k2-daemon"
+fi
 DAEMON_BIN=""
 for root in "${CARGO_TARGET_DIR:-}" "$PROJECT_ROOT/target"; do
     [ -n "$root" ] || continue

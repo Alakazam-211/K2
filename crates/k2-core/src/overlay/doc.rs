@@ -164,6 +164,11 @@ pub const AUTHOR_OWNER: &str = "owner";
 pub const AUTHOR_USER: &str = "user";
 /// [`PostAuthor::kind`] for an app guest (`k2skn_` pass).
 pub const AUTHOR_GUEST: &str = "guest";
+/// [`PostAuthor::kind`] for a person's post that arrived with a clone: a
+/// historical name, never "You" on this server (CL7). `login` is the
+/// original login, `name` the label shown. Older viewers treat an unknown
+/// kind as someone else's post and show its `from` (the same label).
+pub const AUTHOR_IMPORTED: &str = "imported";
 
 impl PostAuthor {
     pub fn owner() -> Self {
@@ -184,6 +189,16 @@ impl PostAuthor {
 
     pub fn guest(username: &str) -> Self {
         Self { kind: AUTHOR_GUEST.to_string(), login: username.trim().to_string(), name: None }
+    }
+
+    /// A historical person from an imported Thread (see [`AUTHOR_IMPORTED`]).
+    pub fn imported(login: &str, label: &str) -> Self {
+        let label = label.trim();
+        Self {
+            kind: AUTHOR_IMPORTED.to_string(),
+            login: login.trim().to_string(),
+            name: (!label.is_empty()).then(|| label.to_string()),
+        }
     }
 }
 
@@ -224,6 +239,53 @@ pub struct OverlayDoc {
     /// other doc and on docs from before this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<CollectedMeta>,
+    /// Set on a line that arrived with a clone (or `k2 thread import`):
+    /// where it came from and the originals of every field the import
+    /// rewrote. Read-only history. None on every other doc and on docs
+    /// from before this field. Never a secret value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported: Option<ImportedMeta>,
+}
+
+/// Provenance of an imported Thread line (prd-clone-carries-threads-and-
+/// vault-v1 §5.3). Holds the originals of the fields the import rewrote
+/// (author, via, from, to), so nothing about the source line is lost.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedMeta {
+    /// The clone (manifest `clone_id`) or export id this line came with.
+    pub clone_id: String,
+    /// The server it was written on (`rosson.k2.dev`).
+    pub source_host: String,
+    /// The source workspace's handle (`sales`).
+    pub source_handle: String,
+    /// The doc id on the source (empty on the divider line).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_doc_id: String,
+    /// Unix seconds the line was imported here.
+    pub imported_at: i64,
+    /// The original `author` (a person's post), before the rewrite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<PostAuthor>,
+    /// The original `via`, when the import changed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+    /// The original `from`, when the import changed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// The original `to`, when the import changed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// The original card `answeredBy`, when the import changed it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_by: Option<PostAuthor>,
+    /// A card that was still open on the source: closed here, with this
+    /// note ("carried over: answer on the source").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// The "Imported from … on …" line placed above the imported history.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub divider: bool,
 }
 
 /// [`CollectedMeta::origin`]: the product's own local chat store (imported).
@@ -288,6 +350,7 @@ impl OverlayDoc {
             design: None,
             author: None,
             external: None,
+            imported: None,
         }
     }
 
@@ -326,6 +389,7 @@ impl OverlayDoc {
             design: None,
             author: None,
             external: None,
+            imported: None,
         }
     }
 
@@ -364,6 +428,7 @@ impl OverlayDoc {
             design: None,
             author: None,
             external: None,
+            imported: None,
         }
     }
 
@@ -390,6 +455,7 @@ impl OverlayDoc {
             design: None,
             author: None,
             external: None,
+            imported: None,
         }
     }
 

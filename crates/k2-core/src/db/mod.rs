@@ -1401,6 +1401,12 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
             "0179_workspace_design_mode",
             include_str!("../../drizzle_sql/0179_workspace_design_mode.sql"),
         ),
+        ),
+        // 0180 — a clone carries its Threads (prd-clone-carries-threads-
+        // and-vault-v1 §5.2): `overlay_imports` (one row per imported
+        // conversation; pending pin settle) + `clone_proposals` (agent
+        // proposals held for a person). New tables only.
+        ("0180_clone_imports", include_str!("../../drizzle_sql/0180_clone_imports.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2064,7 +2070,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0179_workspace_design_mode",
+            last_name, "0180_clone_imports",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2106,6 +2112,7 @@ mod tests {
                 "0177_published_services_probe_timeout",
                 "0178_git_review_notes",
                 "0179_workspace_design_mode",
+                "0180_clone_imports",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2148,6 +2155,7 @@ mod tests {
                 "0177_published_services_probe_timeout",
                 "0178_git_review_notes",
                 "0179_workspace_design_mode",
+                "0180_clone_imports",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2210,6 +2218,59 @@ mod tests {
         for c in ["config_json", "io_max_json", "devices_json", "exception_json"] {
             assert!(cols.iter().any(|n| n == c), "apps.{c} missing: {cols:?}");
         }
+    }
+
+    /// 0180 (clone imports): one row per imported conversation, unique per
+    /// (project, clone, source conversation); the role vocabulary is
+    /// closed; rows go with their project; proposals hold a closed status.
+    #[test]
+    fn clone_imports_0180_keys_rows_per_clone_and_conversation() {
+        let conn = fresh_memory();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run_migrations(&conn).unwrap();
+        let tables = table_names(&conn);
+        for t in ["overlay_imports", "clone_proposals"] {
+            assert!(tables.iter().any(|n| n == t), "{t} missing: {tables:?}");
+        }
+        conn.execute("INSERT INTO projects (id, name, path, handle) VALUES ('p-0180', 'Sales', '/t/sales', 'sales')", [])
+            .unwrap();
+        let ins = |id: &str, role: &str, clone: &str, src: &str| {
+            conn.execute(
+                "INSERT INTO overlay_imports (id, project_id, local_conversation_id, role, clone_id, source_host, \
+                 source_handle, source_conversation_id) VALUES (?1, 'p-0180', 'import:x', ?2, ?3, 'a.k2.dev', 'sales', ?4)",
+                params![id, role, clone, src],
+            )
+        };
+        for (i, role) in ["canonical", "pending_canonical", "sidecar", "detached"].iter().enumerate() {
+            ins(&format!("r{i}"), role, "c1", &format!("s{i}")).expect("a known role");
+        }
+        assert!(ins("rx", "chatter", "c1", "s9").is_err(), "unknown role refused");
+        assert!(ins("ry", "canonical", "c1", "s0").is_err(), "same clone + source conversation twice");
+        ins("rz", "canonical", "c2", "s0").expect("another clone of the same source conversation");
+        conn.execute(
+            "INSERT INTO clone_proposals (id, project_id, proposed_by, target, options_json, expires_at) \
+             VALUES ('cp1', 'p-0180', 'agent:sales/1', 'here', '{}', 9)",
+            [],
+        )
+        .expect("an open proposal");
+        assert!(
+            conn.execute(
+                "INSERT INTO clone_proposals (id, project_id, proposed_by, target, options_json, expires_at, status) \
+                 VALUES ('cp2', 'p-0180', 'agent:sales/1', 'here', '{}', 9, 'held')",
+                [],
+            )
+            .is_err(),
+            "unknown proposal status refused"
+        );
+        conn.execute("DELETE FROM projects WHERE id = 'p-0180'", []).unwrap();
+        let left: i64 = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM overlay_imports) + (SELECT COUNT(*) FROM clone_proposals)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "imports and proposals go with their project");
     }
 
     /// The tables 0164 creates (contract-garden-data-v1 §2.1).
@@ -2327,6 +2388,9 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
+            // 0180 (clone imports) is the newest; its tables go first.
+            conn.execute_batch("DROP TABLE clone_proposals; DROP TABLE overlay_imports;").unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0180_clone_imports'", []).unwrap();
             // The 0.46.0 App runtime migrations came after 0164; roll them
             // back too, newest first: 0170's columns go with `apps`, and
             // 0169's and 0168's tables go before the `apps` they point at.

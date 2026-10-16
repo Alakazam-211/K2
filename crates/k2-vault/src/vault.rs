@@ -656,6 +656,22 @@ impl LocalVault {
         }
     }
 
+    /// Record a carry in the vault's own audit log (H21): one row per
+    /// secret (`secrets` = id + version; never values) and one summary row
+    /// whose `count` is the number of secrets. `peer` names the other end
+    /// (e.g. `carry:<recipient fingerprint>@<vault id>`) and is stored as
+    /// the consumer. The actor is the caller (agent + session, or the
+    /// person), not `system:carry`. Never blocks the carry.
+    pub fn audit_carry(&self, action: &str, actor: &Actor, peer: &str, secrets: &[(String, u32)]) {
+        let stamp = actor.stamp();
+        let mut rows: Vec<Entry> =
+            secrets.iter().map(|(id, v)| Entry::new(action, &stamp, "ok").secret(id, Some(*v)).consumer(peer)).collect();
+        let mut sum = Entry::new(action, &stamp, "ok").consumer(peer);
+        sum.count = secrets.len() as u64;
+        rows.push(sum);
+        self.audit_only(rows);
+    }
+
     fn deny(&self, mut e: Entry, err: VaultError) -> VaultError {
         e.outcome = format!("deny:{}", err.code);
         self.audit_only(vec![e]);

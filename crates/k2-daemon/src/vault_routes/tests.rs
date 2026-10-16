@@ -547,6 +547,135 @@ fn a_carry_import_matches_the_workspace_by_id_never_by_name() {
     });
 }
 
+/// H21 follow-up (Rosson 2026-10-16): the switch is the gate. Without
+/// "Allow managing server-wide secrets" no agent or shell tab reaches any
+/// carry route (403 → `k2` exit 3), and nothing is sealed or written.
+#[test]
+fn every_carry_route_refuses_an_agent_without_the_switch() {
+    use crate::vault_use_routes::{CARRY_EXPORT, CARRY_IMPORT, RECIPIENT};
+    crate::test_support::with_temp_home(|| {
+        let src = vault();
+        let dst = vault();
+        set_server(&src, "STRIPE_KEY", SENTINEL);
+        let (s, r) = call(&dst, RECIPIENT, &owner(), Value::Null);
+        assert_eq!(s, 200, "{r}");
+        let export = json!({ "targetRecipient": r["recipient"], "targetVaultId": r["vaultId"], "server": ["STRIPE_KEY"] });
+        let (s, ex) = call(&src, CARRY_EXPORT, &owner(), export.clone());
+        assert_eq!(s, 200, "{ex}");
+        let carry = ex["carryB64"].clone();
+        for c in [agent("ws1", false), shell("ws1"), login(Role::Member)] {
+            for (t, path, body) in [
+                (&src, RECIPIENT, Value::Null),
+                (&src, CARRY_EXPORT, export.clone()),
+                (&dst, CARRY_IMPORT, json!({ "carryB64": carry })),
+                (&dst, CARRY_IMPORT, json!({ "carryB64": carry, "apply": true })),
+            ] {
+                let (s, v) = call(t, path, &c, body);
+                assert_eq!(s, 403, "{path} must refuse {:?}: {v}", c.actor);
+                assert!(v.get("carryB64").is_none(), "{path} sealed something for {:?}: {v}", c.actor);
+                assert!(!v.to_string().contains(SENTINEL), "{path} leaked the value: {v}");
+            }
+        }
+        assert_eq!(dst.v.user_secret_count(), 0, "a refused import wrote secrets");
+        let rows = src.v.audit(&Default::default(), &Actor::Owner).expect("audit");
+        let stray: Vec<_> = rows.iter().filter(|r| r.action == "carry-export" && r.actor != "owner").collect();
+        assert!(stray.is_empty(), "a refused export wrote carry rows: {stray:?}");
+    });
+}
+
+/// H21 follow-up: an agent with the switch carries with no person and no
+/// confirm, and the owner sees who, from which workspace and session, which
+/// secrets (names only), to which key, and when: in the vault audit and in
+/// the auth audit (Settings → Access).
+#[test]
+fn an_agent_with_the_switch_carries_and_the_owner_sees_it() {
+    use crate::vault_use_routes::{CARRY_EXPORT, CARRY_IMPORT, RECIPIENT};
+    crate::test_support::with_temp_home(|| {
+        let src = vault();
+        let dst = vault();
+        set_server(&src, "STRIPE_KEY", SENTINEL);
+        set_server(&src, "OPENAI_KEY", "k2test_CARRY_OPENAI_77aa66bb55cc");
+        set_server(&src, "LEFT_HOME", "k2test_CARRY_LEFT_88dd99ee00ff");
+        let it = agent("ws1", true);
+        let (s, r) = call(&dst, RECIPIENT, &it, Value::Null);
+        assert_eq!(s, 200, "{r}");
+        let fp = r["fingerprint"].as_str().expect("fingerprint").to_string();
+        let vid = r["vaultId"].as_str().expect("vaultId").to_string();
+        let (s, ex) = call(&src, CARRY_EXPORT, &it, json!({ "targetRecipient": r["recipient"], "targetVaultId": vid, "server": ["STRIPE_KEY", "OPENAI_KEY"] }));
+        assert_eq!(s, 200, "an agent with the switch carries without a confirm: {ex}");
+        assert_eq!(ex["count"], 2, "{ex}");
+
+        // Vault audit: one row per secret plus a summary, all the agent's.
+        let ids: HashMap<String, String> = src
+            .v
+            .list(&k2_vault::ListFilter::default(), &Actor::Owner)
+            .expect("list")
+            .into_iter()
+            .map(|m| (m.name.clone(), m.id.clone()))
+            .collect();
+        let rows = src.v.audit(&Default::default(), &Actor::Owner).expect("audit");
+        let carry: Vec<_> = rows.iter().filter(|r| r.action == "carry-export").collect();
+        assert_eq!(carry.len(), 3, "two secrets + a summary: {carry:?}");
+        for row in &carry {
+            assert_eq!(row.actor, "agent:ws1/sess-9", "{row:?}");
+            assert_eq!(row.consumer.as_deref(), Some(format!("carry:{fp}@{vid}").as_str()), "{row:?}");
+            assert_eq!(row.outcome, "ok", "{row:?}");
+            assert!(!row.ts.is_empty(), "{row:?}");
+        }
+        let mut per: Vec<&str> = carry.iter().filter_map(|r| r.secret_id.as_deref()).collect();
+        per.sort_unstable();
+        let mut want = vec![ids["STRIPE_KEY"].as_str(), ids["OPENAI_KEY"].as_str()];
+        want.sort_unstable();
+        assert_eq!(per, want, "per-secret rows name exactly what was carried");
+        let summary: Vec<_> = carry.iter().filter(|r| r.secret_id.is_none()).collect();
+        assert_eq!(summary.len(), 1, "{carry:?}");
+        assert_eq!(summary[0].count, 2, "{:?}", summary[0]);
+        assert!(!serde_json::to_string(&rows).expect("json").contains(SENTINEL), "the audit holds a value");
+
+        // Auth audit (Settings → Access): one owner-readable line.
+        let log = k2_core::auth_audit::tail(50).expect("auth audit");
+        let line = log.iter().rev().find(|e| e["event"] == "vault-carry").unwrap_or_else(|| panic!("no vault-carry event in {log:?}"));
+        let out = line["outcome"].as_str().expect("outcome");
+        for want in ["ok export 2", "STRIPE_KEY", "OPENAI_KEY", "by agent:ws1/sess-9", "(workspace ws1)", fp.as_str(), vid.as_str()] {
+            assert!(out.contains(want), "auth audit outcome lacks {want:?}: {out}");
+        }
+        assert!(!out.contains("LEFT_HOME"), "named a secret that wasn't carried: {out}");
+        assert!(!out.contains(SENTINEL), "auth audit holds a value: {out}");
+        assert!(line["ts"].as_str().is_some_and(|t| !t.is_empty()), "{line}");
+
+        // And the target box takes it from the agent too.
+        let (s, v) = call(&dst, CARRY_IMPORT, &agent("ws2", true), json!({ "carryB64": ex["carryB64"], "apply": true }));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(dst.v.user_secret_count(), 2);
+    });
+}
+
+/// People keep what they had: the owner and an Admin login carry with no
+/// confirm (the H21 audit row names them).
+#[test]
+fn people_still_carry_and_are_named_in_the_audit() {
+    use crate::vault_use_routes::{CARRY_EXPORT, RECIPIENT};
+    crate::test_support::with_temp_home(|| {
+        let src = vault();
+        let dst = vault();
+        set_server(&src, "STRIPE_KEY", SENTINEL);
+        let (s, r) = call(&dst, RECIPIENT, &owner(), Value::Null);
+        assert_eq!(s, 200, "{r}");
+        let body = json!({ "targetRecipient": r["recipient"], "targetVaultId": r["vaultId"], "server": ["STRIPE_KEY"] });
+        for (c, who) in [(owner(), "owner"), (login(Role::Admin), "connect:lee")] {
+            let (s, ex) = call(&src, CARRY_EXPORT, &c, body.clone());
+            assert_eq!(s, 200, "{who}: {ex}");
+            assert_eq!(ex["count"], 1, "{who}: {ex}");
+            let rows = src.v.audit(&Default::default(), &Actor::Owner).expect("audit");
+            let summary = rows
+                .iter()
+                .find(|r| r.action == "carry-export" && r.secret_id.is_none() && r.actor == who)
+                .unwrap_or_else(|| panic!("no carry-export summary for {who}: {rows:?}"));
+            assert_eq!(summary.count, 1);
+        }
+    });
+}
+
 #[test]
 fn restoring_a_backup_is_for_people_and_checks_before_replacing() {
     use crate::vault_use_routes::BACKUP;

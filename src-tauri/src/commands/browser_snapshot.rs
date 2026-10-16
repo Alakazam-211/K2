@@ -375,7 +375,14 @@ mod tests {
         let mut f = frame(PixelOrder::Rgba, 32, 8, 4, [1, 2, 3, 4]);
         f.data.truncate(100);
         assert!(raw_to_jpeg(&f, 80).unwrap_err().contains("needed"));
-        let f = frame(PixelOrder::Rgba, 16, 8, 4, [1, 2, 3, 4]);
+        // Rows of 8 px need 32 bytes; a 16-byte stride is a bad report.
+        let f = RawFrame {
+            width: 8,
+            height: 4,
+            stride: 16,
+            order: PixelOrder::Rgba,
+            data: vec![0; 256],
+        };
         assert!(raw_to_jpeg(&f, 80).unwrap_err().contains("stride"));
         let f = frame(PixelOrder::Rgba, 0, 0, 0, [0; 4]);
         assert!(raw_to_jpeg(&f, 80).unwrap_err().contains("no pixels"));

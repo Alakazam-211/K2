@@ -4,8 +4,10 @@
 // the top bar's Run and drawer toggles draw the shared `K2Icons` (squared
 // Lucide, 16px, 1.75 stroke). Buttons keep their size, hover, tooltip and
 // accessible name; the drawer icon still shows open (solid divider) vs
-// closed (dashed divider). The page tabs, Settings cog, server switcher and
-// Admin profile are covered in their own test files.
+// closed (dashed divider). The stopwatch (clock) and the K2 cheat sheet
+// draw theirs too (Rosson: "the clock, mug, and cheat sheet"). The page
+// tabs, Settings cog, server switcher, Admin profile and the Keep awake
+// mug's fill levels are covered in their own test files.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -35,9 +37,15 @@ vi.mock('./TopBarUtilities', () => ({
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import TopBar from './TopBar'
+import TimerButton from '@/components/Timer/TimerButton'
+import K2NounsCheatSheet from '@/components/CheatSheet/K2NounsCheatSheet'
+import { useTimerStore } from '@/stores/timer'
 import {
   AdminIcon,
   AgentsIcon,
+  CheatSheetIcon,
+  ClockIcon,
+  MugIcon,
   DrawerIcon,
   HomeIcon,
   K2_ICON_PX,
@@ -76,6 +84,9 @@ describe('K2Icons (A3)', () => {
       ['server', ServerIcon],
       ['admin', AdminIcon],
       ['run', RunIcon],
+      ['clock', ClockIcon],
+      ['mug', () => <MugIcon fill="half" />],
+      ['cheat-sheet', CheatSheetIcon],
     ] as const
     for (const [name, Icon] of squared) {
       const { container } = render(<Icon />)
@@ -167,5 +178,61 @@ describe('TopBar Run draws its A3 icon; no drawer toggles', () => {
     expect(screen.queryByTitle('Toggle left panel')).toBeNull()
     expect(screen.queryByTitle('Toggle right panel')).toBeNull()
     expect(document.querySelector('[data-k2-icon="drawer"]')).toBeNull()
+  })
+})
+
+describe('the clock, mug and cheat sheet draw A3 icons', () => {
+  it('Lucide clock / coffee / file-text bodies, squared', () => {
+    const clock = svgIn(render(<ClockIcon />).container)
+    expect(clock.querySelector('circle')?.getAttribute('r')).toBe('10')
+    expect(clock.querySelector('path')?.getAttribute('d')).toBe('M12 6v6l4 2')
+    cleanup()
+    const mug = svgIn(render(<MugIcon fill="none" />).container)
+    expect(Array.from(mug.querySelectorAll('path')).map((p) => p.getAttribute('d'))).toEqual([
+      'M6 2v2',
+      'M10 2v2',
+      'M14 2v2',
+      'M3 8h14v13H3Z',
+      'M17 8h1a4 4 0 0 1 0 8h-1',
+    ])
+    cleanup()
+    const sheet = svgIn(render(<CheatSheetIcon />).container)
+    expect(Array.from(sheet.querySelectorAll('path')).map((p) => p.getAttribute('d'))).toEqual([
+      'M4 2h10l6 6v14H4Z',
+      'M14 2v6h6',
+      'M10 9H8',
+      'M16 13H8',
+      'M16 17H8',
+    ])
+  })
+
+  it('the stopwatch button draws the A3 clock; same button, tooltip and colours', () => {
+    useTimerStore.setState({ visible: true, status: 'idle', showMemoDialog: false })
+    render(<TimerButton />)
+    const start = screen.getByTitle('Start stopwatch')
+    const svg = svgIn(start)
+    expect([svg.getAttribute('data-k2-icon'), svg.getAttribute('data-testid'), svg.getAttribute('width')]).toEqual([
+      'clock',
+      'timer-icon',
+      '16',
+    ])
+    for (const cls of ['h-6', 'w-5', 'text-[var(--color-text-muted)]', 'hover:text-[var(--color-text-primary)]']) {
+      expect([cls, start.classList.contains(cls)]).toEqual([cls, true])
+    }
+  })
+
+  it('the cheat sheet button draws the A3 file-text; same label, tooltip and size', () => {
+    render(<K2NounsCheatSheet />)
+    const button = screen.getByRole('button', { name: 'K2 cheat sheet' })
+    expect(button.getAttribute('title')).toBe('K2 cheat sheet')
+    const svg = svgIn(button)
+    expect([svg.getAttribute('data-k2-icon'), svg.getAttribute('width'), svg.getAttribute('aria-hidden')]).toEqual([
+      'cheat-sheet',
+      '16',
+      'true',
+    ])
+    for (const cls of ['h-6', 'w-6', 'text-[var(--color-text-muted)]', 'hover:text-[var(--color-text-primary)]']) {
+      expect([cls, button.classList.contains(cls)]).toEqual([cls, true])
+    }
   })
 })

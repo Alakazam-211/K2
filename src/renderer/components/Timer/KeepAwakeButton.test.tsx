@@ -6,7 +6,7 @@ import { keepAwakeEntryFor, resetKeepAwakeForTests } from '@/stores/keep-awake'
 import { primaryScope } from '@/kessel/server-scope'
 import { KEEP_AWAKE_MODES, keepAwakeTone, parseKeepAwakeBody, type KeepAwakeStatus } from '@/lib/keep-awake'
 import { SQUARE_CHECK_CLASS, SQUARE_RADIO_CLASS } from '@/components/ui'
-import { TOP_BAR_ICON_STROKE_WIDTH } from './topBarIcon'
+import { K2_ICON_PX, K2_ICON_STROKE, MUG_LIQUID_BOTTOM, MUG_LIQUID_TOP } from '@/components/icons/K2Icons'
 
 const h = vi.hoisted(() => ({
   remote: false,
@@ -293,8 +293,9 @@ describe('KeepAwakeButton', () => {
         await renderWith(s)
         const icon = screen.getByTestId('keep-awake-icon')
         expect(icon.getAttribute('data-fill')).toBe(fill)
-        const rim = icon.querySelector('[data-testid="keep-awake-rim"]') as Element
-        expect(rim).not.toBeNull()
+        // Icon style A3: Lucide `coffee`, squared body.
+        expect(icon.getAttribute('data-k2-icon')).toBe('mug')
+        expect(icon.querySelector('[data-testid="keep-awake-body"]')?.getAttribute('d')).toBe('M3 8h14v13H3Z')
         const liquid = icon.querySelector('[data-testid="keep-awake-liquid"]')
         if (fill === 'none') {
           expect(liquid).toBeNull()
@@ -304,46 +305,30 @@ describe('KeepAwakeButton', () => {
         const surface = liquid as Element
         // Primary theme token, never a hex.
         expect(surface.getAttribute('fill')).toBe('var(--color-accent)')
-        // Shown only through the rim.
-        const clipRef = surface.getAttribute('clip-path')
-        expect(clipRef).toMatch(/^url\(#.+\)$/)
-        const clipId = (clipRef as string).slice(5, -1)
-        const clip = icon.querySelector('[data-testid="keep-awake-rim-clip"]')
-        expect(clip).not.toBeNull()
-        expect((clip as Element).getAttribute('id')).toBe(clipId)
-        const rimCy = Number(rim.getAttribute('cy'))
-        const ry = Number(rim.getAttribute('ry'))
-        const drop = Number(surface.getAttribute('cy')) - rimCy
-        // Full: surface at the rim. Half: dropped one rim radius, so half shows.
-        expect(drop).toBe(fill === 'full' ? 0 : ry)
-        expect(surface.getAttribute('rx')).toBe(rim.getAttribute('rx'))
-        expect(surface.getAttribute('ry')).toBe(rim.getAttribute('ry'))
+        // Inside the body, from the bottom up to the mode's level: full is
+        // the rim, half is halfway.
+        const top = Number(surface.getAttribute('y'))
+        const bottom = top + Number(surface.getAttribute('height'))
+        expect(bottom).toBe(MUG_LIQUID_BOTTOM)
+        expect(top).toBe(fill === 'full' ? MUG_LIQUID_TOP.full : MUG_LIQUID_TOP.half)
+        expect(MUG_LIQUID_TOP.half).toBe((MUG_LIQUID_TOP.full + MUG_LIQUID_BOTTOM) / 2)
       })
     }
 
-    it('uses the timer icon stroke, caps, joins and box', async () => {
+    it('uses the timer icon stroke, caps, joins and box (A3: 16px, 1.75, square caps, mitred joins)', async () => {
       render(<TimerButton />)
       const timer = screen.getByTestId('timer-icon')
       await renderWith(STATES[2].s)
       const mug = screen.getByTestId('keep-awake-icon')
-      expect(timer.getAttribute('stroke-width')).toBe(String(TOP_BAR_ICON_STROKE_WIDTH))
-      for (const attr of ['stroke-width', 'stroke-linecap', 'stroke-linejoin', 'viewBox', 'class']) {
-        expect(mug.getAttribute(attr)).toBe(timer.getAttribute(attr))
+      expect([
+        timer.getAttribute('width'),
+        timer.getAttribute('stroke-width'),
+        timer.getAttribute('stroke-linecap'),
+        timer.getAttribute('stroke-linejoin'),
+      ]).toEqual([String(K2_ICON_PX), String(K2_ICON_STROKE), 'square', 'miter'])
+      for (const attr of ['width', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'viewBox', 'class']) {
+        expect([attr, mug.getAttribute(attr)]).toEqual([attr, timer.getAttribute(attr)])
       }
-    })
-
-    it('two mugs on screen get their own rim clip', async () => {
-      h.daemonCliGet.mockResolvedValue({ keepAwake: STATES[2].s })
-      render(
-        <>
-          <KeepAwakeButton />
-          <KeepAwakeButton />
-        </>,
-      )
-      const icons = await screen.findAllByTestId('keep-awake-icon')
-      expect(icons.length).toBe(2)
-      const ids = icons.map((i) => (i.querySelector('[data-testid="keep-awake-rim-clip"]') as Element).getAttribute('id'))
-      expect(new Set(ids).size).toBe(2)
     })
   })
 

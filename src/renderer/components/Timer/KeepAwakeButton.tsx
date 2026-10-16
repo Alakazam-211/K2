@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useKeepAwakeStore, type KeepAwakeTarget } from '@/stores/keep-awake'
 import {
@@ -15,7 +15,7 @@ import {
   usePoolHostStatus,
   useTopBarScope,
 } from '@/components/TopBar/top-bar-scope'
-import { TOP_BAR_ICON_STROKE_WIDTH } from './topBarIcon'
+import { MugIcon, type MugFill } from '@/components/icons/K2Icons'
 
 /** While Keep awake is on, re-read the daemon's truth this often (agents
  *  start and stop, the power source changes). Off: no polling. */
@@ -28,25 +28,12 @@ const TONE_CLASS: Record<KeepAwakeTone, string> = {
   warn: 'text-[var(--color-status-error-soft)] hover:text-[var(--color-status-error-bright)]',
 }
 
-/** The mug, seen from a little above, in the timer's 24×24 box: the rim is
- *  an ellipse (x 2.5–17.5, y 2.5–8.5) and the body runs down to y 21.5. */
-const RIM = { cx: 10, cy: 5.5, rx: 7.5, ry: 3 } as const
-
-type MugFill = 'none' | 'half' | 'full'
-
 /** Fill shows the mode: Off is empty, While agents are working is half
  *  full, Always is full to the rim. */
 const MUG_FILL: Record<KeepAwakeMode, MugFill> = {
   off: 'none',
   working: 'half',
   always: 'full',
-}
-
-/** How far below the rim the liquid surface sits. Half full drops it one
- *  rim radius, so the rim shows half the surface (the back half). */
-const SURFACE_DROP: Record<Exclude<MugFill, 'none'>, number> = {
-  half: RIM.ry,
-  full: 0,
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -59,15 +46,6 @@ function lidClosedNote(s: KeepAwakeStatus, needsSetup: boolean): string {
   if (needsSetup) return `Not set up: lid closed will still sleep. ${s.lidSetupDetail}`.trim()
   if (s.lidSetup === 'unavailable') return `Lid closed will still sleep: ${s.lidSetupDetail}`
   return 'On: stays awake with the lid closed while Keep awake holds.'
-}
-
-function MugOutline(): React.JSX.Element {
-  return (
-    <>
-      <path d="M2.5 5.5V18.5a7.5 3 0 0 0 15 0V5.5" />
-      <path d="M17.5 9.5h.5a3.5 3.5 0 0 1 0 7h-.5" />
-    </>
-  )
 }
 
 /** Close the open menu on an outside click or Escape. */
@@ -131,7 +109,6 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
   const remote = useConnectHostStore((s) => s.activeHost !== 'local')
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
-  const rimClipId = `keep-awake-rim-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
   const close = useCallback(() => setOpen(false), [])
   useCloseOnOutside(open, rootRef, close)
 
@@ -177,21 +154,7 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
           style={noDrag}
           onClick={() => setOpen((was) => !was)}
         >
-          <svg
-            className="w-3.5 h-3.5 flex-shrink-0"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={TOP_BAR_ICON_STROKE_WIDTH}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-            data-testid="keep-awake-icon"
-            data-fill="none"
-          >
-            <ellipse data-testid="keep-awake-rim" cx={RIM.cx} cy={RIM.cy} rx={RIM.rx} ry={RIM.ry} />
-            <MugOutline />
-          </svg>
+          <MugIcon fill="none" className="flex-shrink-0" />
         </button>
         {open && (
           <div
@@ -257,40 +220,9 @@ export default function KeepAwakeButton(): React.JSX.Element | null {
           })
         }}
       >
-        {/* An angled mug the size of the timer's clock. The liquid, in the
-            primary color, is what shows through the rim. */}
-        <svg
-          className="w-3.5 h-3.5 flex-shrink-0"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={TOP_BAR_ICON_STROKE_WIDTH}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-          data-testid="keep-awake-icon"
-          data-fill={fill}
-        >
-          <defs>
-            <clipPath id={rimClipId} data-testid="keep-awake-rim-clip">
-              <ellipse cx={RIM.cx} cy={RIM.cy} rx={RIM.rx} ry={RIM.ry} />
-            </clipPath>
-          </defs>
-          {fill !== 'none' ? (
-            <ellipse
-              data-testid="keep-awake-liquid"
-              cx={RIM.cx}
-              cy={RIM.cy + SURFACE_DROP[fill]}
-              rx={RIM.rx}
-              ry={RIM.ry}
-              fill="var(--color-accent)"
-              stroke="none"
-              clipPath={`url(#${rimClipId})`}
-            />
-          ) : null}
-          <ellipse data-testid="keep-awake-rim" cx={RIM.cx} cy={RIM.cy} rx={RIM.rx} ry={RIM.ry} />
-          <MugOutline />
-        </svg>
+        {/* Icon style A3: Lucide `coffee`, squared. The liquid, in the
+            accent colour, fills the mug to the mode's level. */}
+        <MugIcon fill={fill} className="flex-shrink-0" />
       </button>
       {open && (
         <div

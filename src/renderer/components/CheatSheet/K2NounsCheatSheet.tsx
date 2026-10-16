@@ -1,30 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { DialogScrim, Surface } from '@/components/ui'
 import { K2_CHEAT_SHEET_INTRO, K2_NOUN_GROUPS } from './k2Nouns'
+import { CheatSheetIcon } from '@/components/icons/K2Icons'
 
 const noDrag = {
   WebkitAppRegion: 'no-drag',
 } as React.CSSProperties
-
-function PaperNoteIcon(): React.JSX.Element {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 14 14"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M3.5 1.75h5.2L11.5 4.55V12.25H3.5z" />
-      <path d="M8.7 1.75V4.55H11.5" />
-      <path d="M5.2 7.1h4.2M5.2 9.35h3.2" />
-    </svg>
-  )
-}
 
 export default function K2NounsCheatSheet(): React.JSX.Element {
   const [open, setOpen] = useState(false)
@@ -53,7 +34,8 @@ export default function K2NounsCheatSheet(): React.JSX.Element {
         title="K2 cheat sheet"
         aria-label="K2 cheat sheet"
       >
-        <PaperNoteIcon />
+        {/* Icon style A3: Lucide `file-text`, squared. */}
+        <CheatSheetIcon />
       </button>
 
       {open && (

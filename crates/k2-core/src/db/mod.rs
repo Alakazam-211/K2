@@ -1411,6 +1411,12 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // of a source's bound secret (sources.secret_workspace) and the
         // Garden/widget proposal queue (zen_proposals). Additive only.
         ("0181_gardens_manage", include_str!("../../drizzle_sql/0181_gardens_manage.sql")),
+        // 0183 — the 0.46.1 App door (lane 2: S19, S20, S42): rebuilds
+        // `app_widenings` with every 0.46.1 kind (0168's CHECK can't be
+        // altered; nothing references the table) and adds apps.suspended_*,
+        // approved_caps_json and quota_json. Keeps 0171's `box_service` kind.
+        // 0.46.1 lanes hold 0182–0185 (wall, door, data, sdk); 0183 is lane 2.
+        ("0183_app_door", include_str!("../../drizzle_sql/0183_app_door.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2074,7 +2080,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0181_gardens_manage",
+            last_name, "0183_app_door",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2118,6 +2124,7 @@ mod tests {
                 "0179_workspace_design_mode",
                 "0180_clone_imports",
                 "0181_gardens_manage",
+                "0183_app_door",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2163,6 +2170,8 @@ mod tests {
                 "0179_workspace_design_mode",
                 "0180_clone_imports",
                 "0181_gardens_manage",
+                // 0.46.1 (lane 2 door) runs on top of the 0.46.0 tail.
+                "0183_app_door",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2278,6 +2287,91 @@ mod tests {
             )
             .unwrap();
         assert_eq!(left, 0, "imports and proposals go with their project");
+    }
+
+    /// 0183 (0.46.1 door): every 0.46.1 kind fits the rebuilt table, its
+    /// indexes come back, and `apps` gains the suspend, approved-caps and
+    /// quota columns.
+    #[test]
+    fn app_door_0183_rebuilds_widenings_with_every_kind() {
+        let conn = fresh_memory();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run_migrations(&conn).unwrap();
+        let ins = |id: &str, kind: &str| {
+            conn.execute(
+                "INSERT INTO app_widenings (id, kind, app_id, service_id, app_label, workspace_id, body_json, diff_json, summary, \
+                 reasons_json, requested_by, requested_at, expires_at, status) \
+                 VALUES (?1, ?2, NULL, 'svc-1', 'jobs', 'ws-1', '{}', '[]', 's', '[]', 'agent:ws-1', 1, 2, 'pending')",
+                params![id, kind],
+            )
+        };
+        for (i, kind) in crate::app_grace::requests::ALL_KINDS.iter().enumerate() {
+            ins(&format!("w_{i}"), kind).unwrap_or_else(|e| panic!("kind {kind} refused after 0183: {e}"));
+        }
+        assert!(ins("w_bogus", "bogus").is_err(), "an unknown kind is still refused");
+        let idx: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='app_widenings' AND name NOT LIKE 'sqlite_%'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        for i in ["app_widenings_ws_status", "app_widenings_app_status"] {
+            assert!(idx.iter().any(|n| n == i), "index {i} missing after the rebuild: {idx:?}");
+        }
+        assert!(!table_names(&conn).iter().any(|n| n == "app_widenings_0183"), "the rebuild's temp name is gone");
+        let cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('apps')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        for c in ["suspended_at", "suspended_by", "suspended_reason", "approved_caps_json", "quota_json"] {
+            assert!(cols.iter().any(|n| n == c), "apps.{c} missing: {cols:?}");
+        }
+    }
+
+    /// A 0.46.0 database with held requests keeps them through 0183.
+    #[test]
+    fn app_door_0183_keeps_0460_requests() {
+        let conn = fresh_memory();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run_migrations(&conn).unwrap();
+        // Back to the 0.46.0 shape, one held request, then 0183 again.
+        conn.execute_batch(
+            "DELETE FROM _migrations WHERE name = '0183_app_door';
+             ALTER TABLE apps DROP COLUMN suspended_at; ALTER TABLE apps DROP COLUMN suspended_by;
+             ALTER TABLE apps DROP COLUMN suspended_reason; ALTER TABLE apps DROP COLUMN approved_caps_json;
+             ALTER TABLE apps DROP COLUMN quota_json; DROP TABLE app_widenings;",
+        )
+        .unwrap();
+        for stmt in include_str!("../../drizzle_sql/0168_app_grace.sql").split("--> statement-breakpoint") {
+            if stmt.contains("CREATE TABLE IF NOT EXISTS app_widenings") || stmt.contains("ON app_widenings") {
+                conn.execute_batch(stmt).unwrap();
+            }
+        }
+        conn.execute(
+            "INSERT INTO app_widenings (id, kind, app_id, service_id, app_label, workspace_id, body_json, diff_json, summary, \
+             reasons_json, requested_by, requested_at, expires_at, status) \
+             VALUES ('w_old', 'egress_mode', NULL, 'svc-1', 'jobs', 'ws-1', '{\"x\":1}', '[]', 's', '[]', 'agent:ws-1', 1, 2, 'pending')",
+            [],
+        )
+        .unwrap();
+        assert!(
+            conn.execute(
+                "INSERT INTO app_widenings (id, kind, app_label, workspace_id, body_json, diff_json, summary, reasons_json, \
+                 requested_by, requested_at, expires_at, status) VALUES ('w_new', 'deploy', 'j', 'w', '{}', '[]', 's', '[]', 'a', 1, 2, 'pending')",
+                [],
+            )
+            .is_err(),
+            "0.46.0's CHECK refuses the new kinds (why 0183 rebuilds)"
+        );
+        run_migrations(&conn).unwrap();
+        let (kind, body): (String, String) = conn
+            .query_row("SELECT kind, body_json FROM app_widenings WHERE id = 'w_old'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((kind.as_str(), body.as_str()), ("egress_mode", "{\"x\":1}"));
     }
 
     /// The tables 0164 creates (contract-garden-data-v1 §2.1).
@@ -2439,6 +2533,7 @@ mod tests {
                 "0177_published_services_probe_timeout",
                 "0178_git_review_notes",
                 "0179_workspace_design_mode",
+                "0183_app_door",
             ] {
                 conn.execute("DELETE FROM _migrations WHERE name = ?1", params![m]).unwrap();
             }

@@ -647,6 +647,7 @@ mod tests {
                 c.execute_batch(stmt).unwrap();
             }
         }
+        crate::app_grace::requests::tests::apply_0183_widenings(&c);
         c.execute_batch(include_str!("../../drizzle_sql/0169_app_egress.sql").replace("--> statement-breakpoint", "").as_str())
             .unwrap();
         c.execute_batch("PRAGMA foreign_keys = ON;").unwrap();

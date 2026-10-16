@@ -57,7 +57,12 @@ vi.mock('./useOverlayThread', () => ({
   useOverlayThread: () => h.threadHook,
 }))
 
-import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
+import {
+  composeRowChromeWidth,
+  composeStackNext,
+  TerminalComposeBar,
+  THREAD_COMPOSE_STACK_PREVIEW,
+} from '@/components/Terminal/TerminalComposeBar'
 import { composeTextareaHeight } from '@/components/Terminal/terminalCompose'
 import { CHAMFER_SCOPE, THREAD_CHAMFER_CSS, THREAD_COMPOSE_BOX_BORDER, THREAD_COMPOSE_BOX_PAD, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
 import { formatRelativeTime } from '@/lib/format-relative-time'
@@ -560,5 +565,93 @@ describe('chamfered corners in K2\'s square Style', () => {
       expect(el('[data-zen-send]').style.borderRadius, style).toBe('999px')
       cleanup()
     }
+  })
+})
+
+// PREVIEW (Rosson 2026-10-16): past 3 lines the Thread's box stacks (text on
+// its own full-width line, "+", "/" and Send under it); back at 2.
+describe('stacked message box (preview)', () => {
+  it('is on for the preview', () => {
+    expect(THREAD_COMPOSE_STACK_PREVIEW).toBe(true)
+  })
+
+  it('stacks past 3 lines, keeps one row at 3, and unstacks only when the text would fit in 2 one-row lines', () => {
+    expect(composeRowChromeWidth()).toBe(80)
+    expect(composeStackNext({ stacked: false, lines: 3, width: 300 })).toBe(false)
+    expect(composeStackNext({ stacked: false, lines: 4, width: 300 })).toBe(true)
+    // Stacked at 300px wide: one row would be 220px wide.
+    expect(composeStackNext({ stacked: true, lines: 3, width: 300 })).toBe(true)
+    expect(composeStackNext({ stacked: true, lines: 2, width: 300 })).toBe(true)
+    expect(composeStackNext({ stacked: true, lines: 1, width: 300 })).toBe(false)
+    // Narrower than the row's buttons: stay stacked.
+    expect(composeStackNext({ stacked: true, lines: 1, width: 60 })).toBe(true)
+  })
+
+  it('never flickers: for any text length the layout settles in one step', () => {
+    for (const width of [240, 320, 480, 760]) {
+      for (let text = 0; text <= 4000; text += 7) {
+        // Lines the text wraps to in each layout (stacked = full width).
+        const lines = (stacked: boolean): number => Math.max(1, Math.ceil(text / (stacked ? width : width - 80)))
+        let stacked = false
+        const seen: boolean[] = []
+        for (let i = 0; i < 6; i++) {
+          stacked = composeStackNext({ stacked, lines: lines(stacked), width: stacked ? width : width - 80 })
+          seen.push(stacked)
+        }
+        expect(seen.slice(1).every((s) => s === seen[1]), `width ${width}, text ${text}: ${seen}`).toBe(true)
+      }
+    }
+  })
+
+  it('the box stacks and unstacks with the same textarea: focus and the caret stay', () => {
+    renderBar({ inject: () => {} })
+    const ta = box()
+    let height = 26
+    Object.defineProperty(ta, 'scrollHeight', { configurable: true, get: () => height })
+    Object.defineProperty(ta, 'clientWidth', { configurable: true, get: () => 300 })
+    const field = document.querySelector('[data-zen-compose-box]') as HTMLElement
+    ta.focus()
+    fireEvent.change(ta, { target: { value: 'a'.repeat(120) } })
+    expect(field.hasAttribute('data-stacked')).toBe(false)
+
+    // Five lines (13px × 1.4 each + 8): stacked.
+    height = Math.round(8 + 5 * 13 * 1.4)
+    fireEvent.change(ta, { target: { value: 'a'.repeat(300) } })
+    expect(field.getAttribute('data-stacked')).toBe('true')
+    expect(box()).toBe(ta)
+    expect(document.activeElement).toBe(ta)
+    expect(ta.selectionStart).toBe(300)
+    // The text goes first across the full width; the buttons wrap under it.
+    const wrap = ta.parentElement as HTMLElement
+    expect(wrap.style.order).toBe('-1')
+    expect(wrap.style.flexBasis).toBe('100%')
+    expect(field.style.flexWrap).toBe('wrap')
+
+    // Three lines while stacked: stays (no flicker at the boundary).
+    height = Math.round(8 + 3 * 13 * 1.4)
+    fireEvent.change(ta, { target: { value: 'a'.repeat(200) } })
+    expect(field.getAttribute('data-stacked')).toBe('true')
+
+    // One line: back to one row, same textarea, still focused.
+    height = 26
+    fireEvent.change(ta, { target: { value: 'short' } })
+    expect(field.hasAttribute('data-stacked')).toBe(false)
+    expect(wrap.style.order).toBe('')
+    expect(box()).toBe(ta)
+    expect(document.activeElement).toBe(ta)
+    expect(ta.selectionStart).toBe(5)
+  })
+
+  it('keys still reach the agent\'s PTY while stacked', () => {
+    const inject = vi.fn()
+    renderBar({ inject })
+    const ta = box()
+    Object.defineProperty(ta, 'scrollHeight', { configurable: true, get: () => Math.round(8 + 6 * 13 * 1.4) })
+    Object.defineProperty(ta, 'clientWidth', { configurable: true, get: () => 300 })
+    fireEvent.change(ta, { target: { value: 'b'.repeat(400) } })
+    expect(document.querySelector('[data-zen-compose-box]')?.getAttribute('data-stacked')).toBe('true')
+    fireEvent.keyDown(ta, { key: 'Escape' })
+    fireEvent.keyDown(ta, { key: 'c', ctrlKey: true })
+    expect(inject.mock.calls.map((c) => c[0])).toEqual(['\x1b', '\x03'])
   })
 })

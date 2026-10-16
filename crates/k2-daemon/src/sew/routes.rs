@@ -415,7 +415,15 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         "/cli/sew/server/config" => {
             need_manage(who)?;
             let v = json_body(body)?;
-            sup::server_config(&env, s(&v, "publicUrl"), s(&v, "setupUrl"))
+            if v.get("setupUrl").is_some() {
+                return Err(no(
+                    "bad_request",
+                    400,
+                    "Sew builds setup links as <publicUrl>/setup: set publicUrl (https://<host>) instead of setupUrl",
+                ));
+            }
+            let u = s(&v, "publicUrl").ok_or_else(|| no("bad_request", 400, "name publicUrl (https://<host>)"))?;
+            sup::server_config(&env, u)
         }
         "/cli/sew/media/preflight" => {
             need_credential(who)?;

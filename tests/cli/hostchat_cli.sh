@@ -6,7 +6,8 @@
 #      K2 terminal sends its passport, never the owner token).
 #   2. Request shapes: enable --identity standalone --voice --voice-url sends
 #      {identity, voice:{publicUrl,...}} and waits on /cli/sew/status;
-#      media install/url/probe/renew/uninstall; config --public-url/--setup-url;
+#      media install/url/probe/renew/uninstall; config --public-url (setup
+#      links follow it; --setup-url is refused before any request);
 #      users owner/invite/reset/revoke/reactivate/role/list.
 #   3. A setup link prints to stdout only (never stderr); --json prints raw.
 #   4. Exit codes: 400 → 2, 403/409 → 3, usage errors → 2 before any request.
@@ -234,10 +235,14 @@ run owner hostchat media uninstall
 assert_eq "media uninstall is a POST" "$(req_where /cli/sew/media/uninstall method)" "POST"
 
 echo "== config =="
-run owner hostchat config --public-url https://hearth.box.example.test --setup-url https://hearth.box.example.test/setup
+run owner hostchat config --public-url https://hearth.box.example.test
 assert_eq "config exit 0" "$rc" "0"
-assert_eq "config body" "$(req_where /cli/sew/server/config body)" \
-    '{"publicUrl": "https://hearth.box.example.test", "setupUrl": "https://hearth.box.example.test/setup"}'
+assert_eq "config body" "$(req_where /cli/sew/server/config body)" '{"publicUrl": "https://hearth.box.example.test"}'
+before="$(nreq)"
+run owner hostchat config --setup-url https://hearth.box.example.test/setup
+assert_eq "--setup-url → exit 2" "$rc" "2"
+assert_contains "--setup-url says links follow the public URL" "$err" "<public-url>/setup"
+assert_eq "--setup-url sends nothing" "$(nreq)" "$before"
 run owner hostchat config
 assert_eq "config without a key → exit 2" "$rc" "2"
 

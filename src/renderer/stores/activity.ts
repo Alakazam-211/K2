@@ -309,6 +309,23 @@ export function agentHasUnseen(
   return false
 }
 
+/** How this agent name's (or session's) unseen turns ended: `failed` when
+ *  any failed, else `done`, else null. The per-tab twin of
+ *  `projectUnseenOutcome`; this window's mark (RL11). */
+export function agentUnseenOutcome(
+  state: Pick<ScopeActivity, 'unseenDone'>,
+  agentName: string,
+  sessionId?: string | null,
+): 'done' | 'failed' | null {
+  let out: 'done' | 'failed' | null = null
+  for (const [sid, u] of state.unseenDone) {
+    if (!(sessionId && sid === sessionId) && u.agentName !== agentName) continue
+    if (u.outcome === 'failure') return 'failed'
+    out = 'done'
+  }
+  return out
+}
+
 /** `/w/app` is under `/w`; `/w-other` is not (the daemon's own rule). */
 export function pathUnderRoot(path: string, root: string): boolean {
   const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')

@@ -11,15 +11,17 @@ import { useContextMenuStore, type ContextMenuItemDef } from '@/stores/context-m
 import { useStore } from 'zustand'
 import type { ActiveAgent } from '@/stores/active-agents'
 import {
-  agentHasUnseen,
   agentNameForTerminal,
+  agentUnseenOutcome,
   highestDisplay,
   isBusyDisplay,
   rowForAgentName,
-  terminalDisplay,
+  rowForTerminal,
   type ActivityDisplay,
+  type ActivityRow,
 } from '@/stores/activity'
-import { ActivityMark } from '@/components/Activity/ActivityMark'
+import { sessionsStatus, worseUnseen, type UnseenOutcome } from '@/lib/agent-status'
+import { PinnedChatStatus, TabSlotRest, TabTitleGrid } from '@/components/TabBar/TabStatus'
 import { pinOf, sessionsOf, usePinnedSizeStore } from '@/stores/pinned-size'
 import { applyPinSize, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
 import PinDimensionsModal from '@/components/PaneLayout/PinDimensionsModal'
@@ -874,11 +876,20 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           // via getState().getAgentsInTab — no subscription needed here.
           const terminalItems = Array.from(tab.paneGroups.values())
             .flatMap(pg => pg.items.filter(i => i.type === 'terminal').map(i => i.data as TerminalItemData))
-          const tabDisplay: ActivityDisplay = highestDisplay(terminalItems.map(d => terminalDisplay(activity, d)))
+          // plan-agent-status-unify-v1 S5: the tab draws the same status
+          // model as the agent rows, folded over ITS sessions' rows only
+          // (`sessionsStatus`), plus this window's not-viewed mark (RL11).
+          const tabRows: ActivityRow[] = []
+          let tabUnseen: UnseenOutcome | null = null
+          for (const d of terminalItems) {
+            const row = rowForTerminal(activity, d)
+            if (row) tabRows.push(row)
+            tabUnseen = worseUnseen(tabUnseen, agentUnseenOutcome(activity, agentNameForTerminal(d), d.sessionId))
+          }
+          const tabDisplay: ActivityDisplay = highestDisplay(tabRows.map((r) => r.display))
           const isAgentActive = isBusyDisplay(tabDisplay)
-          const hasUnseenDone =
-            tabDisplay === 'idle' &&
-            terminalItems.some(d => agentHasUnseen(activity, agentNameForTerminal(d), d.sessionId))
+          const tabView = sessionsStatus({ rows: tabRows, unseen: tabUnseen, daemonRows: activity.supported, skewMs: activity.skewMs })
+          const isSessionTab = terminalItems.length > 0
           const isDragged = reorderDragIndex === index
           const showDropBefore = reorderDropIndex === index
           const showDropAfter = reorderDropIndex === tabs.length && index === tabs.length - 1
@@ -947,34 +958,22 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 ? (firstItem.data as { section?: 'inbox' | 'chat' }).section
                 : undefined
 
-            // The pinned Chat tab's working signal lives on its daemon-backed
-            // chat session (agent name = the project id), invisible to the
-            // generic terminal-pane check above. Read its row directly so the
-            // icon→mark swap (and activity underline) fire. Chat-only — the
-            // Inbox tab is a passive queue with no working state.
-            const chatDisplay: ActivityDisplay = section === 'chat' && projectId
-              ? highestDisplay([tabDisplay, rowForAgentName(activity, projectId)?.display ?? 'idle'])
-              : tabDisplay
-            const systemTabActive = isBusyDisplay(chatDisplay)
-            const chatUnseenDone =
-              chatDisplay === 'idle' && section === 'chat' && projectId
-                ? agentHasUnseen(activity, projectId) || hasUnseenDone
-                : hasUnseenDone
+            // The pinned Chat tab's sessions: its daemon-backed chat session
+            // (agent name = the project id, A36), which the terminal-pane
+            // fold above never sees, plus any terminal in the tab. Chat
+            // only: the Inbox tab is a passive queue with no working state.
+            const chatRow = section === 'chat' && projectId ? rowForAgentName(activity, projectId) : null
+            const chatView =
+              section === 'chat'
+                ? sessionsStatus({
+                    rows: chatRow ? [...tabRows, chatRow] : tabRows,
+                    unseen: projectId ? worseUnseen(tabUnseen, agentUnseenOutcome(activity, projectId)) : tabUnseen,
+                    daemonRows: activity.supported,
+                    skewMs: activity.skewMs,
+                  })
+                : null
 
             const iconSvg = (() => {
-              if (chatDisplay === 'working') {
-                return <span className="braille-spinner text-[11px]" />
-              }
-              if (chatDisplay !== 'idle') {
-                return <ActivityMark display={chatDisplay} size={9} />
-              }
-              if (chatUnseenDone) {
-                // F4.1 — finished-while-unseen takes the icon slot (amber)
-                // until the tab is visited, matching the Active bar square.
-                return (
-                  <span className="block w-2.5 h-2.5 bg-[var(--color-status-warn-amber)]" />
-                )
-              }
               if (section === 'inbox') {
                 // Inbox tray with downward arrow into it
                 return (
@@ -1018,9 +1017,11 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 key={tab.id}
                 data-tab-id={tab.id}
                 data-tab-rail=""
+                data-tab-status={chatView?.status}
+                data-tab-working={chatView?.working ? '' : undefined}
                 className={`group sticky z-20 flex h-full w-9 flex-shrink-0 items-center justify-center border-r border-[var(--color-border)] transition-colors select-none cursor-pointer ${
                   isActive
-                    ? 'text-[var(--color-accent)]'
+                    ? 'text-[var(--color-text-primary)]'
                     : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
                 }`}
                 style={{
@@ -1041,11 +1042,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 }
                 title={tab.title}
               >
-                {iconSvg}
-                {/* Activity underline */}
-                {systemTabActive && (
-                  <div className="absolute bottom-0 left-1 right-1 h-[2px] bg-[var(--color-accent)] rounded-full" />
-                )}
+                {/* Chat: the working grid takes the icon's place, the status
+                    (else live / reaped) is a corner badge; no underline. */}
+                {chatView ? <PinnedChatStatus view={chatView} icon={iconSvg} /> : iconSvg}
               </div>
             )
           }
@@ -1162,6 +1161,18 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   onBlur={() => commitRename(tab.id)}
                   className="flex-1 min-w-0 px-1 py-0 text-xs leading-tight bg-transparent border border-[var(--color-accent)] text-[var(--color-text-primary)] outline-none"
                 />
+              ) : isSessionTab ? (
+                // Session tab: title + working slot (S5). Double-click the
+                // label to rename.
+                <TabTitleGrid
+                  title={tab.title}
+                  view={tabView}
+                  className={isDirty ? 'italic' : ''}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation()
+                    setEditingTabId(tab.id)
+                  }}
+                />
               ) : (
                 <span
                   className={`truncate flex-1 ${isDirty ? 'italic' : ''}`}
@@ -1215,14 +1226,15 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     return false
                   }),
                 )
-                // Close glyph picks up the heartbeat-vs-regular split.
-                // The active-agent layer is independent: if the agent
-                // is working we show the braille spinner by default
-                // and reveal the close glyph on hover. Heartbeat tabs
-                // get `–` (minimize), regular tabs get `×` — same hover
-                // pattern, different glyph.
+                // The status slot (S5): at rest it shows the tab's status
+                // (else working with no status, else live / reaped);
+                // hovering ANYWHERE on the tab swaps it for the close glyph:
+                // × for a regular tab, – (minimize) for a heartbeat / API
+                // tab. Nothing else moves.
                 // A pinned tab has no ×: its slot is the pin, and a click
-                // there unpins (TabPin.tsx). Close Tab is in its menu.
+                // there unpins (TabPin.tsx). Close Tab is in its menu. At
+                // rest a pinned session tab shows its status or working, and
+                // the pin where the live / reaped square would be.
                 const pinned = isPinnedTab(tab)
                 const closeGlyph = pinned ? (
                   <PinnedTabSlotGlyph />
@@ -1235,11 +1247,26 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     <line x1="1" y1="1" x2="7" y2="7" /><line x1="7" y1="1" x2="1" y2="7" />
                   </svg>
                 )
-                if (room.readOnly) return null
+                const restView =
+                  pinned && (tabView.status === 'live' || tabView.status === 'reaped' || tabView.status === 'idle') && !tabView.working
+                    ? null
+                    : tabView
+                const rest = isSessionTab && restView ? <TabSlotRest view={restView} /> : null
+                const slotStyle: React.CSSProperties = { width: 14, height: 14, marginLeft: 'var(--clu-gap)' }
+                if (room.readOnly) {
+                  // A view-only room closes nothing, but still shows status.
+                  return rest ? (
+                    <span data-tab-status-slot="" className="flex flex-shrink-0 items-center justify-center" style={slotStyle}>
+                      {rest}
+                    </span>
+                  ) : null
+                }
                 return (
                   <button
-                    className="ml-2 flex h-4 w-4 flex-shrink-0 items-center justify-center hover:bg-[var(--color-wash-2)] group/close"
+                    className="flex flex-shrink-0 items-center justify-center hover:bg-[var(--color-wash-2)] group/close"
+                    style={slotStyle}
                     data-tab-close-slot={pinned ? 'unpin' : 'close'}
+                    data-tab-status={isSessionTab ? tabView.status : undefined}
                     onClick={(e) => (pinned ? handleTogglePinTab(e, tab.id) : handleCloseTab(e, tab.id))}
                     title={
                       pinned
@@ -1250,28 +1277,15 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                           : 'Hide tab — session keeps running in the background'
                         : isAgentActive
                           ? 'Agent is active — close anyway'
-                          : hasUnseenDone
+                          : tabView.status === 'done' || tabView.status === 'failed'
                             ? 'Agent finished while you were away — click the tab to review'
                             : 'Close tab'
                     }
                   >
-                    {tabDisplay === 'working' ? (
+                    {rest ? (
                       <>
-                        <span className="braille-spinner text-[10px] text-[var(--color-text-muted)] group-hover/close:hidden" />
-                        <span className="hidden group-hover/close:block">{closeGlyph}</span>
-                      </>
-                    ) : tabDisplay !== 'idle' ? (
-                      <>
-                        <ActivityMark display={tabDisplay} className="group-hover/close:hidden" />
-                        <span className="hidden group-hover/close:block">{closeGlyph}</span>
-                      </>
-                    ) : hasUnseenDone ? (
-                      <>
-                        {/* F4.1 — finished-while-unseen: amber square holds the
-                            slot until the tab is visited; hover still yields
-                            the X so it can be closed without visiting. */}
-                        <span className="block w-2.5 h-2.5 bg-[var(--color-status-warn-amber)] group-hover/close:hidden" />
-                        <span className="hidden group-hover/close:block">{closeGlyph}</span>
+                        <span data-tab-slot-rest="" className="flex group-hover:hidden">{rest}</span>
+                        <span data-tab-slot-hover="" className="hidden group-hover:flex">{closeGlyph}</span>
                       </>
                     ) : (
                       closeGlyph

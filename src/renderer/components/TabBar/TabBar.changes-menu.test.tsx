@@ -12,7 +12,12 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => {}),
 }))
 
-const repos = vi.hoisted(() => ({ paths: new Set<string>(), calls: [] as Array<{ scope: unknown; path: string }> }))
+const repos = vi.hoisted(() => ({
+  paths: new Set<string>(),
+  calls: [] as Array<{ scope: unknown; path: string }>,
+  // C5: `git/info.gitAvailable` (undefined = an older daemon without the field).
+  gitAvailable: undefined as boolean | undefined,
+}))
 vi.mock('@/lib/daemon-cli', async () => {
   const actual = await vi.importActual<typeof import('@/lib/daemon-cli')>('@/lib/daemon-cli')
   return {
@@ -21,7 +26,9 @@ vi.mock('@/lib/daemon-cli', async () => {
       if (route === 'git/info') {
         const path = params?.path ?? ''
         repos.calls.push({ scope, path })
-        return { isRepo: repos.paths.has(path), currentBranch: 'main', ahead: 0, behind: 0, changedFiles: 0, untrackedFiles: 0 }
+        const info: Record<string, unknown> = { isRepo: repos.paths.has(path), currentBranch: 'main', ahead: 0, behind: 0, changedFiles: 0, untrackedFiles: 0 }
+        if (repos.gitAvailable !== undefined) info.gitAvailable = repos.gitAvailable
+        return info
       }
       throw new Error(`unexpected GET ${route}`)
     }),
@@ -69,6 +76,7 @@ describe('+ menu Changes row', () => {
     __resetGitChangesForTests()
     repos.paths.clear()
     repos.calls = []
+    repos.gitAvailable = undefined
     resetTabs()
     usePresetsStore.setState({ presets: [], fetchPresets: vi.fn(async () => {}) })
     useContextMenuStore.getState().close()
@@ -94,7 +102,32 @@ describe('+ menu Changes row', () => {
     expect(repos.calls).toEqual([{ scope: primaryScope(), path: '/ws' }])
   })
 
-  it('a folder that is not a repo gets no Changes row', async () => {
+  it('C5: a server that can do git offers Changes in a folder that is not a repo yet', async () => {
+    repos.gitAvailable = true
+    renderInPrimaryRoom(
+      <>
+        <TabBar cwd="/plain" groupIndex={0} />
+        <ContextMenu />
+      </>,
+    )
+    await openPlus()
+    expect(menuIds()).toEqual(['terminal', 'new-file', 'browser', 'changes'])
+  })
+
+  it('C5: a server that reports git unavailable gets no Changes row, even in a repo', async () => {
+    repos.gitAvailable = false
+    repos.paths.add('/ws')
+    renderInPrimaryRoom(
+      <>
+        <TabBar cwd="/ws" groupIndex={0} />
+        <ContextMenu />
+      </>,
+    )
+    await openPlus()
+    expect(menuIds()).toEqual(['terminal', 'new-file', 'browser'])
+  })
+
+  it('an older daemon (no gitAvailable): a folder that is not a repo gets no Changes row', async () => {
     renderInPrimaryRoom(
       <>
         <TabBar cwd="/plain" groupIndex={0} />

@@ -16,6 +16,7 @@ import {
   commitStaged,
   discardFiles,
   fetchDiffSides,
+  initRepo,
   stageAllChanges,
   stageFiles,
   unstageFiles,
@@ -23,10 +24,21 @@ import {
   type ChangesFile,
   type GitSnapshotRepo,
 } from '@/stores/git-changes'
+import {
+  addNote,
+  deleteNotes,
+  resolveNotes,
+  sendNotes,
+  updateNote,
+  useGitNotes,
+  type NoteCounts,
+  type ReviewNote,
+} from '@/stores/git-notes'
 import type { ChangesItemData, ChangesListLayout } from '@/stores/tabs'
 import { ChangesList, changesRowKey } from './ChangesList'
 import { ChangesDiffSlot } from './ChangesDiffSlot'
-import type { DiffSidesState } from './diff-slot-types'
+import { ChangesNotesList } from './ChangesNotesList'
+import type { ChangesNotesApi, DiffSidesState } from './diff-slot-types'
 import { buildAiCommitPrompt } from './ai-commit'
 
 export interface ChangesPaneProps {
@@ -134,6 +146,45 @@ export function ChangesPane({ tabId, paneGroupId, itemId, data }: ChangesPanePro
     [scope, workspacePath, base],
   )
 
+  // ── "Open in editor" (room-aware: the room's tabs, the room's server) ──
+  const repoRoot = repo?.repoRoot ?? null
+  const onOpenFile = useCallback(
+    (rel: string) => {
+      const root = repoRoot ?? workspacePath
+      room.tabs.getState().openFileAsTab(`${root.replace(/\/+$/, '')}/${rel}`)
+    },
+    [room, repoRoot, workspacePath],
+  )
+
+  // ── Review notes (C5) ──────────────────────────────────────────────────
+  const isRepo = repo !== null
+  const { list: notesList } = useGitNotes(scope, isRepo ? workspacePath : null)
+  const canNote = scopeMayWrite(scope, 'git/notes/add')
+  const canSendNotes = scopeMayWrite(scope, 'git/notes/send')
+  const notesApi: ChangesNotesApi | undefined = useMemo(() => {
+    if (!isRepo) return undefined
+    const toast = (label: string, e: unknown): never => {
+      useToastStore.getState().addToast(`${label}: ${e instanceof Error ? e.message : String(e)}`, 'error')
+      throw e
+    }
+    return {
+      notes: notesList?.notes ?? EMPTY_NOTES,
+      canWrite: canNote,
+      add: async (input) => {
+        await addNote(scope, workspacePath, input).catch((e: unknown) => toast('Note not saved', e))
+      },
+      update: async (id, text) => {
+        await updateNote(scope, workspacePath, id, text).catch((e: unknown) => toast('Note not saved', e))
+      },
+      resolve: async (id) => {
+        await resolveNotes(scope, workspacePath, [id]).catch((e: unknown) => toast('Resolve failed', e))
+      },
+      remove: async (id) => {
+        await deleteNotes(scope, workspacePath, [id]).catch((e: unknown) => toast('Delete failed', e))
+      },
+    }
+  }, [isRepo, notesList, canNote, scope, workspacePath])
+
   // ── Actions ────────────────────────────────────────────────────────────
   const [busy, setBusy] = useState(false)
   const run = useCallback(async (label: string, fn: () => Promise<unknown>) => {
@@ -177,6 +228,54 @@ export function ChangesPane({ tabId, paneGroupId, itemId, data }: ChangesPanePro
         }
       })
     },
+    [run, scope, workspacePath],
+  )
+
+  // ── Notes list actions ─────────────────────────────────────────────────
+  const onSendNotes = useCallback(
+    () =>
+      void run('Send to agent failed', async () => {
+        const r = await sendNotes(scope, workspacePath)
+        const more = r.remaining > 0 ? ` (${r.remaining} more next time)` : ''
+        useToastStore.getState().addToast(`Sent ${r.sent} note${r.sent === 1 ? '' : 's'} to the agent${more}`, 'success')
+      }),
+    [run, scope, workspacePath],
+  )
+  const onSelectNote = useCallback(
+    (n: ReviewNote) => {
+      const row = files.find((f) => f.path === n.path && f.group === data.selectedGroup) ?? files.find((f) => f.path === n.path)
+      if (row) patch({ selectedPath: row.path, selectedGroup: row.group })
+    },
+    [files, data.selectedGroup, patch],
+  )
+  const onResolveNote = useCallback(
+    (n: ReviewNote, resolved: boolean) =>
+      void run(resolved ? 'Resolve failed' : 'Reopen failed', () => resolveNotes(scope, workspacePath, [n.id], resolved)),
+    [run, scope, workspacePath],
+  )
+  const onEditNote = useCallback(
+    async (n: ReviewNote, text: string) => {
+      await run('Note not saved', () => updateNote(scope, workspacePath, n.id, text))
+    },
+    [run, scope, workspacePath],
+  )
+  const onDeleteNote = useCallback(
+    async (n: ReviewNote) => {
+      const ok = await useConfirmDialogStore.getState().confirm({
+        title: 'Delete note?',
+        message: `Delete the note on ${n.path}:${n.startLine}? This can't be undone.`,
+        confirmLabel: 'Delete',
+        destructive: true,
+      })
+      if (ok) await run('Delete failed', () => deleteNotes(scope, workspacePath, [n.id]))
+    },
+    [run, scope, workspacePath],
+  )
+
+  // ── Initialize repository (not a repo yet) ─────────────────────────────
+  const canInit = scopeMayWrite(scope, 'git/init')
+  const onInit = useCallback(
+    () => void run('Initialize failed', () => initRepo(scope, workspacePath)),
     [run, scope, workspacePath],
   )
 
@@ -243,7 +342,29 @@ export function ChangesPane({ tabId, paneGroupId, itemId, data }: ChangesPanePro
     )
   }
   if (!repo) {
-    return <Centered>Not a git repository</Centered>
+    return (
+      <div data-changes-pane="" data-changes-not-repo="" className="flex h-full w-full items-center justify-center p-4">
+        <div className="max-w-sm text-center">
+          <p className="text-xs text-[var(--color-text-primary)]">This workspace isn&apos;t a git repository</p>
+          <p className="mt-1 text-[11px] text-[var(--color-text-muted)]">
+            Initialize one here to track changes, review them and send notes to the agent.
+          </p>
+          {canInit ? (
+            <button
+              type="button"
+              data-changes-init=""
+              className="mt-3 bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-on-accent)] hover:opacity-90 disabled:opacity-40"
+              disabled={busy}
+              onClick={onInit}
+            >
+              {busy ? 'Initializing…' : 'Initialize repository'}
+            </button>
+          ) : (
+            <p className="mt-2 text-[10px] text-[var(--color-text-muted)]">View only: this room cannot change files on its server.</p>
+          )}
+        </div>
+      </div>
+    )
   }
 
   const seg = (on: boolean): string =>
@@ -367,6 +488,19 @@ export function ChangesPane({ tabId, paneGroupId, itemId, data }: ChangesPanePro
               onDiscard={(fs) => void onDiscard(fs)}
             />
           )}
+          {notesList && (
+            <ChangesNotesList
+              notes={notesList.notes}
+              counts={notesList.counts ?? EMPTY_COUNTS}
+              canWrite={canNote && canSendNotes}
+              busy={busy}
+              onSend={onSendNotes}
+              onSelect={onSelectNote}
+              onResolve={onResolveNote}
+              onEdit={onEditNote}
+              onDelete={(n) => void onDeleteNote(n)}
+            />
+          )}
         </div>
 
         {!canStage && (
@@ -437,6 +571,8 @@ export function ChangesPane({ tabId, paneGroupId, itemId, data }: ChangesPanePro
           rev={rev}
           loadSides={loadSides}
           onSelectFile={onSelect}
+          onOpenFile={onOpenFile}
+          notes={notesApi}
         />
       </div>
     </div>
@@ -444,6 +580,8 @@ export function ChangesPane({ tabId, paneGroupId, itemId, data }: ChangesPanePro
 }
 
 const EMPTY_FILES: ChangesFile[] = []
+const EMPTY_NOTES: ReviewNote[] = []
+const EMPTY_COUNTS: NoteCounts = { open: 0, unsent: 0, sent: 0, resolved: 0 }
 const IDLE: DiffSidesState = { status: 'idle' }
 
 function Centered({ children }: { children: React.ReactNode }): React.JSX.Element {

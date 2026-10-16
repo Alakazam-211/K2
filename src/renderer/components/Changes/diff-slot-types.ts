@@ -18,6 +18,7 @@
 
 import type { ChangesDiffMode, ChangesView } from '@/stores/tabs'
 import type { ChangesFile, DiffSides } from '@/stores/git-changes'
+import type { AddNoteInput, ReviewNote } from '@/stores/git-notes'
 
 export type { ChangesFile, DiffSides, DiffSide } from '@/stores/git-changes'
 
@@ -50,4 +51,22 @@ export interface ChangesDiffSlotProps {
   loadSides: (file: ChangesFile) => Promise<DiffSides>
   /** The viewer picked a file (e.g. a section header in view all). */
   onSelectFile?: (file: ChangesFile) => void
+  /** "Open in editor" for a repo-relative path (room-aware, C2 wires it). */
+  onOpenFile?: (repoRelPath: string) => void
+  /** Review notes (C5). Absent = no notes gutter. */
+  notes?: ChangesNotesApi
+}
+
+/** C5 review notes as the viewer needs them. C2's pane owns the live list
+ *  (`useGitNotes`) and the writes; the viewer places open notes on the
+ *  text it shows (`locateNote`), draws them, and calls back. */
+export interface ChangesNotesApi {
+  /** Every note on the workspace (all statuses; the viewer shows open ones). */
+  notes: ReviewNote[]
+  /** May this room write notes on its server. */
+  canWrite: boolean
+  add: (input: AddNoteInput) => Promise<void>
+  update: (id: string, body: string) => Promise<void>
+  resolve: (id: string) => Promise<void>
+  remove: (id: string) => Promise<void>
 }

@@ -409,6 +409,46 @@ export function ThreadLoadOlder({
 
 // ── The message box ─────────────────────────────────────────────────────
 
+// ── Stacking past 3 lines ──
+//
+// Rosson 2026-10-16 ("really clean"): once the text wraps past 3 lines the
+// box stacks: the text takes its own full-width line and the buttons sit
+// on the line under it (Send on the right). Any box built from this kit
+// can do it: pass `stacked` to ThreadComposeBox, give the textarea's slot
+// `threadComposeTextSlotStyle(stacked)`, put `<ThreadComposeStackSpacer>`
+// before Send, and update `stacked` with `threadComposeStackNext` whenever
+// the textarea is re-measured. The textarea stays the same element (CSS
+// order and wrap), so focus and the caret are kept.
+
+/** Lines `el` wraps to: (scrollHeight - vertical padding) / line height. */
+export function threadComposeLines(el: { value: string; scrollHeight: number }, lineHeightPx: number, padY: number): number {
+  if (!el.value) return 1
+  return Math.max(1, Math.round((el.scrollHeight - padY) / lineHeightPx))
+}
+
+/** Stack or not, from the lines at the textarea's current `width`.
+ *  `rowChrome` is the width the one-row layout takes beside the textarea
+ *  (the leading buttons, the box's gaps and Send). Up past 3 lines; down
+ *  only when the text would take 2 lines or fewer back in the narrower
+ *  one-row field, so it can't flicker (one row again means 3 lines or
+ *  fewer there, which keeps it as it is). */
+export function threadComposeStackNext(o: { stacked: boolean; lines: number; width: number; rowChrome: number }): boolean {
+  if (!o.stacked) return o.lines > 3
+  const narrow = o.width - o.rowChrome
+  if (narrow <= 0) return true
+  return Math.ceil((o.lines * o.width) / narrow) > 2
+}
+
+/** The textarea slot's extra style: stacked, first and full width. */
+export function threadComposeTextSlotStyle(stacked: boolean): CSSProperties {
+  return stacked ? { order: -1, flexBasis: '100%' } : {}
+}
+
+/** Before Send: stacked, pushes it to the right of the button line. */
+export function ThreadComposeStackSpacer({ stacked }: { stacked: boolean }): JSX.Element | null {
+  return stacked ? <div aria-hidden="true" data-thread-compose-spacer="" style={{ flex: 1 }} /> : null
+}
+
 /** The field's padding and border (px); a leading control's ink starts
  *  THREAD_COMPOSE_BOX_EDGE in from the field's outer edge plus its own. */
 export const THREAD_COMPOSE_BOX_PAD = 6

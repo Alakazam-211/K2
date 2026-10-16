@@ -57,13 +57,9 @@ vi.mock('./useOverlayThread', () => ({
   useOverlayThread: () => h.threadHook,
 }))
 
-import {
-  composeRowChromeWidth,
-  composeStackNext,
-  TerminalComposeBar,
-  THREAD_COMPOSE_STACK_PREVIEW,
-} from '@/components/Terminal/TerminalComposeBar'
+import { composeRowChromeWidth, TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { composeTextareaHeight } from '@/components/Terminal/terminalCompose'
+import { threadComposeLines, threadComposeStackNext } from '@/components/Thread/ThreadZenKit'
 import { CHAMFER_SCOPE, FOOTER_FADE_PX, THREAD_CHAMFER_CSS, THREAD_COMPOSE_BOX_BORDER, THREAD_COMPOSE_BOX_PAD, THREAD_FOOTER_FADE_CSS, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { primaryScope } from '@/kessel/server-scope'
@@ -608,11 +604,21 @@ describe('footer fade behind the message box', () => {
   })
 })
 
-// PREVIEW (Rosson 2026-10-16): past 3 lines the Thread's box stacks (text on
-// its own full-width line, "+", "/" and Send under it); back at 2.
-describe('stacked message box (preview)', () => {
-  it('is on for the preview', () => {
-    expect(THREAD_COMPOSE_STACK_PREVIEW).toBe(true)
+// Rosson 2026-10-16 ("really clean"): past 3 lines the Thread's box stacks
+// (text on its own full-width line, "+", "/" and Send under it); back at 2.
+// The rule is the shared kit's, so a Garden box can use it too.
+describe('stacked message box', () => {
+  const composeStackNext = (o: { stacked: boolean; lines: number; width: number }): boolean =>
+    threadComposeStackNext({ ...o, rowChrome: composeRowChromeWidth() })
+
+  it('lives in the shared kit and the desktop box uses it', () => {
+    const bar = src('Terminal/TerminalComposeBar.tsx')
+    for (const name of ['threadComposeStackNext(', 'threadComposeLines(', 'threadComposeTextSlotStyle(', '<ThreadComposeStackSpacer']) {
+      expect(bar).toContain(name)
+    }
+    expect(bar).not.toContain('PREVIEW')
+    expect(threadComposeLines({ value: '', scrollHeight: 999 }, 18.2, 8)).toBe(1)
+    expect(threadComposeLines({ value: 'x', scrollHeight: 8 + 4 * 18.2 }, 18.2, 8)).toBe(4)
   })
 
   it('stacks past 3 lines, keeps one row at 3, and unstacks only when the text would fit in 2 one-row lines', () => {

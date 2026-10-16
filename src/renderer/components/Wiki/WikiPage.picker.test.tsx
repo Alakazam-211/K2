@@ -10,6 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
   indexCalls: [] as { project: string; scope: string | undefined }[],
+  /** Workspace paths whose index has notes (Home + Other, linked). */
+  populated: new Set<string>(),
+  noteCalls: [] as { project: string | null; id: string }[],
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -31,22 +34,33 @@ vi.mock('./wiki-api', async (importOriginal) => {
     ...real,
     fetchWikiIndex: vi.fn(async (project: string, opts?: { scope?: 'workspace' | 'k2' }) => {
       h.indexCalls.push({ project, scope: opts?.scope })
+      const full = opts?.scope !== 'k2' && h.populated.has(project)
+      const note = (id: string, title: string) => ({ id, title, aliases: [], tags: [], path: `.k2/wiki/${id}`, exists: true })
       return {
         workspacePath: project,
         generatedAt: '2026-10-16T00:00:00Z',
-        nodes: [],
-        links: [],
-        noteCount: 0,
+        nodes: full ? [note('Home.md', 'Home'), note('Other.md', 'Other')] : [],
+        links: full ? [{ source: 'Home.md', target: 'Other.md' }] : [],
+        noteCount: full ? 2 : 0,
         scope: opts?.scope === 'k2' ? 'k2' : 'workspace',
       }
     }),
     fetchWikiServeStatus: vi.fn(async () => ({ enabled: false })),
-    fetchWikiNote: vi.fn(async () => {
-      throw new Error('no note expected')
+    fetchWikiNote: vi.fn(async (project: string | null, id: string) => {
+      h.noteCalls.push({ project, id })
+      if (!project || !h.populated.has(project)) throw new Error(`no note expected: ${project} ${id}`)
+      return { id, title: id.replace('.md', ''), body: `# ${id} body`, path: `.k2/wiki/${id}`, workspacePath: project }
     }),
   }
 })
-vi.mock('./WikiGraph', () => ({ default: () => <div data-stub="graph" /> }))
+vi.mock('./WikiGraph', () => ({
+  default: ({ index, selectedId, mode }: { index: { nodes: unknown[] }; selectedId: string | null; mode: string }) => (
+    <div data-stub="graph" data-nodes={index.nodes.length} data-selected={selectedId ?? ''} data-mode={mode} />
+  ),
+}))
+vi.mock('@/components/Markdown/Markdown', () => ({
+  default: ({ children }: { children?: React.ReactNode }) => <div data-stub="markdown">{children}</div>,
+}))
 vi.mock('@/components/TopBar/ServerSwitcher', () => ({ default: () => <span data-stub="server" /> }))
 vi.mock('@/components/TopBar/PageTabs', () => ({ default: () => <span data-stub="tabs" /> }))
 vi.mock('@/components/TopBar/DesktopChromeLeft', () => ({ default: () => null }))
@@ -81,6 +95,8 @@ const project = (id: string, focusGroupId: string | null, extra: Record<string, 
 
 beforeEach(() => {
   h.indexCalls = []
+  h.noteCalls = []
+  h.populated = new Set()
   useProjectsStore.setState({
     projects: [
       project('alpha', 'g1'),
@@ -210,5 +226,59 @@ describe('Wiki close returns to where you came from', () => {
     fireEvent.click(screen.getByTitle('Close (Esc)'))
     const s = usePageViewStore.getState()
     expect([s.page, s.wikiProjectPath, s.lastWikiPath]).toEqual(['feedback', null, '/w/alpha'])
+  })
+})
+
+describe.each(['wiki', '2d'] as const)('a workspace with notes shows its notes and Home (regression, %s view)', (view) => {
+  beforeEach(() => {
+    usePageViewStore.setState({ wikiView: view })
+  })
+
+  /** The note ids on screen: the standard view's list, or the 2D graph's node count. */
+  async function expectNotesShown(): Promise<void> {
+    if (view === 'wiki') {
+      await waitFor(() =>
+        expect(Array.from(document.querySelectorAll('[data-wiki-note-id]')).map((r) => r.getAttribute('data-wiki-note-id')).sort()).toEqual([
+          'Home.md',
+          'Other.md',
+        ]),
+      )
+      expect(document.querySelector('[data-stub="graph"]')).toBeNull()
+    } else {
+      await waitFor(() => expect(document.querySelector('[data-stub="graph"]')?.getAttribute('data-nodes')).toBe('2'))
+      await waitFor(() => expect(document.querySelector('[data-stub="graph"]')?.getAttribute('data-selected')).toBe('Home.md'))
+      expect(document.querySelector('[data-stub="graph"]')?.getAttribute('data-mode')).toBe('global')
+    }
+    expect(screen.queryByText('No knowledge base yet')).toBeNull()
+    await waitFor(() => expect(screen.getByText('# Home.md body')).toBeTruthy())
+  }
+
+  it('opened from the Wiki tab path: the notes, Home selected and read', async () => {
+    h.populated = new Set(['/w/alpha'])
+    act(() => usePageViewStore.getState().openWiki('/w/alpha'))
+    render(<WikiPage />)
+    await expectNotesShown()
+    expect(h.noteCalls).toContainEqual({ project: '/w/alpha', id: 'Home.md' })
+  })
+
+  it('picked in the header, after All workspaces: that workspace\'s notes', async () => {
+    h.populated = new Set(['/w/bravo', '/w/alpha'])
+    act(() => usePageViewStore.getState().openWiki('/w/alpha'))
+    render(<WikiPage />)
+    await expectNotesShown()
+    fireEvent.click(openMenu().querySelector('[data-ws-filter-value="all"]') as HTMLElement)
+    await waitFor(() => expect(h.indexCalls).toContainEqual({ project: '/w/alpha', scope: 'k2' }))
+    h.noteCalls = []
+    fireEvent.click(openMenu().querySelector('[data-ws-filter-value="/w/bravo"]') as HTMLElement)
+    await waitFor(() => expect(h.indexCalls).toContainEqual({ project: '/w/bravo', scope: undefined }))
+    await expectNotesShown()
+    expect(h.noteCalls).toContainEqual({ project: '/w/bravo', id: 'Home.md' })
+  })
+
+  it('a worktree wiki (nav View Wiki) loads that path', async () => {
+    h.populated = new Set(['/w/cortana/.wt/fix'])
+    act(() => usePageViewStore.getState().openWiki('/w/cortana/.wt/fix'))
+    render(<WikiPage />)
+    await expectNotesShown()
   })
 })

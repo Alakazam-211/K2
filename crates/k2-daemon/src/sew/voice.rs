@@ -388,7 +388,10 @@ fn issue(env: &Env, label: &str, st: &mut VoiceState, manual_ip: Option<&str>) -
     let dns = turn_dns(env, label, manual_ip)?;
     let (key, new_ref) = turn_key(env, st)?;
     if let Some(r) = new_ref {
+        // Recorded at once: a failed issuance below must not orphan the
+        // vault key (the next run reuses it).
         st.turn_key_ref = Some(r);
+        save(env, st);
     }
     let csr = turn_csr(label, &key).map_err(|e| no("turn_failed", 500, format!("CSR: {e}")))?;
     let body = json!({"csr": csr, "subdomain": label, "token": "", "mode": "turn"});
@@ -479,19 +482,22 @@ pub fn install_machine(env: &Env, req: &InstallRequest) -> Result<Value, Fail> {
     let r = install_steps(env, req);
     match &r {
         Ok(_) => sup::changed("voice-installed"),
-        Err(f) => {
-            let msg = format!("{}: {}", f.code, f.hint);
-            update(env, |st| {
-                if let Some(p) = st.progress.as_mut() {
-                    p["result"] = json!("error");
-                    p["error"] = json!(msg.clone());
-                }
-                st.last_error = Some(msg);
-            });
-            sup::changed("voice-failed");
-        }
+        Err(f) => record_failure(env, f),
     }
     r
+}
+
+/// Record why a voice install stopped (`progress.result = error`).
+pub fn record_failure(env: &Env, f: &Fail) {
+    let msg = format!("{}: {}", f.code, f.hint);
+    let now = env.ops.now();
+    update(env, |st| {
+        let p = st.progress.get_or_insert_with(|| json!({"step": null, "at": now}));
+        p["result"] = json!("error");
+        p["error"] = json!(msg.clone());
+        st.last_error = Some(msg);
+    });
+    sup::changed("voice-failed");
 }
 
 fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {

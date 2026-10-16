@@ -229,6 +229,27 @@ describe('Tokens column', () => {
     )
   })
 
+  it('tile actions are real buttons (bordered chips, not clickable text); Remove is the destructive style', async () => {
+    await renderColumn()
+    const row = screen.getByTestId('llm-account-acc_home')
+    const names = ['Use this token', 'Rename', 'Remove']
+    for (const name of names) {
+      const btn = within(row).getByRole('button', { name }) as HTMLButtonElement
+      expect(btn.type).toBe('button')
+      expect(btn.className).toContain('border')
+      expect(btn.className).toContain('rounded-[var(--radius-field)]')
+      expect(btn.className).toContain('focus-visible:outline')
+    }
+    expect(within(row).getByRole('button', { name: 'Remove' }).className).toContain('bg-[var(--color-danger-muted)]')
+    expect(within(row).getByRole('button', { name: 'Use this token' }).className).toContain('bg-[var(--color-accent)]')
+    const claude = screen.getByTestId('llm-tool-claude')
+    for (const name of ['+ Add subscription', '+ Add API token']) {
+      const btn = within(claude).getByRole('button', { name })
+      expect(btn.className).toContain('rounded-[var(--radius-field)]')
+    }
+    expect(screen.getByRole('button', { name: 'Use next token' }).className).toContain('rounded-[var(--radius-field)]')
+  })
+
   it('a daemon refusal shows its hint', async () => {
     h.daemonCliPost.mockImplementation(async () => {
       throw new Error(JSON.stringify({ error: { code: 'busy', hint: 'another change is in progress' } }))

@@ -36,6 +36,7 @@ use k2_root_proto::version::SEW_MIN_PROTOCOL;
 
 use super::ops::{MgmtError, RealOps, SewOps, UnitInfo};
 use super::secrets::{kek_id, SewSecrets, VaultSecrets};
+use super::sew_wire as wire;
 use super::store::{self, Row};
 
 // ── environment ──────────────────────────────────────────────────────────
@@ -799,6 +800,50 @@ pub fn k2_alarms(env: &Env, row: &Row, sew_status: Option<&Value>, now: i64) -> 
     a
 }
 
+/// `status.backup`: K2's off-box ship setting plus Sew's own backup state
+/// (SW15 `status.backup`; null fields while Sew is down or has none).
+fn backup_status(row: &Row, sew_status: Option<&Value>) -> Value {
+    let b: wire::StatusBackup = sew_status
+        .and_then(|s| s.get("backup"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    json!({
+        "ship": {"kind": row.ship_kind},
+        "lastOkAt": b.last_ok_at,
+        "lastId": b.last_id,
+        "lastKind": b.last_kind,
+        "ageMs": b.age_ms,
+        "lastError": b.last_error,
+        "lastErrorAt": b.last_error_at,
+        "alarms": sew_alarms(sew_status, &["backup_failed", "backup_stale"]),
+    })
+}
+
+/// `status.drill`: Sew's restore-drill state (SW15 `status.drill`).
+fn drill_status(sew_status: Option<&Value>) -> Value {
+    let d: wire::StatusDrill = sew_status
+        .and_then(|s| s.get("drill"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    json!({
+        "lastOkAt": d.last_ok_at,
+        "lastOk": d.last_ok,
+        "lastError": d.last_error,
+        "ageMs": d.age_ms,
+        "alarms": sew_alarms(sew_status, &["drill_failed", "drill_stale"]),
+    })
+}
+
+/// The subset of Sew's alarms named in `which`.
+fn sew_alarms(sew_status: Option<&Value>, which: &[&str]) -> Vec<String> {
+    debug_assert!(which.iter().all(|w| wire::BACKUP_ALARMS.contains(w)));
+    sew_status
+        .and_then(|s| s.get("alarms"))
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).filter(|x| which.contains(x)).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
 /// What a purge must be confirmed with: the Sew public host, else the box's
 /// hostname.
 pub fn purge_hostname(env: &Env, row: &Row) -> String {
@@ -868,7 +913,8 @@ pub fn status(env: &Env, with_health: bool) -> Value {
         "recoveryKeySaved": row.recovery_shown_at.is_some(),
         "masterKeyAgeDays": row.master_key_created_at.map(|t| (now - t) / 86_400),
         "rotationInProgress": row.master_prev_ref.is_some(),
-        "backup": {"ship": {"kind": row.ship_kind}},
+        "backup": backup_status(&row, sew_status.as_ref()),
+        "drill": drill_status(sew_status.as_ref()),
         "host": {"hostname": row.host, "mode": row.host_mode},
         "appUrl": row.app_url,
         "helper": helper_json,
@@ -1328,15 +1374,84 @@ pub fn rollback(env: &Env) -> R<Value> {
 
 // ── backups / restore ────────────────────────────────────────────────────
 
+/// How long `backup run` waits for Sew's backup job (1 s polls).
+pub const BACKUP_WAIT_SECS: u32 = 1800;
+
+/// A mgmt failure of the backup routes as a refusal.
+fn backup_mgmt_fail(e: MgmtError) -> Fail {
+    match e {
+        MgmtError::Status(409, b) if b.contains(wire::BACKUP_RUNNING) => {
+            no("backup_busy", 409, "a Sew backup is already running; try again when it finishes")
+        }
+        MgmtError::Status(503, b) if b.contains(wire::BACKUPS_UNAVAILABLE) => {
+            no("backups_unavailable", 503, "this Sew server has no backup engine (backups_unavailable)")
+        }
+        MgmtError::Status(c, b) => no("backup_failed", 500, format!("Sew mgmt answered {c}: {b}")),
+        e => no("mgmt_unreachable", 503, format!("{e}: backups go through Sew's mgmt socket, so Sew must be running")),
+    }
+}
+
+/// `GET /mgmt/v1/backups` (SW15): every complete bundle, newest first.
+fn backup_list(env: &Env) -> R<Vec<wire::MgmtBackup>> {
+    let v = mgmt(env, "GET", "/mgmt/v1/backups", None).map_err(backup_mgmt_fail)?;
+    let list: wire::MgmtBackupList =
+        serde_json::from_value(v).map_err(|e| no("backup_list_failed", 500, format!("Sew's backup list does not parse: {e}")))?;
+    Ok(list.items)
+}
+
+/// `POST /mgmt/v1/backup` (SW15) and wait for its `backup` job. A second
+/// POST while a backup job is queued or running answers that same job.
+fn backup_job(env: &Env) -> R<(String, wire::BackupJobResult)> {
+    let v = mgmt(env, "POST", "/mgmt/v1/backup", Some(&json!({}))).map_err(backup_mgmt_fail)?;
+    let start: wire::StartJobResponse =
+        serde_json::from_value(v).map_err(|e| no("backup_failed", 500, format!("Sew's backup answer does not parse: {e}")))?;
+    let id = start.job_id;
+    let mut last = String::from("queued");
+    for i in 0..BACKUP_WAIT_SECS {
+        match mgmt(env, "GET", &format!("/mgmt/v1/jobs/{id}"), None) {
+            Ok(v) => {
+                let j: wire::JobStatus =
+                    serde_json::from_value(v).map_err(|e| no("backup_failed", 500, format!("Sew's job status does not parse: {e}")))?;
+                if j.kind != wire::BACKUP_JOB_KIND {
+                    return Err(no("backup_failed", 500, format!("Sew answered job {id} of kind '{}', not a backup", j.kind)));
+                }
+                let why = j.last_error.clone().unwrap_or_else(|| "no detail".into());
+                match j.state {
+                    wire::JobState::Succeeded => {
+                        let r = j.result.ok_or_else(|| no("backup_failed", 500, format!("backup job {id} succeeded without a result")))?;
+                        let r: wire::BackupJobResult =
+                            serde_json::from_value(r).map_err(|e| no("backup_failed", 500, format!("backup job result does not parse: {e}")))?;
+                        return Ok((id, r));
+                    }
+                    // Lost the race to another backup (the timer, a CLI run).
+                    wire::JobState::Failed | wire::JobState::Dead if why.contains(wire::BACKUP_RUNNING) => {
+                        return Err(no("backup_busy", 409, "a Sew backup is already running; try again when it finishes"));
+                    }
+                    wire::JobState::Dead => return Err(no("backup_failed", 500, format!("Sew backup job {id} failed: {why}"))),
+                    s => last = format!("{s:?}").to_lowercase(),
+                }
+            }
+            Err(e @ MgmtError::Unreachable(_)) => last = e.to_string(),
+            Err(e) => return Err(backup_mgmt_fail(e)),
+        }
+        if i + 1 < BACKUP_WAIT_SECS {
+            env.ops.sleep_ms(1000);
+        }
+    }
+    Err(with(
+        no("backup_timeout", 504, format!("Sew's backup job {id} is still {last}; follow it with /cli/sew/job")),
+        json!({"jobId": id}),
+    ))
+}
+
 pub fn backups(env: &Env) -> R<Value> {
     if !env.ops.linux() {
         return Err(unsupported());
     }
     let row = need_row(true)?;
     helper_check(env)?;
-    let v = sew_ok(env, &["backups"], None).map_err(|e| no("backup_list_failed", 500, e))?;
-    let list = v.get("sew").cloned().filter(Value::is_array).unwrap_or_else(|| json!([]));
-    let latest = list.as_array().and_then(|a| a.iter().max_by_key(|b| b.get("created_at").and_then(Value::as_str).unwrap_or("").to_string())).cloned();
+    let list = backup_list(env)?;
+    let latest = list.first().cloned();
     Ok(json!({
         "ok": true,
         "backups": list,
@@ -1345,7 +1460,7 @@ pub fn backups(env: &Env) -> R<Value> {
     }))
 }
 
-/// `k2 hostchat backup run` (waits until Sew's backup unit finishes).
+/// `k2 hostchat backup run`: Sew's mgmt backup job (SW15), waited for.
 pub fn backup_run(env: &Env) -> R<Value> {
     if !env.ops.linux() {
         return Err(unsupported());
@@ -1355,12 +1470,8 @@ pub fn backup_run(env: &Env) -> R<Value> {
         return Err(no("not_running", 409, format!("Sew is '{}': a backup needs a running server", row.status)));
     }
     helper_check(env)?;
-    let v = helper(env, &["backup"], None).map_err(|e| no("helper_error", 500, e))?;
-    match sew_exit(&v).unwrap_or(0) {
-        0 => Ok(json!({"ok": true, "sew": v["sew"]})),
-        75 => Err(no("backup_busy", 409, "a Sew backup is already running; try again when it finishes")),
-        n => Err(no("backup_failed", 500, format!("sew backup now: exit {n}: {}", sew_message(&v)))),
-    }
+    let (job, r) = backup_job(env)?;
+    Ok(json!({"ok": true, "jobId": job, "backup": r}))
 }
 
 /// Replace ALL Sew data with a backup. K2 takes a fresh backup first (and
@@ -1397,18 +1508,19 @@ pub fn restore(env: &Env, bundle_id: &str) -> R<Value> {
         });
     };
     save_enable(env, |r| r.restore_progress = Some(json!({"bundle": bundle_id, "startedAt": now, "current": "pre-backup", "result": null})));
-    // 1. The pre-restore backup: no backup, no restore.
-    let pre = helper(env, &["backup"], None);
-    let pre_ok = matches!(&pre, Ok(v) if sew_exit(v) == Some(0));
-    if !pre_ok {
-        note(env, "pre-backup", Some("refused"));
-        let why = match pre {
-            Ok(v) => sew_message(&v),
-            Err(e) => e,
-        };
-        return Err(no("pre_restore_backup_failed", 409, format!("K2 takes a backup before every restore and it failed: {why}. Nothing was changed")));
-    }
-    let pre_id = backups(env).ok().and_then(|b| b["latest"]["id"].as_str().map(str::to_string));
+    // 1. The pre-restore backup (Sew's mgmt backup job): no backup, no
+    // restore.
+    let pre_id = match backup_job(env) {
+        Ok((_, r)) => r.id,
+        Err(f) => {
+            note(env, "pre-backup", Some("refused"));
+            return Err(no(
+                "pre_restore_backup_failed",
+                409,
+                format!("K2 takes a backup before every restore and it failed: {}. Nothing was changed", f.hint),
+            ));
+        }
+    };
     // 2. Sew restores (sew stopped, sew-db up; Sew's own safety bundle too).
     note(env, "restore", None);
     let v = helper(env, &["restore", bundle_id], None).map_err(|e| no("helper_error", 500, e))?;

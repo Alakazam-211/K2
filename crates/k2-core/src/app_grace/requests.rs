@@ -35,6 +35,49 @@ pub const KIND_EGRESS: &str = "egress";
 pub const KIND_EGRESS_MODE: &str = "egress_mode";
 pub const KIND_BOX_SERVICE: &str = "box_service";
 
+// 0.46.1 kinds (migration 0183 rebuilds the table's CHECK with them;
+// plan-0461-lanes-v1: lane 2 publishes them for every lane).
+
+/// A deploy whose caps (or write verbs) go past the App's approved set
+/// (§5.6; held instead of dropping the new caps). Lane 2.
+pub const KIND_DEPLOY: &str = "deploy";
+/// An App's first install: it sets the approved cap set (§5.6). Lane 2.
+pub const KIND_INSTALL: &str = "install";
+/// The raw private-database connection (`db.raw`, §5.7). Always per event,
+/// whoever asks (K25). Lane 3 files it; lane 2 owns the vocabulary.
+pub const KIND_DB_RAW: &str = "db_raw";
+/// Memory past the admission headroom (`--overcommit`, §6.6). Lanes 1/3.
+pub const KIND_OVERCOMMIT: &str = "overcommit";
+/// An App change from an agent without "Allow this agent to manage Apps"
+/// (S42; §5.11.1 "every change is a held request"). The body is the
+/// original route call (`{route, body}`), replayed on approval. Lane 2.
+pub const KIND_MANAGE: &str = "manage";
+/// Raising an App's §5.4 quotas past the defaults (S19). Lane 2.
+pub const KIND_QUOTA: &str = "quota";
+
+/// Every kind `app_widenings` accepts (0168 + 0171 + 0183). Keep in step with the
+/// CHECK in `0183_app_door.sql` (a unit test compares them).
+pub const ALL_KINDS: &[&str] = &[
+    KIND_CONFIG,
+    KIND_PUBLISH_RUN,
+    KIND_APP_KEY,
+    KIND_CLEAN_MODE,
+    KIND_EGRESS,
+    KIND_EGRESS_MODE,
+    KIND_BOX_SERVICE,
+    KIND_DEPLOY,
+    KIND_INSTALL,
+    KIND_DB_RAW,
+    KIND_OVERCOMMIT,
+    KIND_MANAGE,
+    KIND_QUOTA,
+];
+
+/// Kinds held for a fresh owner confirm from every caller, the owner token
+/// included (§5.6 "always per event", AR14): no admin switch and no
+/// credential turns them into an immediate change.
+pub const ALWAYS_PER_EVENT: &[&str] = &[KIND_DEPLOY, KIND_INSTALL, KIND_DB_RAW, KIND_EGRESS];
+
 pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_APPROVED: &str = "approved";
 pub const STATUS_DENIED: &str = "denied";
@@ -316,7 +359,7 @@ pub fn expire_due(conn: &Connection, now: i64) -> rusqlite::Result<Vec<AppReques
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn conn() -> Connection {
@@ -330,7 +373,35 @@ mod tests {
                 c.execute_batch(stmt).unwrap();
             }
         }
+        apply_0183_widenings(&c);
         c
+    }
+
+    /// 0183's rebuild of `app_widenings` (the `apps` ALTERs need the full
+    /// schema). Shared by the other unit tests that build the table.
+    pub(crate) fn apply_0183_widenings(c: &Connection) {
+        for stmt in include_str!("../../drizzle_sql/0183_app_door.sql").split("--> statement-breakpoint") {
+            if stmt.contains("app_widenings") {
+                c.execute_batch(stmt).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn every_kind_fits_the_0183_check_and_nothing_else_does() {
+        let c = conn();
+        for (i, kind) in ALL_KINDS.iter().enumerate() {
+            let body = serde_json::json!({ "i": i });
+            insert(&c, &new(kind, "jobs", &body, "agent:nsi"), 100).unwrap_or_else(|e| panic!("kind {kind} refused by the CHECK: {e}"));
+        }
+        assert!(insert(&c, &new("bogus", "jobs", &serde_json::json!({}), "agent:nsi"), 100).is_err(), "an unknown kind is refused");
+        let sql = include_str!("../../drizzle_sql/0183_app_door.sql");
+        for k in ALL_KINDS {
+            assert!(sql.contains(&format!("'{k}'")), "0183's CHECK names {k}");
+        }
+        for k in ALWAYS_PER_EVENT {
+            assert!(ALL_KINDS.contains(k), "{k} is a kind");
+        }
     }
 
     fn new<'a>(kind: &'a str, label: &'a str, body: &Value, by: &'a str) -> NewRequest<'a> {

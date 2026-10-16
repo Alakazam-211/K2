@@ -248,6 +248,11 @@ echo "== the process exception (system unit, User=k2appx) =="
 req daemon apps ensure-process-user
 expect_rc 0 "ensure-process-user"
 id k2appx >/dev/null || fail "k2appx user"
+# The table covers k2appx once it exists (box prep's order).
+req daemon apps nft apply 38600-38899 38900-38999 5432
+expect_rc 0 "nft apply with the process user"
+T2="$(inns nft list table inet k2app)"
+grep -q "meta skuid $(id -u k2appx) jump k2app_v3" <<<"$T2" || fail "k2appx is not in the table: $T2"
 req daemon apps process-unit on
 expect_rc 0 "process-unit on"
 systemctl cat k2app-process@.service >/dev/null || fail "unit not loaded"

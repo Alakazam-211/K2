@@ -210,7 +210,7 @@ function TabGroupColumn({
             </TabVisibilityContext.Provider>
           )
         })}
-        {tabs.length === 0 && <EmptyWorkspaceHints />}
+        {tabs.length === 0 && (groupIndex > 0 ? <EmptySplitColumnHint /> : <EmptyWorkspaceHints />)}
 
         {/* Drop highlight */}
         {showDropHighlight && (
@@ -224,6 +224,22 @@ function TabGroupColumn({
           />
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Empty split column ───────────────────────────────────────────────────
+
+/** A split column with no tabs (the split button on the pinned tab leaves the
+ *  new column empty): tell the user how to fill it. */
+export function EmptySplitColumnHint(): React.JSX.Element {
+  return (
+    <div
+      className="flex h-full flex-col items-center justify-center gap-1.5 px-4 text-center text-[var(--color-text-muted)]"
+      data-empty-split-column=""
+    >
+      <span className="text-xs text-[var(--color-text-secondary)]">Drag a tab here to see it side by side</span>
+      <span className="text-[11px]">or press + for a new tab</span>
     </div>
   )
 }

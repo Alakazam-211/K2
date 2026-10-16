@@ -513,7 +513,7 @@ PASS_HEX="$(printf 'k2skn_e2e_pass' | od -An -tx1 | tr -d ' \n')"
 SK_HEX="$(printf 'sk_e2e_value' | od -An -tx1 | tr -d ' \n')"
 DBJ_HEX="$(printf '{"db":1}' | od -An -tx1 | tr -d ' \n')"
 DEP=d-0000000000f1
-START="{\"verb\":\"start\",\"app\":\"esc-a\",\"deployment\":\"$DEP\",\"seed\":\"$SEED\",\"image\":\"$IMAGE\",\"port\":41999,\"argv\":[\"node\",\"server.mjs\"],\"env\":{\"NODE_ENV\":\"production\",\"K2_PORT\":\"38600\"},\"memoryMib\":256,\"drainSecs\":3,\"secrets\":[{\"env\":\"STRIPE_KEY\",\"file\":null,\"valueHex\":\"$SK_HEX\"},{\"env\":null,\"file\":\"db.json\",\"valueHex\":\"$DBJ_HEX\"}],\"passHex\":\"$PASS_HEX\"}"
+START="{\"verb\":\"start\",\"app\":\"esc-a\",\"deployment\":\"$DEP\",\"seed\":\"$SEED\",\"image\":\"$IMAGE\",\"port\":41999,\"argv\":[\"node\",\"server.mjs\"],\"env\":{\"NODE_ENV\":\"production\",\"K2_PORT\":\"38600\"},\"memoryMib\":256,\"drainSecs\":3,\"secrets\":[{\"env\":\"STRIPE_KEY\",\"file\":null,\"valueHex\":\"$SK_HEX\"},{\"env\":null,\"file\":\"db.json\",\"valueHex\":\"$DBJ_HEX\"}],\"passHex\":\"$PASS_HEX\",\"io\":{\"rbps\":null,\"wbps\":41943040,\"riops\":null,\"wiops\":2000}}"
 req daemon '{"verb":"prepare","app":"esc-a","image":"'"$IMAGE"'","seed":"'"$SEED"'"}' | grep -q '"ok":true' || fail "prepare"
 req daemon "$START" >/tmp/st.json
 grep -q '"ok":true' /tmp/st.json || fail "start with secrets: $(cat /tmp/st.json)"

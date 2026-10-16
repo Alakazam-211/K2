@@ -37,6 +37,7 @@ import { topBarLeftClusterMinWidth, TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/d
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import K2MarkButton from '@/components/TopBar/K2MarkButton'
 import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
+import { DrawerIcon } from '@/components/icons/K2Icons'
 import { Surface } from '@/components/ui'
 import ProjectNav, { CreateProjectForm, ProjectNavRail } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
@@ -345,28 +346,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
               className="no-drag flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
               title="Toggle projects nav"
             >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 14 14"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.3"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                {!navCollapsed ? (
-                  <>
-                    <rect x="1" y="2" width="12" height="10" rx="0" />
-                    <line x1="5" y1="2" x2="5" y2="12" />
-                  </>
-                ) : (
-                  <>
-                    <rect x="1" y="2" width="12" height="10" rx="0" />
-                    <line x1="5" y1="2" x2="5" y2="12" strokeDasharray="1.5 1.5" />
-                  </>
-                )}
-              </svg>
+              <DrawerIcon side="left" open={!navCollapsed} />
             </button>
             <button
               type="button"
@@ -374,29 +354,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
               className="no-drag relative flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
               title="Toggle project chat"
             >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 14 14"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.3"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                {!chatCollapsed ? (
-                  <>
-                    <rect x="1" y="2" width="12" height="10" rx="0" />
-                    <line x1="8.5" y1="2" x2="8.5" y2="12" />
-                    <line x1="11" y1="5" x2="11" y2="9" strokeWidth="1.5" />
-                  </>
-                ) : (
-                  <>
-                    <rect x="1" y="2" width="12" height="10" rx="0" />
-                    <line x1="8.5" y1="2" x2="8.5" y2="12" strokeDasharray="1.5 1.5" />
-                  </>
-                )}
-              </svg>
+              <DrawerIcon side="right" open={!chatCollapsed} />
               {chatCollapsed && selectedUnread && (
                 <span
                   className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]"

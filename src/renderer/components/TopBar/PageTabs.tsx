@@ -17,11 +17,13 @@ import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { withChord } from '@/lib/shortcut-label'
 import {
-  GardenAgentIcon,
-  GardenDashboardIcon,
-  GardenHomeIcon,
-  GardenTicketIcon,
-} from '@/components/icons/GardenPageIcons'
+  AgentsIcon,
+  HomeIcon,
+  K2_ICON_PX,
+  ProjectsIcon,
+  SettingsIcon,
+  TicketsIcon,
+} from '@/components/icons/K2Icons'
 
 /** The Tickets tab's badge from the feedback store (prd-tickets-badge-
  *  orphans TB8/TB15/TB17 + Appa A3): a fresh count; the last count dimmed
@@ -51,18 +53,18 @@ export const PAGE_TAB_LABELS = {
 } as const
 
 /** 0.46.0 experiment (Rosson 2026-10-16): the page tabs are icons, not
- *  words — Garden 1's nav-rail icons. The word stays as the tooltip and
- *  the accessible name. 14px: a touch above the cog's 13px because these
- *  glyphs carry more detail, still well inside the 24px-tall tab. */
-export const PAGE_TAB_ICON_PX = 14
+ *  words. The word stays as the tooltip and the accessible name. Icon
+ *  style A3 (`components/icons/K2Icons.tsx`): one 16px size for every
+ *  top-bar icon, the cog included, inside the 24px-tall tab. */
+export const PAGE_TAB_ICON_PX = K2_ICON_PX
 
-/** The four page tabs in order, with their icons. */
+/** The four page tabs in order, with their A3 icons. */
 export const PAGE_TAB_ITEMS = [
-  { page: 'home', Icon: GardenHomeIcon },
-  { page: 'agents', Icon: GardenAgentIcon },
-  { page: 'projects', Icon: GardenDashboardIcon },
-  { page: 'feedback', Icon: GardenTicketIcon },
-] as const satisfies readonly { page: keyof typeof PAGE_TAB_LABELS; Icon: typeof GardenHomeIcon }[]
+  { page: 'home', Icon: HomeIcon },
+  { page: 'agents', Icon: AgentsIcon },
+  { page: 'projects', Icon: ProjectsIcon },
+  { page: 'feedback', Icon: TicketsIcon },
+] as const satisfies readonly { page: keyof typeof PAGE_TAB_LABELS; Icon: typeof HomeIcon }[]
 
 /** What a tab badge shows: nothing, a number, or `?` (unknown). */
 export function badgeText(badge: number | '?' | undefined): string | null {
@@ -184,10 +186,7 @@ export default function PageTabs(): React.JSX.Element {
         title={withChord('Settings', 'Meta+,')}
         ariaLabel="Settings"
       >
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
-        </svg>
+        <SettingsIcon size={PAGE_TAB_ICON_PX} />
       </PageTab>
       {PAGE_TAB_ITEMS.map(({ page: p, Icon }) => {
         const badge =

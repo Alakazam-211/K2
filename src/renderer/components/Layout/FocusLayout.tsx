@@ -6,6 +6,7 @@ import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import K2MarkButton from '@/components/TopBar/K2MarkButton'
 import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
+import { DrawerIcon } from '@/components/icons/K2Icons'
 import ServerSwitcher from '@/components/TopBar/ServerSwitcher'
 import { Surface } from '@/components/ui'
 import { titleBarDragOnMouseDown, titleBarOnDoubleClick } from '@/lib/titlebar-drag'
@@ -85,20 +86,7 @@ export default function FocusLayout({
               }}
               title="Toggle left panel"
             >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                {leftPanelOpen ? (
-                  <>
-                    <rect x="1" y="2" width="12" height="10" rx="0" />
-                    <line x1="5.5" y1="2" x2="5.5" y2="12" />
-                    <line x1="3" y1="5" x2="3" y2="9" strokeWidth="1.5" />
-                  </>
-                ) : (
-                  <>
-                    <rect x="1" y="2" width="12" height="10" rx="0" />
-                    <line x1="5.5" y1="2" x2="5.5" y2="12" strokeDasharray="1.5 1.5" />
-                  </>
-                )}
-              </svg>
+              <DrawerIcon side="left" open={leftPanelOpen} />
             </button>
 
             <button
@@ -110,20 +98,7 @@ export default function FocusLayout({
               }}
               title="Toggle right panel"
             >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-                {rightPanelOpen ? (
-                  <>
-                    <rect x="1" y="2" width="12" height="10" rx="0" />
-                    <line x1="8.5" y1="2" x2="8.5" y2="12" />
-                    <line x1="11" y1="5" x2="11" y2="9" strokeWidth="1.5" />
-                  </>
-                ) : (
-                  <>
-                    <rect x="1" y="2" width="12" height="10" rx="0" />
-                    <line x1="8.5" y1="2" x2="8.5" y2="12" strokeDasharray="1.5 1.5" />
-                  </>
-                )}
-              </svg>
+              <DrawerIcon side="right" open={rightPanelOpen} />
             </button>
           </TopBarUtilities>
         </DesktopChromeRight>

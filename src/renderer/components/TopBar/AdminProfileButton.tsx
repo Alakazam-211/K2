@@ -23,29 +23,11 @@ import { PasswordRotationStep } from '@/components/PasswordRotationStep'
 import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
 import { saveRememberedPassword, useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
+import { AdminIcon } from '@/components/icons/K2Icons'
 import { loadAdminProfile, type AdminProfile, type ProfileRole, type Read } from './admin-profile-api'
 
 const noDrag = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
-function PersonIcon(): React.JSX.Element {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 14 14"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      data-admin-profile-icon=""
-    >
-      <circle cx="7" cy="4.6" r="2.5" />
-      <path d="M2.2 12.4c0-2.55 2.15-4.3 4.8-4.3s4.8 1.75 4.8 4.3" />
-    </svg>
-  )
-}
 
 const ROLE_LABEL: Record<ProfileRole, string> = { owner: 'Owner', admin: 'Admin', member: 'Member' }
 
@@ -444,7 +426,8 @@ export default function AdminProfileButton(): React.JSX.Element {
         className="no-drag flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
         style={noDrag}
       >
-        <PersonIcon />
+        {/* Icon style A3: Lucide `circle-user`, squared. */}
+        <AdminIcon />
       </button>
       {open ? <AdminProfileModal onClose={close} /> : null}
     </>

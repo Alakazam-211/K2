@@ -88,7 +88,7 @@ describe('PageTabs — Home tab', () => {
     ])
   })
 
-  it('the page tabs are icons only: one 14px svg each, no words, word in title + aria-label', () => {
+  it('the page tabs are icons only: one 16px svg each, no words, word in title + aria-label', () => {
     const { container } = render(<PageTabs />)
     const pages = tabs(container).slice(1)
     expect(pages).toHaveLength(4)
@@ -102,11 +102,11 @@ describe('PageTabs — Home tab', () => {
       expect(name).toBeTruthy()
       expect(b.getAttribute('title')?.startsWith(name as string)).toBe(true)
     }
-    expect(PAGE_TAB_ICON_PX).toBe(14)
+    expect(PAGE_TAB_ICON_PX).toBe(16)
     expect(screen.getByRole('button', { name: 'Tickets' })).toBe(pages[3])
   })
 
-  it('each page draws its Garden icon (home, agent, dashboard, ticket)', () => {
+  it('each page draws its A3 icon (home, agents, projects, tickets)', () => {
     const { container } = render(<PageTabs />)
     const pages = tabs(container).slice(1)
     PAGE_TAB_ITEMS.forEach(({ Icon }, i) => {
@@ -114,6 +114,41 @@ describe('PageTabs — Home tab', () => {
       expect(pages[i].innerHTML).toBe(one.innerHTML)
     })
     expect(PAGE_TAB_ITEMS.map((x) => x.page)).toEqual(['home', 'agents', 'projects', 'feedback'])
+    expect(pages.map((b) => b.querySelector('svg')?.getAttribute('data-k2-icon'))).toEqual([
+      'home',
+      'agents',
+      'projects',
+      'tickets',
+    ])
+    // Squared Lucide: square caps, mitred joins, the one 1.75 stroke.
+    for (const b of pages) {
+      const svg = b.querySelector('svg')
+      if (!svg) throw new Error('page tab has no svg')
+      expect([
+        svg.getAttribute('stroke-linecap'),
+        svg.getAttribute('stroke-linejoin'),
+        svg.getAttribute('stroke-width'),
+      ]).toEqual(['square', 'miter', '1.75'])
+    }
+  })
+
+  it('the Settings tab draws Lucide\'s settings gear at 16px, round caps, same stroke', () => {
+    const { container } = render(<PageTabs />)
+    const gear = tabs(container)[0]
+    expect(gear.getAttribute('aria-label')).toBe('Settings')
+    const svgs = gear.querySelectorAll('svg')
+    expect(svgs).toHaveLength(1)
+    const svg = svgs[0]
+    expect([
+      svg.getAttribute('data-k2-icon'),
+      svg.getAttribute('width'),
+      svg.getAttribute('stroke-linecap'),
+      svg.getAttribute('stroke-linejoin'),
+      svg.getAttribute('stroke-width'),
+      svg.getAttribute('aria-hidden'),
+    ]).toEqual(['settings', '16', 'round', 'round', '1.75', 'true'])
+    expect(svg.querySelector('path')?.getAttribute('d')?.startsWith('M9.671 4.136a2.34 2.34 0 0 1 4.659 0')).toBe(true)
+    expect(svg.querySelectorAll('circle')).toHaveLength(1)
   })
 
   it('the active tab is marked (aria-pressed + accent underline) and only that one', () => {

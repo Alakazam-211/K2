@@ -10,6 +10,7 @@ import { SetiFileIcon } from '@/lib/seti-file-icons'
 import { isAgentPtyTerminalItem } from '@/lib/chat-session-tab'
 import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
+import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
 
 // ── Types (from tabs store — will be available after store refactor) ──
 
@@ -41,8 +42,8 @@ interface BrowserItemData {
 
 interface Item {
   id: string
-  type: 'terminal' | 'file-viewer' | 'agent' | 'browser'
-  data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData
+  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes'
+  data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData | { workspacePath: string }
   pinned?: boolean
 }
 
@@ -64,6 +65,9 @@ function getTabLabel(item: Item): string {
   if (item.type === 'agent') {
     const data = item.data as AgentItemData
     return data.agentName === '__workspace__' ? 'Work Board' : `Agent: ${data.agentName}`
+  }
+  if (item.type === 'changes') {
+    return 'Changes'
   }
   if (item.type === 'browser') {
     const data = item.data as BrowserItemData
@@ -92,6 +96,9 @@ function paneItemIcon(item: Item): React.JSX.Element | null {
   if (item.type === 'browser') {
     const data = item.data as BrowserItemData
     return <BrowserTabGlyph icon={data.icon} />
+  }
+  if (item.type === 'changes') {
+    return <ChangesTabIcon />
   }
   return null
 }

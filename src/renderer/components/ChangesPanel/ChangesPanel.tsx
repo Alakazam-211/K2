@@ -8,6 +8,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { useRoom, useRoomProjects, useRoomTabs } from '@/components/Room/RoomContext'
 import { useRoomResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useGitInfo, useGitChanges } from '@/hooks/useGit'
+import { buildAiCommitPrompt } from '@/components/Changes/ai-commit'
 
 // ── Status helpers ───────────────────────────────────────────────────────────
 
@@ -117,19 +118,8 @@ export default function ChangesPanel(): React.JSX.Element {
 
     const { command, args } = resolvedAgent
 
-    // Build concise changed-files summary (agent will run git diff itself)
-    const MAX_FILES = 80
-    const fileLines = changes.slice(0, MAX_FILES).map((f) => `${f.status}: ${f.path}`)
-    if (changes.length > MAX_FILES) {
-      fileLines.push(`...and ${changes.length - MAX_FILES} more files`)
-    }
-    const changedSummary = fileLines.join('\n')
-
-    let prompt = `Review the following changes in this repository and create a well-structured commit with an appropriate commit message.\n\nChanged files:\n${changedSummary}`
-
-    if (includeMerge) {
-      prompt += `\n\nAfter committing, merge the branch "${branchName}" back into main and resolve any conflicts. Once merged, remove the worktree with "git worktree remove" and delete the branch with "git branch -d ${branchName}".`
-    }
+    // Concise changed-files summary (the agent runs git diff itself).
+    const prompt = buildAiCommitPrompt(changes, { includeMerge, branchName })
 
     const tabsStore = room.tabs.getState()
     const activeGroup = tabsStore.activeGroupIndex

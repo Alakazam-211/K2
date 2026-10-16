@@ -47,6 +47,8 @@ import { errorText, useLlmAccountsStore, type LlmAccountsDoc } from '@/stores/ll
 import type { Tab } from '@/stores/tabs'
 import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
+import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
+import { cachedIsGitRepo, probeIsGitRepo } from '@/stores/git-changes'
 import { useToastStore } from '@/stores/toast'
 import { metaChordLabel } from '@/lib/shortcut-label'
 
@@ -62,11 +64,13 @@ function presetMenuIcon(preset: AgentPreset): ReactNode {
   return <AgentIcon agent={preset.label} size={14} />
 }
 
-/** Terminal, New File, Browser, then enabled presets in store order. No separator when none are enabled. */
+/** Terminal, New File, Browser, Changes (git repos only), then enabled
+ *  presets in store order. No separator when none are enabled. */
 function buildPlusMenuItems(
   presets: AgentPreset[],
   defaultPresetId: string | null,
   sandboxHint: boolean,
+  isGitRepo = false,
 ): ContextMenuItemDef[] {
   const enabled = presets.filter((p) => p.enabled !== 0)
   const items: ContextMenuItemDef[] = [
@@ -74,6 +78,7 @@ function buildPlusMenuItems(
     { id: 'new-file', label: 'New File', shortcut: metaChordLabel('Meta+N') ?? undefined },
     { id: 'browser', label: 'Browser' },
   ]
+  if (isGitRepo) items.push({ id: 'changes', label: 'Changes', icon: <ChangesTabIcon /> })
   if (enabled.length === 0) return items
   items.push({ id: 'plus-presets-sep', label: '', type: 'separator' })
   for (const preset of enabled) {
@@ -321,14 +326,29 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     // that call it have to record altKey before that promise continues.
     let optionHeld = e.altKey
     let shown = optionHeld
+    // Changes (C2) shows only for a git repo: paint from the last answer at
+    // once, then ask `git/info` on the bar's server and repaint if it moved.
+    let isGitRepo = cachedIsGitRepo(room.scope, barCwd) === true
+    let shownGit = isGitRepo
+    let stopped = false
     const paint = (): void => {
-      if (!useContextMenuStore.getState().isOpen) return
-      if (shown === optionHeld) return
+      if (stopped || !useContextMenuStore.getState().isOpen) return
+      if (shown === optionHeld && shownGit === isGitRepo) return
       shown = optionHeld
+      shownGit = isGitRepo
       useContextMenuStore.getState().replaceItems(
-        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox),
+        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, isGitRepo),
       )
     }
+    probeIsGitRepo(room.scope, barCwd).then(
+      (yes) => {
+        isGitRepo = yes
+        paint()
+      },
+      (err: unknown) => {
+        console.warn('[tab-bar] git/info for the + menu failed', err)
+      },
+    )
     const onKeyDown = (ev: KeyboardEvent): void => {
       if (ev.key === 'Alt') {
         optionHeld = true
@@ -361,13 +381,14 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     window.addEventListener('click', onClick, true)
     window.addEventListener('blur', onBlur)
     const stop = (): void => {
+      stopped = true
       window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('keyup', onKeyUp, true)
       window.removeEventListener('click', onClick, true)
       window.removeEventListener('blur', onBlur)
     }
     try {
-      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox)
+      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, isGitRepo)
       const picked = await useContextMenuStore.getState().show(rect.left, rect.bottom, items)
       if (!picked) return
       if (picked === 'terminal') {
@@ -380,6 +401,10 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       }
       if (picked === 'browser') {
         room.tabs.getState().openUrlInNewTab('', group)
+        return
+      }
+      if (picked === 'changes') {
+        room.tabs.getState().openChangesTab(barCwd, group)
         return
       }
       if (picked.startsWith('preset:')) {
@@ -1069,6 +1094,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     icon = <SetiFileIcon name={fileName} size={16} />
                   } else if (items.some((item) => item.type === 'terminal')) {
                     icon = <ShellTabIcon />
+                  } else if (items.some((item) => item.type === 'changes')) {
+                    icon = <ChangesTabIcon />
                   } else if (items.some((item) => item.type === 'browser')) {
                     // After file and terminal. A mixed tab never reaches here.
                     const browser = items.find((item) => item.type === 'browser')

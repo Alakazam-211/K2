@@ -25,11 +25,17 @@ function tcp(host, p, ms = 2000) {
 }
 function get(url, ms = 3000, headers = {}) {
   return new Promise((res) => {
-    const r = http.get(url, { timeout: ms, headers }, (x) => {
-      let b = "";
-      x.on("data", (d) => (b += d));
-      x.on("end", () => res({ status: x.statusCode, body: b.trim() }));
-    });
+    let r;
+    try {
+      r = http.get(url, { timeout: ms, headers }, (x) => {
+        let b = "";
+        x.on("data", (d) => (b += d));
+        x.on("end", () => res({ status: x.statusCode, body: b.trim() }));
+      });
+    } catch (e) {
+      // A bad URL throws here; the probe answers instead of crashing.
+      return res({ status: 0, body: String(e.code || e.message) });
+    }
     r.on("timeout", () => { r.destroy(); res({ status: 0, body: "timeout" }); });
     r.on("error", (e) => res({ status: 0, body: e.code || "error" }));
   });
@@ -92,6 +98,8 @@ function read0(p) { try { return fs.readFileSync(p, "utf8"); } catch (e) { retur
 // link (`gw:<host gateway port>`) the daemon accepted the call on.
 async function gateway() {
   const url = process.env.K2_GATEWAY_URL || "";
+  // Phase B starts the App straight on the engine: no daemon, no link.
+  if (!url) return { url: null, status: 0, link: null };
   const pass = process.env.K2_PASS_FILE ? read0(process.env.K2_PASS_FILE).trim() : "";
   const r = await get(`${url}/gw/me`, 3000, { authorization: `Bearer ${pass}` });
   let link = null;

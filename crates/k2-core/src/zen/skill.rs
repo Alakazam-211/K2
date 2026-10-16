@@ -36,6 +36,7 @@ fn prop_type(t: PropType) -> String {
         PropType::Text => "text".into(),
         PropType::OneOf(xs) => format!("one of {}", ticks(xs)),
         PropType::SubsetOf(xs) => format!("a list from {}", ticks(xs)),
+        PropType::Int { min, max } => format!("a whole number from {min} to {max}"),
     }
 }
 

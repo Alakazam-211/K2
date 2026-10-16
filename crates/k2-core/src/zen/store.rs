@@ -1209,26 +1209,42 @@ impl ZenFiles {
         crate::fs_atomic::atomic_write_str(&path, &(body + "\n")).map_err(|e| io(e, &path))
     }
 
-    /// The theme a Garden shows (G16): its own pick, else its template's
-    /// default theme (a catalog Garden's `theme`, the Diary's haunted study;
-    /// scope `garden`, so a theme switch there becomes the Garden's own
-    /// pick), else the global one, else `basic`. A pick whose theme is gone
-    /// is reported in `missing` and skipped. `garden` is a Garden id.
+    /// The theme a Garden shows (G16): its own pick, else its catalog
+    /// template's default theme (a catalog Garden's `theme`, the Diary's
+    /// haunted study; scope `garden`, so a theme switch there becomes the
+    /// Garden's own pick), else the global one, else its start template's
+    /// default theme (Garden 1's `glass`, 0.46.0; scope `garden`), else
+    /// `basic`. A pick whose theme is gone is reported in `missing` and
+    /// skipped. `garden` is a Garden id.
+    ///
+    /// The start template's theme is read from the set the Garden's theme
+    /// resolves on ([`ZenFiles::theme_defaults`]): synced, K2's live set;
+    /// an own copy, its archived set, which named none before 0.46.0, so
+    /// an own copy keeps what it showed (prd-zen-garden-sync-defaults-v1).
     pub fn active_theme(&self, garden: Option<&str>) -> ActiveTheme {
+        let set = garden.map(|id| self.theme_defaults(id));
+        self.active_theme_in(garden, set.as_deref())
+    }
+
+    /// [`ZenFiles::active_theme`] with the Garden's theme set `set` given
+    /// (a resolve through a sync view passes the view's set). `None` reads
+    /// no start template theme.
+    pub fn active_theme_in(&self, garden: Option<&str>, set: Option<&Defaults>) -> ActiveTheme {
         let a = self.read_active();
         let mut missing = None;
         let mut chain: Vec<(String, &'static str)> = Vec::new();
         if let Some(n) = garden.and_then(|id| a.gardens.get(id)) {
             chain.push((n.clone(), "garden"));
         }
-        if let Some(t) = garden
-            .and_then(|id| self.gardens().into_iter().find(|g| g.id == id))
-            .and_then(|g| super::garden_catalog::template_theme(&g.template))
-        {
+        let entry = garden.and_then(|id| self.gardens().into_iter().find(|g| g.id == id));
+        if let Some(t) = entry.as_ref().and_then(|g| super::garden_catalog::template_theme(&g.template)) {
             chain.push((t.to_string(), "garden"));
         }
         if let Some(n) = &a.theme {
             chain.push((n.clone(), "global"));
+        }
+        if let Some(t) = entry.as_ref().zip(set).and_then(|(g, d)| d.template_default_theme(&g.template)) {
+            chain.push((t, "garden"));
         }
         for (name, scope) in chain {
             if self.theme_exists(&name) {
@@ -1277,7 +1293,8 @@ impl ZenFiles {
             ZenFile::Theme(name) => Self::theme_parent(name).clone(),
             ZenFile::Zen => self.theme_stack(&self.active_theme(None).name).2,
             ZenFile::Garden(id) => {
-                let tbase = self.theme_stack_in(&self.theme_defaults(id), &self.active_theme(Some(id)).name).2;
+                let td = self.theme_defaults(id);
+                let tbase = self.theme_stack_in(&td, &self.active_theme_in(Some(id), Some(&td)).name).2;
                 let zen = self.effective(&ZenFile::Zen, &tbase);
                 schema::merge(&[&tbase, &zen.layer])
             }
@@ -1554,7 +1571,7 @@ impl ZenFiles {
         };
         let id = entry.id.clone();
         let gd = self.garden_defaults(&id, view);
-        let active = self.active_theme(Some(&id));
+        let active = self.active_theme_in(Some(&id), Some(&gd.theme));
         let (parent, theme, tbase) = self.theme_stack_in(&gd.theme, &active.name);
         let zen = self.effective(&ZenFile::Zen, &tbase);
         let base = schema::merge(&[&tbase, &zen.layer]);

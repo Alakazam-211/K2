@@ -150,6 +150,16 @@ pub const BUILTIN_THEMES: &[BuiltinTheme] = &[
             bytes: include_bytes!("themes/haunted-background.webp"),
         }],
     },
+    // K2 Companion's look (Rosson 2026-10-16, 0.46.0): Garden 1's default
+    // theme (`theme` in `template-k2-texting-1.toml`), and anyone's to use.
+    BuiltinTheme {
+        name: "glass",
+        label: "Glass",
+        summary: "always dark: K2 Companion's black canvas, glassy dark cards, iMessage blue, round corners",
+        toml: include_str!("themes/glass.toml"),
+        background: None,
+        older_backgrounds: &[],
+    },
 ];
 
 pub fn builtin_theme(name: &str) -> Option<&'static BuiltinTheme> {

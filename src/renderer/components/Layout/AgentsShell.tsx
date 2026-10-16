@@ -35,6 +35,7 @@ import { RoomProvider } from '@/components/Room/RoomContext'
 import { primaryRoom } from '@/stores/room'
 import { RemoteRoomDrawer, useShownRemoteRoom } from '@/components/Home/room/HomeRemoteRooms'
 import { RoomSlot } from '@/components/Home/room/HomeRoomsHost'
+import { useRoomWorkspaceName } from '@/components/TopBar/TopBarTitle'
 import GrokBotChatView from '@/components/GrokBots/GrokBotChatView'
 import { useGrokBotsStore } from '@/stores/grokbots'
 
@@ -92,6 +93,8 @@ export default function AgentsShell({
   const homeEmpty = useHomesStore((s) => selectedHome(s).rows.length === 0)
   const remote = useShownRemoteRoom()
   const remoteRoom = remote?.room ?? null
+  // The top bar names a room on another server as `server / agent / branch`.
+  const remoteBranch = useRoomWorkspaceName(remoteRoom)
   // Local Grok Bots (0.45.7): a Grok Bot chat takes the main area (no room,
   // no drawers — it is not a workspace). Picking a K2 agent closes it.
   const grok = useGrokBotsStore((s) => s.open)
@@ -123,7 +126,8 @@ export default function AgentsShell({
         </RoomProvider>
       ) : undefined}
       projectName={remote ? remote.entry.label : roomShown ? activeProject?.name : undefined}
-      workspaceName={remote ? undefined : roomShown ? activeWorkspace?.name : undefined}
+      workspaceName={remote ? (remoteBranch ?? undefined) : roomShown ? activeWorkspace?.name : undefined}
+      remoteServer={remote ? { hostKey: remote.entry.hostKey, phase: remote.entry.phase } : undefined}
     >
       <RoomSlot visible={remote !== null && grok === null} />
       {grok !== null && <GrokBotChatView key={`${grok.hostKey}|${grok.agentId}`} hostKey={grok.hostKey} agentId={grok.agentId} />}

@@ -748,6 +748,48 @@ fn backups_list_and_run_over_mgmt_not_the_helper() {
     assert_eq!(backups(&t.env()).unwrap_err().code, "mgmt_unreachable");
 }
 
+/// Sew answer 2026-10-16: `keys_mirror_stale` with `keys.mirror.kind ==
+/// "none"` is intended (no off-box key copy yet): a setup warning, never
+/// `degraded`. A stale dir mirror is broken and stays an alarm.
+#[test]
+fn a_missing_key_mirror_is_a_setup_warning_but_a_stale_dir_mirror_degrades() {
+    let t = t();
+    t.enabled();
+    store::update(1, |r| {
+        r.ship_kind = "dir".into();
+        r.recovery_shown_at = Some(1);
+    })
+    .unwrap();
+    assert_eq!(status(&t.env(), false)["state"], "running");
+    // kind none + keys_mirror_stale: running, warned, not alarmed.
+    {
+        let mut st = t.ops.mgmt_status.lock().unwrap();
+        st["alarms"] = json!(["keys_mirror_stale"]);
+        st["keys"]["mirror"] = json!({"kind": "none", "stale": true, "pending": 0});
+    }
+    let s = status(&t.env(), false);
+    assert_eq!(s["state"], "running", "{s}");
+    assert!(!s["alarms"].as_array().unwrap().iter().any(|a| a == "keys_mirror_stale"), "{}", s["alarms"]);
+    assert_eq!(s["warnings"][0]["code"], "no_offbox_key_copy");
+    assert!(s["warnings"][0]["message"].as_str().unwrap().starts_with("no off-box key copy"));
+    // The same alarm with a dir mirror: broken, degrades, no warning.
+    t.ops.mgmt_status.lock().unwrap()["keys"]["mirror"] = json!({"kind": "dir", "stale": true, "pending": 3});
+    let s = status(&t.env(), false);
+    assert_eq!(s["state"], "degraded");
+    assert!(s["alarms"].as_array().unwrap().iter().any(|a| a == "keys_mirror_stale"));
+    assert_eq!(s["warnings"], json!([]));
+    // Another Sew alarm next to a missing mirror still degrades.
+    {
+        let mut st = t.ops.mgmt_status.lock().unwrap();
+        st["keys"]["mirror"] = json!({"kind": "none", "stale": true});
+        st["alarms"] = json!(["keys_mirror_stale", "backup_failed"]);
+    }
+    let s = status(&t.env(), false);
+    assert_eq!(s["state"], "degraded");
+    assert_eq!(s["alarms"].as_array().unwrap().iter().filter(|a| *a == "backup_failed").count(), 1);
+    assert_eq!(s["warnings"].as_array().unwrap().len(), 1);
+}
+
 #[test]
 fn status_carries_sews_backup_and_drill_state() {
     let t = t();

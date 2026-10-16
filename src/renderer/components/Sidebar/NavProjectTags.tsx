@@ -23,6 +23,7 @@ function TagChip({
     <span
       role="button"
       tabIndex={0}
+      data-nav-chip="tag"
       className={`${tagBox} no-drag cursor-pointer hover:bg-[var(--color-accent)] hover:text-[var(--color-on-accent)]`}
       title={tag.name}
       onClick={(e) => {
@@ -66,6 +67,7 @@ export function NavProjectTags({ workspaceId }: { workspaceId: string }): JSX.El
       ))}
       {overflow.length > 0 && (
         <span
+          data-nav-chip="tag"
           className={`flex-shrink-0 ${tagBox}`}
           title={navTagsTooltip(overflow)}
         >

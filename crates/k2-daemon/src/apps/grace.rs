@@ -455,7 +455,7 @@ pub(crate) fn report(t: &Target) -> J {
         ));
     }
     let breaks = warnings.iter().filter(|w| w["severity"] == "breaks").count();
-    json!({
+    let mut out = json!({
         "app": t.summary(),
         "cutover": cut,
         "readyForCutover": breaks == 0,
@@ -467,8 +467,12 @@ pub(crate) fn report(t: &Target) -> J {
         "ownerTokenUses": uses,
         "inheritedNames": if legacy { inherited.into_iter().collect::<Vec<_>>() } else { se.inherited_names.clone() },
         "scan": { "filesScanned": scan.files_scanned, "truncated": scan.truncated },
-        "ownerTokenAttribution": if cfg!(target_os = "linux") { "on" } else { "linux only" },
-    })
+        "ownerTokenAttribution": super::attribution::availability(),
+    });
+    if !cfg!(target_os = "linux") {
+        out["ownerTokenAttributionNote"] = json!(super::attribution::UNAVAILABLE_NOTE);
+    }
+    out
 }
 
 /// GET `/cli/app/warnings?app=` (one) or no `app` (every `--cmd` service
@@ -487,7 +491,10 @@ fn warnings(who: &Who, params: &HashMap<String, String>) -> R<J> {
         None => {
             let list: Vec<J> = all_targets(who)?.iter().map(report).collect();
             let breaks: u64 = list.iter().map(|r| r["breaks"].as_u64().unwrap_or(0)).sum();
-            Ok(json!({ "cutover": app_grace::CUTOVER_RELEASE, "services": list, "breaks": breaks }))
+            // The box's tracing, once for the whole list (an empty list on a
+            // Mac still says it isn't available there).
+            Ok(json!({ "cutover": app_grace::CUTOVER_RELEASE, "services": list, "breaks": breaks,
+                "ownerTokenAttribution": super::attribution::availability() }))
         }
     }
 }
@@ -529,7 +536,13 @@ pub(crate) fn set_clean_mode(t: &Target, on: bool, who_label: &str, restart: boo
     let se = crate::vault::publish_env::set_clean_mode(&t.service_id, on).map_err(|e| no("store", 500, e))?;
     audit("app-clean-mode", who_label, &format!("{} {}", t.service_id, if on { "on" } else { "off" }));
     let restarted = if restart { restart_service(t) } else { json!("applies at the next start (k2 publish start, or pass restart)") };
-    Ok(json!({ "ok": true, "app": t.summary(), "cleanMode": se.clean_mode, "envMode": se.mode, "restart": restarted }))
+    let mut out = json!({ "ok": true, "app": t.summary(), "cleanMode": se.clean_mode, "envMode": se.mode, "restart": restarted,
+        "ownerTokenAttribution": super::attribution::availability() });
+    if on && !cfg!(target_os = "linux") {
+        // Clean mode refuses owner-token calls by tracing them (Linux).
+        out["ownerTokenAttributionNote"] = json!(super::attribution::UNAVAILABLE_NOTE);
+    }
+    Ok(out)
 }
 
 /// POST `/cli/app/clean-mode {app, on, restart?}`. On narrows (anyone who

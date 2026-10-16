@@ -113,6 +113,10 @@ async fn warnings_name_what_breaks_and_clean_mode_narrows_now_widens_later() {
         !v["warnings"].as_array().unwrap().iter().any(|w| w["message"].as_str().unwrap().contains(" PORT,")),
         "PORT is provided in clean mode: no warning"
     );
+    // Owner-token tracing is Linux only; a Mac says so (Rosson 2026-10-16).
+    let want_tracing = if cfg!(target_os = "linux") { "on" } else if cfg!(target_os = "macos") { "not available on macOS" } else { "not available on this OS (Linux only)" };
+    assert_eq!(v["ownerTokenAttribution"], want_tracing, "{v}");
+    assert_eq!(v.get("ownerTokenAttributionNote").is_some(), !cfg!(target_os = "linux"), "{v}");
     // Its own agent sees it; another workspace's agent gets app_not_found.
     let mine = passport(&ws);
     let r = get(d.port, "/cli/app/warnings", &mine, "app=jobsw").await;
@@ -122,6 +126,7 @@ async fn warnings_name_what_breaks_and_clean_mode_narrows_now_widens_later() {
     assert_eq!((r.status, r.code()), (404, "app_not_found".to_string()), "{}", r.body);
     let r = get(d.port, "/cli/app/warnings", &theirs, "").await;
     assert_eq!(r.json()["services"].as_array().unwrap().len(), 0, "an agent lists only its own workspace's services");
+    assert_eq!(r.json()["ownerTokenAttribution"], want_tracing, "an empty list still says where tracing stands");
     let r = get(d.port, "/cli/app/warnings", OWNER, "").await;
     assert!(r.json()["services"].as_array().unwrap().iter().any(|s| s["app"]["serviceId"] == svc.as_str()));
 
@@ -129,6 +134,7 @@ async fn warnings_name_what_breaks_and_clean_mode_narrows_now_widens_later() {
     let r = post(d.port, "/cli/app/clean-mode", &mine, json!({"app": "jobsw", "on": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!((r.json()["cleanMode"].clone(), r.json()["envMode"].clone()), (json!(true), json!("clean")));
+    assert_eq!(r.json()["ownerTokenAttribution"], want_tracing, "{}", r.body);
     assert!(k2_daemon::vault::publish_env::is_clean_mode(&svc));
     // Off widens: the agent's request is held for the owner.
     let r = post(d.port, "/cli/app/clean-mode", &mine, json!({"app": "jobsw", "on": false})).await;
@@ -425,6 +431,13 @@ async fn publish_run_mapping_notice_now_held_when_enforced_and_the_admin_switche
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["crossover"]["wouldHold"], true, "{}", r.body);
     assert_eq!(r.json()["crossover"]["from"], "0.46.1");
+    // Warn-only (Rosson 2026-10-16): it ran, and the notice says so first.
+    assert_eq!((r.json()["crossover"]["mode"].clone(), r.json()["crossover"]["held"].clone()), (json!("warn"), json!(false)), "{}", r.body);
+    assert!(
+        r.json()["crossover"]["message"].as_str().unwrap().starts_with("svc-a ran: this release only warns. From K2 0.46.1"),
+        "{}",
+        r.body
+    );
     let r = post(d.port, "/cli/publish/rm", &agent, json!({"name": "svc-a"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
 

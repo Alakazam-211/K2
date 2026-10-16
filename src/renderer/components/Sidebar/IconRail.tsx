@@ -17,6 +17,7 @@ import { useConnectHostStore } from '../../stores/connect-host'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { EMPTY_NAV_TAGS, navTagsTooltip } from '@/lib/nav-project-tags'
 import { startCloneTo, startCloneToThisComputer } from '../../lib/start-clone-to'
+import { fetchClonePerms, pullAllowed, pushAllowed } from '@/lib/clone-permissions'
 import ProjectAvatar from './ProjectAvatar'
 import { SidebarCollapseButton } from './SidebarCollapseButton'
 import { primaryScope } from '@/kessel/server-scope'
@@ -197,12 +198,14 @@ export default function IconRail(): React.JSX.Element {
       // On a REMOTE host the direction flips: "Clone to This Computer"
       // pulls the remote workspace home (0.40.22, clone-pull.ts).
       const { activeHost, hosts } = useConnectHostStore.getState()
-      if (activeHost === 'local' && hosts.length > 0) {
+      // 0.46.0 clone permissions (whoami): hide what the gate would refuse.
+      const clonePerms = await fetchClonePerms(primaryScope(), activeHost === 'local' ? 'local' : activeHost.id)
+      if (activeHost === 'local' && hosts.length > 0 && pushAllowed(clonePerms)) {
         menuItems.push({ id: 'separator-clone', label: '', type: 'separator' })
         for (const host of hosts) {
           menuItems.push({ id: `clone-to:${host.id}`, label: `Clone to ${host.label}` })
         }
-      } else if (activeHost !== 'local') {
+      } else if (activeHost !== 'local' && pullAllowed(clonePerms)) {
         menuItems.push({ id: 'separator-clone', label: '', type: 'separator' })
         menuItems.push({ id: 'clone-here', label: 'Clone to This Computer' })
       }

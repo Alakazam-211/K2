@@ -735,5 +735,45 @@ describe('cloneWorkspaceTo — vault carry', () => {
       secrets: { GMAIL_TOKEN: 'skip', OPENAI_KEY: 'copy' },
       confirm_token: 'k2vc_x',
     })
+describe('cloneWorkspaceTo — 0.46.0 Thread / secrets / confirm extras', () => {
+  it('passes threads, per-secret choices and the confirm tokens through to clone/bundle', async () => {
+    const order: string[] = []
+    const { deps, spies } = makeDeps(order)
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/ws', DEST, deps, {}, true, true, {
+      threads: { sinceDays: 30 },
+      secrets: { STRIPE_KEY: 'copy', GMAIL_TOKEN: 'skip' },
+      confirm_token: 'carry-tok',
+      env_confirm_token: 'env-tok',
+      proposal_id: 'cp_1',
+    })
+    const bundleCall = spies.daemonCliPost.mock.calls.find((c) => c[0] === 'clone/bundle')
+    expect(bundleCall?.[1]).toEqual({
+      project_path: '/Users/rosson/ws',
+      carry_secrets: true,
+      live_only: false,
+      threads: { sinceDays: 30 },
+      secrets: { STRIPE_KEY: 'copy', GMAIL_TOKEN: 'skip' },
+      confirm_token: 'carry-tok',
+      env_confirm_token: 'env-tok',
+      proposal_id: 'cp_1',
+    })
+  })
+
+  it('surfaces a clone-gate refusal verbatim and stops before the host switch', async () => {
+    const order: string[] = []
+    const hint = 'cloning is not allowed for al on this server: the owner turns on "Can clone" for you'
+    const failing = vi.fn(async (route: string) => {
+      if (route === 'clone/bundle') throw new Error(hint)
+      return {}
+    })
+    const { deps, spies } = makeDeps(order, {
+      daemonCliPost: failing as unknown as CloneDeps['daemonCliPost'],
+    })
+    const onError = vi.fn()
+    await expect(
+      cloneWorkspaceTo(primaryScope(), '/Users/rosson/ws', DEST, deps, { onError }, false, true, { threads: 'none' }),
+    ).rejects.toThrow(hint)
+    expect(onError).toHaveBeenCalledWith(hint)
+    expect(spies.pickHost).not.toHaveBeenCalled()
   })
 })

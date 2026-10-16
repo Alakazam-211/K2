@@ -57,6 +57,7 @@ import type { GeneralSubTab } from '@/stores/settings'
 import { primaryScope } from '@/kessel/server-scope'
 import { RemoteRoomsPreviewRow } from './RemoteRoomsPreviewRow'
 import { AppFontRows } from '../shared/AppFontRows'
+import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater. Right-click the version to toggle automatic update checks.', keywords: ['update', 'version', 'check', 'release', 'automatic', 'disable'] },
@@ -72,6 +73,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.workspace-switch-focus', section: 'general', group: 'Workspaces', label: 'When moving between workspaces, auto-select', description: 'Switching workspaces or project panes (⌘1–⌘9) focuses the terminal or the agent message box so you can type immediately', keywords: ['workspace', 'switch', 'focus', 'terminal', 'composer', 'message', 'agent', 'auto-select', 'input', 'pane', 'project'] },
   { id: 'general.daemon', section: 'general', group: 'Server', label: 'K2 Server', description: 'Background service that keeps agents running when the app is closed', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent'] },
   { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'When on, clicking the red close button hides the window and keeps the Agent & Companion server running. When off, the red button stops everything. Cmd+Q always closes everything.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
+  { id: 'general.clone-personal-computers', section: 'general', group: 'Server', label: "Allow cloning agents to people's personal computers", description: 'When off, Admins and Members cannot clone agents from this server to their own computers. Owner only.', keywords: ['clone', 'copy', 'agent', 'workspace', 'personal', 'computer', 'pull', 'permission', 'migrate'] },
   { id: 'general.restart-host', section: 'general', group: 'Server', label: 'Restart connected host', description: 'Restart the REMOTE machine you are connected to over K2 Connect', keywords: ['restart', 'reboot', 'remote', 'host', 'connect', 'server', 'daemon', 'bounce'] },
   { id: 'general.update-host', section: 'general', group: 'Server', label: 'Update connected host', description: 'Update the REMOTE machine you are connected to over K2 Connect', keywords: ['update', 'upgrade', 'remote', 'host', 'connect', 'server', 'daemon', 'version'] },
   { id: 'general.ai-assistant', section: 'general', group: 'Local LLM', label: 'AI Workspace Assistant', description: 'Local LLM for natural-language workspace operations (⇧⌘L)', keywords: ['ai', 'assistant', 'llm', 'cmd+shift+l', 'qwen', 'model', 'local', 'gguf', 'beta'] },
@@ -413,6 +415,7 @@ export function GeneralSection(): React.JSX.Element {
           </p>
           <DaemonRow />
           <KeepDaemonOnQuitRow />
+          <ClonePersonalComputersRow scope={primaryScope()} />
         </div>
       )}
 

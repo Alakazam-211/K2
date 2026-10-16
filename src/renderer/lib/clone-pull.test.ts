@@ -436,5 +436,23 @@ describe('cloneWorkspaceToThisComputer — vault carry', () => {
       dest_parent: '/Users/rosson/work',
     })
     expect(onVaultCarry.mock.calls[0][0].note).toMatch(/older K2/)
+describe('cloneWorkspaceToThisComputer — 0.46.0 extras', () => {
+  it('passes threads, secrets and confirm tokens through to clone/pack', async () => {
+    const order: string[] = []
+    const { deps, spies } = makeDeps(order)
+    await cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps, {}, false, true, {
+      threads: 'none',
+      secrets: { DB_URL: 'blank' },
+      env_confirm_token: 'env-tok',
+    })
+    const packCall = spies.daemonCliPost.mock.calls.find((c) => c[0] === 'clone/pack')
+    expect(packCall?.[1]).toEqual({
+      project_path: '/srv/work/myws',
+      carry_secrets: false,
+      live_only: false,
+      threads: 'none',
+      secrets: { DB_URL: 'blank' },
+      env_confirm_token: 'env-tok',
+    })
   })
 })

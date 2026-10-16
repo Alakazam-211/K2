@@ -7,7 +7,31 @@ export interface UsageWindow {
   /** 0–1 used. Percent left is `1 - used`. */
   used: number
   resetsAt: string
+  /** Usage v2 (served by newer daemons; absent on older ones). Stable id:
+   *  `five_hour`, `seven_day`, `seven_day_oauth_apps`, `model:<name>:<kind>`,
+   *  `primary`, `secondary`, `credit`, `grok_build`. */
+  id?: string
+  /** `session` · `weekly` · `monthly` · `daily` · `other`. */
+  kind?: string
+  /** 0..100, the daemon's own rounding of `used`. */
+  usedPercent?: number
+  /** The window's length; absent = no pace mark. */
+  windowSecs?: number
+  /** `resetsAt − windowSecs` (RFC3339). */
+  windowStart?: string
+  /** `resetsAt` had passed when the daemon served it; a re-check is under way. */
+  resetPassed?: boolean
 }
+
+/** Why a login has (no) numbers (Usage v2 §3.2). */
+export type LimitState =
+  | 'ok'
+  | 'no_window'
+  | 'not_signed_in'
+  | 'expired'
+  | 'probe_failed'
+  | 'unsupported'
+  | 'airgap'
 
 export interface HarnessUsage {
   harness: string
@@ -19,6 +43,14 @@ export interface HarnessUsage {
   /** The last check failed (why); the windows are the last good reading
    *  and `checkedAt` is when that was. Newer daemons only. */
   error?: string
+  /** Usage v2: typed reason (filled when served). Derive with `limitState`. */
+  state?: LimitState | string
+  /** `probe` · `live_statusline` · `live_rollout`. */
+  source?: string
+  /** The daemon is backing off this check until then (RFC3339). */
+  nextProbeAt?: string
+  /** When the failed check ran. */
+  attemptedAt?: string
 }
 
 export interface SubscriptionDoc {
@@ -46,11 +78,45 @@ function str(raw: unknown): string {
   return typeof raw === 'string' ? raw : ''
 }
 
-function parseWindow(raw: unknown): UsageWindow | null {
+function finite(raw: unknown): number | undefined {
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined
+}
+
+function nonEmpty(raw: unknown): string | undefined {
+  return typeof raw === 'string' && raw !== '' ? raw : undefined
+}
+
+export function parseWindow(raw: unknown): UsageWindow | null {
   if (!isRecord(raw)) return null
   if (typeof raw.label !== 'string') return null
   if (typeof raw.used !== 'number' || !Number.isFinite(raw.used)) return null
-  return { label: raw.label, used: raw.used, resetsAt: str(raw.resetsAt) }
+  const w: UsageWindow = { label: raw.label, used: raw.used, resetsAt: str(raw.resetsAt) }
+  const id = nonEmpty(raw.id)
+  if (id) w.id = id
+  const kind = nonEmpty(raw.kind)
+  if (kind) w.kind = kind
+  const pct = finite(raw.usedPercent)
+  if (pct !== undefined) w.usedPercent = pct
+  const secs = finite(raw.windowSecs)
+  if (secs !== undefined && secs > 0) w.windowSecs = secs
+  const start = nonEmpty(raw.windowStart)
+  if (start) w.windowStart = start
+  if (raw.resetPassed === true) w.resetPassed = true
+  return w
+}
+
+/** The v2 row fields (`state`, `source`, `nextProbeAt`, `attemptedAt`). */
+export function parseRowExtras(raw: Record<string, unknown>): Partial<HarnessUsage> {
+  const out: Partial<HarnessUsage> = {}
+  const state = nonEmpty(raw.state)
+  if (state) out.state = state
+  const source = nonEmpty(raw.source)
+  if (source) out.source = source
+  const next = nonEmpty(raw.nextProbeAt)
+  if (next) out.nextProbeAt = next
+  const attempted = nonEmpty(raw.attemptedAt)
+  if (attempted) out.attemptedAt = attempted
+  return out
 }
 
 function parseHarness(raw: unknown): HarnessUsage | null {
@@ -68,6 +134,7 @@ function parseHarness(raw: unknown): HarnessUsage | null {
     checkedAt: str(raw.checkedAt),
     status: str(raw.status),
     ...(typeof raw.error === 'string' && raw.error !== '' ? { error: raw.error } : {}),
+    ...parseRowExtras(raw),
   }
 }
 
@@ -127,9 +194,11 @@ function chipWindows<W extends { label: string }>(harness: ProbedHarness, window
   return windows.filter((window) => CLAUDE_CHIP_LABELS.has(window.label))
 }
 
-/** One top-bar chip per signed-in harness that has a window. Highest window wins inside that harness. Claude, then Codex, then Grok. */
+/** One top-bar chip per signed-in harness that has a window. Highest window wins inside that harness. Claude, then Codex, then Grok.
+ *  With `nowMs`, a window past its reset counts 0 (Usage v2 P8: the old % is not shown as current). */
 export function buttonChips(
   doc: SubscriptionDoc | null,
+  nowMs?: number,
 ): { harness: ProbedHarness; used: number }[] {
   if (!doc || isAirgapped(doc)) return []
   const chips: { harness: ProbedHarness; used: number }[] = []
@@ -138,7 +207,7 @@ export function buttonChips(
     if (!isSignedIn(row) || !Array.isArray(row.windows) || row.windows.length === 0) continue
     let used = 0
     for (const window of chipWindows(row.harness, row.windows)) {
-      used = Math.max(used, percentUsed(window.used))
+      used = Math.max(used, nowMs === undefined ? percentUsed(window.used) : windowPercent(window, nowMs))
     }
     chips.push({ harness: row.harness, used })
   }
@@ -195,4 +264,167 @@ export function formatResetsIn(resetsAt: string, nowMs: number): string {
   if (hours < 48) return `${hours}h`
   const days = Math.round(delta / 86_400_000)
   return `${days}d`
+}
+
+// ── Usage v2 limit bars (P8, Q4: T3-style bars with a pace mark) ─────────
+//
+// The daemon owns the numbers, the state and the freshness; the renderer
+// only draws them. The pace mark is the one figure drawn here: where even
+// spending would be, from `windowStart` / `windowSecs` and the clock.
+
+/** Amber from here (Rosson 2026-10-16). */
+export const LIMIT_WARN_PCT = 75
+/** Red from here. */
+export const LIMIT_OVER_PCT = 90
+/** T3: within ±5 points of the pace mark reads "on pace". */
+export const PACE_BAND_PCT = 5
+
+/** The window's reset time has passed: the daemon said so when it served
+ *  it, or the clock has moved past `resetsAt` since. */
+export function windowReset(w: UsageWindow, nowMs: number): boolean {
+  if (w.resetPassed === true) return true
+  const t = Date.parse(w.resetsAt)
+  return !Number.isNaN(t) && t <= nowMs
+}
+
+function rawPercent(w: UsageWindow): number {
+  const raw = typeof w.usedPercent === 'number' ? w.usedPercent : w.used * 100
+  return Math.min(100, Math.max(0, raw))
+}
+
+/** Whole percent used to draw. A window past its reset draws 0 until the
+ *  re-check lands ("reset — re-checking"). */
+export function windowPercent(w: UsageWindow, nowMs: number): number {
+  if (windowReset(w, nowMs)) return 0
+  return Math.round(rawPercent(w))
+}
+
+export type LimitTone = 'ok' | 'warn' | 'over'
+
+/** Colour band: amber at 75%, red at 90%. */
+export function limitTone(percent: number): LimitTone {
+  if (percent >= LIMIT_OVER_PCT) return 'over'
+  if (percent >= LIMIT_WARN_PCT) return 'warn'
+  return 'ok'
+}
+
+/** The bar fill for a tone (the label says the same in words). */
+export function limitToneColor(tone: LimitTone): string {
+  if (tone === 'over') return '#ef4444'
+  if (tone === 'warn') return '#f59e0b'
+  return 'var(--color-accent)'
+}
+
+export interface PaceMark {
+  /** Where even spending would be now, 0..100. */
+  elapsedPct: number
+  /** Used minus elapsed, in points. */
+  delta: number
+  /** `ahead`: spending faster than even (may run out before reset). */
+  status: 'ahead' | 'on' | 'under'
+}
+
+/** The pace mark for a window, or null when the daemon gave no length, the
+ *  start is unknown, or the window has reset. */
+export function paceMark(w: UsageWindow, nowMs: number): PaceMark | null {
+  if (!w.windowSecs || w.windowSecs <= 0) return null
+  if (windowReset(w, nowMs)) return null
+  let start = w.windowStart ? Date.parse(w.windowStart) : NaN
+  if (Number.isNaN(start)) {
+    const reset = Date.parse(w.resetsAt)
+    if (Number.isNaN(reset)) return null
+    start = reset - w.windowSecs * 1000
+  }
+  const elapsed = Math.min(1, Math.max(0, (nowMs - start) / (w.windowSecs * 1000))) * 100
+  const delta = rawPercent(w) - elapsed
+  const status = delta > PACE_BAND_PCT ? 'ahead' : delta < -PACE_BAND_PCT ? 'under' : 'on'
+  return { elapsedPct: Math.round(elapsed * 10) / 10, delta: Math.round(delta * 10) / 10, status }
+}
+
+export function paceText(p: PaceMark): string {
+  if (p.status === 'ahead') return 'ahead of pace'
+  if (p.status === 'under') return 'under pace'
+  return 'on pace'
+}
+
+const LIMIT_STATES: readonly string[] = ['ok', 'no_window', 'not_signed_in', 'expired', 'probe_failed', 'unsupported', 'airgap']
+
+type StateInput = Pick<HarnessUsage, 'state' | 'status' | 'error' | 'windows'>
+
+/** The row's typed state: the daemon's when it sent one, else derived the
+ *  daemon's way (`subscription_usage::derive_state`) for an older daemon or
+ *  a raw wallet reading. */
+export function limitState(row: StateInput): LimitState {
+  if (typeof row.state === 'string' && LIMIT_STATES.includes(row.state)) return row.state as LimitState
+  switch (row.status) {
+    case 'Off in air-gap mode':
+      return 'airgap'
+    case 'Not signed in':
+      return 'not_signed_in'
+    case 'Sign-in expired':
+      return 'expired'
+    case 'Not supported':
+      return 'unsupported'
+  }
+  if (row.error) return 'probe_failed'
+  if ((row.windows?.length ?? 0) === 0) return 'no_window'
+  return 'ok'
+}
+
+/** Why there are no (fresh) numbers, in words; null when the row is ok. */
+export function limitStateText(row: StateInput): string | null {
+  switch (limitState(row)) {
+    case 'ok':
+      return null
+    case 'not_signed_in':
+      return 'Not signed in'
+    case 'expired':
+      return 'Sign-in expired. Sign in again to see its limits.'
+    case 'probe_failed':
+      return row.error ? `Last check failed (${row.error})` : 'Last check failed'
+    case 'unsupported':
+      return 'No limits for this login (API token or not supported)'
+    case 'no_window':
+      return row.status ? row.status : 'No usage window'
+    case 'airgap':
+      return 'Off in air-gap mode'
+  }
+}
+
+/** The row needs a person: its last check failed or its sign-in expired. */
+export function needsAttention(row: StateInput): boolean {
+  const state = limitState(row)
+  return state === 'probe_failed' || state === 'expired' || Boolean(row.error)
+}
+
+/** "updated 4m ago" from an RFC3339 time; "not checked yet" when empty. */
+export function updatedAgo(checkedAt: string | null | undefined, nowMs: number): string {
+  const t = checkedAt ? Date.parse(checkedAt) : NaN
+  if (Number.isNaN(t)) return 'not checked yet'
+  const s = Math.max(0, Math.floor((nowMs - t) / 1000))
+  if (s < 60) return 'updated just now'
+  const m = Math.floor(s / 60)
+  if (m < 60) return `updated ${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 48) return `updated ${h}h ago`
+  return `updated ${Math.floor(h / 24)}d ago`
+}
+
+/** Where a reading came from, for the freshness line; null for a probe. */
+export function sourceText(source: string | undefined): string | null {
+  if (source === 'live_statusline' || source === 'live_rollout') return 'live from a running session'
+  return null
+}
+
+/** Rows the top-bar menu lists (P8, B22): every probed harness that is
+ *  signed in, including one whose sign-in expired or whose check failed
+ *  with no windows left (they say why and offer an action). Rows that are
+ *  plainly not signed in, not supported or air-gapped stay out. */
+export function menuRows(doc: SubscriptionDoc | null | undefined): HarnessUsage[] {
+  return visibleHarnesses(doc).filter((row) => {
+    const state = limitState(row)
+    if (state === 'not_signed_in' || state === 'unsupported' || state === 'airgap') return false
+    if (state === 'expired' || state === 'probe_failed') return true
+    return isSignedIn(row)
+  })
 }

@@ -7,14 +7,34 @@ import { roomServerState, usePoolHostStatus, useTopBarScope } from '@/components
 import TopBarPipe from '@/components/TopBar/TopBarPipe'
 import {
   buttonChips,
-  formatResetsIn,
   harnessName,
   isAirgapped,
-  isSignedIn,
-  percentUsed,
-  visibleHarnesses,
+  limitState,
+  limitStateText,
+  menuRows,
+  needsAttention,
+  sourceText,
+  updatedAgo,
+  type HarnessUsage,
 } from '@/lib/subscription-usage'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { LimitBar } from '@/components/Usage/LimitBar'
+import { openSettingsPage } from '@/lib/open-settings-page'
+
+/** How often the chip re-draws its countdowns and "updated X ago". */
+const CHIP_CLOCK_MS = 30_000
+
+/** Hover text for the chip: whose numbers, and how fresh each row is (P8). */
+export function chipTitle(rows: HarnessUsage[], nowMs: number, whose: string | null, failed: string | null): string | undefined {
+  const lines: string[] = []
+  if (whose) lines.push(`${whose}'s subscription usage`)
+  for (const row of rows) {
+    const why = needsAttention(row) ? ` · ${limitStateText(row) ?? 'check failed'}` : ''
+    lines.push(`${harnessName(row.harness)} ${updatedAgo(row.checkedAt, nowMs)}${why}`)
+  }
+  if (failed) lines.push(`Couldn't read usage: ${failed}`)
+  return lines.length > 0 ? lines.join('\n') : undefined
+}
 
 /**
  * Subscription allowance. Sibling of TimerButton — not inside it, so the
@@ -45,6 +65,13 @@ export default function UsageButton(): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   useBrowserOverlay({ active: open, ref: popoverRef, kind: 'menu' })
+
+  // Countdowns, "updated X ago" and windows past their reset stay true
+  // without a fetch.
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), CHIP_CLOCK_MS)
+    return () => clearInterval(id)
+  }, [])
 
   // Load the shown server's entry when it has none: on mount, when the
   // focused room changes, after a top-switcher change dropped the window's
@@ -83,9 +110,13 @@ export default function UsageButton(): React.JSX.Element {
   const roomLabel = target.label
   // The daemon is in air-gap mode: it never checks usage, so say so calmly.
   const airgap = serverState === 'ok' && isAirgapped(doc)
-  const chips = serverState === 'ok' ? buttonChips(doc) : []
-  const rows = doc && serverState === 'ok' && !airgap ? visibleHarnesses(doc).filter(isSignedIn) : []
+  const chips = serverState === 'ok' ? buttonChips(doc, now) : []
+  // P8 / B22: an expired sign-in or a failed check stays listed and says why.
+  const rows = doc && serverState === 'ok' && !airgap ? menuRows(doc) : []
   const anySignedIn = rows.length > 0
+  // The last read of the cache failed (the numbers shown may be old).
+  const readFailed = serverState === 'ok' ? (entry?.error ?? null) : null
+  const warn = serverState === 'ok' && !airgap && (readFailed !== null || rows.some(needsAttention))
   // A view-only room (an older server) only reads (Z16).
   const mayRefresh = serverState === 'ok' && scopeMayWrite(target.scope, 'usage/subscriptions/refresh')
   // Whose logins these are, when they aren't this computer's.
@@ -100,7 +131,7 @@ export default function UsageButton(): React.JSX.Element {
         type="button"
         aria-label="Subscription usage"
         aria-expanded={open}
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         data-testid="subscription-usage"
         className="flex h-6 cursor-pointer items-center gap-[13px] px-1.5 text-[11px] font-mono tabular-nums text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
         style={noDrag}
@@ -110,7 +141,7 @@ export default function UsageButton(): React.JSX.Element {
             return !was
           })
         }}
-        title={roomLabel ? `${roomLabel}'s subscription usage` : undefined}
+        title={chipTitle(rows, now, roomLabel, readFailed)}
       >
         {roomLabel ? (
           <span className="flex items-center gap-1" data-testid="usage-server">
@@ -134,11 +165,17 @@ export default function UsageButton(): React.JSX.Element {
         ) : (
           'Usage'
         )}
+        {warn ? (
+          <span data-testid="usage-warning" aria-label="Usage check needs attention" className="text-amber-400">
+            ⚠
+          </span>
+        ) : null}
       </button>
       {open && (
         <div
           ref={popoverRef}
-          role="menu"
+          role="dialog"
+          aria-label="Subscription usage"
           data-testid="subscription-usage-menu"
           className="absolute right-0 top-full z-50 mt-1 min-w-[240px] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
           style={noDrag}
@@ -161,6 +198,11 @@ export default function UsageButton(): React.JSX.Element {
               Nothing is signed in
             </p>
           ) : null}
+          {readFailed !== null ? (
+            <p data-testid="subscription-usage-read-error" className="mb-1 text-[11px] text-amber-400">
+              Couldn&apos;t read usage: {readFailed}
+            </p>
+          ) : null}
           {rows.map((row, index) => (
             <section
               key={row.harness}
@@ -174,34 +216,21 @@ export default function UsageButton(): React.JSX.Element {
                 {harnessName(row.harness)}
                 {row.plan ? ` · ${row.plan}` : ''}
               </header>
-              {row.status ? (
-                <p className="text-[11px] text-[var(--color-text-muted)]">{row.status}</p>
-              ) : null}
-              {row.windows.map((window) => {
-                const until = formatResetsIn(window.resetsAt, now)
-                const used = percentUsed(window.used)
-                return (
-                  <div key={`${row.harness}:${window.label}`} className="mt-1">
-                    <p className="text-[11px] text-[var(--color-text-secondary)]">
-                      {window.label} {used}%
-                      {until ? ` · ${until}` : ''}
-                    </p>
-                    <div
-                      role="progressbar"
-                      aria-valuenow={used}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-label={`${window.label} used`}
-                      className="mt-1 h-1.5 w-full overflow-hidden bg-[var(--color-bg)]"
-                    >
-                      <div
-                        className="h-full bg-[var(--color-accent)]"
-                        style={{ width: `${used}%` }}
-                      />
-                    </div>
-                  </div>
-                )
-              })}
+              <MenuRowState
+                row={row}
+                now={now}
+                canSignIn={!target.room}
+                whose={roomLabel}
+                onSignIn={() => {
+                  setOpen(false)
+                  void openSettingsPage('llm-tokens')
+                }}
+              />
+              {row.windows.map((window) => (
+                <div key={`${row.harness}:${window.id ?? window.label}`} className="mt-1">
+                  <LimitBar window={window} nowMs={now} />
+                </div>
+              ))}
             </section>
           ))}
           <div className="mt-2 flex justify-end">
@@ -227,6 +256,57 @@ export default function UsageButton(): React.JSX.Element {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/** Under a menu row's name: why there are no (fresh) numbers, how old they
+ *  are, and for an expired sign-in the way to fix it (P8, B21, B22). */
+function MenuRowState({
+  row,
+  now,
+  canSignIn,
+  whose,
+  onSignIn,
+}: {
+  row: HarnessUsage
+  now: number
+  /** The window's own server: Settings can sign it in again. A room's
+   *  server is signed in on that server. */
+  canSignIn: boolean
+  whose: string | null
+  onSignIn: () => void
+}): React.JSX.Element {
+  const state = limitState(row)
+  const why = limitStateText(row)
+  const live = sourceText(row.source)
+  const attention = needsAttention(row)
+  return (
+    <div data-testid={`usage-row-state-${row.harness}`}>
+      {why ? (
+        <p className={`text-[11px] ${attention ? 'text-amber-400' : 'text-[var(--color-text-muted)]'}`}>
+          {attention ? '⚠ ' : ''}
+          {why}
+        </p>
+      ) : null}
+      {state === 'expired' ? (
+        canSignIn ? (
+          <button
+            type="button"
+            data-testid={`usage-sign-in-again-${row.harness}`}
+            className="mt-0.5 cursor-pointer text-[11px] text-[var(--color-accent)] hover:underline"
+            onClick={onSignIn}
+          >
+            Sign in again
+          </button>
+        ) : (
+          <p className="text-[11px] text-[var(--color-text-muted)]">Sign in again on {whose ?? 'that server'}.</p>
+        )
+      ) : null}
+      <p className="text-[10px] text-[var(--color-text-muted)]" data-testid={`usage-row-age-${row.harness}`}>
+        {updatedAgo(row.checkedAt, now)}
+        {live ? ` · ${live}` : ''}
+      </p>
     </div>
   )
 }

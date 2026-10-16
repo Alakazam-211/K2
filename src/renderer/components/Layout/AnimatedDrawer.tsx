@@ -12,10 +12,14 @@
 // The terminal's PTY resize is already debounced (100 ms trailing) in
 // TerminalPane, so the animation's per-frame size changes end in a single
 // PTY resize; the Browser pane's ResizeObserver pushes its final bounds
-// when the width settles.
+// when the width settles. While the drawer slides, the Browser page is
+// frozen (`beginBrowserMotion`): a picture of the page moves with the DOM
+// instead of the native webview lagging the slide, released when the slide
+// ends or is interrupted.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { DRAWER_ANIM_MS, DRAWER_TRANSITION, drawerMotionOn } from './drawer-motion'
+import { beginBrowserMotion } from '@/lib/browser-overlay'
 
 export default function AnimatedDrawer({
   open,
@@ -74,6 +78,9 @@ export default function AnimatedDrawer({
     outer.style.transition = DRAWER_TRANSITION
     outer.style.width = `${to}px`
 
+    // Freeze the Browser page for the slide; cleanup() releases it whether
+    // the slide finishes, is interrupted by another toggle, or unmounts.
+    let endBrowserFreeze: (() => void) | null = beginBrowserMotion()
     let timer: ReturnType<typeof setTimeout> | null = null
     const finish = (): void => {
       cleanup()
@@ -90,6 +97,8 @@ export default function AnimatedDrawer({
     const cleanup = (): void => {
       outer.removeEventListener('transitionend', onEnd)
       if (timer) clearTimeout(timer)
+      endBrowserFreeze?.()
+      endBrowserFreeze = null
     }
     outer.addEventListener('transitionend', onEnd)
     // Fallback when transitionend never fires (hidden window, no layout).

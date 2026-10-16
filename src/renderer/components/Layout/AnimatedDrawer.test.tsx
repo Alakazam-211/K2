@@ -8,6 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import AnimatedDrawer from './AnimatedDrawer'
 import { DRAWER_ANIM_MS, DRAWER_TRANSITION, drawerMotionOn } from './drawer-motion'
+import { overlayClaims, resetBrowserOverlaysForTest } from '@/lib/browser-overlay'
+
+function motionClaims(): number {
+  return overlayClaims().filter((c) => c.kind === 'motion' && c.area === 'fullscreen').length
+}
 
 const realMatchMedia = window.matchMedia
 
@@ -61,6 +66,7 @@ afterEach(() => {
   cleanup()
   vi.useRealTimers()
   window.matchMedia = realMatchMedia
+  resetBrowserOverlaysForTest()
 })
 
 describe('drawerMotionOn', () => {
@@ -199,5 +205,42 @@ describe('AnimatedDrawer', () => {
     const el = must(drawer('left'))
     expect(el.className).toContain('border-r')
     expect(el.className).toContain('overflow-hidden')
+  })
+
+  it('freezes the Browser page for the slide and releases it when the slide ends', () => {
+    const { rerender } = render(ui(true))
+    expect(motionClaims()).toBe(0)
+    rerender(ui(false))
+    expect(motionClaims()).toBe(1)
+    endTransition(must(drawer()))
+    expect(motionClaims()).toBe(0)
+    rerender(ui(true))
+    expect(motionClaims()).toBe(1)
+    endTransition(must(drawer()))
+    expect(motionClaims()).toBe(0)
+  })
+
+  it('an interrupted slide holds one freeze, released on the timer or on unmount', () => {
+    vi.useFakeTimers()
+    const { rerender, unmount } = render(ui(true))
+    rerender(ui(false))
+    rerender(ui(true))
+    expect(motionClaims()).toBe(1)
+    act(() => {
+      vi.advanceTimersByTime(DRAWER_ANIM_MS + 200)
+    })
+    expect(motionClaims()).toBe(0)
+    rerender(ui(false))
+    expect(motionClaims()).toBe(1)
+    unmount()
+    expect(motionClaims()).toBe(0)
+  })
+
+  it('no freeze without a slide (first mount, reduced motion)', () => {
+    setReducedMotion(true)
+    const { rerender } = render(ui(true))
+    rerender(ui(false))
+    rerender(ui(true))
+    expect(motionClaims()).toBe(0)
   })
 })

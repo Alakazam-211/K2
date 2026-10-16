@@ -36,6 +36,10 @@ vi.mock('@/stores/activity', () => ({
   workspaceDisplay: () => 'idle',
   projectHasUnseen: () => false,
 }))
+// The rows' status cluster reads the activity store through this hook.
+vi.mock('@/components/AgentStatus/useAgentStatus', () => ({
+  useAgentStatus: () => ({ heartbeat: false, live: null, working: false, status: 'idle', title: '', workingTitle: '' }),
+}))
 vi.mock('@/hooks/useGit', () => ({ useGitInfo: () => ({ data: undefined }) }))
 vi.mock('./ProjectAvatar', () => ({ default: () => <span /> }))
 vi.mock('@/components/Presence/PresenceWorkspaceAvatars', () => ({ default: () => null }))

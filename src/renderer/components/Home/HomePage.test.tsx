@@ -154,7 +154,10 @@ vi.mock('@/stores/projects', async () => {
   }))
   return { useProjectsStore, __initialProjects: projects }
 })
-vi.mock('@/stores/active-agents', () => ({ useActiveAgentsStore: h.activity }))
+vi.mock('@/stores/active-agents', () => ({
+  useActiveAgentsStore: h.activity,
+  projectHasLiveSession: (cwds: Set<string>, path: string) => cwds.has(path),
+}))
 vi.mock('@/stores/presence', async () => {
   const real = await vi.importActual<typeof import('@/stores/presence')>('@/stores/presence')
   return { ...real, usePresenceStore: h.presence }
@@ -489,8 +492,9 @@ describe('Home — the Agents page shell', () => {
 
   it('row states: working glyph (connected), live + presence (other), sign in (no login)', async () => {
     render(<Shell />)
-    // Connected row = the Agents row: working braille spinner.
-    expect(rowOf('Cortana').querySelector('.braille-spinner')).not.toBeNull()
+    // Connected row = the Agents row: the working cell grid in its working
+    // slot (plan-agent-status-unify-v1).
+    expect(rowOf('Cortana').querySelector('[data-slot="working"] [data-agent-working]')).not.toBeNull()
     expect(rowOf('Cortana').querySelector('[data-machine-chip]')).toBeNull()
     // Other servers carry a machine chip.
     expect(rowOf('Bee').querySelector('[data-machine-chip]')?.textContent).toBe('Box B')

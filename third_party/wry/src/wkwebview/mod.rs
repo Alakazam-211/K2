@@ -392,15 +392,18 @@ impl InnerWebView {
         let window = ns_view.window().unwrap();
 
         let scale_factor = window.backingScaleFactor();
-        let (x, y) = attributes
+        // Logical points as f64: a fractional point (a DOM rect snapped to
+        // the device-pixel grid) is a whole device pixel on a 2x screen.
+        // Rounding to whole points left up to a 1pt seam against the DOM.
+        let (x, y): (f64, f64) = attributes
           .bounds
           .map(|b| b.position.to_logical::<f64>(scale_factor))
           .map(Into::into)
-          .unwrap_or((0, 0));
-        let (w, h) = if is_child {
+          .unwrap_or((0., 0.));
+        let (w, h): (f64, f64) = if is_child {
           attributes
             .bounds
-            .map(|b| b.size.to_logical::<u32>(scale_factor))
+            .map(|b| b.size.to_logical::<f64>(scale_factor))
             .map(Into::into)
         } else {
           None
@@ -408,19 +411,19 @@ impl InnerWebView {
         .unwrap_or_else(|| {
           if is_child {
             let frame = NSView::frame(ns_view);
-            (frame.size.width as u32, frame.size.height as u32)
+            (frame.size.width, frame.size.height)
           } else {
-            (0, 0)
+            (0., 0.)
           }
         });
 
         let frame = CGRect {
           origin: if is_child {
-            window_position(ns_view, x, y, h as f64)
+            window_position(ns_view, x, y, h)
           } else {
-            CGPoint::new(x as f64, (0 - y - h as i32) as f64)
+            CGPoint::new(x, 0. - y - h)
           },
-          size: CGSize::new(w as f64, h as f64),
+          size: CGSize::new(w, h),
         };
         let webview: Retained<WryWebView> =
           objc2::msg_send![super(webview), initWithFrame: frame, configuration: &**config];
@@ -1038,13 +1041,19 @@ impl InnerWebView {
   pub fn set_bounds(&self, #[allow(unused)] bounds: Rect) -> crate::Result<()> {
     #[cfg(target_os = "macos")]
     if self.is_child {
-      let window = self.webview.window().unwrap();
+      // A child that is not in a window (closing, reparenting) has no
+      // frame to set; do not panic the main thread over it.
+      // SAFETY: plain AppKit getters on the main thread (wry's WebView is !Send).
+      let (Some(window), Some(parent_view)) = (self.webview.window(), unsafe { self.webview.superview() })
+      else {
+        return Ok(());
+      };
       let scale_factor = window.backingScaleFactor();
-      let (x, y) = bounds.position.to_logical::<f64>(scale_factor).into();
-      let (width, height) = bounds.size.to_logical::<i32>(scale_factor).into();
+      // f64 logical points end to end (see the initial frame above).
+      let (x, y): (f64, f64) = bounds.position.to_logical::<f64>(scale_factor).into();
+      let (width, height): (f64, f64) = bounds.size.to_logical::<f64>(scale_factor).into();
 
       unsafe {
-        let parent_view = self.webview.superview().unwrap();
         let frame = CGRect {
           origin: window_position(&parent_view, x, y, height),
           size: CGSize::new(width, height),
@@ -1450,7 +1459,7 @@ impl Drop for InnerWebView {
 ///   Default coordinate system: a bottom-left is (0, 0) and y increasing upwards.
 ///   Flipped coordinate system: a top-left is (0, 0) and y increasing downwards.
 #[allow(dead_code)]
-unsafe fn window_position(view: &NSView, x: i32, y: i32, height: f64) -> CGPoint {
+unsafe fn window_position(view: &NSView, x: f64, y: f64, height: f64) -> CGPoint {
   let is_flipped = {
     #[cfg(target_os = "macos")]
     {
@@ -1463,10 +1472,10 @@ unsafe fn window_position(view: &NSView, x: i32, y: i32, height: f64) -> CGPoint
   };
 
   if is_flipped {
-    CGPoint::new(x as f64, y as f64)
+    CGPoint::new(x, y)
   } else {
     let frame: CGRect = view.frame();
-    CGPoint::new(x as f64, frame.size.height - y as f64 - height)
+    CGPoint::new(x, frame.size.height - y - height)
   }
 }
 

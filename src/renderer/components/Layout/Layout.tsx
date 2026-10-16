@@ -7,6 +7,7 @@ import { usePanelsStore } from '../../stores/panels'
 import { usePageViewStore } from '../../stores/page-view'
 import { TAB_LABELS } from '../TabbedPanel/TabbedPanel'
 import DrawerHandle from './DrawerHandle'
+import AnimatedDrawer from './AnimatedDrawer'
 import { DrawerTabBarTogglesContext, drawerHandlesOn, drawerTabBarTogglesOn } from './drawer-handles'
 
 interface LayoutProps {
@@ -90,10 +91,10 @@ export default function Layout({
         )}
 
         {/* Left auxiliary panel (tabbed) */}
-        {leftPanelOpen && leftPanel && (
-          <div className="flex h-full min-h-0 flex-shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)]">
+        {leftPanel && (
+          <AnimatedDrawer open={leftPanelOpen} side="left">
             {leftPanel}
-          </div>
+          </AnimatedDrawer>
         )}
 
         {/* Main content (terminal). The outer box does not clip, so an
@@ -119,10 +120,10 @@ export default function Layout({
         </div>
 
         {/* Right auxiliary panel (tabbed) */}
-        {rightPanelOpen && rightPanel && (
-          <div className="flex h-full min-h-0 flex-shrink-0 flex-col overflow-hidden border-l border-[var(--color-border)]">
+        {rightPanel && (
+          <AnimatedDrawer open={rightPanelOpen} side="right">
             {rightPanel}
-          </div>
+          </AnimatedDrawer>
         )}
       </div>
     </div>

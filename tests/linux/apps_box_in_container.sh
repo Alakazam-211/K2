@@ -278,6 +278,9 @@ chmod 0755 /usr/local/libexec/k2-app-engine
 # What the engine stages (process-stage/activate): the code folder the
 # unit binds read-only, and a stand-in for the engine's own state.
 install -d -o k2app -g k2app -m 0755 /var/lib/k2app/apps/jobs/process/code /var/lib/k2app/engine
+# The daemon writes the App's caps (memory, disk ceilings) before every start.
+req daemon apps process caps jobs 512 -.41943040.-.2000
+expect_rc 0 "process caps"
 req agent apps process start jobs
 expect_rc 77 "an agent starting an App"
 req daemon apps process start jobs

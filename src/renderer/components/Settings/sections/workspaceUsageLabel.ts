@@ -40,7 +40,7 @@ function privateAliases(path: string): string[] {
   return [base]
 }
 
-function samePath(a: string, b: string): boolean {
+export function samePath(a: string, b: string): boolean {
   const keys = new Set(privateAliases(a))
   return privateAliases(b).some((key) => keys.has(key))
 }

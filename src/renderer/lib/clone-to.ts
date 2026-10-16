@@ -27,6 +27,17 @@
 
 import type { ConnectHost } from '@/stores/connect-host'
 import type { ServerScope } from '@/kessel/server-scope'
+import {
+  askVaultRecipient,
+  vaultBundleFields,
+  vaultOutcome,
+  vaultUnpackFields,
+  type CloneVaultCarryReport,
+  type CloneVaultOutcome,
+  type CloneVaultUnpackFields,
+  type VaultRecipientLookup,
+  type VaultRecipientResponse,
+} from './clone-vault'
 
 /** Manifest summary the daemon returns from `clone/bundle`. */
 export interface CloneManifestSummary {
@@ -44,6 +55,11 @@ export interface CloneManifestSummary {
 export interface CloneBundleResult {
   bundle_path: string
   manifest_summary: CloneManifestSummary
+  /** Opaque sealed vault carry for the destination (0.45.2), when the
+   *  vault checkbox was ticked and the source had secrets to move. */
+  vault_carry_b64?: string
+  /** Names-only report of that carry (or why there is none). */
+  vault_carry?: CloneVaultCarryReport
 }
 
 /** Minimal project shape the unpack route returns (the freshly-registered
@@ -56,8 +72,8 @@ export interface ClonedProject {
   [k: string]: unknown
 }
 
-/** `clone/unpack` response. */
-export interface CloneUnpackResult {
+/** `clone/unpack` response (plus the vault fields when a carry rode it). */
+export interface CloneUnpackResult extends CloneVaultUnpackFields {
   project: ClonedProject
   dest_path: string
 }
@@ -98,6 +114,9 @@ export interface CloneHooks {
    *  bytes sent. Never called for the single-shot path. Optional — the
    *  progress modal can light up a byte-level bar later for free. */
   onUploadProgress?: (fraction: number) => void
+  /** Called before `onDone` when the vault checkbox was ticked, with what
+   *  moved (names only) or why nothing did. */
+  onVaultCarry?: (outcome: CloneVaultOutcome) => void
 }
 
 /**
@@ -133,6 +152,10 @@ export interface CloneDeps {
   /** Open the remote folder picker; resolves with the chosen REMOTE parent
    *  dir, or null on cancel. */
   pickRemoteFolder: () => Promise<string | null>
+  /** Ask the DESTINATION daemon for its vault recipient
+   *  (`GET vault/recipient`) before bundling — over its saved login, since
+   *  the window is still on the source at that point. */
+  destVaultRecipient: (host: ConnectHost) => Promise<VaultRecipientResponse>
 }
 
 /** Last path segment of a path, tolerating BOTH `/` and `\` separators. */
@@ -178,14 +201,16 @@ export class CloneCancelledError extends Error {
  * active host is 'local' — the bundle/read steps assume local is active.
  *
  * Step order (each targets the THEN-active host):
- *   1. [local]   clone/bundle  → { bundle_path, manifest_summary }
+ *   0. [dest]    vault/recipient over the destination's saved login — only
+ *                when `carryVault` (the owner's own move, 0.45.2)
+ *   1. [local]   clone/bundle  → { bundle_path, manifest_summary[, vault_carry_b64] }
  *   1b.[local]   read_local_file_base64(bundle_path) → base64
  *   2. [switch]  pickHost(dest) + waitForHostConnected(dest)
  *   3. [dest]    pickRemoteFolder() → dest_parent  (cancel → abort)
  *   3b.[dest]    fs/info → host home, to derive a temp upload dir
  *   4. [dest]    fs/upload-binary { dir, filename, base64 } → remoteBundlePath
- *   5. [dest]    clone/unpack { bundle_path: remoteBundlePath, dest_parent }
- *                  → { project, dest_path }
+ *   5. [dest]    clone/unpack { bundle_path: remoteBundlePath, dest_parent[, vault_carry_b64] }
+ *                  → { project, dest_path[, vault_imported, vault_skipped] }
  *
  * Returns the unpack result on success. Throws on any failure (including
  * cancellation, as a {@link CloneCancelledError}); the error is also
@@ -215,6 +240,14 @@ export async function cloneWorkspaceTo(
    * call as `live_only` (the daemon's inverse-of-this flag).
    */
   includeAllHistory = true,
+  /**
+   * The owner is moving THEIR OWN workspace to THEIR OWN server: also move
+   * the workspace's vault secrets (0.45.2). Default `false`. When set, the
+   * destination is asked for its vault recipient before bundling, the
+   * source seals the secrets into the bundle response, and the opaque carry
+   * rides to `clone/unpack`. Any problem is a note, never a failed clone.
+   */
+  carryVault = false,
 ): Promise<CloneUnpackResult> {
   // This flow SWITCHES THE WINDOW to the destination (step 2) and keeps
   // talking to "the window's server" across that switch: bundle on the
@@ -223,14 +256,20 @@ export async function cloneWorkspaceTo(
   if (!scope.isPrimary) {
     throw new Error('cloneWorkspaceTo switches the window, so it runs on the primary scope only')
   }
-  const { onStage, onBundled, onDone, onError } = hooks
+  const { onStage, onBundled, onDone, onError, onVaultCarry } = hooks
   try {
     // ── 1. Build the bundle on the SOURCE (local is active) ──────────────
     onStage?.('bundling')
+    // 0a. Vault checkbox: ask the destination for its vault first, so the
+    //     source can seal this workspace's secrets to it while bundling.
+    const vaultLookup: VaultRecipientLookup | null = carryVault
+      ? await askVaultRecipient(() => deps.destVaultRecipient(destinationHost), destinationHost.label)
+      : null
     const bundle = await deps.daemonCliPost<CloneBundleResult>(scope, 'clone/bundle', {
       project_path: projectPath,
       carry_secrets: carrySecrets,
       live_only: !includeAllHistory,
+      ...vaultBundleFields(vaultLookup),
     })
     if (!bundle?.bundle_path) {
       throw new Error('Bundle step returned no bundle_path.')
@@ -304,10 +343,13 @@ export async function cloneWorkspaceTo(
     const result = await deps.daemonCliPost<CloneUnpackResult>(scope, 'clone/unpack', {
       bundle_path: remoteBundlePath,
       dest_parent: destParent,
+      ...vaultUnpackFields(vaultLookup, bundle.vault_carry_b64),
     })
     if (!result?.dest_path) {
       throw new Error('Unpack step returned no dest_path.')
     }
+    const vault = vaultOutcome(vaultLookup, bundle.vault_carry, bundle.vault_carry_b64, result)
+    if (vault) onVaultCarry?.(vault)
 
     onStage?.('done')
     onDone?.(result)
@@ -437,6 +479,13 @@ export function defaultCloneDeps(): CloneDeps {
     pickRemoteFolder: async () => {
       const { useRemoteFolderPickerStore } = await import('@/stores/remote-folder-picker')
       return useRemoteFolderPickerStore.getState().open()
+    },
+    destVaultRecipient: async (host) => {
+      const [{ daemonCliGet }, { scopeForHost }] = await Promise.all([
+        import('./daemon-cli'),
+        import('@/kessel/server-scope'),
+      ])
+      return daemonCliGet<VaultRecipientResponse>(scopeForHost(host), 'vault/recipient')
     },
   }
 }

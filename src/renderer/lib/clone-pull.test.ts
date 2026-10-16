@@ -100,6 +100,10 @@ function makeDeps(
     isCancelRequested: vi.fn(() => false),
   }
   const sleep = vi.fn(async () => undefined)
+  const localVaultRecipient = vi.fn(async () => {
+    order.push('local-vault-recipient')
+    return { recipient: 'age1localrecipient', fingerprint: 'fp', vaultId: 'vault-local-1' }
+  })
 
   const deps: ClonePullDeps = {
     daemonCliPost,
@@ -110,6 +114,7 @@ function makeDeps(
     localDownloadAbort,
     progress,
     sleep,
+    localVaultRecipient,
     ...overrides,
   }
   // Home M1: the code passes the scope first. The spies keep the pre-M1
@@ -132,6 +137,7 @@ function makeDeps(
       progressBegin: progress.begin,
       progressEnd: progress.end,
       isCancelRequested: progress.isCancelRequested,
+      localVaultRecipient,
     },
   }
 }
@@ -301,5 +307,122 @@ describe('cloneWorkspaceToThisComputer', () => {
     expect(onError).toHaveBeenCalledWith(
       expect.stringContaining('Unpacking on this computer failed'),
     )
+  })
+})
+
+// ── Vault secrets on the owner's own move (0.45.2) ───────────────────────
+//
+// Pull: THIS computer's vault is the destination, so its recipient comes
+// from the LOCAL daemon; the server seals into the pack job's status; the
+// opaque carry rides to the LOCAL unpack.
+
+describe('cloneWorkspaceToThisComputer — vault carry (own move)', () => {
+  function vaultDeps(
+    order: string[],
+    packed: ClonePackStatus,
+    unpack: CloneUnpackResult,
+    overrides: Partial<ClonePullDeps> = {},
+  ) {
+    const daemonCliGet = vi.fn(async (route: string, params?: Record<string, unknown>) => {
+      order.push(`get:${route}`)
+      if (route === 'clone/pack-status') return packed as unknown
+      if (route === 'fs/read-range') {
+        const offset = Number(params?.offset ?? 0)
+        return { base64: 'AAAAA', len: 5, size: 5, eof: offset >= 0 } as unknown
+      }
+      return {} as unknown
+    }) as ClonePullDeps['daemonCliGet'] & ReturnType<typeof vi.fn>
+    const localDaemonCliPost = vi.fn(async (route: string, _body?: unknown) => {
+      order.push(`local-post:${route}`)
+      if (route === 'clone/unpack') return unpack as unknown
+      return {} as unknown
+    }) as ClonePullDeps['localDaemonCliPost'] & ReturnType<typeof vi.fn>
+    const built = makeDeps(order, { daemonCliGet, localDaemonCliPost, ...overrides })
+    built.spies.daemonCliGet = daemonCliGet
+    built.spies.localDaemonCliPost = localDaemonCliPost
+    return built
+  }
+
+  it('asks this computer’s vault first, then carries the sealed secrets from the pack into the local unpack', async () => {
+    const order: string[] = []
+    const { deps, spies } = vaultDeps(
+      order,
+      { ...PACKED, vault_carry_b64: 'SEALED-CARRY', vault_carry: { sealed: true, count: 2, secrets: ['A_KEY', 'B_KEY'] } },
+      { ...UNPACK, vault_imported: ['A_KEY', 'B_KEY'], vault_skipped: [] },
+    )
+    const onVaultCarry = vi.fn()
+
+    await cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps, { onVaultCarry }, true, true, true)
+
+    expect(order[0]).toBe('local-vault-recipient')
+    expect(order[1]).toBe('post:clone/pack')
+    expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/pack', {
+      project_path: '/srv/work/myws',
+      carry_secrets: true,
+      live_only: false,
+      vault_target: { recipient: 'age1localrecipient', vault_id: 'vault-local-1' },
+      own_box_move: true,
+    })
+    expect(spies.localDaemonCliPost).toHaveBeenCalledWith('clone/unpack', {
+      bundle_path: LOCAL_BUNDLE,
+      dest_parent: '/Users/rosson/work',
+      vault_carry_b64: 'SEALED-CARRY',
+    })
+    expect(onVaultCarry).toHaveBeenCalledWith({ imported: ['A_KEY', 'B_KEY'], skipped: [], note: null })
+  })
+
+  it('sends no vault fields when the box is unticked', async () => {
+    const order: string[] = []
+    const { deps, spies } = vaultDeps(order, PACKED, UNPACK)
+    const onVaultCarry = vi.fn()
+
+    await cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps, { onVaultCarry }, true, true, false)
+
+    expect(order).not.toContain('local-vault-recipient')
+    expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/pack', {
+      project_path: '/srv/work/myws',
+      carry_secrets: true,
+      live_only: false,
+    })
+    expect(spies.localDaemonCliPost).toHaveBeenCalledWith('clone/unpack', {
+      bundle_path: LOCAL_BUNDLE,
+      dest_parent: '/Users/rosson/work',
+    })
+    expect(onVaultCarry).not.toHaveBeenCalled()
+  })
+
+  it('goes on without vault secrets when this computer’s vault is closed', async () => {
+    const order: string[] = []
+    const { deps, spies } = vaultDeps(order, PACKED, UNPACK, {
+      localVaultRecipient: vi.fn(async () => {
+        throw new Error('{"error":{"code":"vault_not_open","hint":"the vault isn\'t open yet"}}')
+      }),
+    })
+    const onVaultCarry = vi.fn()
+    const onDone = vi.fn()
+
+    await cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps, { onVaultCarry, onDone }, true, true, true)
+
+    expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/pack', {
+      project_path: '/srv/work/myws',
+      carry_secrets: true,
+      live_only: false,
+    })
+    expect(onDone).toHaveBeenCalledTimes(1)
+    expect(onVaultCarry.mock.calls[0][0].note).toContain("the vault isn't open yet")
+  })
+
+  it('notes an older server that packed without sealing', async () => {
+    const order: string[] = []
+    const { deps, spies } = vaultDeps(order, PACKED, UNPACK)
+    const onVaultCarry = vi.fn()
+
+    await cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps, { onVaultCarry }, true, true, true)
+
+    expect(spies.localDaemonCliPost).toHaveBeenCalledWith('clone/unpack', {
+      bundle_path: LOCAL_BUNDLE,
+      dest_parent: '/Users/rosson/work',
+    })
+    expect(onVaultCarry.mock.calls[0][0].note).toMatch(/older K2/)
   })
 })

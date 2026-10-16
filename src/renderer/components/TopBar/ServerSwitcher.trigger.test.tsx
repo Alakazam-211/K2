@@ -74,8 +74,8 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
     })
   })
 
-  it('the width class is the 150px constant and does not shrink', () => {
-    expect(SERVER_SWITCHER_WIDTH_PX).toBe(150)
+  it('the width class is the 140px constant and does not shrink', () => {
+    expect(SERVER_SWITCHER_WIDTH_PX).toBe(140)
     expect(SERVER_SWITCHER_WIDTH_CLASS).toBe(`w-[${SERVER_SWITCHER_WIDTH_PX}px] shrink-0`)
   })
 

@@ -4,6 +4,10 @@
 
 import { useState, type JSX } from 'react'
 import { cardExpiryLabel } from './overlayThread'
+import { CHAMFER_CUT, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
+
+const CARD_EDGE = 'var(--thread-card-border,var(--color-border))'
+const CARD_ACCENT = 'var(--thread-card-accent,var(--color-accent))'
 
 /** A, B, … Z, AA — UI letter only; the posted answer is still the option label. */
 export function choiceLetter(index: number): string {
@@ -48,6 +52,9 @@ export function ChoiceCard({
   return (
     <div
       data-testid="thread-choice-card"
+      // K2's square Style (desktop Thread): chamfered, card and options.
+      data-chamfer=""
+      style={chamferVars({ cut: CHAMFER_CUT.surface, fill: 'var(--thread-card-bg,var(--color-bg))', edge: CARD_EDGE, border: 1 })}
       className="mt-1 w-full box-border flex flex-col gap-1.5 rounded-[var(--thread-card-radius,0px)] border border-[var(--thread-card-border,var(--color-border))] bg-[var(--thread-card-bg,var(--color-bg))] px-2 py-1.5"
     >
       {options.map((opt, i) => {
@@ -58,6 +65,13 @@ export function ChoiceCard({
               key={`${opt.label}-${i}`}
               type="button"
               data-testid="thread-choice-chip"
+              data-chamfer=""
+              style={chamferVars({
+                cut: chamferCutFor(26),
+                fill: selected ? `color-mix(in srgb, ${CARD_ACCENT} 15%, transparent)` : 'transparent',
+                edge: selected ? CARD_ACCENT : CARD_EDGE,
+                border: 1,
+              })}
               data-label={opt.label}
               data-letter={letter}
               data-primary={i === 0 ? 'true' : 'false'}

@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactElement } from 'react'
 
 const h = vi.hoisted(() => {
@@ -59,7 +59,7 @@ vi.mock('./useOverlayThread', () => ({
 
 import { composeRowChromeWidth, TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { composeTextareaHeight } from '@/components/Terminal/terminalCompose'
-import { threadComposeLines, threadComposeStackNext } from '@/components/Thread/ThreadZenKit'
+import { ThreadAttachmentChip, threadComposeLines, threadComposeStackNext } from '@/components/Thread/ThreadZenKit'
 import { CHAMFER_SCOPE, FOOTER_FADE_PX, THREAD_CHAMFER_CSS, THREAD_COMPOSE_BOX_BORDER, THREAD_COMPOSE_BOX_PAD, THREAD_FOOTER_FADE_CSS, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { primaryScope } from '@/kessel/server-scope'
@@ -441,9 +441,10 @@ describe('the activity drawer on the Thread\'s message box', () => {
 })
 
 // Rosson 2026-10-16: in K2's square Style the bubbles, the message field,
-// Send and the activity drawer get chamfered corners (the presence chips'
-// 45° cuts); Bezel and Glass keep them round. The small controls ("+", "/",
-// chips, "Earlier messages", cards) are left as they are.
+// Send and the activity drawer (tab, Stop, tags, pulse dot), then the file
+// chips, cards and "Earlier messages", get chamfered corners (the presence
+// chips' 45° cuts); Bezel and Glass keep them round. "+" and "/" have no
+// fill and are left as they are.
 describe('chamfered corners in K2\'s square Style', () => {
   const NOW = Date.now()
   const turn = (): ThreadTurn => {
@@ -468,8 +469,21 @@ describe('chamfered corners in K2\'s square Style', () => {
     h.threadHook.hasMore = false
   })
 
-  function renderThread(): void {
-    h.threadHook.items = [item('a', false), item('m', true)]
+  const choice: OverlayThreadItem = {
+    collection: 'thread',
+    seq: 3,
+    id: 'c',
+    doc: { id: 'c', kind: 'choice', from: 'k2', body: 'Ship?', created_at: 1, choice: { prompt: 'Ship?', options: [{ label: 'Go' }, { label: 'Wait' }], allow_custom: false, status: 'pending' } },
+  }
+  const secret: OverlayThreadItem = {
+    collection: 'thread',
+    seq: 4,
+    id: 's',
+    doc: { id: 's', kind: 'secret', from: 'k2', body: '', created_at: 1, secret: { name: 'GROK_TOKEN', prompt: 'Paste it', status: 'pending' } },
+  }
+
+  function renderThread(extra: OverlayThreadItem[] = []): void {
+    h.threadHook.items = [item('a', false), item('m', true), ...extra]
     h.threadHook.hasMore = true
     renderInRoom(
       room,
@@ -496,7 +510,7 @@ describe('chamfered corners in K2\'s square Style', () => {
   /** Does the chamfer rule (the cut-shape layers) apply to `e`? */
   const cut = (e: HTMLElement): boolean => e.matches(`${CHAMFER_SCOPE} [data-chamfer]`)
 
-  it('exactly the four: bubbles, the message field, Send and the drawer carry the chamfer', () => {
+  it('bubbles, the field, Send, the drawer\'s tab and Stop, and "Earlier messages" carry the chamfer; "+" and "/" do not', () => {
     renderThread()
     const named = Array.from(document.querySelectorAll('[data-chamfer]')).map((e) =>
       e.hasAttribute('data-zen-bubble')
@@ -507,16 +521,20 @@ describe('chamfered corners in K2\'s square Style', () => {
             ? 'send'
             : e.hasAttribute('data-zen-drawer-tile')
               ? 'drawer'
-              : e.outerHTML.slice(0, 60),
+              : e.hasAttribute('data-zen-drawer-stop')
+                ? 'stop'
+                : e.hasAttribute('data-zen-load-older')
+                  ? 'earlier'
+                  : e.outerHTML.slice(0, 60),
     )
-    expect(named.sort()).toEqual(['bubble:agent', 'bubble:me', 'drawer', 'field', 'send'])
-    for (const small of [
-      screen.getByRole('button', { name: 'Attach file' }),
-      screen.getByTestId('compose-slash-button'),
-      screen.getByTestId('overlay-load-older'),
-    ]) {
+    expect(named.sort()).toEqual(['bubble:agent', 'bubble:me', 'drawer', 'earlier', 'field', 'send', 'stop'])
+    for (const small of [screen.getByRole('button', { name: 'Attach file' }), screen.getByTestId('compose-slash-button')]) {
       expect(small.hasAttribute('data-chamfer')).toBe(false)
     }
+    // Scaled like Send (5px at 32px): Stop 20px → 3px, "Earlier messages" 22px → 3.5px.
+    expect(screen.getByTestId('thread-strip-stop').style.getPropertyValue('--ch-tl')).toBe('3px')
+    expect(screen.getByTestId('overlay-load-older').style.getPropertyValue('--ch-tl')).toBe('3.5px')
+    expect(screen.getByTestId('overlay-load-older').style.getPropertyValue('--ch-fill')).toBe('transparent')
     // The cuts: 4px on surfaces (a bubble tail corner stays sharp), Send 4px (5px at 32px, scaled to its 26px), the drawer 5px (its 32px tab, like Send at 32px).
     const mine = el('[data-zen-bubble="me"]')
     expect(['tl', 'tr', 'br', 'bl'].map((k) => mine.style.getPropertyValue(`--ch-${k}`))).toEqual(['4px', '4px', '0px', '4px'])
@@ -534,13 +552,12 @@ describe('chamfered corners in K2\'s square Style', () => {
     renderThread()
     expect(THREAD_CHAMFER_CSS).toContain('html[data-style="square"] [data-k2-thread-zen] [data-chamfer]')
     expect(THREAD_CHAMFER_CSS).toContain('clip-path: polygon(')
-    for (const sel of ['[data-zen-bubble="me"]', '[data-zen-bubble="agent"]', '[data-zen-compose-box]', '[data-zen-send]', '[data-zen-drawer-tile]']) {
+    for (const sel of ['[data-zen-bubble="me"]', '[data-zen-bubble="agent"]', '[data-zen-compose-box]', '[data-zen-send]', '[data-zen-drawer-tile]', '[data-zen-drawer-stop]', '[data-zen-load-older]']) {
       expect(cut(el(sel)), sel).toBe(true)
     }
-    // The small controls keep their round pills.
+    // "+" and "/" have no fill: left as they are.
     expect(cut(screen.getByRole('button', { name: 'Attach file' }))).toBe(false)
     expect(cut(screen.getByTestId('compose-slash-button'))).toBe(false)
-    expect(cut(screen.getByTestId('overlay-load-older'))).toBe(false)
     // The rule flattens the radius and paints the cut shape behind the content.
     expect(THREAD_CHAMFER_CSS).toMatch(/\[data-chamfer\] \{ border-radius: 0 !important;/)
     expect(THREAD_CHAMFER_CSS).toContain('[data-chamfer]::after { inset: 0; background: var(--ch-fill); clip-path: polygon(')
@@ -550,13 +567,51 @@ describe('chamfered corners in K2\'s square Style', () => {
     expect(el('[data-zen-drawer-tile]').style.overflow).toBe('hidden')
   })
 
+  it('square Style: the cards, their options, the file chips, the drawer\'s tags and its pulse dot', () => {
+    document.documentElement.setAttribute('data-style', 'square')
+    renderThread([choice, secret])
+    const choiceCard = el('[data-testid="thread-choice-card"]')
+    expect(cut(choiceCard)).toBe(true)
+    expect(choiceCard.style.getPropertyValue('--ch-tl')).toBe('4px')
+    for (const opt of screen.getAllByTestId('thread-choice-chip')) {
+      expect(cut(opt)).toBe(true)
+      expect(opt.style.getPropertyValue('--ch-tl')).toBe('4px')
+    }
+    const secretCard = el('[data-testid="thread-secret-card"]')
+    expect(cut(secretCard)).toBe(true)
+    expect(secretCard.style.getPropertyValue('--ch-bw')).toBe('1px')
+    // The pulse dot squares off (same pulse); the counter and code tags are cut 3px / 2.5px.
+    const dot = el('[data-zen-drawer-dot]')
+    expect(dot.matches(`${CHAMFER_SCOPE} [data-zen-drawer-dot]`)).toBe(true)
+    expect(dot.hasAttribute('data-zen-pulse')).toBe(true)
+    expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} [data-zen-drawer-dot] { border-radius: 0 !important; }`)
+    expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} .zen-drawer-tag { border-radius: 0 !important; --ch-tl: 3px;`)
+    expect(THREAD_CHAMFER_CSS).toContain(`${CHAMFER_SCOPE} .zen-drawer-tag.zen-drawer-code { --ch-tl: 2.5px;`)
+    const code = el('[data-zen-drawer-code]')
+    expect(code.matches(`${CHAMFER_SCOPE} .zen-drawer-tag`)).toBe(true)
+  })
+
+  it('square Style: a file chip is chamfered', () => {
+    document.documentElement.setAttribute('data-style', 'square')
+    render(
+      <div data-k2-thread-zen="">
+        <ThreadAttachmentChip name="shot.png" onRemove={() => {}} />
+      </div>,
+    )
+    const chip = el('[data-zen-attachment="shot.png"]')
+    expect(cut(chip)).toBe(true)
+    expect(chip.style.getPropertyValue('--ch-tl')).toBe('4px')
+    expect(chip.style.getPropertyValue('--ch-edge')).toBe('var(--zen-border)')
+  })
+
   it('Bezel and Glass keep the round look', () => {
     for (const style of ['bezel', 'glass']) {
       document.documentElement.setAttribute('data-style', style)
       renderThread()
-      for (const sel of ['[data-zen-bubble="me"]', '[data-zen-bubble="agent"]', '[data-zen-compose-box]', '[data-zen-send]', '[data-zen-drawer-tile]']) {
+      for (const sel of ['[data-zen-bubble="me"]', '[data-zen-bubble="agent"]', '[data-zen-compose-box]', '[data-zen-send]', '[data-zen-drawer-tile]', '[data-zen-drawer-stop]', '[data-zen-load-older]']) {
         expect(cut(el(sel)), `${style} ${sel}`).toBe(false)
       }
+      expect(el('[data-zen-drawer-dot]').matches(`${CHAMFER_SCOPE} [data-zen-drawer-dot]`), style).toBe(false)
       // Their own round corners stay (inline, untouched by the rule).
       expect(el('[data-zen-send]').style.borderRadius, style).toBe('999px')
       cleanup()

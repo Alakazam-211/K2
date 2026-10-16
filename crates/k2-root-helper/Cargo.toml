@@ -23,6 +23,10 @@ required-features = ["test-keys"]
 
 [features]
 test-keys = ["k2-root-proto/test-signer"]
+# TEST ONLY: pin Sew's test builds (S29 VM cycle). Release builds never
+# enable it; sign-root-helper.sh refuses a binary built with it.
+sew-test-pins = ["k2-root-proto/sew-test-pins"]
+sew-test-pins-upgrade = ["sew-test-pins", "k2-root-proto/sew-test-pins-upgrade"]
 
 [dependencies]
 k2-root-proto = { path = "../k2-root-proto" }

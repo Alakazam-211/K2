@@ -54,6 +54,13 @@ sandbox-microvm = ["k2-core/sandbox-microvm", "dep:nix", "dep:seccompiler"]
 # out of this crate (see update_routes).
 airgap = ["k2-core/airgap"]
 
+# TEST ONLY (Sew S29 cycle in a throwaway VM): pin Sew's test builds
+# instead of the placeholder pin table. Release builds never enable it;
+# the helper built with it refuses to sign. Build the daemon and the helper
+# with the same value or the daemon refuses the helper (pin mismatch).
+sew-test-pins = ["k2-root-proto/sew-test-pins"]
+sew-test-pins-upgrade = ["sew-test-pins", "k2-root-proto/sew-test-pins-upgrade"]
+
 [dependencies]
 # Session Stream + Awareness Bus primitives are now always compiled
 # into k2so-core (the `session_stream` feature flag was retired in

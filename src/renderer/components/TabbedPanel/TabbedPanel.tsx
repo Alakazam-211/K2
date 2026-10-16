@@ -12,7 +12,7 @@ import { useDrawerTabBarToggles } from '@/components/Layout/drawer-handles'
 
 type PanelTab = 'files' | 'changes' | 'history' | 'workspace'
 
-export const TAB_LABELS: Record<PanelTab, string> = {
+const TAB_LABELS: Record<PanelTab, string> = {
   files: 'Files',
   changes: 'Changes',
   history: 'Chats',

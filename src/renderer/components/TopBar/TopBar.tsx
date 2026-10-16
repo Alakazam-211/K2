@@ -25,8 +25,8 @@ interface TopBarProps {
   rightPanelVisible?: boolean
   onToggleLeftPanel?: () => void
   onToggleRightPanel?: () => void
-  /** False on pages where the drawers open from edge handles instead
-   *  (drawer-handles experiment, `Layout/drawer-handles.ts`). */
+  /** False on pages where the drawers open from » / « toggles in the tab
+   *  bars instead (drawer-controls experiment, `Layout/drawer-handles.ts`). */
   showDrawerToggles?: boolean
   onRunCommand?: (command: string) => void
 }

@@ -214,6 +214,91 @@ describe('drawer tab strip: open drawers', () => {
   })
 })
 
+describe('divider: a closed drawer\'s toggle reads as its own cell', () => {
+  function cls(el: Element): string[] {
+    return Array.from(el.classList)
+  }
+
+  it('the tabs\' own divider token and thickness', () => {
+    // The tabs separate with a 1px `border-r border-[var(--color-border)]`
+    // (TabBar.tsx); the toggles use the same token and width.
+    const [bar] = renderBars(1)
+    const left = must(toggleIn(bar, 'left'))
+    const right = must(toggleIn(bar, 'right'))
+    expect(cls(left)).toContain('border-r')
+    expect(cls(left)).not.toContain('border-l')
+    expect(cls(left)).toContain('border-[var(--color-border)]')
+    expect(left.getAttribute('data-divider')).toBe('right')
+    expect(cls(right)).toContain('border-l')
+    expect(cls(right)).not.toContain('border-r')
+    expect(cls(right)).toContain('border-[var(--color-border)]')
+    expect(right.getAttribute('data-divider')).toBe('left')
+    // Same height as the tabs: fills the 36px strip.
+    for (const b of [left, right]) {
+      expect(cls(b)).toContain('h-full')
+      expect(cls(b)).toContain('self-stretch')
+    }
+  })
+
+  it('open drawer: no divider on its toggle, so no doubled line beside the drawer border', () => {
+    usePanelsStore.setState({ leftPanelOpen: true, rightPanelOpen: true })
+    for (const side of ['left', 'right'] as const) {
+      const tabs = side === 'left' ? (['files', 'workspace'] as const) : (['history', 'agent'] as const)
+      const { container } = render(
+        <TabbedPanel
+          tabs={[...tabs]}
+          activeTab={tabs[0]}
+          onTabChange={() => {}}
+          width={260}
+          onWidthChange={() => {}}
+          resizeSide={side === 'left' ? 'right' : 'left'}
+        >
+          <div />
+        </TabbedPanel>,
+      )
+      const btn = must(toggleIn(container, side))
+      expect(btn.getAttribute('data-divider')).toBeNull()
+      expect(cls(btn)).not.toContain('border-l')
+      expect(cls(btn)).not.toContain('border-r')
+      cleanup()
+    }
+    // And the room bar has no toggle (so no line of its own) while open.
+    const [bar] = renderBars(1)
+    expect(bar.querySelector('[data-divider]')).toBeNull()
+  })
+
+  it('no tab bar: the corner toggle has the divider and the strip\'s bottom line', () => {
+    const { container } = render(
+      <div className="relative">
+        <NoTabBarDrawerToggles />
+      </div>,
+    )
+    for (const side of ['left', 'right'] as const) {
+      const slot = must(container.querySelector(`[data-no-tabbar-drawer-toggle="${side}"]`) as HTMLElement | null)
+      expect(cls(slot)).toContain('border-b')
+      expect(cls(slot)).toContain('border-[var(--color-border)]')
+      const btn = must(toggleIn(slot, side))
+      expect(btn.getAttribute('data-divider')).toBe(side === 'left' ? 'right' : 'left')
+      expect(cls(btn)).toContain(side === 'left' ? 'border-r' : 'border-l')
+    }
+  })
+
+  it('square size and divider={false} draw no divider', () => {
+    const { getByRole } = render(
+      <>
+        <DrawerToggleButton side="right" placement="drawer" name="chat" size="square" onToggle={() => {}} />
+        <DrawerToggleButton side="left" placement="room" name="ticket list" divider={false} onToggle={() => {}} />
+      </>,
+    )
+    for (const name of ['Hide chat', 'Show ticket list']) {
+      const btn = getByRole('button', { name })
+      expect(btn.getAttribute('data-divider')).toBeNull()
+      expect(cls(btn)).not.toContain('border-l')
+      expect(cls(btn)).not.toContain('border-r')
+    }
+  })
+})
+
 describe('no tab bar (empty room, Focus window loading)', () => {
   it('a closed drawer gets its toggle in the top corner; open drawers none', () => {
     const { container } = render(

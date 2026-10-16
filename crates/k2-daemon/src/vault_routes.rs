@@ -1047,9 +1047,6 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Clone proposals (prd-clone-carries-threads-and-vault-v1 CL14):
     // approving an agent's clone proposal (`secretId` = the proposal id).
     "clone-approve",
-    // D4: sending a workspace's `.env` files as files inside a clone
-    // bundle (`secretId` = `env-files:<project_path>`).
-    "clone-env",
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

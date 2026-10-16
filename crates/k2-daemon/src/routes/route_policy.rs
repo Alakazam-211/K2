@@ -1007,6 +1007,12 @@ pub const ROUTES: &[Route] = &[
     // KV10: the handler 405s a GET; the row says so.
     post("/cli/thread/answer", Member),
     post("/cli/thread/ask", Member),
+    // Thread export / import outside a clone (prd-clone-carries-threads-
+    // and-vault-v1 T4): Owner/Admin people + the clone gate; the list of a
+    // workspace's imported Threads is a read for any login.
+    post("/cli/thread/export", Admin),
+    post("/cli/thread/import", Admin),
+    get("/cli/thread/imports", Member),
     // Zen Z41: latest Thread item per addr, for previews. GET only.
     get("/cli/thread/latest", Member),
     both("/cli/thread/post", Member),

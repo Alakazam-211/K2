@@ -10714,6 +10714,63 @@ except Exception:
     printf '%s' "k2"
 }
 
+# k2 thread export|import|imports (prd-clone-carries-threads-and-vault-v1
+# T4): move a workspace's Threads outside a clone. People only (Owner/Admin);
+# imports land read-only and re-runs are no-ops.
+cmd_thread_transfer() {
+    local sub="" ws="" path="" to="" since="" json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            export|import|imports) [ -z "$sub" ] && sub="$1" || ws="$1"; shift ;;
+            --to) to="${2:-}"; shift 2 ;;
+            --since-days|--threads-since) since="${2:-}"; shift 2 ;;
+            --json) json=1; shift ;;
+            -*) echo "usage: k2 thread export <ws> [--since-days N] | import <file> --to <ws> | imports <ws>" >&2; exit 2 ;;
+            *) if [ "$sub" = "import" ]; then path="$1"; else ws="$1"; fi; shift ;;
+        esac
+    done
+    case "$sub" in
+        export)
+            [ -n "$ws" ] || { echo "usage: k2 thread export <ws> [--since-days N]" >&2; exit 2; }
+            _clone_person_guard
+            _compute_call POST /cli/thread/export "$(_compute_json K2_CJ_ws="$ws" K2_CJ_sinceDays_n="$since")" tcp
+            if [ "$json" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+s = v.get("summary") or {}
+print("%s: %s Thread(s), %s line(s) → %s" % (v.get("workspace"), s.get("conversations"), s.get("docs"), v.get("path")))'
+            ;;
+        import)
+            [ -n "$path" ] && [ -n "$to" ] || { echo "usage: k2 thread import <file> --to <ws>" >&2; exit 2; }
+            _clone_person_guard
+            local abs
+            abs="$(cd "$(dirname "$path")" 2>/dev/null && pwd)/$(basename "$path")"
+            _compute_call POST /cli/thread/import "$(_compute_json K2_CJ_path="$abs" K2_CJ_to="$to")" tcp
+            if [ "$json" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+r = v.get("report") or {}
+print("%s: imported %s line(s) into %s Thread(s) (%s already there)%s" % (v.get("workspace"), r.get("docsImported"),
+      len(r.get("conversations") or []), r.get("docsSkipped"), " — main Thread waits for the first chat" if r.get("pending") else ""))'
+            ;;
+        imports)
+            [ -n "$ws" ] || { echo "usage: k2 thread imports <ws>" >&2; exit 2; }
+            _compute_call GET /cli/thread/imports "ws=$(urlencode "$ws")" tcp
+            if [ "$json" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin).get("imports") or []
+if not rows:
+    print("No imported Threads."); sys.exit(0)
+for r in rows:
+    print("%-44s %-17s %5s lines  from %s on %s%s" % (r["localConversationId"], r["role"], r["docCount"], r["sourceHandle"], r["sourceHost"],
+          (" (" + r["name"] + ")") if r.get("name") else ""))'
+            ;;
+    esac
+}
+
 cmd_thread() {
     for arg in "$@"; do
         case "$arg" in
@@ -10740,6 +10797,7 @@ cmd_thread() {
         ask) cmd_thread_ask "$@"; return $? ;;
         secret) cmd_thread_secret "$@"; return $? ;;
         void) cmd_thread_void "$@"; return $? ;;
+        export|import|imports) cmd_thread_transfer "$@"; return $? ;;
         post)
             echo "Error: no 'post' subcommand — use  k2 thread <addr> \"text\"" >&2
             exit 1 ;;
@@ -19002,14 +19060,61 @@ def confirm(side, action, secret_id, label):
     return tok
 
 
-def carry_confirm(side, preview, choices):
-    """clone-carry confirm for Copy rows (vault slice A). Until the vault
-    slice is in this daemon the preview says secrets unavailable and no
-    row can be Copy, so reaching here without one is a bug."""
-    plan = preview.get("secrets", {}).get("confirm") or {}
-    if not plan.get("action"):
-        raise Fail("clone_carry_unavailable", "this server can't copy secrets in a clone yet; choose blank or skip", 3)
-    return confirm(side, plan["action"], plan.get("secretId"), plan.get("label") or "copy secrets")
+CLONE_ID = str(uuid.uuid4())
+
+
+def vault_target(side, label):
+    """The destination vault for a carry (`GET /cli/vault/recipient`), or
+    None (an older K2, or its vault is closed): then no secret travels."""
+    try:
+        r = call(side, "GET", "/cli/vault/recipient")
+    except Fail as e:
+        say("(secrets stay behind: %s's vault answered %s)" % (label, e.code))
+        return None
+    if not r.get("recipient") or not r.get("vaultId"):
+        return None
+    return {"recipient": r["recipient"], "vault_id": r["vaultId"], "label": label}
+
+
+def carry_ask(path, target, choices, env_files):
+    """Slice A's CarryAsk: the plan the clone-carry confirm is bound to."""
+    a = {"project_path": path, "clone_id": CLONE_ID, "secrets": choices,
+         "own_box_move": bool(OPTS.get("own")), "send_env_files": bool(env_files)}
+    if target:
+        a["vault_target"] = target
+    return a
+
+
+def carry_confirm(side, ask, pv):
+    """A fresh clone-carry confirm for exactly this plan (copies and/or
+    .env files): vault.sock on this computer, else the source's
+    /cli/clone/vault/confirm with the person's password."""
+    local = side[0] == "local" and VSOCK and os.path.exists(VSOCK)
+    reason = ((pv.get("secrets") or {}).get("confirm") or {}).get("reason") or "copy secrets in a clone"
+    if local:
+        methods = vault_sock("confirm/start", {"action": "clone-carry"}).get("methods") or []
+        body = {"action": "clone-carry", "clonePlan": ask}
+        if "local-auth" in methods:
+            say("Approve on this Mac (Touch ID or your login password): %s" % reason)
+            body["method"] = "local-auth"
+        elif "vault-password" in methods:
+            body.update(method="vault-password", password=password("Vault password (%s): " % reason))
+        else:
+            raise Fail("no_confirm_method", "set a vault password first: k2 vault confirm-password set (from a terminal outside K2)", 3)
+        tok = vault_sock("confirm/finish", body)["token"]
+        body.pop("password", None)
+        return tok
+    methods = ((pv.get("secrets") or {}).get("confirm") or {}).get("methods") or []
+    body = dict(ask)
+    if "connect-password" in methods:
+        body.update(method="connect-password", password=password("Your password on %s (%s): " % (side[1], reason)))
+    elif "vault-password" in methods:
+        body.update(method="vault-password", password=password("Vault password on %s (%s): " % (side[1], reason)))
+    else:
+        raise Fail("no_confirm_method", "%s offers no password confirm for you (an Owner or Admin login, or a vault password, is needed)" % side[1], 3)
+    tok = call(side, "POST", "/cli/clone/vault/confirm", body)["token"]
+    body.pop("password", None)
+    return tok
 
 
 def threads_value():
@@ -19038,7 +19143,7 @@ def ask_choice(row, default):
 
 def choose_secrets(preview):
     sec = preview.get("secrets") or {}
-    rows = sec.get("rows") or [] if sec.get("available") else []
+    rows = (sec.get("rows") or []) if sec.get("available") else []
     can_copy = bool(preview.get("callerCanCopySecrets"))
     flags = {}
     for key in ("copy", "blank", "skip"):
@@ -19047,55 +19152,68 @@ def choose_secrets(preview):
                 raise Fail("usage", "'%s' is named twice with different choices" % n, 2)
             flags[n] = key
     if flags and not rows:
-        raise Fail("clone_secrets_unavailable", "no secrets to choose on this server (or it can't carry secrets yet): drop --copy/--blank/--skip", 2)
+        raise Fail("clone_secrets_unavailable", "no secrets to choose here (none, or the destination's vault can't take a carry): drop --copy/--blank/--skip", 2)
     names = {r["name"] for r in rows}
     for n in flags:
         if n not in names:
             raise Fail("usage", "no secret '%s' in this agent's plan (k2 clone preview)" % n, 2)
     choices = {}
     for r in rows:
-        d = r.get("default", "skip")
-        if d == "copy" and not can_copy:
+        d = r.get("choice") or r.get("default") or "skip"
+        if d == "copy" and not (can_copy and r.get("copyable", False)):
             d = "blank"
         choices[r["name"]] = flags.get(r["name"], d)
     if rows and not flags and TTY:
         say("Secrets (names only). Enter keeps the default.")
         for r in rows:
-            choices[r["name"]] = ask_choice(r, choices[r["name"]])
+            choices[r["name"]] = ask_choice(dict(r, copyable=r.get("copyable", False) and can_copy), choices[r["name"]])
     for r in rows:
-        c = choices[r["name"]]
-        if c == "copy" and not r.get("copyable", True):
-            raise Fail("usage", "'%s' can't be copied (%s)" % (r["name"], r.get("note") or "not carried"), 2)
-    if any(c == "copy" for c in choices.values()) and not can_copy:
-        raise Fail("clone_secrets_owner_or_admin", "copying secrets needs an Owner or Admin; choose blank or skip", 3)
+        if choices[r["name"]] == "copy" and not r.get("copyable", False):
+            raise Fail("clone_secrets_owner_or_admin" if not can_copy else "usage",
+                       "'%s' can't be copied by you (%s)" % (r["name"], r.get("note") or "copying secrets needs an Owner or Admin"),
+                       3 if not can_copy else 2)
     return choices
 
 
-def preview(side, ws):
+def preview(side, ws, target=None):
     body = {"workspace": ws} if not ws.startswith("/") else {"project_path": ws}
     if OPTS.get("threadsSince"):
         body["sinceDays"] = int(OPTS["threadsSince"])
+    body["clone_id"] = CLONE_ID
+    body["own_box_move"] = bool(OPTS.get("own"))
+    if target:
+        body["vault_target"] = target
     return call(side, "POST", "/cli/clone/preview", body, timeout=600)
 
 
-def bundle_body(side, pv, choices):
+def env_files_wanted(pv):
+    if not OPTS.get("envFiles"):
+        return False
+    if not pv.get("envFiles"):
+        say("(no .env files to send)")
+        return False
+    return True
+
+
+def bundle_body(side, pv, choices, target, with_vault=True):
+    """bundle/pack body: Threads, the clone id, the vault half and the
+    clone-carry confirm when anything copies or .env files travel."""
     path = pv["workspace"]["path"]
-    body = {"project_path": path, "live_only": bool(OPTS.get("liveOnly")), "threads": threads_value()}
-    if choices:
-        body["secrets"] = choices
-    if OPTS.get("own"):
-        body["own_box_move"] = True
+    env = env_files_wanted(pv)
+    body = {"project_path": path, "live_only": bool(OPTS.get("liveOnly")), "threads": threads_value(),
+            "clone_id": CLONE_ID, "carry_secrets": env}
     if OPTS.get("proposal"):
         body["proposal_id"] = OPTS["proposal"]
-    if OPTS.get("envFiles"):
-        if not pv.get("envFiles"):
-            say("(no .env files to send)")
-        else:
-            body["carry_secrets"] = True
-            body["env_confirm_token"] = confirm(side, "clone-env", "env-files:" + path,
-                                                "send %d .env file(s) of %s as files" % (len(pv["envFiles"]), pv["workspace"]["handle"]))
-    if any(c == "copy" for c in choices.values()):
-        body["confirm_token"] = carry_confirm(side, pv, choices)
+    ask = carry_ask(path, target if with_vault else None, choices if with_vault else {}, env)
+    if with_vault and target:
+        body["vault_target"] = target
+        body["secrets"] = choices
+        body["own_box_move"] = bool(OPTS.get("own"))
+    copies = with_vault and any(c == "copy" for c in choices.values())
+    if copies or env:
+        if copies and not target:
+            raise Fail("clone_carry_unavailable", "the destination can't take a vault carry (older K2 or its vault is closed); choose blank or skip", 3)
+        body["confirm_token"] = carry_confirm(side, ask, pv)
     return body
 
 
@@ -19157,14 +19275,16 @@ def result_json(mode, pv, choices, unpacked, extra=None):
     out = {
         "ok": True,
         "mode": mode,
+        "cloneId": CLONE_ID,
         "source": pv["workspace"]["handle"],
         "destPath": unpacked.get("dest_path"),
         "project": {k: (unpacked.get("project") or {}).get(k) for k in ("id", "name", "path")},
         "threads": threads_value(),
         "secrets": choices,
     }
-    for k in ("threads_imported", "threads_skipped", "vault_imported", "vault_skipped", "cards_posted"):
-        if k in unpacked:
+    for k in ("threads_imported", "threads_skipped", "vault_imported", "vault_skipped", "vault_grants",
+              "vault_cards_posted", "vault_cards_deferred", "vault_cards_overflow", "vault_error", "threads_error"):
+        if unpacked.get(k) not in (None, [], ""):
             out[k] = unpacked[k]
     out.update(extra or {})
     return out
@@ -19192,10 +19312,11 @@ def show_plan(pv, where):
 
 
 def push(ws):
-    pv = preview(LOCAL, ws)
+    target = vault_target(REMOTE, REMOTE[1].split("://")[-1])
+    pv = preview(LOCAL, ws, target)
     show_plan(pv, "to %s" % REMOTE[1])
     choices = choose_secrets(pv)
-    body = bundle_body(LOCAL, pv, choices)
+    body = bundle_body(LOCAL, pv, choices, target)
     say("Building the bundle…")
     b = call(LOCAL, "POST", "/cli/clone/bundle", body, timeout=3600)
     home, sep = remote_home(REMOTE)
@@ -19215,10 +19336,11 @@ def push(ws):
 
 
 def pull(ws):
-    pv = preview(REMOTE, ws)
+    target = vault_target(LOCAL, "this computer")
+    pv = preview(REMOTE, ws, target)
     show_plan(pv, "from %s to this computer" % REMOTE[1])
     choices = choose_secrets(pv)
-    body = bundle_body(REMOTE, pv, choices)
+    body = bundle_body(REMOTE, pv, choices, target)
     say("Packing on %s…" % REMOTE[1])
     job = call(REMOTE, "POST", "/cli/clone/pack", body)["job_id"]
     deadline = time.time() + 3600
@@ -19248,16 +19370,24 @@ def pull(ws):
 
 
 def here(ws):
-    pv = preview(LOCAL, ws)
+    """A second copy on this server: the bundle carries files and Threads;
+    secrets are re-encrypted in place afterwards (/cli/clone/vault/copy)."""
+    target = vault_target(LOCAL, "a second copy on this server")
+    pv = preview(LOCAL, ws, target)
     show_plan(pv, "to a second copy on this server")
-    if OPTS.get("copy"):
-        raise Fail("clone_here_copy_unavailable", "copying secrets into a second copy on the same server comes with the duplicate update; choose blank or skip", 3)
     choices = choose_secrets(pv)
-    body = bundle_body(LOCAL, pv, choices)
+    body = bundle_body(LOCAL, pv, choices, target, with_vault=False)
     b = call(LOCAL, "POST", "/cli/clone/bundle", body, timeout=3600)
     dest = OPTS.get("dest") or os.path.dirname(pv["workspace"]["path"].rstrip("/"))
     u = call(LOCAL, "POST", "/cli/clone/unpack", {"bundle_path": b["bundle_path"], "dest_parent": dest}, timeout=3600)
-    return result_json("here", pv, choices, u)
+    extra = {}
+    if target and any(c != "skip" for c in choices.values()):
+        ask = carry_ask(pv["workspace"]["path"], target, choices, False)
+        cbody = dict(ask, new_project_path=u.get("dest_path"))
+        if any(c == "copy" for c in choices.values()):
+            cbody["confirm_token"] = carry_confirm(LOCAL, ask, pv)
+        extra["vault"] = call(LOCAL, "POST", "/cli/clone/vault/copy", cbody, timeout=600)
+    return result_json("here", pv, choices, u, extra)
 
 
 def find_proposal(token):

@@ -515,6 +515,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/vault/restore",
         "/cli/vault/backup",
         "/cli/vault/legacy-export",
+        // Thread export / import (T4) are people only (the `/cli/thread`
+        // allow prefix would otherwise admit them). Covers `imports`.
+        "/cli/thread/export",
+        "/cli/thread/import",
     ];
     if DENY_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return false;

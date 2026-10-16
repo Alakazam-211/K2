@@ -50,6 +50,12 @@
 //     default): pinned agents stay first, then the agents you last messaged
 //     from a Garden, newest first (`zen-recent-first.ts`). ⌘↑ / ⌘↓ follow
 //     what's drawn; ⌘1–9 keep the Home's own order.
+// 0.46.0 (Garden 1's template sets both; an older daemon sends neither):
+//   - `pin-limit`: the grid holds the first N pinned agents (Garden 1: 9,
+//     3 × 3); pinned agents past it head the list.
+//   - `recent-first`: the Garden's default for "Recent agents first" until
+//     the person picks on this computer (Garden 1: on).
+//   The cog's settings also pick this Garden's theme.
 // Only Gardens read any of this; the app's Agents page doesn't change.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -66,13 +72,14 @@ import { zenGardenHomeKey } from '@/lib/zen/zen-garden-homes'
 import { zenAgentsSource } from '@/lib/zen/zen-rail-views'
 import type { ZenFocusGroups } from '@/lib/zen/zen-data'
 import FocusGroupDropdown from '@/components/Sidebar/FocusGroupDropdown'
-import { useZenRecentFirstStore } from '@/lib/zen/zen-recent-first'
+import { useZenRecentFirst, useZenRecentFirstStore, zenRecentFirstProp } from '@/lib/zen/zen-recent-first'
 import {
   ZEN_PIN_COL_GAP,
   ZEN_PIN_GRID_BOTTOM_PX,
   ZEN_PIN_ROW_GAP,
   zenAgentsDisplay,
   zenPinAvatarPx,
+  zenPinLimit,
   zenPinGridCentred,
   zenPinGridColumns,
 } from '@/lib/zen/zen-pin-grid'
@@ -594,9 +601,15 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
   const home = homes.find((h) => h.id === homeId) ?? null
   // 0.45.6 Garden 1: the pin grid (`pins`, not in one-agent mode) and
   // "Recent agents first" (the Garden's own setting, this computer).
-  const recentFirst = useZenRecentFirstStore((s) => s.on)
+  // 0.46.0: `recent-first` is the Garden's default (the person's own
+  // choice on this computer wins); `pin-limit` caps the grid. Both unset on
+  // an older daemon: today's behaviour.
+  const recentFirstDefault = zenRecentFirstProp(decl.props)
+  const recentFirst = useZenRecentFirst(recentFirstDefault)
   const sent = useZenRecentFirstStore((s) => s.sent)
-  const { pins, list } = zenAgentsDisplay(rows, { grid: decl.props.pins === true && !agent, recentFirst, sent })
+  const pinsOn = decl.props.pins === true && !agent
+  const pinLimit = zenPinLimit(decl.props)
+  const { pins, list } = zenAgentsDisplay(rows, { grid: pinsOn, recentFirst, sent, limit: pinLimit })
   const settingsOn = decl.props.settings === true
   // ⌘↑ / ⌘↓ walk what's drawn: the grid, then the list.
   const rowsRef = useRef(rows)
@@ -667,7 +680,14 @@ export function ZenAgentsWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Ele
         <span>{agent ? 'Agent' : 'Agents'}</span>
         {picker && <HomePicker homes={homes} current={home} onPick={pickHome} />}
         {groups?.enabled && <FocusGroupPicker bridge={bridge} groups={groups} />}
-        {settingsOn && <ZenGardenSettingsButton />}
+        {settingsOn && (
+          <ZenGardenSettingsButton
+            gardenId={gardenId || null}
+            pinsOn={pinsOn}
+            pinLimit={pinLimit}
+            recentFirstDefault={recentFirstDefault}
+          />
+        )}
       </div>
       {rows.length === 0 ? (
         <div

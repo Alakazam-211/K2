@@ -13,6 +13,8 @@ import {
   zenPinGridCentred,
   zenPinGridColumns,
   zenPinGridRows,
+  zenPinGridText,
+  zenPinLimit,
 } from './zen-pin-grid'
 
 describe('zenPinGridColumns', () => {
@@ -93,5 +95,74 @@ describe('zenAgentsDisplay', () => {
 
   it('splitZenPins with the grid off keeps every row in the list', () => {
     expect(splitZenPins(list, (r) => r.pinned === true, false)).toEqual({ pins: [], rest: list })
+  })
+})
+
+describe('pin-limit (0.46.0: Garden 1 sets 9)', () => {
+  // Twelve pinned rows with an unpinned row after every fourth.
+  const many: Row[] = []
+  for (let i = 1; i <= 12; i++) {
+    many.push({ address: `p${i}::local`, pinned: true })
+    if (i % 4 === 0) many.push({ address: `u${i / 4}::local` })
+  }
+  const pinned = (n: number): string[] => Array.from({ length: n }, (_, i) => `p${i + 1}::local`)
+
+  it('the first nine pinned rows go to the grid, the 10th on head the list, order kept', () => {
+    const d = zenAgentsDisplay(many, { grid: true, recentFirst: false, sent: {}, limit: 9 })
+    expect(order(d.pins)).toEqual(pinned(9))
+    expect(order(d.list)).toEqual(['p10::local', 'p11::local', 'p12::local', 'u1::local', 'u2::local', 'u3::local'])
+  })
+
+  it('nine or fewer pins: all in the grid, the list unchanged', () => {
+    const rows: Row[] = Array.from({ length: 9 }, (_, i) => ({ address: `p${i}::local`, pinned: true }))
+    rows.splice(4, 0, { address: 'x::local' })
+    const d = zenAgentsDisplay(rows, { grid: true, recentFirst: false, sent: {}, limit: 9 })
+    expect(d.pins).toHaveLength(9)
+    expect(order(d.list)).toEqual(['x::local'])
+  })
+
+  it('with recent first on, the overflow pins still head the list, before the newest sends', () => {
+    const d = zenAgentsDisplay(many, { grid: true, recentFirst: true, sent: { 'u3::local': 9, 'p11::local': 99 }, limit: 9 })
+    expect(order(d.pins)).toEqual(pinned(9))
+    expect(order(d.list)).toEqual(['p10::local', 'p11::local', 'p12::local', 'u3::local', 'u1::local', 'u2::local'])
+  })
+
+  it('no limit (unset, older daemon): every pinned row in the grid, as before', () => {
+    const d = zenAgentsDisplay(many, { grid: true, recentFirst: false, sent: {} })
+    expect(order(d.pins)).toEqual(pinned(12))
+    expect(order(d.list)).toEqual(['u1::local', 'u2::local', 'u3::local'])
+    expect(zenAgentsDisplay(many, { grid: true, recentFirst: false, sent: {}, limit: null })).toEqual(d)
+  })
+
+  it('grid off ignores the limit: the view’s own order', () => {
+    const d = zenAgentsDisplay(many, { grid: false, recentFirst: false, sent: {}, limit: 9 })
+    expect(d.pins).toEqual([])
+    expect(order(d.list)).toEqual(order(many))
+  })
+
+  it('splitZenPins: limit 1 keeps one pin and moves the rest to the list head', () => {
+    const rows: Row[] = [{ address: 'a' }, { address: 'p1', pinned: true }, { address: 'b' }, { address: 'p2', pinned: true }]
+    const s = splitZenPins(rows, (r) => r.pinned === true, true, 1)
+    expect(order(s.pins)).toEqual(['p1'])
+    expect(order(s.rest)).toEqual(['p2', 'a', 'b'])
+  })
+
+  it('zenPinLimit reads only an integer of 1 or more', () => {
+    expect(zenPinLimit({ 'pin-limit': 9 })).toBe(9)
+    expect(zenPinLimit({ 'pin-limit': 1 })).toBe(1)
+    expect(zenPinLimit({})).toBeNull()
+    expect(zenPinLimit({ 'pin-limit': 0 })).toBeNull()
+    expect(zenPinLimit({ 'pin-limit': -3 })).toBeNull()
+    expect(zenPinLimit({ 'pin-limit': 2.5 })).toBeNull()
+    expect(zenPinLimit({ 'pin-limit': '9' })).toBeNull()
+    expect(zenPinLimit({ 'pin-limit': null })).toBeNull()
+    expect(zenPinLimit({ 'pin-limit': Number.NaN })).toBeNull()
+  })
+
+  it('zenPinGridText: 3 × 3 (9) for nine, “up to” for a partial row, “no limit” for none', () => {
+    expect(zenPinGridText(9)).toBe('3 × 3 (9)')
+    expect(zenPinGridText(6)).toBe('3 × 2 (6)')
+    expect(zenPinGridText(10)).toBe('3 across, up to 10')
+    expect(zenPinGridText(null)).toBe('3 across, no limit')
   })
 })

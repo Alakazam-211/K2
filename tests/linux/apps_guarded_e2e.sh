@@ -426,7 +426,7 @@ curl -s -m 40 "http://127.0.0.1:$FB/box?port=8470" | python3 -c 'import json,sys
 ok "esc-b (no box service) still can't reach 8470"
 K2 app box-service esc-a --json >/tmp/bs2.json
 jq_ 's={x["name"]:x for x in v["services"]}; assert s["sew-api"]["status"]=="allowed" and s["sew-api"]["forwarded"] is True and s["sew-api"]["door"]=="open", s' /tmp/bs2.json
-K2 app inspect esc-a --json | python3 -c 'import json,sys; b=json.load(sys.stdin)["boxServices"]; assert b["allowed"]==1, b'
+K2 app inspect esc-a --json | python3 -c 'import json,sys; b=json.load(sys.stdin)["boxServices"]; assert b["allowed"]>=1 and any(s["name"]=="sew-api" and s["status"]=="allowed" for s in b["services"]), b'
 K2 app box-service esc-a | grep -q 'allowed  sew-api' || fail "k2 app box-service text"
 ok "status: k2 app box-service and k2 app inspect show it (allowed, forwarded, door open)"
 

@@ -140,9 +140,12 @@ export interface ServerIconProps extends K2IconProps {
   label?: string
 }
 
+/** Inside width of a rack frame: x 2 to 22, less half the stroke each side. */
+const SERVER_FRAME_INNER_WIDTH = 20 - K2_ICON_STROKE
 /** The rack LED: a short bar starting at Lucide's dot (x 4.25), the old
- *  square's height and 3x its width (Rosson 2026-10-16), inside the frame. */
-export const SERVER_LED = { x: 4.25, width: 10.5, height: 3.5, y: [4.25, 16.25] } as const
+ *  square's 3.5 height, spanning half the frame's inside width (9.125;
+ *  Rosson 2026-10-16). */
+export const SERVER_LED = { x: 4.25, width: SERVER_FRAME_INNER_WIDTH / 2, height: 3.5, y: [4.25, 16.25] } as const
 
 /** Server: Lucide `server`, squared. Its two rack LEDs are short filled
  *  bars: in the status colour with `ledColor` (the connection light: the

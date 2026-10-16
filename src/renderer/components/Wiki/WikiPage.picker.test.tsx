@@ -180,8 +180,8 @@ describe('Wiki header workspace picker', () => {
     expect(screen.queryByRole('button', { name: 'Global' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Local' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Projects' })).toBeTruthy()
-    // Workspace-only actions are off on the server-wide map.
-    expect((screen.getByRole('button', { name: 'Serve: OFF' }) as HTMLButtonElement).disabled).toBe(true)
+    // W0: wiki hosting (Serve / Public chat) is hidden until the runtime rebuild.
+    expect(screen.queryByRole('button', { name: /^Serve/ })).toBeNull()
     await waitFor(() => expect(screen.getByText('No workspace wikis on this server yet.')).toBeTruthy())
     expect(screen.queryByText('No knowledge base yet')).toBeNull()
     expect(usePageViewStore.getState().page).toBe('wiki')
@@ -190,7 +190,7 @@ describe('Wiki header workspace picker', () => {
     fireEvent.click(openMenu().querySelector('[data-ws-filter-value="/w/cortana"]') as HTMLElement)
     await waitFor(() => expect(h.indexCalls).toContainEqual({ project: '/w/cortana', scope: undefined }))
     expect(screen.getByRole('button', { name: 'Global' }).className).toContain('bg-[var(--color-accent)]/15')
-    expect((screen.getByRole('button', { name: 'Serve: OFF' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByRole('button', { name: /^Serve/ })).toBeNull()
   })
 
   it('a worktree wiki (nav View Wiki) shows its workspace in the picker', () => {

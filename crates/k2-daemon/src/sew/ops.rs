@@ -73,6 +73,9 @@ pub trait SewOps: Send + Sync {
     /// A file the daemon user can read (`--tarball`, `--recovery-key-file`).
     fn read_file(&self, path: &Path, cap: usize) -> Result<Vec<u8>, String>;
     fn path_exists(&self, path: &str) -> bool;
+    /// Whether `path` exists as the daemon user sees it: `Some(true)` /
+    /// `Some(false)`, `None` when it can't tell (a parent it may not enter).
+    fn path_probe(&self, path: &str) -> Option<bool>;
     fn systemd_version(&self) -> Option<u32>;
     /// Postgres majors with `postgres`, `initdb`, `pg_dump`, `pg_restore`
     /// under `/usr/lib/postgresql/<M>/bin/`.
@@ -234,6 +237,15 @@ impl SewOps for RealOps {
     }
     fn path_exists(&self, path: &str) -> bool {
         std::fs::symlink_metadata(path).is_ok()
+    }
+    fn path_probe(&self, path: &str) -> Option<bool> {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => Some(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
+            // ENOTDIR: a parent is a file, so the path can't exist.
+            Err(e) if e.raw_os_error() == Some(20) => Some(false),
+            Err(_) => None,
+        }
     }
     fn systemd_version(&self) -> Option<u32> {
         let o = std::process::Command::new("/usr/bin/systemctl").arg("--version").output().ok()?;
@@ -538,6 +550,9 @@ pub mod fake {
         pub mgmt_backups: Mutex<Vec<Value>>,
         pub files: Mutex<HashMap<String, Vec<u8>>>,
         pub exists: Mutex<Vec<String>>,
+        /// Directories the daemon user may not enter (`path_probe` → `None`
+        /// for anything under them).
+        pub unreadable: Mutex<Vec<String>>,
         pub taken: Mutex<Vec<(u16, bool)>>,
         pub systemd: Mutex<Option<u32>>,
         pub pg: Mutex<Vec<u32>>,
@@ -617,8 +632,13 @@ pub mod fake {
                     json!({"id": "20260102T031500Z", "kind": "scheduled", "created_at": "2026-01-02T03:15:00Z", "bytes": 120, "schema_version": 920002, "sew_version": pin}),
                     json!({"id": "20260101T031500Z", "kind": "scheduled", "created_at": "2026-01-01T03:15:00Z", "bytes": 100, "schema_version": 920002, "sew_version": pin}),
                 ]),
-                files: Mutex::new(HashMap::new()),
+                // A fresh box: no `sew` user yet.
+                files: Mutex::new(HashMap::from([(
+                    crate::sew::service_user::PASSWD.to_string(),
+                    b"root:x:0:0:root:/root:/bin/bash\nk2:x:1001:1001::/home/k2:/bin/bash\n".to_vec(),
+                )])),
                 exists: Mutex::new(vec![]),
+                unreadable: Mutex::new(vec![]),
                 taken: Mutex::new(vec![]),
                 systemd: Mutex::new(Some(255)),
                 pg: Mutex::new(vec![16]),
@@ -889,6 +909,14 @@ pub mod fake {
         }
         fn path_exists(&self, path: &str) -> bool {
             self.exists.lock().unwrap().iter().any(|p| p == path)
+        }
+        fn path_probe(&self, path: &str) -> Option<bool> {
+            let hidden = self.unreadable.lock().unwrap().iter().any(|d| path.starts_with(&format!("{}/", d.trim_end_matches('/'))));
+            if hidden {
+                None
+            } else {
+                Some(self.path_exists(path))
+            }
         }
         fn systemd_version(&self) -> Option<u32> {
             *self.systemd.lock().unwrap()

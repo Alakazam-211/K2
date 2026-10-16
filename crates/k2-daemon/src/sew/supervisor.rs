@@ -425,6 +425,9 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
     } else {
         c.push(check("turn_443", "info", ":443 is free", "TURN on 443 could be offered (voice)"));
     }
+    // Sew adopts an existing `sew` user as its service account: never a
+    // login account (sewlab 2026-10-16). Sew's own account passes.
+    c.push(super::service_user::preflight_check(env.ops));
     let row = store::load();
     let has_key = master_key_present(env, row.as_ref());
     let data = env.ops.path_exists(SEW_DATA_DIR) || env.ops.path_exists(SEW_CONFIG_DIR);
@@ -455,6 +458,23 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
 
 fn failed(checks: &[Value]) -> bool {
     checks.iter().any(|c| c["status"] == "fail")
+}
+
+/// The enable refusal's hint: the failing checks in words, so `k2 hostchat
+/// enable` says why without the report.
+fn refusal_hint(checks: &[Value]) -> String {
+    let why: Vec<String> = checks
+        .iter()
+        .filter(|c| c["status"] == "fail")
+        .map(|c| {
+            let d = c["detail"].as_str().unwrap_or_default().trim_end_matches('.');
+            match c["hint"].as_str().unwrap_or_default() {
+                "" => format!("{d}."),
+                h => format!("{d}. {h}"),
+            }
+        })
+        .collect();
+    format!("the box is not ready for Sew; nothing was changed. {}", why.join(" "))
 }
 
 // ── progress ─────────────────────────────────────────────────────────────
@@ -522,10 +542,7 @@ pub fn enable_begin<'a>(env: &Env<'a>, req: &EnableRequest) -> R<Result<Latch<'a
     let latch = begin(env)?;
     let checks = preflight(env, req);
     if failed(&checks) {
-        return Err(with(
-            no("preflight_failed", 409, "the box is not ready for Sew; nothing was changed (see report)"),
-            json!({"report": checks}),
-        ));
+        return Err(with(no("preflight_failed", 409, refusal_hint(&checks)), json!({"report": checks})));
     }
     let now = env.ops.now();
     let mut row = store::load().unwrap_or_else(|| Row::new(pinned().version, now));

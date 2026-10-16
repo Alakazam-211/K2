@@ -17,7 +17,13 @@ import {
   writeWindowChrome,
 } from '@/lib/window-chrome'
 
-type PanelTab = 'files' | 'changes' | 'history' | 'workspace'
+// 0.46.0 (Rosson 2026-10-16): the right drawer's Changes tab is replaced by
+// Agent (the room's agent: picture, color, name, handle, permissions). The
+// Changes panel itself stays in the repo (`components/ChangesPanel`); saved
+// layouts that name 'changes' migrate to 'agent' (`migrateTab` below). To
+// offer Changes again: add 'changes' back here, in TabbedPanel's labels and
+// WorkspaceDrawers' bodies, and drop the 'changes' → 'agent' migration.
+export type PanelTab = 'files' | 'agent' | 'history' | 'workspace'
 
 interface PanelsState {
   // Left auxiliary panel (between projects sidebar and terminal)
@@ -109,7 +115,7 @@ export const usePanelsStore = create<PanelsState>((set, get) => ({
   rightPanelOpen: bootChrome?.rightOpen ?? true,
   rightPanelWidth: SIDEBAR_DEFAULT_WIDTH,
   rightPanelActiveTab: 'history',
-  rightPanelTabs: ['history', 'changes'],
+  rightPanelTabs: ['history', 'agent'],
 
   focusWorkspaceHeaderSide: 'left',
 
@@ -211,9 +217,12 @@ export const usePanelsStore = create<PanelsState>((set, get) => ({
       const settings = await settingsGet()
 
       // Migrate old tab names to new ones
-      const VALID_TABS: PanelTab[] = ['files', 'changes', 'history', 'workspace']
+      const VALID_TABS: PanelTab[] = ['files', 'agent', 'history', 'workspace']
       const migrateTab = (t: string): PanelTab | null => {
         if (t === 'agents' || t === 'reviews') return 'workspace'
+        // 0.46.0: the Changes tab became Agent; a saved layout keeps its
+        // place (same side, same order) and never lands on a missing tab.
+        if (t === 'changes') return 'agent'
         // 0.36.0 had a short-lived 'heartbeats' drawer tab that has
         // since folded back into the Workspace panel. Drop it from
         // saved layouts so users don't see a stale tab they can't
@@ -233,11 +242,20 @@ export const usePanelsStore = create<PanelsState>((set, get) => ({
         : ['files', 'workspace'] as PanelTab[]
       let rightTabs = settings.rightPanelTabs?.length
         ? migrateTabs(settings.rightPanelTabs as string[])
-        : ['history', 'changes'] as PanelTab[]
+        : ['history', 'agent'] as PanelTab[]
 
       // Ensure 'workspace' only appears on one side — prefer left
       if (leftTabs.includes('workspace') && rightTabs.includes('workspace')) {
         rightTabs = rightTabs.filter((t) => t !== 'workspace')
+      }
+      // Same for 'agent' (a layout could name both 'changes' and 'agent').
+      if (leftTabs.includes('agent') && rightTabs.includes('agent')) {
+        rightTabs = rightTabs.filter((t) => t !== 'agent')
+      }
+      // Tabs move between sides but are never removed, so a layout without
+      // Agent predates it: offer it on the right.
+      if (!leftTabs.includes('agent') && !rightTabs.includes('agent')) {
+        rightTabs = [...rightTabs, 'agent']
       }
 
       let leftActive = settings.leftPanelActiveTab

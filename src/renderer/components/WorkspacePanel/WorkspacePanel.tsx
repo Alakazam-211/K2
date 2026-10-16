@@ -1,9 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
-import { agentDisplayName, agentHandle } from '@/lib/workspace-agent'
-import { onAgentIdentityChanged } from '@/stores/session-events'
-import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-identity'
 // Plan B — projects_update / workspaces_delete AND the daemon-data git
 // reads/mutations (git_remove_worktree) are host-aware: route through
 // the `/cli/*` HTTP layer (local OR remote). open_in_finder + the
@@ -34,8 +30,6 @@ import { scopedKey } from '@/kessel/server-scope'
 export default function WorkspacePanel(): React.JSX.Element {
   // Home M3 — the drawer's room: its server, its tabs, its collapse keys.
   const room = useRoom()
-  const [displayName, setDisplayName] = useState('')
-  const [handle, setHandle] = useState('')
   const [wsInboxCount, setWsInboxCount] = useState(0)
   const [showWorktreeDialog, setShowWorktreeDialog] = useState(false)
 
@@ -106,46 +100,6 @@ export default function WorkspacePanel(): React.JSX.Element {
     return () => { cancelled = true; clearInterval(interval) }
   }, [activeProjectId, activeProjectPath, room])
 
-  useEffect(() => {
-    if (!activeProjectPath) {
-      setDisplayName('')
-      setHandle('')
-      return
-    }
-    let cancelled = false
-    const loadName = (): void => {
-      void agentDisplayName(room.scope, activeProjectPath)
-        .then((n) => { if (!cancelled) setDisplayName(n) })
-        .catch(() => { if (!cancelled) setDisplayName('') })
-      void agentHandle(room.scope, activeProjectPath)
-        .then((h) => { if (!cancelled) setHandle(h) })
-        .catch(() => { if (!cancelled) setHandle('') })
-    }
-    loadName()
-    let unlisten: (() => void) | undefined
-    // MS14/MS67: `sync:projects` is THIS computer's daemon; a room on
-    // another server never hears it.
-    if (room.localCommands) {
-      void listen('sync:projects', () => { loadName() }).then((fn) => {
-        if (cancelled) fn()
-        else unlisten = fn
-      })
-    }
-    // Agent rename live update: the room's own server says who renamed
-    // what (any client, the CLI, a Connect user). Reaches every viewer.
-    const offIdentity = onAgentIdentityChanged(room.scope, (e) => {
-      if (cancelled || !agentIdentityMatchesPath(e, activeProjectPath)) return
-      const n = agentIdentityDisplayName(e)
-      if (n) setDisplayName(n)
-      if (e.handle) setHandle(e.handle)
-    })
-    return () => {
-      cancelled = true
-      unlisten?.()
-      offIdentity()
-    }
-  }, [activeProjectPath, room])
-
   const agentMode = activeProject?.agentMode || 'off'
   const workspaces = activeProject?.workspaces ?? []
   // Filter to only worktree workspaces (not the main workspace)
@@ -166,31 +120,30 @@ export default function WorkspacePanel(): React.JSX.Element {
 
   return (
     <div className="h-full min-h-0 flex flex-col overflow-hidden">
-      {/* ── Status ── */}
-      <div className="flex-shrink-0 px-3 py-3 border-b border-[var(--color-border)]">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0 flex-1 space-y-1">
-            {(displayName || activeProject.name) && (
-              <div className="flex items-baseline gap-2 min-w-0">
-                <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0">
-                  Display Name
-                </span>
-                <span className="text-xs text-[var(--color-text-primary)] truncate">
-                  {displayName || activeProject.name}
-                </span>
-              </div>
-            )}
-            {(handle || activeProject.handle) && (
-              <div className="flex items-baseline gap-2 min-w-0">
-                <span className="text-[10px] uppercase tracking-wider text-[var(--color-text-muted)] flex-shrink-0">
-                  Handle
-                </span>
-                <span className="text-xs font-mono text-[var(--color-text-primary)] truncate">
-                  {handle || activeProject.handle}
-                </span>
-              </div>
-            )}
-          </div>
+      {/* ── Status ── The agent's name, handle, picture and color live on
+          the Agent drawer tab (0.46.0). Here: View Wiki, then the
+          completion bell at the top right. */}
+      <div className="flex-shrink-0 px-3 py-2 border-b border-[var(--color-border)]">
+        <div className="flex items-center justify-end gap-1.5" data-testid="workspace-panel-header">
+          {/* Workspace knowledge base / brain map (prd-workspace-kb). The Wiki
+              page reads the window's server, so a room on another server
+              does not offer it (MS3: B's path means nothing on A). */}
+          {room.isPrimary && (
+            <button
+              type="button"
+              className="flex items-center gap-1.5 px-2 py-1 hover:bg-[var(--color-bg-elevated)] transition-colors cursor-pointer no-drag"
+              onClick={() => usePageViewStore.getState().openWiki(activeProject.path)}
+              title="Open the workspace knowledge base graph"
+            >
+              <svg className="w-3 h-3 text-[var(--color-accent)] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="6" cy="6" r="2.5" />
+                <circle cx="18" cy="8" r="2.5" />
+                <circle cx="10" cy="18" r="2.5" />
+                <path d="M8 7.5l7 0.5M8 16.5l8-7" />
+              </svg>
+              <span className="text-[11px] text-[var(--color-text-primary)]">View Wiki</span>
+            </button>
+          )}
           <WorkspaceCompletionSoundBell project={activeProject} />
         </div>
 
@@ -198,7 +151,7 @@ export default function WorkspacePanel(): React.JSX.Element {
             workspace has undelegated inbox items. */}
         {agentMode === 'off' && wsInboxCount > 0 && (
           <div
-            className="mt-2.5 px-2 py-1.5 hover:bg-[var(--color-bg-elevated)] transition-colors cursor-pointer -mx-1"
+            className="mt-2 px-2 py-1.5 hover:bg-[var(--color-bg-elevated)] transition-colors cursor-pointer -mx-1"
             onClick={() => openAgentPane('__workspace__', activeProject.path)}
           >
             <div className="flex items-center gap-2">
@@ -210,25 +163,6 @@ export default function WorkspacePanel(): React.JSX.Element {
             </div>
           </div>
         )}
-
-        {/* Workspace knowledge base / brain map (prd-workspace-kb). The Wiki
-            page reads the window's server, so a room on another server
-            does not offer it (MS3: B's path means nothing on A). */}
-        {room.isPrimary && <div
-          className="mt-2.5 px-2 py-1.5 hover:bg-[var(--color-bg-elevated)] transition-colors cursor-pointer -mx-1"
-          onClick={() => usePageViewStore.getState().openWiki(activeProject.path)}
-          title="Open the workspace knowledge base graph"
-        >
-          <div className="flex items-center gap-2">
-            <svg className="w-3 h-3 text-[var(--color-accent)] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="6" cy="6" r="2.5" />
-              <circle cx="18" cy="8" r="2.5" />
-              <circle cx="10" cy="18" r="2.5" />
-              <path d="M8 7.5l7 0.5M8 16.5l8-7" />
-            </svg>
-            <span className="text-[11px] text-[var(--color-text-primary)]">View Wiki</span>
-          </div>
-        </div>}
       </div>
 
       {showWorktreeDialog && (

@@ -16,7 +16,6 @@ import { focusedRoom } from '../../stores/window-room'
 import { roomActiveProject } from '../../stores/room'
 import { assistantRefusalFor } from '../../lib/workspace-ops-router'
 import { useProjectsStore } from '../../stores/projects'
-import { usePanelsStore } from '../../stores/panels'
 import { useMergeDialogStore } from '../MergeDialog/MergeDialog'
 import { useToastStore } from '../../stores/toast'
 import { usePresetsStore } from '../../stores/presets'
@@ -450,16 +449,16 @@ async function executeToolCalls(toolCalls: ToolCall[]): Promise<string> {
             }
             results.push(`Diff: ${file}`)
           } else {
-            // No specific file — activate changes panel
-            usePanelsStore.getState().activateTab('changes')
-            results.push('Changes panel')
+            // No specific file. 0.46.0: the drawers no longer offer a
+            // Changes tab (Agent replaced it), so there is no panel to open.
+            results.push('No Changes panel (name a file to see its diff)')
           }
           break
         }
 
         case 'show_changes': {
-          usePanelsStore.getState().activateTab('changes')
-          results.push('Changes panel')
+          // 0.46.0: the drawers no longer offer a Changes tab.
+          results.push('No Changes panel (name a file to see its diff)')
           break
         }
 

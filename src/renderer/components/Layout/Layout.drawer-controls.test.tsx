@@ -75,7 +75,7 @@ beforeEach(() => {
     leftPanelWidth: 260,
     rightPanelWidth: 260,
     leftPanelTabs: ['files', 'workspace'],
-    rightPanelTabs: ['history', 'changes'],
+    rightPanelTabs: ['history', 'agent'],
   })
   onPage('agents')
 })

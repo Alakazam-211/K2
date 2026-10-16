@@ -359,6 +359,30 @@ pub fn chain_matches(chain: &str, host: &str, key: &rcgen::KeyPair) -> Result<i6
     Ok(cert.validity().not_after.timestamp())
 }
 
+/// The cert K2 already holds, when it is for this host and key and
+/// outside the renewal window (an install re-run must not spend K2
+/// Connect's turn budget: 5 issuances / 24 h / label).
+fn reusable(env: &Env, label: &str, st: &VoiceState) -> Option<(String, String)> {
+    let chain = st.cert_pem.as_deref()?;
+    if st.cert_not_after.map_or(true, |t| t - env.ops.now() < RENEW_WINDOW_SECS) {
+        return None;
+    }
+    let key_pem = env.secrets.resolve(st.turn_key_ref.as_deref()?).ok()??;
+    let key = rcgen::KeyPair::from_pem(&key_pem).ok()?;
+    chain_matches(chain, &turn_host(label), &key).ok()?;
+    Some((chain.to_string(), key_pem))
+}
+
+/// DNS (always: it also tells K2 the box's IP), then the cert K2 holds or a
+/// new one for the vault key. Returns (chain, key PEM, dns).
+fn issue_or_reuse(env: &Env, label: &str, st: &mut VoiceState, manual_ip: Option<&str>) -> R<(String, String, TurnDns)> {
+    if let Some((chain, key_pem)) = reusable(env, label, st) {
+        let dns = turn_dns(env, label, manual_ip)?;
+        return Ok((chain, key_pem, dns));
+    }
+    issue(env, label, st, manual_ip)
+}
+
 /// DNS, then a cert for the vault key. Returns (chain, key PEM, dns).
 fn issue(env: &Env, label: &str, st: &mut VoiceState, manual_ip: Option<&str>) -> R<(String, String, TurnDns)> {
     let dns = turn_dns(env, label, manual_ip)?;
@@ -483,7 +507,7 @@ fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
 
     step(env, "turn-dns");
     step(env, "turn-cert");
-    let (chain, key_pem, dns) = issue(env, &label, &mut st, req.node_ip.as_deref())?;
+    let (chain, key_pem, dns) = issue_or_reuse(env, &label, &mut st, req.node_ip.as_deref())?;
     save(env, &mut st);
     let node_ip = match &req.node_ip {
         Some(ip) => ip.clone(),
@@ -694,7 +718,7 @@ pub fn renew(env: &Env, force: bool) -> R<Value> {
             let ip = node_ip_of(&dns);
             if st.node_ip.as_deref() != Some(ip.as_str()) {
                 let body = json!({"node_ip": ip});
-                sup::sew_run(env, &["media", "reconfigure"], Some(body.to_string().as_bytes()))
+                sup::sew_run(env, &["media", "reconfigure", "restart-now"], Some(body.to_string().as_bytes()))
                     .map_err(|e| no("media_reconfigure_failed", 500, e))?;
                 moved = Some(ip.clone());
                 st.node_ip = Some(ip);

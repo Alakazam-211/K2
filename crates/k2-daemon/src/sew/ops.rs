@@ -768,7 +768,9 @@ pub mod fake {
                     active(UNIT_MEDIA);
                     Self::sew_exit(0, json!({"changed": ["sew-media"], "warnings": []}))
                 }
-                "engine sew media reconfigure" => Self::sew_exit(0, json!({"changed": ["/etc/sew/sew.toml [voice]"]})),
+                "engine sew media reconfigure" | "engine sew media reconfigure restart-now" => {
+                    Self::sew_exit(0, json!({"changed": ["/etc/sew/sew.toml [voice]"]}))
+                }
                 "engine sew media turn-cert" => Self::sew_exit(0, json!({"changed": ["turn-tls/fullchain.pem"]})),
                 "engine sew media status" => Self::sew_exit(0, self.media_state.lock().unwrap().clone()),
                 "engine sew media uninstall" => {

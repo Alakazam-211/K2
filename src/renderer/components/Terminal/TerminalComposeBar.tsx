@@ -83,6 +83,10 @@ import {
   ThreadRoundButton,
   ThreadSendButton,
   THREAD_COMPOSE_BOX_EDGE,
+  ThreadComposeStackSpacer,
+  threadComposeLines,
+  threadComposeStackNext,
+  threadComposeTextSlotStyle,
 } from '@/components/Thread/ThreadZenKit'
 
 /** Shown when Thread Send runs before this cell has its own address. The draft stays. */
@@ -250,15 +254,16 @@ export function TerminalComposeBar({
   // Auto-grow with real draft text only. Empty boxes stay one line —
   // the long placeholder used to wrap (especially before width settled
   // or on a hidden tab) and pin every bar at the 160px cap until typed.
-  // PREVIEW (THREAD_COMPOSE_STACK_PREVIEW): the Thread box stacks past 3 lines.
+  // The Thread's box stacks past 3 lines (text above, buttons under it;
+  // Rosson 2026-10-16: "really clean"). The rule is the shared kit's.
   const [stacked, setStacked] = useState(false)
   const autoGrow = useCallback(() => {
     const el = textareaRef.current
     if (!el || isEffectivelyHidden(el)) return
     applyComposeTextareaAutosize(el, editorFontSize)
-    if (zenLook && THREAD_COMPOSE_STACK_PREVIEW) {
-      const lines = el.value ? Math.max(1, Math.round((el.scrollHeight - 8) / (editorFontSize * 1.4))) : 1
-      setStacked((cur) => composeStackNext({ stacked: cur, lines, width: el.clientWidth }))
+    if (zenLook) {
+      const lines = threadComposeLines(el, editorFontSize * 1.4, 8)
+      setStacked((cur) => threadComposeStackNext({ stacked: cur, lines, width: el.clientWidth, rowChrome: composeRowChromeWidth() }))
     }
   }, [editorFontSize, zenLook])
 
@@ -1021,13 +1026,13 @@ export function TerminalComposeBar({
           {slashMenu}
           <div
             className="relative min-w-0 flex-1"
-            // Stacked (preview): first, on a line of its own; same element, so
+            // Stacked: first, on a line of its own; the same element, so
             // focus and the caret stay put.
-            style={{ alignSelf: 'center', ...(stacked ? { order: -1, flexBasis: '100%' } : {}) }}
+            style={{ alignSelf: 'center', ...threadComposeTextSlotStyle(stacked) }}
           >
             {textarea}
           </div>
-          {stacked ? <div aria-hidden="true" style={{ flex: 1 }} /> : null}
+          <ThreadComposeStackSpacer stacked={stacked} />
           <ThreadSendButton
             canSend={canSend}
             onClick={() => void send()}
@@ -1146,30 +1151,12 @@ export function TerminalComposeBar({
   )
 }
 
-/** PREVIEW (Rosson 2026-10-16, "I just want to see what that would look
- *  like"): past 3 lines the Thread's box stacks: the text on its own line
- *  across the full width, "+", "/" and Send on a line under it. Back to one
- *  row at 2 lines. Set false to turn it off (the box then never stacks). */
-export const THREAD_COMPOSE_STACK_PREVIEW = true
-
 /** Width (px) the one-row layout takes beside the textarea: the "+"/"/"
  *  group with its margin, the box's two 8px gaps and Send. */
 export function composeRowChromeWidth(): number {
   const { marginLeft, boxGap } = composeToolLayout()
   const group = marginLeft + (COMPOSE_TOOL.plusInk + 2 * COMPOSE_TOOL.pad) + boxGap + (COMPOSE_TOOL.slashInk + 2 * COMPOSE_TOOL.pad)
   return group + 8 + 8 + COMPOSE_TOOL.height
-}
-
-/** Stack or not, from the text's wrapped lines at the textarea's current
- *  width. Up past 3 lines; down only when the text would take 2 lines or
- *  fewer back in the narrower one-row field (so it can't flicker: one row
- *  again means 3 lines or fewer there, which keeps it as it is). */
-export function composeStackNext(o: { stacked: boolean; lines: number; width: number }): boolean {
-  if (!o.stacked) return o.lines > 3
-  const narrow = o.width - composeRowChromeWidth()
-  if (narrow <= 0) return true
-  const rowLines = Math.ceil((o.lines * o.width) / narrow)
-  return rowLines > 2
 }
 
 /** The Thread box's "+" / "/" spacing (px). `gap` is both visible gaps:

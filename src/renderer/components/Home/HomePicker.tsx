@@ -12,6 +12,7 @@ import { useHomesStore, selectedHome, HOME_NAME_MAX } from '@/stores/homes'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { Button, Input } from '@/components/ui'
 import { ShortcutIndexBadge } from '@/components/Sidebar/Sidebar'
+import { PickerOptionLabel, PickerTriggerLabel } from '@/components/Sidebar/picker-label'
 import { HOME_SWITCH_LIMIT, homeSwitchCombo } from '@/lib/home-shortcuts'
 
 type Mode = 'menu' | 'create' | 'rename'
@@ -72,12 +73,7 @@ export default function HomePicker(): React.JSX.Element {
         aria-haspopup="menu"
         aria-expanded={open}
       >
-        <span className="text-[11px] font-semibold text-[var(--color-text-primary)] uppercase tracking-wide truncate flex-1">
-          {current.name}
-        </span>
-        <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono flex-shrink-0">
-          {current.rows.length}
-        </span>
+        <PickerTriggerLabel name={current.name} count={current.rows.length} />
         <svg
           className={`w-3 h-3 text-[var(--color-text-muted)] flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`}
           fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
@@ -113,8 +109,7 @@ export default function HomePicker(): React.JSX.Element {
                       }}
                     >
                       <span className="w-2 flex-shrink-0" />
-                      <span className="truncate flex-1">{h.name}</span>
-                      <span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)] tabular-nums">{h.rows.length}</span>
+                      <PickerOptionLabel name={h.name} count={h.rows.length} />
                       {idx < HOME_SWITCH_LIMIT && (
                         <ShortcutIndexBadge index={idx} combo={homeSwitchCombo(idx + 1)} />
                       )}

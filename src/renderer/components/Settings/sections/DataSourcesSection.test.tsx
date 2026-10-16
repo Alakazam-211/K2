@@ -45,7 +45,7 @@ vi.mock('@/stores/projects', () => ({
 import { DataSourcesSection, pollerLine } from './DataSourcesSection'
 import { stateText } from './DataSourceRow'
 import { secretFitsOrigin } from './DataSourceReview'
-import { ago, batchHash, countsLine, maskQuery, sourcesErrorOf } from './data-sources-ui'
+import { ago, batchHash, countsLine, maskQuery, sourcesErrorOf, sourcesErrorText } from './data-sources-ui'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import type { SourceListRow, SourceResult } from '@/lib/sources/sources-types'
 
@@ -196,6 +196,12 @@ describe('helpers', () => {
     })
     expect(secretFitsOrigin({ hosts: ['https://api.stripe.com:443'], status: 'active' }, 'https://api.stripe.com:443')).toBe(true)
     expect(secretFitsOrigin({ hosts: ['https://api.stripe.com:443'], status: 'active' }, 'https://evil.example:443')).toBe(false)
+  })
+
+  it('reads the one confirm code, and the 0.45.x spelling for one release', () => {
+    const want = 'This needs your confirm (Touch ID, your login or the vault password). Try again and confirm when asked.'
+    expect(sourcesErrorText(new Error('403: {"error":{"code":"vault_confirm_required","hint":"h"}}'))).toBe(want)
+    expect(sourcesErrorText(new Error('403: {"error":{"code":"confirm_required","hint":"h"}}'))).toBe(want)
   })
 
   it('hashes a batch the way the daemon does', async () => {

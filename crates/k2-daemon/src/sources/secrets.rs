@@ -118,7 +118,7 @@ pub fn resolve_plan(plan: &FetchPlan) -> Result<Resolved, Reason> {
 /// Needs a person's confirm (`proof`); replaces any earlier binding.
 pub fn bind(source_id: &str, secret_name: &str, origin: &str, proof: &k2_vault::HumanProof) -> Result<(), SourceErr> {
     if !matches!(proof, k2_vault::HumanProof::Confirmed { .. }) {
-        return Err(SourceErr::new("confirm_required", 403, "binding a secret needs a person's confirm"));
+        return Err(SourceErr::new("vault_confirm_required", 403, "binding a secret needs a person's confirm"));
     }
     let v = crate::vault::get().map_err(|_| unavailable())?;
     if v.status().rollback {

@@ -46,6 +46,7 @@ import {
   type VaultRecipientLookup,
   type VaultRecipientResponse,
 } from './clone-vault'
+import type { CloneExtras } from './clone-options'
 // Static import is safe in headless tests: the store module only pulls
 // zustand (no Tauri / daemon side effects at import time).
 import { useTransferProgressStore } from '@/stores/transfer-progress'
@@ -158,6 +159,8 @@ export async function cloneWorkspaceToThisComputer(
   carryVault = false,
   /** See `cloneWorkspaceTo`. */
   vaultOptions: CloneVaultOptions = {},
+  /** Thread / per-secret choices + confirm tokens, spread into `clone/pack`. */
+  extras?: CloneExtras,
 ): Promise<CloneUnpackResult> {
   const { onStage, onBundled, onDone, onError, onVaultCarry } = hooks
   try {
@@ -172,6 +175,7 @@ export async function cloneWorkspaceToThisComputer(
       project_path: projectPath,
       carry_secrets: carrySecrets,
       live_only: !includeAllHistory,
+      ...(extras ?? {}),
       ...vaultBundleFields(vaultLookup, vaultOptions),
     })
     if (!job_id) {

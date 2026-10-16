@@ -3,6 +3,14 @@ import React, { useEffect } from 'react'
 import { Callout, DialogScrim } from '@/components/ui'
 import { useCloneToDialogStore } from '../../stores/clone-to-dialog'
 import type { CloneStage } from '../../lib/clone-to'
+import {
+  cloneButtonLabel,
+  doneCountsLine,
+  EnvFilesBlock,
+  PasswordPromptBlock,
+  SecretsBlock,
+  ThreadBlock,
+} from './CloneOptionsBlocks'
 
 // Progress modal for "Clone to" (K2 Connect workspace migration). Driven
 // entirely by the clone-to-dialog store, which the orchestration's hooks
@@ -41,7 +49,11 @@ export default function CloneToDialog(): React.JSX.Element | null {
   const host = useCloneToDialogStore((s) => s.host)
   const pull = useCloneToDialogStore((s) => s.pull)
   const carrySecrets = useCloneToDialogStore((s) => s.carrySecrets)
-  const setCarrySecrets = useCloneToDialogStore((s) => s.setCarrySecrets)
+  const secretChoices = useCloneToDialogStore((s) => s.secretChoices)
+  const confirming = useCloneToDialogStore((s) => s.confirming)
+  const optionsError = useCloneToDialogStore((s) => s.optionsError)
+  const previewError = useCloneToDialogStore((s) => s.previewError)
+  const previewLoading = useCloneToDialogStore((s) => s.previewLoading)
   const includeAllHistory = useCloneToDialogStore((s) => s.includeAllHistory)
   const setIncludeAllHistory = useCloneToDialogStore((s) => s.setIncludeAllHistory)
   const confirm = useCloneToDialogStore((s) => s.confirm)
@@ -65,7 +77,7 @@ export default function CloneToDialog(): React.JSX.Element | null {
     if (!isOpen) return
     const handler = (e: KeyboardEvent): void => {
       if (e.key === 'Escape' && isClosable) close()
-      else if (e.key === 'Enter' && isOptions) confirm()
+      else if (e.key === 'Enter' && isOptions) void confirm()
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -119,32 +131,18 @@ export default function CloneToDialog(): React.JSX.Element | null {
               progress phase. */}
           {isOptions && (
             <div className="space-y-3 pt-1">
-              <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
-                <input
-                  type="checkbox"
-                  checked={carrySecrets}
-                  onChange={(e) => setCarrySecrets(e.target.checked)}
-                  className="peer sr-only"
-                />
-                <span
-                  aria-hidden="true"
-                  className="mt-0.5 w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-                >
-                  {carrySecrets && (
-                    <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                    </svg>
-                  )}
-                </span>
-                <span className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
-                  Include secrets (<span className="font-mono text-[11px]">.env</span>,{' '}
-                  <span className="font-mono text-[11px]">.auth/</span>, in-workspace tokens)
-                </span>
-              </label>
-              <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed pl-[22px]">
-                Carried securely over the encrypted connection between your machines.
-                Uncheck to scrub them — you’ll re-add them on {pull ? 'this computer' : 'the host'}.
-              </p>
+              {/* 0.46.0: Thread, per-secret step, `.env` files (D3/D1/D4). */}
+              <ThreadBlock />
+              {previewLoading && (
+                <p className="text-[11px] text-[var(--color-text-muted)]">Checking what travels…</p>
+              )}
+              {previewError && (
+                <Callout tone="error">
+                  <p className="whitespace-pre-wrap break-words" data-testid="clone-preview-error">{previewError}</p>
+                </Callout>
+              )}
+              <SecretsBlock />
+              <EnvFilesBlock pull={pull} />
 
               <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
                 <input
@@ -236,6 +234,14 @@ export default function CloneToDialog(): React.JSX.Element | null {
                 </p>
               </div>
 
+              {doneCountsLine(result).length > 0 && (
+                <div className="space-y-0.5" data-testid="clone-done-counts">
+                  {doneCountsLine(result).map((line) => (
+                    <p key={line} className="text-[11px] text-[var(--color-text-secondary)]">{line}</p>
+                  ))}
+                </div>
+              )}
+
               <div className="border border-[var(--color-border)] bg-[var(--color-bg)]/40 px-3 py-3">
                 <p className="text-[11px] font-medium text-[var(--color-text-primary)] mb-1.5">
                   Re-supply checklist
@@ -277,6 +283,17 @@ export default function CloneToDialog(): React.JSX.Element | null {
             </div>
           )}
 
+          {isOptions && (
+            <div className="mt-3 space-y-2">
+              <PasswordPromptBlock />
+              {optionsError && (
+                <Callout tone="error">
+                  <p className="whitespace-pre-wrap break-words" data-testid="clone-options-error">{optionsError}</p>
+                </Callout>
+              )}
+            </div>
+          )}
+
           {/* Error screen. */}
           {stage === 'error' && error && (
             <Callout tone="error">
@@ -296,10 +313,12 @@ export default function CloneToDialog(): React.JSX.Element | null {
                 Cancel
               </button>
               <button
-                className="px-3 py-1.5 text-xs font-medium text-[var(--color-bg)] bg-[var(--color-text-primary)] hover:bg-[var(--color-text-secondary)]"
-                onClick={confirm}
+                className="px-3 py-1.5 text-xs font-medium text-[var(--color-bg)] bg-[var(--color-text-primary)] hover:bg-[var(--color-text-secondary)] disabled:opacity-40"
+                onClick={() => void confirm()}
+                disabled={confirming}
+                data-testid="clone-confirm-button"
               >
-                Clone
+                {cloneButtonLabel(secretChoices, carrySecrets, confirming)}
               </button>
             </>
           ) : (

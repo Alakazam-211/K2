@@ -17,6 +17,10 @@ import HelpButton from './HelpButton'
 import HelpExplorer from './HelpExplorer'
 import catalog from '@shared/cli-catalog.generated.json'
 import { buildExplorerModel, searchExplorer, glossaryPages, type CliCatalog } from './cli-explorer'
+import type { ServerScope } from '@/kessel/server-scope'
+
+/** The server Help reads its glossary from (the top bar's). */
+const SCOPE = { id: 'help-test-scope' } as unknown as ServerScope
 
 const GLOSSARY = [
   { term: 'workspace', summary: 'A folder K2SO manages (has exactly one primary agent)' },
@@ -70,7 +74,7 @@ describe('Help button', () => {
 
 describe('the rail lists the CLI tools and the pages', () => {
   it('k2 (with its noun families) first, then k2-node; then k2 study and Glossary', () => {
-    render(<HelpExplorer onClose={() => {}} />)
+    render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
     const rail = screen.getByTestId('help-rail')
     const labels = Array.from(rail.querySelectorAll('h3, button')).map((el) => el.textContent?.trim())
     expect(labels).toEqual([
@@ -98,7 +102,7 @@ describe('the rail lists the CLI tools and the pages', () => {
   })
 
   it('a family shows only its nouns; k2-node shows its commands', () => {
-    render(<HelpExplorer onClose={() => {}} />)
+    render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
     fireEvent.click(screen.getByTestId('help-rail-k2-mail'))
     expect(screen.getByTestId('help-rail-k2-mail').getAttribute('aria-current')).toBe('true')
     expect(screen.getByTestId('help-rail-k2').getAttribute('aria-current')).toBeNull()
@@ -119,7 +123,7 @@ describe('the rail lists the CLI tools and the pages', () => {
   it('a noun expands to its commands from k2 --schema, with copy buttons', async () => {
     const writeText = vi.fn(async (_t: string) => undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
-    render(<HelpExplorer onClose={() => {}} />)
+    render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
     const card = screen.getByTestId('help-noun-k2:agent')
     expect(card.getAttribute('data-expanded')).toBe('false')
     fireEvent.click(within(card).getByRole('button', { expanded: false }))
@@ -134,7 +138,7 @@ describe('the rail lists the CLI tools and the pages', () => {
   })
 
   it('a noun --schema does not list shows its captured --help, or points at k2 help', () => {
-    render(<HelpExplorer onClose={() => {}} />)
+    render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
     const compute = screen.getByTestId('help-noun-k2:compute')
     fireEvent.click(within(compute).getByRole('button', { expanded: false }))
     expect(within(compute).getByText(/run commands on your own machines/)).toBeTruthy()
@@ -143,7 +147,7 @@ describe('the rail lists the CLI tools and the pages', () => {
   })
 
   it('k2 study lists the pages and opens one', () => {
-    render(<HelpExplorer onClose={() => {}} />)
+    render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
     fireEvent.click(screen.getByTestId('help-rail-study'))
     expect(screen.getByTestId('help-pages-study')).toBeTruthy()
     fireEvent.click(screen.getByTestId('help-page-link-study:errors'))
@@ -157,20 +161,20 @@ describe('the rail lists the CLI tools and the pages', () => {
 
 describe('glossary: from the daemon, with a fallback', () => {
   it('lists the daemon terms (shown as K2) and loads a definition on open', async () => {
-    render(<HelpExplorer onClose={() => {}} />)
-    await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith(expect.anything(), 'glossary'))
+    render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
+    await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith(SCOPE, 'glossary'))
     fireEvent.click(screen.getByTestId('help-rail-glossary'))
     const list = await screen.findByTestId('help-pages-glossary')
     expect(within(list).getByText('A folder K2 manages (has exactly one primary agent)')).toBeTruthy()
     fireEvent.click(within(list).getByTestId('help-page-link-glossary:workspace'))
     const body = await screen.findByTestId('help-page-body')
     expect(body.textContent).toBe('Full text for workspace in K2.')
-    expect(h.daemonCliGet).toHaveBeenCalledWith(expect.anything(), 'glossary/get', { term: 'workspace' })
+    expect(h.daemonCliGet).toHaveBeenCalledWith(SCOPE, 'glossary/get', { term: 'workspace' })
   })
 
   it('daemon down: Glossary says so, everything else still works (search included)', async () => {
     daemonDown()
-    render(<HelpExplorer onClose={() => {}} />)
+    render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
     await waitFor(() => expect(screen.getByTestId('help-rail-glossary').textContent).toContain('offline'))
     fireEvent.click(screen.getByTestId('help-rail-glossary'))
     expect(screen.getByTestId('help-glossary-unavailable').textContent).toContain('did not answer')
@@ -182,7 +186,7 @@ describe('glossary: from the daemon, with a fallback', () => {
 
 describe('search across tools, nouns, commands and pages', () => {
   it('finds nouns, commands, study pages and glossary terms, with type badges', async () => {
-    render(<HelpExplorer onClose={() => {}} />)
+    render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
     await waitFor(() => expect(screen.getByTestId('help-rail-glossary').textContent).toBe('Glossary'))
     fireEvent.change(search(), { target: { value: 'heartbeat' } })
     const kinds = new Set(results().map((r) => r.getAttribute('data-kind')))
@@ -196,7 +200,7 @@ describe('search across tools, nouns, commands and pages', () => {
   })
 
   it('click jumps to that tool + noun (family selected, noun expanded, command highlighted)', () => {
-    render(<HelpExplorer onClose={() => {}} />)
+    render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
     fireEvent.change(search(), { target: { value: 'agent hire' } })
     const hit = results().find((r) => r.getAttribute('data-kind') === 'command' && r.textContent?.includes('k2 agent hire'))
     if (!hit) throw new Error('no k2 agent hire result')
@@ -210,7 +214,7 @@ describe('search across tools, nouns, commands and pages', () => {
   })
 
   it('↑/↓ move the active result, Enter opens it (a page)', () => {
-    render(<HelpExplorer onClose={() => {}} />)
+    render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
     const input = search()
     fireEvent.change(input, { target: { value: 'people' } })
     const all = results()
@@ -231,14 +235,14 @@ describe('search across tools, nouns, commands and pages', () => {
   })
 
   it('no match says so', () => {
-    render(<HelpExplorer onClose={() => {}} />)
+    render(<HelpExplorer scope={SCOPE} onClose={() => {}} />)
     fireEvent.change(search(), { target: { value: 'zzqqxx' } })
     expect(screen.getByTestId('help-search-empty').textContent).toContain('zzqqxx')
   })
 
   it('⌘K / Ctrl+K focus the search; Esc clears it first, then closes', () => {
     const onClose = vi.fn()
-    render(<HelpExplorer onClose={onClose} />)
+    render(<HelpExplorer scope={SCOPE} onClose={onClose} />)
     act(() => screen.getByTestId('help-rail-study').focus())
     expect(document.activeElement).not.toBe(search())
     fireEvent.keyDown(window, { key: 'k', metaKey: true })

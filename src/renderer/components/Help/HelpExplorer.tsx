@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { DialogScrim, Input, Surface } from '@/components/ui'
 import { daemonCliGet } from '@/lib/daemon-cli'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 import catalogJson from '@shared/cli-catalog.generated.json'
 import {
   buildExplorerModel,
@@ -222,7 +222,14 @@ function NounCard({
   )
 }
 
-export default function HelpExplorer({ onClose }: { onClose: () => void }): React.JSX.Element {
+/** `scope`: the server whose glossary Help reads (the top bar's server). */
+export default function HelpExplorer({
+  scope,
+  onClose,
+}: {
+  scope: ServerScope
+  onClose: () => void
+}): React.JSX.Element {
   const [target, setTarget] = useState<ExplorerTarget>({ kind: 'tool', toolId: 'k2' })
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [query, setQuery] = useState('')
@@ -237,7 +244,7 @@ export default function HelpExplorer({ onClose }: { onClose: () => void }): Reac
   // of Help still works.
   useEffect(() => {
     let live = true
-    daemonCliGet<GlossaryEntry[]>(primaryScope(), 'glossary')
+    daemonCliGet<GlossaryEntry[]>(scope, 'glossary')
       .then((rows) => {
         if (!live) return
         if (!Array.isArray(rows)) throw new Error('glossary: not a list')
@@ -249,7 +256,7 @@ export default function HelpExplorer({ onClose }: { onClose: () => void }): Reac
     return () => {
       live = false
     }
-  }, [])
+  }, [scope])
 
   const glossaryList = glossary.status === 'ok' ? glossary.pages : []
   const results = useMemo(() => searchExplorer(MODEL, glossaryList, query), [glossaryList, query])
@@ -264,7 +271,7 @@ export default function HelpExplorer({ onClose }: { onClose: () => void }): Reac
   useEffect(() => {
     if (!openTerm || definitions[openTerm] !== undefined) return
     let live = true
-    daemonCliGet<{ definition?: string; summary?: string }>(primaryScope(), 'glossary/get', { term: openTerm })
+    daemonCliGet<{ definition?: string; summary?: string }>(scope, 'glossary/get', { term: openTerm })
       .then((row) => {
         if (live) setDefinitions((d) => ({ ...d, [openTerm]: fixK2Name(row.definition ?? row.summary ?? '') }))
       })
@@ -274,7 +281,7 @@ export default function HelpExplorer({ onClose }: { onClose: () => void }): Reac
     return () => {
       live = false
     }
-  }, [openTerm, definitions])
+  }, [scope, openTerm, definitions])
 
   const jump = useCallback((t: ExplorerTarget) => {
     setTarget(t)

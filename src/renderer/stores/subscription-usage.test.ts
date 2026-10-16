@@ -26,10 +26,20 @@ vi.mock('@/lib/daemon-cli', () => ({
 
 vi.mock('@/stores/connect-host', () => ({ onActiveHostChange: () => () => {} }))
 
+// Usage v2 B20: the daemon pushes `subscription_usage_changed`.
+const pushes = vi.hoisted(() => new Set<() => void>())
+vi.mock('@/stores/session-events', () => ({
+  onSubscriptionUsageChanged: (_scope: unknown, fn: () => void) => {
+    pushes.add(fn)
+    return () => pushes.delete(fn)
+  },
+}))
+
 import {
   USAGE_CACHE_POLL_MS,
   resetSubscriptionUsageForTests,
   startUsageCachePoll,
+  usageCachePollHolds,
   usageEntryFor,
   type UsageTarget,
 } from './subscription-usage'
@@ -152,5 +162,37 @@ describe('startUsageCachePoll', () => {
     useWindowFocusStore.setState({ isFocused: true })
     await settle()
     expect(h.gets).toHaveLength(0)
+  })
+})
+
+describe('one poller per server (B32) and the push (B20)', () => {
+  it('the top bar, the Zen band and the Zen menu share one poller for one server', async () => {
+    const a = startUsageCachePoll(target)
+    const b = startUsageCachePoll(target)
+    const c = startUsageCachePoll(target)
+    expect(usageCachePollHolds('win')).toBe(3)
+    await vi.advanceTimersByTimeAsync(USAGE_CACHE_POLL_MS)
+    expect(h.gets).toHaveLength(1)
+    a()
+    b()
+    await vi.advanceTimersByTimeAsync(USAGE_CACHE_POLL_MS)
+    expect(h.gets).toHaveLength(2)
+    c()
+    expect(usageCachePollHolds('win')).toBe(0)
+    await vi.advanceTimersByTimeAsync(USAGE_CACHE_POLL_MS * 3)
+    expect(h.gets).toHaveLength(2)
+  })
+
+  it('reads at once when the daemon announces new numbers, and stops listening on release', async () => {
+    stop = startUsageCachePoll(target)
+    expect(pushes.size).toBe(1)
+    h.body = doc(0.77)
+    for (const fn of pushes) fn()
+    await settle()
+    expect(h.gets).toHaveLength(1)
+    expect(usedOf('win')).toBe(0.77)
+    stop()
+    stop = null
+    expect(pushes.size).toBe(0)
   })
 })

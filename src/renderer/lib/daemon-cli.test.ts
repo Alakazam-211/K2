@@ -87,6 +87,7 @@ import {
 } from '@/stores/connect-host'
 import { __resetRemoteSessionForTests } from './remote-session'
 import { primaryScope } from '@/kessel/server-scope'
+import { DaemonHttpError, httpCodeOf, httpStatusOf } from './daemon-http-error'
 
 const LOCAL_CREDS = { port: 47800, token: 'local-tok', host: '127.0.0.1', secure: false }
 const SECURE_CREDS = { port: 443, token: 'remote-tok', host: 'rosson.k2.dev', secure: true }
@@ -372,6 +373,27 @@ describe('remote auth failures — session revival / expiry through daemon-cli',
     await expect(daemonCliGet(primaryScope(), 'projects/list')).rejects.toThrow('peer not allowed')
     expect(fetchMock).toHaveBeenCalledTimes(1) // no whoami, no replay
     expect((useConnectHostStore.getState().activeHost as ConnectHost).token).toBe('remote-tok')
+  })
+
+  it('a refusal carries its HTTP status and code, so callers branch on them, not on the text (Usage v2 B25)', async () => {
+    const host = makeRemoteHost()
+    useConnectHostStore.getState().addHost(host)
+    useConnectHostStore.getState().selectHost(host)
+    getDaemonWsMock.mockResolvedValue(SECURE_CREDS)
+    const body = JSON.stringify({ error: 'Usage is visible to the server Owner and Admins', code: 'admin_only' })
+    vi.stubGlobal('fetch', vi.fn(async () => fakeRes({ status: 403, body })))
+
+    const err = await daemonCliGet(primaryScope(), 'usage/tokens').then(
+      () => {
+        throw new Error('expected a refusal')
+      },
+      (e: unknown) => e,
+    )
+    expect(err).toBeInstanceOf(DaemonHttpError)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toBe('Usage is visible to the server Owner and Admins')
+    expect(httpStatusOf(err)).toBe(403)
+    expect(httpCodeOf(err)).toBe('admin_only')
   })
 })
 

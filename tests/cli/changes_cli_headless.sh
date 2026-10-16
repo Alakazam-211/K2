@@ -492,6 +492,17 @@ has "$OUT" "Initialized a git repository in" "init"
 [ -d "$PLAIN/.git" ] || fail "no .git after init"
 run owner changes --workspace "$PLAIN" --json
 jok "$OUT" 'j["isRepo"] and j["unborn"]' "init: the workspace is now a repo (no commits yet)"
+git -C "$PLAIN" config user.name K2-Test
+git -C "$PLAIN" config user.email k2-test@example.com
+printf '.k2/\n.claude/\nAGENTS.md\nCLAUDE.md\n' >>"$PLAIN/.git/info/exclude"
+printf 'hello\n' >"$PLAIN/hello.txt"
+run owner changes stage hello.txt --workspace "$PLAIN"
+want_rc 0 "stage in the new repo"
+run owner changes commit -m "first" --workspace "$PLAIN"
+want_rc 0 "first commit"
+[ "$(git -C "$PLAIN" log -1 --format=%s)" = "first" ] || fail "first commit missing"
+[ "$(git -C "$PLAIN" rev-list --count HEAD)" = "1" ] || fail "first commit count"
+ok "the first commit in a fresh repo works (no HEAD yet)"
 run owner changes init --workspace "$PLAIN"
 want_rc 3 "init twice"
 [ "$(errcode)" = "already_a_repo" ] || fail "init twice code: $ERR"

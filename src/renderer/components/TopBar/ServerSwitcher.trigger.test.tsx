@@ -205,10 +205,10 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
       expect(icon.getAttribute('data-led-color')).toBe(c.color)
       const leds = Array.from(icon.querySelectorAll('[data-led]'))
       expect(leds).toHaveLength(2)
-      // Bars 3x the old 3.5 square's width (Rosson 2026-10-16).
+      // Bars half the frame's inside width (Rosson 2026-10-16).
       expect(leds.map((l) => [l.getAttribute('width'), l.getAttribute('height')])).toEqual([
-        ['10.5', '3.5'],
-        ['10.5', '3.5'],
+        ['9.125', '3.5'],
+        ['9.125', '3.5'],
       ])
       expect(leds.map((l) => l.getAttribute('fill'))).toEqual([c.color, c.color])
       expect(t.getAttribute('aria-label')).toBe(`rosson.k2.dev — ${c.words}`)

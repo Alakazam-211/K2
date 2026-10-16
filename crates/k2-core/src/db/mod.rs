@@ -2233,6 +2233,9 @@ mod tests {
             for m in ["0165_app_runtime_core", "0168_app_grace", "0169_app_egress", "0170_app_walls_lite"] {
                 conn.execute("DELETE FROM _migrations WHERE name = ?1", params![m]).unwrap();
             }
+            // 0181 (clone proposals) came after them.
+            conn.execute_batch("DROP TABLE clone_proposals;").unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0181_clone_proposals'", []).unwrap();
             let last: String = conn
                 .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
                 .unwrap();

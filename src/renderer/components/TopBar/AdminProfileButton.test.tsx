@@ -15,8 +15,10 @@ const h = vi.hoisted(() => ({
   scope: {
     label: 'This computer',
     isRemote: false,
-    host: null as null | { hostname: string },
+    host: null as null | Record<string, unknown>,
   },
+  login: vi.fn(),
+  remember: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -38,6 +40,10 @@ vi.mock('@/lib/daemon-cli', () => ({
     return h.routes[route]
   }),
 }))
+vi.mock('@/stores/connect-host', async (orig) => {
+  const real = await orig<typeof import('@/stores/connect-host')>()
+  return { ...real, loginToHost: h.login, saveRememberedPassword: h.remember }
+})
 vi.mock('@/kessel/server-scope', async (orig) => {
   const real = await orig<typeof import('@/kessel/server-scope')>()
   const scope = {
@@ -58,6 +64,8 @@ import TopBarUtilities from './TopBarUtilities'
 import AdminProfileButton from './AdminProfileButton'
 import { __resetZenAvailableForTests } from '@/lib/zen/zen-platform'
 import { useSettingsStore } from '@/stores/settings'
+import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
+import { PASSWORD_CHANGED_NOTICE } from './AdminProfileButton'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -122,7 +130,30 @@ beforeEach(() => {
   useSettingsStore.setState({ settingsOpen: false, ownerDisplayName: 'Rosson Long' })
 })
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
+
+/** The saved server a Connect login signed in to from this device. */
+function remoteHost(remember = true): Record<string, unknown> {
+  return {
+    id: 'host-rosson',
+    label: 'Rosson’s Mac',
+    hostname: 'rosson.k2.dev',
+    port: 443,
+    secure: true,
+    token: 'sess-old',
+    remember,
+    username: 'rosson-phone',
+  }
+}
+
+function connectAdmin(remember = true): void {
+  h.scope = { label: 'Rosson’s Mac', isRemote: true, host: remoteHost(remember) }
+  h.routes['auth/whoami'] = { owner: false, username: 'rosson-phone', role: 'admin', mustChangePassword: false }
+  delete h.routes['users/audit']
+}
 
 describe('the Admin profile button in the top bar', () => {
   it('sits immediately right of the Zen toggle and matches its look', () => {
@@ -245,9 +276,7 @@ describe('the Admin profile modal: who you are', () => {
   })
 
   it('a Connect admin from another device: username, Admin, created date; sign-ins are owner-only', async () => {
-    h.scope = { label: 'Rosson’s Mac', isRemote: true, host: { hostname: 'rosson.k2.dev' } }
-    h.routes['auth/whoami'] = { owner: false, username: 'rosson-phone', role: 'admin', mustChangePassword: false }
-    delete h.routes['users/audit']
+    connectAdmin()
     render(<AdminProfileButton />)
     await openLoaded()
     expect(text('admin-profile-name')).toContain('rosson-phone')
@@ -264,7 +293,7 @@ describe('the Admin profile modal: who you are', () => {
   })
 
   it('a Connect member: only whoami and tunnel status are read; the rest says who can see it', async () => {
-    h.scope = { label: 'Rosson’s Mac', isRemote: true, host: { hostname: 'rosson.k2.dev' } }
+    h.scope = { label: 'Rosson’s Mac', isRemote: true, host: { ...remoteHost(), username: 'sam' } }
     h.routes = {
       'auth/whoami': { owner: false, username: 'sam', role: 'member', mustChangePassword: false },
       'tunnel/status': { running: false, frpc_installed: true },
@@ -285,5 +314,125 @@ describe('the Admin profile modal: who you are', () => {
     act(() => void fireEvent.click(button()))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('unexpected route auth/whoami')
+  })
+})
+
+describe('the Admin profile modal: change password (Connect logins only)', () => {
+  function fill(label: string, value: string): void {
+    act(() => void fireEvent.change(screen.getByLabelText(label), { target: { value } }))
+  }
+
+  /** The daemon side of the shared step: the policy read and the
+   *  change-password POST, on the server's own address. */
+  function stubDaemon(changeStatus = 200): ReturnType<typeof vi.fn> {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.startsWith('https://rosson.k2.dev/cli/users/policy')) {
+        return new Response(JSON.stringify({ minLength: 8, requireSpecial: false, requireNumber: true, requireUppercase: false }), { status: 200 })
+      }
+      if (url.startsWith('https://rosson.k2.dev/cli/auth/change-password')) {
+        return new Response(changeStatus === 200 ? '{"success":true}' : '{"error":"unauthorized"}', { status: changeStatus })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  beforeEach(() => {
+    h.login.mockReset()
+    h.remember.mockReset()
+  })
+
+  it('the owner on this computer gets no Change password button', async () => {
+    render(<AdminProfileButton />)
+    await openLoaded()
+    expect(document.querySelector('[data-testid="admin-profile-change-password"]')).toBeNull()
+  })
+
+  it('a Connect member gets it too (self-service, any role)', async () => {
+    h.scope = { label: 'Rosson’s Mac', isRemote: true, host: { ...remoteHost(), username: 'sam' } }
+    h.routes = {
+      'auth/whoami': { owner: false, username: 'sam', role: 'member', mustChangePassword: false },
+      'tunnel/status': { running: false, frpc_installed: true },
+    }
+    render(<AdminProfileButton />)
+    await openLoaded()
+    expect(text('admin-profile-account')).toContain('Change password')
+  })
+
+  it('opens the shared first-password step with change-password words; Cancel goes back', async () => {
+    connectAdmin()
+    stubDaemon()
+    render(<AdminProfileButton />)
+    await openLoaded()
+    act(() => void fireEvent.click(screen.getByTestId('admin-profile-change-password')))
+    const step = screen.getByTestId('password-rotation-step')
+    expect(dialog().contains(step)).toBe(true)
+    expect(step.textContent).toContain(CHANGE_PASSWORD_COPY.title)
+    expect(screen.getByLabelText(CHANGE_PASSWORD_COPY.currentLabel)).toBeTruthy()
+    // The policy comes from the server, as in the first-password flow.
+    await waitFor(() => expect(step.textContent).toContain('a number'))
+    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Cancel' })))
+    expect(document.querySelector('[data-testid="password-rotation-step"]')).toBeNull()
+    expect(text('admin-profile-role')).toContain('Admin')
+  })
+
+  it('success: change-password with the current session, re-login with the new password, remembered password updated, back to the profile', async () => {
+    connectAdmin(true)
+    const fetchMock = stubDaemon()
+    h.login.mockResolvedValue({ ok: true, token: 'sess-new', mustChangePassword: false })
+    h.remember.mockResolvedValue(null)
+    render(<AdminProfileButton />)
+    await openLoaded()
+    act(() => void fireEvent.click(screen.getByTestId('admin-profile-change-password')))
+    fill(CHANGE_PASSWORD_COPY.currentLabel, 'old-pass-1')
+    fill(CHANGE_PASSWORD_COPY.newLabel, 'new-pass-22')
+    fill(CHANGE_PASSWORD_COPY.confirmLabel, 'new-pass-22')
+    act(() => void fireEvent.click(screen.getByRole('button', { name: CHANGE_PASSWORD_COPY.submit })))
+
+    await waitFor(() => expect(text('admin-profile-notice')).toBe(PASSWORD_CHANGED_NOTICE))
+    expect(document.querySelector('[data-testid="password-rotation-step"]')).toBeNull()
+
+    const post = fetchMock.mock.calls.find(([url]) => String(url).includes('/cli/auth/change-password'))
+    if (!post) throw new Error('no change-password POST')
+    expect(String(post[0])).toContain('token=sess-old')
+    expect((post[1] as RequestInit).method).toBe('POST')
+    expect(JSON.parse(String((post[1] as RequestInit).body))).toEqual({ currentPassword: 'old-pass-1', newPassword: 'new-pass-22' })
+
+    expect(h.login).toHaveBeenCalledTimes(1)
+    const [loginHost, loginPw] = h.login.mock.calls[0] as [{ id: string; username: string }, string]
+    expect([loginHost.id, loginHost.username, loginPw]).toEqual(['host-rosson', 'rosson-phone', 'new-pass-22'])
+    expect(h.remember.mock.calls).toEqual([['host-rosson', 'new-pass-22']])
+  })
+
+  it('a login that does not remember its password leaves the keychain alone', async () => {
+    connectAdmin(false)
+    stubDaemon()
+    h.login.mockResolvedValue({ ok: true, token: 'sess-new', mustChangePassword: false })
+    render(<AdminProfileButton />)
+    await openLoaded()
+    act(() => void fireEvent.click(screen.getByTestId('admin-profile-change-password')))
+    fill(CHANGE_PASSWORD_COPY.currentLabel, 'old-pass-1')
+    fill(CHANGE_PASSWORD_COPY.newLabel, 'new-pass-22')
+    fill(CHANGE_PASSWORD_COPY.confirmLabel, 'new-pass-22')
+    act(() => void fireEvent.click(screen.getByRole('button', { name: CHANGE_PASSWORD_COPY.submit })))
+    await waitFor(() => expect(text('admin-profile-notice')).toBe(PASSWORD_CHANGED_NOTICE))
+    expect(h.remember).not.toHaveBeenCalled()
+  })
+
+  it('a wrong current password stays on the step with the change-password wording, and no re-login', async () => {
+    connectAdmin()
+    stubDaemon(401)
+    render(<AdminProfileButton />)
+    await openLoaded()
+    act(() => void fireEvent.click(screen.getByTestId('admin-profile-change-password')))
+    fill(CHANGE_PASSWORD_COPY.currentLabel, 'wrong-pass-1')
+    fill(CHANGE_PASSWORD_COPY.newLabel, 'new-pass-22')
+    fill(CHANGE_PASSWORD_COPY.confirmLabel, 'new-pass-22')
+    act(() => void fireEvent.click(screen.getByRole('button', { name: CHANGE_PASSWORD_COPY.submit })))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toBe(CHANGE_PASSWORD_COPY.badCurrent)
+    expect(screen.getByTestId('password-rotation-step')).toBeTruthy()
+    expect(h.login).not.toHaveBeenCalled()
   })
 })

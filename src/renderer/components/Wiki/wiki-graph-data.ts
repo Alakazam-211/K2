@@ -172,6 +172,18 @@ export function countWikiGraphNodes(index: WikiIndex, opts: WikiGraphOpts): numb
 }
 
 /**
+ * The ids the graph would show plus the search matches (null when the
+ * search is empty). The standard Wiki view lists from the same set so the
+ * three views agree. No sim side effects.
+ */
+export function wikiGraphVisibleIds(
+  index: WikiIndex,
+  opts: WikiGraphOpts,
+): { visible: Set<string>; matchedIds: Set<string> | null } {
+  return visibleIds(index, buildCatalog(index), opts)
+}
+
+/**
  * Build `{nodes, links}` for a force graph. Reuses node objects from `sim`
  * (keeping x/y/z and velocities) so polls don't re-explode the layout; new
  * nodes spawn next to a known neighbour. Mutates `sim`.

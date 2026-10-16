@@ -15,10 +15,10 @@
 // in, the bonsai's pads pop with a little sway. An off icon that just
 // mounted stays still. `prefers-reduced-motion: reduce` skips all of it.
 
-import { useEffect, useId, useState } from 'react'
+import { useId, useState } from 'react'
 import { motion, type Transition } from 'motion/react'
 import type { ZenIconVariant } from '@/lib/zen/zen-icon'
-import { REDUCED_MOTION_QUERY, zenMediaMatches } from '@/lib/zen/zen-theme'
+import { useReducedMotion } from '@/hooks/useReducedMotion'
 
 const f = (n: number): string => String(Math.round(n * 100) / 100)
 
@@ -99,20 +99,6 @@ const BONSAI_PADS_D = [
 ]
 
 const GLIDE: Transition['ease'] = [0.22, 1, 0.36, 1]
-
-/** `prefers-reduced-motion`, live. */
-function useReducedMotion(): boolean {
-  const [on, setOn] = useState(() => zenMediaMatches(REDUCED_MOTION_QUERY))
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
-    const mq = window.matchMedia(REDUCED_MOTION_QUERY)
-    const sync = (): void => setOn(mq.matches)
-    sync()
-    mq.addEventListener?.('change', sync)
-    return () => mq.removeEventListener?.('change', sync)
-  }, [])
-  return on
-}
 
 export const ZEN_ICON_DEFAULT_ACCENT = 'var(--zen-accent)'
 

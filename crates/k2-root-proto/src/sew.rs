@@ -49,6 +49,14 @@ pub const SEW_STAGE_TARBALL: &str = "/var/lib/k2-root-helper/sew/sew.tar.gz";
 pub const SEW_STAGE_MEDIA_TARBALL: &str = "/var/lib/k2-root-helper/sew/sew-media.tar.gz";
 pub const SEW_STAGE_INSTALL_JSON: &str = "/var/lib/k2-root-helper/sew/install.json";
 pub const SEW_STAGE_MEDIA_JSON: &str = "/var/lib/k2-root-helper/sew/media.json";
+/// The TURN TLS chain and key the daemon hands over (K13), written 0600
+/// root for the one `sew media install|turn-cert` call that reads them and
+/// removed right after (Sew copies them into its own credential store).
+pub const SEW_STAGE_TURN_CERT: &str = "/var/lib/k2-root-helper/sew/turn-fullchain.pem";
+pub const SEW_STAGE_TURN_KEY: &str = "/var/lib/k2-root-helper/sew/turn-key.pem";
+/// Upper bounds of the TURN chain / key PEM text on stdin.
+pub const MAX_TURN_CHAIN: usize = 16 * 1024;
+pub const MAX_TURN_KEY: usize = 4 * 1024;
 
 /// Sew's units (written by `sew install`, never by K2).
 pub const UNIT_DB: &str = "sew-db.service";
@@ -405,6 +413,12 @@ pub fn public_url_ok(s: &str) -> bool {
     s.is_empty() || scheme_host_ok(s, "https")
 }
 
+/// `identity.standalone.setup_url`: exactly `https://<host>/setup`, or `""`
+/// to clear it.
+pub fn setup_url_ok(s: &str) -> bool {
+    s.is_empty() || s.strip_suffix("/setup").is_some_and(|b| scheme_host_ok(b, "https"))
+}
+
 /// An absolute, normalised path: no `..`, `.`, `//`, trailing `/`, control
 /// characters or shell-meta. (Existence and link checks are the helper's.)
 pub fn abs_path_ok(p: &str) -> bool {
@@ -429,21 +443,47 @@ pub fn mirror_path_ok(p: &str) -> bool {
         && !p.split('/').any(|seg| seg == ".k2" || seg == ".k2so")
 }
 
+/// The identity provider `sew install` sets. Fixed for the life of an
+/// install: switching means a fresh install (uninstall --purge, enable).
+pub const PROVIDER_K2: &str = "k2";
+/// Sew's own password logins (local users with setup links): the 0.46.0
+/// demo path, before K2's chat pass (S28) ships.
+pub const PROVIDER_STANDALONE: &str = "standalone";
+
 /// `engine sew install` stdin.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct InstallRequest {
-    /// [`jwks_url_ok`].
-    pub jwks_url: String,
+    /// `k2` (absent = `k2`) or `standalone`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// [`jwks_url_ok`]. Required for `k2`, refused for `standalone`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jwks_url: Option<String>,
     /// [`master_key_text_ok`]. Piped to `sew install --master-key-from -`;
     /// never written to disk by K2.
     pub master_key: String,
 }
 
 impl InstallRequest {
+    /// The provider this request installs (`k2` when absent).
+    pub fn provider(&self) -> &str {
+        self.provider.as_deref().unwrap_or(PROVIDER_K2)
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
-        if !jwks_url_ok(&self.jwks_url) {
-            return Err("install refused: jwksUrl");
+        match self.provider() {
+            PROVIDER_K2 => {
+                if !self.jwks_url.as_deref().is_some_and(jwks_url_ok) {
+                    return Err("install refused: jwksUrl");
+                }
+            }
+            PROVIDER_STANDALONE => {
+                if self.jwks_url.is_some() {
+                    return Err("install refused: jwksUrl with provider standalone");
+                }
+            }
+            _ => return Err("install refused: provider"),
         }
         if !master_key_text_ok(&self.master_key) {
             return Err("install refused: masterKey");
@@ -452,20 +492,23 @@ impl InstallRequest {
     }
 
     /// The `sew install --config-json` body (Sew SW5 `InstallInputs`).
-    /// Provider k2, profile shared (the K2 memory split), never a cred mode
-    /// (Sew picks encrypted credentials on systemd ≥ 250) and never
-    /// `mgmt_users` (no `sew-mgmt` group for the daemon). `daemon_uid` is
-    /// the caller check's uid, never an input field: Sew writes it to
-    /// `[mgmt] allow_uids` itself (SW5 `mgmt_allow_uids`, SW7), so the
-    /// daemon reaches the mgmt socket without a supplementary group and K2
-    /// never edits `sew.toml`.
+    /// Provider `k2` (with K2's JWKS) or `standalone`, profile shared (the
+    /// K2 memory split), never a cred mode (Sew picks encrypted credentials
+    /// on systemd ≥ 250) and never `mgmt_users` (no `sew-mgmt` group for
+    /// the daemon). `daemon_uid` is the caller check's uid, never an input
+    /// field: Sew writes it to `[mgmt] allow_uids` itself (SW5
+    /// `mgmt_allow_uids`, SW7), so the daemon reaches the mgmt socket
+    /// without a supplementary group and K2 never edits `sew.toml`.
     pub fn sew_inputs(&self, daemon_uid: u32) -> serde_json::Value {
-        serde_json::json!({
-            "provider": "k2",
-            "k2_jwks_url": self.jwks_url,
+        let mut v = serde_json::json!({
+            "provider": self.provider(),
             "profile": "shared",
             "mgmt_allow_uids": [daemon_uid],
-        })
+        });
+        if let Some(u) = &self.jwks_url {
+            v["k2_jwks_url"] = serde_json::json!(u);
+        }
+        v
     }
 }
 
@@ -478,6 +521,11 @@ pub struct ConfigRequest {
     pub jwks_url: Option<String>,
     #[serde(rename = "server.public_url", default, skip_serializing_if = "Option::is_none")]
     pub public_url: Option<String>,
+    /// Where Sew's password setup links point (standalone installs):
+    /// `https://<host>/setup` ([`setup_url_ok`]). Unset, Sew uses
+    /// `<server.public_url>/setup`.
+    #[serde(rename = "identity.standalone.setup_url", default, skip_serializing_if = "Option::is_none")]
+    pub setup_url: Option<String>,
     #[serde(rename = "keys.mirror.kind", default, skip_serializing_if = "Option::is_none")]
     pub mirror_kind: Option<String>,
     #[serde(rename = "keys.mirror.path", default, skip_serializing_if = "Option::is_none")]
@@ -486,7 +534,12 @@ pub struct ConfigRequest {
 
 impl ConfigRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.jwks_url.is_none() && self.public_url.is_none() && self.mirror_kind.is_none() && self.mirror_path.is_none() {
+        if self.jwks_url.is_none()
+            && self.public_url.is_none()
+            && self.setup_url.is_none()
+            && self.mirror_kind.is_none()
+            && self.mirror_path.is_none()
+        {
             return Err("config refused: no keys");
         }
         if self.jwks_url.as_deref().is_some_and(|v| !jwks_url_ok(v)) {
@@ -494,6 +547,9 @@ impl ConfigRequest {
         }
         if self.public_url.as_deref().is_some_and(|v| !public_url_ok(v)) {
             return Err("config refused: server.public_url");
+        }
+        if self.setup_url.as_deref().is_some_and(|v| !setup_url_ok(v)) {
+            return Err("config refused: identity.standalone.setup_url");
         }
         // `k2` (an Alakazam target) stays refused until Q1 is ruled.
         if self.mirror_kind.as_deref().is_some_and(|v| v != "none" && v != "dir") {
@@ -514,6 +570,9 @@ impl ConfigRequest {
         if let Some(x) = &self.public_url {
             v.push(("server.public_url", x.as_str()));
         }
+        if let Some(x) = &self.setup_url {
+            v.push(("identity.standalone.setup_url", x.as_str()));
+        }
         // Path before kind, so `kind = dir` never points at a stale path.
         if let Some(x) = &self.mirror_path {
             v.push(("keys.mirror.path", x.as_str()));
@@ -525,15 +584,70 @@ impl ConfigRequest {
     }
 }
 
-/// `engine sew media install` stdin: the subset of Sew's
-/// `MediaInstallInputs` K2 may set. The tarball path is the helper's fixed
-/// staging file; cert/key paths are refused here (K13 delivers the TURN
-/// cert through its own verb); the cred mode is never set.
+/// PEM blocks of the allowed labels only (printable ASCII, base64 bodies),
+/// at most `max` bytes. `Some(n)` = n complete blocks.
+fn pem_blocks(text: &str, labels: &[&str], max: usize) -> Option<usize> {
+    if text.is_empty() || text.len() > max || !text.bytes().all(|b| b == b'\n' || b == b'\r' || (0x20..0x7f).contains(&b)) {
+        return None;
+    }
+    let mut n = 0;
+    let mut open: Option<&str> = None;
+    for line in text.lines().map(str::trim_end) {
+        if line.is_empty() {
+            continue;
+        }
+        match open {
+            None => {
+                let label = line.strip_prefix("-----BEGIN ")?.strip_suffix("-----")?;
+                open = Some(labels.iter().copied().find(|l| *l == label)?);
+            }
+            Some(l) => {
+                if let Some(end) = line.strip_prefix("-----END ").and_then(|x| x.strip_suffix("-----")) {
+                    if end != l {
+                        return None;
+                    }
+                    open = None;
+                    n += 1;
+                } else if !line.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=') {
+                    return None;
+                }
+            }
+        }
+    }
+    (open.is_none() && n > 0).then_some(n)
+}
+
+/// A TURN TLS certificate chain: 1–4 `CERTIFICATE` blocks, nothing else.
+pub fn turn_chain_pem_ok(text: &str) -> bool {
+    pem_blocks(text, &["CERTIFICATE"], MAX_TURN_CHAIN).is_some_and(|n| n <= 4)
+}
+
+/// A TURN TLS private key: exactly one `PRIVATE KEY` (PKCS#8) or
+/// `EC PRIVATE KEY` block.
+pub fn turn_key_pem_ok(text: &str) -> bool {
+    pem_blocks(text, &["PRIVATE KEY", "EC PRIVATE KEY"], MAX_TURN_KEY) == Some(1)
+}
+
+/// `voice.public_url`: `wss://<host>` exactly. On K2 the nested
+/// `voice.<box>` label, or an App's own origin that proxies Sew's `/rtc`
+/// same-origin (Hearth's BFF for the 0.46.0 demo).
+pub fn voice_url_ok(s: &str) -> bool {
+    scheme_host_ok(s, "wss")
+}
+
+/// `engine sew media install` / `media reconfigure` stdin: the subset of
+/// Sew's `MediaInstallInputs` K2 may set. The tarball path is the helper's
+/// fixed staging file; the TURN cert and key arrive as PEM TEXT
+/// (`turn_cert_pem`, `turn_key_pem`) that the helper writes to its own
+/// fixed staging files ([`SEW_STAGE_TURN_CERT`], [`SEW_STAGE_TURN_KEY`]),
+/// never as a path; the cred mode is never set.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub struct MediaRequest {
-    /// `wss://<host>` (the nested `voice.<box>` label).
-    pub public_url: String,
+    /// [`voice_url_ok`]. Required to install; on reconfigure, absent keeps
+    /// Sew's `[voice] public_url`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
     /// `stun`, or 1–4 comma-separated literal IPs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_ip: Option<String>,
@@ -551,11 +665,33 @@ pub struct MediaRequest {
     /// `apply` (write Sew's sysctl drop-in) or `skip`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sysctl: Option<String>,
+    /// [`turn_chain_pem_ok`]; with `turn_key_pem`, both or neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_cert_pem: Option<String>,
+    /// [`turn_key_pem_ok`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_key_pem: Option<String>,
 }
 
 impl MediaRequest {
+    /// `media install`: a public URL is required.
     pub fn validate(&self) -> Result<(), &'static str> {
-        if !scheme_host_ok(&self.public_url, "wss") {
+        if self.public_url.is_none() {
+            return Err("media refused: public_url");
+        }
+        self.validate_fields()
+    }
+
+    /// `media reconfigure`: at least one key.
+    pub fn validate_reconfigure(&self) -> Result<(), &'static str> {
+        if *self == MediaRequest::default() {
+            return Err("media refused: no keys");
+        }
+        self.validate_fields()
+    }
+
+    fn validate_fields(&self) -> Result<(), &'static str> {
+        if self.public_url.as_deref().is_some_and(|u| !voice_url_ok(u)) {
             return Err("media refused: public_url");
         }
         if let Some(n) = &self.node_ip {
@@ -579,17 +715,72 @@ impl MediaRequest {
         if self.sysctl.as_deref().is_some_and(|s| s != "apply" && s != "skip") {
             return Err("media refused: sysctl");
         }
+        match (&self.turn_cert_pem, &self.turn_key_pem) {
+            (None, None) => {}
+            (Some(c), Some(k)) => {
+                if !turn_chain_pem_ok(c) {
+                    return Err("media refused: turn_cert_pem");
+                }
+                if !turn_key_pem_ok(k) {
+                    return Err("media refused: turn_key_pem");
+                }
+            }
+            _ => return Err("media refused: turn_cert_pem and turn_key_pem go together"),
+        }
         Ok(())
     }
 
-    /// The `sew media install --config-json` body: this request plus the
-    /// helper's staged tarball path and the shared profile.
-    pub fn sew_inputs(&self, tarball: &str) -> serde_json::Value {
+    /// True when this request carries TURN TLS material.
+    pub fn has_turn_tls(&self) -> bool {
+        self.turn_cert_pem.is_some()
+    }
+
+    /// The `sew media install --config-json` body: this request without
+    /// the PEM text, plus the helper's staged tarball path (install only),
+    /// its staged TURN cert/key paths (when PEM text came) and the shared
+    /// profile.
+    pub fn sew_inputs(&self, tarball: Option<&str>, turn: Option<(&str, &str)>) -> serde_json::Value {
         let mut v = serde_json::to_value(self).expect("plain struct");
-        v["tarball"] = serde_json::json!(tarball);
+        if let Some(m) = v.as_object_mut() {
+            m.remove("turn_cert_pem");
+            m.remove("turn_key_pem");
+        }
+        if let Some(t) = tarball {
+            v["tarball"] = serde_json::json!(t);
+        }
+        if let Some((c, k)) = turn {
+            v["turn_cert"] = serde_json::json!(c);
+            v["turn_key"] = serde_json::json!(k);
+        }
         v["profile"] = serde_json::json!("shared");
         v
     }
+}
+
+/// `engine sew media turn-cert` stdin: a renewed TURN chain and its key
+/// (K2 reuses the key on renewal, so Sew restarts nothing).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct TurnCertRequest {
+    pub cert_pem: String,
+    pub key_pem: String,
+}
+
+impl TurnCertRequest {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !turn_chain_pem_ok(&self.cert_pem) {
+            return Err("turn-cert refused: cert_pem");
+        }
+        if !turn_key_pem_ok(&self.key_pem) {
+            return Err("turn-cert refused: key_pem");
+        }
+        Ok(())
+    }
+}
+
+/// An outside-probe result token (`engine sew media probe-record`).
+pub fn probe_result_ok(s: &str) -> bool {
+    s == "ok" || s == "fail"
 }
 
 /// The 16-hex KEK id Sew reports (`status.keys.kek_id`) for a master key:
@@ -786,6 +977,25 @@ mod tests {
         r.validate().unwrap();
         let inputs = r.sew_inputs(1001);
         assert_eq!(inputs["provider"], "k2");
+        assert_eq!(inputs["k2_jwks_url"], "http://127.0.0.1:38471/v1/chat/jwks");
+        // Standalone (0.46.0 demo): no JWKS, Sew's own password logins.
+        let sa: InstallRequest =
+            serde_json::from_str(r#"{"provider":"standalone","masterKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#).unwrap();
+        sa.validate().unwrap();
+        let si = sa.sew_inputs(1001);
+        assert_eq!(si["provider"], "standalone");
+        assert!(si.get("k2_jwks_url").is_none());
+        assert_eq!(si["mgmt_allow_uids"], serde_json::json!([1001]));
+        for bad in [
+            r#"{"provider":"standalone","jwksUrl":"http://127.0.0.1:1/v1/chat/jwks","masterKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#,
+            r#"{"provider":"k2","masterKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#,
+            r#"{"masterKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#,
+            r#"{"provider":"ldap","masterKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#,
+            r#"{"provider":"standalone","masterKey":"short"}"#,
+        ] {
+            let r: InstallRequest = serde_json::from_str(bad).unwrap();
+            assert!(r.validate().is_err(), "{bad}");
+        }
         assert_eq!(inputs["mgmt_allow_uids"], serde_json::json!([1001]), "Sew writes [mgmt] allow_uids (SW5)");
         assert!(inputs.get("mgmt_users").is_none(), "no sew-mgmt group (SW7)");
         assert!(inputs.get("cred_mode").is_none(), "never a plain cred mode");
@@ -796,7 +1006,7 @@ mod tests {
         .is_err());
         // Unknown keys (a path, a provider, a cred mode) never parse.
         for bad in [
-            r#"{"jwksUrl":"http://127.0.0.1:1/v1/chat/jwks","masterKey":"x","provider":"standalone"}"#,
+            r#"{"jwksUrl":"http://127.0.0.1:1/v1/chat/jwks","masterKey":"x","mgmt_users":["k2"]}"#,
             r#"{"jwksUrl":"http://127.0.0.1:1/v1/chat/jwks","masterKey":"x","cred_mode":"plain"}"#,
             r#"{"jwksUrl":"http://127.0.0.1:1/v1/chat/jwks"}"#,
         ] {
@@ -811,7 +1021,15 @@ mod tests {
         assert_eq!(c.pairs(), vec![("keys.mirror.path", "/mnt/o"), ("keys.mirror.kind", "dir")]);
         let m: MediaRequest = serde_json::from_str(r#"{"public_url":"wss://voice.box.k2.dev","sysctl":"apply","node_ip":"stun"}"#).unwrap();
         m.validate().unwrap();
-        assert_eq!(m.sew_inputs("/x")["tarball"], "/x");
+        assert_eq!(m.sew_inputs(Some("/x"), None)["tarball"], "/x");
+        assert!(m.sew_inputs(None, None).get("tarball").is_none());
+        // Reconfigure: no URL needed, but at least one key.
+        assert!(MediaRequest::default().validate_reconfigure().is_err());
+        let r: MediaRequest = serde_json::from_str(r#"{"public_url":"wss://hearth.box.k2.dev"}"#).unwrap();
+        r.validate_reconfigure().unwrap();
+        let r: MediaRequest = serde_json::from_str(r#"{"node_ip":"203.0.113.7"}"#).unwrap();
+        r.validate_reconfigure().unwrap();
+        assert!(r.validate().is_err(), "install needs public_url");
         for bad in [
             r#"{"public_url":"wss://voice.box.k2.dev","turn_cert":"/etc/shadow"}"#,
             r#"{"public_url":"wss://voice.box.k2.dev","tarball":"/tmp/x"}"#,
@@ -824,10 +1042,79 @@ mod tests {
             r#"{"public_url":"wss://voice.box.k2.dev","sysctl":"system"}"#,
             r#"{"public_url":"wss://voice.box.k2.dev","node_ip":"evil;id"}"#,
             r#"{"public_url":"wss://voice.box.k2.dev","udp_port":53}"#,
+            r#"{"public_url":"wss://voice.box.k2.dev/rtc"}"#,
+            r#"{"public_url":"wss://voice.box.k2.dev:443"}"#,
+            r#"{"public_url":"ws://voice.box.k2.dev"}"#,
         ] {
             let m: MediaRequest = serde_json::from_str(bad).unwrap();
             assert!(m.validate().is_err(), "{bad}");
         }
+        // Setup links: https://<host>/setup only.
+        let c: ConfigRequest =
+            serde_json::from_str(r#"{"identity.standalone.setup_url":"https://hearth.box.k2.dev/setup","server.public_url":"https://hearth.box.k2.dev"}"#).unwrap();
+        c.validate().unwrap();
+        assert_eq!(
+            c.pairs(),
+            vec![("server.public_url", "https://hearth.box.k2.dev"), ("identity.standalone.setup_url", "https://hearth.box.k2.dev/setup")]
+        );
+        for bad in ["https://hearth.box.k2.dev", "http://hearth.box.k2.dev/setup", "https://hearth.box.k2.dev/setup/x", "https://u@h.k2.dev/setup"] {
+            assert!(!setup_url_ok(bad), "{bad}");
+        }
+        assert!(setup_url_ok(""));
+    }
+
+    fn pem(label: &str, body: &str) -> String {
+        format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
+    }
+
+    /// TURN TLS material rides stdin as PEM text, never as a path: the
+    /// helper writes it to its own fixed staging files.
+    #[test]
+    fn turn_tls_pem_is_text_and_strict() {
+        let cert = pem("CERTIFICATE", "MIIBszCCAVmgAwIBAgIU");
+        let chain = format!("{cert}{}", pem("CERTIFICATE", "MIIBAAAA+/="));
+        let key = pem("PRIVATE KEY", "MIGHAgEAMBMGByqGSM49");
+        assert!(turn_chain_pem_ok(&cert));
+        assert!(turn_chain_pem_ok(&chain));
+        assert!(turn_key_pem_ok(&key));
+        assert!(turn_key_pem_ok(&pem("EC PRIVATE KEY", "MHcCAQEEI")));
+        for bad in [
+            String::new(),
+            "/etc/shadow".to_string(),
+            key.clone(),
+            format!("{cert}{key}"),
+            pem("CERTIFICATE", "not base64!"),
+            "-----BEGIN CERTIFICATE-----\nMIIB\n".to_string(),
+            pem("CERTIFICATE", &"A".repeat(MAX_TURN_CHAIN)),
+            format!("{cert}{cert}{cert}{cert}{cert}"),
+        ] {
+            assert!(!turn_chain_pem_ok(&bad), "{bad:?}");
+        }
+        for bad in [cert.clone(), format!("{key}{key}"), pem("RSA PUBLIC KEY", "AAAA"), format!("{key}\u{1b}[0m")] {
+            assert!(!turn_key_pem_ok(&bad), "{bad:?}");
+        }
+        let m = MediaRequest {
+            public_url: Some("wss://voice.box.k2.dev".into()),
+            turn_tls: Some("direct".into()),
+            turn_domain: Some("turn-box.k2.dev".into()),
+            turn_cert_pem: Some(chain.clone()),
+            turn_key_pem: Some(key.clone()),
+            ..Default::default()
+        };
+        m.validate().unwrap();
+        assert!(m.has_turn_tls());
+        let inputs = m.sew_inputs(Some("/s/m.tar.gz"), Some(("/s/c.pem", "/s/k.pem")));
+        assert!(inputs.get("turn_cert_pem").is_none() && inputs.get("turn_key_pem").is_none(), "PEM text never reaches Sew's JSON");
+        assert_eq!(inputs["turn_cert"], "/s/c.pem");
+        assert_eq!(inputs["turn_key"], "/s/k.pem");
+        assert_eq!(inputs["profile"], "shared");
+        let half = MediaRequest { turn_key_pem: None, ..m.clone() };
+        assert!(half.validate().is_err(), "cert without key");
+        let t = TurnCertRequest { cert_pem: chain, key_pem: key };
+        t.validate().unwrap();
+        assert!(TurnCertRequest { cert_pem: "x".into(), key_pem: t.key_pem.clone() }.validate().is_err());
+        assert!(serde_json::from_str::<TurnCertRequest>(r#"{"cert_pem":"a","key_pem":"b","cert":"/etc/x"}"#).is_err());
+        assert!(probe_result_ok("ok") && probe_result_ok("fail") && !probe_result_ok("OK") && !probe_result_ok(""));
     }
 
     #[test]

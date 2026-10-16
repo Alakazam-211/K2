@@ -18790,6 +18790,723 @@ print("Removed %s" % (d.get("removed") or "(subdomain)"))
 # server-side). Never put a password on argv — interactive getpass or
 # --password-stdin only.
 
+# ── k2 clone (prd-clone-carries-threads-and-vault-v1 §4.3, §4.4, CL20) ──
+#
+# People clone; agents propose. `to` / `from` are the same two-leg
+# sequences the desktop dialog runs (clone-to.ts / clone-pull.ts): each leg
+# is one daemon route, the remote leg uses --host + connect-tokens.json /
+# $K2_REMOTE_TOKEN like `k2 talk`. Works headless on Linux. Output never
+# prints a secret value: --json prints names, choices and counts.
+#
+# Exit codes: 0 ok · 2 bad usage / bad request · 3 refused or unreachable
+# (clone_not_allowed, clone_personal_computers_off, confirm_required, …).
+
+_clone_usage() {
+    cat <<'EOF'
+k2 clone — copy an agent (workspace + chat history + Thread) to another server
+
+People:
+  k2 clone preview <ws> [--host H] [--threads-since N] [--json]
+                                   what would travel (names only)
+  k2 clone to <host> <ws> [--dest DIR] [flags]      push a workspace from this server
+  k2 clone from <host>:<ws> [--dest DIR] [flags]    pull one to this computer
+  k2 clone here <ws> [--dest DIR] [flags]           a second copy on this server
+  k2 clone <ws> --dest DIR [flags]                  same as `here`
+  k2 clone proposals [--all] [--json]               agent proposals waiting for a person
+  k2 clone approve <id> [--yes]                     approve (asks you to confirm) and run it
+  k2 clone deny <id> [--reason TEXT]
+
+Agents (a person approves):
+  k2 clone propose --to <host|here> [flags] --why "…"
+  k2 clone proposals --mine        k2 clone withdraw <id>
+
+Flags:
+  --no-threads                 leave the Thread behind (default: bring it)
+  --threads-since N            only the last N days of Thread
+  --copy A,B  --blank C  --skip D
+                               per-secret choices (names only). Without them a
+                               terminal asks per secret; otherwise defaults:
+                               API keys copy, sign-ins skip, server/box keys blank.
+                               Copying needs an Owner/Admin confirm.
+  --own                        this is my own server (keeps "given by a person")
+  --live-only                  only the newest chat transcript (default: all)
+  --env-files                  also send .env files as files (asks you to confirm;
+                               better: k2 vault import .env first)
+  --token T                    remote token (else connect-tokens.json / $K2_REMOTE_TOKEN)
+  --yes                        don't ask; take defaults and flags as given
+  --json                       names, choices and counts as JSON
+
+Agents can't clone: `k2 clone propose` holds the plan for a person, who runs
+`k2 clone approve <id>` from a terminal outside K2 (or approves in K2).
+Exit: 0 ok · 2 bad usage · 3 refused or unreachable.
+EOF
+}
+
+_clone_die() {
+    local code="$1" hint="$2" rc="${3:-3}"
+    python3 -c 'import json,sys; print(json.dumps({"error": sys.argv[1], "hint": sys.argv[2]}))' "$code" "$hint" >&2
+    exit "$rc"
+}
+
+# People-only verbs refuse a passport (an agent, or a K2 terminal).
+_clone_person_guard() {
+    if _compute_in_session || [ -n "${K2_HOOK_TOKEN:-}${K2SO_HOOK_TOKEN:-}" ]; then
+        _clone_die clone_agents_propose "agents can't clone; propose it and a person approves: k2 clone propose --to <host|here> --why \"…\""
+    fi
+}
+
+# The engine: preview, push, pull, here, show, approve. Python so the
+# chunked transfer and the JSON stay in one place. Tokens and passwords ride
+# the environment and /dev/tty, never argv.
+_clone_py() {
+    K2C_LOCAL_URL="$BASE_URL" K2C_LOCAL_TOKEN="$TOKEN" K2C_K2_HOME="$K2_HOME" \
+    K2C_VAULT_SOCK="$(_vault_sock)" K2C_TTY="$( { [ -t 0 ] || [ -t 2 ]; } && [ -r /dev/tty ] && echo 1 || echo 0)" \
+    python3 - "$@" <<'PY'
+import base64, getpass, http.client, json, os, socket, sys, time, uuid
+import urllib.error, urllib.parse, urllib.request
+
+LOCAL = ("local", os.environ["K2C_LOCAL_URL"], os.environ["K2C_LOCAL_TOKEN"])
+REMOTE = ("remote", os.environ.get("K2C_REMOTE_URL", ""), os.environ.get("K2C_REMOTE_TOKEN", ""))
+OPTS = json.loads(os.environ.get("K2C_OPTS") or "{}")
+K2_HOME = os.environ["K2C_K2_HOME"]
+VSOCK = os.environ.get("K2C_VAULT_SOCK", "")
+TTY = os.environ.get("K2C_TTY") == "1" and not OPTS.get("yes")
+JSON_OUT = bool(OPTS.get("json"))
+CHUNK = 8 * 1024 * 1024
+
+
+class Fail(Exception):
+    def __init__(self, code, hint, rc=3):
+        super().__init__(hint)
+        self.code, self.hint, self.rc = code, hint, rc
+
+
+def say(msg):
+    if not JSON_OUT:
+        print(msg, file=sys.stderr)
+
+
+def refusal(status, v):
+    e = v.get("error") if isinstance(v, dict) else None
+    if isinstance(e, dict):
+        code, hint = e.get("code", "error"), e.get("hint", "")
+    else:
+        code = (v.get("code") if isinstance(v, dict) else None) or "error"
+        hint = (v.get("hint") if isinstance(v, dict) else None) or (e if isinstance(e, str) else "") or "refused (%s)" % status
+    return Fail(code, hint, 2 if status in (400, 413) else 3)
+
+
+def call(side, method, route, body=None, params=None, timeout=120):
+    name, base, tok = side
+    if not base:
+        raise Fail("usage", "no %s server" % name, 2)
+    q = {"token": tok}
+    q.update({k: v for k, v in (params or {}).items() if v is not None})
+    url = base + route + "?" + urllib.parse.urlencode(q)
+    data = None
+    if method == "POST":
+        data = json.dumps(body if body is not None else {}).encode()
+    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            status, raw = r.status, r.read()
+    except urllib.error.HTTPError as e:
+        status, raw = e.code, e.read()
+    except (urllib.error.URLError, OSError) as e:
+        raise Fail("daemon_unreachable", "%s server %s: %s" % (name, base, getattr(e, "reason", e)), 3)
+    try:
+        v = json.loads(raw or b"{}")
+    except ValueError:
+        v = {"error": raw[:200].decode(errors="replace")}
+    if status != 200:
+        raise refusal(status, v)
+    return v
+
+
+class _UConn(http.client.HTTPConnection):
+    def __init__(self, path, timeout):
+        super().__init__("localhost", timeout=timeout)
+        self._p = path
+
+    def connect(self):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(self.timeout)
+        s.connect(self._p)
+        self.sock = s
+
+
+def vault_sock(route, body):
+    c = _UConn(VSOCK, 180)
+    try:
+        c.request("POST", "/cli/vault/" + route, body=json.dumps(body),
+                  headers={"Content-Type": "application/json", "X-K2-Tty": "1" if TTY else "0"})
+        r = c.getresponse()
+        status, raw = r.status, r.read()
+    except OSError as e:
+        raise Fail("vault_unreachable", "vault socket %s: %s" % (VSOCK, e), 3)
+    v = json.loads(raw or b"{}")
+    if status != 200:
+        raise refusal(status, v)
+    return v
+
+
+def password(prompt):
+    if not TTY:
+        raise Fail("confirm_needs_a_person", "this needs your confirm: run it from a terminal (not --yes, not a pipe)", 3)
+    return getpass.getpass(prompt)
+
+
+def confirm(side, action, secret_id, label):
+    """A fresh vault confirm token on `side`'s daemon (Touch ID or a password)."""
+    local = side[0] == "local" and VSOCK and os.path.exists(VSOCK)
+    start = {"action": action}
+    if local:
+        methods = vault_sock("confirm/start", start).get("methods") or []
+    else:
+        methods = call(side, "POST", "/cli/vault/confirm/start", start).get("methods") or []
+    body = {"action": action, "secretId": secret_id}
+    if local and "local-auth" in methods:
+        say("Approve on this Mac (Touch ID or your login password): %s" % label)
+        body.update(method="local-auth", label=label)
+    elif "connect-password" in methods:
+        body.update(method="connect-password", password=password("Your password on %s (%s): " % (side[1], label)))
+    elif "vault-password" in methods:
+        body.update(method="vault-password", password=password("Vault password (%s): " % label))
+    else:
+        raise Fail("no_confirm_method", "set a vault password first: k2 vault confirm-password set (from a terminal outside K2)", 3)
+    if local:
+        tok = vault_sock("confirm/finish", body)["token"]
+    else:
+        tok = call(side, "POST", "/cli/vault/confirm/finish", body)["token"]
+    body.pop("password", None)
+    return tok
+
+
+def carry_confirm(side, preview, choices):
+    """clone-carry confirm for Copy rows (vault slice A). Until the vault
+    slice is in this daemon the preview says secrets unavailable and no
+    row can be Copy, so reaching here without one is a bug."""
+    plan = preview.get("secrets", {}).get("confirm") or {}
+    if not plan.get("action"):
+        raise Fail("clone_carry_unavailable", "this server can't copy secrets in a clone yet; choose blank or skip", 3)
+    return confirm(side, plan["action"], plan.get("secretId"), plan.get("label") or "copy secrets")
+
+
+def threads_value():
+    if OPTS.get("noThreads"):
+        return "none"
+    if OPTS.get("threadsSince"):
+        return {"sinceDays": int(OPTS["threadsSince"])}
+    return "all"
+
+
+def ask_choice(row, default):
+    allowed = ["copy", "blank", "skip"] if row.get("copyable", True) else ["blank", "skip"]
+    note = (" — " + row["note"]) if row.get("note") else ""
+    with open("/dev/tty", "r+") as t:
+        while True:
+            t.write("  %-24s %-10s %s [%s]%s: " % (row["name"], row.get("kind", ""), "/".join(allowed), default, note))
+            t.flush()
+            a = t.readline().strip().lower()
+            if not a:
+                return default
+            for c in allowed:
+                if c.startswith(a):
+                    return c
+            t.write("    choose %s\n" % ", ".join(allowed))
+
+
+def choose_secrets(preview):
+    sec = preview.get("secrets") or {}
+    rows = sec.get("rows") or [] if sec.get("available") else []
+    can_copy = bool(preview.get("callerCanCopySecrets"))
+    flags = {}
+    for key in ("copy", "blank", "skip"):
+        for n in OPTS.get(key) or []:
+            if n in flags and flags[n] != key:
+                raise Fail("usage", "'%s' is named twice with different choices" % n, 2)
+            flags[n] = key
+    if flags and not rows:
+        raise Fail("clone_secrets_unavailable", "no secrets to choose on this server (or it can't carry secrets yet): drop --copy/--blank/--skip", 2)
+    names = {r["name"] for r in rows}
+    for n in flags:
+        if n not in names:
+            raise Fail("usage", "no secret '%s' in this agent's plan (k2 clone preview)" % n, 2)
+    choices = {}
+    for r in rows:
+        d = r.get("default", "skip")
+        if d == "copy" and not can_copy:
+            d = "blank"
+        choices[r["name"]] = flags.get(r["name"], d)
+    if rows and not flags and TTY:
+        say("Secrets (names only). Enter keeps the default.")
+        for r in rows:
+            choices[r["name"]] = ask_choice(r, choices[r["name"]])
+    for r in rows:
+        c = choices[r["name"]]
+        if c == "copy" and not r.get("copyable", True):
+            raise Fail("usage", "'%s' can't be copied (%s)" % (r["name"], r.get("note") or "not carried"), 2)
+    if any(c == "copy" for c in choices.values()) and not can_copy:
+        raise Fail("clone_secrets_owner_or_admin", "copying secrets needs an Owner or Admin; choose blank or skip", 3)
+    return choices
+
+
+def preview(side, ws):
+    body = {"workspace": ws} if not ws.startswith("/") else {"project_path": ws}
+    if OPTS.get("threadsSince"):
+        body["sinceDays"] = int(OPTS["threadsSince"])
+    return call(side, "POST", "/cli/clone/preview", body, timeout=600)
+
+
+def bundle_body(side, pv, choices):
+    path = pv["workspace"]["path"]
+    body = {"project_path": path, "live_only": bool(OPTS.get("liveOnly")), "threads": threads_value()}
+    if choices:
+        body["secrets"] = choices
+    if OPTS.get("own"):
+        body["own_box_move"] = True
+    if OPTS.get("proposal"):
+        body["proposal_id"] = OPTS["proposal"]
+    if OPTS.get("envFiles"):
+        if not pv.get("envFiles"):
+            say("(no .env files to send)")
+        else:
+            body["carry_secrets"] = True
+            body["env_confirm_token"] = confirm(side, "clone-env", "env-files:" + path,
+                                                "send %d .env file(s) of %s as files" % (len(pv["envFiles"]), pv["workspace"]["handle"]))
+    if any(c == "copy" for c in choices.values()):
+        body["confirm_token"] = carry_confirm(side, pv, choices)
+    return body
+
+
+def upload(side, local_path, dest_dir):
+    size = os.path.getsize(local_path)
+    name = os.path.basename(local_path)
+    uid = "clone-cli-%s" % uuid.uuid4().hex[:12]
+    final, off = None, 0
+    with open(local_path, "rb") as f:
+        while True:
+            data = f.read(CHUNK)
+            last = off + len(data) >= size
+            body = {"upload_id": uid, "dir": dest_dir, "filename": name, "offset": off,
+                    "base64": base64.b64encode(data).decode(), "is_last": last}
+            if off == 0:
+                body["total_bytes"] = size
+            r = call(side, "POST", "/cli/fs/upload-chunk", body, timeout=600)
+            off += len(data)
+            if last:
+                final = r.get("path")
+                break
+    if not final:
+        raise Fail("upload_failed", "the upload finished without a path", 3)
+    return final
+
+
+def download(side, remote_path, size):
+    tmp = os.path.join(K2_HOME, "clone-tmp")
+    os.makedirs(tmp, exist_ok=True)
+    out = os.path.join(tmp, os.path.basename(remote_path))
+    part = out + ".part"
+    off = 0
+    with open(part, "wb") as f:
+        while True:
+            r = call(side, "GET", "/cli/fs/read-range", params={"path": remote_path, "offset": off, "len": CHUNK}, timeout=600)
+            data = base64.b64decode(r.get("base64") or "")
+            f.write(data)
+            off += len(data)
+            if r.get("eof") or not data:
+                break
+    if size and off != size:
+        os.unlink(part)
+        raise Fail("download_failed", "got %d of %d bytes" % (off, size), 3)
+    os.chmod(part, 0o600)
+    os.replace(part, out)
+    return out
+
+
+def remote_home(side):
+    info = call(side, "GET", "/cli/fs/info")
+    sep = info.get("separator") or "/"
+    home = (info.get("home") or "").rstrip(sep)
+    if not home:
+        raise Fail("remote_home_unknown", "the remote server didn't say its home folder; pass --dest", 3)
+    return home, sep
+
+
+def result_json(mode, pv, choices, unpacked, extra=None):
+    out = {
+        "ok": True,
+        "mode": mode,
+        "source": pv["workspace"]["handle"],
+        "destPath": unpacked.get("dest_path"),
+        "project": {k: (unpacked.get("project") or {}).get(k) for k in ("id", "name", "path")},
+        "threads": threads_value(),
+        "secrets": choices,
+    }
+    for k in ("threads_imported", "threads_skipped", "vault_imported", "vault_skipped", "cards_posted"):
+        if k in unpacked:
+            out[k] = unpacked[k]
+    out.update(extra or {})
+    return out
+
+
+def show_plan(pv, where):
+    if JSON_OUT:
+        return
+    w = pv["workspace"]
+    h = pv.get("history") or {}
+    say("Clone %s (%s) %s" % (w["handle"], w["path"], where))
+    say("  files: %s · chat transcripts: %s" % (h.get("files"), h.get("sessions")))
+    t = pv.get("threads") or {}
+    if OPTS.get("noThreads"):
+        say("  Thread: left behind (--no-threads)")
+    elif t.get("available"):
+        say("  Thread: %s conversation(s), %s message(s)%s. Chatter never travels." % (
+            t.get("conversations"), t.get("docs"),
+            (" from " + ", ".join(t["participants"])) if t.get("participants") else ""))
+    else:
+        say("  Thread: brought along (counts need the Thread update on this server). Chatter never travels.")
+    if pv.get("envFiles"):
+        say("  .env files held back: %s%s" % (", ".join(pv["envFiles"]),
+            "" if OPTS.get("envFiles") else " (move them into the vault: k2 vault import .env)"))
+
+
+def push(ws):
+    pv = preview(LOCAL, ws)
+    show_plan(pv, "to %s" % REMOTE[1])
+    choices = choose_secrets(pv)
+    body = bundle_body(LOCAL, pv, choices)
+    say("Building the bundle…")
+    b = call(LOCAL, "POST", "/cli/clone/bundle", body, timeout=3600)
+    home, sep = remote_home(REMOTE)
+    dest = OPTS.get("dest") or home
+    say("Uploading %s…" % os.path.basename(b["bundle_path"]))
+    remote_bundle = upload(REMOTE, b["bundle_path"], home + sep + ".k2" + sep + "clone-tmp")
+    try:
+        os.unlink(b["bundle_path"])
+    except OSError:
+        pass
+    ub = {"bundle_path": remote_bundle, "dest_parent": dest}
+    if b.get("vault_carry_b64"):
+        ub["vault_carry_b64"] = b["vault_carry_b64"]
+    say("Unpacking on %s…" % REMOTE[1])
+    u = call(REMOTE, "POST", "/cli/clone/unpack", ub, timeout=3600)
+    return result_json("to", pv, choices, u, {"host": REMOTE[1]})
+
+
+def pull(ws):
+    pv = preview(REMOTE, ws)
+    show_plan(pv, "from %s to this computer" % REMOTE[1])
+    choices = choose_secrets(pv)
+    body = bundle_body(REMOTE, pv, choices)
+    say("Packing on %s…" % REMOTE[1])
+    job = call(REMOTE, "POST", "/cli/clone/pack", body)["job_id"]
+    deadline = time.time() + 3600
+    while True:
+        st = call(REMOTE, "GET", "/cli/clone/pack-status", params={"job_id": job})
+        if st.get("phase") == "done":
+            break
+        if st.get("phase") == "failed":
+            raise Fail("pack_failed", st.get("error") or "the pack failed", 3)
+        if time.time() > deadline:
+            raise Fail("pack_timeout", "the pack took over an hour", 3)
+        time.sleep(0.5)
+    say("Downloading %s bytes…" % st.get("size_bytes"))
+    try:
+        local_bundle = download(REMOTE, st["bundle_path"], st.get("size_bytes") or 0)
+    finally:
+        try:
+            call(REMOTE, "POST", "/cli/clone/pack-cleanup", {"job_id": job})
+        except Fail:
+            pass
+    ub = {"bundle_path": local_bundle, "dest_parent": OPTS.get("dest") or os.path.expanduser("~")}
+    if st.get("vault_carry_b64"):
+        ub["vault_carry_b64"] = st["vault_carry_b64"]
+    say("Unpacking here…")
+    u = call(LOCAL, "POST", "/cli/clone/unpack", ub, timeout=3600)
+    return result_json("from", pv, choices, u, {"host": REMOTE[1]})
+
+
+def here(ws):
+    pv = preview(LOCAL, ws)
+    show_plan(pv, "to a second copy on this server")
+    if OPTS.get("copy"):
+        raise Fail("clone_here_copy_unavailable", "copying secrets into a second copy on the same server comes with the duplicate update; choose blank or skip", 3)
+    choices = choose_secrets(pv)
+    body = bundle_body(LOCAL, pv, choices)
+    b = call(LOCAL, "POST", "/cli/clone/bundle", body, timeout=3600)
+    dest = OPTS.get("dest") or os.path.dirname(pv["workspace"]["path"].rstrip("/"))
+    u = call(LOCAL, "POST", "/cli/clone/unpack", {"bundle_path": b["bundle_path"], "dest_parent": dest}, timeout=3600)
+    return result_json("here", pv, choices, u)
+
+
+def find_proposal(token):
+    rows = call(LOCAL, "GET", "/cli/clone-proposal/list", params={"status": "all"}).get("proposals") or []
+    hit = [r for r in rows if r["id"] == token] or [r for r in rows if r["id"].startswith(token)]
+    if len(hit) != 1:
+        raise Fail("proposal_not_found", "no single clone proposal matches '%s' (k2 clone proposals)" % token, 3)
+    return hit[0]
+
+
+def approve(token):
+    p = find_proposal(token)
+    if p["status"] != "open":
+        raise Fail("proposal_not_open", "%s is %s" % (p["id"], p["status"]), 3)
+    say("%s: %s" % (p["id"], p["summary"]))
+    say("asked by %s%s" % (p["proposedBy"], (": " + p["why"]) if p.get("why") else ""))
+    tok = confirm(LOCAL, "clone-approve", p["id"], "approve " + p["summary"][:60])
+    a = call(LOCAL, "POST", "/cli/clone-proposal/approve", {"proposal": p["id"], "confirmToken": tok})
+    run = a["run"]
+    o = run["options"]
+    OPTS.update({
+        "proposal": p["id"], "noThreads": not o.get("threads", True), "threadsSince": o.get("sinceDays"),
+        "liveOnly": not o.get("allHistory", True), "dest": OPTS.get("dest") or o.get("dest"),
+        "copy": [n for n, c in (o.get("secrets") or {}).items() if c == "copy"],
+        "blank": [n for n, c in (o.get("secrets") or {}).items() if c == "blank"],
+        "skip": [n for n, c in (o.get("secrets") or {}).items() if c == "skip"],
+    })
+    try:
+        res = here(run["workspacePath"]) if run["target"] == "here" else push(run["workspacePath"])
+    except Fail as e:
+        call(LOCAL, "POST", "/cli/clone-proposal/finish", {"proposal": p["id"], "ok": False, "detail": e.code})
+        raise
+    call(LOCAL, "POST", "/cli/clone-proposal/finish", {"proposal": p["id"], "ok": True})
+    res["proposal"] = p["id"]
+    return res
+
+
+def main():
+    verb = sys.argv[1]
+    arg = sys.argv[2] if len(sys.argv) > 2 else ""
+    try:
+        if verb == "preview":
+            out = preview(REMOTE if REMOTE[1] else LOCAL, arg)
+            if JSON_OUT:
+                print(json.dumps(out, indent=2))
+            else:
+                show_plan(out, "(preview)")
+                sec = out.get("secrets") or {}
+                for r in sec.get("rows") or []:
+                    print("  %-24s %-10s %-9s default %s%s" % (r["name"], r.get("kind", ""), r.get("group", ""), r.get("default"),
+                          (" — " + r["note"]) if r.get("note") else ""), file=sys.stderr)
+                if sec.get("notCarried"):
+                    print("  not carried: " + ", ".join(sec["notCarried"]), file=sys.stderr)
+                if not out.get("callerCanCopySecrets"):
+                    print("  copying secrets needs an Owner or Admin", file=sys.stderr)
+            return 0
+        if verb == "show":
+            p = find_proposal(arg)
+            print(json.dumps({"id": p["id"], "target": p["target"], "status": p["status"]}))
+            return 0
+        res = {"push": push, "pull": pull, "here": here, "approve": approve}[verb](arg)
+    except Fail as e:
+        print(json.dumps({"error": e.code, "hint": e.hint}), file=sys.stderr)
+        return e.rc
+    except KeyboardInterrupt:
+        print(json.dumps({"error": "cancelled", "hint": "stopped"}), file=sys.stderr)
+        return 3
+    if JSON_OUT:
+        print(json.dumps(res, indent=2))
+    else:
+        print("Cloned %s → %s%s" % (res["source"], res.get("destPath"), (" on " + res["host"]) if res.get("host") else ""))
+        if res.get("secrets"):
+            counts = {}
+            for c in res["secrets"].values():
+                counts[c] = counts.get(c, 0) + 1
+            print("  secrets: " + " · ".join("%s %d" % (k, v) for k, v in sorted(counts.items())))
+        for k in ("threads_imported", "vault_imported", "cards_posted"):
+            if k in res:
+                print("  %s: %s" % (k.replace("_", " "), res[k]))
+    return 0
+
+
+sys.exit(main())
+PY
+}
+
+# Parse the shared flags into K2C_OPTS (JSON). Leftover positionals land in
+# _CLONE_ARGS.
+_clone_parse() {
+    _CLONE_ARGS=()
+    _CLONE_TOKEN=""
+    local copy="" blank="" skip="" since="" dest="" why="" to="" ws="" reason=""
+    local no_threads=0 own=0 live_only=0 env_files=0 yes=0 json=0 mine=0 all=0
+    _CLONE_HOST=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --no-threads) no_threads=1; shift ;;
+            --threads-since|--since-days) since="${2:-}"; shift 2 ;;
+            --copy) copy="${copy}${copy:+,}${2:-}"; shift 2 ;;
+            --blank) blank="${blank}${blank:+,}${2:-}"; shift 2 ;;
+            --skip) skip="${skip}${skip:+,}${2:-}"; shift 2 ;;
+            --own) own=1; shift ;;
+            --live-only) live_only=1; shift ;;
+            --env-files) env_files=1; shift ;;
+            --dest) dest="${2:-}"; shift 2 ;;
+            --host) _CLONE_HOST="${2:-}"; shift 2 ;;
+            --token) _CLONE_TOKEN="${2:-}"; shift 2 ;;
+            --to) to="${2:-}"; shift 2 ;;
+            --why) why="${2:-}"; shift 2 ;;
+            --reason) reason="${2:-}"; shift 2 ;;
+            --workspace) ws="${2:-}"; shift 2 ;;
+            --yes|-y) yes=1; shift ;;
+            --json) json=1; shift ;;
+            --mine) mine=1; shift ;;
+            --all) all=1; shift ;;
+            -h|--help) _clone_usage; exit 0 ;;
+            -*) _clone_die usage "unknown flag '$1' (k2 clone --help)" 2 ;;
+            *) _CLONE_ARGS+=("$1"); shift ;;
+        esac
+    done
+    if [ -n "$since" ]; then
+        case "$since" in ''|*[!0-9]*) _clone_die usage "--threads-since takes a number of days" 2 ;; esac
+    fi
+    K2C_OPTS="$(K2C_copy="$copy" K2C_blank="$blank" K2C_skip="$skip" K2C_since="$since" K2C_dest="$dest" \
+        K2C_why="$why" K2C_to="$to" K2C_ws="$ws" K2C_reason="$reason" \
+        K2C_flags="$no_threads $own $live_only $env_files $yes $json $mine $all" python3 -c '
+import json, os
+e = os.environ
+f = [x == "1" for x in e["K2C_flags"].split()]
+lst = lambda k: [n.strip() for n in e.get(k, "").split(",") if n.strip()]
+o = {"noThreads": f[0], "own": f[1], "liveOnly": f[2], "envFiles": f[3], "yes": f[4], "json": f[5], "mine": f[6], "all": f[7],
+     "copy": lst("K2C_copy"), "blank": lst("K2C_blank"), "skip": lst("K2C_skip")}
+for k, n in (("threadsSince", "K2C_since"), ("dest", "K2C_dest"), ("why", "K2C_why"), ("to", "K2C_to"),
+             ("workspace", "K2C_ws"), ("reason", "K2C_reason")):
+    if e.get(n):
+        o[k] = int(e[n]) if k == "threadsSince" else e[n]
+print(json.dumps(o))')"
+    export K2C_OPTS
+}
+
+_clone_opt() {
+    printf '%s' "$K2C_OPTS" | python3 -c 'import json,sys; v=json.load(sys.stdin).get(sys.argv[1]); print("" if v in (None, False) else (json.dumps(v) if isinstance(v,(list,dict)) else v))' "$1"
+}
+
+# Point K2C_REMOTE_* at a Connect host (token from --token / env / file).
+_clone_remote() {
+    local host="$1" tok
+    tok="$(_remote_token_for_host "$host" "$_CLONE_TOKEN")"
+    [ -n "$tok" ] || _clone_die no_remote_token "no token for '$host': sign in to it in K2 with Remember on, pass --token, set \$K2_REMOTE_TOKEN, or add it to ${K2_HOME}/connect-tokens.json"
+    case "$host" in
+        http://*|https://*) K2C_REMOTE_URL="${host%/}" ;;
+        *) K2C_REMOTE_URL="https://${host}" ;;
+    esac
+    K2C_REMOTE_TOKEN="$tok"
+    export K2C_REMOTE_URL K2C_REMOTE_TOKEN
+}
+
+cmd_clone() {
+    local sub="${1:-}"
+    case "$sub" in
+        ""|-h|--help|help) _clone_usage; return 0 ;;
+    esac
+    shift
+    case "$sub" in
+        preview)
+            _clone_parse "$@"
+            [ "${#_CLONE_ARGS[@]}" -eq 1 ] || _clone_die usage "usage: k2 clone preview <ws> [--host H]" 2
+            _clone_person_guard
+            [ -n "$_CLONE_HOST" ] && _clone_remote "$_CLONE_HOST"
+            _clone_py preview "${_CLONE_ARGS[0]}"
+            ;;
+        to)
+            _clone_parse "$@"
+            [ "${#_CLONE_ARGS[@]}" -eq 2 ] || _clone_die usage "usage: k2 clone to <host> <ws> [--dest DIR]" 2
+            _clone_person_guard
+            _clone_remote "${_CLONE_ARGS[0]}"
+            _clone_py push "${_CLONE_ARGS[1]}"
+            ;;
+        from)
+            _clone_parse "$@"
+            [ "${#_CLONE_ARGS[@]}" -eq 1 ] || _clone_die usage "usage: k2 clone from <host>:<ws> [--dest DIR]" 2
+            local spec="${_CLONE_ARGS[0]}"
+            case "$spec" in *:*) ;; *) _clone_die usage "usage: k2 clone from <host>:<ws>" 2 ;; esac
+            _clone_person_guard
+            # The workspace is after the LAST colon (a URL host has its own).
+            _clone_remote "${spec%:*}"
+            _clone_py pull "${spec##*:}"
+            ;;
+        here)
+            _clone_parse "$@"
+            [ "${#_CLONE_ARGS[@]}" -eq 1 ] || _clone_die usage "usage: k2 clone here <ws> [--dest DIR]" 2
+            _clone_person_guard
+            _clone_py here "${_CLONE_ARGS[0]}"
+            ;;
+        proposals|proposal)
+            _clone_parse "$@"
+            local q="status=open"
+            [ "$(_clone_opt all)" = "True" ] && q="status=all"
+            _compute_call GET /cli/clone-proposal/list "$q"
+            if [ "$(_clone_opt json)" = "True" ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+rs = json.load(sys.stdin).get("proposals") or []
+if not rs:
+    print("No clone proposals."); sys.exit(0)
+for r in rs:
+    print("%s  %-9s %s" % (r["id"], r["status"], r["summary"]))
+    print("    by %s%s" % (r["proposedBy"], (": " + r["why"]) if r.get("why") else ""))
+    if r.get("decidedBy"):
+        print("    %s by %s" % (r["status"], r["decidedBy"]))'
+            ;;
+        propose)
+            _clone_parse "$@"
+            [ "${#_CLONE_ARGS[@]}" -eq 0 ] || _clone_die usage "usage: k2 clone propose --to <host|here> --why \"…\"" 2
+            local body
+            body="$(printf '%s' "$K2C_OPTS" | python3 -c '
+import json, sys
+o = json.load(sys.stdin)
+if not o.get("to"):
+    print("usage: --to <host|here>", file=sys.stderr); sys.exit(2)
+b = {"to": o["to"], "threads": not o.get("noThreads"), "allHistory": not o.get("liveOnly"),
+     "copy": o.get("copy") or [], "blank": o.get("blank") or [], "skip": o.get("skip") or []}
+for k in ("why", "dest", "workspace"):
+    if o.get(k): b[k] = o[k]
+if o.get("threadsSince"): b["sinceDays"] = o["threadsSince"]
+print(json.dumps(b))')" || exit 2
+            _compute_call POST /cli/clone-proposal/new "$body"
+            if [ "$(_clone_opt json)" = "True" ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+p = v["proposal"]
+print("%s held: %s" % (p["id"], p["summary"]))
+print("  " + v.get("hint", ""))'
+            ;;
+        withdraw)
+            _clone_parse "$@"
+            [ "${#_CLONE_ARGS[@]}" -eq 1 ] || _clone_die usage "usage: k2 clone withdraw <id>" 2
+            _compute_call POST /cli/clone-proposal/withdraw "$(_compute_json K2_CJ_proposal="${_CLONE_ARGS[0]}")"
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; p=json.load(sys.stdin)["proposal"]; print("%s %s" % (p["id"], p["status"]))'
+            ;;
+        deny)
+            _clone_parse "$@"
+            [ "${#_CLONE_ARGS[@]}" -eq 1 ] || _clone_die usage "usage: k2 clone deny <id> [--reason TEXT]" 2
+            _clone_person_guard
+            _compute_call POST /cli/clone-proposal/deny "$(_compute_json K2_CJ_proposal="${_CLONE_ARGS[0]}" K2_CJ_reason="$(_clone_opt reason)")" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; p=json.load(sys.stdin)["proposal"]; print("%s %s" % (p["id"], p["status"]))'
+            ;;
+        approve)
+            _clone_parse "$@"
+            [ "${#_CLONE_ARGS[@]}" -eq 1 ] || _clone_die usage "usage: k2 clone approve <id>" 2
+            _clone_person_guard
+            local shown target
+            shown="$(_clone_py show "${_CLONE_ARGS[0]}")" || exit $?
+            target="$(printf '%s' "$shown" | python3 -c 'import json,sys; print(json.load(sys.stdin)["target"])')"
+            [ "$target" = "here" ] || _clone_remote "$target"
+            _clone_py approve "${_CLONE_ARGS[0]}"
+            ;;
+        *)
+            # Bare `k2 clone <ws> --dest DIR` = `here` (dup PRD A4 alias).
+            _clone_parse "$sub" "$@"
+            [ -n "$(_clone_opt dest)" ] || _clone_die usage "unknown 'k2 clone $sub' (k2 clone --help); a bare workspace needs --dest" 2
+            [ "${#_CLONE_ARGS[@]}" -eq 1 ] || _clone_die usage "usage: k2 clone <ws> --dest DIR" 2
+            _clone_person_guard
+            _clone_py here "${_CLONE_ARGS[0]}"
+            ;;
+    esac
+}
+
 _users_usage() {
     cat <<'EOF' >&2
 k2 users — local daemon connect-user accounts
@@ -18809,6 +19526,9 @@ USAGE
                                 change-password / logout / set-password:
                                 outcome, ingress, ip, client). Owner only.
                                 Default 50, max 1000. ~/.k2/auth-audit.jsonl
+  k2 users set-can-clone <username> on|off
+                                Settings → Admin Access → "Can clone" (owner
+                                only). Owners can always clone.
   k2 users unlock <username> [--json]
                                 Clear a box login lock without changing
                                 the password. Exit 0 when no lock is there.
@@ -19118,6 +19838,36 @@ print(line(hdr))
 for r in rows:
     print(line(r))
 '
+            ;;
+        set-can-clone)
+            # Settings → Admin Access → "Can clone" (owner only).
+            shift || true
+            local cc_user="${1:-}" cc_val="${2:-}"
+            case "$cc_val" in
+                on|true|yes|1) cc_val=true ;;
+                off|false|no|0) cc_val=false ;;
+                *) echo "Usage: k2 users set-can-clone <username> on|off" >&2; return 2 ;;
+            esac
+            [ -n "$cc_user" ] || { echo "Usage: k2 users set-can-clone <username> on|off" >&2; return 2; }
+            local cc_body cc_resp
+            cc_body=$(CC_USER="$cc_user" CC_VAL="$cc_val" python3 -c '
+import json, os
+print(json.dumps({"username": os.environ["CC_USER"], "canClone": os.environ["CC_VAL"] == "true"}))')
+            cc_resp=$(cli_send cli_post_json "/cli/users/set-can-clone" "$cc_body") || cc_resp=""
+            printf '%s' "$cc_resp" | CC_USER="$cc_user" CC_VAL="$cc_val" python3 -c '
+import json, os, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw) if raw.strip() else {}
+except Exception:
+    d = {"error": raw[:200]}
+if d.get("success"):
+    print("%s: Can clone %s" % (os.environ["CC_USER"], "on" if os.environ["CC_VAL"] == "true" else "off"))
+    sys.exit(0)
+e = d.get("error") or "empty response from daemon"
+print("Error: %s" % (e.get("hint") if isinstance(e, dict) else e), file=sys.stderr)
+sys.exit(3)'
+            return $?
             ;;
         unlock)
             shift || true
@@ -23688,6 +24438,44 @@ cmd_schema() {
       "flags": [
         {"name": "--role", "arg": "role", "description": "owner | admin | member (there is no viewer role)"},
         {"name": "--password-stdin", "arg": null, "description": "Read password from stdin (automation)."}
+      ]
+    },
+    {
+      "name": "users set-can-clone",
+      "usage": "k2 users set-can-clone <username> on|off",
+      "description": "Settings → Admin Access → Can clone (POST /cli/users/set-can-clone, owner only). Defaults on; Owners can always clone.",
+      "args": [{"name": "username", "required": true}, {"name": "on|off", "required": true}],
+      "flags": []
+    },
+    {
+      "name": "clone",
+      "usage": "k2 clone <preview|to|from|here|proposals|approve|deny|propose|withdraw> ...",
+      "description": "Copy an agent (workspace, chat history, Thread, chosen vault secrets) to another server, this computer or a second copy here. People clone (clone gate: owner, or a login with Can clone; the personal-computer switch for pulls); agents propose and a person approves. Never prints a secret value. Exit 0 ok, 2 bad usage, 3 refused/unreachable.",
+      "args": [],
+      "flags": [
+        {"name": "--no-threads", "arg": null, "description": "Leave the Thread behind (default: bring it)."},
+        {"name": "--threads-since", "arg": "N", "description": "Only the last N days of Thread."},
+        {"name": "--copy", "arg": "NAMES", "description": "Secrets to copy (Owner/Admin confirm)."},
+        {"name": "--blank", "arg": "NAMES", "description": "Secrets to leave blank (a card on the clone's Thread)."},
+        {"name": "--skip", "arg": "NAMES", "description": "Secrets to skip."},
+        {"name": "--own", "arg": null, "description": "My own server: keep given-by-a-person marks."},
+        {"name": "--live-only", "arg": null, "description": "Only the newest chat transcript."},
+        {"name": "--env-files", "arg": null, "description": "Also send .env files as files (asks to confirm)."},
+        {"name": "--dest", "arg": "DIR", "description": "Parent folder on the target."},
+        {"name": "--host", "arg": "HOST", "description": "preview: a remote server."},
+        {"name": "--token", "arg": "TOKEN", "description": "Remote token (else connect-tokens.json / $K2_REMOTE_TOKEN)."},
+        {"name": "--yes", "arg": null, "description": "Don't ask; defaults and flags as given."},
+        {"name": "--json", "arg": null, "description": "Names, choices and counts as JSON."}
+      ]
+    },
+    {
+      "name": "clone propose",
+      "usage": "k2 clone propose --to <host|here> [--no-threads] [--threads-since N] [--copy A,B] [--blank C] [--skip D] [--dest DIR] --why \"…\"",
+      "description": "Agents: hold a clone of your own workspace for a person (POST /cli/clone-proposal/new). Posts one Thread line for your human; you get a k2 msg when they approve, deny or it expires (7 days). k2 clone proposals --mine, k2 clone withdraw <id>.",
+      "args": [],
+      "flags": [
+        {"name": "--to", "arg": "HOST|here", "description": "Where the clone goes."},
+        {"name": "--why", "arg": "TEXT", "description": "Why, for your human (required for agents)."}
       ]
     },
     {
@@ -51545,6 +52333,10 @@ EOF
         # Hosted services (run/ps/start/stop/rm/logs → /cli/publish/*) plus
         # nested-subdomain CP (status + subdomain *). P6: status stays plan.
         shift; cmd_publish "$@"
+        ;;
+    clone)
+        # k2 clone (prd-clone-carries-threads-and-vault-v1 §4.3/§4.4).
+        shift; cmd_clone "$@"
         ;;
     users)
         # Local daemon connect-user accounts (list / add). Owner-token

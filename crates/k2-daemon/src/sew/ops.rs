@@ -463,6 +463,10 @@ pub mod fake {
                         "binary": match &v {
                             None => json!({"present": false}),
                             Some(v) if v == "unknown" => json!({"present": true, "known": false, "version": null}),
+                            // What the real helper answers for a binary it
+                            // refuses to hash (owner / mode).
+                            Some(v) if v == "not-root" => json!({"present": true, "known": false,
+                                "error": "sew helper: /usr/local/bin/sew is not root-owned or is writable by others"}),
                             Some(v) => json!({"present": true, "known": true, "version": v}),
                         },
                         "staged": {"core": null},
@@ -515,7 +519,11 @@ pub mod fake {
                     inactive(UNIT_DB);
                     Self::sew_exit(0, json!({"removed": ["units"]}))
                 }
-                a if a.starts_with("engine sew purge ") => Self::sew_exit(0, json!({"purged": true})),
+                a if a.starts_with("engine sew purge ") => {
+                    // Sew moves kept backups aside (sew-ops install.rs).
+                    let kept = a.ends_with(" keep-backups").then_some("/var/lib/sew-backups-20260103T000000Z");
+                    Self::sew_exit(0, json!({"purged": true, "kept_backups": kept}))
+                }
                 "engine sew doctor" => Self::sew_exit(0, json!({"ok": true, "checks": []})),
                 "engine sew rotate-master" => Self::sew_exit(0, json!({"restarted": true})),
                 "engine sew drop-prev" => Self::sew_exit(0, json!({"dropped": true})),

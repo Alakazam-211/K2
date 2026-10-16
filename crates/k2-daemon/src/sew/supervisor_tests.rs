@@ -216,6 +216,31 @@ fn preflight_hard_stops_refuse_before_any_effect() {
     assert_eq!(status(&t2.env(), false)["supported"], false);
 }
 
+/// S29 VM cycle: a `k2:k2` or group-writable /usr/local/bin/sew was
+/// reported as "not a Sew release this K2 knows"; say what is wrong.
+#[test]
+fn preflight_says_why_the_helper_refused_the_binary() {
+    let t = t();
+    *t.ops.on_disk.lock().unwrap() = Some("not-root".into());
+    let b = preflight(&t.env(), &t.req()).into_iter().find(|c| c["id"] == "binary").unwrap();
+    assert_eq!(b["status"], "fail");
+    assert!(b["detail"].as_str().unwrap().contains("not root-owned"), "{b}");
+    assert!(b["hint"].as_str().unwrap().contains("root:root"), "{b}");
+}
+
+/// S29 VM cycle: on a fresh box the vault check said it "holds Sew's
+/// master key" before enable had stored one.
+#[test]
+fn preflight_vault_check_says_whether_a_key_is_there() {
+    let t = t();
+    let vault = |t: &T| preflight(&t.env(), &t.req()).into_iter().find(|c| c["id"] == "vault").unwrap();
+    let before = vault(&t);
+    assert_eq!(before["status"], "ok");
+    assert!(before["detail"].as_str().unwrap().contains("is open"), "{before}");
+    t.enabled();
+    assert!(vault(&t)["detail"].as_str().unwrap().contains("holds Sew's master key"));
+}
+
 #[test]
 fn voice_ports_warn_and_a_taken_443_means_no_turn_on_443() {
     let t = t();
@@ -451,9 +476,29 @@ fn purge_checks_the_hostname_first_and_deletes_vault_keys_last() {
     t.ops.clear();
     let r = purge(&t.env(), "lztek", true).unwrap();
     assert_eq!(r["purged"], true);
-    assert_eq!(t.ops.effects(), vec!["engine sew systemctl disable-now".to_string(), format!("engine sew purge {INSTALL_ID} keep-backups")]);
+    // sew-db stays up so Sew can read the install id it checks the
+    // typed-back id against (S29 VM cycle: stopping it first made every
+    // purge a mismatch).
+    assert_eq!(t.ops.effects(), vec![format!("engine sew purge {INSTALL_ID} keep-backups")]);
+    assert_eq!(r["backupsAt"], "/var/lib/sew-backups-20260103T000000Z", "where Sew moved the kept backups");
     assert!(t.secrets.resolve(&key_ref).unwrap().is_none(), "vault key gone");
     assert!(store::load().is_none(), "not installed");
+}
+
+/// After `uninstall` sew-db is down, so Sew reads the install id as `none`
+/// and only `--yes-delete-all-data=none` matches (Sew's contract).
+#[test]
+fn purge_after_uninstall_types_back_none() {
+    let t = t();
+    t.enabled();
+    uninstall(&t.env(), false).unwrap();
+    assert!(!t.ops.unit(pin::UNIT_DB).is_active());
+    t.ops.clear();
+    let r = purge(&t.env(), "lztek", false).unwrap();
+    assert_eq!(r["purged"], true);
+    assert_eq!(t.ops.effects(), vec!["engine sew purge none".to_string()]);
+    assert!(r["backupsAt"].is_null());
+    assert!(store::load().is_none());
 }
 
 // ── upgrade / rollback ───────────────────────────────────────────────────

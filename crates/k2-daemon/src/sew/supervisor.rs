@@ -293,7 +293,17 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
     let (present, version, known) = st.as_ref().map(on_disk).unwrap_or((false, None, false));
     let pin_v = pinned().version;
     if present && !known {
-        c.push(check("binary", "fail", "/usr/local/bin/sew is not a Sew release this K2 knows", "remove it or reinstall from a pinned release"));
+        // The helper's own words when it refused the file itself (owner,
+        // mode, not a regular file), else an unknown sha.
+        match st.as_ref().and_then(|s| s.pointer("/binary/error")).and_then(Value::as_str) {
+            Some(why) => c.push(check(
+                "binary",
+                "fail",
+                why.trim_start_matches("sew helper: ").to_string(),
+                "Sew's binary must be root:root and not group/other-writable: reinstall it from a pinned release",
+            )),
+            None => c.push(check("binary", "fail", "/usr/local/bin/sew is not a Sew release this K2 knows", "remove it or reinstall from a pinned release")),
+        }
     } else if let Some(v) = &version {
         if v == pin_v {
             c.push(check("binary", "ok", format!("Sew {v} installed"), ""));
@@ -386,8 +396,10 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
     // A read probe: never writes the vault.
     if !has_key && env.secrets.resolve("sewsec_probe_000000000000").is_err() {
         c.push(check("vault", "fail", "the K2 vault isn't open", "Sew's master key lives in the vault: open it first (k2 vault status)"));
-    } else {
+    } else if has_key {
         c.push(check("vault", "ok", "the K2 vault holds Sew's master key", ""));
+    } else {
+        c.push(check("vault", "ok", "the K2 vault is open (enable stores a new Sew master key there)", ""));
     }
     c
 }
@@ -1078,16 +1090,28 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
     }
     helper_check(env)?;
     let _l = begin(env)?;
-    let _ = helper(env, &["systemctl", "disable-now"], None);
-    let id = row.install_id.clone().unwrap_or_else(|| "none".into());
+    // Sew checks `--yes-delete-all-data=<id>` against the install id it
+    // reads from its database, and the id is `none` when that database is
+    // unreadable (Sew's contract). So: never stop sew-db first (`sew
+    // uninstall --purge` disables every unit itself), and type back `none`
+    // when sew-db is down (after an uninstall). S29 VM cycle: K2 stopped
+    // the db first and passed the stored id, so every purge was refused.
+    // The person proof (vault confirm) stays bound to the real install id.
+    let db_up = env.ops.unit(UNIT_DB).is_active();
+    let id = if db_up { row.install_id.clone().unwrap_or_else(|| "none".into()) } else { "none".into() };
     let mut tail = vec!["purge", id.as_str()];
     if keep_backups {
         tail.push("keep-backups");
     }
-    if let Err(e) = sew_ok(env, &tail, None) {
-        fail_row(env, &format!("purge: {e}"));
-        return Err(no("purge_failed", 500, format!("{e} (nothing in the K2 vault was deleted; retry when fixed)")));
-    }
+    let out = match sew_ok(env, &tail, None) {
+        Ok(v) => v,
+        Err(e) => {
+            fail_row(env, &format!("purge: {e}"));
+            return Err(no("purge_failed", 500, format!("{e} (nothing in the K2 vault was deleted; retry when fixed)")));
+        }
+    };
+    // `--keep-backups` moves them to /var/lib/sew-backups-<stamp>: say where.
+    let backups_at = out.pointer("/sew/kept_backups").and_then(Value::as_str).map(str::to_string);
     for r in [&row.master_key_ref, &row.master_next_ref, &row.master_prev_ref].into_iter().flatten() {
         if let Err(e) = env.secrets.delete(r) {
             return Err(no("vault_error", 500, format!("Sew was purged but the vault key could not be deleted: {e}")));
@@ -1100,6 +1124,7 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
         "state": "not-installed",
         "purged": true,
         "keptBackups": keep_backups,
+        "backupsAt": backups_at,
         "warning": "Off-box backups and the keyring mirror can no longer be read unless you kept the recovery key. \
                     K2 did not delete off-box copies.",
     }))

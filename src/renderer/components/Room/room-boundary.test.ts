@@ -64,6 +64,7 @@ const ROOM_FILES = [
   'components/AgentPane/AgentChatPane.tsx',
   'components/AgentPane/AgentInboxPane.tsx',
   'components/AgentPane/AgentPane.tsx',
+  'components/AgentPanel/AgentPanel.tsx',
   'components/BrowserPane/BrowserPane.tsx',
   'components/ChangesPanel/ChangesPanel.tsx',
   'components/ChatHistory/ChatHistory.tsx',

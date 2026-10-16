@@ -107,7 +107,7 @@ import {
   writeWindowChrome,
 } from '@/lib/window-chrome'
 
-type PanelTab = 'files' | 'changes' | 'history' | 'workspace'
+type PanelTab = 'files' | 'agent' | 'history' | 'workspace'
 const DEFAULT_TABS: {
   leftPanelActiveTab: PanelTab
   rightPanelActiveTab: PanelTab
@@ -117,7 +117,7 @@ const DEFAULT_TABS: {
   leftPanelActiveTab: 'files',
   rightPanelActiveTab: 'history',
   leftPanelTabs: ['files', 'workspace'],
-  rightPanelTabs: ['history', 'changes'],
+  rightPanelTabs: ['history', 'agent'],
 }
 
 function chromeUpdates(
@@ -278,7 +278,7 @@ describe('panels store — per-window chrome + tab persist gate', () => {
     settingsGetRejecter!(new Error('first attempt fails'))
     await initPromise
 
-    usePanelsStore.getState().setRightPanelActiveTab('changes')
+    usePanelsStore.getState().setRightPanelActiveTab('agent')
     expect(settingsUpdateCalls).toHaveLength(0)
 
     freshSettingsGetPromise()
@@ -316,5 +316,78 @@ describe('panels store — per-window chrome + tab persist gate', () => {
       rightOpen: false,
       sidebarCollapsed: true,
     })
+  })
+})
+
+// 0.46.0 (Rosson 2026-10-16): the right drawer's Changes tab became Agent. A
+// saved layout that names 'changes' keeps its place as 'agent', so nobody
+// lands on a tab the drawers no longer render.
+describe('panels store — Changes tab becomes Agent', () => {
+  beforeEach(() => {
+    __resetPanelsLoadGateForTests()
+    settingsUpdateCalls.length = 0
+    localMem.clear()
+    windowLabel.value = 'main'
+    resetPanelState()
+    freshSettingsGetPromise()
+  })
+
+  async function initWith(saved: Record<string, unknown>): Promise<void> {
+    const p = usePanelsStore.getState().initFromSettings()
+    settingsGetResolver!({ leftPanelOpen: true, rightPanelOpen: true, sidebarCollapsed: false, ...saved })
+    await p
+  }
+
+  it('the default right drawer offers Chats and Agent, not Changes', () => {
+    expect(usePanelsStore.getInitialState().rightPanelTabs).toEqual(['history', 'agent'])
+  })
+
+  it('a saved right drawer with Changes (active) migrates to Agent (active)', async () => {
+    await initWith({
+      leftPanelTabs: ['files', 'workspace'],
+      rightPanelTabs: ['history', 'changes'],
+      leftPanelActiveTab: 'files',
+      rightPanelActiveTab: 'changes',
+    })
+    const s = usePanelsStore.getState()
+    expect(s.rightPanelTabs).toEqual(['history', 'agent'])
+    expect(s.rightPanelActiveTab).toBe('agent')
+    expect(s.leftPanelTabs).toEqual(['files', 'workspace'])
+  })
+
+  it('Changes moved to the left drawer becomes Agent on the left, once', async () => {
+    await initWith({
+      leftPanelTabs: ['files', 'changes', 'workspace'],
+      rightPanelTabs: ['history'],
+      leftPanelActiveTab: 'changes',
+      rightPanelActiveTab: 'history',
+    })
+    const s = usePanelsStore.getState()
+    expect(s.leftPanelTabs).toEqual(['files', 'agent', 'workspace'])
+    expect(s.leftPanelActiveTab).toBe('agent')
+    expect(s.rightPanelTabs).toEqual(['history'])
+  })
+
+  it('a layout naming both Changes and Agent keeps one Agent', async () => {
+    await initWith({
+      leftPanelTabs: ['files', 'workspace', 'agent'],
+      rightPanelTabs: ['history', 'changes'],
+      leftPanelActiveTab: 'files',
+      rightPanelActiveTab: 'changes',
+    })
+    const s = usePanelsStore.getState()
+    expect(s.leftPanelTabs).toEqual(['files', 'workspace', 'agent'])
+    expect(s.rightPanelTabs).toEqual(['history'])
+    expect(s.rightPanelActiveTab).toBe('history')
+  })
+
+  it('a layout with neither gets Agent on the right', async () => {
+    await initWith({
+      leftPanelTabs: ['files', 'workspace'],
+      rightPanelTabs: ['history'],
+      leftPanelActiveTab: 'files',
+      rightPanelActiveTab: 'history',
+    })
+    expect(usePanelsStore.getState().rightPanelTabs).toEqual(['history', 'agent'])
   })
 })

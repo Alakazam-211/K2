@@ -80,7 +80,7 @@ vi.mock('@/components/Terminal/TerminalArea', () => ({
 vi.mock('@/components/FileTree/FileTree', () => ({
   default: ({ rootPath }: { rootPath: string }) => <div data-testid="drawer-files" data-root={rootPath} />,
 }))
-vi.mock('@/components/ChangesPanel/ChangesPanel', () => ({ default: () => <div data-testid="drawer-changes" /> }))
+vi.mock('@/components/AgentPanel/AgentPanel', () => ({ default: () => <div data-testid="drawer-agent" /> }))
 vi.mock('@/components/ChatHistory/ChatHistory', () => ({
   default: ({ projectPath }: { projectPath: string }) => <div data-testid="drawer-history" data-root={projectPath} />,
 }))
@@ -288,7 +288,7 @@ beforeEach(() => {
     leftPanelTabs: ['files', 'workspace'],
     leftPanelActiveTab: 'files',
     rightPanelOpen: true,
-    rightPanelTabs: ['history', 'changes'],
+    rightPanelTabs: ['history', 'agent'],
     rightPanelActiveTab: 'history',
   })
   const home = useHomesStore.getState().homes[0]

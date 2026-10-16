@@ -4,16 +4,14 @@ import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_DEFAULT_WIDTH
 } from '../../../shared/constants'
-import { usePanelsStore } from '../../stores/panels'
+import { usePanelsStore, type PanelTab } from '../../stores/panels'
 import { showContextMenu } from '../../lib/context-menu'
 import { Surface } from '@/components/ui'
 import DrawerTabBarToggle from '@/components/Layout/DrawerTabBarToggle'
 
-type PanelTab = 'files' | 'changes' | 'history' | 'workspace'
-
 const TAB_LABELS: Record<PanelTab, string> = {
   files: 'Files',
-  changes: 'Changes',
+  agent: 'Agent',
   history: 'Chats',
   workspace: 'Workspace'
 }

@@ -424,7 +424,9 @@ fn skin_login_throttle_key(
 ) -> ThrottleKey {
     match ingress {
         Ingress::Tunnel => ThrottleKey::Uncapped,
-        Ingress::App => ThrottleKey::Client("app-link".to_string()),
+        // A login through an App's link has its own buckets (per App, per
+        // (App, username) failures, link-wide): `apps::gateway::link_login`.
+        Ingress::App => ThrottleKey::Uncapped,
         Ingress::Loopback => match proxied_client(ingress, peer, headers_blob, trusted) {
             Some(ip) => ThrottleKey::Client(ip.to_string()),
             None => ThrottleKey::Uncapped,
@@ -3950,7 +3952,24 @@ async fn handle_one_request(
                     }
                 })
                 .unwrap_or_default();
-            let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let mut body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // Runtime 0.46.1 door: a guest login through an App's link is
+            // bound to that App and throttled per App, per (App, username)
+            // failure and link-wide (`apps::gateway::link_login`).
+            let mut link_user_key = None;
+            if ingress == Ingress::App {
+                match crate::apps::gateway::link_login(&state.login_limiter, &body_bytes, &content_type) {
+                    Some(crate::apps::gateway::LinkLogin::Proceed { body, user_key }) => {
+                        body_bytes = body;
+                        link_user_key = Some(user_key);
+                    }
+                    Some(crate::apps::gateway::LinkLogin::Refuse { status, body }) => {
+                        super::http::send_response(&mut *stream, status, "application/json", &body).await;
+                        return DispatchOutcome::Done;
+                    }
+                    None => {}
+                }
+            }
             // Same 5/300s delay as Connect, BEFORE dummy argon2 /
             // `check_and_record_login`. Skin keys are `"skin:" + ip` in
             // their own table so a Connect spray does not 429 skin guests.
@@ -4002,6 +4021,9 @@ async fn handle_one_request(
                 r.response.status.starts_with("401") || r.response.status.starts_with("423");
             if anonymous && refused {
                 limiter.record_global_failure(crate::login_throttle::Door::Skin, limiter.now());
+            }
+            if let (true, Some(k)) = (refused, link_user_key.as_deref()) {
+                crate::apps::gateway::link_login_refused(limiter, k);
             }
             if refused {
                 tokio::time::sleep(Duration::from_millis(500)).await;

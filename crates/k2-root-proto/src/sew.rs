@@ -413,11 +413,6 @@ pub fn public_url_ok(s: &str) -> bool {
     s.is_empty() || scheme_host_ok(s, "https")
 }
 
-/// `identity.standalone.setup_url`: exactly `https://<host>/setup`, or `""`
-/// to clear it.
-pub fn setup_url_ok(s: &str) -> bool {
-    s.is_empty() || s.strip_suffix("/setup").is_some_and(|b| scheme_host_ok(b, "https"))
-}
 
 /// An absolute, normalised path: no `..`, `.`, `//`, trailing `/`, control
 /// characters or shell-meta. (Existence and link checks are the helper's.)
@@ -521,11 +516,6 @@ pub struct ConfigRequest {
     pub jwks_url: Option<String>,
     #[serde(rename = "server.public_url", default, skip_serializing_if = "Option::is_none")]
     pub public_url: Option<String>,
-    /// Where Sew's password setup links point (standalone installs):
-    /// `https://<host>/setup` ([`setup_url_ok`]). Unset, Sew uses
-    /// `<server.public_url>/setup`.
-    #[serde(rename = "identity.standalone.setup_url", default, skip_serializing_if = "Option::is_none")]
-    pub setup_url: Option<String>,
     #[serde(rename = "keys.mirror.kind", default, skip_serializing_if = "Option::is_none")]
     pub mirror_kind: Option<String>,
     #[serde(rename = "keys.mirror.path", default, skip_serializing_if = "Option::is_none")]
@@ -536,7 +526,6 @@ impl ConfigRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.jwks_url.is_none()
             && self.public_url.is_none()
-            && self.setup_url.is_none()
             && self.mirror_kind.is_none()
             && self.mirror_path.is_none()
         {
@@ -547,9 +536,6 @@ impl ConfigRequest {
         }
         if self.public_url.as_deref().is_some_and(|v| !public_url_ok(v)) {
             return Err("config refused: server.public_url");
-        }
-        if self.setup_url.as_deref().is_some_and(|v| !setup_url_ok(v)) {
-            return Err("config refused: identity.standalone.setup_url");
         }
         // `k2` (an Alakazam target) stays refused until Q1 is ruled.
         if self.mirror_kind.as_deref().is_some_and(|v| v != "none" && v != "dir") {
@@ -569,9 +555,6 @@ impl ConfigRequest {
         }
         if let Some(x) = &self.public_url {
             v.push(("server.public_url", x.as_str()));
-        }
-        if let Some(x) = &self.setup_url {
-            v.push(("identity.standalone.setup_url", x.as_str()));
         }
         // Path before kind, so `kind = dir` never points at a stale path.
         if let Some(x) = &self.mirror_path {
@@ -1049,18 +1032,19 @@ mod tests {
             let m: MediaRequest = serde_json::from_str(bad).unwrap();
             assert!(m.validate().is_err(), "{bad}");
         }
-        // Setup links: https://<host>/setup only.
-        let c: ConfigRequest =
-            serde_json::from_str(r#"{"identity.standalone.setup_url":"https://hearth.box.k2.dev/setup","server.public_url":"https://hearth.box.k2.dev"}"#).unwrap();
+        // Only Sew's settable keys parse (Sew `SETTABLE_KEYS`): setup links
+        // follow server.public_url (`<public_url>/setup`), and
+        // voice.public_url goes through `sew media install`, never
+        // `config set`.
+        let c: ConfigRequest = serde_json::from_str(r#"{"server.public_url":"https://hearth.box.k2.dev"}"#).unwrap();
         c.validate().unwrap();
-        assert_eq!(
-            c.pairs(),
-            vec![("server.public_url", "https://hearth.box.k2.dev"), ("identity.standalone.setup_url", "https://hearth.box.k2.dev/setup")]
-        );
-        for bad in ["https://hearth.box.k2.dev", "http://hearth.box.k2.dev/setup", "https://hearth.box.k2.dev/setup/x", "https://u@h.k2.dev/setup"] {
-            assert!(!setup_url_ok(bad), "{bad}");
+        assert_eq!(c.pairs(), vec![("server.public_url", "https://hearth.box.k2.dev")]);
+        for bad in [
+            r#"{"identity.standalone.setup_url":"https://hearth.box.k2.dev/setup"}"#,
+            r#"{"voice.public_url":"wss://hearth.box.k2.dev"}"#,
+        ] {
+            assert!(serde_json::from_str::<ConfigRequest>(bad).is_err(), "{bad}");
         }
-        assert!(setup_url_ok(""));
     }
 
     fn pem(label: &str, body: &str) -> String {

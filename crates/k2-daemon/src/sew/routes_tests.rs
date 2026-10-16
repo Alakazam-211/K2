@@ -328,8 +328,11 @@ fn enable_takes_an_explicit_standalone_identity_and_voice_in_one_call() {
     assert_eq!(s["identityProvider"], "standalone");
     assert_eq!(s["voice"]["publicUrl"], "wss://hearth.lztek.k2.dev");
     // Voice URL later, and setup links on the App.
-    let (st, v) = t.call(&agent("w-it"), "/cli/sew/server/config", json!({"publicUrl": "https://hearth.lztek.k2.dev", "setupUrl": "https://hearth.lztek.k2.dev/setup"}));
+    let (st, v) = t.call(&agent("w-it"), "/cli/sew/server/config", json!({"publicUrl": "https://hearth.lztek.k2.dev"}));
     assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["setupLinks"], "https://hearth.lztek.k2.dev/setup");
+    let (st, v) = t.call(&agent("w-it"), "/cli/sew/server/config", json!({"setupUrl": "https://hearth.lztek.k2.dev/setup"}));
+    assert_eq!((st.as_str(), code(&v)), ("400 Bad Request", "bad_request"), "setupUrl is never sent: {v}");
     // Users: the setup link comes back to the caller.
     t.ops.mgmt_answers.lock().unwrap().entry("POST /mgmt/v1/local/users".into()).or_default().push_back(Ok(json!({
         "member_id": "5", "username": "bob", "install_role": "member", "deactivated": false, "created": true,

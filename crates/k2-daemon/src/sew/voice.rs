@@ -168,17 +168,14 @@ pub fn check_voice_url(env: &Env, url: &str) -> R<String> {
     Ok(url.to_string())
 }
 
-/// `server.public_url` (`https://<host>`) or the setup URL
-/// (`https://<host>/setup`) on this box.
-pub fn check_https_url(env: &Env, url: &str, setup: bool) -> R<String> {
+/// `server.public_url` (`https://<host>`) on this box.
+pub fn check_https_url(env: &Env, url: &str) -> R<String> {
     let url = url.trim();
-    let ok = if setup { pin::setup_url_ok(url) && !url.is_empty() } else { pin::public_url_ok(url) && !url.is_empty() };
-    if !ok {
-        let want = if setup { "https://<host>/setup" } else { "https://<host>" };
-        return Err(no("bad_request", 400, format!("must be exactly {want} (lowercase, no port)")));
+    if url.is_empty() || !pin::public_url_ok(url) {
+        return Err(no("bad_request", 400, "must be exactly https://<host> (lowercase, no port, no path)"));
     }
     let label = env.ops.box_label();
-    let host = url_host(url, "https").unwrap_or("").trim_end_matches("/setup");
+    let host = url_host(url, "https").unwrap_or("");
     if !host_allowed(host, label.as_deref(), &env.ops.bound_apexes()) {
         return Err(not_ours(url, label.as_deref()));
     }
@@ -631,9 +628,11 @@ pub fn served_check(env: &Env, ip: &str, host: &str, ours: Option<&str>) -> Stri
 
 // ── voice URL later ──────────────────────────────────────────────────────
 
-/// Set `voice.public_url` on an installed engine (`sew media install
-/// --reconfigure`), then restart `sew.service` (Sew's core reads it at
-/// start). Moves the nested `voice` label with it.
+/// Set `voice.public_url` on an installed engine. Sew's documented path
+/// (docs/voice.md): `sew media install --reconfigure` with the new
+/// `public_url` in its JSON input (never `sew config set`), which rewrites
+/// `[voice] public_url`; then a `sew.service` restart (Sew's core reads it
+/// at start). Moves the nested `voice` label with it.
 pub fn set_url(env: &Env, url: &str) -> R<Value> {
     if !env.ops.linux() {
         return Err(no("unsupported", 409, "Sew voice runs on Linux boxes only"));

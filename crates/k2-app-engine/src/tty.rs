@@ -131,9 +131,30 @@ pub fn bridge(mut cmd: Command, cols: u16, rows: u16, conn: UnixStream) -> std::
         return Err(os_err());
     }
     let mut reader = unsafe { std::fs::File::from_raw_fd(rd) };
+    // Set once the command exited. `podman exec` leaves a helper (conmon)
+    // holding a copy of the terminal, so EIO may never come: after the
+    // exit the reader drains what is left and stops at the first quiet
+    // 200 ms.
+    let exited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let exited_r = exited.clone();
     let out = std::thread::spawn(move || {
         let mut buf = vec![0u8; 16 * 1024];
         loop {
+            let mut p = libc::pollfd { fd: rd, events: libc::POLLIN, revents: 0 };
+            // SAFETY: one valid pollfd.
+            let n = unsafe { libc::poll(&mut p, 1, 200) };
+            if n < 0 {
+                if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                break;
+            }
+            if n == 0 {
+                if exited_r.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
+                continue;
+            }
             match reader.read(&mut buf) {
                 // EIO: every copy of the slave is closed (the command ended).
                 Ok(0) | Err(_) => break,
@@ -183,6 +204,7 @@ pub fn bridge(mut cmd: Command, cols: u16, rows: u16, conn: UnixStream) -> std::
     });
 
     let status = child.wait()?;
+    exited.store(true, std::sync::atomic::Ordering::SeqCst);
     drop(master);
     let code = status.code().unwrap_or(-1);
     let mut out_conn = out.join().map_err(|_| std::io::Error::other("output thread panicked"))?;
@@ -251,6 +273,33 @@ mod tests {
         let text = String::from_utf8_lossy(&text);
         assert!(text.contains("o n e \\n t w o \\n 004"), "every byte, the ^D included: {text:?}");
         assert!(!text.contains("one\r\n"), "no echo from the engine's terminal: {text:?}");
+    }
+
+    /// Like `podman exec` (its conmon keeps a copy of the terminal): a
+    /// process that outlives the command doesn't hold the session open;
+    /// the EXIT frame follows the command's exit.
+    #[test]
+    fn the_exit_frame_follows_the_command_even_if_a_helper_keeps_the_terminal() {
+        let (daemon, engine) = UnixStream::pair().unwrap();
+        let mut c = Command::new("/bin/sh");
+        c.args(["-c", "sleep 30 & echo bye; exit 3"]);
+        c.env_clear().env("PATH", "/usr/bin:/bin");
+        let started = std::time::Instant::now();
+        let t = std::thread::spawn(move || bridge(c, 80, 24, engine).unwrap());
+        let mut r = daemon;
+        let mut text = Vec::new();
+        let mut exit = None;
+        while let Some((k, p)) = tty::read(&mut r).unwrap() {
+            match k {
+                tty::OUTPUT => text.extend_from_slice(&p),
+                tty::EXIT => exit = Some(i32::from_be_bytes([p[0], p[1], p[2], p[3]])),
+                other => panic!("unexpected frame {other}"),
+            }
+        }
+        assert_eq!(t.join().unwrap(), 3);
+        assert_eq!(exit, Some(3));
+        assert!(String::from_utf8_lossy(&text).contains("bye"), "{text:?}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "ended with the command, not the helper");
     }
 
     #[test]

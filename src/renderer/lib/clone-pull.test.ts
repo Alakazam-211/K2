@@ -436,14 +436,16 @@ describe('cloneWorkspaceToThisComputer — vault carry', () => {
       dest_parent: '/Users/rosson/work',
     })
     expect(onVaultCarry.mock.calls[0][0].note).toMatch(/older K2/)
+  })
+})
+
 describe('cloneWorkspaceToThisComputer — 0.46.0 extras', () => {
-  it('passes threads, secrets and confirm tokens through to clone/pack', async () => {
+  it('passes threads and clone_id through to clone/pack (no secrets or tokens in extras)', async () => {
     const order: string[] = []
     const { deps, spies } = makeDeps(order)
-    await cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps, {}, false, true, {
+    await cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps, {}, false, true, false, {}, {
       threads: 'none',
-      secrets: { DB_URL: 'blank' },
-      env_confirm_token: 'env-tok',
+      clone_id: 'clone-p',
     })
     const packCall = spies.daemonCliPost.mock.calls.find((c) => c[0] === 'clone/pack')
     expect(packCall?.[1]).toEqual({
@@ -451,8 +453,27 @@ describe('cloneWorkspaceToThisComputer — 0.46.0 extras', () => {
       carry_secrets: false,
       live_only: false,
       threads: 'none',
-      secrets: { DB_URL: 'blank' },
-      env_confirm_token: 'env-tok',
+      clone_id: 'clone-p',
+    })
+  })
+
+  it('an .env-only clone with no destination vault carries its confirm token in extras', async () => {
+    const order: string[] = []
+    const { deps, spies } = makeDeps(order)
+    await cloneWorkspaceToThisComputer(primaryScope(), '/srv/work/myws', 'myws', deps, {}, true, true, false, {}, {
+      threads: 'all',
+      clone_id: 'clone-e',
+      confirm_token: 'k2vc_env',
+    })
+    expect(spies.localVaultRecipient).not.toHaveBeenCalled()
+    const packCall = spies.daemonCliPost.mock.calls.find((c) => c[0] === 'clone/pack')
+    expect(packCall?.[1]).toEqual({
+      project_path: '/srv/work/myws',
+      carry_secrets: true,
+      live_only: false,
+      threads: 'all',
+      clone_id: 'clone-e',
+      confirm_token: 'k2vc_env',
     })
   })
 })

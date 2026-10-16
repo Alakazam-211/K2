@@ -76,6 +76,10 @@ interface ReadRangeResponse {
 }
 
 /** Poll cadence for the pack job — matches fs-transfer's compress poll. */
+/** What a pull calls this computer in the vault confirm reason (part of
+ *  the confirmed plan, so the dialog and the run must agree). */
+export const PULL_VAULT_LABEL = 'This computer'
+
 export const PACK_POLL_MS = 500
 /** Decoded bytes per ranged read — mirrors the push flow's chunk size;
  *  well under the daemon's 16 MB per-request cap. */
@@ -169,7 +173,9 @@ export async function cloneWorkspaceToThisComputer(
     // 0a. Vault checkbox: ask THIS computer's vault for its recipient so
     //     the server can seal the workspace's secrets to it while packing.
     const vaultLookup: VaultRecipientLookup | null = carryVault
-      ? await askVaultRecipient(() => deps.localVaultRecipient(), 'This computer')
+      ? vaultOptions.target
+        ? { target: vaultOptions.target }
+        : await askVaultRecipient(() => deps.localVaultRecipient(), PULL_VAULT_LABEL)
       : null
     const { job_id } = await deps.daemonCliPost<{ job_id: string }>(scope, 'clone/pack', {
       project_path: projectPath,

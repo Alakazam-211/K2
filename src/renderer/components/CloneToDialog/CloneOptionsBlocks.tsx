@@ -1,6 +1,8 @@
 import React from 'react'
 
-import { useCloneToDialogStore } from '../../stores/clone-to-dialog'
+import { targetOf, useCloneToDialogStore } from '../../stores/clone-to-dialog'
+import type { CloneUnpackResult } from '../../lib/clone-to'
+import type { CloneVaultOutcome } from '../../lib/clone-vault'
 import {
   anyCopy,
   canCopyRow,
@@ -96,11 +98,22 @@ const CHOICES: { value: SecretChoice; label: string }[] = [
   { value: 'skip', label: 'Skip' },
 ]
 
-export function SecretsBlock(): React.JSX.Element | null {
+export function SecretsBlock({ pull }: { pull: boolean }): React.JSX.Element | null {
   const preview = useCloneToDialogStore((s) => s.preview)
   const choices = useCloneToDialogStore((s) => s.secretChoices)
   const setChoice = useCloneToDialogStore((s) => s.setSecretChoice)
-  if (!preview || !preview.secrets.available || preview.secrets.rows.length === 0) return null
+  const lookup = useCloneToDialogStore((s) => s.vaultLookup)
+  const ownBoxMove = useCloneToDialogStore((s) => s.ownBoxMove)
+  const setOwnBoxMove = useCloneToDialogStore((s) => s.setOwnBoxMove)
+  // No destination vault (older K2, vault closed): secrets stay behind.
+  if (lookup && 'note' in lookup) {
+    return (
+      <p className={muted} data-testid="clone-vault-note">
+        {lookup.note}
+      </p>
+    )
+  }
+  if (!targetOf(lookup) || !preview || !preview.secrets.available || preview.secrets.rows.length === 0) return null
   const callerCanCopy = preview.callerCanCopySecrets
   return (
     <div className="space-y-1.5" data-testid="clone-secrets-block">
@@ -113,7 +126,9 @@ export function SecretsBlock(): React.JSX.Element | null {
               {row.name}
             </span>
             <span className="text-[var(--color-text-muted)] w-16 truncate">{row.kind}</span>
-            <span className="text-[var(--color-text-muted)] w-20 truncate">{row.group === 'server' ? 'server, shared' : 'this agent'}</span>
+            <span className="text-[var(--color-text-muted)] w-20 truncate">
+              {row.group === 'server' ? 'server, shared' : row.group === 'shared' ? 'shared with it' : 'this agent'}
+            </span>
             {CHOICES.map((c) => {
               const disabled = c.value === 'copy' && !canCopyRow(row, callerCanCopy)
               return (
@@ -137,6 +152,9 @@ export function SecretsBlock(): React.JSX.Element | null {
       {preview.secrets.notCarried.length > 0 && (
         <p className={muted}>Not carried: {preview.secrets.notCarried.join(', ')}</p>
       )}
+      <Tick checked={ownBoxMove} onChange={setOwnBoxMove} testId="clone-own-box">
+        This is my own {pull ? 'computer' : 'server'} (keeps &ldquo;given by a person&rdquo; marks)
+      </Tick>
     </div>
   )
 }
@@ -209,20 +227,34 @@ export function cloneButtonLabel(choices: Record<string, SecretChoice>, carrySec
   return anyCopy(choices) || carrySecrets ? 'Confirm and clone' : 'Clone'
 }
 
-/** Done-screen counts from the unpack result (optional fields). */
-export function doneCountsLine(r: {
-  threads_imported?: number
-  vault_imported?: number
-  vault_skipped?: number
-  cards_posted?: number
-} | null): string[] {
-  if (!r) return []
+/** Done-screen lines: the Thread import (slice B's report) and the vault
+ *  outcome (slice A, names only). */
+export function doneCountsLine(
+  r: Pick<CloneUnpackResult, 'threads_imported' | 'threads'> | null,
+  vault?: CloneVaultOutcome | null,
+): string[] {
   const out: string[] = []
-  if (typeof r.threads_imported === 'number') out.push(`Thread: imported ${r.threads_imported} message${r.threads_imported === 1 ? '' : 's'}`)
-  const v: string[] = []
-  if (typeof r.vault_imported === 'number') v.push(`copied ${r.vault_imported}`)
-  if (typeof r.cards_posted === 'number') v.push(`left blank ${r.cards_posted} (card posted)`)
-  if (typeof r.vault_skipped === 'number') v.push(`skipped ${r.vault_skipped}`)
-  if (v.length > 0) out.push(`Secrets: ${v.join(' · ')}`)
+  if (r && typeof r.threads_imported === 'number') {
+    const n = r.threads_imported
+    const convs = r.threads?.conversations?.length
+    const detached = r.threads?.detached ?? 0
+    out.push(
+      `Thread: imported ${n} message${n === 1 ? '' : 's'}` +
+        (typeof convs === 'number' ? ` into ${convs} Thread${convs === 1 ? '' : 's'}` : '') +
+        (detached > 0 ? ` (${detached} detached)` : '') +
+        (r.threads?.pending ? '; the main one joins the clone\u2019s Chat when it first starts' : ''),
+    )
+  }
+  if (vault) {
+    if (vault.note) {
+      out.push(`Secrets: ${vault.note}`)
+    } else {
+      const v: string[] = []
+      if (vault.imported.length > 0) v.push(`copied ${vault.imported.join(', ')}`)
+      if (vault.blank.length > 0) v.push(`left blank ${vault.blank.join(', ')} (card posted)`)
+      if (vault.skipped.length > 0) v.push(`skipped ${vault.skipped.join(', ')}`)
+      if (v.length > 0) out.push(`Secrets: ${v.join(' · ')}`)
+    }
+  }
   return out
 }

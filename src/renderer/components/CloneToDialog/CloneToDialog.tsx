@@ -60,6 +60,7 @@ export default function CloneToDialog(): React.JSX.Element | null {
   const stage = useCloneToDialogStore((s) => s.stage)
   const summary = useCloneToDialogStore((s) => s.summary)
   const result = useCloneToDialogStore((s) => s.result)
+  const vaultOutcome = useCloneToDialogStore((s) => s.vaultOutcome)
   const error = useCloneToDialogStore((s) => s.error)
   const close = useCloneToDialogStore((s) => s.close)
   const openResult = useCloneToDialogStore((s) => s.openResult)
@@ -141,7 +142,7 @@ export default function CloneToDialog(): React.JSX.Element | null {
                   <p className="whitespace-pre-wrap break-words" data-testid="clone-preview-error">{previewError}</p>
                 </Callout>
               )}
-              <SecretsBlock />
+              <SecretsBlock pull={pull} />
               <EnvFilesBlock pull={pull} />
 
               <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
@@ -234,9 +235,9 @@ export default function CloneToDialog(): React.JSX.Element | null {
                 </p>
               </div>
 
-              {doneCountsLine(result).length > 0 && (
+              {doneCountsLine(result, vaultOutcome).length > 0 && (
                 <div className="space-y-0.5" data-testid="clone-done-counts">
-                  {doneCountsLine(result).map((line) => (
+                  {doneCountsLine(result, vaultOutcome).map((line) => (
                     <p key={line} className="text-[11px] text-[var(--color-text-secondary)]">{line}</p>
                   ))}
                 </div>

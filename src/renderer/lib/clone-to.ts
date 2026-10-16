@@ -78,13 +78,21 @@ export interface ClonedProject {
 export interface CloneUnpackResult extends CloneVaultUnpackFields {
   project: ClonedProject
   dest_path: string
-  /** Clone carries Threads and vault (0.46.0): optional counts the
-   *  destination reports; older daemons omit them. */
+  /** Clone carries its Threads (0.46.0, slice B): counts and the import
+   *  report the destination answers; older daemons omit them. */
   threads_imported?: number
   threads_skipped?: number
-  vault_imported?: number
-  vault_skipped?: number
-  cards_posted?: number
+  threads?: CloneThreadsReport | null
+  threads_error?: string | null
+}
+
+/** Slice B's `ImportReport` on `clone/unpack` (names and counts only). */
+export interface CloneThreadsReport {
+  conversations?: { localConversationId: string; role: string; name?: string; imported: number; skipped: number }[]
+  docsImported?: number
+  docsSkipped?: number
+  pending?: boolean
+  detached?: number
 }
 
 /** Host filesystem info (`fs/info`). */
@@ -278,7 +286,9 @@ export async function cloneWorkspaceTo(
     // 0a. Vault checkbox: ask the destination for its vault first, so the
     //     source can seal this workspace's secrets to it while bundling.
     const vaultLookup: VaultRecipientLookup | null = carryVault
-      ? await askVaultRecipient(() => deps.destVaultRecipient(destinationHost), destinationHost.label)
+      ? vaultOptions.target
+        ? { target: vaultOptions.target }
+        : await askVaultRecipient(() => deps.destVaultRecipient(destinationHost), destinationHost.label)
       : null
     const bundle = await deps.daemonCliPost<CloneBundleResult>(scope, 'clone/bundle', {
       project_path: projectPath,

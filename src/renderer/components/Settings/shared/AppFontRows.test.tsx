@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// The app font family + size (0.45.7): one setting shown at the top of
-// Settings → General and in Editors / Fonts → Code.
+// The app font family + size (0.45.7): one setting shown in Settings → General
+// (just below the app version) and in Editors / Fonts → Code.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -41,6 +41,18 @@ async function pick(row: HTMLElement, trigger: string, option: string): Promise<
     fireEvent.click(within(menu).getByRole('button', { name: option }))
   })
 }
+
+describe('General page order', () => {
+  it('the app font sits below the app version and above the CLI version (Rosson 2026-10-16)', () => {
+    const src = readFileSync(join(__dirname, '../sections/GeneralSection.tsx'), 'utf8')
+    const version = src.indexOf('data-settings-id="general.app-version"')
+    const font = src.indexOf('data-settings-id="general.font"')
+    const cli = src.indexOf('CLI Version — right under App Version')
+    expect(version).toBeGreaterThan(0)
+    expect(font).toBeGreaterThan(version)
+    expect(cli).toBeGreaterThan(font)
+  })
+})
 
 describe('AppFontRows', () => {
   it('General and Code show the same setting: a change in one shows in the other', async () => {
@@ -85,7 +97,7 @@ describe('AppFontRows', () => {
     expect((document.querySelector('[data-settings-id="code-editor.font-size"]') as HTMLElement).className).toContain('border-b')
   })
 
-  it('both pages have search entries, and General puts the rows first', () => {
+  it('both pages have search entries, and General shows the rows below the app version', () => {
     const general = GENERAL_MANIFEST.filter((e) => e.id === 'general.font-family' || e.id === 'general.font-size')
     expect(general.map((e) => [e.id, e.section, e.group])).toEqual([
       ['general.font-family', 'general', 'General'],
@@ -97,7 +109,7 @@ describe('AppFontRows', () => {
     const gen = readFileSync(join(dir, 'GeneralSection.tsx'), 'utf8')
     const body = gen.slice(gen.indexOf("{tab === 'general' && ("))
     expect(body.indexOf('<AppFontRows where="general" lastHasBorder={false} />')).toBeGreaterThan(0)
-    expect(body.indexOf('<AppFontRows where="general"')).toBeLessThan(body.indexOf('data-settings-id="general.app-version"'))
+    expect(body.indexOf('<AppFontRows where="general"')).toBeGreaterThan(body.indexOf('data-settings-id="general.app-version"'))
     const codeSrc = readFileSync(join(dir, 'CodeEditorSettingsSection.tsx'), 'utf8')
     expect(codeSrc).toContain('<AppFontRows where="code-editor" />')
   })

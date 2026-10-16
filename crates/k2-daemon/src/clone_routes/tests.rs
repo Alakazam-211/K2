@@ -333,13 +333,13 @@ fn unpack_handler_400s_on_missing_bundle() {
         "dest_parent": "/tmp",
     })
     .to_string();
-    let resp = super::handle_clone_unpack(body.as_bytes());
+    let resp = super::handle_clone_unpack(body.as_bytes(), None);
     assert_eq!(resp.status, "400 Bad Request", "missing bundle → 400");
 }
 
 #[test]
 fn bundle_handler_rejects_invalid_json() {
-    let resp = super::handle_clone_bundle(b"not json");
+    let resp = super::handle_clone_bundle(b"not json", None);
     assert_eq!(resp.status, "400 Bad Request");
 }
 
@@ -355,7 +355,7 @@ fn pack_lock() -> std::sync::MutexGuard<'static, ()> {
 
 #[test]
 fn pack_handler_rejects_invalid_json() {
-    let resp = super::handle_clone_pack(b"not json");
+    let resp = super::handle_clone_pack(b"not json", None);
     assert_eq!(resp.status, "400 Bad Request");
 }
 
@@ -366,7 +366,7 @@ fn pack_rejects_unregistered_workspace() {
     let root = TempDir::new("k2so-pack-unregistered");
     let body = serde_json::json!({ "project_path": root.path().to_string_lossy() })
         .to_string();
-    let resp = super::handle_clone_pack(body.as_bytes());
+    let resp = super::handle_clone_pack(body.as_bytes(), None);
     assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
     assert!(
         resp.body.contains("not a registered workspace"),
@@ -380,6 +380,7 @@ fn pack_rejects_unregistered_workspace() {
 fn pack_rejects_nonexistent_path() {
     let resp = super::handle_clone_pack(
         br#"{"project_path":"/nonexistent/definitely-not-here-k2/ws"}"#,
+        None,
     );
     assert_eq!(resp.status, "400 Bad Request", "body: {}", resp.body);
 }
@@ -408,6 +409,8 @@ fn pack_job_builds_bundle_and_cleanup_removes_it() {
         clone_id: None,
         threads: None,
         error: None,
+        vault_carry_b64: None,
+        vault_carry: None,
     });
     let opts = clone::CloneOptions {
         home_override: Some(home.clone()),
@@ -420,6 +423,7 @@ fn pack_job_builds_bundle_and_cleanup_removes_it() {
         &home,
         k2_core::fs_commands::MAX_TRANSFER_SIZE,
         k2_core::overlay::transfer::ThreadsChoice::All,
+        None,
         None,
     );
 
@@ -467,6 +471,8 @@ fn pack_job_enforces_transfer_ceiling() {
         clone_id: None,
         threads: None,
         error: None,
+        vault_carry_b64: None,
+        vault_carry: None,
     });
     let opts = clone::CloneOptions {
         home_override: Some(home.clone()),
@@ -480,6 +486,7 @@ fn pack_job_enforces_transfer_ceiling() {
         &home,
         1,
         k2_core::overlay::transfer::ThreadsChoice::All,
+        None,
         None,
     );
 
@@ -530,6 +537,8 @@ fn pack_cleanup_rejects_unknown_job_and_running_job() {
         clone_id: None,
         threads: None,
         error: None,
+        vault_carry_b64: None,
+        vault_carry: None,
     });
     let resp = super::handle_clone_pack_cleanup(br#"{"job_id":"pack-test-running"}"#);
     assert_eq!(

@@ -36,6 +36,16 @@ import type {
   CloneUnpackResult,
 } from './clone-to'
 import { CloneCancelledError } from './clone-to'
+import {
+  askVaultRecipient,
+  vaultBundleFields,
+  vaultOutcome,
+  vaultUnpackFields,
+  type CloneVaultCarryReport,
+  type CloneVaultOptions,
+  type VaultRecipientLookup,
+  type VaultRecipientResponse,
+} from './clone-vault'
 // Static import is safe in headless tests: the store module only pulls
 // zustand (no Tauri / daemon side effects at import time).
 import { useTransferProgressStore } from '@/stores/transfer-progress'
@@ -50,6 +60,10 @@ export interface ClonePackStatus {
   entry_count?: number
   scrubbed_secret_count?: number
   error?: string
+  /** Opaque sealed vault carry for this computer's vault (0.46.0). */
+  vault_carry_b64?: string
+  /** Names-only report of that carry (or why there is none). */
+  vault_carry?: CloneVaultCarryReport
 }
 
 /** Wire shape of `GET /cli/fs/read-range` (mirrors fs-transfer.ts). */
@@ -81,6 +95,9 @@ export interface ClonePullDeps {
   ) => Promise<T>
   /** POST a `/cli/*` route against the LOCAL daemon (host-independent). */
   localDaemonCliPost: <T = unknown>(route: string, body?: unknown) => Promise<T>
+  /** Ask THIS computer's daemon for its vault recipient
+   *  (`GET vault/recipient`) — the pull's destination vault. */
+  localVaultRecipient: () => Promise<VaultRecipientResponse>
   /** Native OS folder dialog for the LOCAL destination parent; resolves
    *  with the chosen dir, or null on cancel. */
   pickLocalFolder: () => Promise<string | null>
@@ -136,15 +153,26 @@ export async function cloneWorkspaceToThisComputer(
    *  into the pack job. */
   carrySecrets = true,
   includeAllHistory = true,
+  /** Bring vault secrets into this computer's vault (0.46.0). See
+   *  `cloneWorkspaceTo`. */
+  carryVault = false,
+  /** See `cloneWorkspaceTo`. */
+  vaultOptions: CloneVaultOptions = {},
 ): Promise<CloneUnpackResult> {
-  const { onStage, onBundled, onDone, onError } = hooks
+  const { onStage, onBundled, onDone, onError, onVaultCarry } = hooks
   try {
     // ── 1. Pack on the REMOTE (active) host — async job ─────────────────
     onStage?.('packing')
+    // 0a. Vault checkbox: ask THIS computer's vault for its recipient so
+    //     the server can seal the workspace's secrets to it while packing.
+    const vaultLookup: VaultRecipientLookup | null = carryVault
+      ? await askVaultRecipient(() => deps.localVaultRecipient(), 'This computer')
+      : null
     const { job_id } = await deps.daemonCliPost<{ job_id: string }>(scope, 'clone/pack', {
       project_path: projectPath,
       carry_secrets: carrySecrets,
       live_only: !includeAllHistory,
+      ...vaultBundleFields(vaultLookup, vaultOptions),
     })
     if (!job_id) {
       throw new Error('Packing failed on the server: no job id returned.')
@@ -254,6 +282,7 @@ export async function cloneWorkspaceToThisComputer(
       result = await deps.localDaemonCliPost<CloneUnpackResult>('clone/unpack', {
         bundle_path: localBundlePath,
         dest_parent: destParent,
+        ...vaultUnpackFields(vaultLookup, packed.vault_carry_b64),
       })
     } catch (err) {
       // Unpack never ran to the point of deleting the temp bundle — do it
@@ -268,6 +297,8 @@ export async function cloneWorkspaceToThisComputer(
     if (!result?.dest_path) {
       throw new Error('Unpacking on this computer failed: no dest_path returned.')
     }
+    const vault = vaultOutcome(vaultLookup, packed.vault_carry, packed.vault_carry_b64, result)
+    if (vault) onVaultCarry?.(vault)
 
     onStage?.('done')
     onDone?.(result)
@@ -299,6 +330,10 @@ export function defaultClonePullDeps(): ClonePullDeps {
     localDaemonCliPost: async (route, body) => {
       const { localDaemonCliPost } = await import('./daemon-cli')
       return localDaemonCliPost(route, body)
+    },
+    localVaultRecipient: async () => {
+      const { localDaemonCliGet } = await import('./daemon-cli')
+      return localDaemonCliGet<VaultRecipientResponse>('vault/recipient')
     },
     pickLocalFolder: async () => {
       // Deliberately NOT `pickWorkspaceFolder()` — that helper is host-

@@ -278,6 +278,14 @@ pub const ROUTES: &[Route] = &[
     post("/cli/clone/pack-cleanup", Member),
     get("/cli/clone/pack-status", Member),
     post("/cli/clone/unpack", Member),
+    // Clone carries vault secrets (0.46.0 slice A): Member floor like the
+    // other clone doors; the handler narrows copies and confirms to
+    // Owner/Admin (D1) and the clone gate (slice C) narrows further.
+    post("/cli/clone/vault/confirm", Member),
+    post("/cli/clone/vault/copy", Member),
+    post("/cli/clone/vault/export", Member),
+    post("/cli/clone/vault/import", Member),
+    post("/cli/clone/vault/plan", Member),
     post("/cli/commit", Member),
     post("/cli/commit-merge", Member),
     post("/cli/companion/disconnect-session", Member),

@@ -49,8 +49,27 @@ pub fn classify_secret(rel_path: &str, abs_path: &Path) -> Option<SecretReason> 
     }
     // K2 vault KV30: `.env.k2` holds `k2v://` references, safe to carry —
     // unless a sensitive key in it holds a literal value.
-    if final_component(rel_path) == ".env.k2" && env_k2_has_literal_secret(abs_path) {
-        return Some(SecretReason::Content);
+    // Only references (and non-sensitive literals): it travels, even with
+    // sensitive-looking key names (`OPENAI_API_KEY=k2v://…`), which the
+    // content scan below would otherwise flag (0.46.0: the clone rewrites
+    // its references to the clone, prd-clone-carries-threads-and-vault-v1
+    // §6.3).
+    if final_component(rel_path) == ".env.k2" {
+        if env_k2_has_literal_secret(abs_path) {
+            return Some(SecretReason::Content);
+        }
+        // The credential scan still runs on every line that isn't a
+        // reference (a token pasted under an innocent name).
+        let Ok(text) = std::fs::read_to_string(abs_path) else { return Some(SecretReason::Content) };
+        let literals: String = text
+            .lines()
+            .filter(|l| {
+                let v = l.split_once('=').map(|(_, v)| v.trim().trim_matches('"').trim_matches('\'')).unwrap_or("");
+                !v.starts_with("k2v://")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return content_has_credential_str(&literals).then_some(SecretReason::Content);
     }
     if path_under_auth_dir(rel_path) {
         return Some(SecretReason::PathPattern);
@@ -120,6 +139,13 @@ mod env_k2_tests {
         assert_eq!(classify_secret(".env.k2", &refs), None);
         std::fs::write(&refs, "STRIPE_KEY=k2v://ws/sales/STRIPE_KEY\nDB_PASSWORD=hunter2hunter2\n").expect("write");
         assert!(classify_secret(".env.k2", &refs).is_some());
+        // Sensitive-looking names holding references still travel.
+        std::fs::write(&refs, "OPENAI_API_KEY=k2v://server/OPENAI_KEY\nSTRIPE_SECRET_KEY=k2v://ws/sales/STRIPE_KEY\nDB_PASSWORD=k2v://ws/sales/DB\n").expect("write");
+        assert_eq!(classify_secret(".env.k2", &refs), None);
+        std::fs::write(&refs, "OPENAI_API_KEY=sk-live-literal-value-123456\n").expect("write");
+        assert!(classify_secret(".env.k2", &refs).is_some(), "a literal key is still scrubbed");
+        std::fs::write(&refs, "OPENAI_API_KEY=k2v://server/OPENAI_KEY\nNOTES=ghp_abcdefghijklmnopqrstuvwxyz0123456789\n").expect("write");
+        assert!(classify_secret(".env.k2", &refs).is_some(), "a token under an innocent name is still scrubbed");
         let plain = dir.join(".env.local");
         std::fs::write(&plain, "PORT=3000\n").expect("write");
         assert_eq!(classify_secret(".env.local", &plain), Some(SecretReason::PathPattern));

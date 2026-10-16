@@ -100,6 +100,10 @@ function makeDeps(
     order.push('pickRemoteFolder')
     return '/home/rosson/work'
   })
+  const destVaultRecipient = vi.fn(async (_host: ConnectHost) => {
+    order.push('dest-vault-recipient')
+    return { recipient: 'age1destrecipient', fingerprint: 'fp', vaultId: 'vault-dest-1' }
+  })
 
   const deps: CloneDeps = {
     daemonCliPost,
@@ -110,6 +114,7 @@ function makeDeps(
     pickHost,
     waitForHostConnected,
     pickRemoteFolder,
+    destVaultRecipient,
     ...overrides,
   }
   // Home M1: the code passes the scope first. The spies keep the pre-M1
@@ -131,6 +136,7 @@ function makeDeps(
       pickHost,
       waitForHostConnected,
       pickRemoteFolder,
+      destVaultRecipient,
     } as Record<string, ReturnType<typeof vi.fn>>,
   }
 }
@@ -501,5 +507,233 @@ describe('cloneWorkspaceTo — large bundle (chunked streaming, GH #3)', () => {
     ).rejects.toThrow('relay dropped the chunk')
     expect(order).not.toContain('post:clone/unpack')
     expect(onError).toHaveBeenCalledWith('relay dropped the chunk')
+  })
+})
+
+// ── Vault secrets ride the clone (0.46.0) ────────────────────────────────
+//
+// The renderer only carries opaque values between the two daemons: it asks
+// the DESTINATION for its vault recipient before bundling, hands it (with
+// the Secrets block's choices, the clone id and the confirm token) to the
+// source's clone/bundle, and passes the sealed carry to clone/unpack.
+// Every vault problem is a note — never a failed clone.
+
+describe('cloneWorkspaceTo — vault carry', () => {
+  const VAULT_BUNDLE: CloneBundleResult = {
+    ...BUNDLE,
+    vault_carry_b64: 'SEALED-CARRY',
+    vault_carry: { sealed: true, copied: ['STRIPE_KEY'], blank: [], skipped: [] },
+  }
+
+  function vaultDeps(
+    order: string[],
+    opts: { bundle?: CloneBundleResult; unpack?: CloneUnpackResult } & Partial<CloneDeps> = {},
+  ) {
+    const { bundle = VAULT_BUNDLE, unpack, ...overrides } = opts
+    const daemonCliPost = vi.fn(async (route: string, _body?: unknown) => {
+      order.push(`post:${route}`)
+      if (route === 'clone/bundle') return bundle as unknown
+      if (route === 'fs/upload-binary') return { path: '/home/rosson/.k2/clone-tmp/myworkspace.tar.gz' } as unknown
+      if (route === 'clone/unpack') {
+        return (unpack ?? { ...UNPACK, vault_imported: ['STRIPE_KEY'], vault_skipped: [] }) as unknown
+      }
+      return {} as unknown
+    }) as CloneDeps['daemonCliPost'] & ReturnType<typeof vi.fn>
+    const built = makeDeps(order, { daemonCliPost, ...overrides })
+    built.spies.daemonCliPost = daemonCliPost
+    return built
+  }
+
+  it('asks the destination vault before bundling and carries the sealed secrets to unpack', async () => {
+    const order: string[] = []
+    const { deps, spies } = vaultDeps(order)
+    const onVaultCarry = vi.fn()
+    const onDone = vi.fn()
+
+    await cloneWorkspaceTo(
+      primaryScope(),
+      '/Users/rosson/myworkspace',
+      DEST,
+      deps,
+      { onVaultCarry, onDone },
+      true,
+      true,
+      true, // carryVault
+    )
+
+    // The destination is asked FIRST, over its saved login (before the
+    // window switches), then the source bundles with the target.
+    expect(order[0]).toBe('dest-vault-recipient')
+    expect(order[1]).toBe('post:clone/bundle')
+    expect(spies.destVaultRecipient).toHaveBeenCalledWith(DEST)
+    expect(spies.daemonCliPost).toHaveBeenNthCalledWith(1, 'clone/bundle', {
+      project_path: '/Users/rosson/myworkspace',
+      carry_secrets: true,
+      live_only: false,
+      vault_target: { recipient: 'age1destrecipient', vault_id: 'vault-dest-1', label: DEST.label },
+    })
+    expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/unpack', {
+      bundle_path: '/home/rosson/.k2/clone-tmp/myworkspace.tar.gz',
+      dest_parent: '/home/rosson/work',
+      vault_carry_b64: 'SEALED-CARRY',
+    })
+    expect(onVaultCarry).toHaveBeenCalledTimes(1)
+    expect(onVaultCarry).toHaveBeenCalledWith({ imported: ['STRIPE_KEY'], skipped: [], blank: [], note: null })
+    expect(onDone).toHaveBeenCalledTimes(1)
+  })
+
+  it('never asks or sends vault fields when the box is unticked (a clone for someone else)', async () => {
+    const order: string[] = []
+    const { deps, spies } = vaultDeps(order)
+    const onVaultCarry = vi.fn()
+
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, { onVaultCarry }, true, true, false)
+
+    expect(spies.destVaultRecipient).not.toHaveBeenCalled()
+    expect(spies.daemonCliPost).toHaveBeenNthCalledWith(1, 'clone/bundle', {
+      project_path: '/Users/rosson/myworkspace',
+      carry_secrets: true,
+      live_only: false,
+    })
+    // Even if a source answered with a carry, nothing rides to unpack.
+    expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/unpack', {
+      bundle_path: '/home/rosson/.k2/clone-tmp/myworkspace.tar.gz',
+      dest_parent: '/home/rosson/work',
+    })
+    expect(onVaultCarry).not.toHaveBeenCalled()
+  })
+
+  it('skips the vault with a note when the destination runs an older K2 (recipient 404)', async () => {
+    const order: string[] = []
+    const { deps, spies } = vaultDeps(order, {
+      bundle: BUNDLE,
+      destVaultRecipient: vi.fn(async () => {
+        order.push('dest-vault-recipient')
+        throw new Error('route not found')
+      }),
+    })
+    const onVaultCarry = vi.fn()
+
+    const result = await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, { onVaultCarry }, true, true, true)
+
+    expect(result.dest_path).toBe(UNPACK.dest_path)
+    expect(spies.daemonCliPost).toHaveBeenNthCalledWith(1, 'clone/bundle', {
+      project_path: '/Users/rosson/myworkspace',
+      carry_secrets: true,
+      live_only: false,
+    })
+    expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/unpack', {
+      bundle_path: '/home/rosson/.k2/clone-tmp/myworkspace.tar.gz',
+      dest_parent: '/home/rosson/work',
+    })
+    expect(onVaultCarry).toHaveBeenCalledTimes(1)
+    const outcome = onVaultCarry.mock.calls[0][0]
+    expect(outcome.imported).toEqual([])
+    expect(outcome.note).toMatch(/older K2/)
+    expect(outcome.note).toContain(DEST.label)
+  })
+
+  it('turns a destination vault refusal into a note naming why', async () => {
+    const order: string[] = []
+    const { deps, spies } = vaultDeps(order, {
+      bundle: BUNDLE,
+      destVaultRecipient: vi.fn(async () => {
+        throw new Error('{"error":{"code":"vault_admin_required","hint":"this needs an Owner or Admin"}}')
+      }),
+    })
+    const onVaultCarry = vi.fn()
+
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, { onVaultCarry }, true, true, true)
+
+    expect(spies.daemonCliPost.mock.calls[0][1]).not.toHaveProperty('vault_target')
+    expect(onVaultCarry.mock.calls[0][0].note).toContain('this needs an Owner or Admin')
+  })
+
+  it('shows the source note and sends no carry when the source sealed nothing', async () => {
+    const order: string[] = []
+    const { deps, spies } = vaultDeps(order, {
+      bundle: {
+        ...BUNDLE,
+        vault_carry: { sealed: false, copied: [], blank: [], skipped: [], reason: 'no_secrets' },
+      },
+    })
+    const onVaultCarry = vi.fn()
+
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, { onVaultCarry }, true, true, true)
+
+    expect(spies.daemonCliPost).toHaveBeenCalledWith('clone/unpack', {
+      bundle_path: '/home/rosson/.k2/clone-tmp/myworkspace.tar.gz',
+      dest_parent: '/home/rosson/work',
+    })
+    expect(onVaultCarry).toHaveBeenCalledWith({
+      imported: [],
+      skipped: [],
+      blank: [],
+      note: 'This workspace has no vault secrets to copy.',
+    })
+  })
+
+  it('reports a destination import failure without failing the clone', async () => {
+    const order: string[] = []
+    const { deps } = vaultDeps(order, {
+      unpack: {
+        ...UNPACK,
+        vault_imported: [],
+        vault_skipped: [],
+        vault_error: { code: 'vault_not_open', hint: 'The vault on this server isn’t open.' },
+      },
+    })
+    const onVaultCarry = vi.fn()
+    const onDone = vi.fn()
+    const onError = vi.fn()
+
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, { onVaultCarry, onDone, onError }, true, true, true)
+
+    expect(onError).not.toHaveBeenCalled()
+    expect(onDone).toHaveBeenCalledTimes(1)
+    expect(onVaultCarry.mock.calls[0][0].imported).toEqual([])
+    expect(onVaultCarry.mock.calls[0][0].note).toContain('isn’t open')
+  })
+
+  it('lists skipped names from the destination (kept its own copy)', async () => {
+    const order: string[] = []
+    const { deps } = vaultDeps(order, {
+      unpack: {
+        ...UNPACK,
+        vault_imported: ['STRIPE_KEY'],
+        vault_skipped: ['OPENAI_KEY: already here (kept this box\'s)'],
+      },
+    })
+    const onVaultCarry = vi.fn()
+
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, { onVaultCarry }, true, true, true)
+
+    expect(onVaultCarry).toHaveBeenCalledWith({
+      imported: ['STRIPE_KEY'],
+      skipped: ['OPENAI_KEY: already here (kept this box\'s)'],
+      blank: [],
+      note: null,
+    })
+  })
+
+  it('sends the Secrets block (choices, clone id, confirm token) with the target', async () => {
+    const order: string[] = []
+    const { deps, spies } = vaultDeps(order)
+
+    await cloneWorkspaceTo(primaryScope(), '/Users/rosson/myworkspace', DEST, deps, {}, true, true, true, {
+      cloneId: 'clone-7',
+      secrets: { GMAIL_TOKEN: 'skip', OPENAI_KEY: 'copy' },
+      confirmToken: 'k2vc_x',
+    })
+
+    expect(spies.daemonCliPost).toHaveBeenNthCalledWith(1, 'clone/bundle', {
+      project_path: '/Users/rosson/myworkspace',
+      carry_secrets: true,
+      live_only: false,
+      vault_target: { recipient: 'age1destrecipient', vault_id: 'vault-dest-1', label: DEST.label },
+      clone_id: 'clone-7',
+      secrets: { GMAIL_TOKEN: 'skip', OPENAI_KEY: 'copy' },
+      confirm_token: 'k2vc_x',
+    })
   })
 })

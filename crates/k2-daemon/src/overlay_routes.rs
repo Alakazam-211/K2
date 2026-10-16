@@ -1149,53 +1149,9 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         None => None,
     };
     let session_id = params.get("cell_session_id").cloned();
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    match overlay::post_secret(
-        &conn,
-        &resolved.conversation_id,
-        &resolved.project_id,
-        &from,
-        &resolved.addr,
-        name.trim(),
-        prompt.as_deref(),
-        proposal.clone(),
-        Some(overlay::now_secs() + k2_vault::vault::REQUEST_EXPIRY_DAYS * 24 * 60 * 60),
-    ) {
-        Ok((item, links)) => {
-            drop(conn);
-            let req = k2_vault::vault::SecretRequest {
-                card_id: item.id.clone(),
-                conversation: resolved.conversation_id.clone(),
-                session_id: session_id.clone(),
-                workspace_id: resolved.project_id.clone(),
-                requested_by: from.clone(),
-                name: name.trim().to_string(),
-                kind: proposal.kind.as_deref().map(k2_vault::Kind::parse).and_then(Result::ok).unwrap_or(k2_vault::Kind::ApiKey),
-                proposed_scope: proposal.scope.clone().unwrap_or_else(|| "workspace".into()),
-                proposed_hosts: proposal.hosts.clone(),
-                proposed_delivery: proposal
-                    .delivery
-                    .as_deref()
-                    .map(crate::vault_routes::request_delivery)
-                    .and_then(Result::ok)
-                    .unwrap_or(k2_vault::Delivery::Fetch),
-                prompt: prompt.clone().unwrap_or_default(),
-                ttl_secs,
-                status: String::new(),
-                answered_by: None,
-                secret_id: None,
-                created_at: String::new(),
-                answered_at: None,
-            };
-            if let Err(e) = vault.request_create(req) {
-                let _ = overlay::mark_secret(&resolved.conversation_id, &item.id, "voided", None, "card withdrawn".into(), None);
-                return error_json("400 Bad Request", e.code, e.hint);
-            }
-            crate::overlay_ws::emit_links(&links, &item.doc);
-            crate::thread_activity::note_reply(&resolved.conversation_id);
-            // A secret card pushes name-only, never its name or prompt (§7).
-            push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret);
+    match create_secret_card(&vault, &resolved, &from, name.trim(), prompt.as_deref(), proposal, session_id, ttl_secs, false) {
+        Err(e) => e,
+        Ok(item) => {
             let secret = item.doc.secret.as_ref();
             CliResponse::ok_json(with_moved_from(
                 serde_json::json!({
@@ -1213,7 +1169,121 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
                 &resolved,
             ))
         }
-        Err(e) => error_json("400 Bad Request", "usage", e),
+    }
+}
+
+/// Post a secret card and create its vault request together (§10.1).
+/// Shared by `thread/secret` and the clone's leave-blank cards
+/// (prd-clone-carries-threads-and-vault-v1 §6.6). `quiet`: no push and no
+/// activity turn (a clone posts its cards in a batch, as history).
+#[allow(clippy::too_many_arguments)]
+fn create_secret_card(
+    vault: &k2_vault::LocalVault,
+    resolved: &ResolvedOverlay,
+    from: &str,
+    name: &str,
+    prompt: Option<&str>,
+    proposal: overlay::SecretProposal,
+    session_id: Option<String>,
+    ttl_secs: Option<i64>,
+    quiet: bool,
+) -> Result<overlay::OverlayItem, CliResponse> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let (item, links) = overlay::post_secret(
+        &conn,
+        &resolved.conversation_id,
+        &resolved.project_id,
+        from,
+        &resolved.addr,
+        name,
+        prompt,
+        proposal.clone(),
+        Some(overlay::now_secs() + k2_vault::vault::REQUEST_EXPIRY_DAYS * 24 * 60 * 60),
+    )
+    .map_err(|e| error_json("400 Bad Request", "usage", e))?;
+    drop(conn);
+    let req = k2_vault::vault::SecretRequest {
+        card_id: item.id.clone(),
+        conversation: resolved.conversation_id.clone(),
+        session_id,
+        workspace_id: resolved.project_id.clone(),
+        requested_by: from.to_string(),
+        name: name.to_string(),
+        kind: proposal.kind.as_deref().map(k2_vault::Kind::parse).and_then(Result::ok).unwrap_or(k2_vault::Kind::ApiKey),
+        proposed_scope: proposal.scope.clone().unwrap_or_else(|| "workspace".into()),
+        proposed_hosts: proposal.hosts.clone(),
+        proposed_delivery: proposal
+            .delivery
+            .as_deref()
+            .map(crate::vault_routes::request_delivery)
+            .and_then(Result::ok)
+            .unwrap_or(k2_vault::Delivery::Fetch),
+        prompt: prompt.map(str::to_string).unwrap_or_default(),
+        ttl_secs,
+        status: String::new(),
+        answered_by: None,
+        secret_id: None,
+        created_at: String::new(),
+        answered_at: None,
+    };
+    if let Err(e) = vault.request_create(req) {
+        let _ = overlay::mark_secret(&resolved.conversation_id, &item.id, "voided", None, "card withdrawn".into(), None);
+        return Err(error_json("400 Bad Request", e.code, e.hint));
+    }
+    crate::overlay_ws::emit_links(&links, &item.doc);
+    if !quiet {
+        crate::thread_activity::note_reply(&resolved.conversation_id);
+        // A secret card pushes name-only, never its name or prompt (§7).
+        push_agent_post(resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret);
+    }
+    Ok(item)
+}
+
+/// A clone's leave-blank card on its own Thread (`conversation_id`, owned
+/// by `project_id`): from the clone itself, workspace scope. Outside the
+/// VS13 3-pending cap (the caller caps clone cards at 10, CL17). Returns
+/// the card id, or why it wasn't posted (names only).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn post_clone_secret_card(
+    conversation_id: &str,
+    project_id: &str,
+    addr: &str,
+    name: &str,
+    kind: &str,
+    hosts: &[String],
+    delivery: &str,
+    prompt: &str,
+) -> Result<String, String> {
+    let vault = crate::vault::get().map_err(|e| e.code.to_string())?;
+    let resolved = ResolvedOverlay {
+        conversation_id: conversation_id.to_string(),
+        project_id: project_id.to_string(),
+        addr: addr.to_string(),
+        requested_addr: addr.to_string(),
+        canonical_alias: true,
+    };
+    let proposal = overlay::SecretProposal {
+        scope: Some("workspace".into()),
+        hosts: hosts.to_vec(),
+        delivery: Some(delivery.to_string()).filter(|d| !d.is_empty() && d != "none"),
+        kind: Some(kind.to_string()),
+    };
+    create_secret_card(&vault, &resolved, addr, name, Some(prompt), proposal, None, None, true)
+        .map(|item| item.id)
+        .map_err(|r| r.body)
+}
+
+/// One plain Thread line on a clone's Thread (the leave-blank overflow).
+pub(crate) fn post_clone_text_line(conversation_id: &str, project_id: &str, addr: &str, body: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    match overlay::post_thread(&conn, conversation_id, project_id, addr, addr, body, "import") {
+        Ok((item, links)) => {
+            drop(conn);
+            crate::overlay_ws::emit_links(&links, &item.doc);
+        }
+        Err(e) => k2_core::log_debug!("[clone-vault] overflow line not posted: {e}"),
     }
 }
 

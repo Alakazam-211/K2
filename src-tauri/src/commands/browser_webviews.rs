@@ -31,6 +31,71 @@ pub struct BrowserHistoryState {
     pub can_forward: bool,
 }
 
+/// Dock look from the renderer (`dockGeometry.ts`): the pane background
+/// and which dock corners sit on a rounded pane corner.
+#[derive(serde::Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(not(feature = "browser-pane"), allow(dead_code))]
+pub struct Appearance {
+    /// sRGB r, g, b, a in 0–255. None keeps the engine default.
+    pub background: Option<[u8; 4]>,
+    /// Logical px.
+    #[serde(default)]
+    pub corner_radius: f64,
+    /// Top-left, top-right, bottom-right, bottom-left.
+    #[serde(default)]
+    pub corners: [bool; 4],
+}
+
+/// Which window edges the dock sits on (it should follow those on resize).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(not(all(feature = "browser-pane", target_os = "macos")), allow(dead_code))]
+pub struct DockAnchors {
+    pub right: bool,
+    pub bottom: bool,
+}
+
+/// A dock edge within a pixel of the window's edge follows it.
+#[cfg(all(feature = "browser-pane", target_os = "macos"))]
+fn dock_anchors(rect: &real::Rect, window_width: f64, window_height: f64) -> DockAnchors {
+    anchors_for(rect.x + rect.width, rect.y + rect.height, window_width, window_height)
+}
+
+#[cfg_attr(not(all(feature = "browser-pane", target_os = "macos")), allow(dead_code))]
+fn anchors_for(right: f64, bottom: f64, window_width: f64, window_height: f64) -> DockAnchors {
+    DockAnchors {
+        right: (window_width - right).abs() < 1.0,
+        bottom: (window_height - bottom).abs() < 1.0,
+    }
+}
+
+/// CALayer `maskedCorners` bits for the visual corners (TL, TR, BR, BL).
+/// kCALayerMinXMinYCorner = 1, MaxXMinY = 2, MinXMaxY = 4, MaxXMaxY = 8;
+/// "MinY" is the bottom unless the superview is flipped.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn macos_corner_mask(corners: [bool; 4], flipped: bool) -> usize {
+    let [tl, tr, br, bl] = corners;
+    let (top_left, top_right, bottom_right, bottom_left) = if flipped {
+        (1, 2, 8, 4)
+    } else {
+        (4, 8, 2, 1)
+    };
+    let mut mask = 0;
+    if tl {
+        mask |= top_left;
+    }
+    if tr {
+        mask |= top_right;
+    }
+    if br {
+        mask |= bottom_right;
+    }
+    if bl {
+        mask |= bottom_left;
+    }
+    mask
+}
+
 #[cfg(feature = "browser-pane")]
 mod real {
     use std::collections::HashMap;
@@ -41,6 +106,10 @@ mod real {
     use tauri::{
         AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewUrl,
     };
+
+    #[cfg(target_os = "macos")]
+    use super::dock_anchors;
+    use super::Appearance;
 
     /// Registry of live browser webviews. Keyed by composite
     /// `"parent_label\0item_id"` (NOT the tauri label).
@@ -123,6 +192,112 @@ mod real {
         pub height: f64,
     }
 
+    /// One bounds message, logical f64 end to end. Two calls
+    /// (`set_position` then `set_size`) were two main-thread round trips,
+    /// and each one read back the other half of the bounds first: on Linux
+    /// a child's position reads back as (0, 0), so the size call undid the
+    /// move.
+    fn dock_bounds(rect: &Rect) -> tauri::Rect {
+        tauri::Rect {
+            position: LogicalPosition::new(rect.x, rect.y).into(),
+            size: LogicalSize::new(rect.width, rect.height).into(),
+        }
+    }
+
+    /// Re-dock: bounds, and on macOS the autoresizing anchors so AppKit
+    /// keeps the view on its pane during a live window resize (same frame)
+    /// until the renderer's exact bounds arrive.
+    fn apply_bounds(view: &Webview, rect: &Rect) -> Result<(), String> {
+        view.set_bounds(dock_bounds(rect)).map_err(|e| e.to_string())?;
+        #[cfg(target_os = "macos")]
+        if let Ok(window_size) = view
+            .window()
+            .inner_size()
+            .and_then(|size| Ok(size.to_logical::<f64>(view.window().scale_factor()?)))
+        {
+            let anchors = dock_anchors(rect, window_size.width, window_size.height);
+            let _ = view.with_webview(move |webview| {
+                // SAFETY: inner() is the WKWebView tauri owns; main thread.
+                unsafe { macos_dock::set_anchors(&*webview.inner().cast(), anchors) }
+            });
+        }
+        Ok(())
+    }
+
+    /// Pane background and rounded corners (macOS clips the page to them).
+    fn apply_appearance(view: &Webview, appearance: &Appearance) {
+        if let Some([r, g, b, a]) = appearance.background {
+            // Windows / Linux. macOS ignores this; set_under_page below.
+            let _ = view.set_background_color(Some(tauri::webview::Color(r, g, b, a)));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let appearance = appearance.clone();
+            let _ = view.with_webview(move |webview| {
+                // SAFETY: inner() is the WKWebView tauri owns; main thread.
+                unsafe { macos_dock::set_appearance(&*webview.inner().cast(), &appearance) }
+            });
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    mod macos_dock {
+        use objc2_app_kit::{NSAutoresizingMaskOptions, NSColor, NSView};
+        use objc2_quartz_core::CACornerMask;
+        use objc2_web_kit::WKWebView;
+
+        use super::super::{macos_corner_mask, Appearance, DockAnchors};
+
+        fn superview_flipped(view: &WKWebView) -> bool {
+            // SAFETY: AppKit getters on the main thread.
+            unsafe { view.superview() }.is_some_and(|parent: objc2::rc::Retained<NSView>| parent.isFlipped())
+        }
+
+        /// Right/bottom edges on the window's: track that edge (fixed
+        /// margin, flexible size). Otherwise keep the size and the left/top
+        /// margin. Superview y may point up (AppKit default) or down.
+        pub unsafe fn set_anchors(view: &WKWebView, anchors: DockAnchors) {
+            let flipped = superview_flipped(view);
+            let mut mask = if anchors.right {
+                NSAutoresizingMaskOptions::ViewWidthSizable
+            } else {
+                NSAutoresizingMaskOptions::ViewMaxXMargin
+            };
+            mask |= if anchors.bottom {
+                NSAutoresizingMaskOptions::ViewHeightSizable
+            } else if flipped {
+                NSAutoresizingMaskOptions::ViewMaxYMargin
+            } else {
+                NSAutoresizingMaskOptions::ViewMinYMargin
+            };
+            if view.autoresizingMask() != mask {
+                view.setAutoresizingMask(mask);
+            }
+        }
+
+        pub unsafe fn set_appearance(view: &WKWebView, appearance: &Appearance) {
+            if let Some([r, g, b, a]) = appearance.background {
+                let color = NSColor::colorWithSRGBRed_green_blue_alpha(
+                    f64::from(r) / 255.0,
+                    f64::from(g) / 255.0,
+                    f64::from(b) / 255.0,
+                    f64::from(a) / 255.0,
+                );
+                // The colour before the page paints and around an overscroll.
+                view.setUnderPageBackgroundColor(Some(&color));
+            }
+            view.setWantsLayer(true);
+            let Some(layer) = view.layer() else {
+                return;
+            };
+            let mask = macos_corner_mask(appearance.corners, superview_flipped(view));
+            let radius = if mask == 0 { 0.0 } else { appearance.corner_radius.max(0.0) };
+            layer.setCornerRadius(radius);
+            layer.setMaskedCorners(CACornerMask(mask));
+            layer.setMasksToBounds(radius > 0.0);
+        }
+    }
+
     /// Close any live webview for the composite key (map + Tauri label).
     /// `Webview::close` is asynchronous on WKWebView — a bare close +
     /// immediate `add_child` races and surfaces `add_child failed: a webview
@@ -159,14 +334,15 @@ mod real {
         label: &str,
         parsed: &Url,
         rect: &Rect,
+        appearance: Option<&Appearance>,
     ) -> Result<(), String> {
         let view = app
             .get_webview(label)
             .ok_or_else(|| format!("expected existing webview {label}"))?;
-        view.set_position(LogicalPosition::new(rect.x, rect.y))
-            .map_err(|e| e.to_string())?;
-        view.set_size(LogicalSize::new(rect.width, rect.height))
-            .map_err(|e| e.to_string())?;
+        apply_bounds(&view, rect)?;
+        if let Some(appearance) = appearance {
+            apply_appearance(&view, appearance);
+        }
         let _ = view.show();
         view.navigate(parsed.clone()).map_err(|e| e.to_string())?;
         views(app).0.lock().unwrap().insert(key.to_string(), view);
@@ -428,6 +604,7 @@ mod real {
         url: String,
         rect: Rect,
         parent_window: Option<String>,
+        appearance: Option<Appearance>,
     ) -> Result<(), String> {
         // Serialize all creates so two concurrent creates for the same label
         // cannot both pass "label free" and race add_child.
@@ -450,8 +627,10 @@ mod real {
             let state = views(&app);
             let mut map = state.0.lock().unwrap();
             if let Some(view) = map.get(&key) {
-                let _ = view.set_position(LogicalPosition::new(rect.x, rect.y));
-                let _ = view.set_size(LogicalSize::new(rect.width, rect.height));
+                let _ = apply_bounds(view, &rect);
+                if let Some(appearance) = &appearance {
+                    apply_appearance(view, appearance);
+                }
                 let _ = view.show();
                 if view.navigate(parsed.clone()).is_err() {
                     // View may be half-dead; drop and fall through to recreate.
@@ -473,7 +652,7 @@ mod real {
         if !free {
             // Native view still registered — adopt rather than collide.
             if app.get_webview(&label).is_some() {
-                return adopt_existing(&app, &key, &label, &parsed, &rect);
+                return adopt_existing(&app, &key, &label, &parsed, &rect, appearance.as_ref());
             }
         }
 
@@ -512,6 +691,12 @@ mod real {
                     read_browser_favicon(&webview, &icon_item, &icon_parent);
                 })
                 .focused(false);
+            // The pane colour from the first frame: no white flash before
+            // the page paints (tauri #10011).
+            let builder = match appearance.as_ref().and_then(|a| a.background) {
+                Some([r, g, b, a]) => builder.background_color(tauri::webview::Color(r, g, b, a)),
+                None => builder,
+            };
             // macOS WKWebView omits Safari. Windows WebView2 already says
             // Edge, and Linux WebKitGTK already names itself, so only the
             // Mac pane amends the engine's own string.
@@ -534,12 +719,12 @@ mod real {
                 if msg.contains("already exists") {
                     // Adopt the survivor instead of failing the OAuth UI.
                     if app.get_webview(&label).is_some() {
-                        return adopt_existing(&app, &key, &label, &parsed, &rect);
+                        return adopt_existing(&app, &key, &label, &parsed, &rect, appearance.as_ref());
                     }
                     reap_browser_label(&app, &key, &label);
                     let _ = wait_label_free(&app, &label).await;
                     if app.get_webview(&label).is_some() {
-                        return adopt_existing(&app, &key, &label, &parsed, &rect);
+                        return adopt_existing(&app, &key, &label, &parsed, &rect, appearance.as_ref());
                     }
                     window
                         .add_child(
@@ -554,6 +739,11 @@ mod real {
             }
         };
 
+        // Initial anchors and corners (bounds came with add_child).
+        let _ = apply_bounds(&view, &rect);
+        if let Some(appearance) = &appearance {
+            apply_appearance(&view, appearance);
+        }
         views(&app).0.lock().unwrap().insert(key, view);
         Ok(())
     }
@@ -573,10 +763,21 @@ mod real {
         let state = views(&app);
         let guard = state.0.lock().unwrap();
         let view = guard.get(&key).ok_or("no such browser view")?;
-        view.set_position(LogicalPosition::new(rect.x, rect.y))
-            .map_err(|e| e.to_string())?;
-        view.set_size(LogicalSize::new(rect.width, rect.height))
-            .map_err(|e| e.to_string())?;
+        apply_bounds(view, &rect)
+    }
+
+    /// Pane background and rounded corners, when the renderer sees them
+    /// change (a Style switch, a split moving the dock off a corner).
+    #[tauri::command]
+    pub async fn browser_set_appearance(
+        app: AppHandle,
+        item_id: String,
+        parent_window: Option<String>,
+        appearance: Appearance,
+    ) -> Result<(), String> {
+        let view = browser_view(&app, &item_id, parent_window.as_deref())
+            .ok_or("no such browser view")?;
+        apply_appearance(&view, &appearance);
         Ok(())
     }
 
@@ -1020,6 +1221,16 @@ mod stub {
         _url: String,
         _rect: Rect,
         _parent_window: Option<String>,
+        _appearance: Option<super::Appearance>,
+    ) -> Result<(), String> {
+        Err(OFF.into())
+    }
+    #[tauri::command]
+    pub async fn browser_set_appearance(
+        _app: AppHandle,
+        _item_id: String,
+        _parent_window: Option<String>,
+        _appearance: super::Appearance,
     ) -> Result<(), String> {
         Err(OFF.into())
     }
@@ -1139,6 +1350,58 @@ fn declare_browser_engine(default_ua: &str, os_major: i64, os_minor: i64) -> Str
         "{default_ua} Version/{os_major}.{minor} Safari/{webkit}",
         minor = os_minor.max(0)
     )
+}
+
+#[cfg(test)]
+mod dock_helpers {
+    use super::{anchors_for, macos_corner_mask, Appearance, DockAnchors};
+
+    #[test]
+    fn anchors_follow_the_window_edges_the_dock_sits_on() {
+        // A pane docked right and bottom (sidebar on the left).
+        assert_eq!(
+            anchors_for(1280.0, 800.0, 1280.0, 800.0),
+            DockAnchors { right: true, bottom: true }
+        );
+        // Half a pixel off is still on the edge (snapped rects at 2x).
+        assert_eq!(
+            anchors_for(1279.5, 799.5, 1280.0, 800.0),
+            DockAnchors { right: true, bottom: true }
+        );
+        // Left half of a split, above a bottom drawer.
+        assert_eq!(
+            anchors_for(640.0, 600.0, 1280.0, 800.0),
+            DockAnchors { right: false, bottom: false }
+        );
+    }
+
+    #[test]
+    fn corner_mask_maps_visual_corners_for_both_y_directions() {
+        // Bottom corners only (the dock sits under the chrome bar).
+        let bottom = [false, false, true, true];
+        assert_eq!(macos_corner_mask(bottom, false), 1 | 2);
+        assert_eq!(macos_corner_mask(bottom, true), 4 | 8);
+        assert_eq!(macos_corner_mask([true, true, true, true], false), 15);
+        assert_eq!(macos_corner_mask([true, true, true, true], true), 15);
+        assert_eq!(macos_corner_mask([true, false, false, false], false), 4);
+        assert_eq!(macos_corner_mask([true, false, false, false], true), 1);
+        assert_eq!(macos_corner_mask([false; 4], false), 0);
+    }
+
+    #[test]
+    fn appearance_wire_shape() {
+        let a: Appearance = serde_json::from_value(serde_json::json!({
+            "background": [18, 18, 20, 255],
+            "cornerRadius": 11.0,
+            "corners": [false, false, true, true]
+        }))
+        .unwrap();
+        assert_eq!(a.background, Some([18, 18, 20, 255]));
+        assert_eq!(a.corner_radius, 11.0);
+        assert_eq!(a.corners, [false, false, true, true]);
+        let bare: Appearance = serde_json::from_value(serde_json::json!({ "background": null })).unwrap();
+        assert_eq!(bare, Appearance::default());
+    }
 }
 
 #[cfg(test)]

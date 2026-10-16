@@ -49,6 +49,8 @@ import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { useToastStore } from '@/stores/toast'
 import { metaChordLabel } from '@/lib/shortcut-label'
+import DrawerTabBarToggle from '@/components/Layout/DrawerTabBarToggle'
+import { useRoomTabBarDrawerToggle } from '@/components/Layout/drawer-handles'
 
 interface TabBarProps {
   cwd: string
@@ -186,6 +188,11 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   const splitTerminalArea = useRoomTabs((s) => s.splitTerminalArea)
   const unsplitTerminalArea = useRoomTabs((s) => s.unsplitTerminalArea)
   const reorderTabs = useRoomTabs((s) => s.reorderTabs)
+  // Drawer-controls experiment (Agents): a closed drawer's » / « toggle
+  // takes its own slot at the far left of the leftmost column's bar and
+  // the far right of the rightmost column's bar.
+  const showLeftDrawerToggle = useRoomTabBarDrawerToggle('left') && groupIndex === 0
+  const showRightDrawerToggle = useRoomTabBarDrawerToggle('right') && groupIndex === splitCount - 1
   // prd-daemon-activity-and-thread-working-v1 S5: the ROOM's server's
   // activity rows (Home M4, MS14/MS21) — what the daemon says each session
   // is doing. A tab maps to its row by its `sessionId`, else its agent name
@@ -799,6 +806,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       bordered={false}
       className="flex h-9 items-center border-b border-[var(--color-border)] no-drag"
     >
+      {showLeftDrawerToggle && <DrawerTabBarToggle side="left" placement="room" />}
       {/* Grow 0 so the + sits on the last tab. Overflow stays in this node, not the + . */}
       <div
         ref={tabBarRef}
@@ -1303,6 +1311,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           )}
         </>
       )}
+
+      {showRightDrawerToggle && <DrawerTabBarToggle side="right" placement="room" />}
 
       {/* Pin Dimensions modal — opened from a tab's context menu */}
       {pinModalSessionId && (

@@ -48,17 +48,24 @@ export function useWorkspaceIndexShortcuts(): void {
         return
       }
 
-      // Cmd+Option+1-9 (e.code: Option modifies e.key on macOS).
+      // Cmd+Option+1-9, and 0 for the tenth row (the number column's `0`,
+      // plan-agent-status-unify-v1 §3.2). e.code: Option modifies e.key on
+      // macOS.
       if (e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey) {
         const digitMatch = e.code.match(/^Digit(\d)$/)
         const num = digitMatch ? parseInt(digitMatch[1], 10) : NaN
-        if (!isNaN(num) && num >= 1 && num <= 9) {
+        // ⌥⌘0 is the tenth Agents row only: on Home and in Zen, ⌥⌘1–9
+        // switch Homes / Gardens (above) and ⌥⌘0 has no Home to pick.
+        const switcherPage = zenShownNow() || usePageViewStore.getState().page === 'home'
+        if (num === 0 && switcherPage) return
+        if (!isNaN(num) && num >= 0 && num <= 9) {
           e.preventDefault()
+          const idx = num === 0 ? 9 : num - 1
           const layout = useTerminalSettingsStore.getState().shortcutLayout
           if (layout === 'cmd-active-cmdshift-pinned') {
-            switchToPinnedByIndex(num - 1)
+            switchToPinnedByIndex(idx)
           } else {
-            switchToActiveByIndex(num - 1)
+            switchToActiveByIndex(idx)
           }
         }
         return

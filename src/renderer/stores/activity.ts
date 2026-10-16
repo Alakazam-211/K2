@@ -73,6 +73,9 @@ export interface UnseenDone {
   agentName: string
   projectId: string | null
   workspacePath: string | null
+  /** How the turn ended (plan-agent-status-unify-v1: a failed turn shows
+   *  ×, not ✓). Absent = success. */
+  outcome?: 'success' | 'failure'
 }
 
 /** One server's activity, as this client holds it. */
@@ -231,6 +234,67 @@ export function displayUnderRoot(state: Pick<ScopeActivity, 'rows'>, root: strin
 export function projectHasUnseen(state: Pick<ScopeActivity, 'unseenDone'>, projectId: string): boolean {
   for (const u of state.unseenDone.values()) if (u.projectId === projectId) return true
   return false
+}
+
+/** How `projectId`'s unseen turns ended: `failed` when any failed, else
+ *  `done` when any finished, else null (plan-agent-status-unify-v1 rank). */
+export function projectUnseenOutcome(
+  state: Pick<ScopeActivity, 'unseenDone'>,
+  projectId: string,
+): 'done' | 'failed' | null {
+  let out: 'done' | 'failed' | null = null
+  for (const u of state.unseenDone.values()) {
+    if (u.projectId !== projectId) continue
+    if (u.outcome === 'failure') return 'failed'
+    out = 'done'
+  }
+  return out
+}
+
+/** How the unseen turns under `root` ended (an open room's Home row). */
+export function unseenOutcomeUnderRoot(state: Pick<ScopeActivity, 'unseenDone'>, root: string): 'done' | 'failed' | null {
+  let out: 'done' | 'failed' | null = null
+  for (const u of state.unseenDone.values()) {
+    if (!u.workspacePath || !pathUnderRoot(u.workspacePath, root)) continue
+    if (u.outcome === 'failure') return 'failed'
+    out = 'done'
+  }
+  return out
+}
+
+/** A workspace's rollup, by project id first, then by path (null = no
+ *  rows: idle). */
+export function workspaceRollup(
+  state: Pick<ScopeActivity, 'workspaces'>,
+  ref: { projectId?: string | null; path?: string | null },
+): ActivityWorkspace | null {
+  const byId = ref.projectId ? state.workspaces.get(workspaceKey(ref.projectId, null)) : undefined
+  if (byId) return byId
+  const byPath = ref.path ? state.workspaces.get(workspaceKey(null, ref.path)) : undefined
+  return byPath ?? null
+}
+
+/** Does this server's daemon report `live` on its rollups (D1)? Proven by
+ *  any rollup that carries the field. */
+export function daemonReportsLive(state: Pick<ScopeActivity, 'workspaces'>): boolean {
+  for (const w of state.workspaces.values()) if (typeof w.live === 'number') return true
+  return false
+}
+
+/** The workspace's first row showing `display` (for a tooltip's reason):
+ *  its project's rows when any row carries the id, else rows at its path. */
+export function workspaceRowWith(
+  state: Pick<ScopeActivity, 'rows'>,
+  ref: { projectId?: string | null; path?: string | null },
+  display: ActivityDisplay,
+): ActivityRow | null {
+  const id = ref.projectId
+  const byId = id ? [...state.rows.values()].some((r) => r.projectId === id) : false
+  for (const r of state.rows.values()) {
+    if (r.display !== display) continue
+    if (byId ? r.projectId === id : !r.projectId && !!ref.path && r.workspacePath === ref.path) return r
+  }
+  return null
 }
 
 /** Does this agent name (or session) have a finished turn this client
@@ -461,6 +525,7 @@ function armDone(scopeId: string, n: Notifier, row: ActivityRow): void {
     sid,
     setTimeout(() => {
       n.chimeTimers.delete(sid)
+      const ended = n.pendingDone.get(sid)
       n.pendingDone.delete(sid)
       const cur = currentRow(scopeId, sid)
       if (!settled(cur) || isViewing(n, cur)) return
@@ -471,6 +536,7 @@ function armDone(scopeId: string, n: Notifier, row: ActivityRow): void {
         agentName: cur.agentName,
         projectId: cur.projectId,
         workspacePath: cur.workspacePath,
+        outcome: ended?.outcome === 'failure' ? 'failure' : 'success',
       })
       store.setState({ unseenDone: unseen })
       const host = hostsFor(n, cur)[0]

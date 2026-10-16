@@ -69,6 +69,7 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--color-status-warn-soft': zen('needs-you'),
   '--color-status-warn-text': zen('needs-you'),
   '--color-status-warn-amber': zen('needs-you'),
+  '--color-status-needs-you': zen('needs-you'),
   '--color-status-warn-amber-soft': zen('needs-you'),
   '--color-status-warn-amber-bright': zen('needs-you'),
   '--color-status-warning-soft': zen('needs-you'),

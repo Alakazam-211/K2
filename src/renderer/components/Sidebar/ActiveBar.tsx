@@ -2,9 +2,9 @@ import { useMemo, useCallback, useState, useEffect, useRef, Fragment } from 'rea
 import { useProjectsStore } from '@/stores/projects'
 import { useTabsStore } from '@/stores/tabs'
 import { useActiveStore } from '@/stores/active'
-import { useActiveAgentsStore, projectHasLiveSession } from '@/stores/active-agents'
-import { activityStore, isLiveDisplay, projectHasUnseen, useActivity, workspaceDisplay } from '@/stores/activity'
-import { ActivityMark } from '@/components/Activity/ActivityMark'
+import { activityStore, isLiveDisplay, workspaceDisplay } from '@/stores/activity'
+import { AgentStatusCluster } from '@/components/AgentStatus/AgentStatusCluster'
+import { useAgentStatus } from '@/components/AgentStatus/useAgentStatus'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useSettingsStore, clampActiveWindowHours } from '@/stores/settings'
@@ -23,7 +23,6 @@ import { onActiveHostChange } from '@/stores/connect-host'
 import { showContextMenu } from '@/lib/context-menu'
 import ProjectAvatar from './ProjectAvatar'
 import { KeyCombo } from '@/components/KeySymbol'
-import { IconAutonomous } from '@/components/icons/IconAutonomous'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { primaryScope } from '@/kessel/server-scope'
 
@@ -344,29 +343,15 @@ function ActiveBarItem({
   onClick: () => void
   onContextMenu: (e: React.MouseEvent) => void
 }): React.JSX.Element {
-  const shortcutNum = index < 9 ? index + 1 : index === 9 ? 0 : null
-  // prd-daemon-activity-and-thread-working-v1 S5: the workspace's rollup
-  // from the window server's daemon (RL1/RL10).
-  const display = useActivity(primaryScope(), (s) => workspaceDisplay(s, { projectId: project.id, path: project.path }))
-  const isAgentWorking = isLiveDisplay(display)
-  // Green "live session" dot — the workspace currently holds a live PTY
-  // (i.e. it's consuming RAM and is reapable on dismiss/age-out). Selector
-  // returns a boolean so the item only re-renders when its liveness flips.
-  const hasLiveSession = useActiveAgentsStore((s) => projectHasLiveSession(s.liveSessionCwds, project.path))
-  // F4 — amber "done, unseen" dot: an agent in this workspace finished
-  // while its pane wasn't being watched, and hasn't been viewed since
-  // (per-client view state, RL11). Renders in the liveness slot
-  // (precedence: activity mark > unseen-done(amber) > live(green)) so the
-  // row doesn't jump. Clicking the row focuses the workspace → the pane's
-  // visible-and-focused effect clears the mark → dot extinguishes.
-  const hasUnseenDone = useActivity(primaryScope(), (s) => projectHasUnseen(s, project.id))
-
-  // EKG (heartbeat) badge — config-flag semantics: shown whenever this
-  // workspace has ≥1 enabled heartbeat, i.e. it CAN self-drive. Persistent
-  // (not gated on recency or on a recent fire) and coexists with the
-  // braille spinner. Distinct glyph (EKG pulse) reads as "has autonomous
-  // heartbeats" vs the spinner's "working now".
-  const showEkg = hasEnabledHeartbeat(project.heartbeatEnabled)
+  // plan-agent-status-unify-v1 S3: the same cluster as the nav rows —
+  // working | heartbeat | status-or-live | number. Live / reaped is the
+  // daemon's rollup `live` (D1), else (an older daemon) the renderer's
+  // live-session set; "not viewed" is this client's (RL11).
+  const view = useAgentStatus(primaryScope(), {
+    projectId: project.id,
+    path: project.path,
+    heartbeatEnabled: hasEnabledHeartbeat(project.heartbeatEnabled),
+  })
 
   return (
     <button
@@ -387,44 +372,7 @@ function ActiveBarItem({
         size={18}
       />
       <span className="text-[11px] truncate flex-1">{project.name}</span>
-      {display === 'working' && (
-        <span className="text-[11px] font-mono flex-shrink-0 text-[var(--color-text-muted)]">
-          {/* 1ch, not the shared 1em box: the glyph is ~0.6em wide and sat
-              left of a blank strip, so it read further left than the marks. */}
-          <span className="braille-spinner !w-[1ch]" />
-        </span>
-      )}
-      {isAgentWorking && display !== 'working' && <ActivityMark display={display} />}
-      {showEkg && (
-        <span
-          className="flex-shrink-0 text-[var(--color-text-muted)] opacity-80"
-          title="Has an enabled heartbeat — this workspace can run on its own"
-        >
-          <IconAutonomous className="w-3.5 h-3.5" />
-        </span>
-      )}
-      {/* Session-liveness square, RIGHT of the EKG — always shown: green when
-          ≥1 live session (consuming RAM, reapable), grey when none alive.
-          F4 — an unseen completion takes the slot over (amber) until
-          the user views the pane. */}
-      {!isAgentWorking && hasUnseenDone ? (
-        <span
-          className="flex-shrink-0 w-1.5 h-1.5 bg-[var(--color-status-warn-amber)]"
-          title="Agent finished — not yet viewed"
-        />
-      ) : (
-        <span
-          className={`flex-shrink-0 w-1.5 h-1.5 ${
-            hasLiveSession ? 'bg-[var(--color-status-ok)]' : 'bg-[var(--color-wash-3)]'
-          }`}
-          title={hasLiveSession ? 'Live session running' : 'No live session'}
-        />
-      )}
-      {shortcutNum !== null && (
-        <span className="text-[10px] font-mono text-[var(--color-text-muted)] flex-shrink-0 tabular-nums">
-          {shortcutNum}
-        </span>
-      )}
+      <AgentStatusCluster view={view} index={index} />
     </button>
   )
 }

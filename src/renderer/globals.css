@@ -1002,6 +1002,45 @@ html[data-os]:not([data-os="mac"]) select optgroup {
   animation: status-pulse 2s infinite;
 }
 
+/* ── Agent status cluster (plan-agent-status-unify-v1 §3) ───────────
+   working | heartbeat | status-or-live | number, 14px slots. Every glyph's
+   ink sits in the same 14-of-24 box, so a 4px box gap reads ≈9px; the
+   digit has more side bearing, so 2px before the number reads the same. */
+:root {
+  --clu-gap: 4px;
+  --num-gap: 2px;
+}
+
+/* Working: a 3×3 cell grid; a lit head runs clockwise round the 8 edge
+   cells (0.8s a lap, 0.1s per cell) with a fading tail; the centre stays
+   dim. Reduced motion: still, the top row + right column lit. */
+@keyframes agent-working-orbit {
+  0% { opacity: 1; }
+  37.5% { opacity: 0.3; }
+  100% { opacity: 0.3; }
+}
+.agent-working rect {
+  fill: currentColor;
+  opacity: 0.3;
+}
+.agent-working rect.e {
+  animation: agent-working-orbit 0.8s linear infinite;
+}
+.agent-working.is-still rect.e {
+  animation: none;
+}
+.agent-working.is-still rect.e.p {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-agent-working] rect.e {
+    animation: none;
+  }
+  [data-agent-working] rect.e.p {
+    opacity: 1;
+  }
+}
+
 /* ── Icon rail active indicator ───────────────────────────────────── */
 
 .icon-rail-active {

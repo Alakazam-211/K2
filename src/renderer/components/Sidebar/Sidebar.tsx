@@ -4,8 +4,8 @@ import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useSettingsStore } from '@/stores/settings'
 import { SidebarCollapseButton } from './SidebarCollapseButton'
 import { useToastStore } from '@/stores/toast'
-import { projectHasUnseen, useActivity, workspaceDisplay } from '@/stores/activity'
-import { ActivityMark } from '@/components/Activity/ActivityMark'
+import { AgentStatusCluster } from '@/components/AgentStatus/AgentStatusCluster'
+import { useAgentStatus } from '@/components/AgentStatus/useAgentStatus'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useCommandPaletteStore } from '@/stores/command-palette'
 import { useAddWorkspaceDialogStore } from '@/stores/add-workspace-dialog'
@@ -83,9 +83,11 @@ function WorkspaceGitBadge({ path }: { path?: string }): React.JSX.Element | nul
   )
 }
 
-// ── Worktree status dot (amber pulsing if dirty) ────────────────────────────
+// ── Worktree changes (a neutral count; no pulse, no amber) ──────────────────
 
-function WorkspaceStatusDot({ path }: { path?: string }): React.JSX.Element | null {
+/** How many files a worktree has changed: a quiet count chip (amber means
+ *  "needs you" only, plan-agent-status-unify-v1 §3.3). */
+function WorkspaceDirtyCount({ path }: { path?: string }): React.JSX.Element | null {
   const { data } = useGitInfo(primaryScope(), path)
   if (!data?.isRepo) return null
 
@@ -94,38 +96,34 @@ function WorkspaceStatusDot({ path }: { path?: string }): React.JSX.Element | nu
 
   return (
     <span
-      className="status-dot-dirty flex-shrink-0"
-      style={{
-        width: 6,
-        height: 6,
-        backgroundColor: 'var(--color-status-warn)'
-      }}
-    />
+      className="flex-shrink-0 px-[5px] py-px font-mono text-[10px] leading-none tabular-nums text-[var(--color-text-secondary)] bg-[var(--color-wash-3)]"
+      title={`${count} changed ${count === 1 ? 'file' : 'files'}`}
+      data-worktree-dirty={count}
+    >
+      {count}
+    </span>
   )
 }
 
-// ── Agent status (shows spinner when agent is working) ───────────────────────
+// ── Agent status (the shared cluster) ───────────────────────────────────────
 
-/** 14px slot always — glyph only (braille / state mark / "done" / empty).
- *  Never unmount. The workspace's rollup from the window server's daemon
- *  (prd-daemon-activity-and-thread-working-v1 RL1/RL10); "done" is this
- *  client's unseen finished turn (RL11). */
-export function AgentSpinner({ projectId }: { projectId: string }): React.JSX.Element {
-  const display = useActivity(primaryScope(), (s) => workspaceDisplay(s, { projectId }))
-  const review = useActivity(primaryScope(), (s) => projectHasUnseen(s, projectId)) && display === 'idle'
-  const color = review ? 'text-[var(--color-status-ok-soft)]' : 'text-[var(--color-text-muted)]'
-
-  return (
-    <span className={`inline-flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center leading-none ${color}`}>
-      {display === 'working' ? (
-        <span className="braille-spinner text-[11px] font-mono" />
-      ) : display !== 'idle' ? (
-        <ActivityMark display={display} />
-      ) : review ? (
-        <span className="text-[10px] font-mono">done</span>
-      ) : null}
-    </span>
-  )
+/** A nav row's status cluster: working | heartbeat | status-or-live |
+ *  number (plan-agent-status-unify-v1 §3.2). The window server's rollup
+ *  (RL1, daemon) plus this client's "not viewed" (RL11). `index` is the
+ *  row's chord position (null = a list without chords: the column stays). */
+export function AgentRowStatus({
+  projectId,
+  path,
+  heartbeatEnabled,
+  index,
+}: {
+  projectId: string
+  path?: string
+  heartbeatEnabled?: number
+  index?: number | null
+}): React.JSX.Element {
+  const view = useAgentStatus(primaryScope(), { projectId, path, heartbeatEnabled })
+  return <AgentStatusCluster view={view} index={index} />
 }
 
 // ── Single Workspace Item (worktreeMode === 0) ─────────────────────────────────
@@ -268,7 +266,7 @@ export function AgentRowButton({
       <div className="flex flex-col justify-center min-w-0 flex-1">
         <div className="flex items-center gap-2 w-full leading-4">
           <span className="truncate flex-1 leading-4">{name}</span>
-          <span className="-mr-1 flex items-center">{nameAside}</span>
+          <span className="flex items-center">{nameAside}</span>
         </div>
         <div className="h-3.5 min-h-3.5 leading-none flex items-center gap-1">{subline}</div>
       </div>
@@ -329,8 +327,12 @@ export function SingleProjectItem({
         subline={
           <>
             <NavProjectTags workspaceId={project.id} />
-            <AgentSpinner projectId={project.id} />
-            <ShortcutIndexBadge index={shortcutIndex} />
+            <AgentRowStatus
+              projectId={project.id}
+              path={project.path}
+              heartbeatEnabled={project.heartbeatEnabled}
+              index={shortcutIndex ?? null}
+            />
           </>
         }
       />
@@ -385,7 +387,6 @@ function WorkspaceButton({
         onContextMenu={onContextMenu}
       >
         <div className="flex items-center gap-2 w-full">
-          {isWorktree && <WorkspaceStatusDot path={workspacePath} />}
 
           {isWorktree ? (
             /* Git branch/worktree icon */
@@ -410,12 +411,8 @@ function WorkspaceButton({
           </span>
 
           <PresenceWorkspaceAvatars path={workspacePath} />
-          <AgentSpinner projectId={workspace.projectId} />
-          {shortcutIndex !== undefined && shortcutIndex < 9 && (
-            <span className="text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0 py-0.5 pl-2 -mr-1">
-              {shortcutIndex + 1}
-            </span>
-          )}
+          {isWorktree && <WorkspaceDirtyCount path={workspacePath} />}
+          <AgentRowStatus projectId={workspace.projectId} path={workspacePath} index={shortcutIndex ?? null} />
         </div>
       </button>
     </div>

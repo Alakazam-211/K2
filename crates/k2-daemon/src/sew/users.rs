@@ -79,11 +79,14 @@ pub fn resolve(input: &str, email: Option<&str>) -> R<(String, Option<String>)> 
     Ok((username, email))
 }
 
-/// Sew's error code from a mgmt error body (`{"error":{"code"|"reason"}}`
-/// or `{"code"}`).
+/// Sew's error code from a mgmt error body. Sew's wire (sew-proto
+/// `ReasonDetails`, docs/mgmt.md) is `{"ok":false,"error":{"code":"conflict",
+/// "hint":…,"details":{"reason":"owner_exists"}}}`: the reason first, then
+/// the coarse code. (S29/0.1.2 VM cycle: K2 read `error.reason`, which Sew
+/// never sends, so every refusal fell through to "Sew answered 409".)
 fn sew_code(body: &str) -> String {
     let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
-    for p in ["/error/reason", "/error/code", "/reason", "/code", "/error"] {
+    for p in ["/error/details/reason", "/error/reason", "/error/code", "/reason", "/code", "/error"] {
         if let Some(s) = v.pointer(p).and_then(Value::as_str) {
             return s.to_string();
         }

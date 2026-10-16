@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
 import { usePanelsStore } from '../../stores/panels'
+import AnimatedDrawer from './AnimatedDrawer'
 import DesktopChromeLeft from '@/components/TopBar/DesktopChromeLeft'
 import { TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/desktop-chrome'
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
@@ -107,20 +108,20 @@ export default function FocusLayout({
       {/* Content area with optional left/right panels */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left auxiliary panel */}
-        {leftPanelOpen && leftPanel && (
-          <div className="flex h-full min-h-0 flex-shrink-0 flex-col overflow-hidden border-r border-[var(--color-border)]">
+        {leftPanel && (
+          <AnimatedDrawer open={leftPanelOpen} side="left">
             {leftPanel}
-          </div>
+          </AnimatedDrawer>
         )}
 
         {/* Main content (terminal) */}
         <div className="flex-1 overflow-hidden">{children}</div>
 
         {/* Right auxiliary panel */}
-        {rightPanelOpen && rightPanel && (
-          <div className="flex h-full min-h-0 flex-shrink-0 flex-col overflow-hidden border-l border-[var(--color-border)]">
+        {rightPanel && (
+          <AnimatedDrawer open={rightPanelOpen} side="right">
             {rightPanel}
-          </div>
+          </AnimatedDrawer>
         )}
       </div>
     </div>

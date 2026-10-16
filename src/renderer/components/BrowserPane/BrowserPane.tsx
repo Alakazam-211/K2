@@ -22,6 +22,7 @@ import {
   type BrowserFace,
   type FrozenFrame,
 } from './browserFreeze'
+import { dockAppearance, sameAppearance, snapRect, type DockAppearance } from './dockGeometry'
 
 export { focusVisibleBrowserAddress } from './focusBrowserAddress'
 export { normalizeUrl }
@@ -274,10 +275,18 @@ export function BrowserPane({
     if (!el) return null
     // getBoundingClientRect is CSS px relative to the viewport; the main
     // webview fills the window at origin, so this IS the parent-window
-    // logical coordinate space browser_set_bounds expects.
+    // logical coordinate space browser_set_bounds expects. Snapped to the
+    // device-pixel grid so the native view's edges meet the DOM's.
     const r = el.getBoundingClientRect()
     if (r.width <= 0 || r.height <= 0) return null // display:none / collapsed
-    return { x: r.x, y: r.y, width: r.width, height: r.height }
+    return snapRect({ x: r.x, y: r.y, width: r.width, height: r.height }, window.devicePixelRatio || 1)
+  }, [])
+
+  // Background + rounded corners last sent to the native view.
+  const appearanceRef = useRef<DockAppearance | null>(null)
+  const readAppearance = useCallback((): DockAppearance | null => {
+    const el = contentRef.current
+    return el ? dockAppearance(el) : null
   }, [])
 
   const createView = useCallback(async (targetUrl: string): Promise<void> => {
@@ -304,8 +313,10 @@ export function BrowserPane({
     }
     setError(null)
     createInFlightRef.current = true
+    const appearance = readAppearance()
     try {
-      await invoke('browser_create', { itemId, url: normalized, rect, parentWindow })
+      await invoke('browser_create', { itemId, url: normalized, rect, parentWindow, appearance })
+      appearanceRef.current = appearance
       createdRef.current = true
       setCreated(true)
       freezeRef.current?.adoptCreatedView()
@@ -322,7 +333,7 @@ export function BrowserPane({
     } finally {
       createInFlightRef.current = false
     }
-  }, [itemId, measureRect, parentWindow])
+  }, [itemId, measureRect, parentWindow, readAppearance])
 
   const scheduleBoundsPush = useCallback(() => {
     if (rafRef.current !== null) return
@@ -341,8 +352,15 @@ export function BrowserPane({
         // View may have been closed in a race; the visibility/lifecycle
         // effects own recovery.
       })
+      // A split, a drawer or a Style change can move the dock onto (or off)
+      // a rounded pane corner, or change the pane background.
+      const appearance = readAppearance()
+      if (appearance && !sameAppearance(appearanceRef.current, appearance)) {
+        appearanceRef.current = appearance
+        void invoke('browser_set_appearance', { itemId, parentWindow, appearance }).catch(() => {})
+      }
     })
-  }, [itemId, measureRect, createView, parentWindow])
+  }, [itemId, measureRect, createView, parentWindow, readAppearance])
 
   useEffect(() => {
     const el = contentRef.current
@@ -788,7 +806,7 @@ export function BrowserPane({
       {/* Docking area — the native child webview is positioned exactly
           over this div. DOM content here only shows when the view is
           absent (not created / stub build / error). */}
-      <div ref={contentRef} className="flex-1 min-h-0 relative overflow-hidden">
+      <div ref={contentRef} className="flex-1 min-h-0 relative overflow-hidden bg-[var(--color-bg)]">
         {frame && (
           // Freeze-frame: the page as it was, pinned top-left at its own
           // size so a shrinking dock (drawer slide) clips it, never squashes.

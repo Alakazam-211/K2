@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow as getCurrentTauriWindow } from '@tauri-apps/api/window'
 import { useWindowFocusStore } from './stores/window-focus'
 import FocusLayout from './components/Layout/FocusLayout'
+import { NoTabBarDrawerToggles } from './components/Layout/DrawerTabBarToggle'
 import { LeftPanelContent, RightPanelContent } from './components/Layout/WorkspaceDrawers'
 import { TerminalArea } from './components/Terminal/TerminalArea'
 import Settings from './components/Settings/Settings'
@@ -181,6 +182,7 @@ function FocusModeContent({ activeProject, cwd }: { activeProject: any; cwd: str
             className="relative flex h-full w-full flex-1 items-center justify-center overflow-hidden"
             data-toast-host="workspace"
           >
+            <NoTabBarDrawerToggles />
             <div className="text-center">
               <h2 className="text-lg font-medium text-[var(--color-text-muted)]">Loading...</h2>
             </div>

@@ -37,7 +37,8 @@ import { topBarLeftClusterMinWidth, TRAFFIC_LIGHT_CLUSTER_GAP_PX } from '@/lib/d
 import DesktopChromeRight from '@/components/TopBar/DesktopChromeRight'
 import K2MarkButton from '@/components/TopBar/K2MarkButton'
 import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
-import { DrawerIcon } from '@/components/icons/K2Icons'
+import AnimatedDrawer from '@/components/Layout/AnimatedDrawer'
+import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
 import { Surface } from '@/components/ui'
 import ProjectNav, { CreateProjectForm, ProjectNavRail } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
@@ -82,6 +83,9 @@ function SelectedProjectView({
   // (per-project, never per-dashboard); open/closed is the persisted
   // store flag the top-bar toggle flips.
   const chatOpen = useProjectGroupsStore((s) => !s.chatCollapsed)
+  const selectedUnread = useProjectGroupsStore((s) =>
+    s.selectedGroupId !== null && s.unreadGroupIds.has(s.selectedGroupId),
+  )
 
   // P5 — a member-row click (open/focus its canonical pane) lands on a
   // DASHBOARD tab (the first one when Feedback is active); the mounted
@@ -156,6 +160,27 @@ function SelectedProjectView({
                 mounted ProjectDashboard applies the re-tile). Hidden
                 for viewers (inside the component). */}
             {activeTab !== FEEDBACK_TAB && activeDashboard !== null && <DashboardPresetsMenu />}
+            {/* Closed chat: its » / « toggle in its own slot at the row's
+                far right (the drawer-toggle principle); the unread dot
+                rides it. Open, the toggle sits in the chat header. */}
+            {!chatOpen && (
+              <div className="-mr-4 -mt-2 flex self-stretch" data-project-chat-toggle-slot="">
+                <DrawerToggleButton
+                  side="right"
+                  placement="room"
+                  name="project chat"
+                  onToggle={() => useProjectGroupsStore.getState().setChatCollapsed(false)}
+                >
+                  {selectedUnread && (
+                    <span
+                      className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]"
+                      title="New project messages"
+                      data-project-chat-unread=""
+                    />
+                  )}
+                </DrawerToggleButton>
+              </div>
+            )}
           </div>
         </div>
 
@@ -191,7 +216,9 @@ function SelectedProjectView({
           update props without remounting, so the composer draft
           survives them (SelectedProjectView is keyed by group id
           upstream: a project switch is a fresh panel). */}
-      {chatOpen && <ProjectChatPanel show={show} />}
+      <AnimatedDrawer open={chatOpen} side="right" bordered={false} clipAtRest={false}>
+        <ProjectChatPanel show={show} />
+      </AnimatedDrawer>
     </div>
   )
 }
@@ -207,10 +234,6 @@ export default function ProjectsPage(): React.JSX.Element | null {
   const revision = useProjectGroupsStore((s) => s.revision)
   // §6.7.1 / §6.7.3 — the two per-client persisted toggles.
   const navCollapsed = useProjectGroupsStore((s) => s.navCollapsed)
-  const chatCollapsed = useProjectGroupsStore((s) => s.chatCollapsed)
-  const selectedUnread = useProjectGroupsStore((s) =>
-    s.selectedGroupId !== null && s.unreadGroupIds.has(s.selectedGroupId),
-  )
 
   const [show, setShow] = useState<ProjectGroupShow | null>(null)
   const [showError, setShowError] = useState<string | null>(null)
@@ -334,35 +357,12 @@ export default function ProjectsPage(): React.JSX.Element | null {
           <PageTabs />
         </div>
 
-        {/* Right: the chat-panel toggle (§6.7.3 — the TopBar right-panel
-            idiom at the bar's right end); the unread dot rides it while
-            the panel is closed. Window controls sit after page affordances. */}
+        {/* Right: utilities + window controls. The nav and chat toggles
+            moved off the top bar (0.46.0): the nav's » / « sits at the
+            bottom of the nav / rail, the chat's in the dashboard tab row
+            (closed) or the chat header (open). */}
         <DesktopChromeRight>
-          <TopBarUtilities>
-            {/* §6.7.1 — nav-collapse toggle, after the last pipe. */}
-            <button
-              type="button"
-              onClick={() => useProjectGroupsStore.getState().setNavCollapsed(!navCollapsed)}
-              className="no-drag flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-              title="Toggle projects nav"
-            >
-              <DrawerIcon side="left" open={!navCollapsed} />
-            </button>
-            <button
-              type="button"
-              onClick={() => useProjectGroupsStore.getState().setChatCollapsed(!chatCollapsed)}
-              className="no-drag relative flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] transition-colors"
-              title="Toggle project chat"
-            >
-              <DrawerIcon side="right" open={!chatCollapsed} />
-              {chatCollapsed && selectedUnread && (
-                <span
-                  className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]"
-                  title="New project messages"
-                />
-              )}
-            </button>
-          </TopBarUtilities>
+          <TopBarUtilities />
         </DesktopChromeRight>
       </Surface>
 

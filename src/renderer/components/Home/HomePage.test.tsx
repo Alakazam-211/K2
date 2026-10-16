@@ -352,21 +352,23 @@ describe('Home — the Agents page shell', () => {
     expect(within(roomArea()).getByTestId('terminal-area').getAttribute('data-cwd')).toBe('/w/cortana')
   })
 
-  it('a selected local agent has the Agents drawers and drawer toggles on Home', () => {
+  it('a selected local agent has the Agents drawers on Home (toggled from the tab bars, not the top bar)', () => {
     useProjectsStore.getState().setActiveProject('pl')
     render(<Shell />)
-    // Top bar drawer toggles (the Agents TopBar).
-    const left = screen.getByTitle('Toggle left panel')
-    const right = screen.getByTitle('Toggle right panel')
+    // 0.46.0: no top bar drawer toggles on Home either; the drawers open
+    // and close from the room / drawer tab bars (stubbed here), i.e. the
+    // window's panels store.
+    expect(screen.queryByTitle('Toggle left panel')).toBeNull()
+    expect(screen.queryByTitle('Toggle right panel')).toBeNull()
     // Drawer bodies for the selected agent.
     expect(screen.getByTestId('drawer-files').getAttribute('data-root')).toBe('/w/cortana')
     expect(screen.getByTestId('drawer-history').getAttribute('data-root')).toBe('/w/cortana')
     expect(screen.getByText('Cortana', { selector: 'span.text-\\[var\\(--color-text-secondary\\)\\]' })).toBeTruthy()
 
-    fireEvent.click(left)
+    act(() => usePanelsStore.getState().toggleLeftPanel())
     expect(usePanelsStore.getState().leftPanelOpen).toBe(false)
     expect(screen.queryByTestId('drawer-files')).toBeNull()
-    fireEvent.click(right)
+    act(() => usePanelsStore.getState().toggleRightPanel())
     expect(usePanelsStore.getState().rightPanelOpen).toBe(false)
     expect(screen.queryByTestId('drawer-history')).toBeNull()
   })

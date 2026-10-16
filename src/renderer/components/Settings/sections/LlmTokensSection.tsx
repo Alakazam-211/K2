@@ -1,4 +1,4 @@
-// Settings → LLMs → Tokens (0.45.7, Rosson: "Group the LLM details under
+// Settings → Language Models → Subscriptions / Tokens (was LLMs → Tokens; 0.45.7, Rosson: "Group the LLM details under
 // one section as well: LLMs · Tokens · Token Usage"). The page around
 // `AgentAccountsColumn`: this server's subscriptions and API tokens, the
 // server default per tool, switching, Use next token, Sign in again, each
@@ -19,16 +19,16 @@ export const LLM_TOKENS_MANIFEST: SettingEntry[] = [
   {
     id: 'agents.accounts',
     section: 'llm-tokens',
-    label: 'Tokens',
+    label: 'Subscriptions / Tokens',
     description: 'Which subscription or API token each agent CLI uses on this server; add, switch or remove tokens',
-    keywords: ['token', 'tokens', 'subscription', 'api token', 'api key', 'server default', 'account', 'login', 'sign in', 'switch', 'claude', 'codex', 'grok'],
+    keywords: ['token', 'tokens', 'subscription', 'subscriptions', 'llm', 'llms', 'language models', 'api token', 'api key', 'server default', 'account', 'login', 'sign in', 'switch', 'claude', 'codex', 'grok'],
   },
   {
     id: 'agents.add-login',
     section: 'llm-tokens',
     label: 'Add subscription or API token',
     description: 'Sign another Claude, Codex or Grok subscription in, or paste an API token, on this server',
-    keywords: ['add', 'token', 'subscription', 'api token', 'api key', 'account', 'login', 'sign in', 'claude', 'codex', 'grok', 'gemini'],
+    keywords: ['add', 'token', 'subscription', 'tokens', 'llm', 'language models', 'api token', 'api key', 'account', 'login', 'sign in', 'claude', 'codex', 'grok', 'gemini'],
   },
 ]
 

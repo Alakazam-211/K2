@@ -96,7 +96,7 @@ export function searchManifest(entries: SettingEntry[], query: string): SettingE
 export const SECTION_LABELS: Record<SettingsSection, string> = {
   general: 'General',
   notifications: 'Notifications',
-  'token-usage': 'Token Usage',
+  'token-usage': 'Usage',
   styles: 'Styles',
   projects: 'Workspaces / Agents',
   'project-groups': 'Projects',
@@ -109,10 +109,10 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   terminal: 'Terminal',
   'code-editor': 'Code',
   editors: 'Defaults',
-  agents: 'LLMs',
-  'llm-tokens': 'Tokens',
-  /** @deprecated — use Editors / LLMs */
-  'editors-agents': 'LLMs',
+  agents: 'Models',
+  'llm-tokens': 'Subscriptions / Tokens',
+  /** @deprecated — use Language Models → Models */
+  'editors-agents': 'Models',
   keybindings: 'Key Bindings',
   timer: 'Timer',
   heartbeats: 'Heartbeats',

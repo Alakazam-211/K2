@@ -65,9 +65,9 @@ export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
   {
     id: 'token-usage.machine',
     section: 'token-usage',
-    label: 'Token Usage',
+    label: 'Usage',
     description: 'Token counts and estimated cost on this server, by workspace, model, login, and harness',
-    keywords: ['tokens', 'usage', 'claude', 'codex', 'grok', 'cache', 'input', 'output', 'cost', 'requests', 'limits'],
+    keywords: ['token usage', 'tokens', 'usage', 'llm', 'llms', 'language models', 'claude', 'codex', 'grok', 'cache', 'input', 'output', 'cost', 'requests', 'limits'],
   },
 ]
 

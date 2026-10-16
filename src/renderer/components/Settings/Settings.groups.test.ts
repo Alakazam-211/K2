@@ -9,7 +9,10 @@ import { join } from 'node:path'
 import { settingsNav, THIRD_PARTY_BOTS } from './Settings'
 import { useSettingsStore, type SettingsSection } from '@/stores/settings'
 import { primaryScope } from '@/kessel/server-scope'
-import { SECTION_LABELS } from './searchManifest'
+import { SECTION_LABELS, searchManifest } from './searchManifest'
+import { AGENTS_MANIFEST } from './sections/AgentsSection'
+import { LLM_TOKENS_MANIFEST } from './sections/LlmTokensSection'
+import { TOKEN_USAGE_MANIFEST } from './sections/TokenUsageSection'
 import { COMING_SOON_BOTS, COMING_SOON_BOTS_MANIFEST } from './sections/ComingSoonBotSection'
 
 type Nav = ReturnType<typeof settingsNav>
@@ -22,25 +25,26 @@ const group = (nav: Nav, title: string) => {
 const leafIds = (nav: Nav): Array<SettingsSection | undefined> =>
   nav.flatMap((b) => (b.kind === 'item' ? [b.id] : b.items.map((i) => i.id)))
 
-describe('Settings → LLMs group', () => {
-  it('is one group with LLMs, Tokens, Token Usage, whether or not Gardens show', () => {
+describe('Settings → Language Models group (was LLMs)', () => {
+  it('is one group with Models, Subscriptions / Tokens, Usage (in that order), whether or not Gardens show', () => {
     for (const zenGardens of [true, false]) {
       const nav = settingsNav({ zenGardens })
-      const group = nav.find((b) => b.kind === 'group' && b.title === 'LLMs')
+      const group = nav.find((b) => b.kind === 'group' && b.title === 'Language Models')
       expect(group).toEqual({
         kind: 'group',
-        title: 'LLMs',
+        title: 'Language Models',
         items: [
-          { id: 'agents', label: 'LLMs' },
-          { id: 'llm-tokens', label: 'Tokens' },
-          { id: 'token-usage', label: 'Token Usage' },
+          { id: 'agents', label: 'Models' },
+          { id: 'llm-tokens', label: 'Subscriptions / Tokens' },
+          { id: 'token-usage', label: 'Usage' },
         ],
       })
       const items = nav.flatMap((b) => (b.kind === 'item' ? [b.id] : []))
       expect(items).not.toContain('agents')
       expect(items).not.toContain('token-usage')
       const titles = nav.flatMap((b) => (b.kind === 'group' ? [b.title] : []))
-      expect(titles[0]).toBe('LLMs')
+      expect(titles[0]).toBe('Language Models')
+      expect(titles).not.toContain('LLMs')
     }
   })
 
@@ -58,13 +62,34 @@ describe('Settings → LLMs group', () => {
   })
 })
 
+describe('Settings search: Language Models pages (was LLMs)', () => {
+  const llm = [...AGENTS_MANIFEST, ...LLM_TOKENS_MANIFEST, ...TOKEN_USAGE_MANIFEST]
+  const ids = (q: string): string[] => searchManifest(llm, q).map((e) => e.id)
+
+  it('labels the pages Models, Subscriptions / Tokens, Usage', () => {
+    expect(LLM_TOKENS_MANIFEST.find((e) => e.id === 'agents.accounts')!.label).toBe('Subscriptions / Tokens')
+    expect(TOKEN_USAGE_MANIFEST.find((e) => e.id === 'token-usage.machine')!.label).toBe('Usage')
+    expect(SECTION_LABELS.agents).toBe('Models')
+  })
+
+  it('old and new words both find them', () => {
+    expect(ids('Subscriptions')[0]).toBe('agents.accounts')
+    expect(ids('tokens')).toContain('agents.accounts')
+    expect(ids('LLM')).toEqual(expect.arrayContaining(['agents.accounts', 'token-usage.machine', 'agents.default-agent']))
+    expect(ids('language models')).toEqual(expect.arrayContaining(['agents.accounts', 'agents.add-login', 'token-usage.machine', 'agents.default-agent']))
+    expect(ids('token usage')).toContain('token-usage.machine')
+    expect(ids('Usage')[0]).toBe('token-usage.machine')
+    expect(ids('models')).toContain('agents.default-agent')
+  })
+})
+
 describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
-  it('group order: LLMs, Access, Gardens, Network, Editors / Fonts, Logs, Cores, 3rd Party Bots', () => {
+  it('group order: Language Models, Access, Gardens, Network, Editors / Fonts, Logs, Cores, 3rd Party Bots', () => {
     expect(titles(settingsNav({ zenGardens: true }))).toEqual([
-      'LLMs', 'Access', 'Gardens', 'Network', 'Editors / Fonts', 'Logs', 'Cores', '3rd Party Bots',
+      'Language Models', 'Access', 'Gardens', 'Network', 'Editors / Fonts', 'Logs', 'Cores', '3rd Party Bots',
     ])
     expect(titles(settingsNav({ zenGardens: false }))).toEqual([
-      'LLMs', 'Access', 'Network', 'Editors / Fonts', 'Logs', 'Cores', '3rd Party Bots',
+      'Language Models', 'Access', 'Network', 'Editors / Fonts', 'Logs', 'Cores', '3rd Party Bots',
     ])
   })
 

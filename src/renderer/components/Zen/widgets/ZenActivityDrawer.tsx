@@ -431,7 +431,7 @@ export function ZenActivityDrawer({
               ? { borderBottom: 'none', borderRadius: 'calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0' }
               : { borderRadius: 'calc(var(--zen-radius) + 2px)' }),
             ...chamferVars({
-              cut: attached ? [CHAMFER_CUT.button, CHAMFER_CUT.button, 0, 0] : CHAMFER_CUT.button,
+              cut: attached ? [CHAMFER_CUT.drawer, CHAMFER_CUT.drawer, 0, 0] : CHAMFER_CUT.drawer,
               fill: 'var(--zen-surface-raised)',
               edge: 'var(--zen-border)',
               border: 1,

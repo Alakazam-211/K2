@@ -137,6 +137,21 @@ fn publish_run_gate_enforced() -> bool {
     std::env::var("K2_OPEN_APPS_GATE").is_ok_and(|v| v.trim() == "enforce")
 }
 
+/// The warn-only answer a gated run carries in 0.46.0: the run went
+/// through (`held: false`); `message` says so, then what changes.
+fn crossover_notice(name: &str, why: &str) -> serde_json::Value {
+    let mut c = why.chars();
+    let why_sentence: String = c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default();
+    serde_json::json!({
+        "from": PUBLISH_RUN_GATE_FROM,
+        "mode": "warn",
+        "held": false,
+        "wouldHold": true,
+        "hint": why,
+        "message": format!("{name} ran: this release only warns. {why_sentence}"),
+    })
+}
+
 /// §8.2 / §5.11.5: a **new** `--cmd` service from an agent is an open-path
 /// App, so it needs "Allow this agent to manage Apps" and "…and publish
 /// open Apps". `None` = no gate applies (a human, `--skin`, a re-run of an
@@ -604,11 +619,10 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
             let mut v = serde_json::to_value(&svc).unwrap_or(serde_json::Value::Null);
             if let (Some(why), Some(o)) = (gate, v.as_object_mut()) {
                 // 0.46.0 removes nothing: the run goes through, with the
-                // notice of what changes at the cut-over.
-                o.insert(
-                    "crossover".into(),
-                    serde_json::json!({ "from": PUBLISH_RUN_GATE_FROM, "wouldHold": true, "hint": why }),
-                );
+                // notice of what changes at the cut-over (warn-only,
+                // Rosson 2026-10-16).
+                let name = o.get("name").and_then(|n| n.as_str()).unwrap_or("this service").to_string();
+                o.insert("crossover".into(), crossover_notice(&name, &why));
             }
             CliResponse::ok_json(v.to_string())
         }
@@ -764,6 +778,19 @@ fn handle_frame(params: &HashMap<String, String>) -> CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_publish_run_gate_only_warns_unless_the_owner_opts_in() {
+        // Rosson 2026-10-16: warn-only in 0.46.0; enforcing is the
+        // K2_OPEN_APPS_GATE=enforce opt-in (the 0.46.1 behaviour).
+        if std::env::var("K2_OPEN_APPS_GATE").is_err() {
+            assert!(!publish_run_gate_enforced());
+        }
+        assert_eq!(PUBLISH_RUN_GATE_FROM, "0.46.1");
+        let n = crossover_notice("shop", "from K2 0.46.1 a new --cmd service from an agent is an open-path App: …");
+        assert_eq!((n["mode"].as_str(), n["held"].as_bool(), n["wouldHold"].as_bool()), (Some("warn"), Some(false), Some(true)));
+        assert_eq!(n["message"], "shop ran: this release only warns. From K2 0.46.1 a new --cmd service from an agent is an open-path App: …");
+    }
 
     #[test]
     fn get_chain_405s_mutating_publish_routes() {

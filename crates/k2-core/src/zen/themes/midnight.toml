@@ -19,6 +19,8 @@ bubble-me = "#1f5f8f"
 bubble-me-text = "#eaf4ff"
 bubble-agent = "#1b232c"
 bubble-agent-text = "#d6dde6"
+# working = the accent (0.46.0).
+working = "#5ab0f6"
 idle = "#5d6b7a"
 
 [font]

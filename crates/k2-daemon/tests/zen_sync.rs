@@ -246,12 +246,15 @@ const FROZEN: &[(&str, &str)] = &[
     // grid, settings cog and activity drawer (`pins`, `settings`,
     // `activity-drawer`; off by default in widget-props).
     ("template:k2.texting@1", "a00b851026ae72d0"),
-    ("theme:basic", "7fc5a1fb5062b263"),
+    // 0.46.0 (GS45, plan-agent-status-unify-v1, Rosson 2026-10-16): working
+    // is the theme accent in basic, midnight and paper, and the bone text
+    // colour in haunted (its accent sits too near the needs-you orange).
+    ("theme:basic", "ee73d0d510936337"),
     // The Diary's study (Rosson 2026-10-08), new in 0.45.1; 0.45.2 draws
     // a creepier one (haunted-background-2.webp; GS45, Rosson 2026-10-08).
-    ("theme:haunted", "ccd919524b13e5f9"),
-    ("theme:midnight", "ff5f017a77ab1206"),
-    ("theme:paper", "08fe35e01810ae29"),
+    ("theme:haunted", "d4380bff6abfb969"),
+    ("theme:midnight", "f0ecc58c374f1766"),
+    ("theme:paper", "a9f7198592fa9474"),
     ("widget-props", "243e9c43200d40ea"),
 ];
 

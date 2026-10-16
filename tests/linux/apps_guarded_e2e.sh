@@ -579,7 +579,8 @@ hreq() { req helper "$1" >/tmp/h.json; jq_ "assert v['rc']==0, v" /tmp/h.json ||
 hreq "apps ensure-process-user"
 hreq "apps nft apply 38600-38899 38900-38999 5432"
 hreq "apps process-unit on"
-cat >/usr/local/libexec/k2-app-engine <<'SH'
+# A rename, not a write: the real engine is still running (ETXTBSY).
+cat >/usr/local/libexec/k2-app-engine.standin <<'SH'
 #!/bin/bash
 [ "$1" = process-run ] || exit 2
 {
@@ -595,7 +596,8 @@ cat >/usr/local/libexec/k2-app-engine <<'SH'
 } >"$STATE_DIRECTORY/report.tmp" && mv "$STATE_DIRECTORY/report.tmp" "$STATE_DIRECTORY/report"
 exec sleep 300
 SH
-chmod 0755 /usr/local/libexec/k2-app-engine
+chmod 0755 /usr/local/libexec/k2-app-engine.standin
+mv -f /usr/local/libexec/k2-app-engine.standin /usr/local/libexec/k2-app-engine
 install -d -o k2app -g k2app -m 0755 /var/lib/k2app/apps/pxe/process/code
 hreq "apps process caps pxe 256 -.41943040.-.2000"
 hreq "apps process start pxe"

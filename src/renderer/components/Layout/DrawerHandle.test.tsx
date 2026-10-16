@@ -114,6 +114,20 @@ describe('Agents page drawer handles', () => {
     expect(left.tabIndex).toBe(0)
   })
 
+  it('pill is secondary-text colour at rest, primary-text and larger on hover', () => {
+    renderShell()
+    const pill = handle('left').querySelector('[data-drawer-pill]')
+    if (!(pill instanceof HTMLElement)) throw new Error('no drawer pill')
+    const cls = pill.className.split(/\s+/)
+    expect(cls).toContain('bg-[var(--color-text-secondary)]')
+    expect(cls).toContain('group-hover:bg-[var(--color-text-primary)]')
+    expect(cls).toContain('h-8')
+    expect(cls).toContain('w-1')
+    expect(cls).toContain('group-hover:h-12')
+    expect(cls).toContain('group-hover:w-1.5')
+    expect(cls).not.toContain('bg-[var(--color-border)]')
+  })
+
   it('drops the top bar drawer buttons', () => {
     renderShell()
     expect(screen.queryByTitle('Toggle left panel')).toBeNull()

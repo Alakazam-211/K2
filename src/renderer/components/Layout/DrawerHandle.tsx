@@ -118,7 +118,8 @@ export default function DrawerHandle({
     >
       <span
         aria-hidden="true"
-        className="block h-8 w-1 rounded-full bg-[var(--color-border)] transition-all duration-150 group-hover:h-12 group-hover:w-1.5 group-hover:bg-[var(--color-text-secondary)] group-focus-visible:bg-[var(--color-accent)]"
+        data-drawer-pill=""
+        className="block h-8 w-1 rounded-full bg-[var(--color-text-secondary)] transition-all duration-150 group-hover:h-12 group-hover:w-1.5 group-hover:bg-[var(--color-text-primary)] group-focus-visible:bg-[var(--color-accent)]"
       />
     </button>
   )

@@ -225,7 +225,9 @@ sleep 1
 MYIP=203.0.113.1
 as_app() { inns runuser -u k2app -- curl -s -o /dev/null -m 3 -w '%{http_code}' "$1" 2>/dev/null || true; }
 as_k2() { inns runuser -u k2 -- curl -s -o /dev/null -m 5 -w '%{http_code}' "$1" 2>/dev/null || true; }
-[ "$(as_app http://127.0.0.1:38910/)" = 200 ] || fail "k2app → proxy port"
+# Ruleset v3 (S15): proxy ports, like gateway ports, are per-App rules
+# only (an App reaches its own proxy, never another's or the range).
+[ "$(as_app http://127.0.0.1:38910/)" = 000 ] || fail "k2app outside any App cgroup → a proxy port was allowed"
 [ "$(as_app http://127.0.0.1:38650/)" = 000 ] || fail "k2app outside any App cgroup → a gateway port was allowed"
 [ "$(as_app http://127.0.0.1:9999/)" = 000 ] || fail "k2app → another loopback port was allowed"
 [ "$(as_app "http://$MYIP:9998/")" = 000 ] || fail "k2app → this host's own address was allowed"
@@ -239,7 +241,7 @@ req daemon apps nft apply 38600-38899 38900-38999 5432
 expect_rc 0 "nft re-apply"
 [ "$(as_app http://127.0.0.1:9999/)" = 000 ] || fail "re-applied table does not drop"
 kill "$L1" "$L2" "$L3" "$L4"
-ok "k2app: proxy port yes; gateway ports without a per-App rule, other loopback and this host's address ($MYIP) no (control without the table: yes); the daemon user unaffected"
+ok "k2app: gateway and proxy ports without a per-App rule, other loopback and this host's address ($MYIP) no (control without the table: yes); the daemon user unaffected"
 
 echo "== the process exception (system unit, User=k2app) =="
 req daemon apps process-unit on

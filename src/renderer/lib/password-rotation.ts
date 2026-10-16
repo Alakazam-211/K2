@@ -55,6 +55,25 @@ export const ROTATION_COPY = {
   badCurrent: 'Temporary password incorrect, or too many attempts. Try again later.',
 } as const
 
+/** The step's words. Every entry point uses ROTATION_COPY except the
+ *  self-service change below. */
+export type RotationCopy = { readonly [K in keyof typeof ROTATION_COPY]: string }
+
+/** The same step, reached by choice from the top bar's Admin profile (a
+ *  Connect login changing its own password; Rosson 2026-10-16). Same
+ *  route, same re-login; only the words differ. */
+export const CHANGE_PASSWORD_COPY: RotationCopy = {
+  title: 'Change your password',
+  lead: 'Other devices signed in with this login will need the new password. This one stays signed in.',
+  currentLabel: 'Current password',
+  newLabel: 'New password',
+  confirmLabel: 'Confirm new password',
+  submit: 'Change password',
+  mismatch: ROTATION_COPY.mismatch,
+  missingCurrent: 'Enter your current password.',
+  badCurrent: 'Current password incorrect, or too many attempts. Try again later.',
+}
+
 /** Per-request timeout for the policy read + change POST. */
 const ROTATION_TIMEOUT_MS = 8000
 

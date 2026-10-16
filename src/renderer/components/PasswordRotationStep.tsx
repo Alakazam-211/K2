@@ -4,6 +4,8 @@
 //   - RemoteSignIn (full-screen re-auth + the switcher's pickHost path, and
 //     the W2 data-plane `password_change_required` route-back)
 //   - Settings → Connections "Add server" (inline, `variant="inline"`)
+//   - the top bar's Admin profile "Change password" (inline, by choice:
+//     `copy={CHANGE_PASSWORD_COPY}`; same route and re-login)
 //
 // Given a host whose `token` is the RESTRICTED session the daemon minted for
 // a temporary password, it: reads the active policy, validates new+confirm
@@ -23,6 +25,7 @@ import {
   DEFAULT_PASSWORD_POLICY,
   ROTATION_COPY,
   changeHostPassword,
+  type RotationCopy,
   fetchPasswordPolicy,
   policyHint,
   validateNewPassword,
@@ -47,6 +50,9 @@ export interface PasswordRotationStepProps {
   /** 'overlay' = the full-screen sign-in look (13px); 'inline' = the
    *  Settings add-server form look (xs). */
   variant?: 'overlay' | 'inline'
+  /** The words. Default ROTATION_COPY (a temporary password); the Admin
+   *  profile passes CHANGE_PASSWORD_COPY. */
+  copy?: RotationCopy
 }
 
 const CLS = {
@@ -84,6 +90,7 @@ export function PasswordRotationStep({
   onDone,
   onCancel,
   variant = 'overlay',
+  copy = ROTATION_COPY,
 }: PasswordRotationStepProps): React.JSX.Element {
   const c = CLS[variant]
   const [current, setCurrent] = useState(initialCurrentPassword)
@@ -123,7 +130,7 @@ export function PasswordRotationStep({
 
   const submit = async (): Promise<void> => {
     if (!current) {
-      setError(ROTATION_COPY.missingCurrent)
+      setError(copy.missingCurrent)
       currentRef.current?.focus()
       return
     }
@@ -134,14 +141,14 @@ export function PasswordRotationStep({
       return
     }
     if (next !== confirm) {
-      setError(ROTATION_COPY.mismatch)
+      setError(copy.mismatch)
       return
     }
     setBusy(true)
     setError(null)
     const changed = await changeHostPassword(host, current, next)
     if (!changed.ok) {
-      setError(changed.reason)
+      setError(changed.kind === 'bad-current' ? copy.badCurrent : changed.reason)
       setBusy(false)
       return
     }
@@ -182,13 +189,13 @@ export function PasswordRotationStep({
               : 'text-xs font-medium text-[var(--color-text-primary)]'
           }
         >
-          {ROTATION_COPY.title}
+          {copy.title}
         </div>
-        <p className={c.lead}>{ROTATION_COPY.lead}</p>
+        <p className={c.lead}>{copy.lead}</p>
       </div>
 
       <label className={c.label}>
-        {ROTATION_COPY.currentLabel}
+        {copy.currentLabel}
         <input
           ref={currentRef}
           type="password"
@@ -202,7 +209,7 @@ export function PasswordRotationStep({
 
       <div className="flex flex-col gap-1">
         <label className={c.label}>
-          {ROTATION_COPY.newLabel}
+          {copy.newLabel}
           <input
             ref={nextRef}
             type="password"
@@ -220,7 +227,7 @@ export function PasswordRotationStep({
       </div>
 
       <label className={c.label}>
-        {ROTATION_COPY.confirmLabel}
+        {copy.confirmLabel}
         <input
           type="password"
           value={confirm}
@@ -239,7 +246,7 @@ export function PasswordRotationStep({
 
       <div className="flex gap-2 mt-1">
         <button type="submit" disabled={busy} className={c.primary}>
-          {busy ? 'Setting password…' : ROTATION_COPY.submit}
+          {busy ? 'Setting password…' : copy.submit}
         </button>
         {onCancel && (
           <button type="button" onClick={onCancel} disabled={busy} className={c.secondary}>

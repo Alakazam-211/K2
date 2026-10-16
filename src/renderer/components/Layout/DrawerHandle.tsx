@@ -1,5 +1,5 @@
-// Drawer handles (0.46.0 UI experiment): a small dog-ear tab (a page
-// corner folded over), flush against the edge where a drawer opens and
+// Drawer handles (0.46.0 UI experiment): a small grip (a squarish tab
+// with a column of dots), flush against the edge where a drawer opens and
 // centred vertically, replaces the top bar's drawer buttons. Click
 // toggles the drawer. Closed, the tab hangs off the room's edge into the
 // room. Open, it hangs off the drawer's inner border over the drawer (so
@@ -93,8 +93,7 @@ export default function DrawerHandle({
 
   // Closed: flush inside the room's edge (the right edge is the window's,
   // so the tab cannot hang past it). Open: flush against the drawer
-  // border, over the drawer. `attached` is the tab's edge that touches the
-  // border; the folded corner is on the other (free) side, at the top.
+  // border, over the drawer.
   const position =
     side === 'left'
       ? open
@@ -103,7 +102,6 @@ export default function DrawerHandle({
       : open
         ? 'right-0 translate-x-full justify-start'
         : 'right-0 justify-end'
-  const attached: 'left' | 'right' = (side === 'left') !== open ? 'left' : 'right'
 
   return (
     <button
@@ -118,29 +116,19 @@ export default function DrawerHandle({
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
-      className={`group no-drag absolute top-1/2 z-20 flex h-12 w-3 -translate-y-1/2 cursor-pointer items-center outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)] ${position}`}
+      className={`group no-drag absolute top-1/2 z-20 flex h-11 w-3 -translate-y-1/2 cursor-pointer items-center outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent)] ${position}`}
     >
-      {/* Drawn attached on the left with the top-right corner folded;
-          mirrored when the tab is attached on the right. */}
-      <svg
+      {/* Grip: theme radius (capped so it never turns into a pill), two
+          columns of three dots in the background colour. */}
+      <span
         aria-hidden="true"
-        data-drawer-dogear={attached}
-        viewBox="0 0 12 32"
-        preserveAspectRatio="none"
-        className="block h-7 w-2.5 transition-all duration-150 group-hover:h-8 group-hover:w-3"
-        style={attached === 'right' ? { transform: 'scaleX(-1)' } : undefined}
+        data-drawer-grip=""
+        className="grid h-9 w-2.5 grid-cols-[2px_2px] content-center justify-center gap-[2px] rounded-[min(var(--radius-selector),3px)] bg-[var(--color-text-secondary)] transition-all duration-150 group-hover:h-10 group-hover:w-3 group-hover:bg-[var(--color-text-primary)] group-focus-visible:bg-[var(--color-accent)]"
       >
-        <path
-          data-part="body"
-          d="M0 0 H6 L12 6 V30 Q12 32 10 32 H0 Z"
-          className="fill-[var(--color-text-secondary)] transition-colors duration-150 group-hover:fill-[var(--color-text-primary)] group-focus-visible:fill-[var(--color-accent)]"
-        />
-        <path
-          data-part="fold"
-          d="M6 0 V6 H12 Z"
-          className="fill-[var(--color-text-muted)] transition-colors duration-150 group-hover:fill-[var(--color-text-secondary)]"
-        />
-      </svg>
+        {Array.from({ length: 6 }, (_, i) => (
+          <span key={i} data-grip-dot="" className="block h-[2px] w-[2px] rounded-full bg-[var(--color-bg)]" />
+        ))}
+      </span>
     </button>
   )
 }

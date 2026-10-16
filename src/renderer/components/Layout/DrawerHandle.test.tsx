@@ -114,47 +114,40 @@ describe('Agents page drawer handles', () => {
     expect(left.tabIndex).toBe(0)
   })
 
-  it('is a dog-ear: a body with a folded corner, secondary-text at rest, brighter and larger on hover', () => {
+  it('is a grip: a squarish tab with six dots, secondary-text at rest, brighter and taller on hover', () => {
     renderShell()
-    const svg = handle('left').querySelector('svg[data-drawer-dogear]')
-    if (!(svg instanceof SVGElement)) throw new Error('no dog-ear svg')
-    const svgCls = svg.getAttribute('class')!.split(/\s+/)
-    expect(svgCls).toEqual(expect.arrayContaining(['h-7', 'w-2.5', 'group-hover:h-8', 'group-hover:w-3']))
-    const body = svg.querySelector('[data-part="body"]')
-    const fold = svg.querySelector('[data-part="fold"]')
-    if (!body || !fold) throw new Error('dog-ear is missing its body or fold')
-    // Body has the top outer corner cut on the diagonal; the fold fills that corner.
-    expect(body.getAttribute('d')).toBe('M0 0 H6 L12 6 V30 Q12 32 10 32 H0 Z')
-    expect(fold.getAttribute('d')).toBe('M6 0 V6 H12 Z')
-    const bodyCls = body.getAttribute('class')!.split(/\s+/)
-    expect(bodyCls).toContain('fill-[var(--color-text-secondary)]')
-    expect(bodyCls).toContain('group-hover:fill-[var(--color-text-primary)]')
-    const foldCls = fold.getAttribute('class')!.split(/\s+/)
-    expect(foldCls).toContain('fill-[var(--color-text-muted)]')
-    expect(foldCls).toContain('group-hover:fill-[var(--color-text-secondary)]')
+    const grip = handle('left').querySelector('[data-drawer-grip]')
+    if (!(grip instanceof HTMLElement)) throw new Error('no drawer grip')
+    const cls = grip.className.split(/\s+/)
+    expect(cls).toEqual(
+      expect.arrayContaining([
+        'h-9',
+        'w-2.5',
+        'group-hover:h-10',
+        'group-hover:w-3',
+        'bg-[var(--color-text-secondary)]',
+        'group-hover:bg-[var(--color-text-primary)]',
+        'rounded-[min(var(--radius-selector),3px)]',
+      ]),
+    )
+    expect(cls).not.toContain('rounded-full')
+    const dots = grip.querySelectorAll('[data-grip-dot]')
+    expect(dots.length).toBe(6)
+    for (const d of dots) expect(d.className).toContain('bg-[var(--color-bg)]')
+    expect(handle('left').querySelector('svg')).toBeNull()
     expect(handle('left').querySelector('[data-drawer-pill]')).toBeNull()
   })
 
-  it('the tab sits flush on the edge, mirrored per side and open state', () => {
+  it('the grip sits flush on the edge: over the drawer when open, inside the room when closed', () => {
     renderShell()
-    const facing = (side: 'left' | 'right'): string | null =>
-      handle(side).querySelector('svg')!.getAttribute('data-drawer-dogear')
-    // Open: over the drawer, touching the drawer border.
-    expect(facing('left')).toBe('right')
-    expect(facing('right')).toBe('left')
     expect(handle('left').className).toContain('-translate-x-full')
     expect(handle('right').className).toContain('translate-x-full')
-    expect(handle('left').querySelector('svg')!.style.transform).toBe('scaleX(-1)')
-    expect(handle('right').querySelector('svg')!.style.transform).toBe('')
-    // Closed: inside the room, touching the room's edge.
     fireEvent.click(handle('left'))
     fireEvent.click(handle('right'))
-    expect(facing('left')).toBe('left')
-    expect(facing('right')).toBe('right')
     expect(handle('left').className).not.toContain('translate-x-full')
     expect(handle('right').className).not.toContain('translate-x-full')
-    expect(handle('left').querySelector('svg')!.style.transform).toBe('')
-    expect(handle('right').querySelector('svg')!.style.transform).toBe('scaleX(-1)')
+    expect(handle('left').className).toContain('left-0')
+    expect(handle('right').className).toContain('right-0')
   })
 
   it('drops the top bar drawer buttons', () => {

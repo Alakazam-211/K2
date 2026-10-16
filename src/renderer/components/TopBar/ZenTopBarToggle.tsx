@@ -12,7 +12,8 @@
 
 //
 // Its icon is the ensō (`ZenIcon`, off state; the choice is
-// `lib/zen/zen-icon.ts`, Rosson 2026-10-04). Pointing at it draws the
+// `lib/zen/zen-icon.ts`, Rosson 2026-10-04), at the top bar's one A3 icon
+// size (`K2Icons`). Pointing at it draws the
 // stroke in once more; reduced motion keeps it still.
 
 import { useState } from 'react'
@@ -21,6 +22,7 @@ import { currentDesktopOs, zenAvailable } from '@/lib/zen/zen-platform'
 import { ZEN_CHORD_LABEL } from '@/lib/zen/zen-shortcut'
 import { ZEN_ICON_CHOICE } from '@/lib/zen/zen-icon'
 import { ZenIcon } from '@/components/Zen/ZenIcon'
+import { K2_ICON_PX } from '@/components/icons/K2Icons'
 
 export function zenTopBarToggleTitle(): string {
   const chord = currentDesktopOs() === 'mac' ? ZEN_CHORD_LABEL.mac : ZEN_CHORD_LABEL.other
@@ -45,7 +47,7 @@ function ZenEnterButton({ title }: { title: string }): React.JSX.Element {
         WebkitAppRegion: 'no-drag',
       }}
     >
-      <ZenIcon variant={ZEN_ICON_CHOICE} on={false} size={16} replay={hovers} />
+      <ZenIcon variant={ZEN_ICON_CHOICE} on={false} size={K2_ICON_PX} replay={hovers} />
     </button>
   )
 }

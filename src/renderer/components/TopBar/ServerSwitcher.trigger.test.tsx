@@ -156,16 +156,25 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
     expect(t.getAttribute('title')?.startsWith(`${THIS_COMPUTER_LABEL} — `)).toBe(true)
   })
 
-  it('the server icon sits at the left, before the name, at 14px', () => {
+  it('the server icon sits at the left, before the name, at 16px (A3 server shape)', () => {
     const t = renderOn(host('rosson', 'rosson.k2.dev'))
     const first = t.firstElementChild
     expect(first?.getAttribute('data-testid')).toBe('server-status-icon')
+    expect(first?.getAttribute('data-k2-icon')).toBe('server')
     expect(first?.nextElementSibling?.getAttribute('data-testid')).toBe('server-switcher-label')
-    expect(SERVER_ICON_PX).toBe(14)
+    expect(SERVER_ICON_PX).toBe(16)
     expect(first?.getAttribute('width')).toBe(String(SERVER_ICON_PX))
-    // Two rack frames + two LEDs, as in the Companion's Servers tab.
-    expect(first?.querySelectorAll('rect')).toHaveLength(2)
-    expect(first?.querySelectorAll('circle[data-led]')).toHaveLength(2)
+    // Squared Lucide `server`: two square-cornered rack frames…
+    const frames = Array.from(first?.querySelectorAll('rect:not([data-led])') ?? [])
+    expect(frames.map((r) => [r.getAttribute('x'), r.getAttribute('y'), r.getAttribute('width'), r.getAttribute('height')])).toEqual([
+      ['2', '2', '20', '8'],
+      ['2', '14', '20', '8'],
+    ])
+    expect(frames.map((r) => r.getAttribute('rx'))).toEqual([null, null])
+    expect([first?.getAttribute('stroke-linecap'), first?.getAttribute('stroke-linejoin')]).toEqual(['square', 'miter'])
+    // …and two square LEDs where Lucide draws its dots (the status light).
+    expect(first?.querySelectorAll('[data-led]')).toHaveLength(2)
+    expect(first?.querySelectorAll('circle')).toHaveLength(0)
   })
 
   it('the LEDs are the status light: colour per state, the words in the accessible name', () => {
@@ -191,7 +200,8 @@ describe('server switcher trigger: fixed width, ellipsis', () => {
       const t = renderOn(host('rosson', 'rosson.k2.dev'))
       const icon = screen.getByTestId('server-status-icon')
       expect(icon.getAttribute('data-led-color')).toBe(c.color)
-      const leds = Array.from(icon.querySelectorAll('circle[data-led]'))
+      const leds = Array.from(icon.querySelectorAll('[data-led]'))
+      expect(leds).toHaveLength(2)
       expect(leds.map((l) => l.getAttribute('fill'))).toEqual([c.color, c.color])
       expect(t.getAttribute('aria-label')).toBe(`rosson.k2.dev — ${c.words}`)
       expect(t.getAttribute('title')).toBe(`rosson.k2.dev — ${c.words} (⌘L)`)

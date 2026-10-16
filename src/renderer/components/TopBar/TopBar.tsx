@@ -9,6 +9,7 @@ import DesktopChromeLeft from './DesktopChromeLeft'
 import DesktopChromeRight from './DesktopChromeRight'
 import K2MarkButton from './K2MarkButton'
 import TopBarUtilities from './TopBarUtilities'
+import { DrawerIcon, RunIcon } from '@/components/icons/K2Icons'
 import { Surface } from '@/components/ui'
 import {
   topBarLeftClusterMinWidth,
@@ -135,15 +136,7 @@ export default function TopBar({
                 }}
                 title="Run workspace command"
               >
-                <svg
-                  width="12"
-                  height="12"
-                  viewBox="0 0 12 12"
-                  fill="currentColor"
-                  stroke="none"
-                >
-                  <polygon points="2,0 2,12 11,6" />
-                </svg>
+                <RunIcon />
               </button>
             ) : null
           }
@@ -160,29 +153,7 @@ export default function TopBar({
                 }}
                 title="Toggle left panel"
               >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 14 14"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.3"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  {leftPanelVisible ? (
-                    <>
-                      <rect x="1" y="2" width="12" height="10" rx="0" />
-                      <line x1="5.5" y1="2" x2="5.5" y2="12" />
-                      <line x1="3" y1="5" x2="3" y2="9" strokeWidth="1.5" />
-                    </>
-                  ) : (
-                    <>
-                      <rect x="1" y="2" width="12" height="10" rx="0" />
-                      <line x1="5.5" y1="2" x2="5.5" y2="12" strokeDasharray="1.5 1.5" />
-                    </>
-                  )}
-                </svg>
+                <DrawerIcon side="left" open={leftPanelVisible} />
               </button>
 
               {/* Right panel toggle (opens panel to the right of terminal) */}
@@ -195,29 +166,7 @@ export default function TopBar({
                 }}
                 title="Toggle right panel"
               >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 14 14"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.3"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  {rightPanelVisible ? (
-                    <>
-                      <rect x="1" y="2" width="12" height="10" rx="0" />
-                      <line x1="8.5" y1="2" x2="8.5" y2="12" />
-                      <line x1="11" y1="5" x2="11" y2="9" strokeWidth="1.5" />
-                    </>
-                  ) : (
-                    <>
-                      <rect x="1" y="2" width="12" height="10" rx="0" />
-                      <line x1="8.5" y1="2" x2="8.5" y2="12" strokeDasharray="1.5 1.5" />
-                    </>
-                  )}
-                </svg>
+                <DrawerIcon side="right" open={rightPanelVisible} />
               </button>
             </>
           ) : null}

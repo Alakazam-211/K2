@@ -126,9 +126,13 @@ export interface ServerIconProps extends K2IconProps {
   label?: string
 }
 
-/** Server: Lucide `server`, squared. With `ledColor` its two rack LEDs are
- *  the connection light: small filled squares in the status colour (the
- *  server switcher, 0.46.0 experiment). */
+/** The rack LED: a short bar starting at Lucide's dot (x 4.25), the old
+ *  square's height and 3x its width (Rosson 2026-10-16), inside the frame. */
+export const SERVER_LED = { x: 4.25, width: 10.5, height: 3.5, y: [4.25, 16.25] } as const
+
+/** Server: Lucide `server`, squared. Its two rack LEDs are short filled
+ *  bars: in the status colour with `ledColor` (the connection light: the
+ *  server switcher, the top-bar title), else in `currentColor`. */
 export function ServerIcon({ ledColor, label, ...props }: ServerIconProps = {}): React.JSX.Element {
   const base = iconProps('server', props)
   const a11y = label
@@ -145,17 +149,18 @@ export function ServerIcon({ ledColor, label, ...props }: ServerIconProps = {}):
     >
       <rect width="20" height="8" x="2" y="2" />
       <rect width="20" height="8" x="2" y="14" />
-      {status ? (
-        <>
-          <rect data-led="" x="4.25" y="4.25" width="3.5" height="3.5" fill={ledColor} stroke="none" />
-          <rect data-led="" x="4.25" y="16.25" width="3.5" height="3.5" fill={ledColor} stroke="none" />
-        </>
-      ) : (
-        <>
-          <path d="M6 6h.01" />
-          <path d="M6 18h.01" />
-        </>
-      )}
+      {SERVER_LED.y.map((y) => (
+        <rect
+          key={y}
+          data-led=""
+          x={SERVER_LED.x}
+          y={y}
+          width={SERVER_LED.width}
+          height={SERVER_LED.height}
+          fill={ledColor ?? 'currentColor'}
+          stroke="none"
+        />
+      ))}
     </svg>
   )
 }

@@ -23,8 +23,24 @@ import type { OverlayThreadItem, ThreadAnswerPayload } from '@/components/Sessio
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 
-/** The attribute the desktop Thread puts on its box (the CSS scope). */
-export const THREAD_ZEN_SCOPE_ATTR = 'data-k2-thread-zen'
+import {
+  CHAMFER_CUT,
+  THREAD_CHAMFER_CSS,
+  THREAD_ZEN_SCOPE_ATTR,
+  chamferCutFor,
+  chamferVars,
+} from './chamfer'
+
+// The square Style's chamfers live in ./chamfer (the cards use them too).
+export {
+  CHAMFER_CUT,
+  CHAMFER_SCOPE,
+  THREAD_CHAMFER_CSS,
+  THREAD_ZEN_SCOPE_ATTR,
+  chamferCutFor,
+  chamferVars,
+  type ChamferCorners,
+} from './chamfer'
 
 /** The `--zen-*` tokens the shared pieces read, from the app's Style. */
 export const THREAD_ZEN_DESKTOP_TOKENS = {
@@ -61,74 +77,6 @@ export const THREAD_CARD_TOKENS = {
   '--thread-card-muted': 'var(--zen-text-muted)',
   '--thread-card-radius': 'calc(var(--zen-radius) / 2)',
 } as CSSProperties
-
-// ── Chamfered corners in K2's square style ──────────────────────────────
-//
-// Rosson 2026-10-16: in K2's square Style the Thread doesn't go round; the
-// bubbles, the message field, Send and the activity drawer get the
-// chamfered corners of the presence chips (mockup-activity-status-v1
-// §Presence: small 45° corner cuts). Bezel and Glass (rounded Styles) and
-// Zen's own themes keep the rounded look.
-//
-// An element opts in with `data-chamfer` and `chamferVars(...)`. Under
-// `html[data-style="square"]` inside the desktop Thread box, its own fill,
-// border and radius go transparent/0 and two pseudo layers draw it instead:
-// `::before` the edge (border colour) and `::after` the fill, each clipped
-// to the cut polygon. The element itself is never clipped, so focus rings
-// and children stay whole.
-
-/** Corner cuts (px): top-left, top-right, bottom-right, bottom-left. */
-export type ChamferCorners = readonly [number, number, number, number]
-
-/** The cut sizes the Thread uses: big surfaces 4px, a 32px button 3px. */
-/** Send reads at 5px (Rosson 2026-10-16: 3px was too subtle). */
-export const CHAMFER_CUT = { surface: 4, button: 3, send: 5, drawer: 5 } as const
-
-export function chamferVars(o: {
-  /** One cut for every corner, or one per corner (TL, TR, BR, BL). */
-  cut: number | ChamferCorners
-  /** The element's fill. */
-  fill: string
-  /** Its border colour and width (none by default). */
-  edge?: string
-  border?: number
-  /** `::before`'s inset when the border isn't on every side (CSS inset). */
-  outset?: string
-}): CSSProperties {
-  const [tl, tr, br, bl] = typeof o.cut === 'number' ? [o.cut, o.cut, o.cut, o.cut] : o.cut
-  const v: Record<string, string> = {
-    '--ch-tl': `${tl}px`,
-    '--ch-tr': `${tr}px`,
-    '--ch-br': `${br}px`,
-    '--ch-bl': `${bl}px`,
-    '--ch-fill': o.fill,
-    '--ch-edge': o.edge ?? o.fill,
-    '--ch-bw': `${o.border ?? 0}px`,
-  }
-  if (o.outset) v['--ch-outset'] = o.outset
-  return v as CSSProperties
-}
-
-/** The cut polygon, each corner's cut less `less` (the inner fill's). */
-function chamferPolygon(less: string): string {
-  const c = (k: string): string => `max(0px, calc(var(--ch-${k}) - ${less}))`
-  return (
-    `polygon(${c('tl')} 0, calc(100% - ${c('tr')}) 0, 100% ${c('tr')}, 100% calc(100% - ${c('br')}), ` +
-    `calc(100% - ${c('br')}) 100%, ${c('bl')} 100%, 0 calc(100% - ${c('bl')}), 0 ${c('tl')})`
-  )
-}
-
-/** Where chamfers apply: the desktop Thread box under K2's square Style. */
-export const CHAMFER_SCOPE = `html[data-style="square"] [${THREAD_ZEN_SCOPE_ATTR}]`
-
-export const THREAD_CHAMFER_CSS = `
-${CHAMFER_SCOPE} [data-chamfer] { border-radius: 0 !important; border-color: transparent !important; background: transparent !important; position: relative; isolation: isolate; }
-${CHAMFER_SCOPE} [data-chamfer]::before, ${CHAMFER_SCOPE} [data-chamfer]::after { content: ''; position: absolute; pointer-events: none; z-index: -1; }
-${CHAMFER_SCOPE} [data-chamfer]::before { inset: var(--ch-outset, calc(-1 * var(--ch-bw, 0px))); background: var(--ch-edge, var(--ch-fill)); clip-path: ${chamferPolygon('0px')}; }
-${CHAMFER_SCOPE} [data-chamfer]::after { inset: 0; background: var(--ch-fill); clip-path: ${chamferPolygon('calc(var(--ch-bw, 0px) * 0.586)')}; }
-${CHAMFER_SCOPE} [data-zen-drawer-tile][data-chamfer]:hover { --ch-fill: var(--zen-surface) !important; }
-${CHAMFER_SCOPE} [data-zen-drawer-tile][data-chamfer] { overflow: visible !important; }
-`
 
 /** Where the shared rules apply: a Zen root, or the desktop Thread's box. */
 const SCOPE = `:is([data-zen-root], [${THREAD_ZEN_SCOPE_ATTR}])`
@@ -390,6 +338,7 @@ export function ThreadLoadOlder({
       type="button"
       data-zen-load-older=""
       data-zen-soft-button=""
+      data-chamfer=""
       data-testid={testId}
       disabled={loading}
       onClick={onClick}
@@ -400,6 +349,8 @@ export function ThreadLoadOlder({
         borderRadius: 999,
         fontSize: '0.8em',
         color: 'var(--zen-text-muted)',
+        // Square Style: no fill at rest (a hover fills it), cut like a 22px control.
+        ...chamferVars({ cut: chamferCutFor(22), fill: 'transparent' }),
       }}
     >
       {loading ? 'Loading…' : 'Earlier messages'}
@@ -572,7 +523,7 @@ export function ThreadSendButton({
   size?: number
 }): JSX.Element {
   // The square Style cut keeps the proportion of 5px at 32px (to 0.5px).
-  const cut = Math.round(((size * CHAMFER_CUT.send) / 32) * 2) / 2
+  const cut = chamferCutFor(size)
   return (
     <button
       type="button"
@@ -628,6 +579,7 @@ export function ThreadAttachmentChip({
   return (
     <span
       data-zen-attachment={name}
+      data-chamfer=""
       title={title}
       className="inline-flex max-w-[16rem] items-center gap-1.5"
       style={{
@@ -637,6 +589,7 @@ export function ThreadAttachmentChip({
         background: 'var(--zen-surface-raised)',
         border: '1px solid var(--zen-border)',
         color: 'var(--zen-text)',
+        ...chamferVars({ cut: chamferCutFor(24), fill: 'var(--zen-surface-raised)', edge: 'var(--zen-border)', border: 1 }),
       }}
     >
       {leading}

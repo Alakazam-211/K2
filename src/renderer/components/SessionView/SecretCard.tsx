@@ -18,6 +18,7 @@
 import { useRef, useState, type JSX } from 'react'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import { SquareRadio } from '@/components/ui'
+import { CHAMFER_CUT, chamferVars } from '@/components/Thread/chamfer'
 import { cardExpiryLabel, type OverlaySecret, type SecretDelivery, type SecretScope, type ThreadAnswerPayload } from './overlayThread'
 
 /** The daemon refusals that turn the card red and want a second click. */
@@ -230,6 +231,14 @@ export function SecretCard({
     <div
       data-testid="thread-secret-card"
       data-compact={compact ? 'true' : 'false'}
+      // K2's square Style (desktop Thread): chamfered.
+      data-chamfer=""
+      style={chamferVars({
+        cut: CHAMFER_CUT.surface,
+        fill: 'var(--thread-card-bg,var(--color-bg))',
+        edge: warning ? 'var(--color-danger,#e5484d)' : 'var(--thread-card-border,var(--color-border))',
+        border: 1,
+      })}
       data-warning={warning?.code ?? ''}
       className={`mt-1 w-full box-border flex flex-col gap-2 rounded-[var(--thread-card-radius,0px)] border ${
         warning ? 'border-[var(--color-danger,#e5484d)]' : border

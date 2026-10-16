@@ -21,7 +21,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ThreadTurn } from '@/components/SessionView/overlayThread'
-import { CHAMFER_CUT, THREAD_ZEN_SCOPE_ATTR, chamferVars } from '@/components/Thread/ThreadZenKit'
+import { CHAMFER_CUT, THREAD_ZEN_SCOPE_ATTR, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
 import {
   COUNTER_CHECK_PX,
   COUNTER_GAP_PX,
@@ -375,6 +375,7 @@ export function ZenActivityDrawer({
   const dot = (
     <span
       aria-hidden
+      data-zen-drawer-dot=""
       data-zen-pulse={display.tone === 'working' ? '' : undefined}
       style={{
         display: 'inline-block',
@@ -517,6 +518,7 @@ export function ZenActivityDrawer({
             type="button"
             data-testid="thread-strip-stop"
             data-zen-drawer-stop=""
+            data-chamfer=""
             title="Sends Esc to the agent"
             // Keep the caret in the message box.
             onMouseDown={(e) => e.preventDefault()}
@@ -534,6 +536,8 @@ export function ZenActivityDrawer({
               color: 'var(--zen-text)',
               background: 'var(--zen-surface)',
               border: '1px solid var(--zen-border)',
+              // K2's square Style: chamfered like Send, scaled to its height.
+              ...chamferVars({ cut: chamferCutFor(ZEN_DRAWER_STOP_H_PX), fill: 'var(--zen-surface)', edge: 'var(--zen-border)', border: 1 }),
             }}
           >
             Stop

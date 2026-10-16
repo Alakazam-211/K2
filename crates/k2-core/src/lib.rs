@@ -175,6 +175,8 @@ pub mod fs_extract;
 /// Resumable chunked upload for app guests (part bound to the guest).
 pub mod fs_guest_upload;
 pub mod git;
+/// Changes tab v1: snapshot, both-sides diff, discard-to-Trash, rev.
+pub mod git_changes;
 /// Ensure global git user.name / user.email when missing (init-git path).
 pub mod git_identity;
 // Phase 2.5c: workspace heartbeat schedules + launchd + cron live here

@@ -800,7 +800,7 @@ fn is_index_locked(err: &git2::Error) -> bool {
 }
 
 /// Retry getting the repository index with lock contention handling.
-fn get_index_with_retry(repo: &Repository) -> Result<git2::Index, String> {
+pub(crate) fn get_index_with_retry(repo: &Repository) -> Result<git2::Index, String> {
     for attempt in 0..INDEX_LOCK_RETRIES {
         match repo.index() {
             Ok(idx) => return Ok(idx),
@@ -814,7 +814,7 @@ fn get_index_with_retry(repo: &Repository) -> Result<git2::Index, String> {
 }
 
 /// Retry writing the index with lock contention handling.
-fn write_index_with_retry(index: &mut git2::Index) -> Result<(), String> {
+pub(crate) fn write_index_with_retry(index: &mut git2::Index) -> Result<(), String> {
     for attempt in 0..INDEX_LOCK_RETRIES {
         match index.write() {
             Ok(()) => return Ok(()),

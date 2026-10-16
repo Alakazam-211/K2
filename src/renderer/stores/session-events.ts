@@ -524,6 +524,19 @@ export interface FsChangedEvent {
   paths: string[]
 }
 
+/** APP-LEVEL — Changes tab v1 (prd-changes-tab-v1): the git state behind a
+ *  workspace's Changes view may have moved (index / HEAD / refs, or a
+ *  non-ignored working-tree edit). Debounced 300 ms (1 s max) per workspace
+ *  on the daemon. `rev` is opaque: refetch `GET /cli/git/snapshot` when it
+ *  differs (`!==`) from the last snapshot's `rev`. Filter on
+ *  `workspacePath`. */
+export interface GitChangedEvent {
+  kind: 'git_changed'
+  workspacePath: string
+  repoRoot: string
+  rev: string
+}
+
 /** APP-LEVEL — this computer's Zen files changed (prd-zen-mode-v1 Z12).
  *  Payload-free: the Zen store re-reads `GET /cli/zen/get` from the LOCAL
  *  daemon. Nothing about the file rides the frame. */
@@ -678,6 +691,7 @@ export type SessionEventMessage =
   | TokenUsageChangedEvent
   | LlmAccountsChangedEvent
   | FsChangedEvent
+  | GitChangedEvent
   | ZenChangedEvent
   | SourcesChangedEvent
   | GardenDataChangedEvent
@@ -1157,6 +1171,7 @@ type GrokbotsChangedHandler = (e: GrokbotsChangedEvent) => void
 type HooksInstallFailedHandler = (e: HooksInstallFailedEvent) => void
 type ActivityChangedHandler = (e: ActivityChangedEvent) => void
 type FsChangedHandler = (e: FsChangedEvent) => void
+type GitChangedHandler = (e: GitChangedEvent) => void
 // Home 0.43.2 (Q7) — Settings → Email's refetch signal (`reason` unwrapped,
 // the onFeedbackChanged idiom).
 type MailChangedHandler = (reason: string) => void
@@ -1206,6 +1221,7 @@ interface AppBusHandlers {
   tokenUsageChanged: Set<TokenUsageChangedHandler>
   llmAccountsChanged: Set<LlmAccountsChangedHandler>
   fsChanged: Set<FsChangedHandler>
+  gitChanged: Set<GitChangedHandler>
   mailChanged: Set<MailChangedHandler>
   domainsChanged: Set<DomainsChangedHandler>
   federationPeersChanged: Set<FederationPeersChangedHandler>
@@ -1252,6 +1268,7 @@ function createBusState(scopeId: string): BusState {
       tokenUsageChanged: new Set(),
       llmAccountsChanged: new Set(),
       fsChanged: new Set(),
+      gitChanged: new Set(),
       mailChanged: new Set(),
       domainsChanged: new Set(),
       federationPeersChanged: new Set(),
@@ -1509,6 +1526,13 @@ export function onFsChanged(scope: ServerScope, fn: FsChangedHandler): Unsubscri
   return addHandler(busFor(scope).handlers.fsChanged, fn)
 }
 
+/** Changes tab v1 — subscribe to APP-LEVEL `git_changed` on `scope`'s
+ *  server. Filter on `workspacePath`; refetch the snapshot when `rev`
+ *  differs from the one you hold. */
+export function onGitChanged(scope: ServerScope, fn: GitChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.gitChanged, fn)
+}
+
 /** Home 0.43.2 (Q7) — subscribe to APP-LEVEL `mail_changed` (mail server,
  *  domain or approval queue changed on `scope`'s server). Refetch signal;
  *  the handler gets the `reason`. Settings → Email is the consumer, so a
@@ -1683,6 +1707,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   fs_changed: (h, m) => {
     for (const fn of h.fsChanged) fn(m)
   },
+  git_changed: (h, m) => {
+    for (const fn of h.gitChanged) fn(m)
+  },
   mail_changed: (h, m) => {
     for (const fn of h.mailChanged) fn(m.reason)
   },
@@ -1752,6 +1779,7 @@ export interface AppBus {
   onTokenUsageChanged(fn: TokenUsageChangedHandler): UnsubscribeFn
   onLlmAccountsChanged(fn: LlmAccountsChangedHandler): UnsubscribeFn
   onFsChanged(fn: FsChangedHandler): UnsubscribeFn
+  onGitChanged(fn: GitChangedHandler): UnsubscribeFn
   onMailChanged(fn: MailChangedHandler): UnsubscribeFn
   onDomainsChanged(fn: DomainsChangedHandler): UnsubscribeFn
   onZenChanged(fn: ZenChangedHandler): UnsubscribeFn
@@ -1800,6 +1828,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onTokenUsageChanged: (fn) => onTokenUsageChanged(scope, fn),
     onLlmAccountsChanged: (fn) => onLlmAccountsChanged(scope, fn),
     onFsChanged: (fn) => onFsChanged(scope, fn),
+    onGitChanged: (fn) => onGitChanged(scope, fn),
     onMailChanged: (fn) => onMailChanged(scope, fn),
     onDomainsChanged: (fn) => onDomainsChanged(scope, fn),
     onZenChanged: (fn) => onZenChanged(scope, fn),

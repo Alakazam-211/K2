@@ -21,6 +21,7 @@ import { SetiFileIcon } from '@/lib/seti-file-icons'
 import { KeyCombo } from '@/components/KeySymbol'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { DoubleChevron } from '@/components/Sidebar/SidebarCollapseButton'
+import { NAV_TOGGLE_BOX } from '@/components/Layout/drawer-toggles'
 import ProjectGroupAvatar from './ProjectGroupAvatar'
 import { completeDashDrag, useDashboardDndStore } from './dashboard-dnd'
 import {
@@ -769,7 +770,7 @@ export function ProjectNavCollapseButton(): React.JSX.Element {
   return (
     <button
       type="button"
-      className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 bg-white/[0.04] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08] transition-colors"
+      className={`no-drag flex items-center justify-center ${NAV_TOGGLE_BOX} flex-shrink-0 bg-white/[0.04] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08] transition-colors`}
       onClick={() => useProjectGroupsStore.getState().setNavCollapsed(!collapsed)}
       title={label}
       aria-label={label}

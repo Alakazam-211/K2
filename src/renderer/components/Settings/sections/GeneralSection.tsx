@@ -203,10 +203,6 @@ export function GeneralSection(): React.JSX.Element {
       >
       {tab === 'general' && (
       <div className="space-y-4">
-        {/* App font (0.45.7): the same setting as Editors / Fonts → Code. */}
-        <div className="border border-[var(--color-border)]" data-settings-id="general.font">
-          <AppFontRows where="general" lastHasBorder={false} />
-        </div>
         {/* Version & Update */}
         <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]" data-settings-id="general.app-version">
           <span className="flex items-center gap-2 min-w-0">
@@ -329,6 +325,11 @@ export function GeneralSection(): React.JSX.Element {
           </div>
         )}
 
+        {/* App font (0.45.7): the same setting as Editors / Fonts → Code.
+            Sits just below the app version and its update notices (Rosson 2026-10-16). */}
+        <div className="border border-[var(--color-border)]" data-settings-id="general.font">
+          <AppFontRows where="general" lastHasBorder={false} />
+        </div>
         {/* CLI Version — right under App Version so it feels like part of the app */}
         <CLIVersionRow />
 

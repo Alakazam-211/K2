@@ -7,34 +7,23 @@
 
 import React, { useCallback, useEffect, useMemo, useRef } from 'react'
 import ForceGraph2D, { type ForceGraphMethods, type NodeObject } from 'react-force-graph-2d'
-import type { WikiIndex, WikiLink, WikiNode } from './wiki-api'
+import type { WikiIndex } from './wiki-api'
 import {
-  focusGroupFilterWorkspaceIds,
   isWikiFocusGroupNode,
   isWikiHomeNode,
   isWikiProjectNode,
   isWikiWorkspaceHubNode,
-  neighborhoodIds,
-  nodeMatchesSearch,
-  projectFilterWorkspaceIds,
 } from './wiki-api'
+import {
+  buildWikiGraphData,
+  localCenterIdFor,
+  ORG_EDGE_FALLBACK,
+  type WikiGraphLink,
+  type WikiSimNode,
+} from './wiki-graph-data'
 
-type GraphNode = WikiNode & {
-  id: string
-  __missing?: boolean
-  x?: number
-  y?: number
-  vx?: number
-  vy?: number
-}
-
-type GraphLink = {
-  source: string | GraphNode
-  target: string | GraphNode
-  missing?: boolean
-  kind?: string | null
-  color?: string | null
-}
+type GraphNode = WikiSimNode
+type GraphLink = WikiGraphLink
 
 /** Default node radius in graph units (unselected). */
 const NODE_R_GRAPH = 4
@@ -52,8 +41,6 @@ export const LABEL_FADE_START_DIAMETER_PX = 20
 
 /** Soft blue for Home when it is not the active selection. */
 const HOME_SOFT_BLUE = '#8fa8ff'
-/** Fallback color for focus-group / project membership edges. */
-const ORG_EDGE_FALLBACK = '#6b8cff'
 
 function readCssColor(varName: string, fallback: string): string {
   if (typeof document === 'undefined') return fallback
@@ -166,190 +153,16 @@ export default function WikiGraph({
     [],
   )
 
-  // Only Local mode's neighborhood depends on selection. Including
-  // selectedId in graphData for Global/K2 rebuilt the whole graphData
-  // object on every click, which restarts force-graph's sim → layout shift.
-  const localCenterId = mode === 'local' ? selectedId : null
+  // Only Local mode's neighborhood depends on selection (no reheat on click).
+  const localCenterId = localCenterIdFor(mode, selectedId)
 
   const graphData = useMemo(() => {
-    const catalog = new Map<string, WikiNode>()
-    for (const n of index.nodes) {
-      catalog.set(n.id, n)
-    }
-    for (const l of index.links) {
-      if (!catalog.has(l.source)) {
-        catalog.set(l.source, {
-          id: l.source,
-          title: l.source,
-          aliases: [],
-          tags: [],
-          path: '',
-          exists: false,
-        })
-      }
-      if (!catalog.has(l.target)) {
-        catalog.set(l.target, {
-          id: l.target,
-          title: l.target,
-          aliases: [],
-          tags: [],
-          path: '',
-          exists: false,
-        })
-      }
-    }
-
-    let visible = new Set(catalog.keys())
-
-    // K2: pick lens (projects vs groups) and apply org filter.
-    if (mode === 'k2') {
-      const next = new Set<string>()
-      if (k2Lens === 'projects') {
-        const wsOk = projectFilterWorkspaceIds(index, projectFilter)
-        const projectIdFilter =
-          projectFilter.startsWith('project:') ? projectFilter.slice('project:'.length) : null
-        for (const n of catalog.values()) {
-          if (isWikiFocusGroupNode(n)) continue // hide FG layer on Projects lens
-          if (isWikiProjectNode(n)) {
-            if (projectFilter === 'all') {
-              next.add(n.id)
-            } else if (projectIdFilter && (n.projectId === projectIdFilter || n.id === `__project__::${projectIdFilter}`)) {
-              next.add(n.id)
-            }
-            // Single-workspace filter: no project square unless that ws is a member (optional omit)
-            continue
-          }
-          if (!wsOk) {
-            next.add(n.id)
-            continue
-          }
-          if (n.workspaceId && wsOk.has(n.workspaceId)) next.add(n.id)
-        }
-      } else {
-        // Groups lens — hide project layer
-        const wsOk = focusGroupFilterWorkspaceIds(index, focusGroupFilter)
-        for (const n of catalog.values()) {
-          if (isWikiProjectNode(n)) continue
-          if (isWikiFocusGroupNode(n)) {
-            if (!focusGroupFilter || focusGroupFilter === 'all') {
-              next.add(n.id)
-            } else if (
-              focusGroupFilter !== 'ungrouped' &&
-              (n.focusGroupId === focusGroupFilter || n.id === `__focusgroup__::${focusGroupFilter}`)
-            ) {
-              next.add(n.id)
-            }
-            continue
-          }
-          if (!wsOk) {
-            next.add(n.id)
-            continue
-          }
-          if (n.workspaceId && wsOk.has(n.workspaceId)) next.add(n.id)
-        }
-      }
-      visible = next
-    }
-
-    if (mode === 'local' && localCenterId && catalog.has(localCenterId)) {
-      visible = neighborhoodIds(index.links, localCenterId, depth)
-    }
-
-    if (search.trim()) {
-      const matched = new Set<string>()
-      for (const n of catalog.values()) {
-        if (visible.has(n.id) && nodeMatchesSearch(n, search)) matched.add(n.id)
-      }
-      const withNeighbors = new Set(matched)
-      for (const l of index.links) {
-        if (matched.has(l.source)) withNeighbors.add(l.target)
-        if (matched.has(l.target)) withNeighbors.add(l.source)
-      }
-      visible = withNeighbors
-    }
-
-    const sim = simNodesRef.current
-    for (const id of [...sim.keys()]) {
-      if (!visible.has(id)) sim.delete(id)
-    }
-
-    const nodes: GraphNode[] = []
-    for (const id of visible) {
-      const meta = catalog.get(id)!
-      let node = sim.get(id)
-      if (!node) {
-        let x = (Math.random() - 0.5) * 40
-        let y = (Math.random() - 0.5) * 40
-        for (const l of index.links) {
-          const other =
-            l.source === id ? l.target : l.target === id ? l.source : null
-          if (!other) continue
-          const n = sim.get(other)
-          if (n && n.x != null && n.y != null) {
-            x = n.x + (Math.random() - 0.5) * 36
-            y = n.y + (Math.random() - 0.5) * 36
-            break
-          }
-        }
-        node = {
-          ...meta,
-          id,
-          __missing: !meta.exists,
-          x,
-          y,
-          vx: 0,
-          vy: 0,
-        }
-        sim.set(id, node)
-      } else {
-        node.title = meta.title
-        node.aliases = meta.aliases
-        node.tags = meta.tags
-        node.path = meta.path
-        node.exists = meta.exists
-        node.__missing = !meta.exists
-        node.workspaceId = meta.workspaceId
-        node.workspaceName = meta.workspaceName
-        node.workspacePath = meta.workspacePath
-        node.kind = meta.kind
-        node.focusGroupId = meta.focusGroupId
-        node.focusGroupName = meta.focusGroupName
-        node.focusGroupColor = meta.focusGroupColor
-        node.projectId = meta.projectId
-        node.projectName = meta.projectName
-        node.projectColor = meta.projectColor
-      }
-      nodes.push(node)
-    }
-
-    // Stable order so force-graph doesn't thrash identity when sets match.
-    nodes.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-
-    const links: GraphLink[] = index.links
-      .filter((l: WikiLink) => {
-        if (!visible.has(l.source) || !visible.has(l.target)) return false
-        // Lens isolation: don't draw the other org layer's edges.
-        if (mode === 'k2' && k2Lens === 'projects' && l.kind === 'focusGroup') return false
-        if (mode === 'k2' && k2Lens === 'groups' && l.kind === 'project') return false
-        return true
-      })
-      .map((l) => {
-        const src = catalog.get(l.source)
-        let edgeColor: string | null = null
-        if (l.kind === 'focusGroup') {
-          edgeColor = src?.focusGroupColor || ORG_EDGE_FALLBACK
-        } else if (l.kind === 'project') {
-          edgeColor = src?.projectColor || ORG_EDGE_FALLBACK
-        }
-        return {
-          source: l.source,
-          target: l.target,
-          missing: l.missing || !catalog.get(l.target)?.exists,
-          kind: l.kind ?? null,
-          color: edgeColor,
-        }
-      })
-
+    const { nodes, links } = buildWikiGraphData(
+      index,
+      { mode, depth, k2Lens, focusGroupFilter, projectFilter, search, localCenterId },
+      simNodesRef.current,
+      2,
+    )
     return { nodes, links }
   }, [index, localCenterId, search, mode, depth, k2Lens, focusGroupFilter, projectFilter])
 

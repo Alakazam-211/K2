@@ -50,6 +50,10 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 import { LlmLoginSheet, type LoginSheetStart } from './LlmLoginSheet'
 import { useDialogEscape } from '../settings-esc'
+import { Button } from '@/components/ui'
+
+/** Visible keyboard focus on the tile actions (Button leaves outline to the UA). */
+const ACTION_FOCUS = 'outline-none focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-accent)]'
 
 /** The big 7 rows, in the page's order, with their icon names. */
 export const LOGIN_TOOL_ROWS: Array<{ id: string; label: string; agentIcon: string }> = [
@@ -308,43 +312,46 @@ function AccountRow({
             {STATE_LABELS[account.state] ?? account.state}
           </span>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0 text-[10px]">
+        <div className="flex items-center gap-1.5 flex-shrink-0">
           {!account.active && signedIn && (
-            <button
-              type="button"
-              className="text-[var(--color-accent)] disabled:opacity-40"
+            <Button
+              variant="accent"
+              className={ACTION_FOCUS}
               disabled={switchBlocked !== undefined}
-              title={switchBlocked}
+              title={switchBlocked ?? `Make ${tokenName(tool.display, account)} the server default`}
               onClick={() => void makeDefault()}
             >
               Use this token
-            </button>
+            </Button>
           )}
           {/* Any subscription that isn't the server default can be signed
               in again (same flow as `k2 llm tokens login`). */}
           {!account.active && !apiKey && (signedIn || needsLogin) && (
-            <button
-              type="button"
-              className="text-[var(--color-accent)] disabled:opacity-40"
+            <Button
+              className={ACTION_FOCUS}
               disabled={pinnedBlock}
-              title={pinnedBlock ? PINNED_SWITCH_REASON : undefined}
+              title={pinnedBlock ? PINNED_SWITCH_REASON : `Sign ${tokenName(tool.display, account)} in again`}
               onClick={() => onLoginAgain(account)}
             >
               Sign in again
-            </button>
+            </Button>
           )}
-          <button type="button" className="text-[var(--color-text-muted)]" onClick={() => setRenaming(true)}>
+          <Button
+            className={ACTION_FOCUS}
+            title={`Rename ${tokenName(tool.display, account)}`}
+            onClick={() => setRenaming(true)}
+          >
             Rename
-          </button>
-          <button
-            type="button"
-            className="text-[var(--color-text-muted)] disabled:opacity-40"
+          </Button>
+          <Button
+            variant="danger-muted"
+            className={ACTION_FOCUS}
             disabled={removeBlocked !== undefined}
-            title={removeBlocked}
+            title={removeBlocked ?? `Remove ${tokenName(tool.display, account)}`}
             onClick={() => void remove()}
           >
             Remove
-          </button>
+          </Button>
         </div>
       </div>
       {who && <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5 truncate">{who}</div>}
@@ -451,17 +458,18 @@ function ApiKeyDialog({
           </p>
         )}
         <div className="flex justify-end gap-2 text-xs">
-          <button type="button" className="text-[var(--color-text-muted)]" onClick={onClose}>
+          <Button variant="ghost" size="md" className={ACTION_FOCUS} onClick={onClose}>
             Cancel
-          </button>
-          <button
-            type="button"
-            className="text-[var(--color-accent)] disabled:opacity-40"
+          </Button>
+          <Button
+            variant="accent"
+            size="md"
+            className={ACTION_FOCUS}
             disabled={busy || !label.trim() || !key.trim()}
             onClick={() => void submit()}
           >
             Add API token
-          </button>
+          </Button>
         </div>
       </div>
     </div>
@@ -605,25 +613,25 @@ export function AgentAccountsColumn(): React.JSX.Element {
                     <div className="text-xs text-[var(--color-text-secondary)] truncate">{row.label}</div>
                   </div>
                   {supported ? (
-                    <div className="flex items-center gap-3 flex-shrink-0">
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
                       {canSignIn && (
-                        <button
-                          type="button"
-                          className="text-[10px] text-[var(--color-accent)] disabled:opacity-40"
+                        <Button
+                          className={ACTION_FOCUS}
                           disabled={doc?.airgap === true}
+                          title={`Add a ${row.label} subscription`}
                           onClick={() => setSheet({ kind: 'add', tool: row.id, toolLabel: row.label })}
                         >
                           + Add subscription
-                        </button>
+                        </Button>
                       )}
                       {canKey && (
-                        <button
-                          type="button"
-                          className="text-[10px] text-[var(--color-accent)]"
+                        <Button
+                          className={ACTION_FOCUS}
+                          title={`Add a ${row.label} API token`}
                           onClick={() => setKeyDialog({ tool: row.id, toolLabel: row.label })}
                         >
                           + Add API token
-                        </button>
+                        </Button>
                       )}
                     </div>
                   ) : (
@@ -660,13 +668,13 @@ export function AgentAccountsColumn(): React.JSX.Element {
                     <span className="text-[10px] text-[var(--color-text-muted)]">
                       Use this when a session hits its limit. Applies to chats on Server default. K2 never switches on its own.
                     </span>
-                    <button
-                      type="button"
-                      className="text-[10px] text-[var(--color-accent)] flex-shrink-0"
+                    <Button
+                      className={`flex-shrink-0 ${ACTION_FOCUS}`}
+                      title={`Switch ${row.label} to its next signed-in token`}
                       onClick={() => void switchToNextToken(tool, doc)}
                     >
                       Use next token
-                    </button>
+                    </Button>
                   </div>
                 )}
               </div>

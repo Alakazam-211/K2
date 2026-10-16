@@ -1,29 +1,53 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type JSX } from 'react'
-import { ChatMessage } from '@/components/common/ChatMessage'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
 import { useSettingsStore } from '@/stores/settings'
 import { useOverlayThread } from './useOverlayThread'
 import { useRoom } from '@/components/Room/RoomContext'
-import { ThreadWorkingStrip } from './ThreadWorkingStrip'
 import { displayThreadAddress } from '@/lib/thread-address-bus'
 import {
-  cardExpiryLabel,
   isVoidedHitl,
   type OverlayDoc,
   type OverlayThreadItem,
   type ThreadAnswerPayload,
+  type ThreadTurn,
 } from './overlayThread'
-import { SecretCard } from './SecretCard'
 import {
-  cardAnswererLabel,
   isOwnThreadPost,
   OWNER_VIEWER,
   parseThreadAuthor,
   useThreadViewer,
   type ThreadViewer,
 } from '@/lib/thread-viewer'
+import {
+  THREAD_ZEN_DESKTOP_TOKENS,
+  THREAD_ZEN_SCOPE_ATTR,
+  ThreadBubble,
+  ThreadLoadOlder,
+  ThreadZenStyles,
+  zenEmptyThreadText,
+} from '@/components/Thread/ThreadZenKit'
+import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
+
+// The choice card lives in its own file; Zen and Grok Bots import it from here.
+export { ChoiceCard, choiceLetter } from './ChoiceCard'
+
+// 2026-10-16 (Rosson: "update the thread UI in K2 to match what we have in
+// mobile/the zen garden"): the desktop Thread draws the Zen Thread widget's
+// pieces (`components/Thread/ThreadZenKit`): text bubbles, "author · time"
+// under each, the cards inside, "Earlier messages", the empty line, and the
+// activity drawer (`ZenActivityDrawer`) in place of the old working strip,
+// with the strip's Stop kept. Colours come from the app's Style
+// (`THREAD_ZEN_DESKTOP_TOKENS`); the shapes are Zen's.
+
+/** The `--zen-*` tokens + the scope attribute for a desktop Thread box. */
+export function threadZenScopeProps(fontSize?: number): Record<string, unknown> & { style: CSSProperties } {
+  return {
+    [THREAD_ZEN_SCOPE_ATTR]: '',
+    style: { ...THREAD_ZEN_DESKTOP_TOKENS, ...(fontSize ? { fontSize } : {}) },
+  }
+}
 
 // The vault secret card lives in its own file; Zen imports it from here.
 export { SecretCard } from './SecretCard'
@@ -43,6 +67,10 @@ interface ThreadOverlayPaneProps {
   agentName?: string
   /** The working strip's Stop (Esc to the agent's PTY). Absent: no Stop. */
   onStop?: () => void
+  /** Set by a column with a message box: the activity drawer goes on that
+   *  box's top edge (the column hands it the live turn). Absent: the pane
+   *  draws the drawer itself, under the list. */
+  onTurn?: (turn: ThreadTurn | null) => void
 }
 
 /** Overlay log only — Message-the-agent compose stays on TerminalPane. */
@@ -52,6 +80,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   active = true,
   agentName,
   onStop,
+  onTurn,
 }: ThreadOverlayPaneProps): JSX.Element {
   const roomScope = useRoom().scope
   // A Thread is shared: "You" only on this viewer's own posts.
@@ -68,6 +97,14 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   })
 
   const visible = items.filter((it) => !isVoidedHitl(it.doc))
+  // The column's message box draws the drawer: hand it the live turn.
+  const liveTurn = turn ?? null
+  useEffect(() => {
+    onTurn?.(liveTurn)
+  }, [onTurn, liveTurn])
+  const onTurnRef = useRef(onTurn)
+  onTurnRef.current = onTurn
+  useEffect(() => () => onTurnRef.current?.(null), [])
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
   const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
   useEffect(() => {
@@ -177,15 +214,21 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     void loadOlder()
   }
 
+  const scope = threadZenScopeProps(editorFontSize)
   return (
     <div
       className="flex-1 min-h-0 overflow-hidden flex flex-col bg-[var(--color-bg)] selectable-copy chat-thread-selectable"
       data-testid="thread-overlay-pane"
+      {...scope}
     >
+      <ThreadZenStyles />
       <div
         ref={listRef}
         data-testid="thread-overlay-list"
-        className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-2 py-2"
+        data-zen-conversation-body=""
+        className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
+        // The browser's own scroll anchoring would fight the pin.
+        style={{ padding: '14px var(--zen-gap) 8px', overflowAnchor: 'none' }}
         onScroll={(e) => {
           const el = e.currentTarget
           if (!listScrollLive(el)) return
@@ -206,43 +249,31 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
           savedScrollTopRef.current = el.scrollTop
         }}
       >
-        {hasMore && (
-          <button
-            type="button"
-            data-testid="overlay-load-older"
-            disabled={loadingOlder}
-            onClick={() => requestOlder()}
-            className="w-full mb-2 px-2 py-1 text-[11px] text-[var(--color-text-muted)] border border-[var(--color-border)]"
-          >
-            {loadingOlder ? 'Loading…' : 'Load older'}
-          </button>
-        )}
-        {error && (
-          <div className="text-[11px] text-[var(--color-text-muted)] px-2.5">{error}</div>
-        )}
         {loaded && !error && visible.length === 0 && (
           // Absolute over the list so it centers without adding scroll
-          // height; pointer-events-none keeps Load older clickable.
+          // height; pointer-events-none keeps Earlier messages clickable.
           <div
             data-testid="thread-overlay-empty"
-            className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1 px-6 text-center"
+            data-zen-thread-empty=""
+            className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center px-6 text-center"
+            style={{ color: 'var(--zen-text-muted)' }}
           >
-            <div className="text-[13px] font-medium text-[var(--color-text-primary)]">
-              No Thread messages yet
-            </div>
-            <div className="text-[12px] text-[var(--color-text-muted)] max-w-[40ch]">
-              Send a message to {agentName?.trim() || 'the agent'} in the box below.
-            </div>
+            <div className="max-w-[40ch]">{zenEmptyThreadText(agentName?.trim() || 'the agent')}</div>
           </div>
         )}
-        <div ref={contentRef} className="flex flex-col gap-2.5">
+        <div ref={contentRef} className="flex flex-col" style={{ gap: 10 }}>
+          {hasMore && (
+            <ThreadLoadOlder loading={loadingOlder} onClick={() => requestOlder()} testId="overlay-load-older" />
+          )}
+          {error && (
+            <div style={{ color: 'var(--zen-text-muted)', fontSize: '0.85em', textAlign: 'center' }}>{error}</div>
+          )}
           {visible.map((it) => (
             <ThreadItemRow
               key={it.id}
               item={it}
               viewer={viewer}
               nowSec={nowSec}
-              fontSize={editorFontSize}
               currentAddr={currentAddr}
               pastAddresses={pastAddresses}
               onAnswer={(payload) => answer(it.id, payload)}
@@ -250,10 +281,11 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
               cardContext={{ workspace: addr.split('/')[0], server: roomScope.label }}
             />
           ))}
-          {/* TW12: live only, under the last message; never stored (TW13). */}
-          {turn && <ThreadWorkingStrip key={turn.turnId} turn={turn} onStop={onStop} />}
         </div>
       </div>
+      {/* TW12: live only, never stored (TW13). With a message box the
+          column draws it on the box's top edge (`onTurn`). */}
+      {!onTurn && <ZenActivityDrawer turn={liveTurn} onStop={onStop} attached={false} />}
     </div>
   )
 })
@@ -289,7 +321,6 @@ export function ThreadItemRow({
   item,
   viewer = OWNER_VIEWER,
   nowSec,
-  fontSize,
   currentAddr,
   pastAddresses,
   onAnswer,
@@ -301,7 +332,6 @@ export function ThreadItemRow({
    *  the owner on this computer. */
   viewer?: ThreadViewer | null
   nowSec?: number
-  fontSize?: number
   /** Q5: an old row stamped with this chat's earlier address shows the
    *  current one (storage keeps what was stamped). */
   currentAddr?: string
@@ -311,178 +341,20 @@ export function ThreadItemRow({
   onVoid?: () => void
   cardContext?: SecretCardContext
 }): JSX.Element {
-  const kind = item.doc.kind
-  const { label: author, mine: owner } = threadAuthorLabel(item.doc, viewer, currentAddr, pastAddresses)
-  const timeLabel = formatRelativeTime(
-    item.doc.created_at,
-    nowSec ?? Math.floor(Date.now() / 1000),
-  )
-  const prompt =
-    kind === 'choice'
-      ? item.doc.choice?.prompt || item.doc.body || ''
-      : kind === 'secret' && item.doc.secret
-        ? // The card shows the agent's prompt as plain text (VS13), never markdown.
-          ''
-        : item.doc.body || ''
+  const { label: author, mine } = threadAuthorLabel(item.doc, viewer, currentAddr, pastAddresses)
+  const now = nowSec ?? Math.floor(Date.now() / 1000)
   return (
-    <div
-      data-testid="thread-item"
-      data-kind={kind}
-      data-seq={item.seq}
-      data-status={item.doc.choice?.status || item.doc.secret?.status || ''}
-    >
-      <ChatMessage
-        author={author}
-        isOwner={owner}
-        timeLabel={timeLabel}
-        body={prompt}
-        fontSize={fontSize}
-        footer={
-          kind === 'choice' && item.doc.choice ? (
-            <ChoiceCard
-              options={item.doc.choice.options}
-              allowCustom={item.doc.choice.allow_custom}
-              status={item.doc.choice.status}
-              answer={item.doc.choice.answer}
-              answeredBy={cardAnswererLabel(item.doc.choice.answeredBy, viewer)}
-              expiresAt={item.doc.choice.expiresAt}
-              nowSec={nowSec}
-              onPick={(label) => onAnswer?.({ answer: label })}
-            />
-          ) : kind === 'secret' && item.doc.secret ? (
-            <SecretCard
-              secret={item.doc.secret}
-              answeredBy={cardAnswererLabel(item.doc.secret.answeredBy, viewer)}
-              agent={item.doc.from || ''}
-              workspace={cardContext?.workspace}
-              server={cardContext?.server}
-              onSubmit={async (payload) => {
-                await onAnswer?.(payload)
-              }}
-              onDismiss={() => onVoid?.()}
-            />
-          ) : null
-        }
-      />
-    </div>
-  )
-}
-
-/** A, B, … Z, AA — UI letter only; the posted answer is still the option label. */
-export function choiceLetter(index: number): string {
-  let n = index
-  let s = ''
-  do {
-    s = String.fromCharCode(65 + (n % 26)) + s
-    n = Math.floor(n / 26) - 1
-  } while (n >= 0)
-  return s
-}
-
-export function ChoiceCard({
-  options,
-  allowCustom,
-  status,
-  answer,
-  answeredBy,
-  expiresAt,
-  nowSec,
-  onPick,
-}: {
-  options: { label: string }[]
-  allowCustom: boolean
-  status: string
-  answer?: string | null
-  /** `cardAnswererLabel` of the card's `answeredBy` ("You", a login). */
-  answeredBy?: string | null
-  /** The card's time frame (unix seconds); the daemon expires it. */
-  expiresAt?: number | null
-  nowSec?: number
-  onPick: (label: string) => void
-}): JSX.Element {
-  const pending = status === 'pending'
-  const expiry =
-    status === 'expired'
-      ? 'expired'
-      : pending
-        ? cardExpiryLabel(expiresAt, nowSec ?? Math.floor(Date.now() / 1000))
-        : null
-  const [custom, setCustom] = useState('')
-  return (
-    <div
-      data-testid="thread-choice-card"
-      className="mt-1 w-full box-border flex flex-col gap-1.5 rounded-[var(--thread-card-radius,0px)] border border-[var(--thread-card-border,var(--color-border))] bg-[var(--thread-card-bg,var(--color-bg))] px-2 py-1.5"
-    >
-      {options.map((opt, i) => {
-          const selected = answer === opt.label
-          const letter = choiceLetter(i)
-          return (
-            <button
-              key={`${opt.label}-${i}`}
-              type="button"
-              data-testid="thread-choice-chip"
-              data-label={opt.label}
-              data-letter={letter}
-              data-primary={i === 0 ? 'true' : 'false'}
-              disabled={!pending}
-              onClick={() => onPick(opt.label)}
-              className={`flex w-full items-center gap-2 box-border rounded-[var(--thread-card-radius,0px)] px-2 py-1.5 text-left text-[11px] font-medium border transition-colors ${
-                selected
-                  ? 'border-[var(--thread-card-accent,var(--color-accent))] bg-[var(--thread-card-accent,var(--color-accent))]/15 text-[var(--thread-card-text,var(--color-text-primary))]'
-                  : pending
-                    ? 'border-[var(--thread-card-border,var(--color-border))] text-[var(--thread-card-text-secondary,var(--color-text-secondary))] hover:border-[var(--thread-card-accent,var(--color-accent))] hover:text-[var(--thread-card-text,var(--color-text-primary))] cursor-pointer'
-                    : 'border-[var(--thread-card-border,var(--color-border))] text-[var(--thread-card-muted,var(--color-text-muted))] opacity-50'
-              } disabled:cursor-not-allowed`}
-            >
-              <span
-                className={`w-4 shrink-0 text-[10px] font-semibold ${
-                  selected
-                    ? 'text-[var(--thread-card-accent,var(--color-accent))]'
-                    : 'text-[var(--thread-card-muted,var(--color-text-muted))]'
-                }`}
-              >
-                {letter}
-              </span>
-              <span className="min-w-0 flex-1">{opt.label}</span>
-            </button>
-          )
-      })}
-      {expiry && (
-        <div
-          data-testid="thread-choice-expiry"
-          className="text-[10px] text-[var(--thread-card-muted,var(--color-text-muted))]"
-        >
-          {expiry}
-        </div>
-      )}
-      {status === 'answered' && answeredBy && (
-        <div
-          data-testid="thread-choice-answered-by"
-          className="text-[10px] text-[var(--thread-card-muted,var(--color-text-muted))]"
-        >
-          answered by {answeredBy}
-        </div>
-      )}
-      {allowCustom && pending && (
-        <div className="mt-0.5 flex gap-2">
-          <input
-            data-testid="thread-choice-custom"
-            value={custom}
-            onChange={(e) => setCustom(e.target.value)}
-            placeholder="Custom…"
-            className="flex-1 bg-transparent text-[12px] text-[var(--thread-card-text,var(--color-text-primary))] outline-none border border-[var(--thread-card-border,var(--color-border))] px-2 py-1"
-          />
-          <button
-            type="button"
-            data-testid="thread-choice-custom-submit"
-            disabled={!custom.trim()}
-            onClick={() => onPick(custom.trim())}
-            className="px-2 py-1 text-[11px] border border-[var(--thread-card-border,var(--color-border))]"
-          >
-            Send
-          </button>
-        </div>
-      )}
-    </div>
+    <ThreadBubble
+      item={item}
+      mine={mine}
+      author={author}
+      timeLabel={formatRelativeTime(item.doc.created_at, now)}
+      viewer={viewer}
+      nowSec={now}
+      onAnswer={onAnswer}
+      onVoid={onVoid}
+      // The desktop Thread is where Zen's "More options" leads: the full card.
+      secret={{ workspace: cardContext?.workspace, server: cardContext?.server }}
+    />
   )
 }

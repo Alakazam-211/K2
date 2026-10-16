@@ -74,6 +74,15 @@ import { postThreadCompose } from '@/components/SessionView/overlayThread'
 import { loadHostImageObjectUrl, revokeObjectUrl } from '@/lib/load-host-binary'
 import { scopedKey } from '@/kessel/server-scope'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { useThreadComposeDrawer } from '@/components/SessionView/threadComposeDrawer'
+import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
+import {
+  ThreadAttachmentChip,
+  ThreadAttachmentChips,
+  ThreadComposeBox,
+  ThreadRoundButton,
+  ThreadSendButton,
+} from '@/components/Thread/ThreadZenKit'
 
 /** Shown when Thread Send runs before this cell has its own address. The draft stays. */
 const THREAD_ADDR_NOT_READY = "This session isn't ready yet. Your draft is still here."
@@ -149,6 +158,10 @@ export function TerminalComposeBar({
   )
   const messagePlaceholder = composeMessagePlaceholder(agentName)
   const sessionChrome = useSessionViewChrome()
+  // The Thread's bar wears the Zen Thread widget's look (2026-10-16); the
+  // terminal's bar keeps its own. Same keys, same commands, same send.
+  const zenLook = sendDestination === 'thread'
+  const threadDrawer = useThreadComposeDrawer()
   const sendOnThread =
     sendDestination === 'thread' ||
     (sendDestination !== 'pty' && sessionChrome?.viewTab === 'thread')
@@ -735,6 +748,278 @@ export function TerminalComposeBar({
   const iconSize = Math.max(10, Math.round(btnSize * 0.55))
   const btnNudge = Math.max(0, (firstLineH - btnSize) / 2)
 
+  const fileInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      multiple
+      className="sr-only"
+      aria-hidden="true"
+      tabIndex={-1}
+      onChange={handleLocalFiles}
+    />
+  )
+  const addrError = threadAddrError ? (
+    <p
+      role="alert"
+      data-testid="compose-thread-addr-error"
+      className="text-[11px] text-[var(--color-status-error-soft)]"
+    >
+      {threadAddrError}
+    </p>
+  ) : null
+  const slashMenu =
+    slashMenuOpen && slashMenuPos && slashMatches.length > 0
+      ? createPortal(
+          <div
+            ref={slashMenuRef}
+            role="menu"
+            data-testid="compose-slash-menu"
+            data-look={zenLook ? 'zen' : undefined}
+            className={`border border-[var(--color-border)] py-0.5 shadow-lg ${
+              zenLook ? 'bg-[var(--color-bg-elevated)] px-1' : 'bg-[var(--color-bg)]'
+            }`}
+            style={{
+              position: 'fixed',
+              left: slashMenuPos.left,
+              bottom: slashMenuPos.bottom,
+              zIndex: 99999,
+              // The Thread's box is Zen-shaped; its menu is rounded to match.
+              borderRadius: zenLook ? 12 : 0,
+              minWidth: 180,
+            }}
+          >
+            {slashMatches.map((item, index) => {
+              const selected = slashCommand === item.command
+              const highlighted =
+                index === Math.min(slashHighlight, slashMatches.length - 1)
+              // Accent the committed command, or the keyboard cursor when
+              // nothing is committed yet (so Enter/arrows have an obvious
+              // first choice). Never paint row 0 as chosen if another
+              // command is already selected.
+              const accent = selected || (slashCommand == null && highlighted)
+              return (
+                <button
+                  key={item.command}
+                  type="button"
+                  role="menuitem"
+                  aria-checked={selected}
+                  aria-selected={highlighted}
+                  onClick={() =>
+                    selectSlashCommand(item.command, { toggle: !slashMenuFromTypeahead })
+                  }
+                  className={`flex w-full items-baseline gap-2 px-2 py-1 text-left ${
+                    highlighted
+                      ? 'bg-[var(--color-bg-hover)]'
+                      : 'hover:bg-[var(--color-bg-hover)]'
+                  }`}
+                  style={{ borderRadius: zenLook ? 8 : 0 }}
+                >
+                  <span
+                    className="font-mono text-[11px]"
+                    style={{
+                      color: accent
+                        ? 'var(--color-accent)'
+                        : 'var(--color-text-primary)',
+                    }}
+                  >
+                    {item.command}
+                  </span>
+                  <span className="text-[10px] text-[var(--color-text-muted)]">{item.title}</span>
+                </button>
+              )
+            })}
+          </div>,
+          document.body,
+        )
+      : null
+  const textarea = (
+    <textarea
+      ref={textareaRef}
+      value={draft}
+      onChange={(e) => {
+        const value = e.target.value
+        writeComposeCaret(
+          sessionId,
+          e.target.selectionStart,
+          e.target.selectionEnd,
+          value.length,
+        )
+        if (historyIndex !== -1) {
+          setHistoryIndex(-1)
+          historyDraftRef.current = ''
+        }
+        const spaceCommit = composeSlashSpaceCommit(value)
+        if (spaceCommit) {
+          setSlashCommand(spaceCommit.command)
+          setDraft(spaceCommit.remainder)
+          closeSlashMenu()
+          requestAnimationFrame(() => {
+            const ta = textareaRef.current
+            if (!ta) return
+            ta.focus()
+            ta.setSelectionRange(
+              spaceCommit.remainder.length,
+              spaceCommit.remainder.length,
+            )
+            writeComposeCaret(
+              sessionId,
+              spaceCommit.remainder.length,
+              spaceCommit.remainder.length,
+              spaceCommit.remainder.length,
+            )
+            autoGrow()
+          })
+          return
+        }
+        setDraft(value)
+        const query = composeSlashTypeaheadQuery(value)
+        if (query != null) {
+          const matches = filterComposeSlashCommands(query)
+          if (matches.length > 0) {
+            if (!slashMenuOpen || slashMenuFromTypeahead) {
+              placeSlashMenu()
+              setSlashMenuFromTypeahead(true)
+              if (!slashMenuOpen) {
+                setSlashHighlight(
+                  composeSlashInitialHighlight(matches, slashCommand),
+                )
+              }
+              setSlashMenuOpen(true)
+            }
+          } else if (slashMenuFromTypeahead) {
+            closeSlashMenu()
+          }
+        } else if (slashMenuFromTypeahead) {
+          closeSlashMenu()
+        }
+      }}
+      onSelect={persistCaret}
+      onClick={persistCaret}
+      onKeyUp={persistCaret}
+      onBlur={persistCaret}
+      onFocus={restoreCaret}
+      onKeyDown={handleKeyDown}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+      rows={1}
+      spellCheck={false}
+      placeholder={messagePlaceholder}
+      title="Enter to send, Shift+Enter for newline. Drop files for paths."
+      data-zen-compose-input={zenLook ? '' : undefined}
+      className="block w-full resize-none overflow-x-hidden bg-transparent text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
+      style={{
+        display: 'block',
+        width: '100%',
+        minWidth: 0,
+        // The Thread's box reads like a text (the Zen Thread widget's
+        // font); the terminal's bar keeps the terminal font.
+        fontFamily: zenLook
+          ? 'inherit'
+          : "'MesloLGM Nerd Font', 'MesloLGM Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",
+        fontSize: editorFontSize,
+        lineHeight: 1.4,
+        boxSizing: 'border-box',
+        border: 'none',
+        borderRadius: 0,
+        padding: '4px 6px',
+        maxHeight: COMPOSE_TEXTAREA_MAX_HEIGHT,
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        overflowWrap: 'anywhere',
+        wordBreak: 'break-word',
+        color: zenLook ? 'var(--zen-text)' : undefined,
+        caretColor: zenLook ? 'var(--zen-text)' : 'var(--color-text-primary)',
+      }}
+    />
+  )
+
+  if (zenLook) {
+    // The Thread's message box: the Zen Thread widget's (and K2
+    // Companion's) round field, "+" and Send, chips above, the activity
+    // drawer on its top edge — plus the desktop's "/" commands. Keys are
+    // the same handler as the terminal's bar (`handleKeyDown`): Esc,
+    // Ctrl+C, Ctrl+B and an empty Enter reach the agent's PTY.
+    const circle = 32
+    return (
+      <div
+        ref={barRef}
+        className="flex min-w-0 w-full flex-shrink-0 flex-col"
+        style={{ padding: '8px var(--zen-gap, 12px) var(--zen-gap, 12px)' }}
+        data-compose-bar=""
+        data-zen-compose=""
+        data-compose-look="zen"
+        data-session-id={sessionId}
+        data-compose-destination={sendOnThread ? 'thread' : 'pty'}
+        data-workspace-path={workspacePath || undefined}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
+        {addrError ? <div style={{ marginBottom: 6 }}>{addrError}</div> : null}
+        {fileInput}
+        <ThreadComposeBox
+          chips={
+            imagePaths.length > 0 ? (
+              <ThreadAttachmentChips testId="compose-image-previews">
+                {imagePaths.map((path) => (
+                  <ComposeImageThumb
+                    key={path}
+                    path={path}
+                    variant="chip"
+                    onRemove={() => setDraft((cur) => removePathFromDraft(cur, path))}
+                  />
+                ))}
+              </ThreadAttachmentChips>
+            ) : undefined
+          }
+          drawer={
+            threadDrawer ? (
+              <ZenActivityDrawer turn={threadDrawer.turn} onStop={threadDrawer.onStop} />
+            ) : undefined
+          }
+        >
+          <ThreadRoundButton label="Attach file" title="Attach a file or image" onClick={handleAttachClick}>
+            +
+          </ThreadRoundButton>
+          <ThreadRoundButton
+            label="Slash command"
+            title={slashCommand ? `${slashCommand} selected` : 'Slash command'}
+            buttonRef={slashBtnRef}
+            disabled={sending}
+            pressed={slashCommand != null}
+            onClick={toggleSlashMenu}
+            data={{
+              'aria-haspopup': 'menu',
+              'aria-expanded': slashMenuOpen,
+              'aria-pressed': slashCommand != null,
+              'data-testid': 'compose-slash-button',
+            }}
+            style={{
+              width: circle,
+              height: circle,
+              fontFamily:
+                "'MesloLGM Nerd Font', 'MesloLGM Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",
+              fontSize: 15,
+              fontWeight: 600,
+            }}
+          >
+            /
+          </ThreadRoundButton>
+          {slashMenu}
+          <div className="relative min-w-0 flex-1" style={{ alignSelf: 'center' }}>
+            {textarea}
+          </div>
+          <ThreadSendButton
+            canSend={canSend}
+            onClick={() => void send()}
+            label="Send message"
+            title="Send"
+          />
+        </ThreadComposeBox>
+      </div>
+    )
+  }
+
   return (
     <div
       ref={barRef}
@@ -746,24 +1031,8 @@ export function TerminalComposeBar({
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
-      {threadAddrError ? (
-        <p
-          role="alert"
-          data-testid="compose-thread-addr-error"
-          className="text-[11px] text-[var(--color-status-error-soft)]"
-        >
-          {threadAddrError}
-        </p>
-      ) : null}
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        className="sr-only"
-        aria-hidden="true"
-        tabIndex={-1}
-        onChange={handleLocalFiles}
-      />
+      {addrError}
+      {fileInput}
       <div
         className="flex min-w-0 w-full flex-col bg-[var(--color-bg)]"
         style={{ border: '1px solid var(--color-border)', borderRadius: 0 }}
@@ -828,161 +1097,9 @@ export function TerminalComposeBar({
         >
           /
         </button>
-      {slashMenuOpen &&
-        slashMenuPos &&
-        slashMatches.length > 0 &&
-        createPortal(
-          <div
-            ref={slashMenuRef}
-            role="menu"
-            data-testid="compose-slash-menu"
-            className="border border-[var(--color-border)] bg-[var(--color-bg)] py-0.5 shadow-lg"
-            style={{
-              position: 'fixed',
-              left: slashMenuPos.left,
-              bottom: slashMenuPos.bottom,
-              zIndex: 99999,
-              borderRadius: 0,
-              minWidth: 180,
-            }}
-          >
-            {slashMatches.map((item, index) => {
-              const selected = slashCommand === item.command
-              const highlighted =
-                index === Math.min(slashHighlight, slashMatches.length - 1)
-              // Accent the committed command, or the keyboard cursor when
-              // nothing is committed yet (so Enter/arrows have an obvious
-              // first choice). Never paint row 0 as chosen if another
-              // command is already selected.
-              const accent = selected || (slashCommand == null && highlighted)
-              return (
-                <button
-                  key={item.command}
-                  type="button"
-                  role="menuitem"
-                  aria-checked={selected}
-                  aria-selected={highlighted}
-                  onClick={() =>
-                    selectSlashCommand(item.command, { toggle: !slashMenuFromTypeahead })
-                  }
-                  className={`flex w-full items-baseline gap-2 px-2 py-1 text-left ${
-                    highlighted
-                      ? 'bg-[var(--color-bg-hover)]'
-                      : 'hover:bg-[var(--color-bg-hover)]'
-                  }`}
-                  style={{ borderRadius: 0 }}
-                >
-                  <span
-                    className="font-mono text-[11px]"
-                    style={{
-                      color: accent
-                        ? 'var(--color-accent)'
-                        : 'var(--color-text-primary)',
-                    }}
-                  >
-                    {item.command}
-                  </span>
-                  <span className="text-[10px] text-[var(--color-text-muted)]">{item.title}</span>
-                </button>
-              )
-            })}
-          </div>,
-          document.body,
-        )}
+      {slashMenu}
       <div className="relative min-w-0 flex-1">
-      <textarea
-        ref={textareaRef}
-        value={draft}
-        onChange={(e) => {
-          const value = e.target.value
-          writeComposeCaret(
-            sessionId,
-            e.target.selectionStart,
-            e.target.selectionEnd,
-            value.length,
-          )
-          if (historyIndex !== -1) {
-            setHistoryIndex(-1)
-            historyDraftRef.current = ''
-          }
-          const spaceCommit = composeSlashSpaceCommit(value)
-          if (spaceCommit) {
-            setSlashCommand(spaceCommit.command)
-            setDraft(spaceCommit.remainder)
-            closeSlashMenu()
-            requestAnimationFrame(() => {
-              const ta = textareaRef.current
-              if (!ta) return
-              ta.focus()
-              ta.setSelectionRange(
-                spaceCommit.remainder.length,
-                spaceCommit.remainder.length,
-              )
-              writeComposeCaret(
-                sessionId,
-                spaceCommit.remainder.length,
-                spaceCommit.remainder.length,
-                spaceCommit.remainder.length,
-              )
-              autoGrow()
-            })
-            return
-          }
-          setDraft(value)
-          const query = composeSlashTypeaheadQuery(value)
-          if (query != null) {
-            const matches = filterComposeSlashCommands(query)
-            if (matches.length > 0) {
-              if (!slashMenuOpen || slashMenuFromTypeahead) {
-                placeSlashMenu()
-                setSlashMenuFromTypeahead(true)
-                if (!slashMenuOpen) {
-                  setSlashHighlight(
-                    composeSlashInitialHighlight(matches, slashCommand),
-                  )
-                }
-                setSlashMenuOpen(true)
-              }
-            } else if (slashMenuFromTypeahead) {
-              closeSlashMenu()
-            }
-          } else if (slashMenuFromTypeahead) {
-            closeSlashMenu()
-          }
-        }}
-        onSelect={persistCaret}
-        onClick={persistCaret}
-        onKeyUp={persistCaret}
-        onBlur={persistCaret}
-        onFocus={restoreCaret}
-        onKeyDown={handleKeyDown}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        rows={1}
-        spellCheck={false}
-        placeholder={messagePlaceholder}
-        title="Enter to send, Shift+Enter for newline. Drop files for paths."
-        className="block w-full resize-none overflow-x-hidden bg-transparent text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
-        style={{
-          display: 'block',
-          width: '100%',
-          minWidth: 0,
-          fontFamily:
-            "'MesloLGM Nerd Font', 'MesloLGM Nerd Font Mono', Menlo, Monaco, 'Courier New', monospace",
-          fontSize: editorFontSize,
-          lineHeight: 1.4,
-          boxSizing: 'border-box',
-          border: 'none',
-          borderRadius: 0,
-          padding: '4px 6px',
-          maxHeight: COMPOSE_TEXTAREA_MAX_HEIGHT,
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          overflowWrap: 'anywhere',
-          wordBreak: 'break-word',
-          caretColor: 'var(--color-text-primary)',
-        }}
-      />
+      {textarea}
       </div>
       <button
         type="button"
@@ -1012,9 +1129,12 @@ export function TerminalComposeBar({
 function ComposeImageThumb({
   path,
   onRemove,
+  variant = 'thumb',
 }: {
   path: string
   onRemove: () => void
+  /** `chip`: the Thread's Zen chip (a small round picture, the name, ×). */
+  variant?: 'thumb' | 'chip'
 }): React.JSX.Element {
   const scope = useRoom().scope
   const [url, setUrl] = useState<string | null>(null)
@@ -1066,6 +1186,57 @@ function ComposeImageThumb({
   }, [open])
 
   const name = path.split('/').pop()?.split('\\').pop() || path
+  const preview = open && url ? createPortal(
+      <div
+        ref={lightboxRef}
+        className="fixed inset-0 z-[99999] flex items-center justify-center bg-[var(--color-scrim)] p-6"
+        role="dialog"
+        aria-modal="true"
+        aria-label={name}
+        onClick={() => setOpen(false)}
+      >
+        <img
+          src={url}
+          alt={name}
+          className="max-h-full max-w-full object-contain"
+          style={{ borderRadius: 0 }}
+          onClick={(e) => e.stopPropagation()}
+        />
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={() => setOpen(false)}
+          className="absolute top-3 right-3 h-7 w-7 flex items-center justify-center bg-black/70 text-white text-lg leading-none hover:bg-black/90"
+          style={{ borderRadius: 0 }}
+        >
+          ×
+        </button>
+      </div>,
+      document.body,
+    ) : null
+  if (variant === 'chip') {
+    return (
+      <>
+        <ThreadAttachmentChip
+          name={name}
+          title={path}
+          onRemove={onRemove}
+          onOpen={url ? () => setOpen(true) : undefined}
+          leading={
+            <span
+              aria-hidden
+              data-compose-chip-thumb={url ? 'image' : 'loading'}
+              className="flex-shrink-0 overflow-hidden"
+              style={{ width: 20, height: 20, borderRadius: 999, background: 'var(--zen-surface)' }}
+            >
+              {url ? <img src={url} alt="" className="h-full w-full object-cover" /> : null}
+            </span>
+          }
+        />
+        {preview}
+      </>
+    )
+  }
   return (
     <>
     <div className="relative h-20 w-20 flex-shrink-0 overflow-hidden border border-[var(--color-border)] bg-[var(--color-bg)]" style={{ borderRadius: 0 }}>
@@ -1093,34 +1264,7 @@ function ComposeImageThumb({
         ×
       </button>
     </div>
-    {open && url && createPortal(
-      <div
-        ref={lightboxRef}
-        className="fixed inset-0 z-[99999] flex items-center justify-center bg-[var(--color-scrim)] p-6"
-        role="dialog"
-        aria-modal="true"
-        aria-label={name}
-        onClick={() => setOpen(false)}
-      >
-        <img
-          src={url}
-          alt={name}
-          className="max-h-full max-w-full object-contain"
-          style={{ borderRadius: 0 }}
-          onClick={(e) => e.stopPropagation()}
-        />
-        <button
-          type="button"
-          aria-label="Close"
-          onClick={() => setOpen(false)}
-          className="absolute top-3 right-3 h-7 w-7 flex items-center justify-center bg-black/70 text-white text-lg leading-none hover:bg-black/90"
-          style={{ borderRadius: 0 }}
-        >
-          ×
-        </button>
-      </div>,
-      document.body,
-    )}
+    {preview}
     </>
   )
 }

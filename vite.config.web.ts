@@ -38,6 +38,9 @@ export default defineConfig({
       '@tauri-apps/plugin-updater': shim('plugin-updater.ts'),
       '@tauri-apps/plugin-process': shim('plugin-process.ts'),
       '@crabnebula/tauri-plugin-drag': shim('plugin-drag.ts'),
+      // Wiki 3D: three-render-objects statically imports the (unused)
+      // WebGPU renderer; stub it out of the lazy chunk (prd-wiki-3d-view-v1 §6.5).
+      'three/webgpu': resolve(__dirname, 'src/renderer/lib/three-webgpu-stub.ts'),
     },
   },
   root: 'src/renderer',

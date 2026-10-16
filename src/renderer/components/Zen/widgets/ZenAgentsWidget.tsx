@@ -293,25 +293,72 @@ const ACTIVITY_TEXT = {
   idle: 'idle',
 } as const
 
-/** The status mark on the avatar, and its word. Monitoring is a hollow
- *  accent ring, no update a dashed one (the daemon's displays, Q13). */
-export function ZenStatusDot({ row, size = 10 }: { row: ZenAgentRow; size?: number }): React.JSX.Element | null {
+/** The one state a Zen dot shows, by the app's rank (plan-agent-status-
+ *  unify-v1 Q4/S7: Zen keeps its circles, mapped to the same states):
+ *  needs you > failed > done > working > monitoring > no update > idle. */
+export type ZenDotState = 'needs-you' | 'failed' | 'done' | 'working' | 'monitoring' | 'unverifiable' | 'idle'
+
+export function zenDotState(row: Pick<ZenAgentRow, 'activity' | 'unseen'>): ZenDotState | null {
   if (row.activity === null) return null
-  const color =
-    row.activity === 'working' ? 'var(--zen-working)' : row.activity === 'needs-you' ? 'var(--zen-needs-you)' : 'transparent'
+  if (row.activity === 'needs-you') return 'needs-you'
+  if (row.unseen === 'failed') return 'failed'
+  if (row.unseen === 'done') return 'done'
+  return row.activity
+}
+
+const DOT_TITLE: Record<ZenDotState, string> = {
+  'needs-you': 'Needs you',
+  failed: 'Failed (not viewed yet)',
+  done: 'Done (not viewed yet)',
+  working: 'Working',
+  monitoring: 'Monitoring',
+  unverifiable: 'No update',
+  idle: 'Idle',
+}
+
+/** The status mark on the avatar. Circles (Zen's own look), one shape per
+ *  state: filled = needs you / working (pulsing), a ring with × = failed, a
+ *  ring with ✓ = done, a hollow accent ring = monitoring, a dashed ring = no
+ *  update, a thin muted ring = idle. */
+export function ZenStatusDot({ row, size = 10 }: { row: ZenAgentRow; size?: number }): React.JSX.Element | null {
+  const state = zenDotState(row)
+  if (state === null) return null
+  if (state === 'failed' || state === 'done') {
+    const ink = state === 'failed' ? 'var(--zen-danger)' : 'var(--zen-working)'
+    return (
+      <svg
+        role="img"
+        aria-label={DOT_TITLE[state]}
+        data-zen-status-dot={state}
+        width={size}
+        height={size}
+        viewBox="0 0 12 12"
+        style={{ display: 'inline-block', flex: 'none' }}
+      >
+        <circle cx="6" cy="6" r="5" fill="var(--zen-surface)" stroke={ink} strokeWidth="1.75" />
+        {state === 'failed' ? (
+          <path d="M4.2 4.2 L7.8 7.8 M7.8 4.2 L4.2 7.8" stroke={ink} strokeWidth="1.5" strokeLinecap="round" fill="none" />
+        ) : (
+          <path d="M3.7 6.2 L5.3 7.8 L8.4 4.4" stroke={ink} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+        )}
+      </svg>
+    )
+  }
+  const color = state === 'working' ? 'var(--zen-working)' : state === 'needs-you' ? 'var(--zen-needs-you)' : 'transparent'
   const border =
-    row.activity === 'idle'
+    state === 'idle'
       ? '1.5px solid var(--zen-text-muted)'
-      : row.activity === 'monitoring'
+      : state === 'monitoring'
         ? '2px solid var(--zen-accent)'
-        : row.activity === 'unverifiable'
+        : state === 'unverifiable'
           ? '1.5px dashed var(--zen-text-muted)'
           : '2px solid var(--zen-surface)'
   return (
     <span
-      aria-hidden
-      data-zen-status-dot={row.activity}
-      data-zen-pulse={row.activity === 'working' ? '' : undefined}
+      role="img"
+      aria-label={DOT_TITLE[state]}
+      data-zen-status-dot={state}
+      data-zen-pulse={state === 'working' ? '' : undefined}
       style={{
         display: 'inline-block',
         width: size,

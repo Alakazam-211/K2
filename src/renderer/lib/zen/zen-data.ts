@@ -68,7 +68,14 @@ import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { usePageViewStore } from '@/stores/page-view'
-import { countsUnderRoot, workspaceCounts, workspaceDisplay, type ActivityDisplay } from '@/stores/activity'
+import {
+  countsUnderRoot,
+  projectUnseenOutcome,
+  unseenOutcomeUnderRoot,
+  workspaceCounts,
+  workspaceDisplay,
+  type ActivityDisplay,
+} from '@/stores/activity'
 import { usePresenceStore, usersForWorkspace } from '@/stores/presence'
 import { useWindowFocusStore } from '@/stores/window-focus'
 import { homeRooms, type HomeRoomEntry } from '@/stores/home-rooms'
@@ -182,6 +189,10 @@ export interface ZenAgentRow {
   auth: string | null
   /** Live status; null when the server can't say (no indicator). */
   activity: ZenActivity | null
+  /** A turn this client hasn't looked at (plan-agent-status-unify-v1 Q4/S7:
+   *  Zen's circles map to the same states): `failed` or `done`, else null.
+   *  Known for the window's server and an open room only. */
+  unseen?: 'done' | 'failed' | null
   /** 0.45.2: live subagents and this turn's tool calls / shell commands,
    *  summed over the agent's busy sessions. Null when the row has no
    *  activity (not `ok`, or the server can't say). */
@@ -819,6 +830,10 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
   // An open room on another server reads its own rows; the window's server
   // reads the primary room's (below).
   let counts: ZenAgentCounts | null = onConnected ? null : roomCountsOf(roomEntry)
+  let unseen: 'done' | 'failed' | null =
+    !onConnected && roomEntry?.phase === 'open' && roomEntry.room
+      ? unseenOutcomeUnderRoot(roomEntry.room.activityView.getState(), roomEntry.room.cwd())
+      : null
   let people: ZenPerson[] = []
   let detail: string | null = status.detail ?? null
   const grokRow = grokBotIdFromAddress(row.address) !== null
@@ -839,6 +854,7 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
         const rows = primaryRoom().activityView.getState()
         activity = fromDisplay(workspaceDisplay(rows, { projectId: ws.id, path: ws.path }))
         counts = workspaceCounts(rows, { projectId: ws.id, path: ws.path })
+        unseen = projectUnseenOutcome(rows, ws.id)
         const presence = usePresenceStore.getState()
         const self = host.activeHost === 'local' ? 'owner' : host.activeHost.username || 'owner'
         people = presence.supported
@@ -898,6 +914,7 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
     reach: onConnected ? (host.connectionStatus === 'connected' ? 'live' : 'unknown') : (entry?.reach ?? 'unknown'),
     auth: onConnected ? 'ok' : (entry?.auth ?? null),
     activity,
+    unseen: state === 'ok' && activity !== null ? unseen : null,
     counts: state === 'ok' && activity !== null ? counts : null,
     working: activity === 'working',
     needsYou: activity === 'needs-you',

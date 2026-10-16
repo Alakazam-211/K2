@@ -14,6 +14,7 @@ import {
   percentUsed,
   visibleHarnesses,
 } from '@/lib/subscription-usage'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 /**
  * Subscription allowance. Sibling of TimerButton — not inside it, so the
@@ -42,6 +43,8 @@ export default function UsageButton(): React.JSX.Element {
   const [refreshing, setRefreshing] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   const rootRef = useRef<HTMLDivElement>(null)
+  const popoverRef = useRef<HTMLDivElement>(null)
+  useBrowserOverlay({ active: open, ref: popoverRef, kind: 'menu' })
 
   // Load the shown server's entry when it has none: on mount, when the
   // focused room changes, after a top-switcher change dropped the window's
@@ -134,6 +137,7 @@ export default function UsageButton(): React.JSX.Element {
       </button>
       {open && (
         <div
+          ref={popoverRef}
           role="menu"
           data-testid="subscription-usage-menu"
           className="absolute right-0 top-full z-50 mt-1 min-w-[240px] border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"

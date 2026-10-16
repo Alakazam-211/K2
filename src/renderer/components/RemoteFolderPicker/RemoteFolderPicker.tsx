@@ -6,6 +6,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { useServerSupports, featureMinVersion } from '@/lib/server-capabilities'
 import { primaryScope } from '@/kessel/server-scope'
 import { HOST_PICKER_Z } from '@/lib/overlay-layers'
+import { BrowserOverlayClaim } from '@/lib/browser-overlay'
 
 // A lightweight, self-contained directory browser over the REMOTE daemon's
 // filesystem. Deliberately does NOT reuse the full FileTree component (too
@@ -188,6 +189,7 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
       style={{ zIndex: HOST_PICKER_Z, backgroundColor: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(4px)' }}
       onClick={cancel}
     >
+      <BrowserOverlayClaim />
       <div
         className="w-[560px] max-h-[80vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}

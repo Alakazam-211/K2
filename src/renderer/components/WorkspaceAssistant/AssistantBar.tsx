@@ -22,6 +22,7 @@ import { useToastStore } from '../../stores/toast'
 import { usePresetsStore } from '../../stores/presets'
 import { resolveAgentCommand } from '@/lib/agent-resolve'
 import { primaryScope } from '@/kessel/server-scope'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 interface ToolCall {
   tool: string
@@ -695,6 +696,7 @@ export default function AssistantBar(): React.JSX.Element | null {
 
   const [message, setMessage] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const assistantBarRef = useRef<HTMLDivElement>(null)
   const resultTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Abort flag: when set, the in-flight response is discarded on arrival
   const abortedRef = useRef(false)
@@ -935,6 +937,14 @@ export default function AssistantBar(): React.JSX.Element | null {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [interactionLog.length, isLoading])
 
+  // The bar floats over the bottom of the window (and any Browser page).
+  useBrowserOverlay({
+    active: isOpen,
+    ref: assistantBarRef,
+    kind: 'popover',
+    watch: isDownloading ? 'downloading' : modelLoaded ? 'console' : 'setup',
+  })
+
   if (!isOpen) return null
 
   // Shared bar style
@@ -949,6 +959,7 @@ export default function AssistantBar(): React.JSX.Element | null {
   if (isDownloading) {
     return (
       <div
+        ref={assistantBarRef}
         className="fixed bottom-0 left-0 right-0 z-[900] flex items-center"
         style={{ height: '48px', ...barStyle }}
       >
@@ -984,7 +995,10 @@ export default function AssistantBar(): React.JSX.Element | null {
           }
         }}
         tabIndex={-1}
-        ref={(el) => el?.focus()}
+        ref={(el) => {
+          assistantBarRef.current = el
+          el?.focus()
+        }}
       >
         <div className="flex items-center gap-3 px-4 w-full">
           <span className="text-[11px] text-[var(--color-text-muted)] flex-shrink-0 tracking-wide">
@@ -1017,7 +1031,7 @@ export default function AssistantBar(): React.JSX.Element | null {
 
   // Main console UI
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-[900]" style={barStyle}>
+    <div ref={assistantBarRef} className="fixed bottom-0 left-0 right-0 z-[900]" style={barStyle}>
       <div className="absolute top-1.5 right-2 z-10">
         <AssistantCloseButton onClose={handleClose} />
       </div>

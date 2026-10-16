@@ -1,6 +1,7 @@
 import React from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 export function SettingRow({
   label,
@@ -166,6 +167,9 @@ export function SettingDropdown({
   } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  // Used outside Settings too (Presets bar, dialogs): claim the open list
+  // over a native Browser page.
+  useBrowserOverlay({ active: isOpen && menuBox !== null, ref: menuRef, kind: 'menu', watch: menuBox })
 
   const match = options.find((o) => o.value === value)
   const selected = match ?? (placeholder !== undefined ? undefined : options[0])

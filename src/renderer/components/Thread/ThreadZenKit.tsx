@@ -463,12 +463,17 @@ export function ThreadSendButton({
   onClick,
   label = 'Send',
   title = 'Send (Enter)',
+  size = 32,
 }: {
   canSend: boolean
   onClick: () => void
   label?: string
   title?: string
+  /** Its square side (px); the desktop Thread's box uses 26. */
+  size?: number
 }): JSX.Element {
+  // The square Style cut keeps the proportion of 5px at 32px (to 0.5px).
+  const cut = Math.round(((size * CHAMFER_CUT.send) / 32) * 2) / 2
   return (
     <button
       type="button"
@@ -480,13 +485,13 @@ export function ThreadSendButton({
       onClick={onClick}
       className="flex flex-shrink-0 items-center justify-center cursor-pointer disabled:cursor-default"
       style={{
-        width: 32,
-        height: 32,
+        width: size,
+        height: size,
         borderRadius: 999,
         background: canSend ? 'var(--zen-accent)' : 'var(--zen-surface)',
         color: canSend ? 'var(--zen-accent-text)' : 'var(--zen-text-muted)',
         transition: 'background-color 140ms ease',
-        ...chamferVars({ cut: CHAMFER_CUT.send, fill: canSend ? 'var(--zen-accent)' : 'var(--zen-surface)' }),
+        ...chamferVars({ cut, fill: canSend ? 'var(--zen-accent)' : 'var(--zen-surface)' }),
       }}
     >
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

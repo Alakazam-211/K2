@@ -48,6 +48,7 @@ import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import ProjectsPage from './ProjectsPage'
 import { ProjectNavCollapseButton } from './ProjectNav'
+import { NAV_TOGGLE_BOX } from '@/components/Layout/drawer-toggles'
 import { usePageViewStore } from '@/stores/page-view'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import type { ProjectGroup, ProjectGroupShow } from './projects-api'
@@ -151,6 +152,16 @@ describe('Projects chat drawer toggle', () => {
     expect(row.firstElementChild).toBe(hide)
     expect(row.lastElementChild!.textContent).toContain('Send')
     expect(row.className).toContain('justify-between')
+    // Same 32×32 box as the nav's » / « by New Project; Send stretches to it.
+    const navToggle = must(document.querySelector('[data-projects-nav-toggle]') as HTMLElement | null, 'nav toggle')
+    for (const cls of NAV_TOGGLE_BOX.split(' ')) {
+      expect([cls, hide.classList.contains(cls)]).toEqual([cls, true])
+      expect([cls, navToggle.classList.contains(cls)]).toEqual([cls, true])
+    }
+    expect(NAV_TOGGLE_BOX).toBe('h-8 w-8')
+    expect(hide.getAttribute('data-size')).toBe('square')
+    expect(hide.classList.contains('h-full')).toBe(false)
+    expect(row.className).toContain('items-stretch')
     // Not in the chat header any more.
     const header = must(screen.getByText('Project chat').parentElement, 'chat header')
     expect(header.querySelector('[data-drawer-tabbar-toggle]')).toBeNull()

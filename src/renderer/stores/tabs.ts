@@ -997,7 +997,13 @@ export interface TabsState {
   extraGroups: Array<{ tabs: Tab[], activeTabId: string | null }>
   activeGroupIndex: number  // which group receives new tabs by default
 
-  splitTerminalArea: (cwd: string) => void    // add a column (max 3)
+  /** Add a column (max 3). `fromGroup` is the column whose tab bar holds the
+   *  split button (default: the rightmost). On that column's pinned Chat/Inbox
+   *  tab the new column starts EMPTY; on any other tab that tab MOVES into
+   *  the new column and the source column shows its pinned tab. Without a
+   *  pinned tab and only one tab to move, the new column gets a fresh
+   *  terminal (the pre-0.46 behaviour). */
+  splitTerminalArea: (cwd: string, fromGroup?: number) => void
   unsplitTerminalArea: () => void              // remove rightmost column
   setActiveGroup: (index: number) => void
   addTabToGroup: (groupIndex: number, cwd: string, options?: AddTerminalTabOptions) => string
@@ -1351,6 +1357,17 @@ function getFirstLeaf(tree: MosaicNode<string> | null): string | null {
   if (tree === null) return null
   if (typeof tree === 'string') return tree
   return getFirstLeaf(tree.first)
+}
+
+/** The pinned agent tab of a column: its Chat tab, else its first pinned
+ *  system tab (Inbox / Work Board), else null. */
+export function pinnedTabOf(tabs: Tab[]): Tab | null {
+  const system = tabs.filter((t) => t.isSystemAgent)
+  const chat = system.find((t) => {
+    const item = Array.from(t.paneGroups.values())[0]?.items[0]
+    return item?.type === 'agent' && (item.data as AgentItemData).section === 'chat'
+  })
+  return chat ?? system[0] ?? null
 }
 
 /** Count leaf nodes (panes) in a mosaic tree */
@@ -5010,28 +5027,68 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
 
     // ── Tab Groups ──────────────────────────────────────────────────────
 
-    splitTerminalArea: (cwd: string) => {
+    splitTerminalArea: (cwd: string, fromGroup?: number) => {
       const state = get()
       if (state.splitCount >= 3) return
 
-      // Create a new group with a fresh terminal tab
-      tabCounter++
-      const tabId = crypto.randomUUID()
-      const pgId = crypto.randomUUID()
-      const pg = makeTerminalPaneGroup(pgId, cwd)
-      const tab: Tab = {
-        id: tabId,
-        title: `Terminal ${tabCounter}`,
-        mosaicTree: pgId,
-        paneGroups: new Map([[pgId, pg]])
-      }
+      const newGroup = state.splitCount
+      const sourceGroup = fromGroup !== undefined && fromGroup >= 0 && fromGroup < state.splitCount
+        ? fromGroup
+        : state.splitCount - 1
+      const source = state.getGroupTabs(sourceGroup)
+      const current = source.tabs.find((t) => t.id === source.activeTabId) ?? null
+      const pinned = pinnedTabOf(source.tabs)
 
-      const newGroups = [...state.extraGroups, { tabs: [tab], activeTabId: tabId }]
-      set({
-        splitCount: state.splitCount + 1,
-        extraGroups: newGroups,
-        activeGroupIndex: state.splitCount  // focus the new group
-      })
+      if (current?.isSystemAgent) {
+        // Case 1 — on the pinned tab: the new column starts empty (its
+        // empty state tells the user to drag a tab there).
+        set({
+          splitCount: state.splitCount + 1,
+          extraGroups: [...state.extraGroups, { tabs: [], activeTabId: null }],
+          activeGroupIndex: newGroup,
+        })
+      } else if (current && (pinned || source.tabs.length > 1)) {
+        // Case 2 — move (not copy) the tab being viewed into the new column;
+        // the source column shows its pinned tab. Same move path as a tab
+        // drag, so the PTY is untouched.
+        set({
+          splitCount: state.splitCount + 1,
+          extraGroups: [...state.extraGroups, { tabs: [], activeTabId: null }],
+        })
+        get().moveTabToGroup(sourceGroup, newGroup, current.id)
+        if (pinned) {
+          if (sourceGroup === 0) {
+            persistGroup0Selection(get(), pinned.id)
+            set({ activeTabId: pinned.id })
+          } else {
+            set((s) => {
+              const groups = [...s.extraGroups]
+              const gi = sourceGroup - 1
+              if (groups[gi]) groups[gi] = { ...groups[gi], activeTabId: pinned.id }
+              return { extraGroups: groups }
+            })
+          }
+        }
+        set({ activeGroupIndex: newGroup })
+      } else {
+        // No pinned tab and nothing to spare in the source column: a fresh
+        // terminal in the new column (never leave the source empty).
+        tabCounter++
+        const tabId = crypto.randomUUID()
+        const pgId = crypto.randomUUID()
+        const pg = makeTerminalPaneGroup(pgId, cwd)
+        const tab: Tab = {
+          id: tabId,
+          title: `Terminal ${tabCounter}`,
+          mosaicTree: pgId,
+          paneGroups: new Map([[pgId, pg]])
+        }
+        set({
+          splitCount: state.splitCount + 1,
+          extraGroups: [...state.extraGroups, { tabs: [tab], activeTabId: tabId }],
+          activeGroupIndex: newGroup  // focus the new group
+        })
+      }
       // 0.40.48: a split must HOLD against a remote host — save immediately
       // instead of riding the 1s debounce, so a competing TabOrderChanged
       // can't refetch the pre-split layout while the save is still queued

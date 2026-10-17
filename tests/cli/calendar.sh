@@ -28,11 +28,14 @@ help="$("$K2" calendar --help)"
 for want in 'k2 calendar list' 'events' 'freebusy' 'wait' 'create' 'update' 'delete' \
             'existing read' 'draft mail grants now also cover' 'NEVER any email' \
             "'send' level" 'capability_missing' 'k2 hostmail calendar enable' \
-            'LINKED INBOXES' 'Microsoft 365' 'k2 mail link calendars on' 'scope_not_granted' \
+            'LINKED INBOXES' 'Microsoft 365' 'Google Calendar API' 'sendUpdates=none' \
+            'k2 mail link calendars on' 'scope_not_granted' \
             '/cli/mail/calendar/' 'BEGIN/END CALENDAR NOTES' 'SHARED CALENDARS' \
             '<owner>/<id>' 'share_rights' 'editor share'; do
   printf '%s' "$help" | grep -qF -- "$want" || fail "calendar --help must mention '$want'"
 done
+printf '%s' "$help" | grep -qF -- 'not_built' && fail "calendar --help must not say Google calendars are not built (MCS4)"
+"$K2" mail link --help | grep -qF -- '--features calendar' || fail "mail link --help must teach calendar-only Google links"
 [ "$("$K2" cal --help)" = "$help" ] || fail "k2 cal --help must equal k2 calendar --help"
 [ "$("$K2" calendar events --help)" = "$help" ] || fail "verb --help prints the page"
 "$K2" help calendar | grep -q 'k2 calendar' || fail "k2 help calendar"

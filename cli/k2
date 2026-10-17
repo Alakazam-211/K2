@@ -25638,14 +25638,14 @@ cmd_schema() {
     {
       "name": "calendar list",
       "usage": "k2 calendar list [<address>] [--json]",
-      "description": "Calendars of an inbox you hold a grant on (alias k2 cal): a HOSTED inbox, or a LINKED Microsoft 365 / Outlook account over Microsoft Graph (linked with calendar consent; source microsoft). Needs read on the inbox via k2 mail access (existing read/draft mail grants also cover calendars). No address = the one hosted inbox your workspace owns. A linked inbox that can't do this (Google until a later K2, an IMAP app-password link, a Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. GET /cli/mail/calendar/list.",
+      "description": "Calendars of an inbox you hold a grant on (alias k2 cal): a HOSTED inbox, or a LINKED Microsoft 365 / Outlook account over Microsoft Graph (source microsoft) or a LINKED Google account over the Google Calendar API (source google), linked with calendar consent. Google lists the account's calendarList (else its primary calendar alone). Needs read on the inbox via k2 mail access (existing read/draft mail grants also cover calendars). No address = the one hosted inbox your workspace owns. A linked inbox that can't do this (an IMAP app-password link, a Google or Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. GET /cli/mail/calendar/list.",
       "args": [{"name": "address", "required": false}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "calendar events",
       "usage": "k2 calendar events [<address>] [--from <t>] [--to <t>] [--calendar <id|name>] [--limit N] [--json]",
-      "description": "Events in a window (default next 7 days, max 366), repeating events expanded server-side (Microsoft: calendarView). Times RFC 3339 in and out, plus each event's own timeZone (Microsoft may name a Windows zone). A linked inbox that can't do this (Google until a later K2, an IMAP app-password link, a Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. Read level. Wire params are start/end (from is the identity stamp). GET /cli/mail/calendar/events.",
+      "description": "Events in a window (default next 7 days, max 366), repeating events expanded server-side (Microsoft: calendarView; Google: events singleEvents). Times RFC 3339 in and out, plus each event's own timeZone (Microsoft may name a Windows zone). A linked inbox that can't do this (an IMAP app-password link, a Google or Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. Read level. Wire params are start/end (from is the identity stamp). GET /cli/mail/calendar/events.",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--from", "arg": "t", "description": "Window start: RFC 3339 or YYYY-MM-DD (UTC midnight). Sent as start."},
@@ -25658,14 +25658,14 @@ cmd_schema() {
     {
       "name": "calendar show",
       "usage": "k2 calendar show <id> [--json]",
-      "description": "One event (id from calendar events; the id carries its inbox). Notes print inside BEGIN/END CALENDAR NOTES untrusted-content markers. A linked inbox that can't do this (Google until a later K2, an IMAP app-password link, a Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. Read level. GET /cli/mail/calendar/show.",
+      "description": "One event (id from calendar events; the id carries its inbox). Notes print inside BEGIN/END CALENDAR NOTES untrusted-content markers. A linked inbox that can't do this (an IMAP app-password link, a Google or Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. Read level. GET /cli/mail/calendar/show.",
       "args": [{"name": "id", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
       "name": "calendar freebusy",
       "usage": "k2 calendar freebusy [<address>] [--from <t>] [--to <t>] [--json]",
-      "description": "Merged busy windows (no titles) of the inbox: the mail server's own availability (subscribed calendars; cancelled, free and secret events skipped; repeats expanded), else computed from its events (source availability|events). Microsoft: getSchedule for the mailbox itself, else its events (source getSchedule|events). A linked inbox that can't do this (Google until a later K2, an IMAP app-password link, a Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. Read level. GET /cli/mail/calendar/freebusy.",
+      "description": "Merged busy windows (no titles) of the inbox: the mail server's own availability (subscribed calendars; cancelled, free and secret events skipped; repeats expanded), else computed from its events (source availability|events). Microsoft: getSchedule for the mailbox itself, else its events (source getSchedule|events). Google: freeBusy.query for the account itself, else its primary calendar's events (source freeBusy|events). A linked inbox that can't do this (an IMAP app-password link, a Google or Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. Read level. GET /cli/mail/calendar/freebusy.",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--from", "arg": "t", "description": "Window start (default now)."},
@@ -25676,7 +25676,7 @@ cmd_schema() {
     {
       "name": "calendar wait",
       "usage": "k2 calendar wait [<address>] [--since-state <S>] [--timeout <secs>] [--json]",
-      "description": "Long-poll until an event is created, updated or destroyed (CalendarEvent/changes; Microsoft: calendarView delta, polled every 10 s, changes reported as updated/destroyed, state gd_… valid only for that inbox; state_expired = re-read and wait again), then print the ids and the new state. A linked inbox that can't do this (Google until a later K2, an IMAP app-password link, a Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. Pass --since-state on the next call. Max 900 s per call, default 300; timeout = nothing on stdout, exit 2, state in the stderr hint. Read level. GET /cli/mail/calendar/wait.",
+      "description": "Long-poll until an event is created, updated or destroyed (CalendarEvent/changes; Microsoft: calendarView delta, polled every 10 s, changes reported as updated/destroyed, state gd_… valid only for that inbox; Google: syncToken on the primary calendar, polled every 10 s, state gs_…; state_expired = re-read and wait again), then print the ids and the new state. A linked inbox that can't do this (an IMAP app-password link, a Google or Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. Pass --since-state on the next call. Max 900 s per call, default 300; timeout = nothing on stdout, exit 2, state in the stderr hint. Read level. GET /cli/mail/calendar/wait.",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--since-state", "arg": "S", "description": "Changes after this state (default: now)."},
@@ -25687,7 +25687,7 @@ cmd_schema() {
     {
       "name": "calendar create",
       "usage": "k2 calendar create [<address>] --title <t> --start <t> --end <t> [--tz <zone>] [--location <l>] [--notes <text>] [--calendar <id|name>] [--json]",
-      "description": "Create an event in an existing (default: the inbox's default) calendar. Draft level; never sends email (sendSchedulingMessages false). Participants other than the inbox owner, or email alarms, need send level: exit 3. Microsoft: never writes attendees (Exchange would send a meeting request), keeps one popup reminder, --tz must be an IANA name. A linked inbox that can't do this (Google until a later K2, an IMAP app-password link, a Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. POST /cli/mail/calendar/create.",
+      "description": "Create an event in an existing (default: the inbox's default) calendar. Draft level; never sends email (sendSchedulingMessages false). Participants other than the inbox owner, or email alarms, need send level: exit 3. Microsoft and Google: never writes attendees (Exchange would send a meeting request; Google adds events to Google attendees' calendars even without email) and every Google write says sendUpdates=none; Microsoft keeps one popup reminder, Google up to 5; --tz must be an IANA name. Google --calendar: an id from calendar list (primary = the account's own). A linked inbox that can't do this (an IMAP app-password link, a Google or Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. POST /cli/mail/calendar/create.",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--title", "arg": "t", "description": "Event title (required)."},
@@ -25703,7 +25703,7 @@ cmd_schema() {
     {
       "name": "calendar update",
       "usage": "k2 calendar update <id> [--title <t>] [--start <t>] [--end <t>] [--tz <zone>] [--location <l>] [--notes <text>] [--json]",
-      "description": "Change an event. Draft level; never sends email. Refused (exit 3, invites_need_send_level) when the STORED event has participants other than the inbox owner (Microsoft: or was organized by someone else). Keeps the event's own IANA zone unless --tz is given. A linked inbox that can't do this (Google until a later K2, an IMAP app-password link, a Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. POST /cli/mail/calendar/update.",
+      "description": "Change an event. Draft level; never sends email. Refused (exit 3, invites_need_send_level) when the STORED event has participants other than the inbox owner (Microsoft/Google: or was organized by someone else). Keeps the event's own IANA zone unless --tz is given. A linked inbox that can't do this (an IMAP app-password link, a Google or Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. POST /cli/mail/calendar/update.",
       "args": [{"name": "id", "required": true}],
       "flags": [
         {"name": "--title", "arg": "t", "description": "New title."},
@@ -25718,7 +25718,7 @@ cmd_schema() {
     {
       "name": "calendar delete",
       "usage": "k2 calendar delete <id> [--json]",
-      "description": "Delete an event. Draft level; never sends a cancellation. Refused (exit 3) when the stored event has participants other than the inbox owner (they would get no CANCEL; Microsoft: or was organized by someone else). A linked inbox that can't do this (Google until a later K2, an IMAP app-password link, a Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. POST /cli/mail/calendar/delete.",
+      "description": "Delete an event. Draft level; never sends a cancellation. Refused (exit 3) when the stored event has participants other than the inbox owner (they would get no CANCEL; Microsoft/Google: or was organized by someone else). A linked inbox that can't do this (an IMAP app-password link, a Google or Microsoft link consented for mail only, or the owner's linked-calendars switch off) exits 3 with capability_missing {cap, reason, fix}. POST /cli/mail/calendar/delete.",
       "args": [{"name": "id", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
@@ -25811,12 +25811,12 @@ cmd_schema() {
     },
     {
       "name": "mail link",
-      "usage": "k2 mail link add <address> (--host <imap-host> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] [--smtp-host <h>] [--smtp-port <n>] [--smtp-tls implicit-tls|starttls] | --provider gmail|microsoft [--features mail|mail,calendar]) --workspace <ws> | upgrade <address> --features calendar|mail,calendar | calendars [on|off] | list | remove <address>",
+      "usage": "k2 mail link add <address> (--host <imap-host> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] [--smtp-host <h>] [--smtp-port <n>] [--smtp-tls implicit-tls|starttls] | --provider gmail|microsoft [--features mail|calendar|mail,calendar]) --workspace <ws> | upgrade <address> --features calendar|mail,calendar | calendars [on|off] | list | remove <address>",
       "description": "Connect the user's OWN external email accounts as LINKED assistant inboxes (was 'mail external') — OWNER verbs (agent tokens exit 3). Two add paths: (1) generic IMAP with an app-password (Gmail app-password, Fastmail, company IMAP), or (2) OAuth with --provider gmail|microsoft (NO password): Gmail links over IMAP-XOAUTH2 via the system browser + a 127.0.0.1 loopback (do it ON the daemon's machine; a remote daemon returns a 'link on the daemon's box' teaching error), Microsoft over the Microsoft Graph API via a device code you enter in any browser. The OAuth flow runs SERVER-SIDE (the daemon polls/exchanges); codes and tokens NEVER reach the CLI and are vaulted daemon-side. Each inbox binds to ONE PRIMARY workspace whose agents read it (via messages/read/wait) and save reply drafts via 'k2 mail draft'. Drafting is always on; sending is OFF by default — raise a workspace to level 'send' to let its agents send (app-password and Gmail-OAuth inboxes over SMTP, Microsoft 365 over Microsoft Graph), governed by the workspace's Email sending mode (off / approval / on). Share with more workspaces via 'k2 mail access grant'. The password/tokens are vaulted daemon-side, never in the DB, never in output, never on argv. 'calendars [on|off]' shows or sets the per-server switch for calendars on LINKED inboxes (default on; off = every linked calendar verb exits 3 capability_missing/owner_disabled; hosted calendars keep k2 hostmail calendar enable|disable). GET|POST /cli/mail/link/calendars {enabled}.",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--provider", "arg": "p", "description": "OAuth link: gmail (IMAP-XOAUTH2, system-browser loopback) | microsoft (Graph, device code). No --host/password; the daemon runs the flow and the CLI long-polls to connected (add). The signed-in account must be <address> (else account_mismatch, nothing stored)."},
-        {"name": "--features", "arg": "f", "description": "OAuth: what to consent for — mail (default) or mail,calendar (add); what to ADD to an existing OAuth link, re-consented in place keeping its grants and ids (upgrade)."},
+        {"name": "--features", "arg": "f", "description": "OAuth: what to consent for — mail (default), mail,calendar, or calendar (Google only: a calendar-only link with no Gmail access, so no restricted scope) (add); what to ADD to an existing OAuth link, re-consented in place keeping its grants and ids (upgrade)."},
         {"name": "--host", "arg": "h", "description": "IMAP server (generic-IMAP add)."},
         {"name": "--workspace", "arg": "ws", "description": "The PRIMARY workspace to bind (add)."},
         {"name": "--pass-stdin", "arg": null, "description": "Read the app-password from stdin (add)."},
@@ -29247,7 +29247,7 @@ AGENT SURFACE
   k2 mail send / reply / outbox
   k2 mail draft    linked Gmail Drafts (always on for draft)
   k2 calendar      calendars of a HOSTED inbox or a LINKED Microsoft 365
-                   account (alias k2 cal; other linked inboxes exit 3
+                   or Google account (alias k2 cal; other linked inboxes exit 3
                    capability_missing with the fix). Existing
                    read/draft mail grants now also cover calendars:
                    read = list/events/show/freebusy/wait; draft =
@@ -40531,7 +40531,7 @@ elif verb == "link_calendars":
         print("Calendars on linked inboxes: %s%s" % (
             state, "" if not want else (" (changed)" if d.get("changed") else " (unchanged)")))
         if state == "on":
-            print("Agents with a grant can use a linked Microsoft 365 account's calendar (k2 calendar).")
+            print("Agents with a grant can use a linked Microsoft 365 or Google account's calendar (k2 calendar).")
         else:
             print("Every linked calendar verb answers capability_missing (owner_disabled). Turn on: k2 mail link calendars on")
 
@@ -46439,7 +46439,8 @@ cmd_hostmail_dmarc_report_to() {
 # ── k2 calendar / k2 cal (prd-hostmail-calendars-v1 S3) ──────────────
 # The agent calendar CLI: the calendars of an inbox you hold a
 # `k2 mail access` grant on — hosted (Stalwart), or a linked Microsoft
-# 365 account over Graph (MCS3); other linked inboxes exit 3 with
+# 365 account over Graph (MCS3) or Google account over the Google Calendar
+# API (MCS4); other linked inboxes exit 3 with
 # capability_missing {cap, reason, fix}. read = list/events/show/freebusy/wait;
 # draft = create/update/delete (never any email: no invites, no email
 # alarms — participant events need the 'send' level, a later slice).
@@ -46811,7 +46812,7 @@ cmd_calendar() {
 cmd_help_calendar() {
     cat <<'EOF'
 k2 calendar (alias: k2 cal) — the calendars of an inbox you can use: a
-HOSTED inbox, or a LINKED Microsoft 365 / Outlook account
+HOSTED inbox, or a LINKED Microsoft 365 / Outlook or Google account
 
 Access is your existing `k2 mail access` grant on the inbox — existing read
 and draft mail grants now also cover that inbox's calendars:
@@ -46829,12 +46830,20 @@ LINKED INBOXES
   someone else organized, needs the 'send' level (exit 3). One popup
   reminder per event; --tz must be an IANA zone. Free/busy covers the
   mailbox itself.
+  A Google account your human linked WITH calendar consent (with mail, or
+  calendar-only) works the same way over the Google Calendar API ("source":
+  "google"): list = its calendar list (ids are Google calendar ids; the
+  account's own is its address, or say --calendar primary), events expand
+  repeats, writes never carry attendees and say sendUpdates=none (Google
+  would add the event to Google attendees' calendars), an event with
+  attendees or organised elsewhere needs 'send' (exit 3). Up to 5 popup
+  reminders. Free/busy = freeBusy for the account itself (else its events);
+  wait follows the primary calendar's sync token (state gs_…).
   Any other linked inbox exits 3 with capability_missing {cap, reason, fix}:
     scope_not_granted    linked for mail only — your human runs the fix
                          (k2 mail link upgrade <address> --features calendar)
     owner_disabled       your human turned linked calendars off
                          (k2 mail link calendars on)
-    not_built            Google calendars arrive in a later K2 version
     backend_unsupported  an IMAP app-password link has no calendar API
   `k2 mail capabilities <address>` shows the same before you try.
 
@@ -47595,8 +47604,13 @@ The account that signs in must BE the address you typed — otherwise the
 link fails with account_mismatch and nothing is stored. --features picks
 what to consent for (mail, or mail,calendar); add calendar to an existing
 link later with `k2 mail link upgrade` (same inbox, grants and ids).
-A Microsoft link with calendar consent gives its agents `k2 calendar`
-(Microsoft Graph); `k2 mail link calendars on|off` is the per-server switch
+A Google link may be calendar-only (--features calendar): no Gmail access,
+so none of Google's restricted mail scope — agents get its calendar and
+mail verbs answer capability_missing until `k2 mail link upgrade <address>
+--features mail`.
+A Google or Microsoft link with calendar consent gives its agents
+`k2 calendar` (Google Calendar API / Microsoft Graph); drafts only, nobody
+is emailed. `k2 mail link calendars on|off` is the per-server switch
 for calendars on linked inboxes (default on; hosted calendars keep
 `k2 hostmail calendar enable|disable`).
 Removing a Google link revokes K2's access at Google; Microsoft has no
@@ -47616,7 +47630,7 @@ USAGE
                    [--smtp-host <h>] [--smtp-port <n>]
                    [--smtp-tls implicit-tls|starttls] [--json]
   k2 mail link add <address> --provider gmail|microsoft --workspace <ws>
-                   [--features mail|mail,calendar] [--json]
+                   [--features mail|calendar|mail,calendar] [--json]
   k2 mail link upgrade <address> --features calendar|mail,calendar [--json]
   k2 mail link calendars [on|off] [--json]
   k2 mail link list [--json]
@@ -47627,8 +47641,9 @@ FLAGS (OAuth add / upgrade)
                          microsoft (Microsoft Graph, device code). No --host
                          or password — the daemon runs the OAuth flow.
   --workspace <ws>       The PRIMARY workspace this inbox binds to (add)
-  --features <f>         mail (default) or mail,calendar. upgrade: what to
-                         ADD to an existing OAuth link, re-consented in place
+  --features <f>         mail (default), mail,calendar, or calendar (Google
+                         only: calendar-only, no Gmail access). upgrade: what
+                         to ADD to an existing OAuth link, re-consented in place
 
 FLAGS (add)
   --host <h>             The IMAP server, e.g. imap.gmail.com
@@ -47656,6 +47671,8 @@ EXAMPLES
   k2 mail link add me@company.com --provider microsoft --workspace acme-ops \
       --features mail,calendar
   k2 mail link upgrade me@company.com --features calendar
+  k2 mail link add organiser@gmail.com --provider gmail --workspace meet \
+      --features calendar
   k2 mail link calendars off
 EOF
 }
@@ -47718,6 +47735,17 @@ MICROSOFT APP REGISTRATION (Entra → App registrations → New)
   API permissions     delegated Microsoft Graph: openid, profile, email,
                       offline_access, User.Read, Mail.ReadWrite, Mail.Send,
                       Calendars.ReadWrite
+
+GOOGLE APP (Google Cloud console → APIs & Services)
+  Enable              Gmail API (mail links) and Google Calendar API
+  Client              OAuth client ID, type Desktop app (loopback redirect)
+  Consent screen      scopes openid, email, https://mail.google.com/
+                      (restricted: CASA to publish externally), and
+                      .../auth/calendar.events, .../auth/calendar.calendarlist
+                      .readonly, .../auth/calendar.freebusy (sensitive).
+                      In Testing mode only listed test users can link and
+                      refresh tokens expire after 7 days; an Internal app
+                      (Workspace) needs no verification.
 
 EXAMPLES
   k2 mail oauth-config show

@@ -207,7 +207,7 @@ rewrite.
 fn calendar_skill_section(heading: &str) -> String {
     format!(
         r#"{heading} Calendar (k2 calendar / k2 cal)
-The calendars of an inbox you hold a grant on: HOSTED, or a LINKED Microsoft 365 account (over Microsoft Graph, same verbs and ids; draft writes never put attendees on the event). Access is your `k2 mail access` grant — existing read and draft mail grants now also cover calendars: read = read calendars, draft = write events WITHOUT email (never invites, never email alarms). An event with participants other than the inbox owner needs the 'send' level: create/update/delete of one exits 3 (`invites_need_send_level`) — ask your human. No address = the one hosted inbox your workspace owns. A linked inbox that can't do calendars (Google for now, an IMAP app-password link, a Microsoft link without calendar consent, or the owner's switch off) exits 3 `capability_missing` with `{{cap, reason, fix}}` — the fix is your human's verb; `k2 mail capabilities <address>` shows it up front. Times are RFC 3339.
+The calendars of an inbox you hold a grant on: HOSTED, or a LINKED Microsoft 365 account (over Microsoft Graph) or Google account (over the Google Calendar API, including calendar-only Google links) — same verbs and ids; draft writes never put attendees on the event and never email anyone. Access is your `k2 mail access` grant — existing read and draft mail grants now also cover calendars: read = read calendars, draft = write events WITHOUT email (never invites, never email alarms). An event with participants other than the inbox owner needs the 'send' level: create/update/delete of one exits 3 (`invites_need_send_level`) — ask your human. No address = the one hosted inbox your workspace owns. A linked inbox that can't do calendars (an IMAP app-password link, a Google or Microsoft link without calendar consent, or the owner's switch off) exits 3 `capability_missing` with `{{cap, reason, fix}}` — the fix is your human's verb; `k2 mail capabilities <address>` shows it up front. Times are RFC 3339.
 ```
 k2 calendar list [<address>]                               # calendars (default marked)
 k2 calendar events [<address>] --from <t> --to <t>         # window (default next 7 days); repeats expanded
@@ -1922,6 +1922,7 @@ mod tests {
                 "Calendars shared TO an inbox you hold a grant on show up too",
                 "share_rights",
                 "LINKED Microsoft 365 account",
+                "Google Calendar API",
                 "capability_missing",
             ] {
                 assert!(body.contains(want), "{generator} must contain {want:?}");

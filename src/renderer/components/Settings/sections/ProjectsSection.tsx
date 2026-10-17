@@ -2517,101 +2517,6 @@ export function AgentsManageGardensToggle({
   )
 }
 
-// Per-workspace agent-send mode (`projects.mail_agent_send`): may this
-// workspace's agents SEND email, from hosted AND linked inboxes. Every OS
-// (linked sends run on macOS too). The daemon owns the value: read via
-// GET /cli/mail/config?workspace=, written via POST /cli/mail/config/set
-// `{workspace, agentSend}` (Admin floor; the agent's own session is
-// refused server-side). Same switch as `k2 mail sending <ws> <mode>`.
-// Not on the projects row, so no fetchProjects() here.
-type MailAgentSendMode = 'off' | 'approval' | 'on'
-
-function MailAgentSendControl({
-  project,
-}: {
-  project: ProjectWithWorkspaces
-}): React.JSX.Element {
-  const [mode, setMode] = useState<MailAgentSendMode | null>(null)
-  const [inherited, setInherited] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    daemonCliGet<{
-      workspace?: { agentSend?: { effective?: string; override?: string | null } }
-    }>(primaryScope(), 'mail/config', { workspace: project.path })
-      .then((d) => {
-        if (cancelled) return
-        const eff = d.workspace?.agentSend?.effective
-        setMode(eff === 'on' || eff === 'approval' ? eff : 'off')
-        setInherited(d.workspace?.agentSend?.override == null)
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [project.path])
-
-  const change = async (next: string): Promise<void> => {
-    if (busy || (next !== 'off' && next !== 'approval' && next !== 'on')) return
-    const before = mode
-    const beforeInherited = inherited
-    setBusy(true)
-    setError(null)
-    setMode(next)
-    setInherited(false)
-    try {
-      await daemonCliPost(primaryScope(), 'mail/config/set', {
-        workspace: project.path,
-        agentSend: next,
-      })
-    } catch (err) {
-      setMode(before)
-      setInherited(beforeInherited)
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="border border-[var(--color-border)] p-3" data-settings-id="projects.mail-agent-send">
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
-            Let this agent send email
-          </div>
-          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
-            Covers hosted K2 mailboxes and linked inboxes (Gmail, Outlook, IMAP). The inbox
-            level (send) picks which inbox; this picks whether the agent may send at all.
-            Approval queues hosted mailboxes only: a linked inbox needs On. Same as{' '}
-            <span className="font-mono">k2 mail sending &lt;workspace&gt; on</span>.
-            {inherited && mode !== null ? ' Using the server default.' : ''}
-          </div>
-          {error && (
-            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1">{error}</div>
-          )}
-        </div>
-        <SettingDropdown
-          ariaLabel="Agent email sending"
-          value={mode ?? ''}
-          placeholder="…"
-          disabled={busy || mode === null}
-          onChange={(v) => void change(v)}
-          options={[
-            { value: 'off', label: 'Off' },
-            { value: 'approval', label: 'Approval' },
-            { value: 'on', label: 'On' },
-          ]}
-        />
-      </div>
-    </div>
-  )
-}
-
 // Per-workspace agents-may-manage-hosted-mail. DEFAULTS OFF.
 // No global master. Writes POST /cli/mail-manage `{project, enable: 0|1}`.
 // Optimistic store patch; do not fetchProjects() on this path.
@@ -4726,4 +4631,97 @@ function CursorMigrationPanel({ projectPath }: { projectPath: string }): React.J
   )
 }
 
+// Per-workspace agent-send mode (`projects.mail_agent_send`): may this
+// workspace's agents SEND email, from hosted AND linked inboxes. Every OS
+// (linked sends run on macOS too). The daemon owns the value: read via
+// GET /cli/mail/config?workspace=, written via POST /cli/mail/config/set
+// `{workspace, agentSend}` (Admin floor; the agent's own session is
+// refused server-side). Same switch as `k2 mail sending <ws> <mode>`.
+// Not on the projects row, so no fetchProjects() here.
+type MailAgentSendMode = 'off' | 'approval' | 'on'
 
+function MailAgentSendControl({
+  project,
+}: {
+  project: ProjectWithWorkspaces
+}): React.JSX.Element {
+  const [mode, setMode] = useState<MailAgentSendMode | null>(null)
+  const [inherited, setInherited] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    daemonCliGet<{
+      workspace?: { agentSend?: { effective?: string; override?: string | null } }
+    }>(primaryScope(), 'mail/config', { workspace: project.path })
+      .then((d) => {
+        if (cancelled) return
+        const eff = d.workspace?.agentSend?.effective
+        setMode(eff === 'on' || eff === 'approval' ? eff : 'off')
+        setInherited(d.workspace?.agentSend?.override == null)
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [project.path])
+
+  const change = async (next: string): Promise<void> => {
+    if (busy || (next !== 'off' && next !== 'approval' && next !== 'on')) return
+    const before = mode
+    const beforeInherited = inherited
+    setBusy(true)
+    setError(null)
+    setMode(next)
+    setInherited(false)
+    try {
+      await daemonCliPost(primaryScope(), 'mail/config/set', {
+        workspace: project.path,
+        agentSend: next,
+      })
+    } catch (err) {
+      setMode(before)
+      setInherited(beforeInherited)
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="border border-[var(--color-border)] p-3" data-settings-id="projects.mail-agent-send">
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+            Let this agent send email
+          </div>
+          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+            Covers hosted K2 mailboxes and linked inboxes (Gmail, Outlook, IMAP). The inbox
+            level (send) picks which inbox; this picks whether the agent may send at all.
+            Approval queues hosted mailboxes only: a linked inbox needs On. Same as{' '}
+            <span className="font-mono">k2 mail sending &lt;workspace&gt; on</span>.
+            {inherited && mode !== null ? ' Using the server default.' : ''}
+          </div>
+          {error && (
+            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1">{error}</div>
+          )}
+        </div>
+        <SettingDropdown
+          ariaLabel="Agent email sending"
+          value={mode ?? ''}
+          placeholder="…"
+          disabled={busy || mode === null}
+          onChange={(v) => void change(v)}
+          options={[
+            { value: 'off', label: 'Off' },
+            { value: 'approval', label: 'Approval' },
+            { value: 'on', label: 'On' },
+          ]}
+        />
+      </div>
+    </div>
+  )
+}

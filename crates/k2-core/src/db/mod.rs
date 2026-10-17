@@ -1319,17 +1319,6 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // 0.46.0. The integrator renumbers on slips (never below a number
         // already live).
         ("0164_garden_data", include_str!("../../drizzle_sql/0164_garden_data.sql")),
-        // 0186 — the remote switch covers agents on other servers only
-        // (Rosson 2026-10-16): workspaces listed to peers only through
-        // "Allow agents to create connections" get the switch on so none go
-        // hidden on upgrade. 0165–0181 are on integ/0.46.0, 0182–0185 are the
-        // 0.46.1 lanes, 0186 was the spare (wiki `Ops - Migration numbers`).
-        // The integrator renumbers on slips (never below a number already
-        // live).
-        (
-            "0186_remote_switch_keeps_listing",
-            include_str!("../../drizzle_sql/0186_remote_switch_keeps_listing.sql"),
-        ),
     ];
 
     for (name, sql) in migrations {
@@ -1990,7 +1979,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0186_remote_switch_keeps_listing",
+            last_name, "0164_garden_data",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2023,7 +2012,6 @@ mod tests {
                 "0162_agents_manage_projects",
                 "0163_sources",
                 "0164_garden_data",
-                "0186_remote_switch_keeps_listing",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2124,51 +2112,6 @@ mod tests {
         assert!(bad_tomb.is_err(), "status removed needs removed_at");
     }
 
-    /// 0186 on an upgraded database: a connections-only workspace gets the
-    /// remote switch on, others are untouched, and the step runs once (an
-    /// owner who turns the switch off afterwards keeps that).
-    #[test]
-    fn remote_switch_upgrade_runs_once_on_an_upgraded_db() {
-        let path = scratch_db_path();
-        {
-            let conn = Connection::open(&path).unwrap();
-            run_migrations(&conn).unwrap();
-            conn.execute(
-                "DELETE FROM _migrations WHERE name = '0186_remote_switch_keeps_listing'",
-                [],
-            )
-            .unwrap();
-            for (id, conns, remote) in [("w-conn", 1, 0), ("w-none", 0, 0), ("w-on", 0, 1), ("w-both", 1, 1)] {
-                conn.execute(
-                    "INSERT INTO projects (id, name, path, agents_can_create_connections, allow_remote_instruct) \
-                     VALUES (?1, ?1, ?2, ?3, ?4)",
-                    params![id, format!("/t/{id}"), conns, remote],
-                )
-                .unwrap();
-            }
-        }
-        let flag = |conn: &Connection, id: &str| -> i64 {
-            conn.query_row(
-                "SELECT allow_remote_instruct FROM projects WHERE id = ?1",
-                params![id],
-                |r| r.get(0),
-            )
-            .unwrap()
-        };
-        let conn = Connection::open(&path).unwrap();
-        run_migrations(&conn).unwrap();
-        assert_eq!(flag(&conn, "w-conn"), 1, "connections-only gets the switch on");
-        assert_eq!(flag(&conn, "w-none"), 0, "neither flag stays off");
-        assert_eq!(flag(&conn, "w-on"), 1);
-        assert_eq!(flag(&conn, "w-both"), 1);
-        conn.execute("UPDATE projects SET allow_remote_instruct = 0 WHERE id = 'w-conn'", [])
-            .unwrap();
-        run_migrations(&conn).unwrap();
-        assert_eq!(flag(&conn, "w-conn"), 0, "a second run must not override the owner");
-        drop(conn);
-        let _ = std::fs::remove_file(&path);
-    }
-
     /// 0163 on an upgraded database (last migration before it is 0162):
     /// it applies once, keeps existing rows, and a second run is a
     /// no-op.
@@ -2189,9 +2132,6 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0186 (remote switch data step, no tables) came after too.
-            conn.execute("DELETE FROM _migrations WHERE name = '0186_remote_switch_keeps_listing'", [])
-                .unwrap();
             let last: String = conn
                 .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
                 .unwrap();

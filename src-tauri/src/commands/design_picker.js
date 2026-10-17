@@ -405,15 +405,6 @@
   }
 
   // ── listeners (capture phase) ─────────────────────────────────────────
-  function isEditable(el) {
-    if (!el || el.nodeType !== 1) return false;
-    var tag = el.tagName.toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
-    if (el.isContentEditable) return true;
-    var ce = el.getAttribute && el.getAttribute('contenteditable');
-    return ce === '' || ce === 'true' || ce === 'plaintext-only';
-  }
-
   function block(e) {
     e.preventDefault();
     e.stopPropagation();
@@ -448,13 +439,9 @@
       block(e);
       setArmed(false);
       enqueue({ type: 'key', key: 'escape' });
-      return;
     }
-    if (e.key !== 's' && e.key !== 'S') return;
-    if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
-    if (isEditable(eventElement(e)) || isEditable(d.activeElement)) return;
-    block(e);
-    enqueue({ type: 'key', key: 'toggle-select' });
+    // No S hotkey (Rosson 2026-10-16): the palette button in the chrome bar
+    // toggles Select. Every other key belongs to the page.
   }
 
   function setArmed(on) {

@@ -1,35 +1,62 @@
-// Design tab toolbar (DD7): a visible Select toggle (S inside the page does
-// the same), the tray count, and Send / Retry. The palette icon comes from
-// `K2Icons.tsx` at integration (`icon` prop); this file draws no glyphs.
+// Design tab controls (DD7, reworked Rosson 2026-10-16).
+//
+//  - `DesignPaletteButton` sits in the Browser chrome bar after Back /
+//    Forward, before the URL. It IS the Select toggle: accent colour while
+//    Select is on (the default when the tab opens), the normal icon colour
+//    when off. No separate Select button and no S hotkey.
+//  - `DesignToolbar` is the strip above the page: the note count and
+//    Send / Retry.
 
-import type { ReactNode } from 'react'
+import { K2_ICON_PX, PaletteIcon } from '@/components/icons/K2Icons'
 
-export interface DesignToolbarProps {
+export interface DesignPaletteButtonProps {
   /** Select (pick an element) is on. */
   armed: boolean
-  onToggleSelect: () => void
+  onToggle: () => void
+  /** Select cannot run here (web client, remote loopback refused…). */
+  disabled?: boolean
+}
+
+/** The palette in the chrome bar: the Select toggle. */
+export function DesignPaletteButton({ armed, onToggle, disabled = false }: DesignPaletteButtonProps): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-pressed={armed}
+      aria-label="Select an element"
+      title={armed ? 'Selecting: click an element on the page (Esc stops)' : 'Select an element on the page'}
+      disabled={disabled}
+      onClick={onToggle}
+      data-design-palette={armed ? 'on' : 'off'}
+      className={`ml-1 flex h-6 w-6 flex-shrink-0 items-center justify-center cursor-pointer disabled:opacity-30 ${
+        armed
+          ? 'text-[var(--color-accent)] hover:text-[var(--color-accent-hover,var(--color-accent))]'
+          : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text)]'
+      }`}
+    >
+      <PaletteIcon size={K2_ICON_PX} />
+    </button>
+  )
+}
+
+export interface DesignToolbarProps {
   noteCount: number
   sending: boolean
   /** The last Send stored a Thread item the agent did not get yet. */
   canRetry: boolean
   onSend: () => void
   onRetry: () => void
-  /** Optional leading icon (the palette from K2Icons). */
-  icon?: ReactNode
-  /** Select cannot run here (web client, remote loopback refused…). */
-  selectDisabled?: boolean
+  /** Select is on (only changes the hint). */
+  armed?: boolean
 }
 
 export function DesignToolbar({
-  armed,
-  onToggleSelect,
   noteCount,
   sending,
   canRetry,
   onSend,
   onRetry,
-  icon,
-  selectDisabled = false,
+  armed = false,
 }: DesignToolbarProps): React.JSX.Element {
   const notesLabel = noteCount === 1 ? '1 note' : `${noteCount} notes`
   return (
@@ -37,26 +64,11 @@ export function DesignToolbar({
       className="flex items-center gap-2 px-2 h-7 border-b border-[var(--color-border)] text-xs no-drag"
       data-testid="design-toolbar"
     >
-      {icon ? <span className="flex-shrink-0 text-[var(--color-text-muted)]">{icon}</span> : null}
-      <button
-        type="button"
-        aria-pressed={armed}
-        disabled={selectDisabled}
-        onClick={onToggleSelect}
-        title={armed ? 'Stop selecting (S or Esc)' : 'Select an element on the page (S)'}
-        className={`flex items-center gap-1.5 px-2 h-5 cursor-pointer disabled:opacity-50 ${
-          armed
-            ? 'bg-[var(--color-accent)] text-[var(--color-on-accent)]'
-            : 'border border-[var(--color-border)] text-[var(--color-text-primary)]'
-        }`}
-      >
-        Select
-        <kbd aria-hidden="true" className="text-[10px] opacity-70 font-mono">
-          S
-        </kbd>
-      </button>
       <span className="text-[var(--color-text-muted)]" data-testid="design-note-count">
         {notesLabel}
+      </span>
+      <span className="min-w-0 truncate text-[10px] text-[var(--color-text-muted)]" data-testid="design-hint">
+        {armed ? 'Click an element to add a note' : 'Turn on the palette to pick an element'}
       </span>
       <span className="flex-1" />
       {canRetry ? (

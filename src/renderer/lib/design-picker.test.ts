@@ -83,19 +83,11 @@ describe('design picker guest script', () => {
     expect(document.querySelector(sel(b))).toBe(b)
   })
 
-  it('S queues toggle-select, but not in an input, a contenteditable, or with a modifier', () => {
-    const input = document.createElement('input')
-    const editable = document.createElement('div')
-    editable.setAttribute('contenteditable', 'true')
-    document.body.append(input, editable)
+  it('no S hotkey: S reaches the page and nothing is queued', () => {
     const e = key(document.body, 's')
-    expect(e.defaultPrevented).toBe(true)
-    key(input, 's')
-    key(editable, 'S')
-    key(document.body, 's', { metaKey: true })
-    key(document.body, 's', { ctrlKey: true })
-    key(document.body, 'a')
-    expect(drain().events).toEqual([{ type: 'key', key: 'toggle-select' }])
+    expect(e.defaultPrevented).toBe(false)
+    key(document.body, 'S')
+    expect(drain().events).toEqual([])
   })
 
   it('armed: a click picks the element and the page never sees the click', () => {
@@ -160,7 +152,10 @@ describe('design picker guest script', () => {
   })
 
   it('the queue is bounded to the last 20 events', () => {
-    for (let i = 0; i < 30; i++) key(document.body, 's')
+    const button = document.createElement('button')
+    document.body.append(button)
+    picker().arm(true)
+    for (let i = 0; i < 30; i++) button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     expect(drain().events).toHaveLength(20)
   })
 

@@ -18,8 +18,10 @@
 //    design view (`design: true`) so the picker commands accept it. Drawer
 //    slides freeze it the same way they freeze a Browser tab (the dock is
 //    the Browser pane's, and `AnimatedDrawer` calls `beginBrowserMotion`).
-//  - Select (toolbar button or S in the page) → pick → note pop-up beside
-//    the element (its overlay claim freezes the page) → tray → one Send.
+//  - Select is on when the tab opens; the palette in the chrome bar (after
+//    Back / Forward) toggles it, accent-coloured while on. No S hotkey.
+//    Pick → note pop-up beside the element (its overlay claim freezes the
+//    page) → Add to the tray, or ⌘↩ to send now → one Send.
 //  - Notes are per viewer; they leave when the tab is closed.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -29,19 +31,18 @@ import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { webFeatures } from '@/web/features'
 import { BrowserPane, browserNativeItemId, currentParentWindow } from '@/components/BrowserPane/BrowserPane'
 import { PinnedChatSlot, useRetainedChatProjectId } from '@/components/AgentPane/PinnedChatRetainer'
-import { PaletteIcon } from '@/components/icons/K2Icons'
 import { beginBrowserMotion } from '@/lib/browser-overlay'
 import { pickArm, pickDisarm, pickPoll, setDesignBadges } from '@/lib/design-picker-ipc'
 import { chatTabSlotVisible, useRetainedChatStore } from '@/stores/retained-chat'
 import type { AgentItemData, DesignItemData, Tab } from '@/stores/tabs'
-import { DesignToolbar } from './DesignToolbar'
+import { DesignPaletteButton, DesignToolbar } from './DesignToolbar'
 import { DesignWebStub } from './DesignWebStub'
 import { NotePopover } from './NotePopover'
 import { NoteTray } from './NoteTray'
 import { designItemStillOpen } from './design-lifecycle'
 import { readDesignSplit, writeDesignSplit } from './design-split-sizes'
 import { scaleGuestRect } from './placement'
-import { badgesFor, useDesignNotesStore, useDesignTray } from './useDesignNotes'
+import { MAX_DESIGN_NOTES, NOTES_FULL_REASON, badgesFor, useDesignNotesStore, useDesignTray } from './useDesignNotes'
 import { useDesignPicker } from './useDesignPicker'
 import type { DesignPickerIpc, NoteRect, PickResult } from './types'
 
@@ -185,7 +186,7 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
   const { setArmed } = picker
 
   // One pick at a time: Select pauses while the pop-up is open and comes
-  // back after Add or Cancel (pin many, send once).
+  // back after Add, Cancel or ⌘↩ (pin many, send once).
   useEffect(() => {
     if (pick) setArmed(false)
   }, [pick, setArmed])
@@ -194,6 +195,23 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
     setPopoverBox(null)
     setArmed(true)
   }, [setArmed])
+  const sendNow = useCallback(
+    (comment: string, intent: 'change' | 'question') => {
+      const typed = pick && comment
+        ? {
+            comment,
+            intent,
+            element: pick.element,
+            url: pick.url,
+            title: pick.title,
+            viewport: { width: pick.viewport.width, height: pick.viewport.height },
+          }
+        : undefined
+      closePopover()
+      void useDesignNotesStore.getState().sendNow(itemId, target, typed)
+    },
+    [itemId, pick, target, closePopover],
+  )
   const addNote = useCallback(
     (comment: string, intent: 'change' | 'question') => {
       if (!pick) return
@@ -226,13 +244,11 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
     <>
       <DesignToolbar
         armed={picker.armed}
-        onToggleSelect={picker.toggle}
         noteCount={tray.notes.length}
         sending={tray.sending}
         canRetry={tray.pendingThreadItemId !== null}
         onSend={send}
         onRetry={retry}
-        icon={<PaletteIcon size={14} />}
       />
       {chatBeside ? (
         <div className="px-2 h-5 flex items-center text-[10px] text-[var(--color-text-muted)] border-b border-[var(--color-border)]" data-testid="design-chat-beside">
@@ -293,6 +309,7 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
           navSeq={data.navSeq}
           design
           aboveDock={toolbar}
+          navExtra={<DesignPaletteButton armed={picker.armed} onToggle={picker.toggle} />}
           dockRef={dockRef}
         />
       </div>
@@ -304,6 +321,9 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
           anchor={popoverBox.anchor}
           container={popoverBox.container}
           onAdd={addNote}
+          onSendNow={sendNow}
+          trayCount={tray.notes.length}
+          addDisabledReason={tray.notes.length >= MAX_DESIGN_NOTES ? NOTES_FULL_REASON : null}
           onCancel={closePopover}
         />
       ) : null}

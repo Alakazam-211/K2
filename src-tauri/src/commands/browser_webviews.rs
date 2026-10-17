@@ -1152,7 +1152,7 @@ mod real {
 
     fn design_page_load(webview: &Webview, key: &str, event: PageLoadEvent) {
         let app = webview.app_handle();
-        let nav = {
+        let (nav, armed) = {
             let state = design_state(app);
             let mut reg = state.0.lock().unwrap();
             if event == PageLoadEvent::Started {
@@ -1160,7 +1160,7 @@ mod real {
                 return;
             }
             match reg.nav(key) {
-                Ok(n) => n,
+                Ok(n) => (n, reg.is_armed(key)),
                 Err(_) => return,
             }
         };
@@ -1169,7 +1169,8 @@ mod real {
             .map(|u| matches!(u.scheme(), "http" | "https"))
             .unwrap_or(false);
         if http {
-            let _ = webview.eval(super::super::design_pick::install_script(nav));
+            // Select is on by default: a new page load comes back armed.
+            let _ = webview.eval(super::super::design_pick::arm_script(nav, armed));
         }
     }
 
@@ -1180,11 +1181,34 @@ mod real {
         item_id: &str,
         parent_window: Option<&str>,
     ) -> Result<(Webview, u64), String> {
+        design_view_keyed(app, item_id, parent_window).map(|(view, nav, _)| (view, nav))
+    }
+
+    /// [`design_view`] plus its registry key.
+    fn design_view_keyed(
+        app: &AppHandle,
+        item_id: &str,
+        parent_window: Option<&str>,
+    ) -> Result<(Webview, u64, String), String> {
         let parent = resolve_parent(parent_window);
         let key = registry_key(parent, item_id);
         let nav = design_state(app).0.lock().unwrap().nav(&key)?;
         let view = browser_view(app, item_id, parent_window).ok_or("no such browser view")?;
-        Ok((view, nav))
+        Ok((view, nav, key))
+    }
+
+    /// Arm or disarm the page, and remember it so the next page load in
+    /// this view comes back the same way.
+    fn design_set_armed(
+        app: &AppHandle,
+        item_id: &str,
+        parent_window: Option<&str>,
+        armed: bool,
+    ) -> Result<(), String> {
+        let (view, nav, key) = design_view_keyed(app, item_id, parent_window)?;
+        design_state(app).0.lock().unwrap().set_armed(&key, armed);
+        view.eval(super::super::design_pick::arm_script(nav, armed))
+            .map_err(|e| e.to_string())
     }
 
     /// Select on: hover highlights, click picks. Installs the picker first
@@ -1195,9 +1219,7 @@ mod real {
         item_id: String,
         parent_window: Option<String>,
     ) -> Result<(), String> {
-        let (view, nav) = design_view(&app, &item_id, parent_window.as_deref())?;
-        view.eval(super::super::design_pick::arm_script(nav, true))
-            .map_err(|e| e.to_string())
+        design_set_armed(&app, &item_id, parent_window.as_deref(), true)
     }
 
     #[tauri::command]
@@ -1206,12 +1228,10 @@ mod real {
         item_id: String,
         parent_window: Option<String>,
     ) -> Result<(), String> {
-        let (view, nav) = design_view(&app, &item_id, parent_window.as_deref())?;
-        view.eval(super::super::design_pick::arm_script(nav, false))
-            .map_err(|e| e.to_string())
+        design_set_armed(&app, &item_id, parent_window.as_deref(), false)
     }
 
-    /// Drain the page's picks and key presses (`S`, Esc). `null` when there
+    /// Drain the page's picks and Esc presses. `null` when there
     /// is nothing. Sync eval result only (Windows/Linux do not await a
     /// Promise), so the renderer polls: ~120 ms while armed, ~400 ms while
     /// the Design tab is shown. Works while the pane is frozen (hidden).
@@ -1221,8 +1241,8 @@ mod real {
         item_id: String,
         parent_window: Option<String>,
     ) -> Result<Option<serde_json::Value>, String> {
-        use super::super::design_pick::{drain_script, install_script, parse_drain, Drained};
-        let (view, nav) = design_view(&app, &item_id, parent_window.as_deref())?;
+        use super::super::design_pick::{arm_script, drain_script, parse_drain, Drained};
+        let (view, nav, key) = design_view_keyed(&app, &item_id, parent_window.as_deref())?;
         let (tx, rx) = tokio::sync::oneshot::channel::<String>();
         let tx = std::sync::Mutex::new(Some(tx));
         view.eval_with_callback(drain_script(), move |raw| {
@@ -1245,7 +1265,8 @@ mod real {
         match parse_drain(&raw, nav, current.as_deref()) {
             Drained::Events(poll) => serde_json::to_value(poll).map(Some).map_err(|e| e.to_string()),
             Drained::Missing => {
-                let _ = view.eval(install_script(nav));
+                let armed = design_state(&app).0.lock().unwrap().is_armed(&key);
+                let _ = view.eval(arm_script(nav, armed));
                 Ok(None)
             }
             Drained::Nothing => Ok(None),

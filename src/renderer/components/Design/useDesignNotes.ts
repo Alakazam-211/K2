@@ -65,6 +65,9 @@ interface DesignNotesState {
   /** Close the tab: forget its tray. */
   drop(itemId: string): void
   send(itemId: string, target: SendTarget): Promise<void>
+  /** ⌘↩ in the note pop-up: pin what is typed (if anything) and Send the
+   *  whole tray at once. A full tray still takes this one note. */
+  sendNow(itemId: string, target: SendTarget, typed?: NewNote): Promise<void>
   retry(itemId: string, target: SendTarget): Promise<void>
 }
 
@@ -104,26 +107,43 @@ export const useDesignNotesStore = create<DesignNotesState>((set, get) => {
     }
   }
 
+  const addNote = (itemId: string, note: NewNote, cap: number): AddResult => {
+    const t = tray(itemId)
+    if (t.notes.length >= cap) return { ok: false, reason: NOTES_FULL_REASON }
+    const comment = note.comment.trim()
+    if (!comment) return { ok: false, reason: 'Write a note first.' }
+    const id = newNoteId()
+    const draft: DesignNoteDraft = {
+      id,
+      comment,
+      intent: note.intent ?? 'change',
+      url: note.url,
+      title: note.title,
+      ...(note.element ? { element: note.element } : {}),
+      ...(note.viewport ? { viewport: note.viewport } : {}),
+    }
+    patch(itemId, { notes: [...t.notes, draft] })
+    return { ok: true, id }
+  }
+
   return {
     trays: {},
 
     add(itemId, note) {
-      const t = tray(itemId)
-      if (t.notes.length >= MAX_DESIGN_NOTES) return { ok: false, reason: NOTES_FULL_REASON }
-      const comment = note.comment.trim()
-      if (!comment) return { ok: false, reason: 'Write a note first.' }
-      const id = newNoteId()
-      const draft: DesignNoteDraft = {
-        id,
-        comment,
-        intent: note.intent ?? 'change',
-        url: note.url,
-        title: note.title,
-        ...(note.element ? { element: note.element } : {}),
-        ...(note.viewport ? { viewport: note.viewport } : {}),
+      return addNote(itemId, note, MAX_DESIGN_NOTES)
+    },
+
+    async sendNow(itemId, target, typed) {
+      if (typed && typed.comment.trim()) {
+        if (tray(itemId).sending) return
+        // One past the tray's cap: the typed note goes out with this Send.
+        const res = addNote(itemId, typed, MAX_DESIGN_NOTES + 1)
+        if (!res.ok) {
+          patch(itemId, { error: res.reason })
+          return
+        }
       }
-      patch(itemId, { notes: [...t.notes, draft] })
-      return { ok: true, id }
+      return get().send(itemId, target)
     },
 
     edit(itemId, noteId, p) {

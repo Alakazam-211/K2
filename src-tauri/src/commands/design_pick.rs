@@ -11,7 +11,7 @@
 
 #![cfg_attr(not(feature = "browser-pane"), allow(dead_code))]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use k2_core::browser_notes::{clamp_element, clamp_line, clean_page_url, NoteElement, MAX_TITLE_CHARS};
 use serde::Serialize;
@@ -72,11 +72,14 @@ fn js_literal(json: &str) -> String {
     json.replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029")
 }
 
-/// Which registry keys are Design views, and each one's page-load number.
-/// Plain Browser views are never in here, so the picker refuses them.
+/// Which registry keys are Design views, each one's page-load number, and
+/// whether Select is on. Plain Browser views are never in here, so the
+/// picker refuses them. Select is on by default in a Design tab, so a new
+/// page load (navigation, reload) re-arms the fresh picker from here.
 #[derive(Debug, Default)]
 pub struct DesignRegistry {
     nav: HashMap<String, u64>,
+    armed: HashSet<String>,
 }
 
 impl DesignRegistry {
@@ -87,11 +90,27 @@ impl DesignRegistry {
             self.nav.entry(key.to_string()).or_insert(1);
         } else {
             self.nav.remove(key);
+            self.armed.remove(key);
         }
     }
 
     pub fn remove(&mut self, key: &str) {
         self.nav.remove(key);
+        self.armed.remove(key);
+    }
+
+    /// Remember Select for this view (only for a design view).
+    pub fn set_armed(&mut self, key: &str, armed: bool) {
+        if armed && self.nav.contains_key(key) {
+            self.armed.insert(key.to_string());
+        } else {
+            self.armed.remove(key);
+        }
+    }
+
+    /// Select is on for this view (a page load installs the picker armed).
+    pub fn is_armed(&self, key: &str) -> bool {
+        self.armed.contains(key)
     }
 
     /// The current page-load number, or [`NOT_DESIGN`].
@@ -175,7 +194,7 @@ pub fn parse_drain(raw: &str, nav: u64, current_url: Option<&str>) -> Drained {
         }
         match ev.get("type").and_then(serde_json::Value::as_str) {
             Some("key") => match ev.get("key").and_then(serde_json::Value::as_str) {
-                Some(k @ ("toggle-select" | "escape")) => events.push(PickEvent::Key { key: k.to_string() }),
+                Some(k @ "escape") => events.push(PickEvent::Key { key: k.to_string() }),
                 _ => {}
             },
             Some("pick") => {
@@ -291,10 +310,13 @@ mod design_pick_tests {
 
     #[test]
     fn design_pick_drops_stale_navigation_and_other_urls() {
-        let body = json!({"nav": 2, "events": [pick("http://localhost/a"), {"type": "key", "key": "toggle-select"}]});
+        let body = json!({"nav": 2, "events": [pick("http://localhost/a"), {"type": "key", "key": "escape"}]});
         assert_eq!(parse_drain(&raw(body.clone()), 3, None), Drained::Nothing, "an older page load is void");
         let Drained::Events(p) = parse_drain(&raw(body), 2, Some("http://localhost/b")) else { panic!() };
-        assert_eq!(p.events, vec![PickEvent::Key { key: "toggle-select".into() }], "a pick from another URL is dropped");
+        assert_eq!(p.events, vec![PickEvent::Key { key: "escape".into() }], "a pick from another URL is dropped");
+        // The S key is gone (Rosson 2026-10-16): an old page's toggle is ignored.
+        let s = json!({"nav": 1, "events": [{"type": "key", "key": "toggle-select"}]});
+        assert_eq!(parse_drain(&raw(s), 1, None), Drained::Nothing);
     }
 
     #[test]
@@ -318,6 +340,23 @@ mod design_pick_tests {
         let many: Vec<_> = (0..40).map(|_| json!({"type": "key", "key": "escape"})).collect();
         let Drained::Events(p) = parse_drain(&raw(json!({"nav": 1, "events": many})), 1, None) else { panic!() };
         assert_eq!(p.events.len(), MAX_POLL_EVENTS);
+    }
+
+    #[test]
+    fn design_pick_remembers_select_per_design_view() {
+        let mut r = DesignRegistry::default();
+        r.set_armed("w\0a", true);
+        assert!(!r.is_armed("w\0a"), "not a design view yet: nothing remembered");
+        r.set_design("w\0a", true);
+        r.set_armed("w\0a", true);
+        assert!(r.is_armed("w\0a"));
+        r.bump("w\0a");
+        assert!(r.is_armed("w\0a"), "a navigation keeps Select on");
+        r.set_armed("w\0a", false);
+        assert!(!r.is_armed("w\0a"));
+        r.set_armed("w\0a", true);
+        r.remove("w\0a");
+        assert!(!r.is_armed("w\0a"));
     }
 
     #[test]

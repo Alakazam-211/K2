@@ -1,5 +1,9 @@
 // The note pop-up beside a picked element (PRD C1, D-A12).
 //
+// Add pins the note in the tray. ⌘↩ (Ctrl+Enter off macOS) sends right
+// away: what is typed plus every note already in the tray (Rosson
+// 2026-10-16). Plain Return is a new line.
+//
 // It claims its own box through the Browser overlay arbiter. The box
 // overlaps the dock, so the arbiter freezes the page (its snapshot replaces
 // the native view) while the person types: the page never sees or forges the
@@ -8,6 +12,7 @@
 
 import { useLayoutEffect, useRef, useState } from 'react'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { isMacPlatform } from '@/lib/desktop-chrome'
 import { placePopover, type PopoverPlacement } from './placement'
 import type { NoteElement, NoteIntent, NoteRect } from './types'
 
@@ -22,7 +27,18 @@ export interface NotePopoverProps {
   initialComment?: string
   initialIntent?: NoteIntent
   onAdd: (comment: string, intent: NoteIntent) => void
+  /** ⌘↩: send the typed text (may be empty) plus the tray now. */
+  onSendNow?: (comment: string, intent: NoteIntent) => void
+  /** Notes already in the tray (⌘↩ with nothing typed sends these). */
+  trayCount?: number
+  /** Why Add is off (the tray is full), or null. */
+  addDisabledReason?: string | null
   onCancel: () => void
+}
+
+/** The send-now chord's label on this platform. */
+export function sendNowChord(): string {
+  return isMacPlatform() ? '⌘↩' : 'Ctrl+↩'
 }
 
 /** Starting size before the first measure. */
@@ -44,6 +60,9 @@ export function NotePopover({
   initialComment = '',
   initialIntent = 'change',
   onAdd,
+  onSendNow,
+  trayCount = 0,
+  addDisabledReason = null,
   onCancel,
 }: NotePopoverProps): React.JSX.Element | null {
   const ref = useRef<HTMLDivElement | null>(null)
@@ -66,9 +85,15 @@ export function NotePopover({
   const place: PopoverPlacement = placePopover(anchor, size, container)
   const trimmed = comment.trim()
   const add = (): void => {
-    if (!trimmed) return
+    if (!trimmed || addDisabledReason) return
     onAdd(trimmed, intent)
   }
+  const canSendNow = !!onSendNow && (trimmed.length > 0 || trayCount > 0)
+  const sendNow = (): void => {
+    if (!canSendNow || !onSendNow) return
+    onSendNow(trimmed, intent)
+  }
+  const chord = sendNowChord()
 
   return (
     <div
@@ -85,7 +110,7 @@ export function NotePopover({
           onCancel()
         } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
           e.preventDefault()
-          add()
+          sendNow()
         }
       }}
     >
@@ -127,12 +152,16 @@ export function NotePopover({
         <button
           type="button"
           onClick={add}
-          disabled={!trimmed}
-          title="Add (⌘↩)"
+          disabled={!trimmed || !!addDisabledReason}
+          title={addDisabledReason ?? 'Pin this note; send them together later'}
           className="px-2 h-5 bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer disabled:opacity-50"
         >
           Add
         </button>
+      </div>
+      <div className="text-[10px] text-[var(--color-text-muted)]" data-testid="design-popover-hint">
+        {addDisabledReason ? `${addDisabledReason} · ` : ''}
+        {chord} sends {trayCount > 0 ? `this and ${trayCount === 1 ? 'the 1 note' : `the ${trayCount} notes`}` : 'it'} now
       </div>
     </div>
   )

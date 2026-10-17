@@ -1573,17 +1573,21 @@ pub(crate) fn v1_principal(
 /// CLOSED. Three outcomes:
 ///
 /// - [`SendMessageAuth::Owner`] — the request carries the OWNER token. The
-///   owner is ALWAYS allowed (unchanged from 1a), independent of the opt-in
-///   flag. The caller resolves the attributed `from` server-side via
-///   `workspace_msg::resolve_owner_from()`.
-/// - [`SendMessageAuth::ConnectUser`] — a live connect-user session (any
-///   role; the Viewer role this once excluded was removed) AND the host has
-///   opted into remote multi-user instruction (`remote_instruct_opt_in`,
-///   default OFF). Carries the daemon-resolved `username` — the `from` attribution
-///   (D3: resolved from the token, NEVER the request body).
-/// - [`SendMessageAuth::Denied`] — anything else (missing/unknown/expired
-///   token, opt-in OFF). The caller MUST drain-then-403
-///   (mirror [`require_manage`]).
+///   owner is ALWAYS allowed. The caller resolves the attributed `from`
+///   server-side via `workspace_msg::resolve_owner_from()`.
+/// - [`SendMessageAuth::ConnectUser`] — a live connect-user session whose
+///   stored role is Member or above. Carries the daemon-resolved
+///   `username` — the `from` attribution (D3: resolved from the token,
+///   NEVER the request body).
+/// - [`SendMessageAuth::Denied`] — anything else (missing/unknown/expired/
+///   revoked token, or a session whose user no longer has a role). The
+///   caller MUST drain-then-403 (mirror [`require_manage`]).
+///
+/// The per-agent "Let agents on other servers message this agent" switch
+/// (`projects.allow_remote_instruct` OR the app-level `allowRemoteInstruct`
+/// master) does NOT gate this route (Rosson 2026-10-16): people who log in
+/// here are decided by their role, not that switch. The switch covers
+/// federated agents only (`federation_routes::handle_inbound` + the roster).
 ///
 /// A revoked connect-user fails here at request time (`validate_session`
 /// returns `None` once `revoke_user_sessions` drops the in-memory entry);
@@ -1593,42 +1597,35 @@ pub(crate) fn v1_principal(
 pub(crate) enum SendMessageAuth {
     /// Owner token — always allowed.
     Owner,
-    /// Connect-user on an opted-in host. Carries the
-    /// daemon-resolved username used as the `from` attribution.
+    /// Connect-user login (Member or above). Carries the daemon-resolved
+    /// username used as the `from` attribution.
     ConnectUser { username: String },
     /// Reject — caller drains the body then sends 403.
     Denied,
 }
 
-/// Decide whether a `send-message` request is authorized (Composer 1c, D4;
-/// #67 per-workspace refinement).
-///
-/// `remote_instruct_opt_in` is the EFFECTIVE opt-in for the TARGET
-/// workspace (default OFF): the per-workspace `projects.allow_remote_instruct`
-/// flag OR the app-level `allowRemoteInstruct` master. The dispatcher
-/// computes it via `remote_instruct_opt_in_for_session` before calling
-/// here. It gates ONLY the connect-user path; the owner token is allowed
-/// regardless. See [`SendMessageAuth`].
-pub(crate) fn authorize_send_message(
-    query: &str,
-    owner_token: &str,
-    remote_instruct_opt_in: bool,
-) -> SendMessageAuth {
-    // Owner is always allowed — independent of the opt-in flag (1a parity).
+/// Decide whether a `send-message` request is authorized (Composer 1c, D4).
+/// See [`SendMessageAuth`]. App/skin guests (`k2skn_`) are not connect-user
+/// sessions, so they never pass here; they keep their own room grants.
+pub(crate) fn authorize_send_message(query: &str, owner_token: &str) -> SendMessageAuth {
+    // Owner is always allowed.
     if token_is_owner(query, owner_token) {
         return SendMessageAuth::Owner;
     }
-    // Connect-user path: the host must have opted in. Every login role is
-    // Member or above (the Viewer role was removed), so the opt-in plus a
-    // live session is the whole decision. Fails CLOSED.
-    if !remote_instruct_opt_in {
-        return SendMessageAuth::Denied;
-    }
     // Resolve the username server-side from the token (D3) — never the body.
     // A revoked/expired token returns None here → Denied.
-    match extract_token(query).and_then(k2_core::connect_users::validate_session) {
-        Some(username) => SendMessageAuth::ConnectUser { username },
-        None => SendMessageAuth::Denied,
+    let Some(username) = extract_token(query).and_then(k2_core::connect_users::validate_session)
+    else {
+        return SendMessageAuth::Denied;
+    };
+    // Role floor: Member or above. Every login role is >= Member today (the
+    // Viewer role was removed); the check keeps the floor explicit so a
+    // future sub-Member role fails closed here.
+    match k2_core::connect_users::role_for_user(&username) {
+        Some(role) if role >= k2_core::connect_users::Role::Member => {
+            SendMessageAuth::ConnectUser { username }
+        }
+        _ => SendMessageAuth::Denied,
     }
 }
 
@@ -2820,88 +2817,87 @@ mod tests {
         });
     }
 
-    // ── authorize_send_message: Composer 1c capability gate (D4; #67) ───
+    // ── authorize_send_message: Composer 1c capability gate (D4) ───────
     //
     // The load-bearing security gate for the send-message route. The owner
-    // token is ALWAYS allowed; a connect-user is allowed ONLY when the
-    // target workspace is opted in AND role >= Member; everything else is
-    // Denied (→ drain-then-403). The `opt_in` bool here is the EFFECTIVE
-    // per-workspace decision the dispatcher computes
-    // (`remote_instruct_opt_in_for_session` = per-workspace flag OR
-    // app-level master): `false` models "workspace NOT opted in, even with
-    // the app-level master off"; `true` models "workspace opted in" (via
-    // either the per-workspace flag or the global master). The OR-derivation
-    // itself is unit-tested in `k2_core::workspace::settings`. These
+    // token is ALWAYS allowed; a connect-user login with role >= Member is
+    // allowed whatever the per-agent "Let agents on other servers message
+    // this agent" switch says (that switch is federation-only since
+    // 2026-10-16); everything else is Denied (→ drain-then-403). These
     // assertions fail LOUDLY.
+
+    /// Pin the switch OFF everywhere the gate could read it, so a test that
+    /// expects "allowed" proves the switch is not consulted.
+    fn pin_remote_switch_off() {
+        k2_core::app_settings::update(serde_json::json!({ "allowRemoteInstruct": false }))
+            .expect("master off");
+        assert!(!k2_core::app_settings::load().allow_remote_instruct);
+    }
 
     #[test]
     fn authorize_send_message_owner_always_allowed() {
-        let owner = "owner-token-xyz";
-        // Owner is allowed even when the opt-in flag is OFF (1a parity).
-        assert_eq!(
-            authorize_send_message(&format!("token={owner}"), owner, false),
-            SendMessageAuth::Owner,
-        );
-        assert_eq!(
-            authorize_send_message(&format!("token={owner}"), owner, true),
-            SendMessageAuth::Owner,
-        );
+        with_temp_home(|| {
+            pin_remote_switch_off();
+            let owner = "owner-token-xyz";
+            assert_eq!(
+                authorize_send_message(&format!("token={owner}"), owner),
+                SendMessageAuth::Owner,
+            );
+        });
     }
 
     #[test]
     fn authorize_send_message_unknown_token_denied() {
-        // A non-owner, non-session token is rejected regardless of opt-in.
+        // A non-owner, non-session token is rejected.
         with_temp_home(|| {
             let owner = "owner-token-xyz";
             assert_eq!(
-                authorize_send_message("token=not-a-session", owner, true),
+                authorize_send_message("token=not-a-session", owner),
                 SendMessageAuth::Denied,
             );
             // Missing token param → Denied.
+            assert_eq!(authorize_send_message("project=/tmp/x", owner), SendMessageAuth::Denied);
+        });
+    }
+
+    #[test]
+    fn authorize_send_message_member_allowed_with_switch_off() {
+        // Rosson 2026-10-16: people who log in can always message agents —
+        // the switch is off, the Member login is still allowed, and `from`
+        // is THEIR username (D3 — never the body).
+        with_temp_home(|| {
+            pin_remote_switch_off();
+            let owner = "owner-token-xyz";
+            k2_core::connect_users::add_user("member_user", "password123").expect("add_user");
             assert_eq!(
-                authorize_send_message("project=/tmp/x", owner, true),
-                SendMessageAuth::Denied,
+                k2_core::connect_users::role_for_user("member_user"),
+                Some(k2_core::connect_users::Role::Member),
+            );
+            let session = k2_core::connect_users::create_session("member_user");
+            assert_eq!(
+                authorize_send_message(&format!("token={session}"), owner),
+                SendMessageAuth::ConnectUser { username: "member_user".to_string() },
             );
         });
     }
 
     #[test]
-    fn authorize_send_message_connect_user_blocked_when_workspace_not_opted_in() {
-        // The whole point of the safe default (#67): a fully-valid
-        // connect-user (role >= Member) is STILL Denied when the TARGET
-        // workspace is not opted in — i.e. its per-workspace flag is off AND
-        // the app-level master is off (effective opt_in == false).
+    fn authorize_send_message_admin_allowed_with_switch_off() {
         with_temp_home(|| {
+            pin_remote_switch_off();
             let owner = "owner-token-xyz";
-            k2_core::connect_users::add_user("member_user", "password123")
-                .expect("add_user");
-            let session = k2_core::connect_users::create_session("member_user");
-
+            k2_core::connect_users::add_user("admin_user", "password123").expect("add_user");
+            k2_core::connect_users::set_role("admin_user", k2_core::connect_users::Role::Admin)
+                .expect("set_role admin");
             assert_eq!(
-                authorize_send_message(&format!("token={session}"), owner, false),
-                SendMessageAuth::Denied,
-                "connect-user must be BLOCKED until the host opts in",
+                k2_core::connect_users::role_for_user("admin_user"),
+                Some(k2_core::connect_users::Role::Admin),
             );
-        });
-    }
-
-    #[test]
-    fn authorize_send_message_connect_user_allowed_when_workspace_opted_in() {
-        // With the target workspace opted in (#67 — effective opt_in true,
-        // via the per-workspace flag or the app-level master), a Member
-        // connect-user is allowed and the resolved `from` is THEIR username
-        // (D3 — never the body).
-        with_temp_home(|| {
-            let owner = "owner-token-xyz";
-            k2_core::connect_users::add_user("member_user", "password123")
-                .expect("add_user");
-            let session = k2_core::connect_users::create_session("member_user");
-
+            // set_role bumps the token epoch; mint the session after it.
+            let session = k2_core::connect_users::create_session("admin_user");
             assert_eq!(
-                authorize_send_message(&format!("token={session}"), owner, true),
-                SendMessageAuth::ConnectUser {
-                    username: "member_user".to_string()
-                },
+                authorize_send_message(&format!("token={session}"), owner),
+                SendMessageAuth::ConnectUser { username: "admin_user".to_string() },
             );
         });
     }
@@ -2909,27 +2905,41 @@ mod tests {
     #[test]
     fn authorize_send_message_revoked_token_denied_at_gate() {
         // M2 (gate half): a revoked connect-user token flips to Denied on the
-        // next request even with the opt-in ON — no injection is authorized.
+        // next request — no injection is authorized.
         with_temp_home(|| {
+            pin_remote_switch_off();
             let owner = "owner-token-xyz";
-            k2_core::connect_users::add_user("member_user", "password123")
-                .expect("add_user");
+            k2_core::connect_users::add_user("member_user", "password123").expect("add_user");
             let session = k2_core::connect_users::create_session("member_user");
 
             // Sanity: allowed before revoke.
             assert_eq!(
-                authorize_send_message(&format!("token={session}"), owner, true),
-                SendMessageAuth::ConnectUser {
-                    username: "member_user".to_string()
-                },
+                authorize_send_message(&format!("token={session}"), owner),
+                SendMessageAuth::ConnectUser { username: "member_user".to_string() },
             );
 
             k2_core::connect_users::revoke_user_sessions("member_user");
 
             assert_eq!(
-                authorize_send_message(&format!("token={session}"), owner, true),
+                authorize_send_message(&format!("token={session}"), owner),
                 SendMessageAuth::Denied,
                 "revoked session must be Denied (no injection authorized)",
+            );
+        });
+    }
+
+    #[test]
+    fn authorize_send_message_disabled_user_denied() {
+        // A login whose account was disabled is denied even with a token
+        // minted while it was live.
+        with_temp_home(|| {
+            let owner = "owner-token-xyz";
+            k2_core::connect_users::add_user("gone_user", "password123").expect("add_user");
+            let session = k2_core::connect_users::create_session("gone_user");
+            k2_core::connect_users::remove_user("gone_user").expect("remove_user");
+            assert_eq!(
+                authorize_send_message(&format!("token={session}"), owner),
+                SendMessageAuth::Denied,
             );
         });
     }

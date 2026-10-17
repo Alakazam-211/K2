@@ -140,42 +140,6 @@ fn tunnel_route_audit_line(method: &str, path: &str, caller: &str) -> Option<Str
     Some(format!("[tunnel/route] {method} {path} caller={caller}"))
 }
 
-/// #67 — resolve the EFFECTIVE remote-instruct opt-in for the workspace
-/// that owns the live PTY `session_id`.
-///
-/// Maps `session_id` → live session → its spawn cwd → the matching
-/// `projects.path` row's per-workspace flag, OR'd with the app-level
-/// master (`remote_instruct_allowed_for_path`). This is the value fed to
-/// [`super::http::authorize_send_message`]; it gates ONLY the connect-user
-/// path (the owner token is always allowed).
-///
-/// Fail-CLOSED: an unparsable/unknown session id, a session with no cwd,
-/// or an unregistered workspace → `false` (deny the connect-user). The
-/// owner is unaffected because `authorize_send_message` short-circuits on
-/// the owner token before consulting this flag.
-fn remote_instruct_opt_in_for_session(session_id: &str) -> bool {
-    // App-level master opts in everything (back-compat) — short-circuit
-    // before any session lookup so an owner-disabled-but-app-on host still
-    // works even mid-spawn.
-    if k2_core::app_settings::load().allow_remote_instruct {
-        return true;
-    }
-    let Some(sid) = k2_core::session::SessionId::parse(session_id) else {
-        return false;
-    };
-    let Some(live) = crate::session_lookup::lookup_by_session_id(&sid) else {
-        return false;
-    };
-    let cwd = live.cwd();
-    if cwd.is_empty() {
-        return false;
-    }
-    // App-level already checked above; this reads ONLY the per-workspace
-    // flag for the resolved cwd (the OR-with-master is handled by the
-    // early return above, but the core helper also re-checks it harmlessly).
-    k2_core::workspace::settings::remote_instruct_allowed_for_path(&cwd)
-}
-
 /// Outcome of [`handle_one_request`] — tells the outer keep-alive loop
 /// whether to wait for the next request on this socket or tear it down.
 ///
@@ -8292,23 +8256,18 @@ async fn handle_one_request(
         // --dangerously-skip-permissions (= full shell+fs RCE), so the gate
         // is SERVER-ENFORCED and fails CLOSED. Authorized iff:
         //   • the OWNER token is presented (ALWAYS allowed, 1a parity), OR
-        //   • a connect-user session with role >= Member AND the host has
-        //     opted into remote multi-user instruction
-        //     (`app_settings.allow_remote_instruct`, DEFAULT OFF).
-        // Anything else → drain-then-403 (mirrors require_manage). The
-        // renderer hides the composer on the same signal, but THIS is the
-        // source of truth (the renderer-hide is defense-in-depth only).
+        //   • a live connect-user session with role >= Member.
+        // The per-agent "Let agents on other servers message this agent"
+        // switch does NOT apply here (Rosson 2026-10-16: it covers
+        // federated agents only). Anything else → drain-then-403.
         //
         // The if-!is_post guard is enforced by the top-level 405 gate
         // (post_allowed lists this route); we additionally pin `p ==`
         // here so only a POST reaches the handler body.
         p if is_post && p == "/cli/terminal/send-message" => {
-            // Read + parse the body UP-FRONT. The #67 per-workspace gate
-            // needs the target `session_id` (carried in the JSON/form body)
-            // to resolve which workspace's opt-in to consult — so the body
-            // must be read before the capability decision. Reading it here
-            // also means a rejected request has already drained its body
-            // before the 403 (mirrors require_manage's drain-then-403).
+            // Read + parse the body UP-FRONT, so a rejected request has
+            // already drained its body before the 403 (mirrors
+            // require_manage's drain-then-403).
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             // Body may be form-encoded OR JSON; query is the fallback.
             // session_id/text/command — `from` is NEVER read from the body
@@ -8330,17 +8289,8 @@ async fn handle_one_request(
             let text = params.get("text").cloned().unwrap_or_default();
             let command_raw = params.get("command").cloned().unwrap_or_default();
 
-            // #67 — D4 capability decision, now PER-WORKSPACE. The opt-in
-            // gates ONLY the connect-user path; the owner is allowed
-            // regardless. Resolve the target session's workspace and read
-            // its EFFECTIVE opt-in (per-workspace flag OR app-level master);
-            // fail-closed when the session/workspace can't be resolved.
-            let remote_opt_in = remote_instruct_opt_in_for_session(&session_id);
-            let auth = super::http::authorize_send_message(
-                &query,
-                state.token.as_str(),
-                remote_opt_in,
-            );
+            // D4 capability decision: owner, or a Member+ login.
+            let auth = super::http::authorize_send_message(&query, state.token.as_str());
             // D3 — `from` is resolved server-side ONLY, NEVER from the body:
             //   owner       → the 0.46.0 stamp rule: the linked account's
             //                 username (`person_name::sender_identity`), or "owner".
@@ -8444,32 +8394,15 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
         }
         // Composer send history — GET last 50 sent lines for a workspace.
-        // Same authorize_send_message gate as send-message (owner always;
-        // connect-user only when the target workspace is opted in).
+        // Same authorize_send_message gate as send-message (owner, or a
+        // Member+ login; the federation switch does not apply).
         // Scoped API tokens stay off (not an agent verb).
         p if !is_post && p == "/cli/terminal/compose-history" => {
             let _ = stream.read(&mut buf).await;
             let params = super::http::parse_params(&path, &query);
             let workspace_path = params.get("workspace_path").cloned().unwrap_or_default();
             let project_id = params.get("project_id").cloned().unwrap_or_default();
-            let opt_in_path = if !project_id.is_empty() {
-                k2_core::workspace_compose_history::project_path_for_id(&project_id)
-                    .unwrap_or_default()
-            } else {
-                k2_core::workspace_compose_history::resolve_project_id_for_path(&workspace_path)
-                    .and_then(|id| k2_core::workspace_compose_history::project_path_for_id(&id))
-                    .unwrap_or_default()
-            };
-            let remote_opt_in = if opt_in_path.is_empty() {
-                k2_core::app_settings::load().allow_remote_instruct
-            } else {
-                k2_core::workspace::settings::remote_instruct_allowed_for_path(&opt_in_path)
-            };
-            match super::http::authorize_send_message(
-                &query,
-                state.token.as_str(),
-                remote_opt_in,
-            ) {
+            match super::http::authorize_send_message(&query, state.token.as_str()) {
                 super::http::SendMessageAuth::Denied => {
                     super::http::send_response(
                         &mut *stream,

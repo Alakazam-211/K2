@@ -107,35 +107,17 @@ export function composeEmptyEnterSequence(e: {
 }
 
 /**
- * Composer 1c (D4) + #67 per-workspace — renderer-hide predicate. Mirrors
- * the DAEMON's capability gate (`authorize_send_message` +
- * `remote_instruct_opt_in_for_session`): the composer is permitted iff
- *   • the active host is LOCAL (the owner is always allowed), OR
- *   • the app-level `allowRemoteInstruct` master is ON (global, back-compat), OR
- *   • the ACTIVE WORKSPACE opted into remote instruction
- *     (`perWorkspaceAllow`, default OFF).
- *
- * This is DEFENSE-IN-DEPTH only — the daemon rejects an unauthorized send
- * with a 403 regardless of what the renderer shows, and enforces the
- * decision PER-WORKSPACE server-side. A connect-user's role is never below
- * Member (Member is the floor), so the renderer needs no role input; the
- * daemon enforces the `>= Member` floor and a future sub-Member role slots
- * in there. Pure + exported so the mapping is unit-testable without
- * mounting the component.
+ * Composer 1c (D4) — renderer-hide predicate. The composer shows for every
+ * person who can reach the room: the owner, and any login (Admin or Member)
+ * on a remote server. Rosson 2026-10-16: people who log in can always
+ * message agents — their role decides it on the daemon
+ * (`authorize_send_message`), not the per-agent "Let agents on other
+ * servers message this agent" switch, which covers federated agents only.
+ * So the switch is deliberately NOT an input here. Only a view-only room
+ * (which sends nothing to its server) hides the bar.
  */
-export function composerPermitted(_input: {
-  isLocalHost: boolean
-  allowRemoteInstruct: boolean
-  perWorkspaceAllow?: boolean
-}): boolean {
-  // The composer ALWAYS renders — including on remote hosts. Authorization is
-  // enforced SERVER-SIDE: the daemon 403s an unauthorized send regardless of
-  // what the renderer shows (the owner is always allowed; a connect-user is
-  // gated per-workspace). Hiding the bar on remote just made it vanish, which
-  // was confusing — so we keep it visible and let the daemon be the single
-  // gate. (Rosson 2026-06-27: leave the composer enabled by default on remote
-  // machines.) Input kept for call-site stability + the unit-test contract.
-  return true
+export function composerPermitted(input: { readOnly: boolean }): boolean {
+  return !input.readOnly
 }
 
 /**

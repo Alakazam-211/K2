@@ -306,6 +306,11 @@ pub(crate) fn spawn_tail(
             let mut pos = offset;
             let mut partial = Vec::<u8>::new();
             let mut buf = vec![0u8; 16 * 1024];
+            // frpc can write its last line and exit (and be reaped) between
+            // a pass that read nothing and the liveness check: read the file
+            // once more after the pid is gone before giving up, or its error
+            // line ("open …: no such file or directory") is never seen.
+            let mut drained_after_exit = false;
             loop {
                 let mut read_any = false;
                 if let Ok(mut f) = std::fs::File::open(&log) {
@@ -336,7 +341,11 @@ pub(crate) fn spawn_tail(
                     return;
                 }
                 if !read_any && !pid_alive(pid) {
-                    return;
+                    if drained_after_exit {
+                        return;
+                    }
+                    drained_after_exit = true;
+                    continue;
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }

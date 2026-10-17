@@ -141,6 +141,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/TunnelUrlsPanel.tsx',
   'components/Settings/sections/UserTemplatesSection.tsx',
   'components/Settings/sections/WakeSchedulerSection.tsx',
+  // 0.46.0: Settings → General → Your account reads this server's whoami/users.
+  'components/Settings/sections/YourAccountRow.tsx',
   'components/Settings/sections/access-audit-api.ts',
   // 0.45.6 Garden v3: Settings → External Data lists this server's sources.
   'components/Settings/sections/DataSourcesSection.tsx',

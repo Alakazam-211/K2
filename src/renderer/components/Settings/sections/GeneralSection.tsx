@@ -59,7 +59,6 @@ import { RemoteRoomsPreviewRow } from './RemoteRoomsPreviewRow'
 import { AppFontRows } from '../shared/AppFontRows'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
 import { YourAccountRow } from './YourAccountRow'
-import { OwnerDisplayNameInput } from './OwnerDisplayNameInput'
 import {
   parseSessionViewTab,
   parseSplitPaneView,
@@ -74,7 +73,6 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.font-size', section: 'general', group: 'General', label: 'Font size', description: 'Text size for code, the message box, chats and tickets; same setting as Editors / Fonts → Code', keywords: ['font', 'size', 'text size', 'zoom', 'bigger', 'smaller'] },
   { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Open the Chromium DevTools console for this window', keywords: ['devtools', 'developer', 'console', 'inspect', 'debug', 'chromium', 'network', 'logs'] },
   { id: 'general.your-account', section: 'general', group: 'General', label: 'Your account', description: 'The Connect login you use on your phone or laptop counts as you (owner)', keywords: ['account', 'login', 'owner', 'you', 'me', 'this is me', 'linked', 'phone', 'laptop', 'connect', 'identity'] },
-  { id: 'general.owner-display-name', section: 'general', group: 'General', label: 'Your name', description: 'The name K2 agents call you when you message them', keywords: ['name', 'display', 'owner', 'you', 'from', 'identity', 'agents', 'call', 'message', 'sender'] },
   { id: 'general.config-location', section: 'general', group: 'General', label: 'Config Location', description: '~/.k2/settings.json', keywords: ['settings', 'config', 'location', 'path'] },
   { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset All Settings', description: 'Revert every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
   { id: 'general.active-window-hours', section: 'general', group: 'Workspaces', label: 'Active Bar window', description: 'How long workspaces stay Active after activity', keywords: ['active', 'bar', 'window', 'hours', 'tenure', 'workspace', 'recent', 'sidebar'] },
@@ -355,14 +353,12 @@ export function GeneralSection(): React.JSX.Element {
         <WhatsNewRow />
 
         {/* You (0.46.0, Rosson 2026-10-17): your Connect account (it was the
-            "This is me (owner)" checkbox on Admin Access) and your display
-            name — the `from` attribution agents see when you message them
-            (resolved server-side). Your colour is in your profile (the
-            person icon by Zen). */}
+            "This is me (owner)" checkbox on Admin Access). The separate
+            "Your name" is gone: the owner's name is the picked account's
+            first and last name (profile modal, Admin Access). */}
         <div data-settings-group="you" data-testid="general-you-group">
           <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] m-0 mb-1">You</h3>
           <YourAccountRow />
-          <OwnerDisplayNameRow />
         </div>
 
         <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]" data-settings-id="general.config-location">
@@ -699,35 +695,6 @@ function NewAgentViewRow(): React.JSX.Element {
   )
 }
 
-// ── "Your display name" ────────────────────────────────────────────────
-// The name K2 agents recognize YOU (the owner) by. Used server-side as the
-// composer `from` attribution when you message an agent — the daemon
-// resolves it from app_settings (`ownerDisplayName`) and NEVER from the
-// request body (D3), falling back to "owner" when blank. Backed by
-// `settings.ownerDisplayName` (persisted via the daemon's app_settings
-// deep-merge). The input is shared with the profile modal
-// (`OwnerDisplayNameInput`).
-function OwnerDisplayNameRow(): React.JSX.Element {
-  return (
-    <div
-      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
-      data-settings-id="general.owner-display-name"
-    >
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
-          Your name
-        </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-          What agents call you when you message them. Leave blank to use
-          &ldquo;owner&rdquo;.
-        </p>
-      </div>
-      <div className="flex items-center gap-2 flex-shrink-0">
-        <OwnerDisplayNameInput />
-      </div>
-    </div>
-  )
-}
 
 // ── Composer 1c (D4) — "Allow remote instruct" ─────────────────────────
 // MOVED to Settings → K2 Connect (shared/AllowRemoteInstructRow), beneath

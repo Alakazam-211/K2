@@ -38,6 +38,8 @@ import {
   type K2User,
 } from './connect-user-roles'
 import { WasViewerBadge, WasViewerNotice } from './WasViewerNotice'
+import { PERSON_NAME_MAX, realName } from '@/lib/person-name'
+import { setPersonName } from '@/components/Presence/person-name-api'
 import { CanCloneToggle, setCanCloneOptimistic } from './CanCloneToggle'
 import {
   OwnerAccountTag,
@@ -522,6 +524,13 @@ export function K2ConnectSection({
   const [usersLoaded, setUsersLoaded] = useState(false)
   const [newUsername, setNewUsername] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  // 0.46.0: optional first/last name on the new account.
+  const [newFirstName, setNewFirstName] = useState('')
+  const [newLastName, setNewLastName] = useState('')
+  // 0.46.0: the row whose first/last name is being edited.
+  const [nameFor, setNameFor] = useState<string | null>(null)
+  const [nameDraft, setNameDraft] = useState<{ firstName: string; lastName: string }>({ firstName: '', lastName: '' })
+  const [nameBusy, setNameBusy] = useState(false)
   const [newRole, setNewRole] = useState<K2Role>('member')
   const [userQuery, setUserQuery] = useState('')
   const [showNewPassword, setShowNewPassword] = useState(false)
@@ -779,7 +788,14 @@ export function K2ConnectSection({
     setAddError(null)
     setAddedMsg(null)
     try {
-      const res = await userPost('/add', { username, password: pw })
+      const firstName = newFirstName.trim()
+      const lastName = newLastName.trim()
+      const res = await userPost('/add', {
+        username,
+        password: pw,
+        ...(firstName ? { firstName } : {}),
+        ...(lastName ? { lastName } : {}),
+      })
       if (!res.ok) {
         setAddError(await errText(res))
         return
@@ -796,6 +812,8 @@ export function K2ConnectSection({
       }
       setNewUsername('')
       setNewPassword('')
+      setNewFirstName('')
+      setNewLastName('')
       setNewRole('member')
       setAddedMsg(`Added — share these credentials with the user.`)
       setTimeout(() => setAddedMsg(null), 4000)
@@ -804,6 +822,26 @@ export function K2ConnectSection({
       setAddError(e instanceof Error ? e.message : 'Failed to add user')
     } finally {
       setAddBusy(false)
+    }
+  }
+
+  // 0.46.0: an Admin+ sets someone's first/last name (POST /cli/people/name
+  // with `person`; the daemon applies the colour floors). Empty clears.
+  const submitName = async (username: string): Promise<void> => {
+    setNameBusy(true)
+    setUsersError(null)
+    try {
+      await setPersonName(primaryScope(), {
+        person: username,
+        firstName: nameDraft.firstName.trim() || null,
+        lastName: nameDraft.lastName.trim() || null,
+      })
+      setNameFor(null)
+      await refreshUsers()
+    } catch (e) {
+      setUsersError(e instanceof Error ? e.message : 'Failed to save the name')
+    } finally {
+      setNameBusy(false)
     }
   }
 
@@ -1207,7 +1245,8 @@ export function K2ConnectSection({
     if (!q) return users
     return users.filter((u) => {
       const role = (u.role ?? 'member').toLowerCase()
-      return u.username.toLowerCase().includes(q) || role.includes(q)
+      const real = (realName(u) ?? '').toLowerCase()
+      return u.username.toLowerCase().includes(q) || role.includes(q) || real.includes(q)
     })
   }, [users, userQuery])
 
@@ -1842,6 +1881,22 @@ export function K2ConnectSection({
                   value={newUsername}
                   onChange={(e) => setNewUsername(e.target.value)}
                 />
+                <input
+                  className={`${inputCls} flex-1 min-w-[7rem]`}
+                  placeholder="first name (optional)"
+                  aria-label="New user first name"
+                  maxLength={PERSON_NAME_MAX}
+                  value={newFirstName}
+                  onChange={(e) => setNewFirstName(e.target.value)}
+                />
+                <input
+                  className={`${inputCls} flex-1 min-w-[7rem]`}
+                  placeholder="last name (optional)"
+                  aria-label="New user last name"
+                  maxLength={PERSON_NAME_MAX}
+                  value={newLastName}
+                  onChange={(e) => setNewLastName(e.target.value)}
+                />
                 <div className="relative flex-1 min-w-[8rem]">
                   <input
                     className={`${inputCls} w-full pr-7`}
@@ -1922,7 +1977,16 @@ export function K2ConnectSection({
                   <div key={u.username} className="py-2 space-y-2">
                     <div className="flex items-center justify-between gap-3">
                       <span className="flex items-center gap-2 min-w-0">
-                        <span className="text-xs text-[var(--color-text-primary)] font-mono truncate">{u.username}</span>
+                        {realName(u) ? (
+                          <span className="text-xs text-[var(--color-text-primary)] truncate" data-testid={`user-real-name-${u.username}`}>
+                            {realName(u)}
+                          </span>
+                        ) : null}
+                        <span
+                          className={`text-xs font-mono truncate ${realName(u) ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-primary)]'}`}
+                        >
+                          {u.username}
+                        </span>
                         {u.disabled && (
                           <span className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">
                             disabled
@@ -1983,6 +2047,16 @@ export function K2ConnectSection({
                           <span className="text-[10px] text-[var(--color-text-secondary)]">Enabled</span>
                         </label>
                         <button
+                          data-testid={`edit-name-${u.username}`}
+                          onClick={() => {
+                            setNameFor((cur) => (cur === u.username ? null : u.username))
+                            setNameDraft({ firstName: u.firstName ?? '', lastName: u.lastName ?? '' })
+                          }}
+                          className="text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:underline no-drag cursor-pointer"
+                        >
+                          Edit name
+                        </button>
+                        <button
                           onClick={() => {
                             setResetFor((cur) => (cur === u.username ? null : u.username))
                             setResetPassword('')
@@ -2027,6 +2101,49 @@ export function K2ConnectSection({
                         busy={enableBusy === u.username}
                         onEnableAsMember={(name) => void enableAsMember(name)}
                       />
+                    )}
+                    {nameFor === u.username && (
+                      <form
+                        className="flex flex-wrap items-center gap-1.5"
+                        data-testid={`name-form-${u.username}`}
+                        onSubmit={(e) => {
+                          e.preventDefault()
+                          void submitName(u.username)
+                        }}
+                      >
+                        <input
+                          className={inputCls}
+                          style={{ maxWidth: 160 }}
+                          aria-label={`${u.username} first name`}
+                          placeholder="first name"
+                          maxLength={PERSON_NAME_MAX}
+                          value={nameDraft.firstName}
+                          onChange={(e) => setNameDraft((d) => ({ ...d, firstName: e.target.value }))}
+                        />
+                        <input
+                          className={inputCls}
+                          style={{ maxWidth: 160 }}
+                          aria-label={`${u.username} last name`}
+                          placeholder="last name"
+                          maxLength={PERSON_NAME_MAX}
+                          value={nameDraft.lastName}
+                          onChange={(e) => setNameDraft((d) => ({ ...d, lastName: e.target.value }))}
+                        />
+                        <button
+                          type="submit"
+                          disabled={nameBusy}
+                          className="px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] no-drag cursor-pointer disabled:opacity-60"
+                        >
+                          {nameBusy ? 'Saving…' : 'Save name'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNameFor(null)}
+                          className="text-[10px] text-[var(--color-text-muted)] hover:underline no-drag cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </form>
                     )}
                     {resetFor === u.username && (
                       <form

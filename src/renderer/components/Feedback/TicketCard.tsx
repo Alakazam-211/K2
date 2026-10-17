@@ -17,6 +17,7 @@ import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { presenceDisplayName } from '@/components/Presence/PresenceAvatar'
 import { PresenceChip } from '@/components/Presence/PresenceChip'
 import { usePresenceStore } from '@/stores/presence'
+import { realName } from '@/lib/person-name'
 import {
   assigneeInitials,
   cardSummary,
@@ -252,17 +253,25 @@ function CardAssigneeInitials({ assignees }: { assignees: readonly string[] | nu
  *  `colors` map; a name it doesn't know hashes). */
 function AssigneeChips({ names, shown }: { names: string[]; shown: string[] }): React.JSX.Element {
   const colors = usePresenceStore((s) => s.colors)
+  // 0.46.0: real names ride the tooltip and the initials; the assignee is
+  // still the username.
+  const nameMap = usePresenceStore((s) => s.names)
+  const keyOf = (n: string): string => (n === 'Owner' ? 'owner' : n)
+  const label = (n: string): string => {
+    const real = realName(nameMap[keyOf(n)])
+    return real && real !== n ? `${real} (${n})` : n
+  }
   return (
     <span
       data-testid="card-assignee"
       className="inline-flex items-center gap-0.5 flex-shrink-0"
-      title={`Assigned to ${names.join(', ')}`}
+      title={`Assigned to ${names.map(label).join(', ')}`}
     >
       {/* People chips (plan-agent-status-unify-v1 §3.5): chamfered, the
           person's colour, no overlap. */}
       {shown.map((n) => (
         <span key={n} data-testid="card-assignee-initials" className="flex">
-          <PresenceChip name={n} role="member" size={16} title="" color={colors[n === 'Owner' ? 'owner' : n]} />
+          <PresenceChip name={n} role="member" size={16} title="" color={colors[keyOf(n)]} names={nameMap[keyOf(n)]} />
         </span>
       ))}
       {names.length > shown.length && (

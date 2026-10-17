@@ -32,6 +32,10 @@ export interface PresencePerson {
   user: string
   name: string
   role: string
+  /** 0.46.0: optional real name (display only). */
+  firstName?: string | null
+  lastName?: string | null
+  displayName?: string
   /** Effective person colour (0.46.0); absent from an older daemon. */
   color?: string
 }
@@ -176,7 +180,14 @@ export function resolveRowStatus(input: RowStatusInput): RowStatus {
     const people = input.rosterSupported
       ? usersForWorkspace(input.roster, input.workspace.path)
           .filter((u) => u.user !== input.self)
-          .map((u) => ({ user: u.user, name: u.user, role: u.role, color: u.color }))
+          .map((u) => ({
+            user: u.user,
+            name: u.user,
+            role: u.role,
+            color: u.color,
+            firstName: u.firstName ?? null,
+            lastName: u.lastName ?? null,
+          }))
       : []
     return status(input.activity, people)
   }

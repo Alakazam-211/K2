@@ -36,6 +36,11 @@ export interface K2User {
   /** Settings → Admin Access → "Can clone" (0.46.0). Owner rows are always
    *  true; absent from an older daemon (= allowed, today's behaviour). */
   canClone?: boolean
+  /** 0.46.0: optional real name (display only; null/absent when unset or
+   *  from an older daemon). */
+  firstName?: string | null
+  lastName?: string | null
+  displayName?: string
 }
 
 /** Whether the row should offer "Enable as Member": a former Viewer that

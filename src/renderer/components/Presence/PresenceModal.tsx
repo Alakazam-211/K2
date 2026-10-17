@@ -16,6 +16,7 @@ import { DialogFrame, DialogScrim } from '@/components/ui'
 import { usePresenceStore, type RosterUser } from '@/stores/presence'
 import PresenceAvatar, { presenceDisplayName, useSelfPresenceUser } from './PresenceAvatar'
 import PresenceKickButton from './PresenceKickButton'
+import { personDisplayName, realName } from '@/lib/person-name'
 
 interface PresenceModalProps {
   onClose: () => void
@@ -116,7 +117,8 @@ export default function PresenceModal({ onClose, roster: otherRoster, serverLabe
 }
 
 function PresenceRow({ user, readOnly }: { user: RosterUser; readOnly: boolean }): React.JSX.Element {
-  const displayName = presenceDisplayName(user.user)
+  const displayName = personDisplayName(user.user, user)
+  const real = realName(user)
   // The modal lists another server's roster read-only: "you" is only known
   // on the window's own server.
   const self = useSelfPresenceUser()
@@ -124,7 +126,7 @@ function PresenceRow({ user, readOnly }: { user: RosterUser; readOnly: boolean }
 
   return (
     <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-elevated)] transition-colors">
-      <PresenceAvatar name={user.user} role={user.role} size={32} you={you} color={user.color} />
+      <PresenceAvatar name={user.user} role={user.role} size={32} you={you} color={user.color} names={user} />
 
       {/* Identity + where they're working */}
       <div className="flex-1 min-w-0">
@@ -132,7 +134,12 @@ function PresenceRow({ user, readOnly }: { user: RosterUser; readOnly: boolean }
           <span className="text-xs font-medium text-[var(--color-text-primary)] truncate">
             {displayName}
           </span>
-          {you && <span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">(you)</span>}
+          {real ? (
+            <span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)]" data-testid="presence-row-username">
+              {presenceDisplayName(user.user)}
+            </span>
+          ) : null}
+          {you &&<span className="flex-shrink-0 text-[10px] text-[var(--color-text-muted)]">(you)</span>}
           {/* Role chip: neutral (role is the avatar's corner mark, never a
               colour; plan-agent-status-unify-v1 §3.5). */}
           <span

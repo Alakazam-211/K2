@@ -8,6 +8,18 @@ const src = readFileSync(
   'utf8',
 )
 
+// One component's source: from `function <name>(` to its top-level closing
+// brace. Slicing to the next component's comment instead let a later
+// component's comment (MailAgentSendControl: "no fetchProjects() here")
+// leak into the slice.
+function componentBody(name: string): string {
+  const start = src.indexOf(`function ${name}(`)
+  expect(start, `function ${name} not found`).toBeGreaterThan(0)
+  const end = src.indexOf('\n}\n', start)
+  expect(end, `closing brace of ${name} not found`).toBeGreaterThan(start)
+  return src.slice(start, end + 2)
+}
+
 // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §7.2, T3): the Agent tab row for
 // "Allow hiring and managing agents" writes ONLY through the Admin route
 // POST /cli/agent-access/set with toggle `agents_manage` — never the
@@ -19,9 +31,7 @@ describe('Agent-tab "Allow hiring and managing agents" toggle', () => {
     expect(src).toContain('<SettingsGroup title="Agents">')
     expect(src).toContain('<AgentsManageAgentsToggle project={project} />')
     expect(src).toContain('Allow hiring and managing agents')
-    const start = src.indexOf('function AgentsManageAgentsToggle')
-    expect(start).toBeGreaterThan(0)
-    const toggle = src.slice(start, src.indexOf('// Per-workspace agents-may-manage-hosted-mail', start))
+    const toggle = componentBody('AgentsManageAgentsToggle')
     expect(toggle).toContain("daemonCliPost(primaryScope(), 'agent-access/set'")
     expect(toggle).toContain("toggle: 'agents_manage'")
     expect(toggle).toContain('value: next')
@@ -45,9 +55,7 @@ describe('Agent-tab "Allow managing server-wide secrets" toggle', () => {
       src.indexOf('<AgentsManageAgentsToggle project={project} />'),
     )
     expect(src).toContain('Allow managing server-wide secrets')
-    const start = src.indexOf('function AgentsManageVaultToggle')
-    expect(start).toBeGreaterThan(0)
-    const toggle = src.slice(start, src.indexOf('// K2 compute nodes — "Allow compute nodes"', start))
+    const toggle = componentBody('AgentsManageVaultToggle')
     expect(toggle).toContain("daemonCliPost(primaryScope(), 'agent-access/set'")
     expect(toggle).toContain("toggle: 'vault_manage'")
     expect(toggle).toContain('value: next')
@@ -73,9 +81,7 @@ describe('Agent-tab "Allow compute nodes" toggle', () => {
     expect(src.indexOf('<AgentsUseComputeToggle project={project} />')).toBeGreaterThan(
       src.indexOf('<AgentsManageVaultToggle project={project} />'),
     )
-    const start = src.indexOf('function AgentsUseComputeToggle')
-    expect(start).toBeGreaterThan(0)
-    const toggle = src.slice(start, src.indexOf('// Per-workspace agents-may-manage-hosted-mail', start))
+    const toggle = componentBody('AgentsUseComputeToggle')
     expect(toggle).toContain('setWorkspaceComputeSwitch(project.path, next)')
     expect(toggle).toContain('agentsCanUseCompute: next ? 1 : 0')
     expect(toggle).toContain('noteOptimisticProjectsMutationSuccess()')
@@ -96,9 +102,7 @@ describe('Agent-tab "operate compute nodes" toggle', () => {
     expect(src.indexOf('<AgentsOperateComputeToggle project={project} />')).toBeGreaterThan(
       src.indexOf('<AgentsUseComputeToggle project={project} />'),
     )
-    const start = src.indexOf('function AgentsOperateComputeToggle')
-    expect(start).toBeGreaterThan(0)
-    const toggle = src.slice(start, src.indexOf('// Per-workspace agents-may-manage-hosted-mail', start))
+    const toggle = componentBody('AgentsOperateComputeToggle')
     expect(toggle).toContain('setWorkspaceComputeOperate(project.path, next)')
     expect(toggle).toContain('agentsCanOperateCompute: next ? 1 : 0')
     expect(toggle).toContain('noteOptimisticProjectsMutationSuccess()')

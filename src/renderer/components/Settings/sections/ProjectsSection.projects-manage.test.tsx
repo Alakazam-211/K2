@@ -91,9 +91,15 @@ describe('Agent tab: Manage K2 projects', () => {
     expect(src.indexOf('<AgentsManageProjectsToggle project={project} />')).toBeGreaterThan(
       src.indexOf('<AgentsOperateComputeToggle project={project} />'),
     )
-    const start = src.indexOf('export function AgentsManageProjectsToggle')
+    // Slice to this component's own closing brace, not the next component's
+    // comment: MailAgentSendControl's comment ("no fetchProjects() here")
+    // sits between them.
+    const start = src.indexOf('export function AgentsManageProjectsToggle(')
     expect(start).toBeGreaterThan(0)
-    const toggle = src.slice(start, src.indexOf('// Per-workspace agents-may-manage-hosted-mail', start))
+    const end = src.indexOf('\n}\n', start)
+    expect(end).toBeGreaterThan(start)
+    const toggle = src.slice(start, end + 2)
+    expect(toggle).toContain("toggle: 'projects_manage'")
     expect(toggle).not.toContain('fetchProjects(')
     expect(toggle).not.toContain('workspace/set')
   })

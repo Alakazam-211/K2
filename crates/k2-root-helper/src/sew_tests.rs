@@ -270,6 +270,117 @@ fn install_bin_installs_the_pin_once_and_never_replaces_another_version() {
     assert_eq!(std::fs::read(t.p("/usr/local/bin/real")).unwrap(), b"x");
 }
 
+// ── licence notices (Sew SW1 B1, protocol 8) ─────────────────────────────
+
+/// A gzip tarball with `(name, bytes, is_symlink)` members, like Sew's
+/// release script (root-owned, mtime 0).
+fn tarball_of(members: &[(&str, &[u8], bool)]) -> Vec<u8> {
+    let enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut b = tar::Builder::new(enc);
+    for (name, body, link) in members {
+        let mut h = tar::Header::new_ustar();
+        h.set_uid(0);
+        h.set_gid(0);
+        h.set_mtime(0);
+        if *link {
+            h.set_entry_type(tar::EntryType::Symlink);
+            h.set_size(0);
+            h.set_mode(0o777);
+            b.append_link(&mut h, name, "/etc/shadow").unwrap();
+        } else {
+            h.set_entry_type(tar::EntryType::Regular);
+            h.set_size(body.len() as u64);
+            h.set_mode(0o644);
+            b.append_data(&mut h, name, *body).unwrap();
+        }
+    }
+    b.into_inner().unwrap().finish().unwrap()
+}
+
+fn sew_0_2_0_shape() -> Vec<u8> {
+    tarball_of(&[
+        ("LICENSE", b"FSL-1.1-ALv2 text", false),
+        ("NOTICE", b"Sew notice", false),
+        ("THIRD_PARTY_NOTICES.md", b"# third parties", false),
+        ("sew", b"\x7fELF fake sew", false),
+    ])
+}
+
+#[test]
+fn notices_extract_only_top_level_regular_licence_files() {
+    let got = crate::sew::extract_notices(&sew_0_2_0_shape()).expect("0.2.0 shape");
+    let names: Vec<&str> = got.iter().map(|(n, _)| *n).collect();
+    assert_eq!(names, NOTICE_MEMBERS);
+    assert_eq!(got[1].1, b"Sew notice");
+    // The binary member is still found the same way beside them.
+    assert_eq!(member(&sew_0_2_0_shape(), "sew"), b"\x7fELF fake sew");
+    // Pre-0.2.0 tarballs (K2's fixtures) carry none.
+    assert!(crate::sew::extract_notices(&pin_tarball()).expect("fixture").is_empty());
+    // Nested copies are not top-level notices.
+    let nested = tarball_of(&[("doc/LICENSE", b"x", false), ("sew", b"bin", false)]);
+    assert!(crate::sew::extract_notices(&nested).expect("nested").is_empty());
+    // A link, a duplicate: refused.
+    let link = tarball_of(&[("LICENSE", b"", true), ("sew", b"bin", false)]);
+    assert!(crate::sew::extract_notices(&link).unwrap_err().msg.contains("not a regular file"));
+    let twice = tarball_of(&[("NOTICE", b"a", false), ("NOTICE", b"b", false)]);
+    assert!(crate::sew::extract_notices(&twice).unwrap_err().msg.contains("twice"));
+}
+
+#[test]
+fn notices_install_beside_the_binary_and_go_with_it() {
+    let t = box_root();
+    std::fs::create_dir_all(t.p("/usr/share")).unwrap();
+    // No notices in the tarball: nothing written, no directory made.
+    let v = crate::sew::install_notices(&t.ctx, &pin_tarball(), SEW_DOC_DIR).expect("fixture");
+    assert_eq!(v, serde_json::json!({"dir": null, "files": []}));
+    assert!(!t.p(DOC_ROOT).exists());
+
+    let v = crate::sew::install_notices(&t.ctx, &sew_0_2_0_shape(), SEW_DOC_DIR).expect("0.2.0 shape");
+    assert_eq!(v, serde_json::json!({"dir": SEW_DOC_DIR, "files": NOTICE_MEMBERS}));
+    for name in NOTICE_MEMBERS {
+        let p = t.p(&format!("{SEW_DOC_DIR}/{name}"));
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o644, "{name}");
+    }
+    assert_eq!(std::fs::read(t.p(&format!("{SEW_DOC_DIR}/LICENSE"))).unwrap(), b"FSL-1.1-ALv2 text");
+    assert_eq!(std::fs::metadata(t.p(SEW_DOC_DIR)).unwrap().permissions().mode() & 0o777, 0o755);
+    // Re-install is idempotent (atomic rewrite).
+    crate::sew::install_notices(&t.ctx, &sew_0_2_0_shape(), SEW_DOC_DIR).expect("again");
+    let v = json(&t.call(&["engine", "sew", "status"]));
+    assert_eq!(v["notices"], serde_json::json!({"sew": true, "sewMedia": false}));
+
+    // Removal takes the files and the emptied directory; a foreign file
+    // keeps the directory.
+    assert_eq!(crate::sew::remove_notices(&t.ctx, SEW_DOC_DIR).unwrap(), NOTICE_MEMBERS);
+    assert!(!t.p(SEW_DOC_DIR).exists());
+    assert!(t.p(DOC_ROOT).is_dir(), "/usr/share/doc stays");
+    crate::sew::install_notices(&t.ctx, &sew_0_2_0_shape(), SEW_MEDIA_DOC_DIR).unwrap();
+    std::fs::write(t.p(&format!("{SEW_MEDIA_DOC_DIR}/README.Debian")), b"x").unwrap();
+    assert_eq!(crate::sew::remove_notices(&t.ctx, SEW_MEDIA_DOC_DIR).unwrap().len(), 3);
+    assert!(t.p(&format!("{SEW_MEDIA_DOC_DIR}/README.Debian")).exists());
+    assert!(crate::sew::remove_notices(&t.ctx, SEW_DOC_DIR).unwrap().is_empty(), "missing is fine");
+
+    // A link where the doc directory goes is refused, never followed.
+    let t = box_root();
+    std::fs::create_dir_all(t.p("/usr/share")).unwrap();
+    std::fs::create_dir_all(t.p("/tmp/elsewhere")).unwrap();
+    symlink(t.p("/tmp/elsewhere"), t.p(DOC_ROOT)).unwrap();
+    assert!(crate::sew::install_notices(&t.ctx, &sew_0_2_0_shape(), SEW_DOC_DIR).is_err());
+    assert_eq!(std::fs::read_dir(t.p("/tmp/elsewhere")).unwrap().count(), 0);
+}
+
+#[test]
+fn install_bin_with_a_pre_0_2_0_pin_writes_no_notices() {
+    let t = box_root();
+    ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+    let o = t.call(&["engine", "sew", "install-bin"]);
+    ok(&o);
+    assert_eq!(json(&o)["notices"], serde_json::json!({"dir": null, "files": []}));
+    assert!(!t.p(SEW_DOC_DIR).exists());
+    // The same-version re-run answers notices too.
+    let o = t.call(&["engine", "sew", "install-bin"]);
+    assert_eq!(json(&o)["notices"]["files"], serde_json::json!([]));
+}
+
 // ── known-binary rule ────────────────────────────────────────────────────
 
 #[test]

@@ -1,10 +1,17 @@
-//! `engine sew` namespace (protocol 7, Sew S29 K11): install, run, upgrade
-//! and remove Sew through Sew's own ops CLI, as root.
+//! `engine sew` namespace (protocol 7, Sew S29 K11; notices protocol 8):
+//! install, run, upgrade and remove Sew through Sew's own ops CLI, as root.
 //!
 //! Rules on top of the helper's (§5.3):
 //! - **Pins.** A tarball is staged only when its sha256 is this build's pin
 //!   for the arch AND its single binary member hashes to the pinned binary
 //!   sha (`k2_root_proto::sew`). Nothing is downloaded here.
+//! - **Notices** (Sew SW1 B1, 0.2.0 on). The pinned tarballs carry
+//!   `LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES.md` beside the binary;
+//!   the helper puts them under `/usr/share/doc/sew` (`install-bin`, before
+//!   the binary; a successful `upgrade`) and `/usr/share/doc/sew-media` (a
+//!   successful `media install`), root 0644, and removes them on a
+//!   successful `purge` / `media uninstall`. The binary member is still
+//!   the only thing ever executed.
 //! - **Known binary.** Before any root exec of `/usr/local/bin/sew` the file
 //!   must be a regular, root-owned, not group/other-writable file whose
 //!   sha256 is a release this build knows (S29 §7.3).
@@ -71,7 +78,11 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
             if *keep_backups {
                 args.push("--keep-backups");
             }
-            run_sew(ctx, &args, None)
+            let mut out = run_sew(ctx, &args, None)?;
+            if out["sewExit"] == 0 {
+                out["noticesRemoved"] = notices_or_error(remove_all_notices(ctx));
+            }
+            Ok(out)
         }
         SewVerb::Doctor => {
             require_known(ctx)?;
@@ -87,7 +98,11 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
         SewVerb::MediaInstall => media_install(ctx, stdin),
         SewVerb::MediaUninstall => {
             require_known(ctx)?;
-            run_sew(ctx, &["media", "uninstall"], None)
+            let mut out = run_sew(ctx, &["media", "uninstall"], None)?;
+            if out["sewExit"] == 0 {
+                out["noticesRemoved"] = notices_or_error(remove_notices(ctx, SEW_MEDIA_DOC_DIR).map(|a| json!(a)));
+            }
+            Ok(out)
         }
         SewVerb::MediaReconfigure { restart_now } => media_reconfigure(ctx, stdin, *restart_now),
         SewVerb::MediaTurnCert => media_turn_cert(ctx, stdin),
@@ -233,6 +248,111 @@ pub fn extract_member(archive: &[u8], name: &str) -> HResult<Vec<u8>> {
     Err(Fail::argv("sew tarball: binary member missing"))
 }
 
+/// The licence members of a gzip tarball (`LICENSE`, `NOTICE`,
+/// `THIRD_PARTY_NOTICES.md`; Sew 0.2.0 on), in [`NOTICE_MEMBERS`] order.
+/// Top level only, regular files only, each at most [`MAX_NOTICE`], none
+/// twice. An older tarball has none: an empty list.
+pub fn extract_notices(archive: &[u8]) -> HResult<Vec<(&'static str, Vec<u8>)>> {
+    let dec = flate2::read::GzDecoder::new(std::io::Cursor::new(archive));
+    let mut tar = tar::Archive::new(dec);
+    let entries = tar.entries().map_err(|_| Fail::argv("sew tarball unreadable"))?;
+    let mut found: Vec<(&'static str, Vec<u8>)> = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|_| Fail::argv("sew tarball entry unreadable"))?;
+        let path = entry.path().map_err(|_| Fail::argv("sew tarball path unreadable"))?;
+        let Some(name) = NOTICE_MEMBERS.iter().copied().find(|n| exact_name(&path, n)) else {
+            continue;
+        };
+        if !entry.header().entry_type().is_file() {
+            return Err(Fail::argv("sew tarball: a notice member is not a regular file"));
+        }
+        if found.iter().any(|(n, _)| *n == name) {
+            return Err(Fail::argv("sew tarball: a notice member is there twice"));
+        }
+        let mut buf = Vec::new();
+        entry
+            .take(MAX_NOTICE + 1)
+            .read_to_end(&mut buf)
+            .map_err(|_| Fail::argv("sew tarball: read notice failed"))?;
+        if buf.len() as u64 > MAX_NOTICE {
+            return Err(Fail::argv("sew tarball: notice member too large"));
+        }
+        found.push((name, buf));
+    }
+    found.sort_by_key(|(n, _)| NOTICE_MEMBERS.iter().position(|m| m == n));
+    Ok(found)
+}
+
+/// A directory under an existing one: created `mode` root when missing,
+/// opened as is when present (never re-moded: `/usr/share/doc` is the
+/// distro's), refused when something else is there.
+fn ensure_dir(ctx: &Ctx, base: &Dir, name: &str, mode: u32) -> HResult<Dir> {
+    let n = OsStr::new(name);
+    match base.kind(n).map_err(|e| Fail::io_err("stat", e))? {
+        Kind::Missing => {
+            base.mkdir(n, mode).map_err(|e| Fail::io_err("mkdir", e))?;
+            let d = base.sub(n).map_err(|e| Fail::io_err("open", e))?;
+            if let Some((u, g)) = ctx.root_owner() {
+                d.fchown(u, g).map_err(|e| Fail::io_err("chown", e))?;
+            }
+            d.fchmod(mode).map_err(|e| Fail::io_err("chmod", e))?;
+            Ok(d)
+        }
+        Kind::Dir => base.sub(n).map_err(|e| Fail::io_err("open", e)),
+        _ => Err(Fail::state("refused: a link or a file where K2 expects a directory")),
+    }
+}
+
+/// Put a pinned tarball's licence files under `doc_dir` (Sew SW1 B1): dir
+/// root 0755, files root 0644, written atomically. Answers what it wrote;
+/// a tarball without notices (before 0.2.0) writes nothing.
+pub(crate) fn install_notices(ctx: &Ctx, archive: &[u8], doc_dir: &str) -> HResult<J> {
+    let notices = extract_notices(archive)?;
+    if notices.is_empty() {
+        return Ok(json!({"dir": J::Null, "files": []}));
+    }
+    let (parent, leaf) = split(doc_dir);
+    let (grand, doc) = split(parent);
+    let share = ctx.dir(grand).map_err(|e| Fail::io_err("open /usr/share", e))?;
+    let doc_root = ensure_dir(ctx, &share, doc, 0o755)?;
+    let d = sub_dir(ctx, &doc_root, leaf, 0o755)?;
+    let mut files = Vec::new();
+    for (name, bytes) in &notices {
+        d.write_atomic(OsStr::new(name), bytes, 0o644, ctx.root_owner())
+            .map_err(|e| Fail::io_err("write notice", e))?;
+        files.push(*name);
+    }
+    Ok(json!({"dir": doc_dir, "files": files}))
+}
+
+/// Remove `doc_dir`'s licence files and the directory when that leaves it
+/// empty. Missing is fine.
+pub(crate) fn remove_notices(ctx: &Ctx, doc_dir: &str) -> HResult<Vec<&'static str>> {
+    let mut removed = Vec::new();
+    for name in NOTICE_MEMBERS {
+        if remove_file(ctx, &format!("{doc_dir}/{name}"))? {
+            removed.push(name);
+        }
+    }
+    if let Some((parent, leaf)) = open_parent(ctx, doc_dir)? {
+        let n = OsStr::new(&leaf);
+        if parent.kind(n).map_err(|e| Fail::io_err("stat", e))? == Kind::Dir {
+            let d = parent.sub(n).map_err(|e| Fail::io_err("open", e))?;
+            if d.entries().map_err(|e| Fail::io_err("list", e))?.is_empty() {
+                parent.remove_tree(n).map_err(|e| Fail::io_err("rmdir", e))?;
+            }
+        }
+    }
+    Ok(removed)
+}
+
+/// After a purge: both notice directories go.
+fn remove_all_notices(ctx: &Ctx) -> HResult<J> {
+    let sew = remove_notices(ctx, SEW_DOC_DIR)?;
+    let media = remove_notices(ctx, SEW_MEDIA_DOC_DIR)?;
+    Ok(json!({"sew": sew, "sewMedia": media}))
+}
+
 /// What is at `/usr/local/bin/sew`: `None` = absent; `Ok(Some((sha,
 /// Some(version))))` = a release this build knows; `(sha, None)` unknown.
 /// A link, a non-file, or (on a real box) a non-root or writable file is a
@@ -336,6 +456,10 @@ pub fn status(ctx: &Ctx) -> J {
         "data": exists(ctx, SEW_DATA_DIR),
         "mgmtToken": exists(ctx, SEW_MGMT_TOKEN),
         "mediaSysctl": exists(ctx, SEW_MEDIA_SYSCTL),
+        "notices": {
+            "sew": exists(ctx, &format!("{SEW_DOC_DIR}/LICENSE")),
+            "sewMedia": exists(ctx, &format!("{SEW_MEDIA_DOC_DIR}/LICENSE")),
+        },
     })
 }
 
@@ -388,7 +512,9 @@ fn install_bin(ctx: &Ctx) -> HResult<J> {
     let (bytes, art) = staged_core(ctx)?;
     match on_disk(ctx)? {
         Some((_, Some(v))) if v == pinned().version => {
-            return Ok(json!({"installed": v, "changed": false}));
+            // A re-run heals notices a crash left behind.
+            let notices = install_notices(ctx, &bytes, SEW_DOC_DIR)?;
+            return Ok(json!({"installed": v, "changed": false, "notices": notices}));
         }
         Some((_, Some(v))) => {
             return Err(Fail::state(format!("install-bin refused: Sew {v} is installed; use engine sew upgrade")));
@@ -400,6 +526,9 @@ fn install_bin(ctx: &Ctx) -> HResult<J> {
     if !sha256_hex(&bin).eq_ignore_ascii_case(art.binary_sha256) {
         return Err(Fail::argv("install-bin: binary sha256 mismatch"));
     }
+    // Sew SW1 B1: the licence files go first, so a binary is never on the
+    // box without its attribution (a failure here changes nothing else).
+    let notices = install_notices(ctx, &bytes, SEW_DOC_DIR)?;
     let (parent, name) = split(SEW_BIN);
     let d = ctx.dir(parent).map_err(|e| Fail::io_err("open /usr/local/bin", e))?;
     let (_, stage) = split(SEW_BIN_STAGING);
@@ -432,7 +561,7 @@ fn install_bin(ctx: &Ctx) -> HResult<J> {
         let _ = d.unlink(stage);
         return Err(Fail::io_err("install-bin", e));
     }
-    Ok(json!({"installed": pinned().version, "changed": true}))
+    Ok(json!({"installed": pinned().version, "changed": true, "notices": notices}))
 }
 
 // ── install / config / keys ─────────────────────────────────────────────
@@ -554,7 +683,7 @@ fn systemctl(ctx: &Ctx, op: SewSystemctl) -> HResult<J> {
 
 fn upgrade(ctx: &Ctx) -> HResult<J> {
     let from = require_known(ctx)?;
-    let (_, art) = staged_core(ctx)?;
+    let (bytes, art) = staged_core(ctx)?;
     if from == pinned().version {
         return Ok(json!({"sewExit": 0, "sew": {"state": "unchanged", "message": "already the pin"}, "stderrTail": ""}));
     }
@@ -562,7 +691,18 @@ fn upgrade(ctx: &Ctx) -> HResult<J> {
         return Err(Fail::state("upgrade refused: the installed Sew is newer than the pin (a downgrade is a restore)"));
     }
     let tarball = ctx.p(SEW_STAGE_TARBALL).display().to_string();
-    run_sew(ctx, &["upgrade", "--tarball", &tarball, "--sha256", art.tarball_sha256], None)
+    let mut out = run_sew(ctx, &["upgrade", "--tarball", &tarball, "--sha256", art.tarball_sha256], None)?;
+    // The new binary is in place: its notices follow it. Sew's upgrade
+    // already happened, so a notice failure is reported, not an exit.
+    if out["sewExit"] == 0 {
+        out["notices"] = notices_or_error(install_notices(ctx, &bytes, SEW_DOC_DIR));
+    }
+    Ok(out)
+}
+
+/// A notice step after Sew already acted: what it wrote, or `{error}`.
+fn notices_or_error(r: HResult<J>) -> J {
+    r.unwrap_or_else(|f| json!({"error": f.msg}))
 }
 
 fn restore(ctx: &Ctx, id: &str) -> HResult<J> {
@@ -637,7 +777,13 @@ fn media_install(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
         return Err(Fail::state("the staged sew-media tarball is not this build's pin"));
     }
     let tarball = ctx.p(SEW_STAGE_MEDIA_TARBALL).display().to_string();
-    media_run(ctx, &req, Some(&tarball), false, false)
+    let mut out = media_run(ctx, &req, Some(&tarball), false, false)?;
+    // `sew media install` put sew-media in place from the pinned tarball;
+    // its licence files follow it (Sew SW1 B1).
+    if out["sewExit"] == 0 {
+        out["notices"] = notices_or_error(install_notices(ctx, &bytes, SEW_MEDIA_DOC_DIR));
+    }
+    Ok(out)
 }
 
 fn media_reconfigure(ctx: &Ctx, stdin: &[u8], restart_now: bool) -> HResult<J> {

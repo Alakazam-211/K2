@@ -52563,7 +52563,7 @@ cmd_zen_widget_errors() {
         [ -n "$since" ] && q+=("since=$since")
         raw=$(cli_request "/cli/zen/widget/errors" "${q[@]}") || raw=""
         code=0
-        ZE_RAW="$raw" ZE_JSON="$as_json" ZE_FOLLOW="$follow" python3 -c '
+        ZE_RAW="$raw" ZE_JSON="$as_json" ZE_FOLLOW="$follow" ZE_SINCE="$since" python3 -c '
 import json, os, sys
 raw = os.environ.get("ZE_RAW") or ""
 try:
@@ -52597,7 +52597,9 @@ else:
         if e.get("suggestion"):
             print("  suggestion: %s" % e["suggestion"])
     if not errs and os.environ.get("ZE_FOLLOW") != "true":
-        print("no runtime errors%s" % (" since that one" if d.get("last") else ""))
+        # 0.46.1: say what was checked ("since that one" named no seq).
+        since = os.environ.get("ZE_SINCE") or ""
+        print("no runtime errors after #%s" % since if since else "no runtime errors logged")
 sys.exit(1 if any(e.get("current") for e in errs) else 0)
 ' || code=$?
         [ "$code" -eq 3 ] && exit 1

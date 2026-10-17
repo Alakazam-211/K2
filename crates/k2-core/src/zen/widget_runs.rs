@@ -35,6 +35,11 @@ pub const MAX_MESSAGE: usize = 500;
 pub const MAX_STACK: usize = 2000;
 const LOG: &str = "runtime.jsonl";
 
+/// 0.46.1: one writer at a time. A report reads the log for the last
+/// `seq`, then appends; two frames erroring at once used to read the same
+/// last seq and both log `#n+1`. Process-wide (reports are rare and tiny).
+static RUN_LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// The fixed fields a run report may carry besides its text (GV49).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunDetail<'a> {
@@ -212,6 +217,8 @@ impl ZenFiles {
         if event != "ready" && event != "error" {
             return Err(ZenError::BadRequest("event is ready or error".into()));
         }
+        // Held from the read of the last seq through the append (or rewrite).
+        let _log = RUN_LOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let mut runs = self.read_runs(&name);
         if event == "ready" && runs.iter().any(|r| r["event"] == "ready" && r["hash"] == hash) {
             return Ok(json!({ "ok": true, "logged": false }));
@@ -360,6 +367,47 @@ mod tests {
         assert_eq!(run_text(&json!({"message": "boom"})), "boom");
         assert!(fixed_word("sources.read", true) && !fixed_word("sources.read", false));
         assert!(!fixed_word("a b", true) && !fixed_word("", true) && !fixed_word(&"x".repeat(61), true));
+    }
+
+    /// 0.46.1: frames erroring at the same moment each get their own
+    /// `#seq` (the read-then-append used to race to duplicates).
+    #[test]
+    fn concurrent_reports_get_unique_seqs() {
+        let d = std::env::temp_dir().join(format!("k2-zen-runs-race-{}", uuid::Uuid::new_v4().simple()));
+        let root = d.join(".k2").join("zen");
+        let f = ZenFiles::new(root.clone());
+        assert!(f.root().starts_with(std::env::temp_dir()), "tests never touch the real Zen folder");
+        f.setup().expect("setup");
+        f.new_widget("racer", None).expect("new widget");
+        let hash = "a".repeat(64);
+        const N: usize = 24;
+        let start = std::sync::Arc::new(std::sync::Barrier::new(N));
+        let threads: Vec<_> = (0..N)
+            .map(|i| {
+                let (root, hash, start) = (root.clone(), hash.clone(), start.clone());
+                std::thread::spawn(move || {
+                    let f = ZenFiles::new(root);
+                    start.wait();
+                    let msg = format!("Error: boom {i}");
+                    f.record_widget_run("racer", &hash, "error", Some(&msg), None).expect("record")["seq"]
+                        .as_u64()
+                        .expect("seq")
+                })
+            })
+            .collect();
+        let mut seqs: Vec<u64> = threads.into_iter().map(|t| t.join().expect("thread")).collect();
+        seqs.sort_unstable();
+        assert_eq!(seqs, (1..=N as u64).collect::<Vec<_>>(), "every report its own seq");
+        let logged = f.widget_errors("racer", None).expect("errors");
+        let mut on_disk: Vec<u64> = logged["errors"]
+            .as_array()
+            .expect("errors")
+            .iter()
+            .map(|e| e["seq"].as_u64().expect("seq"))
+            .collect();
+        on_disk.sort_unstable();
+        assert_eq!(on_disk, (1..=N as u64).collect::<Vec<_>>(), "{logged}");
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]

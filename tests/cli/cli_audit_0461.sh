@@ -228,6 +228,14 @@ routes '{"GET /cli/sources/pending": [403, {"error": {"code": "owner_only"}}]}'
 run cell sources pending
 assert_absent "never the switch hint for owner_only" "$err" "Manage Gardens and data sources"
 
+echo "== 13. k2 zen widget errors =="
+routes '{"GET /cli/zen/widget/errors": [200, {"ok": true, "widget": "w", "hash": null, "last": 7, "errors": []}]}'
+run owner zen widget errors w
+assert_contains "no errors: says none logged" "$out" "no runtime errors logged"
+run owner zen widget errors w --since 3
+assert_contains "no errors after --since: names the seq" "$out" "no runtime errors after #3"
+assert_absent "old wording gone" "$out" "since that one"
+
 echo
 echo "CLI audit 0.46.1: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

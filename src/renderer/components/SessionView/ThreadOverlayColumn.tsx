@@ -5,7 +5,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { ThreadOverlayPane, threadZenScopeProps } from './ThreadOverlayPane'
 import type { ThreadTurn } from './overlayThread'
 import { ThreadComposeDrawerContext, type ThreadComposeDrawer } from './threadComposeDrawer'
-import { ThreadFooterFade } from '@/components/Thread/ThreadZenKit'
+import { FOOTER_FADE_TARGETS, ThreadFooterFade, threadFadeTop } from '@/components/Thread/ThreadZenKit'
 
 /**
  * Thread list + Message-the-agent bar. The bar floats over the list's
@@ -44,6 +44,9 @@ export function ThreadOverlayColumn({
 }): React.JSX.Element {
   const composeRef = useRef<HTMLDivElement>(null)
   const [bottom, setBottom] = useState(0)
+  /** The fade's top: just above the drawer's tab when it is out, else the
+   *  field (measured with the bar, so it moves when they do). */
+  const [fadeTop, setFadeTop] = useState<number | null>(null)
   const [turn, setTurn] = useState<ThreadTurn | null>(null)
   const hasCompose = composeBar != null
   // A bar that renders nothing (a view-only room, remote instruct off)
@@ -59,7 +62,16 @@ export function ThreadOverlayColumn({
       return
     }
     const measure = (): void => {
-      setBottom(Math.ceil(el.getBoundingClientRect().height))
+      const slot = el.getBoundingClientRect()
+      setBottom(Math.ceil(slot.height))
+      // Everything that can sit on the box is in the bar's flow, so its
+      // coming and going (and the drawer growing) resizes the slot: this
+      // one observer re-measures it. Reads only, then one state write.
+      const tops = FOOTER_FADE_TARGETS.flatMap((sel) => {
+        const node = el.querySelector(sel)
+        return node ? [node.getBoundingClientRect().top] : []
+      })
+      setFadeTop(threadFadeTop(slot.top, tops))
     }
     measure()
     if (typeof ResizeObserver === 'undefined') return
@@ -105,7 +117,7 @@ export function ThreadOverlayColumn({
             focusThreadComposeSlotTextarea(e.currentTarget, e.target)
           }}
         >
-          {composeShown ? <ThreadFooterFade /> : null}
+          {composeShown ? <ThreadFooterFade top={fadeTop} /> : null}
           <div className="relative" style={{ zIndex: 1 }}>
             <ThreadComposeDrawerContext.Provider value={drawer}>{composeBar}</ThreadComposeDrawerContext.Provider>
           </div>

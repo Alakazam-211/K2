@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactElement } from 'react'
 
 const h = vi.hoisted(() => {
@@ -60,7 +60,7 @@ vi.mock('./useOverlayThread', () => ({
 import { composeRowChromeWidth, TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { composeTextareaHeight } from '@/components/Terminal/terminalCompose'
 import { ThreadAttachmentChip, ThreadFooterFade, threadComposeLines, threadComposeStackNext } from '@/components/Thread/ThreadZenKit'
-import { CHAMFER_SCOPE, FOOTER_BLUR_LAYERS, FOOTER_FADE_PX, FOOTER_TINT_STOPS, THREAD_CHAMFER_CSS, THREAD_COMPOSE_BOX_BORDER, THREAD_COMPOSE_BOX_PAD, THREAD_FOOTER_FADE_CSS, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
+import { CHAMFER_SCOPE, FOOTER_BLUR_LAYERS, FOOTER_FADE_PX, FOOTER_FADE_TARGETS, FOOTER_GLASS_WASH, FOOTER_TINT_STOPS, FOOTER_TINT_STOPS_OPAQUE, threadFadeTop, THREAD_CHAMFER_CSS, THREAD_COMPOSE_BOX_BORDER, THREAD_COMPOSE_BOX_PAD, THREAD_FOOTER_FADE_CSS, ThreadBubble, zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { primaryScope } from '@/kessel/server-scope'
 import { resetThreadViewersForTests, setThreadViewerForTests, type ThreadViewer } from '@/lib/thread-viewer'
@@ -619,66 +619,145 @@ describe('chamfered corners in K2\'s square Style', () => {
   })
 })
 
-// Rosson 2026-10-16, from K2 Companion (7cbf584): the strip behind the box
-// and the activity tab is see-through; messages scroll under it and fade.
-describe('footer fade behind the message box', () => {
-  it('the tint eases from clear at the top to 95%, in px from the top (no % band, no hard edge)', () => {
-    expect(FOOTER_FADE_PX).toBe(24)
-    expect(THREAD_FOOTER_FADE_CSS).toContain('top: -24px; pointer-events: none;')
-    // Clear at the top, rising every step, 95% just past the box's top edge.
-    expect(FOOTER_TINT_STOPS[0]).toEqual([0, 0])
-    expect(FOOTER_TINT_STOPS.at(-1)).toEqual([FOOTER_FADE_PX + 4, 95])
-    for (let i = 1; i < FOOTER_TINT_STOPS.length; i++) {
-      const [at, pct] = FOOTER_TINT_STOPS[i]
-      const [prevAt, prevPct] = FOOTER_TINT_STOPS[i - 1]
-      expect(at - prevAt, `stop ${i}`).toBeLessThanOrEqual(4)
-      expect(pct, `stop ${i}`).toBeGreaterThan(prevPct)
-      // No jump: at most +22 points per 4px step.
-      expect(pct - prevPct, `stop ${i}`).toBeLessThanOrEqual(22)
+// Rosson 2026-10-16, from K2 Companion (7cbf584): frosted glass behind the
+// whole bottom area; messages scroll under the box and the drawer's tab,
+// blurred, and show through them.
+describe('frosted glass behind the message box', () => {
+  /** The rule for one selector (a line of the stylesheet), or a loud error. */
+  const ruleFor = (css: string, needle: string): string => {
+    const line = css.split('\n').find((l) => l.includes(needle))
+    if (!line) throw new Error(`no rule with ${needle}`)
+    return line
+  }
+  /** The body of an @-block, by its head. */
+  const block = (head: string): string => {
+    const start = THREAD_FOOTER_FADE_CSS.indexOf(head)
+    if (start < 0) throw new Error(`no block ${head}`)
+    // The body only (after the head's own "{"), up to the block's "}".
+    const open = THREAD_FOOTER_FADE_CSS.indexOf(' {\n', start)
+    const end = THREAD_FOOTER_FADE_CSS.indexOf('\n}', open)
+    return THREAD_FOOTER_FADE_CSS.slice(open + 3, end)
+  }
+
+  it('the strip starts 4px above whatever is on top of the box: the tab when out, else the field', () => {
+    expect(FOOTER_FADE_PX).toBe(4)
+    // Slot top at 500; field at 512.
+    expect(threadFadeTop(500, [512])).toBe(8)
+    // The tab out at 480 (above the slot top's padding row): 4px above it.
+    expect(threadFadeTop(500, [480, 512])).toBe(-24)
+    // Nothing to follow: the stylesheet's default (4px above the slot).
+    expect(threadFadeTop(500, [])).toBeNull()
+    expect(THREAD_FOOTER_FADE_CSS).toContain('top: -4px; pointer-events: none; z-index: 0; transition: top 200ms')
+    expect(FOOTER_FADE_TARGETS).toEqual(['[data-zen-attachments]', '[data-zen-drawer-clip]', '[data-zen-compose-box]'])
+  })
+
+  it('the column measures it: the tab while it is out, the field when it is closed', () => {
+    const rects: Record<string, number> = {}
+    const orig = Element.prototype.getBoundingClientRect
+    Element.prototype.getBoundingClientRect = function getBoundingClientRect() {
+      const node = this as HTMLElement
+      for (const [sel, top] of Object.entries(rects)) {
+        if (node.matches(sel)) return new DOMRect(0, top, 300, sel.includes('compose-slot') ? 900 - top : 30)
+      }
+      return orig.call(this)
     }
-    expect(THREAD_FOOTER_FADE_CSS).toContain(
-      '.thread-footer-tint { background: linear-gradient(to bottom, color-mix(in srgb, var(--zen-canvas) 0%, transparent) 0px, color-mix(in srgb, var(--zen-canvas) 6%, transparent) 4px,',
+    const observers: Array<() => void> = []
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: ResizeObserverCallback) {
+          observers.push(() => cb([], this as unknown as ResizeObserver))
+        }
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      },
     )
-    expect(THREAD_FOOTER_FADE_CSS).not.toMatch(/var\(--zen-canvas\) \d+%, transparent\) \d+%/)
-    // Only in the desktop Thread box.
-    expect(THREAD_FOOTER_FADE_CSS.split('\n').filter((l) => l.includes('.thread-footer-')).every((l) => l.includes('[data-k2-thread-zen] .thread-footer-fade'))).toBe(true)
+    try {
+      rects['[data-testid="agent-session-thread-compose-slot"]'] = 820
+      rects['[data-zen-compose-box]'] = 828
+      const composeBar = (drawerOut: boolean): ReactElement => (
+        <div data-zen-compose="">
+          {drawerOut ? <div data-zen-drawer-clip="" /> : null}
+          <div data-zen-compose-box="" />
+        </div>
+      )
+      const view = renderInRoom(room, <ThreadOverlayColumn addr="sales" conversationId="c" active composeBar={composeBar(false)} />)
+      const fade = (): HTMLElement => document.querySelector('[data-thread-footer-fade]') as HTMLElement
+      // Closed: 4px above the field (828 - 820 - 4).
+      expect(fade().style.top).toBe('4px')
+      // The tab comes out above the field; the slot grows upward.
+      rects['[data-testid="agent-session-thread-compose-slot"]'] = 788
+      rects['[data-zen-drawer-clip]'] = 796
+      view.rerender(<ThreadOverlayColumn addr="sales" conversationId="c" active composeBar={composeBar(true)} />)
+      act(() => {
+        for (const fire of observers) fire()
+      })
+      expect(fade().style.top).toBe('4px')
+      // Out, the top is the tab's (following the field it would be 36px).
+      rects['[data-zen-drawer-clip]'] = 790
+      act(() => {
+        for (const fire of observers) fire()
+      })
+      expect(fade().style.top).toBe('-2px')
+      // The list pads by the bar's height so the newest message rests above it.
+      expect(screen.getByTestId('thread-overlay-list').style.paddingBottom).toBe(`${8 + (900 - 788)}px`)
+    } finally {
+      Element.prototype.getBoundingClientRect = orig
+      vi.unstubAllGlobals()
+    }
   })
 
-  // Rosson's 2026-10-04 no-blur rule is suspended for this strip on the dev
-  // branch while he judges it: four blur layers, as on mobile.
-  it('blurs like mobile: four layers, -webkit- and standard backdrop-filter and mask, feathered in', () => {
-    expect(FOOTER_BLUR_LAYERS.map(([px]) => px)).toEqual([2, 6, 12, 24])
-    FOOTER_BLUR_LAYERS.forEach(([px, from, to], i) => {
-      const rule = THREAD_FOOTER_FADE_CSS.split('\n').find((l) => l.includes(`.thread-footer-blur-${i + 1} {`))
-      if (!rule) throw new Error(`no rule for blur layer ${i + 1}`)
-      expect(rule).toContain(`-webkit-backdrop-filter: blur(${px}px);`)
-      expect(rule).toContain(` backdrop-filter: blur(${px}px);`)
-      const mask = `linear-gradient(to bottom, transparent ${from}px, #000 ${to}px)`
-      expect(rule).toContain(`-webkit-mask-image: ${mask};`)
-      expect(rule).toContain(` mask-image: ${mask};`)
-      // A feather, not a cut: it fades in over at least 8px.
-      expect(to - from).toBeGreaterThanOrEqual(8)
-    })
-    render(<ThreadFooterFade />)
+  it('one blur layer, -webkit- and standard, feathered in at the top', () => {
+    expect(FOOTER_BLUR_LAYERS).toEqual([[14, 0, 6]])
+    const rule = ruleFor(THREAD_FOOTER_FADE_CSS, '.thread-footer-blur-1 {')
+    expect(rule).toContain('-webkit-backdrop-filter: blur(14px);')
+    expect(rule).toContain(' backdrop-filter: blur(14px);')
+    const mask = 'linear-gradient(to bottom, transparent 0px, #000 6px)'
+    expect(rule).toContain(`-webkit-mask-image: ${mask};`)
+    expect(rule).toContain(` mask-image: ${mask};`)
+    expect(THREAD_FOOTER_FADE_CSS).not.toContain('.thread-footer-blur-2')
+    render(<ThreadFooterFade top={12} />)
     const strip = document.querySelector('[data-thread-footer-fade]') as HTMLElement
-    expect(Array.from(strip.children).map((c) => c.className)).toEqual([
-      'thread-footer-blur-1',
-      'thread-footer-blur-2',
-      'thread-footer-blur-3',
-      'thread-footer-blur-4',
-      'thread-footer-tint',
-    ])
+    expect(Array.from(strip.children).map((c) => c.className)).toEqual(['thread-footer-blur-1', 'thread-footer-tint'])
+    expect(strip.style.top).toBe('12px')
   })
 
-  it('reduced transparency (and no backdrop-filter) keeps the gradient alone, no blur', () => {
-    const reduced = /@media \(prefers-reduced-transparency: reduce\) \{([^}]*\})\s*\}/.exec(THREAD_FOOTER_FADE_CSS)
-    if (!reduced) throw new Error('no reduced-transparency block')
-    expect(reduced[1]).toContain('[class^="thread-footer-blur-"] { display: none; }')
-    expect(reduced[1]).not.toMatch(/blur\(|backdrop-filter/)
-    expect(reduced[1]).not.toContain('thread-footer-tint')
-    const noBlur = /@supports not \(\(-webkit-backdrop-filter: blur\(1px\)\) or \(backdrop-filter: blur\(1px\)\)\) \{([^}]*\})\s*\}/.exec(THREAD_FOOTER_FADE_CSS)
-    if (!noBlur) throw new Error('no @supports fallback block')
-    expect(noBlur[1]).toContain('[class^="thread-footer-blur-"] { display: none; }')
+  it('the tint eases in from clear, in px from the top (no % band, no hard edge)', () => {
+    for (const stops of [FOOTER_TINT_STOPS, FOOTER_TINT_STOPS_OPAQUE]) {
+      expect(stops[0]).toEqual([0, 0])
+      for (let i = 1; i < stops.length; i++) {
+        expect(stops[i][0] - stops[i - 1][0]).toBeLessThanOrEqual(2)
+        expect(stops[i][1]).toBeGreaterThan(stops[i - 1][1])
+        expect(stops[i][1] - stops[i - 1][1]).toBeLessThanOrEqual(24)
+      }
+    }
+    // Frosted: a light wash; reduced transparency: nearly opaque.
+    expect(FOOTER_TINT_STOPS.at(-1)?.[1]).toBe(45)
+    expect(FOOTER_TINT_STOPS_OPAQUE.at(-1)?.[1]).toBe(95)
+    expect(THREAD_FOOTER_FADE_CSS).not.toMatch(/var\(--zen-canvas\) \d+%, transparent\) \d+%/)
+  })
+
+  it('the field and the tab on the bar are see-through (stronger in light), opaque with reduced transparency', () => {
+    const field = '[data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]'
+    const tab = '[data-k2-thread-zen] [data-zen-compose] [data-zen-drawer-tile]'
+    const wash = (pct: number): string => `background: color-mix(in srgb, var(--zen-surface-raised) ${pct}%, transparent) !important; --ch-fill: color-mix(in srgb, var(--zen-surface-raised) ${pct}%, transparent) !important;`
+    expect(FOOTER_GLASS_WASH).toEqual({ dark: 72, light: 86 })
+    const dark = ruleFor(THREAD_FOOTER_FADE_CSS, `${field}, ${tab} {`)
+    expect(dark).toContain(wash(72))
+    const light = ruleFor(THREAD_FOOTER_FADE_CSS, `html[data-scheme="light"] ${field}, html[data-scheme="light"] ${tab} {`)
+    expect(light).toContain(wash(86))
+    for (const head of ['@media (prefers-reduced-transparency: reduce)', '@supports not ((-webkit-backdrop-filter']) {
+      const body = block(head)
+      expect(body, head).toContain('[class^="thread-footer-blur-"] { display: none; }')
+      expect(body, head).not.toMatch(/blur\(\d|backdrop-filter:/)
+      expect(body, head).toContain('background: var(--zen-surface-raised) !important; --ch-fill: var(--zen-surface-raised) !important;')
+      expect(body, head).toContain(`html[data-scheme="light"] ${field}`)
+      expect(body, head).toContain('var(--zen-canvas) 95%, transparent) 6px')
+    }
+    // Only the desktop bar's own field and tab (not Zen's box, not a drawer
+    // under a list with no box).
+    expect(THREAD_FOOTER_FADE_CSS.split('\n').filter((l) => l.includes('surface-raised')).every((l) => l.includes('[data-k2-thread-zen] [data-zen-compose] '))).toBe(true)
   })
 
   it('a column without a message box draws no fade', () => {

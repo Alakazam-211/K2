@@ -4,8 +4,9 @@
 # the provider fakes (tests/fakes/oauth-providers) — never Google, never
 # Microsoft, never the real ~/.k2, the production daemon or the keychain.
 #
-# Two roles: the owner token, and an agent holding only its session passport
-# on the cell socket (minted by a pinned chat whose harness is a shim).
+# Roles: the owner token (owner-ws = the owner token inside the workspace),
+# and an agent holding only its session passport on the cell socket (minted
+# by a pinned chat whose harness is a shim).
 #
 #   MCS1  oauth-config (client id + Microsoft tenant), a Microsoft link by
 #         device code (scopes per feature, account check, stamped client),
@@ -19,6 +20,13 @@
 #         send to the locked sender, a >3 MB attachment is refused before
 #         anything is audited, capabilities show send, Microsoft unlink says
 #         where to remove consent.
+#   MCS3  Microsoft calendars over Graph: the owner's linked-calendars
+#         switch (agents exit 3), list / events / show / create / update /
+#         delete / freebusy / wait as the agent passport and the owner token,
+#         the draft guard (attendee or outside-organizer events refused, no
+#         meeting mail ever), getSchedule with the calendarView fallback,
+#         capability_missing (owner_disabled, scope_not_granted) only after
+#         the access gate and the level gate.
 #
 # Build first (the daemon MUST carry the test-only provider override):
 #   cargo build -p k2-provider-fakes
@@ -70,6 +78,8 @@ run() {
     local -a envs=(HOME="$SB" K2_HOST=127.0.0.1 K2_PORT="$DPORT")
     if [ "$who" = "agent" ]; then
         envs+=(K2_HOOK_TOKEN="$PASSPORT" K2_HOOK_SOCK="$SOCK" K2_PROJECT_PATH="$REPO")
+    elif [ "$who" = "owner-ws" ]; then
+        envs+=(K2_PROJECT_PATH="$REPO")
     fi
     set +e
     OUT="$(cd "$WORK" && env "${envs[@]}" "$K2_CLI" "$@" </dev/null 2>"$WORK/err")"
@@ -241,8 +251,159 @@ has "$OUT" "upgraded $MS" "upgrade output"
 LOG="$(fake_log)"
 jok "$LOG" 'any(r["path"].endswith("/devicecode") and "Calendars.ReadWrite" in r["form"].get("scope", "") and "Mail.Send" in r["form"].get("scope", "") for r in j["requests"])' "upgrade asked for mail + calendar"
 run owner mail capabilities "$MS" --json
-jok "$OUT" 'all(m["cap"] != "calendar.read" or m["reason"] == "not_built" for m in j["capabilities"]["missing"])' "calendar is consented now (not built yet)"
+jok "$OUT" 'all(m["cap"] not in ("calendar.read", "calendar.write") for m in j["capabilities"]["missing"]) and j["capabilities"]["calendar"]["read"] and j["capabilities"]["calendar"]["write"] and j["capabilities"]["calendar"]["freebusy"] == "self" and all(m["reason"] == "not_built" for m in j["capabilities"]["missing"] if m["cap"] in ("calendar.invite", "calendar.rsvp"))' "calendar read/write on now (Graph); invites not built"
 ok "upgrade: same row, mail,calendar consented"
+
+echo "== MCS3: the owner's linked-calendars switch =="
+run owner mail link calendars --json
+want_rc 0 "owner reads the switch"
+jok "$OUT" 'j["enabled"] is True and j["linkedCalendars"] == "on"' "linked calendars default on"
+run agent mail link calendars off
+want_rc 3 "an agent can't flip the switch"
+has "$ERR" "owner_only" "agent link calendars → owner_only"
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+    --data-raw '{"enabled":"maybe"}' "$BASE/cli/mail/link/calendars?token=$DTOKEN")"
+[ "$code" = "400" ] || fail "a non-boolean switch body is a usage error (got $code)"
+run owner mail link calendars sometimes
+want_rc 2 "link calendars takes on|off"
+ok "switch: owner reads it, agents exit 3, bad input is usage"
+
+echo "== MCS3: Microsoft calendars over Graph (agent passport at draft) =="
+run agent calendar list "$MS" --json
+want_rc 0 "agent lists the Microsoft calendars"
+jok "$OUT" 'j["source"] == "microsoft" and [c["id"] for c in j["calendars"]] == ["cal-default", "cal-shared"]' "both calendars"
+jok "$OUT" 'j["calendars"][0]["rights"]["write"] is True and j["calendars"][0]["isDefault"] and j["calendars"][1]["shared"] and j["calendars"][1]["rights"]["write"] is False' "own default writable, shared read-only"
+run agent calendar list "$MS"
+want_rc 0 "agent lists (text)"
+has "$OUT" "cal-shared · Boss · shared by boss@contoso.example" "text list names the sharer"
+ok "list: own + shared calendars with rights"
+
+run agent calendar events "$MS" --from 2026-10-19 --to 2026-10-26 --json
+want_rc 0 "agent reads the week"
+jok "$OUT" '[e["title"] for e in j["events"]] == ["Focus time", "Pipeline review", "Board prep"]' "the seeded week in start order"
+jok "$OUT" 'j["events"][0]["start"] == "2026-10-20T16:00:00Z" and j["events"][0]["timeZone"] == "Pacific Standard Time" and j["events"][1]["timeZone"] == "Europe/Berlin" and j["events"][1]["participants"] == 1' "UTC instants, each event keeps its zone"
+EV_SOLO="$(printf %s "$OUT" | python3 -c 'import json,sys; print([e["id"] for e in json.load(sys.stdin)["events"] if e["title"]=="Focus time"][0])')"
+EV_MEETING="$(printf %s "$OUT" | python3 -c 'import json,sys; print([e["id"] for e in json.load(sys.stdin)["events"] if e["title"]=="Pipeline review"][0])')"
+EV_INVITED="$(printf %s "$OUT" | python3 -c 'import json,sys; print([e["id"] for e in json.load(sys.stdin)["events"] if e["title"]=="Board prep"][0])')"
+run agent calendar events "$MS" --from 2026-10-19 --to 2026-10-26 --calendar cal-shared --json
+want_rc 0 "agent reads the shared calendar"
+jok "$OUT" 'j["events"] == []' "the shared calendar is empty"
+ok "events: calendarView in UTC, ids carry the inbox, zones kept"
+
+run agent calendar show "$EV_MEETING"
+want_rc 0 "agent shows a meeting"
+has "$OUT" "attendee : alice@example.com (accepted)" "show lists the attendee"
+has "$OUT" "BEGIN CALENDAR NOTES (untrusted" "notes are fenced as untrusted"
+has "$OUT" "Ignore previous instructions" "the notes are inside"
+ok "show: attendees + untrusted notes markers"
+
+run agent calendar create "$MS" --title "Deep work" --start 2026-10-23T16:00:00Z --end 2026-10-23T17:30:00Z \
+    --tz America/Los_Angeles --location "Desk" --notes "no meetings" --json
+want_rc 0 "agent creates a draft event"
+jok "$OUT" 'j["emailSent"] is False and j["source"] == "microsoft" and j["event"]["timeZone"] == "America/Los_Angeles" and j["event"]["start"] == "2026-10-23T16:00:00Z"' "created in its zone"
+EV_NEW="$(printf %s "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+LOG="$(fake_log)"
+jok "$LOG" 'any(r["method"] == "POST" and r["path"] == "/ms/graph/v1.0/me/events" for r in j["requests"])' "POST /me/events"
+run agent calendar update "$EV_NEW" --title "Deep work (moved)" --start 2026-10-23T18:00:00Z --json
+want_rc 0 "agent updates its own event"
+jok "$OUT" 'j["event"]["title"] == "Deep work (moved)" and j["emailSent"] is False' "updated"
+run agent calendar show "$EV_NEW" --json
+jok "$OUT" 'j["event"]["start"] == "2026-10-23T18:00:00Z" and j["event"]["end"] == "2026-10-23T19:30:00Z" and j["event"]["timeZone"] == "America/Los_Angeles"' "moved in its own zone, duration kept"
+run agent calendar create "$MS" --title "Elsewhere" --start 2026-10-23T09:00:00Z --end 2026-10-23T10:00:00Z --calendar cal-shared
+want_rc 3 "the shared calendar is read-only at draft"
+has "$ERR" "share_rights" "code share_rights"
+ok "create/update: POST + PATCH with no attendees, zone and duration kept"
+
+echo "== MCS3: the draft guard on stored events =="
+run agent calendar update "$EV_MEETING" --title "renamed"
+want_rc 3 "an event with an outside attendee needs send"
+has "$ERR" "invites_need_send_level" "code invites_need_send_level"
+run agent calendar delete "$EV_INVITED"
+want_rc 3 "an event someone else organized"
+has "$ERR" "invites_need_send_level" "code invites_need_send_level (organizer)"
+run agent calendar delete "$EV_NEW" --json
+want_rc 0 "agent deletes its own event"
+jok "$OUT" 'j["deleted"] is True and j["emailSent"] is False' "deleted"
+LOG="$(fake_log)"
+jok "$LOG" 'not any(r["method"] in ("PATCH", "DELETE") and r["path"].endswith("/me/events/ev-meeting") for r in j["requests"])' "the meeting was never written"
+jok "$LOG" 'not any(r["method"] in ("PATCH", "DELETE") and r["path"].endswith("/me/events/ev-invited") for r in j["requests"])' "the organizer's event was never written"
+jok "$LOG" 'any(r["method"] == "DELETE" for r in j["requests"])' "DELETE reached Graph for the agent's own event"
+jok "$LOG" 'not any(s["via"] in ("meetingRequest", "meetingUpdate", "meetingCancel", "organizerNotice") for s in j["sent"])' "Exchange was never asked to email anyone"
+jok "$LOG" 'all("outlook.timezone=\"UTC\"" in (r.get("prefer") or "") for r in j["requests"] if "/calendar" in r["path"] or "/events" in r["path"])' "every calendar request asked for UTC"
+ok "guard: attendee / outside-organizer events refused, nobody emailed, UTC asked"
+
+echo "== MCS3: free/busy =="
+run agent calendar freebusy "$MS" --from 2026-10-19T00:00:00Z --to 2026-10-26T00:00:00Z --json
+want_rc 0 "agent free/busy"
+jok "$OUT" 'j["source"] == "getSchedule" and [b["status"] for b in j["busy"]] == ["busy", "busy", "tentative"]' "getSchedule busy windows"
+[[ "$OUT" != *"Board prep"* && "$OUT" != *"Focus time"* ]] || fail "free/busy leaked a title: $OUT"
+fake_cfg '{"getScheduleRefused": true}'
+run agent calendar freebusy "$MS" --from 2026-10-19T00:00:00Z --to 2026-10-26T00:00:00Z --json
+want_rc 0 "free/busy when getSchedule is refused"
+jok "$OUT" 'j["source"] == "events" and len(j["busy"]) == 3' "computed from the calendar view"
+fake_cfg '{"getScheduleRefused": false}'
+ok "free/busy: getSchedule, calendarView fallback, no titles"
+
+echo "== MCS3: wait (calendarView delta) =="
+run agent calendar wait "$MS" --timeout 5
+want_rc 2 "wait times out with a state"
+STATE="$(printf %s "$ERR" | sed -n 's/.*--since-state \(gd_[A-Za-z0-9_-]*\).*/\1/p')"
+[ -n "$STATE" ] || fail "the timeout hint carries a gd_ state: $ERR"
+run agent calendar create "$MS" --title "Late add" --start 2026-10-24T16:00:00Z --end 2026-10-24T17:00:00Z --json
+want_rc 0 "a change to wait for"
+EV_LATE="$(printf %s "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+run agent calendar wait "$MS" --since-state "$STATE" --timeout 30 --json
+want_rc 0 "wait sees the change"
+jok "$OUT" '"'"$EV_LATE"'" in j["updated"] and j["state"].startswith("gd_") and j["source"] == "microsoft"' "the new event is reported"
+run agent calendar wait "$MS" --since-state s-not-graph --timeout 5
+want_rc 2 "a foreign state is usage"
+LOG="$(fake_log)"
+jok "$LOG" 'all(r["path"] == "/ms/graph/v1.0/me/calendarView/delta" for r in j["requests"] if "delta" in r["path"])' "delta only ever hit the Graph delta path"
+ok "wait: baseline → state → change reported"
+
+echo "== MCS3: capability errors (after the access gate) =="
+run owner mail link calendars off
+want_rc 0 "owner turns linked calendars off"
+has "$OUT" "Calendars on linked inboxes: off (changed)" "switch output"
+run agent calendar list "$MS"
+want_rc 3 "owner_disabled exits 3"
+jok "$ERR" 'j["error"]["code"] == "capability_missing" and j["error"]["reason"] == "owner_disabled" and j["error"]["fix"] == "k2 mail link calendars on (owner)"' "owner_disabled with the fix"
+run agent mail capabilities "$MS" --json
+jok "$OUT" 'any(m["cap"] == "calendar.read" and m["reason"] == "owner_disabled" for m in j["capabilities"]["missing"])' "capabilities agree"
+run owner mail link calendars on
+want_rc 0 "owner turns them back on"
+run agent calendar list "$MS"
+want_rc 0 "back on"
+run agent calendar list nobody@elsewhere.example
+want_rc 1 "an inbox the agent can't see"
+has "$ERR" "not_found" "masked not_found, never capability_missing"
+run owner mail access level "$MS" "$REPO" --level read
+want_rc 0 "owner lowers the agent to read"
+run agent calendar create "$MS" --title "x" --start 2026-10-24T09:00:00Z --end 2026-10-24T10:00:00Z
+want_rc 1 "read level can't write"
+has "$ERR" "not_found" "a read grant answers the masked not_found"
+run agent calendar events "$MS" --from 2026-10-19 --to 2026-10-26
+want_rc 0 "read level still reads"
+run owner mail access level "$MS" "$REPO" --level draft
+want_rc 0 "owner restores draft"
+fake_cfg '{"msAccount": "mailonly@contoso.example"}'
+run owner mail link add mailonly@contoso.example --provider microsoft --workspace "$REPO"
+want_rc 0 "a mail-only Microsoft link"
+fake_cfg '{"msAccount": "rosson@contoso.example"}'
+run agent calendar events mailonly@contoso.example
+want_rc 3 "mail-only link exits 3"
+jok "$ERR" 'j["error"]["code"] == "capability_missing" and j["error"]["reason"] == "scope_not_granted" and j["error"]["cap"] == "calendar.read" and j["error"]["fix"] == "k2 mail link upgrade mailonly@contoso.example --features calendar (owner)"' "scope_not_granted with the upgrade fix"
+run owner mail link remove mailonly@contoso.example
+want_rc 0 "drop the mail-only link"
+ok "capability_missing: owner_disabled, scope_not_granted; masked + level gates first"
+
+echo "== MCS3: owner token in the workspace =="
+run owner-ws calendar events "$MS" --from 2026-10-19 --to 2026-10-26 --json
+want_rc 0 "owner token reads the Microsoft calendar"
+jok "$OUT" 'len(j["events"]) == 4' "owner sees the same week (plus the late add)"
+run owner-ws calendar delete "$EV_LATE"
+want_rc 0 "owner deletes the late add"
+ok "owner: same verbs, same answers"
 
 echo "== MCS1: Google link (client capture) + revoke on unlink =="
 run_stdin "fake-google-secret" mail oauth-config set --provider gmail --client-id fake-g.apps.googleusercontent.com --secret-stdin

@@ -14,6 +14,9 @@
 //!   Graph      /ms/graph/v1.0/me, …/mailFolders/{f}/messages,
 //!              …/messages[/{id}[/attachments|/createReply|/send|/move]],
 //!              …/sendMail
+//!   Calendars  /ms/graph/v1.0/me/calendars, …/calendarView[/delta],
+//!              …/calendars/{id}/calendarView, …/events[/{id}] (GET, POST,
+//!              PATCH, DELETE), …/calendar/getSchedule — see calendar.rs
 //!   Google     POST /google/token, POST /google/revoke,
 //!              GET /google/gmail/v1/users/me/profile
 //!   Control    POST /_fake/config (merge JSON), GET /_fake/log
@@ -21,10 +24,15 @@
 //! `/_fake/config` keys: `msAccount`, `msTid`, `msTokenError` (an AADSTS
 //! description the token endpoint answers until cleared), `pendingPolls`
 //! (authorization_pending answers before a device code succeeds),
-//! `googleAccount`, `googleHd`.
+//! `googleAccount`, `googleHd`, `getScheduleRefused` (getSchedule answers
+//! 403, like some personal accounts).
 //!
 //! Every Graph send is recorded under `sent` in `/_fake/log` so a test
-//! asserts who would have been emailed. Nothing here is a real credential.
+//! asserts who would have been emailed — calendar writes Exchange would turn
+//! into meeting mail included. Each logged request carries its `prefer`
+//! header(s). Nothing here is a real credential.
+
+mod calendar;
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -56,6 +64,7 @@ struct State {
     drafts: HashMap<String, Value>,
     messages: HashMap<String, Value>,
     revoked: Vec<String>,
+    cal: calendar::Calendar,
 }
 
 impl State {
@@ -67,6 +76,7 @@ impl State {
             "pendingPolls": 1,
             "googleAccount": "rosson@gmail.example",
             "googleHd": "",
+            "getScheduleRefused": false,
         });
         let mut messages = HashMap::new();
         messages.insert(
@@ -94,6 +104,7 @@ impl State {
             drafts: HashMap::new(),
             messages,
             revoked: Vec::new(),
+            cal: calendar::Calendar::seeded("rosson@contoso.example"),
         }
     }
 
@@ -170,7 +181,14 @@ fn read_req(stream: &mut TcpStream) -> Option<Req> {
     let mut headers = HashMap::new();
     for l in lines {
         if let Some((k, v)) = l.split_once(':') {
-            headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
+            // Repeated headers (two `Prefer` lines) fold into one value.
+            headers
+                .entry(k.trim().to_ascii_lowercase())
+                .and_modify(|cur: &mut String| {
+                    cur.push_str(", ");
+                    cur.push_str(v.trim());
+                })
+                .or_insert_with(|| v.trim().to_string());
         }
     }
     let len: usize = headers
@@ -200,9 +218,12 @@ fn respond(stream: &mut TcpStream, status: u16, body: &str) {
         200 => "OK",
         201 => "Created",
         202 => "Accepted",
+        204 => "No Content",
         400 => "Bad Request",
         401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
+        410 => "Gone",
         413 => "Payload Too Large",
         _ => "Status",
     };
@@ -248,6 +269,7 @@ fn handle(st: &Mutex<State>, req: Req) -> (u16, String) {
         "query": req.query,
         "form": logged_form,
         "bearer": req.headers.get("authorization").map(|a| a.starts_with("Bearer ")),
+        "prefer": req.headers.get("prefer"),
     });
     s.log.push(entry);
     let p = req.path.as_str();
@@ -366,6 +388,28 @@ fn handle(st: &Mutex<State>, req: Req) -> (u16, String) {
             );
         }
         let segs: Vec<&str> = rest.trim_start_matches('/').split('/').collect();
+        let me = s.cfg_str("msAccount");
+        let refused = s.cfg.get("getScheduleRefused").and_then(|v| v.as_bool()).unwrap_or(false);
+        let base = format!(
+            "http://{}/ms/graph/v1.0",
+            req.headers.get("host").cloned().unwrap_or_else(|| "127.0.0.1".into())
+        );
+        let decoded: Vec<String> = segs.iter().map(|x| pct_decode(x)).collect();
+        let dsegs: Vec<&str> = decoded.iter().map(String::as_str).collect();
+        let st = &mut *s;
+        if let Some(r) = calendar::handle(
+            &mut st.cal,
+            &mut st.sent,
+            &me,
+            refused,
+            &base,
+            m,
+            &dsegs,
+            &req.query,
+            &json_body,
+        ) {
+            return r;
+        }
         match (m, segs.as_slice()) {
             ("GET", ["me"]) => {
                 let a = s.cfg_str("msAccount");

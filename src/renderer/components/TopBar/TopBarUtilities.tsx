@@ -17,7 +17,8 @@ export function hasTopBarPageToggles(children: ReactNode): boolean {
 }
 
 /**
- * Right-cluster body shared with TopBar: presence, usage, pipe, timer,
+ * Right-cluster body shared with TopBar: presence (with its own pipe, only
+ * while the roster shows), usage, pipe, timer,
  * keep awake, Help, pipe, mode, then a pipe only when that page has
  * its own toggles, then (where Zen exists) a pipe and the Zen toggle as the
  * LAST item: right of the drawer toggles on Agents and Home

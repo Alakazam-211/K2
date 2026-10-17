@@ -23,6 +23,7 @@ import {
 } from '@/stores/presence'
 import type { PresenceView, PresenceViewStore } from '@/stores/server-view'
 import { useTopBarScope } from '@/components/TopBar/top-bar-scope'
+import TopBarPipe from '@/components/TopBar/TopBarPipe'
 import PresenceAvatar, { useSelfPresenceUser } from './PresenceAvatar'
 import { PresenceMoreChip } from './PresenceChip'
 import PresenceModal from './PresenceModal'
@@ -71,6 +72,9 @@ export default function PresenceRoster(): React.JSX.Element | null {
           {overflow > 0 && <PresenceMoreChip count={overflow} size={20} title={`${overflow} more connected`} />}
         </span>
       </button>
+      {/* Rosson 2026-10-17: a divider between the people and the usage
+          chip. It lives here so it shows only while the roster does. */}
+      <TopBarPipe />
 
       {modalOpen &&
         (following ? (

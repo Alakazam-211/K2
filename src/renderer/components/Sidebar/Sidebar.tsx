@@ -219,7 +219,8 @@ export function ShortcutRangeHint({ combo }: { combo: string }): React.JSX.Eleme
 // ── Agent row shell (one workspace / agent in the nav) ──────────────────────
 
 /** The nav row every agent list paints: 32px avatar, name + presence on
- *  the first line, a 14px second line (tags, working glyph, shortcut).
+ *  the first line, a 14px second line 2px below it (tags, working glyph,
+ *  shortcut).
  *  Agents' `SingleProjectItem` and the Home roster both render through it
  *  so the two sidebars stay one look. */
 export function AgentRowButton({
@@ -268,7 +269,10 @@ export function AgentRowButton({
           <span className="truncate flex-1 leading-4">{name}</span>
           <span className="flex items-center">{nameAside}</span>
         </div>
-        <div className="h-3.5 min-h-3.5 leading-none flex items-center gap-1">{subline}</div>
+        {/* Line 2 sits 2px below line 1 (`mt-0.5`, Rosson 2026-10-16): the
+            tag, cluster and number read apart from the name and presence.
+            16 + 2 + 14 = 32 = the avatar, so the row height holds. */}
+        <div data-agent-row-line2="" className="mt-0.5 h-3.5 min-h-3.5 leading-none flex items-center gap-1">{subline}</div>
       </div>
     </button>
   )

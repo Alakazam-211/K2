@@ -350,6 +350,12 @@ describe('Home — the Agents page shell', () => {
     // Every Home row is the Agents row shell.
     const rows = homeSidebar().querySelectorAll('[data-agent-row]')
     expect(rows.length).toBe(3)
+    // Line 2 (tag + status + number) sits 2px below the name line.
+    for (const row of rows) {
+      const line2 = row.querySelector('[data-agent-row-line2]')
+      if (!line2) throw new Error('Home row has no line 2')
+      expect(line2.classList.contains('mt-0.5')).toBe(true)
+    }
     // Same room, still mounted, and shown: Cortana is on this Home.
     expect(roomArea().style.display).toBe('')
     expect(within(roomArea()).getByTestId('terminal-area').getAttribute('data-cwd')).toBe('/w/cortana')

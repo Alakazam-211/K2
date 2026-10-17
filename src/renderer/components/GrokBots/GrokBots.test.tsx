@@ -137,6 +137,12 @@ describe('Agents sidebar', () => {
     expect(screen.getByText('Cortana')).toBeTruthy()
     const states = screen.getAllByTestId('grokbot-state').map((e) => e.getAttribute('data-state'))
     expect(states).toEqual(['working', 'idle'])
+    // Same row shell: line 2 (the status cluster) sits 2px below the name line.
+    for (const cluster of screen.getAllByTestId('grokbot-state')) {
+      const line2 = cluster.closest('[data-agent-row-line2]')
+      if (!line2) throw new Error('Grok Bot status is not on line 2')
+      expect(line2.classList.contains('mt-0.5')).toBe(true)
+    }
   })
 
   it('shows nothing while Show is off on the server', async () => {
@@ -186,7 +192,9 @@ describe('My Home', () => {
     const home = { id: 'h1', name: 'Home', rows: [row] }
     render(<GrokBotHomeRow home={home} row={row} index={0} />)
     await waitFor(() => expect(screen.getByTestId('grokbot-state').getAttribute('data-state')).toBe('working'))
-    expect(screen.getByTestId('grokbot-tag')).toBeTruthy()
+    const line2 = screen.getByTestId('grokbot-state').closest('[data-agent-row-line2]')
+    if (!line2) throw new Error('Grok Bot Home status is not on line 2')
+    expect(line2.classList.contains('mt-0.5')).toBe(true)
     fireEvent.click(screen.getByText('Cortana'))
     expect(useGrokBotsStore.getState().open).toEqual({ hostKey: 'local', agentId: ID })
   })

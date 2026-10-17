@@ -35,9 +35,9 @@ import { beginBrowserMotion } from '@/lib/browser-overlay'
 import { pickArm, pickDisarm, pickPoll, setDesignBadges } from '@/lib/design-picker-ipc'
 import { chatTabSlotVisible, useRetainedChatStore } from '@/stores/retained-chat'
 import type { AgentItemData, DesignItemData, Tab } from '@/stores/tabs'
-import { DesignPaletteButton, DesignToolbar } from './DesignToolbar'
+import { DesignPaletteButton } from './DesignToolbar'
 import { DesignWebStub } from './DesignWebStub'
-import { NotePopover } from './NotePopover'
+import { NotePopover, sendNowChord } from './NotePopover'
 import { NoteTray } from './NoteTray'
 import { designItemStillOpen } from './design-lifecycle'
 import { readDesignSplit, writeDesignSplit } from './design-split-sizes'
@@ -242,14 +242,6 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
   const store = useDesignNotesStore.getState
   const toolbar = (
     <>
-      <DesignToolbar
-        armed={picker.armed}
-        noteCount={tray.notes.length}
-        sending={tray.sending}
-        canRetry={tray.pendingThreadItemId !== null}
-        onSend={send}
-        onRetry={retry}
-      />
       {chatBeside ? (
         <div className="px-2 h-5 flex items-center text-[10px] text-[var(--color-text-muted)] border-b border-[var(--color-border)]" data-testid="design-chat-beside">
           Chat is open beside
@@ -265,7 +257,9 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
         onRemove={(noteId) => store().remove(itemId, noteId)}
         onClear={() => store().clear(itemId)}
         onSend={send}
+        onSendOne={(noteId) => void store().sendOne(itemId, noteId, target)}
         onRetry={retry}
+        sendAllHint={sendNowChord()}
       />
     </>
   )

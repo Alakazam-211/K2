@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// Fail loud: the palette (Select) toggle and its colour, Send disabled on an empty
-// tray, the pop-up's overlay claim (which freezes the page) and its keys,
+// Fail loud: the palette (Select) toggle and its colour, the tray's Send all
+// and per-tile Send, the pop-up's overlay claim (which freezes the page) and its keys,
 // the tray's actions, the web stub, and the Design mode switch.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -20,7 +20,7 @@ vi.mock('@/stores/projects', async () => {
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { overlayClaims, resetBrowserOverlaysForTest } from '@/lib/browser-overlay'
-import { DesignPaletteButton, DesignToolbar } from './DesignToolbar'
+import { DesignPaletteButton } from './DesignToolbar'
 import { NotePopover } from './NotePopover'
 import { NoteTray } from './NoteTray'
 import { DesignWebStub } from './DesignWebStub'
@@ -61,47 +61,6 @@ describe('DesignPaletteButton', () => {
     expect(off.getAttribute('aria-pressed')).toBe('false')
     expect(off.className).not.toContain('text-[var(--color-accent)]')
     expect(off.className).toContain('text-[var(--color-text-secondary)]')
-  })
-})
-
-describe('DesignToolbar', () => {
-  function toolbar(over: Partial<Parameters<typeof DesignToolbar>[0]> = {}) {
-    const props = {
-      noteCount: 0,
-      sending: false,
-      canRetry: false,
-      onSend: vi.fn(),
-      onRetry: vi.fn(),
-      ...over,
-    }
-    const r = render(<DesignToolbar {...props} />)
-    return { ...r, props }
-  }
-
-  it('has no Select button and never mentions an S key', () => {
-    toolbar({ armed: true })
-    expect(screen.queryByRole('button', { name: /select/i })).toBeNull()
-    const bar = screen.getByTestId('design-toolbar')
-    expect(bar.textContent).not.toMatch(/\bS\b/)
-    expect(bar.querySelector('kbd')).toBeNull()
-  })
-
-  it('Send is disabled with no notes and enabled with some', () => {
-    const { props, rerender } = toolbar()
-    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
-    rerender(<DesignToolbar {...props} noteCount={2} />)
-    const send = screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement
-    expect(send.disabled).toBe(false)
-    expect(screen.getByTestId('design-note-count').textContent).toBe('2 notes')
-    fireEvent.click(send)
-    expect(props.onSend).toHaveBeenCalledTimes(1)
-  })
-
-  it('shows Retry instead of Send when an item is undelivered', () => {
-    const { props } = toolbar({ noteCount: 1, canRetry: true })
-    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
-    expect(props.onRetry).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -163,10 +122,10 @@ describe('NotePopover', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'x' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add' }))
     expect(onAdd.mock.calls).toEqual([['x', 'change']])
-    rerender(<NotePopover open element={element} anchor={anchor} container={container} onAdd={onAdd} addDisabledReason="Send these first; up to 6 notes" onCancel={vi.fn()} />)
+    rerender(<NotePopover open element={element} anchor={anchor} container={container} onAdd={onAdd} addDisabledReason="Send these first; up to 9 notes" onCancel={vi.fn()} />)
     const add = screen.getByRole('button', { name: 'Add' }) as HTMLButtonElement
     expect(add.disabled).toBe(true)
-    expect(screen.getByTestId('design-popover-hint').textContent).toContain('Send these first; up to 6 notes')
+    expect(screen.getByTestId('design-popover-hint').textContent).toContain('Send these first; up to 9 notes')
   })
 
   it('Esc cancels', () => {
@@ -223,7 +182,30 @@ describe('NoteTray', () => {
     expect(first.className).toContain('items-center')
     expect(first.querySelector('[data-k2-icon="pencil"]')).toBeTruthy()
     expect(first.querySelector('[data-k2-icon="trash-2"]')).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Notes \(2\/6\)/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Notes \(2\/9\)/ })).toBeTruthy()
+  })
+
+  it('a tile has its own Send between the pencil and the trash', () => {
+    const onSendOne = vi.fn()
+    tray({ onSendOne })
+    const tile = screen.getByTestId('design-tile-grid').querySelectorAll('[data-design-tile]')[1] as HTMLElement
+    const buttons = Array.from(tile.querySelectorAll('button')).map((b) => b.getAttribute('aria-label'))
+    expect(buttons).toEqual(['Edit note 2', 'Send note 2', 'Delete note 2'])
+    const send = screen.getByRole('button', { name: 'Send note 2' })
+    expect(send.getAttribute('title')).toBe('Send this note')
+    expect(send.querySelector('[data-k2-icon="arrow-up"]')).toBeTruthy()
+    fireEvent.click(send)
+    expect(onSendOne).toHaveBeenCalledWith('b')
+  })
+
+  it('Send all sits in the notes section header, next to the count', () => {
+    const props = tray({ sendAllHint: '⌘↩' })
+    const header = screen.getByRole('button', { name: /Notes \(2\/9\)/ }).parentElement as HTMLElement
+    const sendAll = screen.getByRole('button', { name: 'Send all' })
+    expect(header.contains(sendAll)).toBe(true)
+    expect(sendAll.getAttribute('title')).toContain('⌘↩')
+    fireEvent.click(sendAll)
+    expect(props.onSend).toHaveBeenCalledTimes(1)
   })
 
   it('deletes, clears, sends, and collapses', () => {
@@ -232,7 +214,7 @@ describe('NoteTray', () => {
     expect(props.onRemove).toHaveBeenCalledWith('b')
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
     expect(props.onClear).toHaveBeenCalledTimes(1)
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send all' }))
     expect(props.onSend).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: /Notes \(2/ }))
     expect(screen.queryByTestId('design-tile-grid')).toBeNull()
@@ -253,11 +235,11 @@ describe('NoteTray', () => {
     expect(props.onEdit).toHaveBeenCalledTimes(1)
   })
 
-  it('six tiles fill the 3 × 2 grid and say the tray is full', () => {
-    const six: DesignNoteDraft[] = Array.from({ length: 6 }, (_, i) => ({ id: `n${i}`, comment: `note ${i}`, intent: 'change', url: 'http://x/', title: '' }))
-    tray({ notes: six })
-    expect(screen.getByTestId('design-tile-grid').querySelectorAll('[data-design-tile]')).toHaveLength(6)
-    expect(screen.getByTestId('design-tray-full').textContent).toBe('Send these first; up to 6 notes')
+  it('nine tiles fill the 3 × 3 grid and say the tray is full', () => {
+    const nine: DesignNoteDraft[] = Array.from({ length: 9 }, (_, i) => ({ id: `n${i}`, comment: `note ${i}`, intent: 'change', url: 'http://x/', title: '' }))
+    tray({ notes: nine })
+    expect(screen.getByTestId('design-tile-grid').querySelectorAll('[data-design-tile]')).toHaveLength(9)
+    expect(screen.getByTestId('design-tray-full').textContent).toBe('Send these first; up to 9 notes')
   })
 
   it('locked notes cannot be edited; the error line and Retry show', () => {

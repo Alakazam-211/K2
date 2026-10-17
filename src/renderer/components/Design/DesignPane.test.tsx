@@ -179,10 +179,12 @@ describe('the page is a design view', () => {
     expect(plain[0][1]).not.toHaveProperty('design')
   })
 
-  it('shows the toolbar above the page and no Chat column when the Chat is not retained', async () => {
+  it('has no status row above the page and no Chat column when the Chat is not retained', async () => {
     renderDesign(fakeIpc([]))
     await flush()
-    expect(screen.getByTestId('design-toolbar')).toBeTruthy()
+    expect(screen.queryByTestId('design-toolbar')).toBeNull()
+    expect(screen.queryByText(/Click an element to add a note/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
     expect(document.querySelector('[data-design-chat]')).toBeNull()
     expect(document.querySelector('[data-design-split]')).toBeNull()
   })
@@ -332,7 +334,7 @@ describe('pick → note → tray → Send', () => {
     expect(ipc.calls.at(-1)).toBe('arm:i-design')
 
     await act(async () => {
-      fireEvent.click(screen.getAllByRole('button', { name: 'Send' })[0])
+      fireEvent.click(screen.getByRole('button', { name: 'Send all' }))
     })
     await flush()
     const posts = vi.mocked(daemonCliPost).mock.calls.filter((c) => c[1] === 'browser/notes')
@@ -344,6 +346,28 @@ describe('pick → note → tray → Send', () => {
       itemId: 'i-design',
     })
     expect(useDesignNotesStore.getState().trays['i-design'].notes).toEqual([])
+  })
+})
+
+describe('per-note Send', () => {
+  it('a tile\'s Send posts just that note and removes its tile', async () => {
+    for (const comment of ['first', 'second']) {
+      const res = useDesignNotesStore.getState().add('i-design', { comment, url: 'http://localhost:5173/pricing', title: 'Pricing' })
+      if (!res.ok) throw new Error(res.reason)
+    }
+    renderDesign(fakeIpc([]))
+    await flush()
+    expect(screen.getByTestId('design-tile-grid').querySelectorAll('[data-design-tile]')).toHaveLength(2)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send note 1' }))
+    })
+    await flush()
+    const posts = vi.mocked(daemonCliPost).mock.calls.filter((c) => c[1] === 'browser/notes')
+    expect(posts).toHaveLength(1)
+    expect((posts[0][2] as { notes: { comment: string }[] }).notes.map((n) => n.comment)).toEqual(['first'])
+    const tiles = screen.getByTestId('design-tile-grid').querySelectorAll('[data-design-tile]')
+    expect(tiles).toHaveLength(1)
+    expect(tiles[0].querySelector('[data-testid="design-tile-text"]')?.textContent).toBe('second')
   })
 })
 

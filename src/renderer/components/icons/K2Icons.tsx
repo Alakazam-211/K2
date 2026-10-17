@@ -5,11 +5,11 @@
 //
 //   Home, Agents, Projects, Tickets, Wiki, Server, Admin, Run, Drawer,
 //   Clock, Mug, Help, Pin, PinOff, Palette, Smartphone, SmartphoneOff,
-//   Pencil, Trash
+//   Pencil, Trash, ArrowUp
 //     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `library`,
 //     `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`,
 //     `circle-help`, `pin`, `pin-off`, `palette`, `smartphone`, `pencil`,
-//     `trash-2`; SmartphoneOff is
+//     `trash-2`, `arrow-up`; SmartphoneOff is
 //     `smartphone` plus the bell's 2,2 → 22,22 slash),
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
@@ -336,6 +336,17 @@ export function TrashIcon(props: K2IconProps = {}): React.JSX.Element {
       <path d="M19 6v16H5V6" />
       <path d="M3 6h18" />
       <path d="M8 6V2h8v4" />
+    </svg>
+  )
+}
+
+/** Send (a Design note tile's own Send, the Thread Send's up arrow):
+ *  Lucide `arrow-up`, squared (square caps, a mitred head). */
+export function ArrowUpIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('arrow-up', props)}>
+      <path d="M12 19V5" />
+      <path d="M5 12l7-7 7 7" />
     </svg>
   )
 }

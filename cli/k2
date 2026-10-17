@@ -6645,8 +6645,11 @@ except Exception as e:
 # Sew S27: `k2 app grant hooks …` — grant-hook status, log, retry, skip,
 # reconcile, target. Owner only (the daemon gates every route).
 _app_grant_hooks() {
-    local action="${1:-status}"
-    shift || true
+    # A bare `hooks`, or one that starts with --json, is `hooks status`
+    # (0.46.1: `k2 app grant hooks --json` was a usage error).
+    case "${1:-}" in ""|--json) set -- status "$@" ;; esac
+    local action="$1"
+    shift
     case "$action" in
         status|"")
             local json_out=0

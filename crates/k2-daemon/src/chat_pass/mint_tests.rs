@@ -406,5 +406,16 @@ fn browser_header_detection() {
     let head = "POST /cli/sew/pass HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer y\r\n\r\n";
     assert!(!mint::has_browser_headers(head));
     assert!(mint::has_browser_headers("POST / HTTP/1.1\r\norigin: https://x\r\n\r\n"));
-    assert!(mint::has_browser_headers("POST / HTTP/1.1\r\nSec-Fetch-Mode: cors\r\n\r\n"));
+    // A browser's fetch (Chrome/Firefox/Safari shape).
+    assert!(mint::has_browser_headers(
+        "POST / HTTP/1.1\r\nSec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: cors\r\nSec-Fetch-Dest: empty\r\n\r\n"
+    ));
+    for one in ["Sec-Fetch-Site: cross-site", "sec-fetch-dest: document", "Sec-Fetch-User: ?1", "Sec-Fetch-Mode: navigate", "Sec-Fetch-Mode: no-cors"] {
+        assert!(mint::has_browser_headers(&format!("POST / HTTP/1.1\r\n{one}\r\n\r\n")), "{one}");
+    }
+    // Node's fetch (undici) on a BFF: exactly this, and it is a server.
+    let node = "POST /cli/sew/pass HTTP/1.1\r\nhost: 127.0.0.1:8730\r\nconnection: keep-alive\r\ncontent-type: application/json\r\naccept: */*\r\naccept-language: *\r\nsec-fetch-mode: cors\r\nuser-agent: node\r\naccept-encoding: gzip, deflate\r\ncontent-length: 2\r\n\r\n";
+    assert!(!mint::has_browser_headers(node), "@k2/server's fetch is not a browser");
+    // Only the head counts, never the body.
+    assert!(!mint::has_browser_headers("POST / HTTP/1.1\r\nHost: x\r\n\r\nOrigin: https://x\r\n"));
 }

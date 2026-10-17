@@ -281,10 +281,14 @@ async fn pass_route_belts_method_bearer_browser_tunnel_csrf_and_skin_host() {
     assert!(!r.raw_body.contains("\"pass\""));
     // Browser headers → 403 browser_not_allowed.
     let auth = format!("Bearer {raw}");
-    for h in [("Origin", "https://evil.example"), ("Sec-Fetch-Mode", "cors")] {
+    for h in [("Origin", "https://evil.example"), ("Sec-Fetch-Site", "cross-site"), ("Sec-Fetch-Mode", "navigate")] {
         let r = http_with(d.port, "POST", "/cli/sew/pass", &[("Authorization", &auth), h], Some("{}"));
         assert_eq!((r.status, err_code(&r).as_str()), (403, "browser_not_allowed"), "{h:?}");
     }
+    // Node's fetch (a BFF on @k2/server) adds only `Sec-Fetch-Mode: cors`:
+    // a server, so it mints.
+    let r = http_with(d.port, "POST", "/cli/sew/pass", &[("Authorization", &auth), ("Sec-Fetch-Mode", "cors")], Some("{}"));
+    assert_eq!(r.status, 200, "{}", r.raw_body);
     // Tunnel ingress → 403 loopback_only (owner token included).
     for b in [raw.as_str(), OWNER_TOKEN] {
         let r = pass(d.tunnel_port, Some(b), "{}");

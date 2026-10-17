@@ -40889,7 +40889,7 @@ cmd_mail_doctor() {
         case "$1" in
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail doctor [<domain>] [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail doctor [<domain>] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$domain" ]; then domain="$1"; else
@@ -40957,7 +40957,7 @@ cmd_mail_config() {
                 always_bcc="$2"; always_bcc_set=true; any_set=true; shift 2 ;;
             --json) as_json=true; shift ;;
             *)
-                _mail_err "usage" "unknown argument '$1' — see k2 mail config --help"
+                _mail_err "usage" "unknown argument '$1' — see k2 hostmail config --help"
                 exit 2 ;;
         esac
     done
@@ -45365,8 +45365,9 @@ USAGE
   k2 hostmail doctor [<domain>] [--json]
 
 NOTES
-  Passing <domain> grades that hosted domain. Bare doctor is server-level.
-  Direct send mode stays locked until a non-failing server-level grade.
+  Passing <domain> grades that hosted domain (and reruns every box check).
+  Bare doctor is server-level. Direct send mode on a domain unlocks when
+  the newest run covering it, bare or for that domain, does not fail.
 
 FLAGS
   --json                 JSON output

@@ -751,7 +751,7 @@ const GLOSSARY: &[GlossaryEntry] = &[
     GlossaryEntry {
         term: "mail-doctor",
         summary: "Deliverability checks + direct-send readiness grade",
-        definition: "The deliverability doctor: `k2 mail doctor [<domain>]` (owner verb; also a Settings → Email card). Probes the box (rDNS/FCrDNS, outbound port 25, SMTP banner, STARTTLS, TLS cert, open-relay self-test, DNS blocklists, disk headroom) and, for a domain, its MX/SPF/DKIM/DMARC posture — MiaB-style pass/warn/fail per check with current-vs-expected values.\n\nThe run's GRADE gates direct-send mode: `direct` stays locked until a server-level run grades non-failing. Runs persist; a server-level run is re-taken automatically every day while the mail server is running, so regressions (a new blocklist hit, expiring cert, blocked port) surface within a day.",
+        definition: "The deliverability doctor: `k2 hostmail doctor [<domain>]` (owner verb, or an agent whose workspace may manage hosted mail; also a Settings → Email card). Probes the box (rDNS/FCrDNS, outbound port 25, SMTP banner, STARTTLS, TLS cert, open-relay self-test, DNS blocklists, disk headroom) and, for a domain, its MX/SPF/DKIM/DMARC posture — MiaB-style pass/warn/fail per check with current-vs-expected values.\n\nThe run's GRADE gates direct-send mode: `direct` on a domain stays locked until the newest run covering it (a server-level run, or that domain's own run, which repeats every box check) grades non-failing. Runs persist; a server-level run is re-taken automatically every day while the mail server is running, so regressions (a new blocklist hit, expiring cert, blocked port) surface within a day.",
     },
     GlossaryEntry {
         term: "onboarding",

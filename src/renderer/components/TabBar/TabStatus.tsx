@@ -1,18 +1,20 @@
 // A room tab's status (plan-agent-status-unify-v1 S5; mock-up
 // `.k2/prds/mockup-activity-status-v1.html`, "Tab strip", the AFTER row).
 // Session tabs use the same model as the agent rows, drawn by the shared
-// AgentStatus pieces:
+// AgentStatus pieces, in ONE 14px status slot after the title:
 //
-//   [icon] Title ......... [▦][■]    working + a status
-//   [icon] Title ............. [■]   no status: the title runs into the
-//                                    free working slot; ■ = live / reaped
-//   [icon] Title ............. [▦]   working, no status: the grid sits in
-//                                    the status slot (Q7 = B)
+//   [icon] Title ............. [■]   at rest: the status, else live /
+//                                    reaped (■); nothing when unknown
+//   [icon] Title ............. [▦]   working: the 3×3 grid takes the slot;
+//                                    the status (else live / reaped) is a
+//                                    small badge on the slot's bottom-left
 //
-// - Hovering anywhere on the tab swaps only the status slot for × (– on a
-//   heartbeat / API tab). Nothing moves: the tab is always sized as title +
-//   working slot (a hidden sizer copy of the title), so only the title's
-//   truncation point changes when the working slot is used.
+// - No space is reserved for working (Rosson 2026-10-16, 0.46.0): working
+//   replaces the status slot's mark, the same way the pinned Chat's grid
+//   replaces its icon. The slot is a constant 14px, so toggling working
+//   never moves the title or changes the tab's width.
+// - Hovering anywhere on the tab swaps the status slot for × (– on a
+//   heartbeat / API tab).
 // - Tabs are not all one width: each is its own title's natural width plus
 //   the fixed slots, between TAB_MIN_PX and TAB_MAX_PX (Rosson 2026-10-16).
 // - Pinned Chat: the 3×3 grid replaces its icon while working, drawn at
@@ -20,13 +22,14 @@
 //   status (else live / reaped) is a 10px badge in its bottom-right corner.
 
 import { StatusSlot, WorkingSlot } from '@/components/AgentStatus/AgentStatusCluster'
+import { PinnedTabMark } from '@/components/TabBar/TabPin'
 import { isRankedStatus, type AgentStatusView } from '@/lib/agent-status'
 
 /** The status slot (px): the cluster's 14px slot. */
 export const TAB_SLOT_PX = 14
 /** A regular tab's default (max) width (px). A tab is as wide as its
- *  content (padding + icon + title + working slot + status slot) up to this,
- *  where the title truncates with an ellipsis (Rosson 2026-10-16). */
+ *  content (padding + icon + title + status slot) up to this, where the
+ *  title truncates with an ellipsis (Rosson 2026-10-16). */
 export const TAB_MAX_PX = 200
 /** A regular tab's floor (px). Content is never squeezed (tabs don't
  *  shrink; the strip scrolls), so the status slot / × stay reachable; this
@@ -39,61 +42,54 @@ export const PINNED_BADGE_PX = 10
  *  the 16px Chat icon it replaces (ink x/y 2–14 of 16). The tab is a fixed
  *  36px wide and full height, so it does not change size. */
 export const PINNED_WORKING_PX = 20
+/** A session tab's corner badge (px): the pinned Chat's 10px badge on its
+ *  20px grid, scaled to the 14px slot (rounded up to stay legible). */
+export const TAB_BADGE_PX = 8
+/** How far the badge box hangs past the slot's bottom-left corner (px). */
+const TAB_BADGE_OUTSET_PX = 3
 
-/** Does the working grid sit in its own slot left of the status (working
- *  AND a ranked status)? Otherwise that slot is free for the title. */
-export function tabWorkingInOwnSlot(view: AgentStatusView): boolean {
-  return view.working && isRankedStatus(view.status)
+/** The badge's mark: the ranked status, else (a pinned tab) its pin, else
+ *  live / reaped. Null = no badge. */
+function tabBadgeMark(view: AgentStatusView, pinned: boolean): React.JSX.Element | null {
+  if (isRankedStatus(view.status)) return <StatusSlot view={view} size={TAB_BADGE_PX} />
+  if (pinned) return <PinnedTabMark size={TAB_BADGE_PX} />
+  if (view.status === 'live' || view.status === 'reaped') return <StatusSlot view={view} size={TAB_BADGE_PX} />
+  return null
 }
 
-/** Title + working slot on a 2-column grid. A hidden sizer copy of the
- *  title holds column 1 at the title's width, so the tab's width never
- *  depends on whether working is in its slot. */
-export function TabTitleGrid({
-  title,
-  view,
-  className = '',
-  onDoubleClick,
-}: {
-  title: string
-  view: AgentStatusView
-  className?: string
-  onDoubleClick?: (e: React.MouseEvent) => void
-}): React.JSX.Element {
-  const inSlot = tabWorkingInOwnSlot(view)
-  return (
-    <span
-      data-tab-title-grid=""
-      data-working-slot={inSlot ? 'used' : 'free'}
-      className="grid min-w-0 flex-auto items-center"
-      style={{ gridTemplateColumns: `minmax(0, max-content) ${TAB_SLOT_PX}px`, columnGap: 'var(--clu-gap)' }}
-    >
-      <span aria-hidden className="invisible h-0 overflow-hidden whitespace-nowrap" style={{ gridColumn: 1 }}>
-        {title}
+/** What a session tab's status slot shows at rest.
+ *  - Working: the 3×3 grid fills the slot, and the status (else the pin on
+ *    a pinned tab, else live / reaped) is a badge on its bottom-left.
+ *  - Not working: the ranked status, else the pin (pinned tab), else live /
+ *    reaped. Null = nothing (live state unknown, on an older server).
+ *  The badge sits on `--tab-bg` (the tab's resting background) so it masks
+ *  the grid's corner cell. */
+export function TabSlotRest({ view, pinned = false }: { view: AgentStatusView; pinned?: boolean }): React.JSX.Element | null {
+  if (view.working) {
+    const badge = tabBadgeMark(view, pinned)
+    return (
+      <span data-tab-slot-working="" className="relative flex" style={{ width: TAB_SLOT_PX, height: TAB_SLOT_PX }}>
+        <WorkingSlot view={view} />
+        {badge ? (
+          <span
+            data-tab-badge=""
+            className="pointer-events-none absolute flex items-center justify-center"
+            style={{
+              left: -TAB_BADGE_OUTSET_PX,
+              bottom: -TAB_BADGE_OUTSET_PX,
+              width: TAB_BADGE_PX + 2,
+              height: TAB_BADGE_PX + 2,
+              background: 'var(--tab-bg, var(--color-bg-surface))',
+            }}
+          >
+            {badge}
+          </span>
+        ) : null}
       </span>
-      <span
-        data-tab-title=""
-        className={`min-w-0 truncate ${className}`}
-        style={{ gridRow: 1, gridColumn: inSlot ? '1' : '1 / span 2' }}
-        onDoubleClick={onDoubleClick}
-      >
-        {title}
-      </span>
-      {inSlot ? (
-        <span className="flex" style={{ gridRow: 1, gridColumn: 2 }}>
-          <WorkingSlot view={view} />
-        </span>
-      ) : null}
-    </span>
-  )
-}
-
-/** What the status slot shows at rest: the ranked status, else working
- *  (no status), else live / reaped. Null = nothing (a tab whose live state
- *  is unknown, on an older server). */
-export function TabSlotRest({ view }: { view: AgentStatusView }): React.JSX.Element | null {
+    )
+  }
   if (isRankedStatus(view.status)) return <StatusSlot view={view} />
-  if (view.working) return <WorkingSlot view={view} />
+  if (pinned) return <PinnedTabMark />
   if (view.status === 'live' || view.status === 'reaped') return <StatusSlot view={view} />
   return null
 }

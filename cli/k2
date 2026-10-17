@@ -38030,28 +38030,63 @@ def print_inboxes(rows, agent_view):
               else "No inboxes yet — mint one (k2 hostmail create) or link one (k2 mail link add).")
         return
     w = max(max(len(r.get("address", "")) for r in rows), len("ADDRESS")) + 2
+    # SEND = what level 'send' really allows once the workspace's
+    # agent-send gate applies (daemon `sendState`; older daemons omit it).
+    def _send_word(state):
+        return {"on": "yes", "approval": "approval", "blocked_off": "BLOCKED",
+                "blocked_approval": "BLOCKED", "no_send_level": "-"}.get(state or "", "?")
+    blocked = []
     if agent_view:
-        print(("%-" + str(w) + "s%-9s%-7s%-7s%s") % ("ADDRESS", "SOURCE", "LEVEL", "MAX", "STATUS"))
+        print(("%-" + str(w) + "s%-9s%-7s%-10s%-7s%s") % (
+            "ADDRESS", "SOURCE", "LEVEL", "SEND", "MAX", "STATUS"))
         for r in rows:
-            print(("%-" + str(w) + "s%-9s%-7s%-7s%s") % (
+            st = r.get("yourSendState")
+            if st in ("blocked_off", "blocked_approval"):
+                blocked.append((r.get("address", ""), st, None))
+            print(("%-" + str(w) + "s%-9s%-7s%-10s%-7s%s") % (
                 r.get("address", ""), r.get("source", "?"),
-                _level_word(r.get("yourLevel")), r.get("maxLevel", "?"), r.get("status", "?")))
+                _level_word(r.get("yourLevel")), _send_word(st),
+                r.get("maxLevel", "?"), r.get("status", "?")))
         print()
         print("read: k2 mail messages [<address>]   send needs level 'send' (hosted, or a linked inbox with SMTP)")
         print("MAX is the CEILING, not a promise — sending also needs a send transport configured.")
+        if blocked:
+            mode = "approval" if any(b[1] == "blocked_approval" for b in blocked) else "off"
+            print()
+            if mode == "off":
+                print("SEND BLOCKED: this workspace's agent sending is off, so level 'send' can't "
+                      "send yet (k2 mail send/reply answer 'gated').")
+            else:
+                print("SEND BLOCKED: this workspace's agent sending is 'approval', which only "
+                      "queues hosted mailboxes — a linked inbox needs 'on'.")
+            print("Ask your human to run: k2 mail sending <this workspace> on   (or Settings → "
+                  "Workspaces / Agents → <workspace> → Email sending)")
     else:
         print(("%-" + str(w) + "s%-9s%-22s%s") % ("ADDRESS", "SOURCE", "PRIMARY", "GRANTS"))
         for r in rows:
             pri = r.get("primary") or {}
             who = pri.get("workspace") or pri.get("projectId") or "?"
             grants = r.get("grants") or []
+            def _lvl(e):
+                st = e.get("sendState")
+                if st in ("blocked_off", "blocked_approval"):
+                    blocked.append((r.get("address", ""), st,
+                                    e.get("workspace") or e.get("projectId", "?")))
+                    return "%s, BLOCKED" % e.get("level", "?")
+                return e.get("level", "?")
             gsum = ", ".join("%s:%s" % (g.get("workspace") or g.get("projectId", "?"),
-                                        g.get("level", "?")) for g in grants) or "-"
+                                        _lvl(g)) for g in grants) or "-"
             print(("%-" + str(w) + "s%-9s%-22s%s") % (
                 r.get("address", ""), r.get("source", "?"),
-                "%s (%s)" % (who, pri.get("level", "?")), gsum))
+                "%s (%s)" % (who, _lvl(pri)), gsum))
         print()
         print("share: k2 mail access grant <address> <workspace> --level read|draft|send")
+        if blocked:
+            print()
+            print("BLOCKED = level 'send', but that workspace's agent sending is off "
+                  "(or 'approval' on a linked inbox), so its sends are gated. Turn it on:")
+            for ws in sorted(set(b[2] for b in blocked)):
+                print("  k2 mail sending %s on" % ws)
 
 
 # ── Verb dispatch ───────────────────────────────────────────────────
@@ -38910,7 +38945,11 @@ elif verb == "inboxes":
     if as_json:
         print(dumps(d))
     else:
-        print_inboxes(d.get("inboxes") or [], agent_view=True)
+        rows = d.get("inboxes") or []
+        # Outside any workspace the daemon answers the OWNER catalog (no
+        # yourLevel): show the owner table, BLOCKED grants included.
+        owner_catalog = bool(rows) and all(r.get("yourLevel") is None for r in rows)
+        print_inboxes(rows, agent_view=not owner_catalog)
 
 elif verb == "inboxes_all":
     # Owner view: ALL inboxes across workspaces (no project param).
@@ -38938,8 +38977,14 @@ elif verb == "link_list":
                 pri.get("workspace") or pri.get("projectId") or "?",
                 "%s (%s)" % (r.get("host", "?"), r.get("tls", "?"))))
             for g in (r.get("grants") or []):
-                print("    grant: %-20s %s" % (
-                    g.get("workspace") or g.get("projectId", "?"), g.get("level", "?")))
+                st = g.get("sendState")
+                note = ""
+                if st in ("blocked_off", "blocked_approval"):
+                    note = ("   BLOCKED: agent sending is %s for this workspace — "
+                            "k2 mail sending %s on" % (g.get("agentSend") or "off",
+                                                       g.get("workspace") or g.get("projectId", "?")))
+                print("    grant: %-20s %s%s" % (
+                    g.get("workspace") or g.get("projectId", "?"), g.get("level", "?"), note))
 
 elif verb == "access_grant":
     d = call("POST", "/cli/mail/access/grant",

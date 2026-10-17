@@ -99,6 +99,21 @@ class H(BaseHTTPRequestHandler):
         q = parse_qs(u.query)
         with open(os.path.join(root, "get.txt"), "w") as f:
             f.write(u.path + "|" + ",".join(q.get("workspace", [])))
+        if u.path == "/cli/mail/inboxes":
+            view = open(os.path.join(root, "VIEW")).read().strip()
+            st = state() or "off"
+            send_state = {"on": "on", "approval": "blocked_approval"}.get(st, "blocked_off")
+            linked = {"address": "baden@gmail.com", "source": "linked", "status": "active",
+                      "host": "imap.gmail.com", "tls": True, "maxLevel": "send",
+                      "primary": {"projectId": "p-baden", "workspace": "baden", "level": "send",
+                                  "agentSend": "on", "sendState": "on"},
+                      "grants": [{"projectId": "p-appa", "workspace": "appa", "level": "send",
+                                  "agentSend": st, "sendState": send_state}]}
+            if view == "agent":
+                linked = dict(linked, yourLevel="send", yourAgentSend=st, yourSendState=send_state)
+            else:
+                linked = dict(linked, yourLevel=None, yourAgentSend=None, yourSendState=None)
+            return self._send(200, {"ok": True, "count": 1, "inboxes": [linked]})
         if u.path != "/cli/mail/config":
             return self._send(404, {"ok": False, "error": {"code": "not_found", "hint": u.path}})
         ws = q.get("workspace", [""])[0]
@@ -224,6 +239,55 @@ rc=$?
 set -e
 assert_exit "hostmail config --agent-send" 0 "$rc"
 assert_json "hostmail config body" "$(cat "$WORKDIR/post.json")" "d == {'workspace': 'appa', 'agentSend': 'on'}"
+
+echo "== k2 mail inboxes shows the EFFECTIVE send state (Baden: level send, gate off) =="
+echo off > "$WORKDIR/STATE"
+echo agent > "$WORKDIR/VIEW"
+set +e
+out="$("${K2[@]}" "$K2_CLI" mail inboxes 2>&1)"
+rc=$?
+set -e
+assert_exit "mail inboxes (agent, gate off)" 0 "$rc"
+assert_contains "agent table has a SEND column" "$out" "SEND"
+printf '%s\n' "$out" | grep -E '^baden@gmail\.com +linked +send +BLOCKED ' >/dev/null \
+    && ok "row shows level send + SEND BLOCKED" || bad "row missing BLOCKED: $out"
+assert_contains "note explains the gate" "$out" "SEND BLOCKED: this workspace's agent sending is off"
+assert_contains "note names the fix" "$out" "k2 mail sending <this workspace> on"
+
+echo approval > "$WORKDIR/STATE"
+set +e
+out="$("${K2[@]}" "$K2_CLI" mail inboxes 2>&1)"
+set -e
+assert_contains "approval on linked explains it needs on" "$out" "a linked inbox needs 'on'"
+
+echo on > "$WORKDIR/STATE"
+set +e
+out="$("${K2[@]}" "$K2_CLI" mail inboxes 2>&1)"
+set -e
+printf '%s\n' "$out" | grep -E '^baden@gmail\.com +linked +send +yes ' >/dev/null \
+    && ok "gate on → SEND yes" || bad "gate on row: $out"
+if printf '%s' "$out" | grep -q "BLOCKED"; then bad "no BLOCKED when the gate is on: $out"; else ok "no BLOCKED note when on"; fi
+
+echo "== owner catalog + link list mark the blocked grant =="
+echo off > "$WORKDIR/STATE"
+echo owner > "$WORKDIR/VIEW"
+set +e
+out="$("${K2[@]}" "$K2_CLI" mail inboxes 2>&1)"
+rc=$?
+set -e
+assert_exit "mail inboxes (owner catalog)" 0 "$rc"
+assert_contains "owner table marks the grant" "$out" "appa:send, BLOCKED"
+assert_contains "owner note names the per-workspace fix" "$out" "k2 mail sending appa on"
+set +e
+out="$("${K2[@]}" "$K2_CLI" mail link list 2>&1)"
+rc=$?
+set -e
+assert_exit "mail link list" 0 "$rc"
+assert_contains "link list marks the grant" "$out" "BLOCKED: agent sending is off for this workspace — k2 mail sending appa on"
+set +e
+out="$("${K2[@]}" "$K2_CLI" mail inboxes --json 2>/dev/null)"
+set -e
+assert_json "--json passes sendState through" "$out" "d['inboxes'][0]['grants'][0]['sendState'] == 'blocked_off'"
 
 echo
 echo "mail_sending.sh: $pass passed, $fail failed"

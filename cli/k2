@@ -20732,7 +20732,9 @@ cmd_users() {
             done
             local raw
             raw=$(cli_send cli_request "/cli/users") || raw=""
-            printf '%s' "$raw" | AS_JSON="$as_json" python3 -c '
+            local users_agent=0
+            { _cli_caller_is_agent_passport || [ -n "${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}" ]; } && users_agent=1
+            printf '%s' "$raw" | AS_JSON="$as_json" USERS_AGENT="$users_agent" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
 try:
@@ -20744,11 +20746,17 @@ if not isinstance(d, dict):
     sys.stderr.write("Error: unexpected response from /cli/users\n"); sys.exit(1)
 err = d.get("error")
 if err is not None:
-    if isinstance(err, dict):
-        sys.stderr.write("Error: %s\n" % (err.get("hint") or err.get("code") or err))
-    else:
-        sys.stderr.write("Error: %s\n" % err)
-    sys.exit(1)
+    text = (err.get("hint") or err.get("code") or str(err)) if isinstance(err, dict) else str(err)
+    code = err.get("code", "") if isinstance(err, dict) else ""
+    low = (code + " " + text).lower()
+    refused = any(w in low for w in ("owner", "admin", "forbidden", "token", "not allowed", "role_required", "gated"))
+    # 0.46.1: an agent passport is refused here (people only); say where
+    # agents look instead. The daemon refusal itself is unchanged.
+    if refused and os.environ.get("USERS_AGENT") == "1":
+        sys.stderr.write("Error: owner_only: Owner/admin only; agents use `k2 connections list --users`. (daemon: %s)\n" % text)
+        sys.exit(3)
+    sys.stderr.write("Error: %s\n" % text)
+    sys.exit(3 if refused else 1)
 users = d.get("users") or []
 if os.environ.get("AS_JSON") == "1":
     # 0.46.0: names ride along (firstName/lastName null when unset;
@@ -22759,37 +22767,56 @@ except Exception as e:
 }
 
 cmd_feed() {
-    local limit="${1:-20}"
-    local agent=""
+    # 0.46.1: flags are parsed (--help and --json used to become the limit),
+    # daemon errors are shown (not "No activity."), and timestamps carry
+    # the date.
+    local limit="20" agent="" as_json=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --agent) agent="$2"; shift 2 ;;
-            --limit) limit="$2"; shift 2 ;;
-            *) shift ;;
+            -h|--help) cmd_help_activity; return 0 ;;
+            --json) as_json=1; shift ;;
+            --agent)
+                [[ $# -ge 2 ]] || { echo "Error: --agent needs a name (k2 activity --help)" >&2; exit 2; }
+                agent="$2"; shift 2 ;;
+            --limit)
+                [[ $# -ge 2 ]] || { echo "Error: --limit needs a number (k2 activity --help)" >&2; exit 2; }
+                limit="$2"; shift 2 ;;
+            -*) echo "Error: unknown flag '$1' (k2 activity --help)" >&2; exit 2 ;;
+            *) limit="$1"; shift ;;
         esac
     done
+    case "$limit" in ''|*[!0-9]*) echo "Error: the limit is a number, got '$limit' (k2 activity --help)" >&2; exit 2 ;; esac
     local params="limit=$limit"
     [[ -n "$agent" ]] && params="$params&agent=$(urlencode "$agent")"
-    cli_request "/cli/feed" "$params" | python3 -c "
-import json, sys, time
+    cli_request "/cli/feed" "$params" | FEED_JSON="$as_json" python3 -c "
+import json, os, sys, time
+raw = sys.stdin.read()
 try:
-    d = json.loads(sys.stdin.read())
-    items = d.get('feed', [])
-    if not items:
-        print('No activity.')
-    else:
-        for e in items:
-            ts = time.strftime('%H:%M:%S', time.localtime(e.get('at', 0)))
-            agent = e.get('agent') or '-'
-            etype = e.get('type', '?')
-            summary = e.get('summary') or ''
-            frm = e.get('from') or ''
-            to = e.get('to') or ''
-            route = f' ({frm}→{to})' if frm and to else ''
-            print(f'  [{ts}] {agent}: {etype}{route} {summary}')
-except Exception as ex:
-    print(f'Error: {ex}', file=sys.stderr)
-" 2>/dev/null
+    d = json.loads(raw)
+except Exception:
+    print('Error: the K2 daemon gave no usable answer: %r' % raw[:200], file=sys.stderr)
+    sys.exit(1)
+err = d.get('error') if isinstance(d, dict) else 'unexpected answer'
+if err is not None:
+    hint = (err.get('hint') or err.get('code') or str(err)) if isinstance(err, dict) else str(err)
+    print('Error: %s' % hint, file=sys.stderr)
+    sys.exit(1)
+if os.environ.get('FEED_JSON') == '1':
+    print(json.dumps(d, indent=2))
+    sys.exit(0)
+items = d.get('feed', [])
+if not items:
+    print('No activity.')
+for e in items:
+    ts = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(e.get('at', 0)))
+    agent = e.get('agent') or '-'
+    etype = e.get('type', '?')
+    summary = e.get('summary') or ''
+    frm = e.get('from') or ''
+    to = e.get('to') or ''
+    route = f' ({frm}→{to})' if frm and to else ''
+    print(f'  [{ts}] {agent}: {etype}{route} {summary}')
+"
 }
 
 # Unwrap daemon {"error": ...} (string or {hint,code}) to stderr and exit 1.
@@ -23047,6 +23074,7 @@ cmd_settings() {
     local set_mode=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            -h|--help) cmd_help_settings; return 0 ;;
             --mode)
                 set_mode="${2:-}"
                 shift
@@ -23054,7 +23082,7 @@ cmd_settings() {
                 ;;
             -*)
                 echo "Error: unknown flag '$1' (supported: --mode <off|custom|manager|k2>)" >&2
-                exit 1
+                exit 2
                 ;;
             *) shift ;;
         esac
@@ -23066,33 +23094,46 @@ cmd_settings() {
             off|custom|manager|k2|k2so) ;;
             *)
                 echo "Error: invalid mode '$set_mode' (valid: off, custom, manager, k2)" >&2
-                exit 1
+                exit 2
                 ;;
         esac
-        cli_request_post "/cli/mode" "set=$(urlencode "$set_mode")" | python3 -c "
-import json, sys
+        cli_request_post "/cli/mode" "set=$(urlencode "$set_mode")" | _settings_print set
+        return
+    fi
+    cli_request "/cli/settings" | _settings_print show
+}
+
+# 0.46.1: a daemon refusal (an agent passport, a member) used to print
+# "Name: ?, Mode: off" with exit 0. Errors go to stderr: exit 3 for a
+# refusal (with the owner/admin hint), 1 for anything else.
+_settings_print() {
+    SP_VIEW="$1" python3 -c '
+import json, os, sys
 raw = sys.stdin.read()
 try:
     d = json.loads(raw)
 except Exception:
-    sys.stdout.write('Error: daemon returned an unparseable response: %r\n' % raw[:200])
+    print("Error: the K2 daemon gave no usable answer: %r" % raw[:200], file=sys.stderr)
     sys.exit(1)
-if 'error' in d:
-    sys.stdout.write('Error: %s\n' % d['error'])
+err = d.get("error") if isinstance(d, dict) else "unexpected answer"
+if err is not None:
+    code = err.get("code", "") if isinstance(err, dict) else ""
+    hint = (err.get("hint") or err.get("message") or code) if isinstance(err, dict) else str(err)
+    print("Error: %s%s" % ((code + ": ") if code and code not in hint else "", hint), file=sys.stderr)
+    low = (code + " " + hint).lower()
+    if any(w in low for w in ("owner", "admin", "forbidden", "token", "not allowed", "refused", "passport")):
+        print("Workspace settings are the owner'"'"'s or an admin'"'"'s: ask your human, or run it from a terminal outside a K2 agent session.", file=sys.stderr)
+        sys.exit(3)
     sys.exit(1)
-print('Mode set to %s' % d.get('mode', '?'))
-"
-        return
-    fi
-    cli_request "/cli/settings" | python3 -c "
-import json, sys
-d = json.loads(sys.stdin.read())
-print('Workspace Settings:')
-print(f\"  Name:      {d.get('name', '?')}\")
-print(f\"  Mode:      {d.get('mode', 'off')}\")
-print(f\"  Heartbeat: {'on' if d.get('heartbeatEnabled') else 'off'}\")
-print(f\"  Pinned:    {'yes' if d.get('pinned') else 'no'}\")
-" 2>/dev/null || cli_request "/cli/settings"
+if os.environ.get("SP_VIEW") == "set":
+    print("Mode set to %s" % d.get("mode", "?"))
+    sys.exit(0)
+print("Workspace Settings:")
+print("  Name:      %s" % d.get("name", "?"))
+print("  Mode:      %s" % d.get("mode", "off"))
+print("  Heartbeat: %s" % ("on" if d.get("heartbeatEnabled") else "off"))
+print("  Pinned:    %s" % ("yes" if d.get("pinned") else "no"))
+'
 }
 
 cmd_help() {
@@ -23658,7 +23699,7 @@ cmd_schema() {
     },
     {
       "name": "inbox",
-      "usage": "k2 inbox [list|compose|move|archive] ...",
+      "usage": "k2 inbox [list|read|compose|move|archive] ...",
       "description": "YOUR tray (receive/triage). Others send files with k2 msg --inbox-wake. Cannot send a file. Default shows new arrivals; compose/move/archive manage items. Not email, not live chat.",
       "args": [],
       "flags": []
@@ -25437,10 +25478,10 @@ cmd_schema() {
     },
     {
       "name": "activity",
-      "usage": "k2 activity [...]",
-      "description": "Show the cross-workspace activity feed.",
+      "usage": "k2 activity [<limit>] [--limit N] [--agent <name>] [--json]",
+      "description": "Show the cross-workspace activity feed (date and time, agent, event). Daemon errors exit 1.",
       "args": [],
-      "flags": []
+      "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON as is."}]
     },
     {
       "name": "glossary",
@@ -26506,8 +26547,8 @@ cmd_schema() {
     },
     {
       "name": "settings",
-      "usage": "k2 settings [--mode <off|agent|manager>] [...]",
-      "description": "Read/update daemon + workspace settings.",
+      "usage": "k2 settings [--mode <off|custom|manager|k2>]",
+      "description": "Show this workspace's settings (name, mode, heartbeat, pinned), or set its mode with --mode off|custom|manager|k2. A daemon refusal exits 3.",
       "args": [],
       "flags": []
     },
@@ -29471,20 +29512,25 @@ cmd_inbox_read() {
     local id="${1:-}"
     if [[ -z "$id" ]]; then
         echo "Usage: k2 inbox read <id>" >&2
-        exit 1
+        exit 2
     fi
+    # 0.46.1: the error used to be hidden (2>/dev/null): a bad id printed
+    # nothing, exit 1. Not found exits 4.
     cli_send cli_request "/cli/inbox/read" "id=$(urlencode "$id")" | python3 -c "
 import json, sys
+raw = sys.stdin.read()
 try:
-    d = json.loads(sys.stdin.read())
-    if 'error' in d:
-        sys.stderr.write('Error: %s\n' % d['error'])
-        sys.exit(1)
-    print(d.get('content', ''))
-except Exception as e:
-    sys.stderr.write('parse: %s\n' % e)
+    d = json.loads(raw)
+except Exception:
+    sys.stderr.write('Error: the K2 daemon gave no usable answer: %r\n' % raw[:200])
     sys.exit(1)
-" 2>/dev/null
+err = d.get('error') if isinstance(d, dict) else 'unexpected answer'
+if err is not None:
+    hint = (err.get('hint') or err.get('code') or str(err)) if isinstance(err, dict) else str(err)
+    sys.stderr.write('Error: %s\n' % hint)
+    sys.exit(4 if 'not found' in hint.lower() or (isinstance(err, dict) and err.get('code') == 'not_found') else 1)
+print(d.get('content', ''))
+"
 }
 
 cmd_inbox_compose() {
@@ -29660,6 +29706,21 @@ cmd_activity() {
     # 0.39.0f Phase 2.1: feed → activity (PRD A5).
     # Same endpoint; renamed at the CLI layer.
     cmd_feed "$@"
+}
+
+cmd_help_activity() {
+    cat <<'EOF'
+k2 activity [<limit>] [--limit N] [--agent <name>] [--json]
+
+The cross-workspace activity feed, newest last: date and time, agent,
+event type, route and summary.
+
+  <limit> / --limit N   how many events (default 20)
+  --agent <name>        only this agent's events
+  --json                the daemon's JSON as is
+
+Exit: 0 ok · 1 the daemon answered with an error or nothing usable · 2 bad usage
+EOF
 }
 
 cmd_who() {
@@ -33217,27 +33278,24 @@ EOF
 
 cmd_help_settings() {
     cat <<'EOF'
-k2 settings [options]
+k2 settings [--mode <off|custom|manager|k2>]
 
-Show or modify workspace settings. Without flags: prints current settings.
+Show this workspace's settings (name, mode, heartbeat, pinned). With
+--mode, set the workspace mode.
 
 WORKSPACE MODE
-  --mode <off|agent|manager>
+  --mode <off|custom|manager|k2>
                             off: K2 ignores this workspace
-                            agent: workspace has a primary agent
-                            manager: workspace coordinates other workspaces
+                            custom: the workspace has its own agent
+                            manager: the workspace coordinates other workspaces
+                            k2: K2's own agent (k2so is accepted too)
 
-GLOBAL TOGGLES
-  --agentic <on|off>        (always on — agentic systems are GA; flag is a no-op)
-
-COMPANION (mobile + remote-desktop access)
-  --companion <on|off>      Enable/disable companion server (ngrok tunnel)
-  --companion-password "<pw>" Set companion auth password
+EXIT
+  0 ok · 1 no usable answer · 2 bad usage · 3 the daemon refused (owner/admin)
 
 EXAMPLES
-  k2 settings                              # show current
+  k2 settings
   k2 settings --mode manager
-  k2 settings --companion on
 EOF
 }
 
@@ -53757,9 +53815,18 @@ cmd_agent_hire_root() {
 }
 
 cmd_msg_who() {
-    local id="${1:-}" as_json=false
-    [ "${2:-}" = "--json" ] && as_json=true
-    [ -n "$id" ] || { echo "Usage: k2 msg who <m_…>  (the id in [from … · m_…])" >&2; exit 2; }
+    local id="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true ;;
+            -h|--help) echo "Usage: k2 msg who <m_…> [--json]  (the id in [from … · m_…])"; exit 0 ;;
+            -*) echo "Usage: k2 msg who <m_…> [--json]  (unknown flag $1)" >&2; exit 2 ;;
+            *) [ -z "$id" ] || { echo "Usage: k2 msg who <m_…> [--json]  (one id only)" >&2; exit 2; }
+               id="$1" ;;
+        esac
+        shift
+    done
+    [ -n "$id" ] || { echo "Usage: k2 msg who <m_…> [--json]  (the id in [from … · m_…])" >&2; exit 2; }
     cli_request "/cli/msg/who" "id=$(urlencode "$id")" | _hire_print who "$as_json"
 }
 
@@ -55295,9 +55362,11 @@ EOF
         shift; cmd_whoami "$@"
         ;;
     msg)
-        # 0.45.6 sender check: `k2 msg who m_…` (only a delivery-id shape, so
-        # a workspace named "who" still gets its messages).
-        if [ "${2:-}" = "who" ] && [[ "${3:-}" =~ ^m_[A-Za-z0-9]{10}$ ]]; then
+        # 0.45.6 sender check: `k2 msg who m_…`. 0.46.1: `who` is ALWAYS
+        # the lookup — any other id used to fall through to a live send to
+        # a workspace named "who". A bad id is the daemon's answer, a
+        # missing one is exit 2.
+        if [ "${2:-}" = "who" ]; then
             shift 2; cmd_msg_who "$@"
         else
             # Phase 2.1: msg now has --inbox and --signal flag forms.

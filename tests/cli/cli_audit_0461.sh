@@ -185,6 +185,49 @@ run cell users list
 assert_eq "agent users list → exit 3" "$rc" "3"
 assert_contains "agent users list points at connections" "$err" "k2 connections list --users"
 
+echo "== 6/7. k2 hostmail status not installed / unsupported =="
+routes '{"GET /cli/mail/status": [200, {"ok": true, "consistent": true, "supported": false, "state": "not-installed", "version": null, "pinnedVersion": "0.16.10", "cert": {"host": null, "names": [], "state": "missing"}, "calendar": {"enabled": false}}]}'
+run owner hostmail status
+assert_contains "unsupported: one clear line" "$out" "hosted mail runs on Linux K2 servers"
+assert_contains "unsupported: points at linked inboxes" "$out" "k2 mail inboxes"
+assert_absent "unsupported: no cert line" "$out" "cert     :"
+assert_absent "unsupported: no calendar line" "$out" "calendar :"
+assert_absent "unsupported: no version line" "$out" "version  :"
+routes '{"GET /cli/mail/status": [200, {"ok": true, "consistent": true, "supported": true, "state": "not-installed", "version": null, "pinnedVersion": "0.16.10", "helper": "installed", "cert": {"host": null, "names": [], "state": "missing", "owner": "unknown"}, "calendar": {"enabled": false}}]}'
+run owner hostmail status
+assert_contains "not installed: one clear line" "$out" "not installed — hosted mail runs on Linux K2 servers"
+assert_contains "not installed: helper line kept" "$out" "helper   : installed"
+assert_absent "not installed: no owner line" "$out" "owner    :"
+assert_absent "not installed: no cert line" "$out" "cert     :"
+run owner hostmail status --help
+assert_absent "status help has no k2 mail status" "$out" "k2 mail status"
+
+echo "== 8/12. k2 compute =="
+routes '{"GET /cli/compute/jobs/get": [404, {"error": {"code": "job_not_found", "hint": "no job abc"}}]}'
+run owner compute get abc
+assert_eq "compute get missing → exit 4" "$rc" "4"
+routes '{"GET /cli/compute/jobs": [200, {"jobs": [{"short": "913e14ac", "node": "k2n2-m1", "state": "queued", "exitCode": null, "reason": "local_resource_limit", "argv": ["cargo", "test"]}]}]}'
+run owner compute jobs
+assert_contains "compute jobs prints the full reason" "$out" "local_resource_limit"
+
+echo "== 9. k2 app token list =="
+routes '{"GET /cli/skin-tokens": [200, {"tokens": []}]}'
+run owner app token list
+assert_contains "no App tokens wording" "$out" "No App tokens."
+
+echo "== 10. k2 sources pending: one hint =="
+routes '{"GET /cli/sources/pending": [403, {"error": {"code": "owner_only", "hint": "approvals are the owner'"'"'s"}}]}'
+run cell sources pending
+assert_eq "sources pending refused → exit 3" "$rc" "3"
+assert_contains "daemon hint shown" "$err" "approvals are the owner's"
+assert_absent "no second hint" "$err" "Manage Gardens and data sources"
+routes '{"GET /cli/sources/pending": [403, {"error": {"code": "person_only"}}]}'
+run cell sources pending
+assert_contains "our hint when the daemon gave none" "$err" "Manage Gardens and data sources"
+routes '{"GET /cli/sources/pending": [403, {"error": {"code": "owner_only"}}]}'
+run cell sources pending
+assert_absent "never the switch hint for owner_only" "$err" "Manage Gardens and data sources"
+
 echo
 echo "CLI audit 0.46.1: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -10800,7 +10800,7 @@ import json,sys
 d=json.load(sys.stdin)
 tokens=d.get("tokens",[])
 if not tokens:
-    print("No skin tokens."); sys.exit(0)
+    print("No App tokens."); sys.exit(0)
 for t in tokens:
     state="revoked" if t.get("revokedAt") else "active"
     caps=",".join(t.get("caps") or []) or "none"
@@ -13975,6 +13975,9 @@ else:
     echo "$line" >&2
     case "$status" in
         400|413) exit 2 ;;
+        # 0.46.1: `k2 compute get <missing>` sets _CP_404_EXIT=4 (not
+        # found); other verbs keep their documented exit 3.
+        404) exit "${_CP_404_EXIT:-3}" ;;
         *) exit 3 ;;
     esac
 }
@@ -14110,7 +14113,8 @@ elif verb == "jobs":
     if not rows:
         print("(no jobs)")
     for j in rows:
-        print("%s  %-12s %-11s exit %-4s %-10s %s" % (j["short"], (j.get("node") or "?")[:12], j["state"], "-" if j.get("exitCode") is None else j["exitCode"], (j.get("reason") or "")[:10], " ".join(j.get("argv") or [])[:60]))
+        # 0.46.1: the full reason (it was cut to 10 characters).
+        print("%s  %-12s %-11s exit %-4s %-22s %s" % (j["short"], (j.get("node") or "?")[:12], j["state"], "-" if j.get("exitCode") is None else j["exitCode"], j.get("reason") or "", " ".join(j.get("argv") or [])[:60]))
 elif verb == "get":
     j = v
     print("job %s on %s: %s%s" % (j["short"], j.get("node"), j["state"], (" (%s)" % j["reason"]) if j.get("reason") else ""))
@@ -14947,7 +14951,7 @@ cmd_compute() {
             ;;
         get|status)
             [ -n "${1:-}" ] || { echo "usage: k2 compute get <job>" >&2; exit 2; }
-            _compute_call GET /cli/compute/jobs/get "job=$(urlencode "$1")"
+            _CP_404_EXIT=4 _compute_call GET /cli/compute/jobs/get "job=$(urlencode "$1")"
             [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
             _compute_render get
             ;;
@@ -15766,13 +15770,22 @@ except Exception:
 
 # Print a refusal and exit with the contract code.
 _sources_fail() {
-    local status="$1" body="$2" code=""
+    local status="$1" body="$2" code="" daemon_hint=""
     code="$(printf '%s' "$body" | python3 -c '
 import json, sys
 try:
     v = json.loads(sys.stdin.read())
     e = v.get("error") if isinstance(v, dict) else None
     print(e.get("code", "") if isinstance(e, dict) else (e or ""))
+except Exception:
+    print("")
+' 2>/dev/null)"
+    # 0.46.1: did the daemon already say what to do? Then ours is noise.
+    daemon_hint="$(printf '%s' "$body" | python3 -c '
+import json, sys
+try:
+    e = json.loads(sys.stdin.read()).get("error")
+    print("1" if isinstance(e, dict) and str(e.get("hint") or "").strip() else "")
 except Exception:
     print("")
 ' 2>/dev/null)"
@@ -15798,10 +15811,14 @@ except Exception:
         # vault_confirm_required is the one confirm code (0.46.0);
         # confirm_required is what a 0.45.x daemon answers.
         person_only|owner_only|vault_confirm_required|confirm_required|lan_owner_only|field_person_only|secret_not_usable|forbidden)
-            if [ "$code" = "secret_not_usable" ]; then
-                echo "Bind a secret from your own workspace, or ask your human for \"Allow managing server-wide secrets\"." >&2
-            else
-                echo "This needs a person (run it outside K2, or Settings → Gardens → External Data), or the agent switch \"Manage Gardens and data sources\" (k2 sources --help)." >&2
+            # One hint only: ours only when the daemon gave none, and never
+            # the agent-switch line for owner_only (no switch opens it).
+            if [ -z "$daemon_hint" ] && [ "$code" != "owner_only" ]; then
+                if [ "$code" = "secret_not_usable" ]; then
+                    echo "Bind a secret from your own workspace, or ask your human for \"Allow managing server-wide secrets\"." >&2
+                else
+                    echo "This needs a person (run it outside K2, or Settings → Gardens → External Data), or the agent switch \"Manage Gardens and data sources\" (k2 sources --help)." >&2
+                fi
             fi
             exit 3 ;;
         source_not_found|trigger_not_found|removed) exit 4 ;;
@@ -39913,6 +39930,18 @@ elif verb == "status":
         d["ok"] = True
     if as_json:
         print(dumps(d))
+    elif not d.get("supported") or d.get("state") == "not-installed":
+        # 0.46.1: one clear line instead of empty cert/owner/calendar rows.
+        if not d.get("supported"):
+            print("server   : not available here — hosted mail runs on Linux K2 servers."
+                  " For linked inboxes use `k2 mail inboxes`.")
+        else:
+            print("server   : not installed — hosted mail runs on Linux K2 servers"
+                  " (k2 hostmail enable --hostname <mail host>). For linked inboxes use `k2 mail inboxes`.")
+            if d.get("helper"):
+                print("helper   : %s" % d["helper"])
+                if d.get("helperFix"):
+                    print("fix      : %s" % d["helperFix"])
     else:
         print("server   : %s  (email supported on this daemon: %s)"
               % (d.get("state", "?"), "yes" if d.get("supported") else "no"))
@@ -46888,7 +46917,6 @@ session, never a K2 terminal; `k2 root-helper install-command`):
 
 USAGE
   k2 hostmail status [flags]
-  k2 mail status [flags]
 
 FLAGS
   --health               Also run the live health probe (systemd + API ping)

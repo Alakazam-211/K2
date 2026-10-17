@@ -316,6 +316,14 @@ async fn waiting_count_counts_needs_discussion_and_me_scopes_to_the_login() {
 async fn owner_linked_account_tickets_are_waiting_on_the_owner() {
     let _g = lock();
     with_temp_home(|| {
+        // The in-memory DB is process-wide, and an earlier test in this
+        // file leaves waiting tickets assigned to the wire `owner`. Linking
+        // makes tlbz3thon count `owner` tickets too, so those leftovers
+        // used to land in its delta whenever that test ran first (the
+        // order-dependent flake). Start from an empty ticket table (we hold
+        // TEST_LOCK; comments and briefs cascade) so the counts below are
+        // exactly the tickets this test seeds.
+        k2_core::db::shared().lock().execute("DELETE FROM feedback", []).expect("clear tickets");
         k2_core::app_settings::update(serde_json::json!({ "ownerDisplayName": "Rosson Link" }))
             .expect("set owner display name");
         connect_users::add_user("tlbz3thon", "password123").expect("add_user");
@@ -342,7 +350,9 @@ async fn owner_linked_account_tickets_are_waiting_on_the_owner() {
         let linked_before = read(linked.as_str());
         seed_linked_ticket("assigned to the linked login", "waiting", &["TLBz3thon "]);
         seed_linked_ticket("assigned to owner", "needs_discussion", &["owner"]);
-        assert_eq!(read(OWNER_TOKEN) - owner_before, 1, "unlinked owner: only the `owner` ticket");
+        // A legacy ticket assigned by the old owner display name.
+        seed_linked_ticket("assigned by the old display name", "waiting", &["Rosson Link"]);
+        assert_eq!(read(OWNER_TOKEN) - owner_before, 2, "unlinked owner: the `owner` + legacy display-name tickets");
         assert_eq!(read(linked.as_str()) - linked_before, 1, "unlinked z3thon: only their own ticket");
 
         // Link z3thon as the owner (Settings → People → "This is me (owner)").
@@ -357,8 +367,15 @@ async fn owner_linked_account_tickets_are_waiting_on_the_owner() {
         let both = serde_json::json!(["owner", "rosson link", "tlbz3thon"]);
         assert_eq!(ticket_me(OWNER_TOKEN), both, "owner token: owner + display + linked");
         assert_eq!(ticket_me(linked.as_str()), both, "linked login: the same person");
-        assert_eq!(read(OWNER_TOKEN) - owner_before, 2, "linked owner: both tickets");
-        assert_eq!(read(linked.as_str()) - linked_before, 2, "linked login: both tickets");
+        assert_eq!(read(OWNER_TOKEN) - owner_before, 3, "linked owner: all three tickets");
+        assert_eq!(
+            read(linked.as_str()) - linked_before,
+            3,
+            "linked login: all three, including the legacy display-name ticket"
+        );
+        // With the table cleared at the start, the absolute counts are the
+        // seeded tickets exactly (no leftovers from other tests).
+        assert_eq!((owner_before, linked_before), (0, 0));
     });
 }
 

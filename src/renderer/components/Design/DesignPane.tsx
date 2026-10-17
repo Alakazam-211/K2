@@ -1,16 +1,15 @@
 // The Design tab's pane (prd-browser-design-mode-v1 §00, D-A6–D-A12).
 //
-// It draws its OWN two-pane view inside the tab item: the workspace's
-// pinned Chat on the left and the page on the right. It never calls
+// It draws its OWN two-pane view inside the tab item: the agent's
+// conversation in Thread view on the left and the page on the right. It never calls
 // `splitTerminalArea` and never touches the room's shared `splitCount` /
 // `extraGroups` (DD5): selecting a Design tab is this window's view only.
 //
-//  - Chat column: a second slot for the retained pinned-Chat instance
-//    (`PinnedChatSlot kind="design"`, multi-slot `retained-chat.ts`). When
-//    the Chat TAB is visible beside it in this window, the Chat tab keeps
-//    the instance and Design shows the page full width. When the Chat is
-//    not retained (an older daemon, a workspace outside Active, a Home
-//    room), Design shows the page only: never a second AgentChatPane.
+//  - Thread column (Rosson 2026-10-16): its own Thread instance for the
+//    workspace's agent (`DesignThreadColumn`), never the pinned Chat's
+//    retained AgentChatPane. Opening or closing Design never moves that
+//    instance or changes the Chat tab's view. Notes sent "via Design"
+//    show up here.
 //  - The split width is this window's, per room (`design-split-sizes.ts`,
 //    DD6). Dragging it claims the window (`beginBrowserMotion('drag')`) so
 //    the native page freezes instead of eating the mouse.
@@ -30,12 +29,11 @@ import { useRoom } from '@/components/Room/RoomContext'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { webFeatures } from '@/web/features'
 import { BrowserPane, browserNativeItemId, currentParentWindow } from '@/components/BrowserPane/BrowserPane'
-import { PinnedChatSlot, useRetainedChatProjectId } from '@/components/AgentPane/PinnedChatRetainer'
 import { beginBrowserMotion } from '@/lib/browser-overlay'
 import { pickArm, pickDisarm, pickPoll, setDesignBadges } from '@/lib/design-picker-ipc'
-import { chatTabSlotVisible, useRetainedChatStore } from '@/stores/retained-chat'
 import type { AgentItemData, DesignItemData, Tab } from '@/stores/tabs'
 import { DesignPaletteButton } from './DesignToolbar'
+import { DesignThreadColumn } from './DesignThreadColumn'
 import { DesignWebStub } from './DesignWebStub'
 import { NotePopover, sendNowChord } from './NotePopover'
 import { NoteTray } from './NoteTray'
@@ -96,10 +94,7 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
   const chatAgent = useStore(room.tabs, (s) => pinnedChatItem(s.tabs)?.agentName ?? null)
   const chatPath = useStore(room.tabs, (s) => pinnedChatItem(s.tabs)?.projectPath ?? null)
   const chatSession = useStore(room.tabs, (s) => pinnedChatItem(s.tabs)?.sessionId)
-  const retainedId = useRetainedChatProjectId(chatPath ?? '')
-  const chatProjectId = chatAgent && chatPath ? retainedId : null
-  const chatBeside = useRetainedChatStore((s) => (chatProjectId ? chatTabSlotVisible(s, chatProjectId) : false))
-  const showChat = chatProjectId !== null && !chatBeside
+  const showChat = !!chatAgent && !!chatPath
 
   // ── Split width (this window, this room) ──────────────────────────────
   const roomKey = room.roomId() ?? room.key
@@ -242,11 +237,6 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
   const store = useDesignNotesStore.getState
   const toolbar = (
     <>
-      {chatBeside ? (
-        <div className="px-2 h-5 flex items-center text-[10px] text-[var(--color-text-muted)] border-b border-[var(--color-border)]" data-testid="design-chat-beside">
-          Chat is open beside
-        </div>
-      ) : null}
       <NoteTray
         notes={tray.notes}
         sending={tray.sending}
@@ -266,32 +256,28 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
 
   return (
     <div ref={rowRef} className="flex h-full w-full min-w-0" data-design-pane={itemId}>
-      {chatProjectId !== null && chatAgent && chatPath ? (
+      {showChat && chatAgent && chatPath ? (
         <>
           <div
             className="h-full min-w-0 overflow-hidden"
-            style={{ flex: `${split[0]} 1 0`, display: showChat ? 'block' : 'none' }}
+            style={{ flex: `${split[0]} 1 0` }}
             data-design-chat=""
           >
-            <PinnedChatSlot
-              kind="design"
-              visible={tabVisible && showChat}
-              projectId={chatProjectId}
-              agentName={chatAgent}
+            <DesignThreadColumn
               projectPath={chatPath}
-              restoredSessionId={chatSession}
+              agentName={chatAgent}
+              conversationId={chatSession ?? null}
+              visible={tabVisible}
             />
           </div>
-          {showChat ? (
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize Chat and page"
-              className="w-1 flex-shrink-0 cursor-col-resize bg-[var(--color-border)] hover:bg-[var(--color-accent)]"
-              onMouseDown={startSplitDrag}
-              data-design-split=""
-            />
-          ) : null}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize Thread and page"
+            className="w-1 flex-shrink-0 cursor-col-resize bg-[var(--color-border)] hover:bg-[var(--color-accent)]"
+            onMouseDown={startSplitDrag}
+            data-design-split=""
+          />
         </>
       ) : null}
       <div className="h-full min-w-0" style={{ flex: `${showChat ? split[1] : 100} 1 0` }}>

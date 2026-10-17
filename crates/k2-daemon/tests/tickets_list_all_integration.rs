@@ -6,6 +6,8 @@
 //!   2. An agent passport (scoped session token) is refused.
 //!   3. A POST is 405 (the route is GET-only in `route_policy`).
 //!   4. `list?all=1` without `project` is a 400 that points to `list-all`.
+//!   5. `waiting-count` counts `waiting` + `needs_discussion`, and `me=1`
+//!      scopes it to the calling login (feature `tickets-badge-me`).
 //!
 //! The app (skin) 404 lives in `publish_skin_gateway.rs`, next to the
 //! `waiting-count` 404.
@@ -231,5 +233,102 @@ async fn post_list_all_is_405_and_list_all_flag_without_project_is_400() {
             "{}",
             r.body
         );
+    });
+}
+
+/// A ticket on a workspace that stays registered, set to `status` and
+/// assigned to `assignees`. Returns the ticket id.
+fn seed_linked_ticket(title: &str, status: &str, assignees: &[&str]) -> String {
+    let uid = uuid::Uuid::new_v4();
+    let project_id = uuid::Uuid::new_v4().to_string();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path) VALUES (?1, ?2, ?3)",
+            rusqlite::params![project_id, format!("live-{uid}"), format!("/tmp/tb-live-{uid}")],
+        )
+        .expect("insert project");
+    }
+    let item = k2_core::feedback::create(k2_core::feedback::NewFeedback {
+        project_id,
+        agent_name: "scout".to_string(),
+        title: title.to_string(),
+        ..Default::default()
+    })
+    .expect("create ticket");
+    if status != "waiting" {
+        k2_core::feedback::set_status(&item.id, status).expect("set status");
+    }
+    if !assignees.is_empty() {
+        let names: Vec<String> = assignees.iter().map(|s| s.to_string()).collect();
+        k2_core::feedback::set_assignees(&item.id, &names).expect("assign");
+    }
+    item.id
+}
+
+/// The badge counts `waiting` + `needs_discussion`; `me=1` scopes it to
+/// the calling login: the owner token is `owner` + the owner's display
+/// name, a Connect-user session is its username. Answered tickets and
+/// other people's tickets never count. Deltas, not totals: the DB is
+/// process-wide (every test here holds `TEST_LOCK`, so the delta is ours).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn waiting_count_counts_needs_discussion_and_me_scopes_to_the_login() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_core::app_settings::update(serde_json::json!({ "ownerDisplayName": "Rosson Test" }))
+            .expect("set owner display name");
+        connect_users::add_user("tlb_member", "password123").expect("add_user");
+        let member = connect_users::create_session("tlb_member");
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+
+        let read = |q: &str, tok: &str, scope: &str| -> i64 {
+            let r = http(d.port, "GET", &format!("/cli/feedback/waiting-count?{q}token={tok}"), None);
+            assert_eq!(r.status, 200, "waiting-count {q}; body={}", r.body);
+            let v = json(&r.body);
+            assert_eq!(v["scope"], serde_json::json!(scope), "{}", r.body);
+            v["count"].as_i64().unwrap_or_else(|| panic!("count must be a number: {}", r.body))
+        };
+        let host_before = read("", OWNER_TOKEN, "host");
+        let owner_before = read("me=1&", OWNER_TOKEN, "me");
+        let member_before = read("me=1&", member.as_str(), "me");
+
+        seed_linked_ticket("owner waiting", "waiting", &["owner"]);
+        seed_linked_ticket("owner by display name", "needs_discussion", &["ROSSON TEST"]);
+        seed_linked_ticket("owner answered", "answered", &["owner"]);
+        seed_linked_ticket("owner resolved", "resolved", &["owner"]);
+        seed_linked_ticket("member talk", "needs_discussion", &["tlb_member"]);
+        seed_linked_ticket("nobody's", "waiting", &[]);
+
+        assert_eq!(read("", OWNER_TOKEN, "host") - host_before, 4, "host-wide: 2 waiting + 2 needs_discussion");
+        assert_eq!(read("", member.as_str(), "host") - host_before, 4, "host-wide is the same for a member");
+        assert_eq!(read("me=1&", OWNER_TOKEN, "me") - owner_before, 2, "owner: owner + display name");
+        assert_eq!(read("me=1&", member.as_str(), "me") - member_before, 1, "member: their own ticket only");
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_passport_is_refused_waiting_count() {
+    let _g = lock();
+    with_temp_home(|| {
+        let principal = HookPrincipal {
+            workspace_uuid: "ws-tickets-badge".to_string(),
+            agent_address: "agent-tickets-badge".to_string(),
+        };
+        let passport = session_token::mint_session_token(
+            &SessionId::new(),
+            "pane-1",
+            principal,
+            session_token::CredMode::ApiKey,
+            session_token::Provider::Anthropic,
+        );
+        assert!(!session_token::is_agent_verb("/cli/feedback/waiting-count"));
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        for q in ["", "me=1&"] {
+            let r = http(d.port, "GET", &format!("/cli/feedback/waiting-count?{q}token={passport}"), None);
+            assert_eq!(r.status, 403, "agent passport must be refused ({q}); body={}", r.body);
+        }
+        let r = http(d.port, "GET", "/cli/feedback/waiting-count?me=1", None);
+        assert_eq!(r.status, 403, "no token must be refused; body={}", r.body);
     });
 }

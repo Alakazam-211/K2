@@ -127,6 +127,97 @@ describe('the activity ear across a message sent while the agent works', () => {
     expect(look().mounted).toBe(false)
   })
 
+  it('holds for 3s, as K2 Companion does', () => {
+    expect(SUPERSEDE_HOLD_MS).toBe(3_000)
+  })
+
+  it('a new turn 2.5s after the supersede (a slow tunnel) still swaps in place', () => {
+    const live1 = turn({ turnId: 't1', startedAt: T0 - 5_000, phaseSince: T0 - 500 }, T0)
+    const { rerender } = render(<ZenActivityDrawer turn={live1} />)
+    const tile = look().tile
+    expect(tile).not.toBeNull()
+    const superseded = turn(
+      { turnId: 't1', startedAt: T0 - 5_000, state: 'stopped', rev: 2, end: { reason: 'superseded', detail: null, at: T0 } },
+      T0,
+    )
+    rerender(<ZenActivityDrawer turn={superseded} />)
+    const seen: Seen[] = [look()]
+    for (let i = 0; i < 5; i++) {
+      act(() => vi.advanceTimersByTime(500))
+      seen.push(look())
+    }
+    const live2 = turn({ turnId: 't2', startedAt: T0, phaseSince: T0 + 2_500, phase: 'delivering', line: null, rev: 1 }, T0 + 2_500)
+    rerender(<ZenActivityDrawer turn={live2} />)
+    seen.push(look())
+    act(() => vi.advanceTimersByTime(SUPERSEDE_HOLD_MS))
+    seen.push(look())
+    expect(seen.map((s) => s.phase)).toEqual(seen.map(() => 'in'))
+    expect(seen.every((s) => s.tile === tile)).toBe(true)
+    expect(document.querySelector('[data-zen-drawer-step]')?.textContent).toBe('Delivering…')
+  })
+
+  it('any other end collapses at once, with no hold', () => {
+    for (const reason of ['done', 'reply', 'failed', 'session_gone', 'delivery_failed', 'stale']) {
+      const live = turn({ turnId: 't1', startedAt: T0 - 5_000 }, T0)
+      const { rerender } = render(<ZenActivityDrawer turn={live} />)
+      expect(look().phase, reason).toBe('in')
+      const ended = turn(
+        {
+          turnId: 't1',
+          startedAt: T0 - 5_000,
+          state: reason === 'done' || reason === 'reply' ? 'idle' : 'stopped',
+          rev: 2,
+          end: { reason, detail: null, at: T0 },
+        },
+        T0,
+      )
+      rerender(<ZenActivityDrawer turn={ended} />)
+      expect(look().phase, reason).toBe('out')
+      act(() => vi.advanceTimersByTime(ZEN_DRAWER_MS + 100))
+      expect(look().mounted, reason).toBe(false)
+      cleanup()
+    }
+  })
+
+  it('a Thread switch drops the hold: no turn collapses at once, and a late end of the old turn is not held', () => {
+    const live1 = turn({ turnId: 't1', startedAt: T0 - 5_000 }, T0)
+    const { rerender } = render(<ZenActivityDrawer turn={live1} />)
+    const superseded = turn(
+      { turnId: 't1', startedAt: T0 - 5_000, state: 'stopped', rev: 2, end: { reason: 'superseded', detail: null, at: T0 } },
+      T0,
+    )
+    rerender(<ZenActivityDrawer turn={superseded} />)
+    expect(look().phase).toBe('in')
+    // The user switches Thread: the hook resets its turn to null.
+    act(() => vi.advanceTimersByTime(200))
+    rerender(<ZenActivityDrawer turn={null} />)
+    expect(look().phase).toBe('out')
+    act(() => vi.advanceTimersByTime(ZEN_DRAWER_MS + 100))
+    expect(look().mounted).toBe(false)
+    // Back on the old Thread, the old turn's end (still inside its hold
+    // window) is not held: the live state it would hold was dropped.
+    rerender(<ZenActivityDrawer turn={superseded} />)
+    expect(look().mounted).toBe(false)
+    // The hold's timers went with it.
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('unmounting during the hold leaves no timer behind', () => {
+    const live1 = turn({ turnId: 't1', startedAt: T0 - 5_000 }, T0)
+    const { rerender, unmount } = render(<ZenActivityDrawer turn={live1} />)
+    rerender(
+      <ZenActivityDrawer
+        turn={turn(
+          { turnId: 't1', startedAt: T0 - 5_000, state: 'stopped', rev: 2, end: { reason: 'superseded', detail: null, at: T0 } },
+          T0,
+        )}
+      />,
+    )
+    expect(vi.getTimerCount()).toBeGreaterThan(0)
+    unmount()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('holds only a superseded turn it saw live, within the hold', () => {
     const live = turn({ turnId: 't1', startedAt: T0 - 5_000 }, T0)
     const sup = turn({ turnId: 't1', startedAt: T0 - 5_000, state: 'stopped', end: { reason: 'superseded', detail: null, at: T0 } }, T0)

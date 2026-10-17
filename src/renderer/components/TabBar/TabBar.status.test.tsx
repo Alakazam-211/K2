@@ -244,6 +244,7 @@ describe('session tabs: one status model (S5)', () => {
         '14',
         '14',
       ])
+      expect([id, grid.querySelectorAll('rect').length]).toEqual([id, 9])
     }
   })
 
@@ -283,6 +284,8 @@ describe('the pinned Chat tab', () => {
       '20',
       '20',
     ])
+    // The full 3×3 here (only narrow spots use the 2×3).
+    expect(grid.querySelectorAll('rect')).toHaveLength(9)
     const badge = tab.querySelector('[data-pinned-chat-badge] [data-slot="status"]') as HTMLElement
     expect([badge.getAttribute('data-agent-status'), badge.style.width]).toEqual(['needs-you', '10px'])
     expect(tab.querySelector('.rounded-full')).toBeNull()

@@ -533,7 +533,8 @@ async fn the_door_comes_from_the_token() {
 
 /// A1: the assignee policy through the real dispatcher with the owner
 /// token (the agent door). "A user on this server" = the owner (literal
-/// `owner` or the owner display name) or a stored Connect user.
+/// `owner`; 0.46.0: no longer the owner display name) or a stored
+/// Connect user.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn assignee_policy_through_the_dispatcher() {
     let _g = lock();
@@ -580,13 +581,12 @@ async fn assignee_policy_through_the_dispatcher() {
             "{hint}"
         );
 
-        // A Connect user, any case; the literal owner; the owner display
-        // name; a disabled Connect user (still a user here): no warning.
+        // A Connect user, any case; the literal owner; a disabled Connect
+        // user (still a user here): no warning.
         for who in [
             serde_json::json!(["tb_julie"]),
             serde_json::json!(["TB_Julie"]),
             serde_json::json!(["owner"]),
-            serde_json::json!(["rosson"]),
             serde_json::json!(["tb_gone"]),
         ] {
             let r = create(OWNER_TOKEN, serde_json::json!({ "assignees": who }));
@@ -594,6 +594,12 @@ async fn assignee_policy_through_the_dispatcher() {
             assert!(codes(&r).is_empty(), "{who}: {}", r.body);
             assert_eq!(json(&r.body)["assignees"], who, "{}", r.body);
         }
+
+        // 0.46.0 (identity = username): the old ownerDisplayName is no
+        // longer a user here — the owner is `owner` or its linked login.
+        let r = create(OWNER_TOKEN, serde_json::json!({ "assignees": ["rosson"] }));
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(codes(&r), vec!["assignee_unknown"], "{}", r.body);
 
         // Not a user here: filed, snapshot kept, assignee_unknown.
         let r = create(OWNER_TOKEN, serde_json::json!({ "assignees": ["tb_julie", "tb_nobody"] }));

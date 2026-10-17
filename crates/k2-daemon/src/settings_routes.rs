@@ -242,9 +242,13 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
         );
     }
     // The owner's person colour changes only through POST
-    // /cli/people/color (palette-validated, re-broadcasts presence).
+    // /cli/people/color (#RRGGBB-validated, re-broadcasts presence).
     if partial.get("ownerColor").is_some() {
         return forbidden("\"ownerColor\" changes only through POST /cli/people/color".to_string());
+    }
+    // The one-time ownerDisplayName carry-over flag is daemon-owned.
+    if partial.get("ownerDisplayNameCarried").is_some() {
+        return forbidden("\"ownerDisplayNameCarried\" is set by the daemon only".to_string());
     }
     if actor != SettingsActor::Owner {
         if let Some(gated) = OWNER_ONLY_KEYS.iter().find(|k| partial.get(**k).is_some()) {

@@ -770,6 +770,9 @@ pub const ROUTES: &[Route] = &[
     // Person colours (0.46.0): any login reads them and sets its own; the
     // handler lets an Admin+ change someone else's (Owner for the owner).
     both("/cli/people/color", Member),
+    // Person names (0.46.0): same floors as colours (any login reads them
+    // and sets its own; Admin+ others; Owner for the owner person).
+    both("/cli/people/name", Member),
     // Power-helper S1: Set up shows the admin dialog on the host, so
     // Admin (and the handler refuses anything but loopback).
     post("/cli/power/helper", Admin),

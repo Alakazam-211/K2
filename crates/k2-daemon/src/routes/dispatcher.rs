@@ -7885,7 +7885,8 @@ async fn handle_one_request(
         // `admin/set` was answered 405 before auth (`get_refused`).
         p if p.starts_with("/cli/notify/")
             || p == crate::notify_routes::OWNER_ACCOUNTS_PATH
-            || p == crate::notify_routes::PEOPLE_COLOR_PATH =>
+            || p == crate::notify_routes::PEOPLE_COLOR_PATH
+            || p == crate::notify_routes::PEOPLE_NAME_PATH =>
         {
             if !super::http::token_ok(&query, state.token.as_str()) {
                 let _ = stream.read(&mut buf).await;
@@ -7923,8 +7924,9 @@ async fn handle_one_request(
                 Vec::new()
             };
             let p_owned = p.to_string();
+            let params = super::http::parse_params(p, &query);
             let result = tokio::task::spawn_blocking(move || {
-                crate::notify_routes::handle(is_post, &p_owned, &body_bytes, &actor)
+                crate::notify_routes::handle_with_params(is_post, &p_owned, &body_bytes, &actor, &params)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {

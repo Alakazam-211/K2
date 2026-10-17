@@ -547,14 +547,10 @@ fn title_case_slug(slug: &str) -> String {
         .join(" ")
 }
 
+/// The owner as an author: the linked account's username (0.46.0:
+/// identity = username), else `user`.
 fn owner_author_label() -> String {
-    crate::app_settings::load()
-        .owner_display_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("user")
-        .to_string()
+    crate::person_name::owner_login_now().unwrap_or_else(|| "user".to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -1108,12 +1104,21 @@ pub fn render_skills_roster_body(project_path: &str) -> String {
 ///
 /// Same rows as `connect_users::list_people_for_agents` — host owner plus
 /// every stored connect-user, including member, viewer, and disabled.
-/// Owner display comes from app settings (trim / empty → `"owner"`).
+/// The owner is the linked account's username (none linked → `"owner"`);
+/// real names follow usernames after ` — `.
 pub fn render_users_roster_body(_project_path: &str) -> String {
-    let owner = crate::app_settings::load()
-        .owner_display_name
-        .unwrap_or_default();
+    // 0.46.0: the owner row is the linked account's username (identity =
+    // username), else "owner" — the old ownerDisplayName is not read.
+    let owner = crate::person_name::owner_login_now().unwrap_or_default();
     let rows = crate::connect_users::list_people_for_agents(owner.trim()).unwrap_or_default();
+    // 0.46.0: real names (display only). The map is keyed by login, plus
+    // the owner's display name — the synthesized owner row's username.
+    let names = crate::person_name::load_map();
+    let label = |username: &str| {
+        let key = if username.eq_ignore_ascii_case(crate::notify_prefs::OWNER) { crate::notify_prefs::OWNER } else { username };
+        crate::person_name::label(username, names.get(key))
+    };
+    let any_named = rows.iter().any(|r| label(&r.username) != r.username);
 
     let mut out = String::new();
     out.push_str(
@@ -1121,13 +1126,19 @@ pub fn render_users_roster_body(_project_path: &str) -> String {
          They write to you from the app as `[from <name>]`. Do **not** `k2 msg` these names.\n\
          CLI lookup: `k2 connections list --users`. Regenerated whenever K2 rewrites AGENTS.md.\n\n",
     );
+    if any_named {
+        out.push_str(
+            "A real name, when set, follows the username after ` — `. It is for context only: \
+             `[from …]`, assignees and every command use the username.\n\n",
+        );
+    }
     out.push_str("| USERNAME | ROLE | DISABLED |\n");
     out.push_str("| --- | --- | --- |\n");
     for r in rows {
         let disabled = if r.disabled { "yes" } else { "no" };
         out.push_str(&format!(
             "| {} | {} | {disabled} |\n",
-            r.username,
+            label(&r.username),
             r.role.as_wire()
         ));
     }
@@ -3100,7 +3111,7 @@ mod tests {
             set_test_owner_display("Rosson");
             let empty = render_users_roster_body("/unused");
             assert!(
-                empty.contains("Rosson") && empty.contains("owner") && empty.contains("no"),
+                empty.contains("| owner | owner | no |"),
                 "empty store must still list host owner; body:\n{empty}"
             );
             assert!(
@@ -3119,7 +3130,7 @@ mod tests {
             crate::connect_users::set_disabled("ghost", true).expect("disable");
 
             let body = render_users_roster_body("/unused");
-            assert!(body.contains("Rosson"), "missing owner; body:\n{body}");
+            assert!(body.contains("| owner | owner | no |"), "missing owner (ownerDisplayName is not read); body:\n{body}");
             assert!(
                 body.contains("julie") && body.contains("admin"),
                 "missing admin; body:\n{body}"
@@ -3144,6 +3155,37 @@ mod tests {
                     && !body.contains("tokenEpoch"),
                 "people table must not leak secrets; body:\n{body}"
             );
+        });
+    }
+
+    /// 0.46.0: a person's real name follows the username; nothing changes
+    /// for people without one.
+    #[test]
+    fn render_users_roster_body_shows_real_names_beside_usernames() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            set_test_owner_display("Rosson");
+            crate::connect_users::add_user("julie", "password1").expect("add julie");
+            crate::connect_users::add_user("member1", "password1").expect("add member");
+            let before = render_users_roster_body("/unused");
+            assert!(before.contains("| julie | member | no |"), "body:\n{before}");
+            assert!(before.contains("| owner | owner | no |"), "ownerDisplayName is not read; body:\n{before}");
+            assert!(!before.contains("| julie —"), "no names → unchanged; body:\n{before}");
+            assert!(!before.contains("use the username"), "no names → no extra note; body:\n{before}");
+
+            crate::connect_users::set_names("julie", Some("Julie"), Some("Park")).expect("names");
+            let body = render_users_roster_body("/unused");
+            assert!(body.contains("| julie — Julie Park | member | no |"), "body:\n{body}");
+            assert!(body.contains("| owner | owner | no |"), "nothing linked: the owner row; body:\n{body}");
+            // Linked: the owner is that login, with its name.
+            crate::connect_users::add_user("z3thon", "password1").expect("add z3thon");
+            crate::connect_users::set_role("z3thon", crate::connect_users::Role::Owner).expect("owner");
+            crate::connect_users::set_names("z3thon", Some("Rosson"), Some("Long")).expect("names");
+            crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["z3thon"] })).expect("link");
+            let body = render_users_roster_body("/unused");
+            assert!(body.contains("| z3thon — Rosson Long | owner | no |"), "body:\n{body}");
+            assert!(!body.contains("Rosson |"), "ownerDisplayName is not read; body:\n{body}");
+            assert!(body.contains("| member1 | member | no |"), "nameless rows unchanged; body:\n{body}");
+            assert!(body.contains("use the username"), "teaches that names are context only; body:\n{body}");
         });
     }
 

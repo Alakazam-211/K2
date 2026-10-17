@@ -640,6 +640,11 @@ pub enum SessionEvent {
         /// name), so ticket assignees and other non-roster names match.
         #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
         colors: std::collections::BTreeMap<String, String>,
+        /// 0.46.0: login → `{firstName, lastName, displayName}` for the
+        /// same people as `colors` (`owner`, every Connect login, the
+        /// owner's display name). Display only; logins stay the identity.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        names: std::collections::BTreeMap<String, k2_core::person_name::NameEntry>,
     },
 
     /// 0.40.34 — a process on the daemon's machine asked to open a URL
@@ -1971,8 +1976,12 @@ mod tests {
                 granted_edit: false,
                 connected_at: 1_700_000_000,
                 color: String::new(),
+                first_name: None,
+                last_name: None,
+                display_name: String::new(),
             }],
             colors: Default::default(),
+            names: Default::default(),
         });
         assert_eq!(json["kind"], "presence_changed");
         assert_keys(&json, &["kind", "roster"]);
@@ -1983,8 +1992,10 @@ mod tests {
         assert_eq!(row["workspaces"], serde_json::json!(["/x/foo"]));
         assert_eq!(row["grantedEdit"], false);
         assert_eq!(row["connectedAt"], 1_700_000_000i64);
+        assert_eq!(row["firstName"], serde_json::Value::Null, "0.46.0 names, null when unset");
+        assert_eq!(row["lastName"], serde_json::Value::Null);
         let row_obj = row.as_object().unwrap();
-        assert_eq!(row_obj.len(), 6, "unexpected roster row keys: {row_obj:?}");
+        assert_eq!(row_obj.len(), 8, "unexpected roster row keys: {row_obj:?}");
     }
 
     /// 0.40.34 FROZEN WIRE CONTRACT: `{ "kind": "open_url", "url":

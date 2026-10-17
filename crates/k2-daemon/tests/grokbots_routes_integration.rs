@@ -335,9 +335,10 @@ async fn grokbots_routes_gate_consent_and_round_trip() {
     assert_eq!(sent[0].body["prompt"], json!("[from gbadmin] ping"));
     assert_eq!(sent[0].body["clientNonce"], b["clientNonce"]);
 
-    // The owner token: the owner's display name from Settings.
-    k2_core::app_settings::update(json!({"ownerDisplayName": "Rosson Test"}))
-        .expect("owner display name");
+    // The owner token (0.46.0, identity = username): the owner's linked
+    // account's username — never the old ownerDisplayName.
+    k2_core::app_settings::update(json!({"ownerDisplayName": "Rosson Test", "ownerAccounts": ["gbadmin"]}))
+        .expect("owner display name + linked account");
     let (s, b, _) = call(
         port,
         "POST",
@@ -351,7 +352,7 @@ async fn grokbots_routes_gate_consent_and_round_trip() {
         .filter(|r| r.path == "/api/sendPrompt")
         .collect();
     assert_eq!(sent.len(), 2);
-    assert_eq!(sent[1].body["prompt"], json!("[from Rosson Test] hello"));
+    assert_eq!(sent[1].body["prompt"], json!("[from gbadmin] hello"));
     assert_eq!(sent[1].body["agentId"], json!(B));
 
     // A stale bot: the send goes through and shows in its live tail.

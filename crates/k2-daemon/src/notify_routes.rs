@@ -9,6 +9,8 @@
 //! | POST | `/cli/notify/admin/set` | Admin  | a workspace default (Admin+), or another person's row (Owner only) |
 //! | GET  | `/cli/people/color`     | Member | the palette, the caller's colour, everyone's effective colour |
 //! | POST | `/cli/people/color`     | Member | the caller's own colour; `user` = someone else's (Admin+, see below) |
+//! | GET  | `/cli/people/name`      | Member | the caller's (or `?person=`'s) names + everyone's |
+//! | POST | `/cli/people/name`      | Member | the caller's own names; `person` = someone else's (Admin+, same floors as colour) |
 //!
 //! Identity comes from the dispatcher arm (owner token → `owner`, a live
 //! Connect session → its username), never the body (TP20). Agent
@@ -36,6 +38,7 @@ pub const ADMIN_PATH: &str = "/cli/notify/admin";
 pub const ADMIN_SET_PATH: &str = "/cli/notify/admin/set";
 pub const OWNER_ACCOUNTS_PATH: &str = "/cli/owner/accounts";
 pub const PEOPLE_COLOR_PATH: &str = "/cli/people/color";
+pub const PEOPLE_NAME_PATH: &str = "/cli/people/name";
 
 /// The acting login, resolved by the dispatcher from the request token.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,7 +65,7 @@ impl Actor {
 pub fn dispatch(path: &str, _params: &HashMap<String, String>) -> Option<CliResponse> {
     match path {
         ADMIN_SET_PATH => Some(CliResponse::method_not_allowed()),
-        PREFS_PATH | ADMIN_PATH | OWNER_ACCOUNTS_PATH | PEOPLE_COLOR_PATH => Some(error(
+        PREFS_PATH | ADMIN_PATH | OWNER_ACCOUNTS_PATH | PEOPLE_COLOR_PATH | PEOPLE_NAME_PATH => Some(error(
             "403 Forbidden",
             "forbidden",
             "notification prefs belong to a person: sign in (an agent cannot read them)",
@@ -86,6 +89,18 @@ fn usage(hint: impl std::fmt::Display) -> CliResponse {
 
 /// Handle one `/cli/notify/*` request for `actor`.
 pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor) -> CliResponse {
+    handle_with_params(is_post, path, body, actor, &HashMap::new())
+}
+
+/// [`handle`] with the request's query params (`GET /cli/people/name`
+/// reads `?person=`; every other path ignores them).
+pub fn handle_with_params(
+    is_post: bool,
+    path: &str,
+    body: &[u8],
+    actor: &Actor,
+    params: &HashMap<String, String>,
+) -> CliResponse {
     let people = match People::load() {
         Ok(p) => p,
         Err(e) => return error("500 Internal Server Error", "store", e),
@@ -102,6 +117,21 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor) -> CliRespo
     if path == PEOPLE_COLOR_PATH {
         // Person colours need no DB: settings + connect-users.json only.
         return if is_post { people_color_write(&people, actor, role, body) } else { people_color_view(&people, actor) };
+    }
+    if path == PEOPLE_NAME_PATH {
+        // Person names: settings + connect-users.json only, like colours.
+        return if is_post {
+            people_name_write(&people, actor, role, body)
+        } else {
+            let login = match params.get("person").map(|p| p.trim()).filter(|p| !p.is_empty()) {
+                None => caller_login(actor),
+                Some(p) => match known_login(&people, p) {
+                    Ok(l) => l,
+                    Err(r) => return r,
+                },
+            };
+            people_name_view(&people, &login)
+        };
     }
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -504,6 +534,17 @@ fn owner_accounts_write(people: &People, actor: &Actor, body: &[u8]) -> CliRespo
         "-",
         "cli",
     ));
+    // 0.46.0: nothing may have been linked at boot — move the old
+    // ownerDisplayName onto the account now (no-op once the flag is set).
+    match k2_core::person_name::carry_over_owner_display_name() {
+        Ok(k2_core::person_name::CarryOver::Carried { login }) => {
+            eprintln!("[people] ownerDisplayName carried onto '{login}'")
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("[people] ownerDisplayName carry-over failed: {e}"),
+    }
+    // The owner's names (and colour key) follow the linked account.
+    crate::presence::rebroadcast();
     emit_changed();
     match People::load() {
         Ok(p) => owner_accounts_view(&p),
@@ -527,7 +568,7 @@ fn people_color_view(people: &People, actor: &Actor) -> CliResponse {
             "person": people.person_key(login),
             "color": k2_core::person_color::effective(login, people, owner_color),
             "chosen": k2_core::person_color::chosen(login, people, owner_color),
-            "colors": k2_core::person_color::color_map(people, owner_color, settings.owner_display_name.as_deref()),
+            "colors": k2_core::person_color::color_map(people, owner_color),
         })
         .to_string(),
     )
@@ -545,21 +586,21 @@ fn people_color_view(people: &People, actor: &Actor) -> CliResponse {
 ///   A Member may set only their own.
 ///
 /// `color: null` (or `"auto"`) clears it back to Automatic (the hash).
-/// A value outside the palette is a 400. Re-broadcasts the presence
+/// Any `#RRGGBB` is accepted (stored lowercase); anything else is a 400. Re-broadcasts the presence
 /// roster so every client repaints.
 fn people_color_write(people: &People, actor: &Actor, role: Role, body: &[u8]) -> CliResponse {
     let v = match parse_body(body) {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let color: Option<&'static str> = match v.get("color") {
+    let color: Option<String> = match v.get("color") {
         Some(serde_json::Value::Null) => None,
         Some(serde_json::Value::String(s)) if s.trim().eq_ignore_ascii_case("auto") => None,
         Some(serde_json::Value::String(s)) => match k2_core::person_color::normalize(s) {
             Ok(c) => Some(c),
             Err(e) => return usage(e),
         },
-        _ => return usage("send {\"color\": \"<palette hex>\" | null}"),
+        _ => return usage("send {\"color\": \"#RRGGBB\" | null}"),
     };
     let me = if actor.owner_token { OWNER.to_string() } else { people.person_key(&actor.login) };
     let target_login: String = match v.get("user") {
@@ -589,14 +630,14 @@ fn people_color_write(people: &People, actor: &Actor, role: Role, body: &[u8]) -
         if !is_self && (role < Role::Admin || !k2_core::connect_users::can_act_on(role, target.role)) {
             return error("403 Forbidden", "role_required", "you can change only your own colour");
         }
-        if let Err(e) = k2_core::connect_users::set_color(&target.username, color) {
+        if let Err(e) = k2_core::connect_users::set_color(&target.username, color.as_deref()) {
             return error("500 Internal Server Error", "store", e);
         }
     }
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
         "people.color.set",
         &actor.login,
-        format!("person={target_person} color={}", color.unwrap_or("auto")),
+        format!("person={target_person} color={}", color.as_deref().unwrap_or("auto")),
         "-",
         "-",
         "cli",
@@ -604,6 +645,166 @@ fn people_color_write(people: &People, actor: &Actor, role: Role, body: &[u8]) -
     crate::presence::rebroadcast();
     match People::load() {
         Ok(p) => people_color_view(&p, actor),
+        Err(e) => error("500 Internal Server Error", "store", e),
+    }
+}
+
+/// The caller's own login: `owner` for the owner token, else the
+/// lowercased Connect username.
+fn caller_login(actor: &Actor) -> String {
+    if actor.owner_token {
+        OWNER.to_string()
+    } else {
+        actor.login.trim().to_ascii_lowercase()
+    }
+}
+
+/// `raw` as a login this server knows (`owner` or a Connect username),
+/// else a 400.
+fn known_login(people: &People, raw: &str) -> Result<String, CliResponse> {
+    let login = raw.trim().to_ascii_lowercase();
+    if login == OWNER {
+        return Ok(login);
+    }
+    match people.user(&login) {
+        Some(u) => Ok(u.username.clone()),
+        None => Err(usage(format!("'{login}' is not a Connect user on this server"))),
+    }
+}
+
+/// `GET /cli/people/name[?person=<login>]` (any login; names are not
+/// secret, like colours) → `{ok, person, firstName, lastName,
+/// displayName, names}`: the person key `login` stands for (`owner` for
+/// the owner token or an owner-linked login), their effective names
+/// (`null` when unset; `displayName` falls back to the username — for
+/// `owner`, the linked account's names, else its username, else
+/// `Owner`), and login → `{firstName, lastName, displayName}` for `owner`
+/// and every login (the map the presence roster also carries).
+fn people_name_view(people: &People, login: &str) -> CliResponse {
+    let me = k2_core::person_name::effective(login, people);
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "person": people.person_key(login),
+            "firstName": me.first_name,
+            "lastName": me.last_name,
+            "displayName": me.display_name,
+            "names": k2_core::person_name::name_map(people),
+        })
+        .to_string(),
+    )
+}
+
+/// One name field of a `POST /cli/people/name` body: absent → `None`
+/// (unchanged); `null` / `""` → `Some(None)` (clear); a string →
+/// normalized (plain text, ≤ 64 chars); anything else → 400.
+fn name_field(v: &serde_json::Value, key: &str) -> Result<Option<Option<String>>, CliResponse> {
+    match v.get(key) {
+        None => Ok(None),
+        Some(serde_json::Value::Null) => Ok(Some(None)),
+        Some(serde_json::Value::String(s)) => match k2_core::person_name::normalize(s) {
+            Ok(n) => Ok(Some(n)),
+            Err(e) => Err(usage(format!("{key}: {e}"))),
+        },
+        Some(_) => Err(usage(format!("{key} must be a string or null"))),
+    }
+}
+
+/// `POST /cli/people/name {"person"?: "<login>", "firstName"?: str|null,
+/// "lastName"?: str|null}`. A key that is absent is left as it is;
+/// `null` or `""` clears it. At least one of the two is required. Names
+/// live on login rows only:
+///
+/// - No `person`: the caller. A login edits its own row (an owner-linked
+///   login's row IS the owner's names). The owner token edits the owner's
+///   linked account ([`k2_core::person_name::owner_login`]); with none
+///   linked it is a 409 `no_owner_account` ("pick your account first").
+/// - `person: "owner"`: the linked account's row (409 when none). Anyone
+///   but the owner person needs the Owner role.
+/// - `person: "<login>"` = someone else: a login that keys to the owner
+///   person needs the Owner role; any other needs Admin+ and
+///   `can_act_on`. A Member may set only their own.
+///
+/// Both values are validated before anything is written. Names are
+/// display only: no identity, routing or principal changes. Re-broadcasts
+/// the presence roster so every client shows the new names. Returns the
+/// GET body for the target person.
+fn people_name_write(people: &People, actor: &Actor, role: Role, body: &[u8]) -> CliResponse {
+    let v = match parse_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let first = match name_field(&v, "firstName") {
+        Ok(f) => f,
+        Err(r) => return r,
+    };
+    let last = match name_field(&v, "lastName") {
+        Ok(l) => l,
+        Err(r) => return r,
+    };
+    if first.is_none() && last.is_none() {
+        return usage("send {\"firstName\"?: string|null, \"lastName\"?: string|null}");
+    }
+    let me = if actor.owner_token { OWNER.to_string() } else { people.person_key(&actor.login) };
+    let caller = caller_login(actor);
+    let target_login: String = match v.get("person") {
+        None | Some(serde_json::Value::Null) => caller.clone(),
+        Some(serde_json::Value::String(s)) if !s.trim().is_empty() => s.trim().to_ascii_lowercase(),
+        _ => return usage("person must be a Connect username or \"owner\""),
+    };
+    let target_person = people.person_key(&target_login);
+    // The row the names go on.
+    let row = if target_login == OWNER {
+        if me != OWNER && role < Role::Owner {
+            return error("403 Forbidden", "role_required", "only the owner can change the owner's name");
+        }
+        match k2_core::person_name::owner_login(people) {
+            Some(login) => login,
+            None => {
+                return error(
+                    "409 Conflict",
+                    "no_owner_account",
+                    "pick your account first: the owner's name is its linked account's (Settings > General > Your account)",
+                )
+            }
+        }
+    } else {
+        let Some(target) = people.user(&target_login) else {
+            return usage(format!("'{target_login}' is not a Connect user on this server"));
+        };
+        let is_self = target.username == caller;
+        if !is_self {
+            if target_person == OWNER {
+                if role < Role::Owner {
+                    return error("403 Forbidden", "role_required", "only the owner can change the owner's name");
+                }
+            } else if role < Role::Admin || !k2_core::connect_users::can_act_on(role, target.role) {
+                return error("403 Forbidden", "role_required", "you can change only your own name");
+            }
+        }
+        target.username.clone()
+    };
+    // Already normalized: a clear is "", a value re-normalizes to itself.
+    let as_arg = |part: &Option<Option<String>>| part.as_ref().map(|p| p.clone().unwrap_or_default());
+    let (f, l) = (as_arg(&first), as_arg(&last));
+    if let Err(e) = k2_core::connect_users::set_names(&row, f.as_deref(), l.as_deref()) {
+        return error("500 Internal Server Error", "store", e);
+    }
+    let changed: Vec<&str> = [("firstName", first.is_some()), ("lastName", last.is_some())]
+        .into_iter()
+        .filter_map(|(k, on)| on.then_some(k))
+        .collect();
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        "people.name.set",
+        &actor.login,
+        format!("person={target_person} login={row} fields={}", changed.join(",")),
+        "-",
+        "-",
+        "cli",
+    ));
+    crate::presence::rebroadcast();
+    match People::load() {
+        Ok(p) => people_name_view(&p, &target_login),
         Err(e) => error("500 Internal Server Error", "store", e),
     }
 }
@@ -953,17 +1154,31 @@ mod tests {
     }
 
     #[test]
-    fn people_color_refuses_values_outside_the_palette() {
+    fn people_color_accepts_any_rrggbb_and_refuses_the_rest() {
         let _f = fixture();
         add("anna", Role::Member);
-        for bad in [serde_json::json!("#ff0000"), serde_json::json!("red"), serde_json::json!(""), serde_json::json!(3)] {
+        for bad in ["#abc", "red", "ff0000", "#ff00000", "#gg0000", ""] {
             let r = post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": bad }), &Actor::login("anna"));
-            assert_eq!(r.status, "400 Bad Request", "{bad}: {}", r.body);
+            assert_eq!(r.status, "400 Bad Request", "{bad:?}: {}", r.body);
         }
+        let r = post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": 3 }), &Actor::login("anna"));
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        let anna_row = || connect_users::list_users().expect("users").into_iter().find(|u| u.username == "anna").expect("anna");
+        assert_eq!(anna_row().color, None, "nothing written on a 400");
+        // Any #RRGGBB, not just the Automatic palette (stored lowercase).
+        let v = ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#123ABC" }), &Actor::login("anna")));
+        assert_eq!(v["chosen"], "#123abc");
+        assert_eq!(color_of(&v, "anna"), "#123abc");
+        assert_eq!(anna_row().color.as_deref(), Some("#123abc"));
         let r = post(PEOPLE_COLOR_PATH, serde_json::json!({}), &Actor::owner_token());
         assert_eq!(r.status, "400 Bad Request", "color is required: {}", r.body);
-        let r = post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#ff0000" }), &Actor::owner_token());
+        let r = post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#abc" }), &Actor::owner_token());
         assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        assert_eq!(k2_core::app_settings::load().owner_color, None);
+        let v = ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#FF0000" }), &Actor::owner_token()));
+        assert_eq!(color_of(&v, "owner"), "#ff0000", "off the palette is fine");
+        assert_eq!(k2_core::app_settings::load().owner_color.as_deref(), Some("#ff0000"));
+        ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": null }), &Actor::owner_token()));
         assert_eq!(k2_core::app_settings::load().owner_color, None);
         // settings/update can't write the owner's colour around the check.
         let r = crate::settings_routes::handle_settings_update(
@@ -998,9 +1213,11 @@ mod tests {
         assert_eq!(color_of(&v, "owner"), "#c026d3");
         let z_row = k2_core::connect_users::list_users().expect("users").into_iter().find(|u| u.username == "z3thon").expect("z3thon");
         assert_eq!(z_row.color, None, "the linked login's own row is untouched");
-        // The display name paints with the owner too.
+        // 0.46.0: the old ownerDisplayName is no longer a colour key (the
+        // owner's identity key is the linked username, already above).
         k2_core::app_settings::update(serde_json::json!({ "ownerDisplayName": "Rosson L" })).expect("name");
-        assert_eq!(color_of(&ok(get(PEOPLE_COLOR_PATH, &Actor::login("gina"))), "Rosson L"), "#c026d3");
+        let v = ok(get(PEOPLE_COLOR_PATH, &Actor::login("gina")));
+        assert!(v["colors"].get("Rosson L").is_none(), "{v}");
     }
 
     #[test]
@@ -1040,5 +1257,200 @@ mod tests {
         assert_eq!(color_of(&colors, "wes"), "#2563eb");
         // The GET chain (no identity) refuses.
         assert_eq!(dispatch(PEOPLE_COLOR_PATH, &HashMap::new()).expect("claimed").status, "403 Forbidden");
+    }
+
+    // ── Person names (0.46.0) ────────────────────────────────────────
+
+    fn get_person(person: &str, actor: &Actor) -> CliResponse {
+        let mut params = HashMap::new();
+        params.insert("person".to_string(), person.to_string());
+        handle_with_params(false, PEOPLE_NAME_PATH, b"", actor, &params)
+    }
+
+    fn display_of(v: &serde_json::Value, login: &str) -> String {
+        v["names"][login]["displayName"].as_str().unwrap_or_else(|| panic!("no names entry for {login}: {v}")).to_string()
+    }
+
+    #[test]
+    fn people_name_self_set_and_get_round_trip() {
+        let _f = fixture();
+        add("anna", Role::Member);
+        let anna = Actor::login("anna");
+        let v = ok(get(PEOPLE_NAME_PATH, &anna));
+        assert_eq!(v["person"], "anna");
+        assert_eq!(v["firstName"], serde_json::Value::Null);
+        assert_eq!(v["lastName"], serde_json::Value::Null);
+        assert_eq!(v["displayName"], "anna", "no name → the username");
+        assert_eq!(display_of(&v, "owner"), "Owner", "no linked account");
+
+        let mut rx = crate::session_events::subscribe();
+        let v = ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": " Anna ", "lastName": "Smith" }), &anna));
+        assert_eq!(v["firstName"], "Anna", "trimmed");
+        assert_eq!(v["lastName"], "Smith");
+        assert_eq!(v["displayName"], "Anna Smith");
+        assert_eq!(display_of(&v, "anna"), "Anna Smith");
+        let row = connect_users::list_users().expect("users").into_iter().find(|u| u.username == "anna").expect("anna");
+        assert_eq!((row.first_name.as_deref(), row.last_name.as_deref()), (Some("Anna"), Some("Smith")), "persisted on the row");
+        let mut presence = 0;
+        while let Ok(ev) = rx.try_recv() {
+            if let crate::session_events::SessionEvent::PresenceChanged { names, .. } = ev {
+                let e = names.get("anna").expect("anna in the names map");
+                assert_eq!(e.display_name, "Anna Smith");
+                presence += 1;
+            }
+        }
+        assert_eq!(presence, 1, "the roster is re-broadcast so clients repaint");
+
+        // An absent key is left alone; null clears; "" clears.
+        let v = ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "lastName": null }), &anna));
+        assert_eq!(v["firstName"], "Anna");
+        assert_eq!(v["lastName"], serde_json::Value::Null);
+        assert_eq!(v["displayName"], "Anna");
+        let v = ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "" }), &anna));
+        assert_eq!(v["firstName"], serde_json::Value::Null);
+        assert_eq!(v["displayName"], "anna");
+
+        // Any login reads anyone's (names are not secret).
+        ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Anna" }), &anna));
+        add("bob", Role::Member);
+        let v = ok(get_person("ANNA", &Actor::login("bob")));
+        assert_eq!(v["person"], "anna");
+        assert_eq!(v["displayName"], "Anna");
+        let r = get_person("ghost", &Actor::login("bob"));
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+    }
+
+    #[test]
+    fn people_name_refuses_bad_values() {
+        let _f = fixture();
+        add("anna", Role::Member);
+        let anna = Actor::login("anna");
+        for bad in [
+            serde_json::json!({ "firstName": "a".repeat(65) }),
+            serde_json::json!({ "lastName": "é".repeat(65) }),
+            serde_json::json!({ "firstName": "Line\nBreak" }),
+            serde_json::json!({ "firstName": "Tab\there" }),
+            serde_json::json!({ "lastName": "<b>Bold</b>" }),
+            serde_json::json!({ "firstName": 3 }),
+            serde_json::json!({ "firstName": "Ok", "lastName": "x".repeat(65) }),
+            serde_json::json!({}),
+            serde_json::json!({ "person": 7, "firstName": "Ok" }),
+        ] {
+            let r = post(PEOPLE_NAME_PATH, bad.clone(), &anna);
+            assert_eq!(r.status, "400 Bad Request", "{bad}: {}", r.body);
+        }
+        let row = connect_users::list_users().expect("users").into_iter().find(|u| u.username == "anna").expect("anna");
+        assert_eq!((row.first_name, row.last_name), (None, None), "nothing written on a 400");
+        // 64 characters is fine (multi-byte counted as characters).
+        ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "é".repeat(64) }), &anna));
+        // settings/update can't write the daemon-owned carry-over flag.
+        let r = crate::settings_routes::handle_settings_update(
+            br#"{"ownerDisplayNameCarried":true}"#,
+            crate::settings_routes::SettingsActor::Owner,
+        );
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert!(!k2_core::app_settings::load().owner_display_name_carried);
+    }
+
+    #[test]
+    fn people_name_owner_is_the_linked_account() {
+        let _f = fixture();
+        add("z3thon", Role::Admin);
+        add("gina", Role::Admin);
+        add("rosson", Role::Owner);
+        add("wes", Role::Owner);
+        // Nothing linked: no names, displayName "Owner"; a write is a 409.
+        k2_core::app_settings::update(serde_json::json!({ "ownerDisplayName": "Rosson L" })).expect("display");
+        let v = ok(get(PEOPLE_NAME_PATH, &Actor::owner_token()));
+        assert_eq!(v["person"], "owner");
+        assert_eq!(v["firstName"], serde_json::Value::Null);
+        assert_eq!(v["lastName"], serde_json::Value::Null);
+        assert_eq!(v["displayName"], "Owner", "ownerDisplayName is not read for display");
+        let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Rosson" }), &Actor::owner_token());
+        assert_eq!(r.status, "409 Conflict", "{}", r.body);
+        assert!(r.body.contains("no_owner_account") && r.body.contains("pick your account first"), "{}", r.body);
+        let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Rosson", "person": "owner" }), &Actor::login("rosson"));
+        assert_eq!(r.status, "409 Conflict", "{}", r.body);
+
+        // Linking z3thon (no names yet) carries the old display name over once.
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["z3thon"] }), &Actor::owner_token()));
+        let settings = k2_core::app_settings::load();
+        assert!(settings.owner_display_name_carried);
+        assert_eq!(settings.owner_display_name.as_deref(), Some("Rosson L"), "kept on disk");
+        let v = ok(get(PEOPLE_NAME_PATH, &Actor::owner_token()));
+        assert_eq!(v["firstName"], "Rosson");
+        assert_eq!(v["lastName"], "L");
+        assert_eq!(v["displayName"], "Rosson L");
+
+        // The owner token writes the linked account's row …
+        let v = ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Rosson", "lastName": "Long" }), &Actor::owner_token()));
+        assert_eq!(v["person"], "owner");
+        assert_eq!(v["displayName"], "Rosson Long");
+        let z = connect_users::list_users().expect("users").into_iter().find(|u| u.username == "z3thon").expect("z3thon");
+        assert_eq!((z.first_name.as_deref(), z.last_name.as_deref()), (Some("Rosson"), Some("Long")), "on the linked row");
+        assert_eq!(display_of(&v, "owner"), "Rosson Long");
+        assert_eq!(display_of(&v, "z3thon"), "Rosson Long");
+        assert!(v["names"].get("Rosson L").is_none(), "no display-name key: {v}");
+        assert_eq!(display_of(&v, "gina"), "gina");
+        // … and the linked login editing itself edits its own row (the owner's names).
+        let v = ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "lastName": "L." }), &Actor::login("z3thon")));
+        assert_eq!(v["person"], "owner");
+        assert_eq!(v["displayName"], "Rosson L.");
+        assert_eq!(ok(get(PEOPLE_NAME_PATH, &Actor::owner_token()))["displayName"], "Rosson L.");
+        // Cleared: the owner shows the linked username.
+        let v = ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": null, "lastName": null }), &Actor::owner_token()));
+        assert_eq!(v["firstName"], serde_json::Value::Null);
+        assert_eq!(v["displayName"], "z3thon");
+        // The carry-over never runs again.
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["z3thon"] }), &Actor::owner_token()));
+        assert_eq!(ok(get(PEOPLE_NAME_PATH, &Actor::owner_token()))["displayName"], "z3thon");
+        // An Admin can't rename the owner person's login.
+        let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "X", "person": "z3thon" }), &Actor::login("gina"));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    }
+
+    #[test]
+    fn people_name_permission_floors() {
+        let _f = fixture();
+        add("anna", Role::Member);
+        add("bob", Role::Member);
+        add("gina", Role::Admin);
+        add("hal", Role::Admin);
+        add("rosson", Role::Owner);
+        add("wes", Role::Owner);
+        add("z3thon", Role::Admin);
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["z3thon"] }), &Actor::owner_token()));
+        // A Member sets only their own.
+        let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Bob", "person": "bob" }), &Actor::login("anna"));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "X", "person": "owner" }), &Actor::login("anna"));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        // Naming yourself is fine.
+        ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Anna", "person": "anna" }), &Actor::login("anna")));
+        // An Admin may change a Member's or another Admin's, not an Owner's
+        // and not the owner person's.
+        ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Bob", "person": "bob" }), &Actor::login("gina")));
+        ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Hal", "person": "hal" }), &Actor::login("gina")));
+        let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Wes", "person": "wes" }), &Actor::login("gina"));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "X", "person": "owner" }), &Actor::login("gina"));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        let z = connect_users::list_users().expect("users").into_iter().find(|u| u.username == "z3thon").expect("z3thon");
+        assert_eq!(z.first_name, None, "nothing written on a 403");
+        // The owner token (and an Owner-role login) may change anyone's.
+        ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Wes", "person": "wes" }), &Actor::owner_token()));
+        ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Rosson", "person": "owner" }), &Actor::login("rosson")));
+        let z = connect_users::list_users().expect("users").into_iter().find(|u| u.username == "z3thon").expect("z3thon");
+        assert_eq!(z.first_name.as_deref(), Some("Rosson"), "the owner person's names live on the linked row");
+        let r = post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Ghost", "person": "ghost" }), &Actor::owner_token());
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        let v = ok(get(PEOPLE_NAME_PATH, &Actor::login("anna")));
+        assert_eq!(display_of(&v, "anna"), "Anna");
+        assert_eq!(display_of(&v, "bob"), "Bob");
+        assert_eq!(display_of(&v, "hal"), "Hal");
+        assert_eq!(display_of(&v, "wes"), "Wes");
+        assert_eq!(display_of(&v, "owner"), "Rosson");
+        // The GET chain (no identity) refuses.
+        assert_eq!(dispatch(PEOPLE_NAME_PATH, &HashMap::new()).expect("claimed").status, "403 Forbidden");
     }
 }

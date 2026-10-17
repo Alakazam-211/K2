@@ -185,6 +185,10 @@ struct StoredConnectUser {
     can_clone: bool,
     #[serde(default)]
     color: Option<String>,
+    #[serde(default)]
+    first_name: Option<String>,
+    #[serde(default)]
+    last_name: Option<String>,
 }
 
 /// Clone permissions (prd-clone-carries-threads-and-vault-v1 D2, Rosson
@@ -217,6 +221,8 @@ impl From<StoredConnectUser> for ConnectUser {
             legacy_viewer_unmigrated: legacy_viewer,
             can_clone: s.can_clone,
             color: s.color,
+            first_name: s.first_name,
+            last_name: s.last_name,
         }
     }
 }
@@ -285,12 +291,20 @@ pub struct ConnectUser {
     /// clone door. Changed only by `POST /cli/users/set-can-clone` (Owner).
     #[serde(default = "default_can_clone")]
     pub can_clone: bool,
-    /// The person colour this login chose (0.46.0): one of
-    /// [`crate::person_color::PALETTE`], or `None` for Automatic (the
+    /// The person colour this login chose (0.46.0): any `#rrggbb`
+    /// ([`crate::person_color::normalize`]), or `None` for Automatic (the
     /// username hash). Set by `POST /cli/people/color`. Omitted on disk
     /// when unset, so older stores load unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// Optional first / last name (0.46.0, [`crate::person_name`]): plain
+    /// text, at most 64 characters each. Set by `POST /cli/people/name`
+    /// or `POST /cli/users/add`. Omitted on disk when unset, so older
+    /// stores load unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_name: Option<String>,
 }
 
 /// Redacted projection of a [`ConnectUser`] safe to return over the
@@ -317,6 +331,16 @@ pub struct ConnectUserView {
     /// older daemon → `None`.
     #[serde(default)]
     pub color: Option<String>,
+    /// Optional first / last name (0.46.0), `null` when unset. Absent
+    /// from an older daemon → `None`.
+    #[serde(default, rename = "firstName", alias = "first_name")]
+    pub first_name: Option<String>,
+    #[serde(default, rename = "lastName", alias = "last_name")]
+    pub last_name: Option<String>,
+    /// This login's `"First Last"` (either alone), else its username.
+    /// Never empty from this daemon; `""` from an older one.
+    #[serde(default, rename = "displayName", alias = "display_name")]
+    pub display_name: String,
 }
 
 impl From<&ConnectUser> for ConnectUserView {
@@ -329,6 +353,10 @@ impl From<&ConnectUser> for ConnectUserView {
             was_viewer: u.was_viewer,
             can_clone: u.can_clone,
             color: u.color.clone(),
+            first_name: u.first_name.clone(),
+            last_name: u.last_name.clone(),
+            display_name: crate::person_name::full_name(u.first_name.as_deref(), u.last_name.as_deref())
+                .unwrap_or_else(|| u.username.clone()),
         }
     }
 }
@@ -604,7 +632,27 @@ pub fn list_people_for_agents(owner_display: &str) -> Result<Vec<PeopleRow>, Str
 /// Provision a new account. Validates + lowercases the username, rejects
 /// duplicates, hashes the password with a fresh salt.
 pub fn add_user(username: &str, password: &str) -> Result<(), String> {
+    add_user_with_names(username, password, None, None)
+}
+
+/// [`add_user`] with optional first / last names (0.46.0). Both are
+/// normalized ([`crate::person_name::normalize`]) BEFORE anything is
+/// written, so a bad name creates no user.
+pub fn add_user_with_names(
+    username: &str,
+    password: &str,
+    first_name: Option<&str>,
+    last_name: Option<&str>,
+) -> Result<(), String> {
     let username = normalize_username(username)?;
+    let first_name = match first_name {
+        Some(raw) => crate::person_name::normalize(raw).map_err(|e| format!("firstName: {e}"))?,
+        None => None,
+    };
+    let last_name = match last_name {
+        Some(raw) => crate::person_name::normalize(raw).map_err(|e| format!("lastName: {e}"))?,
+        None => None,
+    };
     if password.is_empty() {
         return Err("password must not be empty".to_string());
     }
@@ -634,6 +682,8 @@ pub fn add_user(username: &str, password: &str) -> Result<(), String> {
             // D2: "Can clone" starts ON; the Owner narrows per person.
             can_clone: true,
             color: None,
+            first_name,
+            last_name,
         });
         Ok(())
     })?;
@@ -754,13 +804,13 @@ pub fn set_can_clone(username: &str, can_clone: bool) -> Result<(), String> {
 }
 
 /// Set (or clear, with `None`) a login's chosen person colour (0.46.0).
-/// The value must be in [`crate::person_color::PALETTE`]; it is stored
-/// lowercase. Authorization is the route's job. No session revoke: a
+/// The value must be a `#RRGGBB` ([`crate::person_color::normalize`]);
+/// it is stored lowercase. Authorization is the route's job. No session revoke: a
 /// colour is cosmetic. Errors when the user doesn't exist.
 pub fn set_color(username: &str, color: Option<&str>) -> Result<(), String> {
     let username = normalize_username(username)?;
     let color = match color {
-        Some(raw) => Some(crate::person_color::normalize(raw)?.to_string()),
+        Some(raw) => Some(crate::person_color::normalize(raw)?),
         None => None,
     };
     update_store(|store| {
@@ -772,6 +822,41 @@ pub fn set_color(username: &str, color: Option<&str>) -> Result<(), String> {
         user.color = color;
         Ok(())
     })
+}
+
+/// Set a login's first and/or last name (0.46.0). For each part: `None`
+/// leaves it unchanged; `Some("")` (or whitespace) clears it; anything
+/// else is normalized by [`crate::person_name::normalize`] (plain text,
+/// at most 64 characters). Both are validated before either is written.
+/// Authorization is the route's job; no session revoke (cosmetic).
+/// Errors when the user doesn't exist.
+pub fn set_names(username: &str, first: Option<&str>, last: Option<&str>) -> Result<(), String> {
+    let username = normalize_username(username)?;
+    let first = match first {
+        Some(raw) => Some(crate::person_name::normalize(raw).map_err(|e| format!("firstName: {e}"))?),
+        None => None,
+    };
+    let last = match last {
+        Some(raw) => Some(crate::person_name::normalize(raw).map_err(|e| format!("lastName: {e}"))?),
+        None => None,
+    };
+    update_store(|store| {
+        let user = store
+            .users
+            .iter_mut()
+            .find(|u| u.username == username)
+            .ok_or_else(|| format!("user '{username}' not found"))?;
+        if let Some(f) = first {
+            user.first_name = f;
+        }
+        if let Some(l) = last {
+            user.last_name = l;
+        }
+        Ok(())
+    })?;
+    // The agents' User roster shows real names beside usernames.
+    crate::workspace::context_layers::refresh_users_roster_after_people_change();
+    Ok(())
 }
 
 /// Whether `username` may use the clone doors on this server: Owner-role
@@ -2262,6 +2347,71 @@ mod tests {
             // Unknown user errors.
             assert!(set_role("ghost", Role::Admin).is_err());
             assert_eq!(role_for_user("ghost"), None);
+        });
+    }
+
+    fn view(name: &str) -> ConnectUserView {
+        list_users().expect("list").into_iter().find(|u| u.username == name).expect("user row")
+    }
+
+    /// 0.46.0 person names: set, partial update, clear, on-disk shape.
+    #[test]
+    fn set_names_round_trips_and_clears() {
+        with_temp_home(|| {
+            add_user("namea", "password").expect("add");
+            let v = view("namea");
+            assert_eq!((v.first_name.as_deref(), v.last_name.as_deref()), (None, None));
+            let raw = std::fs::read_to_string(store_path()).expect("store");
+            assert!(!raw.contains("first_name"), "unset names are omitted on disk: {raw}");
+
+            set_names("namea", Some("  Anna "), Some("Smith")).expect("set");
+            let v = view("namea");
+            assert_eq!(v.first_name.as_deref(), Some("Anna"), "trimmed");
+            assert_eq!(v.last_name.as_deref(), Some("Smith"));
+            let wire = serde_json::to_value(&v).expect("json");
+            assert_eq!(wire["firstName"], "Anna");
+            assert_eq!(wire["lastName"], "Smith");
+            assert_eq!(wire["displayName"], "Anna Smith");
+
+            // None leaves a part unchanged.
+            set_names("namea", None, Some("Jones")).expect("last only");
+            let v = view("namea");
+            assert_eq!(v.first_name.as_deref(), Some("Anna"));
+            assert_eq!(v.last_name.as_deref(), Some("Jones"));
+
+            // "" clears.
+            set_names("namea", Some(""), None).expect("clear first");
+            let v = view("namea");
+            assert_eq!(v.first_name, None);
+            assert_eq!(v.last_name.as_deref(), Some("Jones"));
+            let wire = serde_json::to_value(&v).expect("json");
+            assert_eq!(wire["firstName"], serde_json::Value::Null, "unset is null on the wire");
+            assert_eq!(wire["displayName"], "Jones");
+            set_names("namea", None, Some("")).expect("clear last");
+            assert_eq!(view("namea").display_name, "namea", "no name → the username");
+            set_names("namea", None, Some("Jones")).expect("restore last");
+
+            // A bad value writes neither part.
+            let err = set_names("namea", Some("Ok"), Some(&"x".repeat(65))).expect_err("over the cap");
+            assert!(err.contains("lastName"), "{err}");
+            let v = view("namea");
+            assert_eq!(v.first_name, None);
+            assert_eq!(v.last_name.as_deref(), Some("Jones"));
+            assert!(set_names("namea", Some("<b>"), None).is_err());
+            assert!(set_names("ghost", Some("Ghost"), None).is_err(), "unknown user");
+        });
+    }
+
+    #[test]
+    fn add_user_with_names_validates_before_writing() {
+        with_temp_home(|| {
+            add_user_with_names("nameb", "password", Some("Bob"), Some("")).expect("add");
+            let v = view("nameb");
+            assert_eq!(v.first_name.as_deref(), Some("Bob"));
+            assert_eq!(v.last_name, None, "empty is unset");
+            let err = add_user_with_names("namec", "password", Some("Line\nBreak"), None).expect_err("bad name");
+            assert!(err.contains("firstName"), "{err}");
+            assert!(list_users().expect("list").iter().all(|u| u.username != "namec"), "no user created");
         });
     }
 

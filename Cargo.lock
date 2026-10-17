@@ -4098,6 +4098,7 @@ dependencies = [
  "blake3",
  "block2",
  "chrono",
+ "chrono-tz",
  "dirs 5.0.1",
  "flate2",
  "futures-util",

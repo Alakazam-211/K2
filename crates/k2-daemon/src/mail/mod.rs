@@ -118,6 +118,7 @@ pub mod alias;
 pub mod app_password;
 pub mod bans;
 pub mod calendar;
+pub mod calendar_graph;
 pub mod calendar_share;
 pub mod capabilities;
 pub mod catchall;

@@ -75,6 +75,12 @@ fn default_agent() -> String {
 /// K2 Mail (prd-email-server-v1 §8.4 / D4) — GLOBAL default agent-send
 /// gating mode. **MUST stay "off"**: outbound email is opt-in, per
 /// workspace, fail-closed.
+/// MCS3: linked (Google / Microsoft) calendars are on until the owner
+/// turns them off.
+fn default_linked_calendars() -> bool {
+    true
+}
+
 fn default_mail_agent_send() -> String {
     "off".to_string()
 }
@@ -584,6 +590,15 @@ pub struct AppSettings {
     /// `k2 mail oauth-config set --provider microsoft --tenant <t>`.
     #[serde(default)]
     pub mail_oauth_microsoft_tenant: String,
+    /// K2 Mail MCS3 — the per-box switch for calendars on LINKED inboxes
+    /// (Microsoft 365 now, Google later). `true` (the default) lets agents
+    /// with a grant use the linked account's calendar through
+    /// `k2 calendar`; `false` answers `capability_missing` /
+    /// `owner_disabled` on every linked calendar verb. Hosted calendars
+    /// keep their own switch (`k2 hostmail calendar enable|disable`).
+    /// Owner-only: `k2 mail link calendars on|off`.
+    #[serde(default = "default_linked_calendars")]
+    pub linked_calendars: bool,
     #[serde(default)]
     pub editor: EditorSettings,
     /// Style System P3 — the user's Style selection (style / palette /
@@ -992,6 +1007,7 @@ impl Default for AppSettings {
             mail_oauth_gmail_client_id: String::new(),
             mail_oauth_microsoft_client_id: String::new(),
             mail_oauth_microsoft_tenant: String::new(),
+            linked_calendars: default_linked_calendars(),
             editor: EditorSettings::default(),
             style: StyleSettings::default(),
             companion: CompanionSettings::default(),

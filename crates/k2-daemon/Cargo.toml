@@ -110,6 +110,8 @@ serde_json = "1"
 
 # chrono — agent-reply event payload needs an RFC-3339 timestamp.
 chrono = { version = "0.4", features = ["serde"] }
+# MCS3: IANA zone math for Microsoft calendar writes (same version k2-core uses).
+chrono-tz = "0.10"
 
 # rusqlite — the per-project heartbeat-schedule route in cli.rs pokes
 # the `projects` table directly (it's the only daemon code that touches

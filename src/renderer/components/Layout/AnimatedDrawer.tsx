@@ -18,6 +18,7 @@
 // ends or is interrupted.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { flushSync } from 'react-dom'
 import { DRAWER_ANIM_MS, DRAWER_TRANSITION, drawerMotionOn } from './drawer-motion'
 import { beginBrowserMotion } from '@/lib/browser-overlay'
 
@@ -85,11 +86,18 @@ export default function AnimatedDrawer({
     const finish = (): void => {
       cleanup()
       stop.current = null
+      if (dir === 'close') {
+        // Unmount in this same task, still at 0 width. Clearing the inline
+        // width first and leaving the unmount to React's next render let
+        // the browser paint one frame of the drawer at full width: the
+        // "flicker open" at the end of every close.
+        flushSync(() => setMounted(false))
+        return
+      }
       outer.style.transition = ''
       outer.style.width = ''
       outer.style.overflow = ''
       delete outer.dataset.drawerAnim
-      if (dir === 'close') setMounted(false)
     }
     const onEnd = (e: TransitionEvent): void => {
       if (e.target === outer && e.propertyName === 'width') finish()

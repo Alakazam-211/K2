@@ -1411,6 +1411,13 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // of a source's bound secret (sources.secret_workspace) and the
         // Garden/widget proposal queue (zen_proposals). Additive only.
         ("0181_gardens_manage", include_str!("../../drizzle_sql/0181_gardens_manage.sql")),
+        // 0188 — OAuth v2 for linked inboxes (prd-app-mail-calendar-
+        // surfaces-v1 MCS1): features, granted scopes, the minting client,
+        // the account check's tenant/kind/time on mail_external_inboxes.
+        // ALTER only. The PRD's placeholder was 0187, which is Sew S30's
+        // (MCS-A2); renumber freely at integration (and edit the
+        // migration-order tests below).
+        ("0188_mail_oauth_v2", include_str!("../../drizzle_sql/0188_mail_oauth_v2.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2074,7 +2081,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0181_gardens_manage",
+            last_name, "0188_mail_oauth_v2",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2118,6 +2125,7 @@ mod tests {
                 "0179_workspace_design_mode",
                 "0180_clone_imports",
                 "0181_gardens_manage",
+                "0188_mail_oauth_v2",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2163,6 +2171,8 @@ mod tests {
                 "0179_workspace_design_mode",
                 "0180_clone_imports",
                 "0181_gardens_manage",
+                // 0.46.1+: OAuth v2 for linked inboxes (MCS1).
+                "0188_mail_oauth_v2",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2230,6 +2240,51 @@ mod tests {
     /// 0180 (clone imports): one row per imported conversation, unique per
     /// (project, clone, source conversation); the role vocabulary is
     /// closed; rows go with their project; proposals hold a closed status.
+    /// 0188 (MCS1): a linked OAuth row from before 0188 keeps its data and
+    /// lands as a mail-only link with every new column NULL (unchecked, no
+    /// stamped client); the CHECKs bound `oauth_client` and `account_kind`.
+    #[test]
+    fn mail_oauth_v2_0188_adds_columns_to_existing_rows() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0181_gardens_manage")).unwrap();
+        conn.execute(
+            "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, kind, host, \
+             port, username, created_at, auth_kind, provider, token_expires_at) \
+             VALUES ('ext-old', 'p-old', 'old@contoso.example', 'graph', 'graph.microsoft.com', \
+             443, 'old@contoso.example', 7, 'oauth', 'microsoft', 99)",
+            [],
+        )
+        .unwrap();
+        run_migrations(&conn).unwrap();
+        type Row = (String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>, i64);
+        let row: Row = conn
+            .query_row(
+                "SELECT features, granted_scopes, oauth_client, oauth_client_hash, account_tenant, \
+                 account_kind, account_checked_at, token_expires_at \
+                 FROM mail_external_inboxes WHERE id = 'ext-old'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("mail".to_string(), None, None, None, None, None, None, 99));
+        conn.execute(
+            "UPDATE mail_external_inboxes SET oauth_client = 'byo', account_kind = 'work' \
+             WHERE id = 'ext-old'",
+            [],
+        )
+        .unwrap();
+        let bad_client = conn.execute(
+            "UPDATE mail_external_inboxes SET oauth_client = 'other' WHERE id = 'ext-old'",
+            [],
+        );
+        assert!(bad_client.is_err(), "oauth_client is bounded to baked|byo");
+        let bad_kind = conn.execute(
+            "UPDATE mail_external_inboxes SET account_kind = 'robot' WHERE id = 'ext-old'",
+            [],
+        );
+        assert!(bad_kind.is_err(), "account_kind is bounded");
+    }
+
     #[test]
     fn clone_imports_0180_keys_rows_per_clone_and_conversation() {
         let conn = fresh_memory();
@@ -2395,7 +2450,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0181 (Gardens manage) is the newest; roll it back first. Its
+            // 0188 (OAuth v2 for linked inboxes) is the newest: its columns
+            // stay (re-adding them is skipped as duplicate columns).
+            conn.execute("DELETE FROM _migrations WHERE name = '0188_mail_oauth_v2'", []).unwrap();
+            // 0181 (Gardens manage) came before it; roll it back next. Its
             // projects column stays (re-adding it is skipped as a duplicate
             // column), its sources column went with the table.
             conn.execute_batch("DROP TABLE zen_proposals;").unwrap();

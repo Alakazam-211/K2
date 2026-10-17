@@ -973,6 +973,10 @@ struct CatalogRow {
     domain: Option<String>,
     host: Option<String>,
     tls: Option<String>,
+    // linked only (MCS1 capabilities): kind, auth kind, OAuth provider.
+    kind: Option<String>,
+    auth_kind: Option<String>,
+    provider: Option<String>,
 }
 
 fn load_catalog_rows(conn: &rusqlite::Connection) -> Vec<CatalogRow> {
@@ -998,6 +1002,9 @@ fn load_catalog_rows(conn: &rusqlite::Connection) -> Vec<CatalogRow> {
                 domain,
                 host: None,
                 tls: None,
+                kind: None,
+                auth_kind: None,
+                provider: None,
             })
         });
         if let Ok(iter) = iter {
@@ -1006,7 +1013,7 @@ fn load_catalog_rows(conn: &rusqlite::Connection) -> Vec<CatalogRow> {
     }
     if let Ok(mut stmt) = conn.prepare(
         "SELECT email_address, id, owner_project_id, primary_level, status, display_name, \
-                host, tls, primary_can_manage, primary_can_delete \
+                host, tls, primary_can_manage, primary_can_delete, kind, auth_kind, provider \
          FROM mail_external_inboxes ORDER BY created_at, email_address",
     ) {
         let iter = stmt.query_map([], |r| {
@@ -1023,6 +1030,9 @@ fn load_catalog_rows(conn: &rusqlite::Connection) -> Vec<CatalogRow> {
                 tls: r.get(7)?,
                 primary_can_manage: r.get::<_, i64>(8)? != 0,
                 primary_can_delete: r.get::<_, i64>(9)? != 0,
+                kind: r.get(10)?,
+                auth_kind: r.get(11)?,
+                provider: r.get(12)?,
             })
         });
         if let Ok(iter) = iter {
@@ -1113,6 +1123,13 @@ pub fn send_state(level: &str, mode: &str, source: Source) -> &'static str {
 pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
     // The global agent-send default, read BEFORE the DB lock (a file read).
     let default_mode = k2_core::app_settings::load().mail_agent_send;
+    // MCS1 capabilities: the owner's hosted calendar switch, read BEFORE the
+    // DB lock (load_policy takes it). An unreadable policy reports calendars
+    // off rather than claiming a capability the verbs would refuse.
+    let hosted_calendars_on = matches!(
+        crate::mail::dav::load_policy(),
+        Ok(p) if p.as_ref().map(|p| p.calendars != crate::mail::dav::OnOff::Off).unwrap_or(true)
+    );
     let db = k2_core::db::shared();
     let conn = db.lock();
     let rows = load_catalog_rows(&conn);
@@ -1183,6 +1200,24 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
             "yourSendState": your_state,
             "maxLevel": row.source.max_level().as_str(),
         });
+        // MCS1 (PRD §3.1): what this inbox can do — for the agent view at
+        // the caller's level, for the owner view at the source's maximum.
+        let meta = match row.source {
+            Source::Linked => crate::mail::external::read_oauth_meta_conn(&conn, &row.inbox_id),
+            Source::Hosted => None,
+        };
+        entry["capabilities"] = crate::mail::capabilities::capabilities(
+            &crate::mail::capabilities::CapInput {
+                source: row.source,
+                address: &row.address,
+                kind: row.kind.as_deref(),
+                auth_kind: row.auth_kind.as_deref(),
+                provider: row.provider.as_deref(),
+                meta: meta.as_ref(),
+                level: your.unwrap_or(row.source.max_level()),
+                hosted_calendars_on,
+            },
+        );
         // Source-specific fields.
         if let Some(obj) = entry.as_object_mut() {
             match row.source {

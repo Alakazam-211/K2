@@ -4186,6 +4186,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "k2-provider-fakes"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "serde_json",
+]
+
+[[package]]
 name = "k2-root-helper"
 version = "0.1.0"
 dependencies = [

@@ -73,6 +73,17 @@ pub fn client_secret_is_set(secrets: &dyn SecretStore, provider: OauthProvider) 
     stored_client_secret(secrets, provider).is_some()
 }
 
+/// The `app_settings` key for the Microsoft authority (MCS1).
+pub const MICROSOFT_TENANT_SETTINGS_KEY: &str = "mailOauthMicrosoftTenant";
+
+/// The stored Microsoft authority, validated (`common` when unset or not
+/// a valid authority). Read straight from `app_settings` — the routes and
+/// their tests see the same truth.
+pub fn stored_microsoft_tenant() -> String {
+    let raw = k2_core::app_settings::load().mail_oauth_microsoft_tenant;
+    crate::mail::oauth::validate_tenant(&raw).unwrap_or_else(|_| "common".to_string())
+}
+
 /// The `app_settings` camelCase key backing a provider's stored client id
 /// (the key the set/clear routes feed to `app_settings::update`).
 pub fn client_id_settings_key(provider: OauthProvider) -> &'static str {

@@ -644,8 +644,18 @@
     "description": "Retire a hosted address you own: it stops receiving and its cap slot frees IMMEDIATELY. Mailbox data is kept for the retention window, then purged (the name stays reserved meanwhile)."
    },
    {
+    "name": "mail capabilities",
+    "usage": "k2 mail capabilities [<address>] [--json]",
+    "description": "What each inbox you can use can do: source (hosted | imap | google | microsoft), mail read/draft/compose/send, calendar read/write/invite/rsvp + free/busy reach, the linked account's kind/tenant, and a 'missing' list of {cap, reason, fix} for every capability that is off (reason: level | scope_not_granted | owner_disabled | backend_unsupported | not_built). Agents see their own grants at their level; the owner (outside a workspace) sees every inbox. An inbox you can't use is not_found."
+   },
+   {
+    "name": "mail oauth-config",
+    "usage": "k2 mail oauth-config show | set --provider gmail|microsoft [--client-id <id>] [--secret-stdin] [--tenant <t>] | clear --provider gmail|microsoft [--json]",
+    "description": "OWNER verb (agents exit 3): your own Google / Microsoft OAuth app for Email Link instead of K2's built-in one, and the Microsoft tenant (common | organizations | consumers | a tenant id or domain). The Gmail client secret rides stdin only and is never shown again. 'show' reports which app is in effect and whether one is configured at all (a build without a baked app needs yours). Links refresh with the app that minted them."
+   },
+   {
     "name": "mail link",
-    "usage": "k2 mail link add <address> (--host <imap-host> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] [--smtp-host <h>] [--smtp-port <n>] [--smtp-tls implicit-tls|starttls] | --provider gmail|microsoft) --workspace <ws> | list | remove <address>",
+    "usage": "k2 mail link add <address> (--host <imap-host> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] [--smtp-host <h>] [--smtp-port <n>] [--smtp-tls implicit-tls|starttls] | --provider gmail|microsoft [--features mail|mail,calendar]) --workspace <ws> | upgrade <address> --features calendar|mail,calendar | list | remove <address>",
     "description": "Connect the user's OWN external email accounts as LINKED assistant inboxes (was 'mail external') — OWNER verbs (agent tokens exit 3). Two add paths: (1) generic IMAP with an app-password (Gmail app-password, Fastmail, company IMAP), or (2) OAuth with --provider gmail|microsoft (NO password): Gmail links over IMAP-XOAUTH2 via the system browser + a 127.0.0.1 loopback (do it ON the daemon's machine; a remote daemon returns a 'link on the daemon's box' teaching error), Microsoft over the Microsoft Graph API via a device code you enter in any browser. The OAuth flow runs SERVER-SIDE (the daemon polls/exchanges); codes and tokens NEVER reach the CLI and are vaulted daemon-side. Each inbox binds to ONE PRIMARY workspace whose agents read it (via messages/read/wait) and save reply drafts via 'k2 mail draft'. Drafting is always on; sending is OFF by default — raise a workspace to level 'send' to let its agents send via SMTP (app-password and Gmail-OAuth inboxes send over SMTP; Microsoft-OAuth is draft-only until Graph send lands). Share with more workspaces via 'k2 mail access grant'. The password/tokens are vaulted daemon-side, never in the DB, never in output, never on argv."
    },
    {

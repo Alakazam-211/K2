@@ -60,6 +60,20 @@ impl HttpClient for MockHttp {
             .expect("MockHttp: an unexpected HTTP call (queue empty)");
         Ok(HttpResponse { status, body })
     }
+
+    fn get_bearer(&self, url: &str, bearer: &str) -> Result<HttpResponse, OauthError> {
+        self.seen.lock().unwrap().push((
+            format!("GET {url}"),
+            vec![("bearer".to_string(), bearer.to_string())],
+        ));
+        let (status, body) = self
+            .queue
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("MockHttp: an unexpected HTTP GET (queue empty)");
+        Ok(HttpResponse { status, body })
+    }
 }
 
 /// In-memory vault fake — the `SecretStore` surface the engine uses, no
@@ -96,7 +110,7 @@ fn provider_configs_match_prd_9() {
     assert_eq!(g.auth_url, Some("https://accounts.google.com/o/oauth2/v2/auth"));
     assert_eq!(g.token_url, "https://oauth2.googleapis.com/token");
     assert_eq!(g.revoke_url, Some("https://oauth2.googleapis.com/revoke"));
-    assert_eq!(g.scope, "https://mail.google.com/");
+    assert_eq!(g.scope, "openid email https://mail.google.com/");
     assert_eq!(g.default_flow, FlowKind::Loopback);
     assert!(g.extra_auth_params.contains(&("access_type", "offline")));
 
@@ -108,7 +122,11 @@ fn provider_configs_match_prd_9() {
     assert!(m
         .token_url
         .starts_with("https://login.microsoftonline.com/common/oauth2/v2.0/"));
-    assert_eq!(m.scope, "https://graph.microsoft.com/Mail.ReadWrite offline_access");
+    assert_eq!(
+        m.scope,
+        "openid profile email offline_access https://graph.microsoft.com/User.Read \
+         https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send"
+    );
     assert_eq!(m.default_flow, FlowKind::DeviceCode);
     assert_eq!(m.revoke_url, None);
 }
@@ -277,7 +295,7 @@ fn device_start_happy_and_request_shape() {
     assert!(url.ends_with("/devicecode"), "{url}");
     assert_eq!(
         http.field(0, "scope").as_deref(),
-        Some("https://graph.microsoft.com/Mail.ReadWrite offline_access")
+        Some(OauthProvider::Microsoft.config().scope)
     );
     assert!(http.field(0, "client_id").is_some());
 }
@@ -366,7 +384,8 @@ fn loopback_build_url_pure_and_encoded() {
     assert!(url.contains("response_type=code"));
     assert!(url.contains("state=state-nonce-abc"));
     assert!(url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A53017%2Fcb"));
-    assert!(url.contains("scope=https%3A%2F%2Fmail.google.com%2F"));
+    // MCS1: identity scopes first, then the mail scope.
+    assert!(url.contains("scope=openid%20email%20https%3A%2F%2Fmail.google.com%2F"), "{url}");
     // PKCE (M2): the S256 challenge + method ride on the consent URL.
     assert!(url.contains("code_challenge=CHALLENGE-abc123"), "{url}");
     assert!(url.contains("code_challenge_method=S256"), "{url}");
@@ -560,6 +579,7 @@ fn vault_store_load_roundtrip() {
         scope: Some("https://mail.google.com/".into()),
         token_type: "Bearer".into(),
         expires_in: 3600,
+        id_token: None,
     };
     let expiry = store_tokens(&store, "row1", &tokens, 1_000).expect("store");
     assert_eq!(expiry, 1_000 + 3600);
@@ -588,6 +608,7 @@ fn seed(store: &MemStore, row: &str, access: &str, refresh: Option<&str>) {
         scope: Some("https://mail.google.com/".into()),
         token_type: "Bearer".into(),
         expires_in: 3600,
+        id_token: None,
     };
     store_tokens(store, row, &t, 0).expect("seed");
 }
@@ -936,6 +957,7 @@ fn tokens_debug_redacts_secrets() {
         scope: Some("s".into()),
         token_type: "Bearer".into(),
         expires_in: 60,
+        id_token: Some(SENTINEL.into()),
     };
     let dbg = format!("{t:?}");
     assert!(!dbg_contains(&dbg), "Tokens Debug leaked a token: {dbg}");
@@ -980,4 +1002,319 @@ fn vaulted_token_parse_error_drops_the_body() {
 
 fn dbg_contains(s: &str) -> bool {
     s.contains(SENTINEL)
+}
+
+// ── MCS1: scopes per feature, tenant, client choice, account check ───────
+
+/// A fake unsigned id_token carrying `claims` (header.payload.sig).
+fn fake_id_token(claims: serde_json::Value) -> String {
+    use base64::Engine as _;
+    let b64 = |v: &serde_json::Value| {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string())
+    };
+    format!("{}.{}.sig", b64(&serde_json::json!({"alg": "none"})), b64(&claims))
+}
+
+fn tokens_with(id_token: Option<String>) -> Tokens {
+    Tokens {
+        access_token: "AT-check".into(),
+        refresh_token: Some("RT-check".into()),
+        scope: None,
+        token_type: "Bearer".into(),
+        expires_in: 3600,
+        id_token,
+    }
+}
+
+#[test]
+fn scope_sets_follow_the_prd_table() {
+    let ms = |f| scope_for(OauthProvider::Microsoft, f);
+    let g = |f| scope_for(OauthProvider::Gmail, f);
+    // The static configs ARE the mail feature set.
+    assert_eq!(ms(Features::MAIL), OauthProvider::Microsoft.config().scope);
+    assert_eq!(g(Features::MAIL), OauthProvider::Gmail.config().scope);
+    let both = Features { mail: true, calendar: true };
+    let ms_both = ms(both);
+    for want in [
+        "openid",
+        "profile",
+        "email",
+        "offline_access",
+        "User.Read",
+        "Mail.ReadWrite",
+        "Mail.Send",
+        "Calendars.ReadWrite",
+    ] {
+        assert!(scope_granted(&ms_both, want), "{want} missing from {ms_both}");
+    }
+    let cal_only = g(Features { mail: false, calendar: true });
+    assert!(!cal_only.contains("mail.google.com"), "calendar-only skips the restricted scope");
+    assert!(cal_only.contains("calendar.events") && cal_only.starts_with("openid email"));
+    assert!(!scope_granted(&ms(Features::MAIL), "Calendars.ReadWrite"));
+}
+
+#[test]
+fn features_parse_store_and_union() {
+    assert_eq!(Features::parse("").unwrap(), None);
+    assert_eq!(Features::parse("mail").unwrap(), Some(Features::MAIL));
+    let both = Features::parse("Calendar, mail").unwrap().unwrap();
+    assert_eq!(both, Features { mail: true, calendar: true });
+    assert_eq!(both.as_db(), "mail,calendar");
+    assert_eq!(Features { mail: false, calendar: true }.as_db(), "calendar");
+    assert!(Features::parse("mail,contacts").unwrap_err().contains("contacts"));
+    assert_eq!(Features::MAIL.union(Features { mail: false, calendar: true }), both);
+}
+
+#[test]
+fn granted_scopes_match_bare_or_qualified_spellings() {
+    let granted = "https://graph.microsoft.com/Mail.ReadWrite mail.send User.Read openid";
+    assert!(scope_granted(granted, "Mail.Send"));
+    assert!(scope_granted(granted, "https://graph.microsoft.com/Mail.ReadWrite"));
+    assert!(!scope_granted(granted, "Calendars.ReadWrite"));
+    let f = features_granted(OauthProvider::Microsoft, granted);
+    assert!(f.mail && !f.calendar);
+    let legacy = "https://graph.microsoft.com/Mail.ReadWrite offline_access";
+    assert!(!scope_granted(legacy, "Mail.Send"), "pre-MCS1 rows never had Mail.Send");
+    let g = features_granted(OauthProvider::Gmail, "https://mail.google.com/ openid");
+    assert!(g.mail && !g.calendar);
+}
+
+#[test]
+fn tenant_setting_validates_and_routes_microsoft_endpoints() {
+    test_byo::clear();
+    assert_eq!(validate_tenant("").unwrap(), "common");
+    assert_eq!(validate_tenant("Organizations").unwrap(), "organizations");
+    assert_eq!(
+        validate_tenant("72F988BF-86F1-41AF-91AB-2D7CD011DB47").unwrap(),
+        "72f988bf-86f1-41af-91ab-2d7cd011db47"
+    );
+    assert_eq!(validate_tenant("contoso.onmicrosoft.com").unwrap(), "contoso.onmicrosoft.com");
+    for bad in ["contoso", "a/b.com", "..x.com", "https://login.microsoftonline.com"] {
+        assert!(validate_tenant(bad).is_err(), "{bad} must be refused");
+    }
+    assert!(token_url(OauthProvider::Microsoft)
+        .starts_with("https://login.microsoftonline.com/common/oauth2/v2.0/token"));
+    test_byo::set_tenant("contoso.onmicrosoft.com");
+    assert_eq!(
+        device_auth_url(OauthProvider::Microsoft).unwrap(),
+        "https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/devicecode"
+    );
+    // The device start actually dials the tenant authority.
+    let http = MockHttp::new();
+    http.push(200, r#"{"device_code":"d","user_code":"u","verification_uri":"https://v"}"#);
+    device_start_scoped(OauthProvider::Microsoft, Some("cid"), "openid", &http).unwrap();
+    assert!(http.request(0).0.contains("/contoso.onmicrosoft.com/"), "{}", http.request(0).0);
+    assert_eq!(http.field(0, "scope").as_deref(), Some("openid"));
+    // Admin consent uses a specific tenant as-is, else `organizations`.
+    assert!(admin_consent_url("abc")
+        .contains("/contoso.onmicrosoft.com/adminconsent?client_id=abc"));
+    test_byo::set_tenant("common");
+    assert!(admin_consent_url("abc").contains("/organizations/adminconsent"));
+    // Google endpoints never take a tenant.
+    assert_eq!(token_url(OauthProvider::Gmail), "https://oauth2.googleapis.com/token");
+    test_byo::clear();
+}
+
+#[test]
+fn loopback_url_carries_scope_and_extra_params() {
+    let url = loopback_build_url_scoped(
+        OauthProvider::Gmail,
+        Some("cid"),
+        "http://127.0.0.1:1/cb",
+        "st",
+        "ch",
+        "openid email https://mail.google.com/",
+        &[("include_granted_scopes", "true"), ("login_hint", "you@gmail.com")],
+    )
+    .unwrap();
+    assert!(url.contains("include_granted_scopes=true"), "{url}");
+    assert!(url.contains("login_hint=you%40gmail.com"), "{url}");
+    assert!(url.contains("scope=openid%20email%20https%3A%2F%2Fmail.google.com%2F"), "{url}");
+    assert!(url.contains("prompt=consent"), "the static consent prompt stays: {url}");
+}
+
+#[test]
+fn client_choice_stamps_and_issuing_client_refuses_a_swapped_byo_app() {
+    test_byo::clear();
+    let baked = resolve_client(OauthProvider::Microsoft);
+    assert_eq!(baked.source, ClientSource::Baked);
+    assert_eq!(baked.id, OauthProvider::Microsoft.config().client_id_placeholder);
+    test_byo::set_client_id(OauthProvider::Microsoft, "byo-app-1");
+    let byo = resolve_client(OauthProvider::Microsoft);
+    assert_eq!((byo.source, byo.id.as_str()), (ClientSource::Byo, "byo-app-1"));
+    // A row minted by the baked app keeps refreshing with it even though a
+    // BYO app is configured now.
+    let r = issuing_client(OauthProvider::Microsoft, Some("baked"), None).unwrap();
+    assert_eq!(r.id, OauthProvider::Microsoft.config().client_id_placeholder);
+    // A BYO row refreshes with the matching stored app...
+    let h = client_hash("byo-app-1");
+    assert_eq!(
+        issuing_client(OauthProvider::Microsoft, Some("byo"), Some(&h)).unwrap().id,
+        "byo-app-1"
+    );
+    // ...and refuses loudly once the app was swapped or removed.
+    test_byo::set_client_id(OauthProvider::Microsoft, "byo-app-2");
+    let err = issuing_client(OauthProvider::Microsoft, Some("byo"), Some(&h)).unwrap_err();
+    assert!(err.contains("k2 mail link upgrade"), "{err}");
+    test_byo::clear();
+    let err = issuing_client(OauthProvider::Microsoft, Some("byo"), Some(&h)).unwrap_err();
+    assert!(err.contains("oauth-config set"), "{err}");
+    // Legacy rows (NULL stamp) keep today's resolution.
+    assert_eq!(
+        issuing_client(OauthProvider::Microsoft, None, None).unwrap().source,
+        ClientSource::Baked
+    );
+    // Debug never shows a Google secret.
+    let g = baked_client(OauthProvider::Gmail);
+    assert!(format!("{g:?}").contains("<redacted>"));
+    assert_eq!(client_hash("x").len(), 16);
+    assert!(is_placeholder_client_id("REPLACE_ME-microsoft-client-id"));
+    assert!(!is_placeholder_client_id("6731de76-14a6-49ae-97bc-6eba6914391e"));
+}
+
+#[test]
+fn account_check_reads_microsoft_id_token_claims_and_kind() {
+    let work = tokens_with(Some(fake_id_token(serde_json::json!({
+        "preferred_username": "Rosson@Contoso.com",
+        "tid": "72f988bf-86f1-41af-91ab-2d7cd011db47",
+    }))));
+    let http = MockHttp::new(); // a match on claims dials nothing
+    let info =
+        check_account(OauthProvider::Microsoft, &work, "rosson@contoso.com", &http).unwrap();
+    assert_eq!(info.kind.as_deref(), Some("work"));
+    assert_eq!(info.tenant.as_deref(), Some("72f988bf-86f1-41af-91ab-2d7cd011db47"));
+    assert_eq!(http.calls(), 0);
+    let personal = tokens_with(Some(fake_id_token(serde_json::json!({
+        "email": "me@outlook.com", "tid": MS_CONSUMER_TENANT,
+    }))));
+    let info =
+        check_account(OauthProvider::Microsoft, &personal, "ME@outlook.com", &MockHttp::new())
+            .unwrap();
+    assert_eq!(info.kind.as_deref(), Some("personal"));
+}
+
+#[test]
+fn account_check_asks_graph_me_when_the_upn_is_not_the_mailbox() {
+    let t = tokens_with(Some(fake_id_token(serde_json::json!({
+        "preferred_username": "rosson@contoso.onmicrosoft.com",
+        "tid": "11111111-2222-3333-4444-555555555555",
+    }))));
+    let http = MockHttp::new();
+    http.push(
+        200,
+        r#"{"mail":null,"userPrincipalName":"rosson@contoso.onmicrosoft.com",
+            "proxyAddresses":["SMTP:rosson@contoso.com","smtp:r@contoso.com"]}"#,
+    );
+    let info = check_account(OauthProvider::Microsoft, &t, "r@contoso.com", &http).unwrap();
+    assert!(info.identities.contains(&"r@contoso.com".to_string()));
+    let (url, form) = http.request(0);
+    assert!(url.starts_with("GET https://graph.microsoft.com/v1.0/me?"), "{url}");
+    assert_eq!(form[0].1, "AT-check", "the new access token is the bearer");
+}
+
+#[test]
+fn account_mismatch_names_who_signed_in_and_never_the_token() {
+    let t = tokens_with(Some(fake_id_token(serde_json::json!({
+        "preferred_username": "b@contoso.com", "tid": "x",
+    }))));
+    let http = MockHttp::new();
+    http.push(200, r#"{"mail":"b@contoso.com","userPrincipalName":"b@contoso.com"}"#);
+    let err = check_account(OauthProvider::Microsoft, &t, "a@contoso.com", &http).unwrap_err();
+    assert_eq!(err.signed_in.as_deref(), Some("b@contoso.com"));
+    assert!(!format!("{err:?}").contains("AT-check"));
+}
+
+#[test]
+fn account_check_google_uses_verified_email_then_the_gmail_profile() {
+    let t = tokens_with(Some(fake_id_token(serde_json::json!({
+        "email": "you@corp.example", "email_verified": true, "hd": "corp.example",
+    }))));
+    let info =
+        check_account(OauthProvider::Gmail, &t, "you@corp.example", &MockHttp::new()).unwrap();
+    assert_eq!(
+        (info.kind.as_deref(), info.tenant.as_deref()),
+        (Some("workspace"), Some("corp.example"))
+    );
+    // An unverified email claim is ignored; the Gmail profile decides.
+    let t = tokens_with(Some(fake_id_token(serde_json::json!({
+        "email": "you@gmail.com", "email_verified": false,
+    }))));
+    let http = MockHttp::new();
+    http.push(200, r#"{"emailAddress":"you@gmail.com"}"#);
+    let info = check_account(OauthProvider::Gmail, &t, "you@gmail.com", &http).unwrap();
+    assert_eq!(info.kind.as_deref(), Some("consumer"));
+    assert!(http.request(0).0.contains("/gmail/v1/users/me/profile"));
+    // No id_token and a failing profile → mismatch, nothing known.
+    let http = MockHttp::new();
+    http.push(401, r#"{"error":{"code":401}}"#);
+    let err =
+        check_account(OauthProvider::Gmail, &tokens_with(None), "x@gmail.com", &http).unwrap_err();
+    assert_eq!(err.signed_in, None);
+}
+
+#[test]
+fn id_token_parses_from_the_token_response() {
+    let http = MockHttp::new();
+    let idt = fake_id_token(serde_json::json!({"email": "a@b.example"}));
+    http.push(
+        200,
+        &format!(
+            r#"{{"access_token":"AT","expires_in":10,"id_token":"{idt}","token_type":"Bearer"}}"#
+        ),
+    );
+    let t = refresh(OauthProvider::Gmail, "RT", None, None, &http).unwrap();
+    assert_eq!(t.id_token.as_deref(), Some(idt.as_str()));
+    assert_eq!(id_token_claims(&idt).unwrap()["email"], "a@b.example");
+    assert!(id_token_claims("not-a-jwt").is_none());
+}
+
+#[test]
+fn revoke_report_tells_revoked_unsupported_and_failed_apart() {
+    let http = MockHttp::new();
+    http.push(200, "");
+    assert_eq!(revoke_report(OauthProvider::Gmail, "RT", &http), RevokeOutcome::Revoked);
+    assert_eq!(http.field(0, "token").as_deref(), Some("RT"));
+    http.push(400, r#"{"error":"invalid_token"}"#);
+    assert_eq!(revoke_report(OauthProvider::Gmail, "RT", &http), RevokeOutcome::Revoked);
+    http.push(503, r#"{"error":"unavailable"}"#);
+    match revoke_report(OauthProvider::Gmail, "RT-secret", &http) {
+        RevokeOutcome::Failed(why) => {
+            assert!(why.contains("503") && !why.contains("RT-secret"), "{why}")
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+    let none = MockHttp::new();
+    assert_eq!(revoke_report(OauthProvider::Microsoft, "RT", &none), RevokeOutcome::Unsupported);
+    assert_eq!(none.calls(), 0);
+}
+
+#[test]
+fn link_errors_teach_admin_consent_ca_blocks_and_app_setup() {
+    test_byo::clear();
+    let e = |d: &str| OauthError::Provider {
+        error: "invalid_grant".into(),
+        description: Some(d.into()),
+    };
+    let f = classify_link_error(
+        OauthProvider::Microsoft,
+        &e("AADSTS65001: The user or administrator has not consented"),
+        "cid-1",
+    );
+    assert_eq!(f.code, "admin_consent_required");
+    assert_eq!(
+        f.admin_consent_url.as_deref(),
+        Some("https://login.microsoftonline.com/organizations/adminconsent?client_id=cid-1")
+    );
+    assert_eq!(
+        classify_link_error(OauthProvider::Microsoft, &e("AADSTS53003: Access blocked by CA"), "c")
+            .code,
+        "device_code_blocked"
+    );
+    let pc =
+        classify_link_error(OauthProvider::Microsoft, &e("AADSTS7000218: client_assertion"), "c");
+    assert!(pc.code == "client_misconfigured" && pc.hint.contains("Allow public client flows"));
+    assert_eq!(
+        classify_link_error(OauthProvider::Microsoft, &OauthError::Http("down".into()), "c").code,
+        "oauth_error"
+    );
 }

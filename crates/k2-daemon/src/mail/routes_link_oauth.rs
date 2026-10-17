@@ -49,8 +49,33 @@ use std::time::{Duration, Instant};
 
 use crate::cli_response::CliResponse;
 use crate::mail::external::{self, ExtError};
-use crate::mail::oauth::{self, FlowKind, HttpClient, OauthProvider, Poll, ReqwestHttp, Tokens};
+use crate::mail::oauth::{
+    self, ClientChoice, Features, FlowKind, HttpClient, OauthProvider, Poll, ReqwestHttp, Tokens,
+};
 use crate::mail::secrets::{FileSecretStore, SecretStore};
+
+// ── MCS1: what a link does once its tokens arrive ───────────────────────
+
+/// Where a completed link lands: a NEW row bound to a workspace, or an
+/// in-place UPGRADE of an existing row (incremental re-consent).
+#[derive(Debug, Clone)]
+enum LinkTarget {
+    New { project_id: String },
+    Upgrade { row_id: String },
+}
+
+/// One link's plan, fixed at `start`: the provider, the client that will
+/// mint the row (resolved ONCE so start/poll/exchange and the stamp agree),
+/// the features consented for, the account it must be, and the target.
+/// `Debug` is safe: [`ClientChoice`] redacts the Google secret.
+#[derive(Debug, Clone)]
+struct LinkPlan {
+    provider: OauthProvider,
+    client: ClientChoice,
+    features: Features,
+    address: String,
+    target: LinkTarget,
+}
 
 // ── Response helpers (the shared {code, hint} error contract) ───────────
 
@@ -126,11 +151,16 @@ impl LinkStatus {
 
 /// One pending link's observable state. Carries NO secret — the address is
 /// the account being linked (already known to the owner who started it).
+/// `code` is the stable failure code (`account_mismatch`,
+/// `admin_consent_required`, `device_code_blocked`, …) on an error.
 #[derive(Debug, Clone)]
 struct LinkEntry {
     status: LinkStatus,
     address: String,
     hint: Option<String>,
+    code: Option<String>,
+    admin_consent_url: Option<String>,
+    upgrade: bool,
 }
 
 fn registry() -> &'static Mutex<HashMap<String, LinkEntry>> {
@@ -138,13 +168,25 @@ fn registry() -> &'static Mutex<HashMap<String, LinkEntry>> {
     REG.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[cfg(test)]
 fn insert_pending(link_id: &str, address: &str) {
+    insert_pending_plan(link_id, address, false);
+}
+
+fn insert_pending_plan(link_id: &str, address: &str, upgrade: bool) {
     registry()
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .insert(
             link_id.to_string(),
-            LinkEntry { status: LinkStatus::Pending, address: address.to_string(), hint: None },
+            LinkEntry {
+                status: LinkStatus::Pending,
+                address: address.to_string(),
+                hint: None,
+                code: None,
+                admin_consent_url: None,
+                upgrade,
+            },
         );
 }
 
@@ -156,9 +198,7 @@ fn insert_pending(link_id: &str, address: &str) {
 // secrets NEVER go on the status response.
 
 struct ClientCapture {
-    provider: OauthProvider,
-    project_id: String,
-    address: String,
+    plan: LinkPlan,
     state: String,
     verifier: String,
     redirect_uri: String,
@@ -198,36 +238,133 @@ fn set_terminal(link_id: &str, status: LinkStatus, hint: Option<String>) {
     }
 }
 
-/// On a successful token acquisition (either flow): mint the linked inbox
-/// row + VAULT the tokens (`external::add_oauth_inbox`), then flip the link
-/// to connected. A row/vault failure flips it to `error` with the reason
-/// (never a token).
+/// A failed link with a stable code (and, for `admin_consent_required`,
+/// the URL a tenant admin opens). Never a token.
+fn set_failure(link_id: &str, status: LinkStatus, code: &str, hint: String, admin_url: Option<String>) {
+    let mut map = registry().lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(e) = map.get_mut(link_id) {
+        e.status = status;
+        e.hint = Some(hint);
+        e.code = Some(code.to_string());
+        e.admin_consent_url = admin_url;
+    }
+}
+
+/// A provider error during the flow → the teaching failure (PRD §3.2:
+/// `admin_consent_required`, `device_code_blocked`, …).
+fn fail_from_oauth(link_id: &str, plan: &LinkPlan, err: &oauth::OauthError) {
+    let f = oauth::classify_link_error(plan.provider, err, &plan.client.id);
+    set_failure(link_id, LinkStatus::Error, f.code, f.hint, f.admin_consent_url);
+}
+
+/// On a successful token acquisition (either flow):
+///  1. the ACCOUNT CHECK (PRD §3.2) — the account that consented must be
+///     the address being linked, else `account_mismatch` and nothing is
+///     stored (an upgrade keeps its old bundle);
+///  2. the scopes actually granted must cover mail when mail was asked
+///     for (Google lets a person untick a scope), else `scope_not_granted`;
+///  3. a NEW link mints the row + vaults the tokens
+///     (`external::add_oauth_inbox`); an UPGRADE replaces the bundle in
+///     place (`external::upgrade_oauth_inbox`), keeping id, grants, levels;
+///  4. the row is stamped with features, granted scopes, the minting
+///     client and the account's tenant/kind.
+/// A row/vault failure flips the link to `error` with the reason (never a
+/// token).
 fn complete_with_tokens(
     secrets: &dyn SecretStore,
-    provider: OauthProvider,
+    http: &dyn HttpClient,
+    plan: &LinkPlan,
     link_id: &str,
-    owner_project_id: &str,
-    address: &str,
     tokens: &Tokens,
     now: i64,
 ) {
-    match external::add_oauth_inbox(secrets, owner_project_id, provider, address, tokens, now) {
-        Ok(_) => set_terminal(
+    let address = plan.address.as_str();
+    let info = match oauth::check_account(plan.provider, tokens, address, http) {
+        Ok(info) => info,
+        Err(m) => {
+            let who = m
+                .signed_in
+                .map(|s| format!("the sign-in was {s}"))
+                .unwrap_or_else(|| "the provider did not say which account signed in".to_string());
+            set_failure(
+                link_id,
+                LinkStatus::Error,
+                "account_mismatch",
+                format!(
+                    "account mismatch: you are linking {address} but {who}. Nothing was stored \
+                     — sign in as {address} (a private browser window helps) and link again"
+                ),
+                None,
+            );
+            return;
+        }
+    };
+    let granted = tokens
+        .scope
+        .as_deref()
+        .map(|s| oauth::features_granted(plan.provider, s))
+        .unwrap_or(plan.features);
+    if plan.features.mail && !granted.mail {
+        set_failure(
             link_id,
-            LinkStatus::Connected,
-            Some(format!(
-                "connected {address} — agents in the bound workspace can read it and save reply \
-                 drafts. {}",
-                if provider == OauthProvider::Gmail {
-                    "Drafting is always on; raise it to 'send' with 'k2 mail access set-level' \
-                     to let agents also send via SMTP (XOAUTH2)."
-                } else {
-                    "Drafting is always on; sending from Microsoft inboxes is not yet available \
-                     (draft-only until Graph send lands)."
-                }
-            )),
-        ),
-        Err(e) => set_terminal(link_id, LinkStatus::Error, Some(ext_error_hint(e))),
+            LinkStatus::Error,
+            "scope_not_granted",
+            format!(
+                "mail access was not granted for {address} — link again and allow K2 to read \
+                 and send mail. Nothing was stored"
+            ),
+            None,
+        );
+        return;
+    }
+    let features = Features {
+        mail: plan.features.mail && granted.mail,
+        calendar: plan.features.calendar && granted.calendar,
+    };
+    let meta = external::OauthMeta {
+        features: features.as_db(),
+        granted_scopes: tokens.scope.clone(),
+        oauth_client: Some(plan.client.source.as_str().to_string()),
+        oauth_client_hash: Some(plan.client.hash()),
+        account_tenant: info.tenant.clone(),
+        account_kind: info.kind.clone(),
+        account_checked_at: Some(now),
+    };
+    let calendar_note = if plan.features.calendar && !features.calendar {
+        " Calendar access was not granted — add it later with 'k2 mail link upgrade'."
+    } else {
+        ""
+    };
+    match &plan.target {
+        LinkTarget::New { project_id } => {
+            match external::add_oauth_inbox(secrets, project_id, plan.provider, address, tokens, &meta, now) {
+                Ok(_) => set_terminal(
+                    link_id,
+                    LinkStatus::Connected,
+                    Some(format!(
+                        "connected {address} ({}) — agents in the bound workspace can read it and \
+                         save drafts. {}{calendar_note}",
+                        meta.features,
+                        external::oauth_send_hint(plan.provider)
+                    )),
+                ),
+                Err(e) => set_terminal(link_id, LinkStatus::Error, Some(ext_error_hint(e))),
+            }
+        }
+        LinkTarget::Upgrade { row_id } => {
+            match external::upgrade_oauth_inbox(secrets, row_id, tokens, &meta, now) {
+                Ok(_) => set_terminal(
+                    link_id,
+                    LinkStatus::Connected,
+                    Some(format!(
+                        "upgraded {address} — now consented for {}; its grants, levels and ids \
+                         are unchanged.{calendar_note}",
+                        meta.features
+                    )),
+                ),
+                Err(e) => set_terminal(link_id, LinkStatus::Error, Some(ext_error_hint(e))),
+            }
+        }
     }
 }
 
@@ -242,10 +379,8 @@ fn complete_with_tokens(
 fn run_device_flow(
     secrets: &dyn SecretStore,
     http: &dyn HttpClient,
-    provider: OauthProvider,
+    plan: &LinkPlan,
     link_id: &str,
-    owner_project_id: &str,
-    address: &str,
     device_code: &str,
     interval_secs: i64,
     expires_in_secs: i64,
@@ -263,9 +398,9 @@ fn run_device_flow(
             );
             return;
         }
-        match oauth::device_poll(provider, device_code, None, http) {
+        match oauth::device_poll(plan.provider, device_code, Some(&plan.client.id), http) {
             Ok(Poll::Ok(tokens)) => {
-                complete_with_tokens(secrets, provider, link_id, owner_project_id, address, &tokens, now_fn());
+                complete_with_tokens(secrets, http, plan, link_id, &tokens, now_fn());
                 return;
             }
             Ok(Poll::Pending) => {}
@@ -287,7 +422,7 @@ fn run_device_flow(
                 return;
             }
             Err(e) => {
-                set_terminal(link_id, LinkStatus::Error, Some(format!("oauth error: {e}")));
+                fail_from_oauth(link_id, plan, &e);
                 return;
             }
         }
@@ -312,10 +447,8 @@ struct LoopbackCapture {
 fn run_loopback_flow(
     secrets: &dyn SecretStore,
     http: &dyn HttpClient,
-    provider: OauthProvider,
+    plan: &LinkPlan,
     link_id: &str,
-    owner_project_id: &str,
-    address: &str,
     listener: TcpListener,
     redirect_uri: &str,
     expected_state: &str,
@@ -357,11 +490,17 @@ fn run_loopback_flow(
     // (Google's Desktop secret; Microsoft omits it). Same seam as
     // `client_id_override`, currently `None`. `code_verifier` completes the
     // PKCE proof — an injected code minted in another session fails here.
-    match oauth::loopback_exchange(provider, &code, redirect_uri, code_verifier, None, None, http) {
-        Ok(tokens) => {
-            complete_with_tokens(secrets, provider, link_id, owner_project_id, address, &tokens, now_fn())
-        }
-        Err(e) => set_terminal(link_id, LinkStatus::Error, Some(format!("oauth error: {e}"))),
+    match oauth::loopback_exchange(
+        plan.provider,
+        &code,
+        redirect_uri,
+        code_verifier,
+        Some(&plan.client.id),
+        plan.client.secret.as_deref(),
+        http,
+    ) {
+        Ok(tokens) => complete_with_tokens(secrets, http, plan, link_id, &tokens, now_fn()),
+        Err(e) => fail_from_oauth(link_id, plan, &e),
     }
 }
 
@@ -553,6 +692,59 @@ struct StartBody {
     client_capture: bool,
     /// Client-local `http://127.0.0.1:<port>/cb` (required with client_capture).
     redirect_uri: String,
+    /// MCS1: what to consent for — `"mail"`, `"calendar"`, `"mail,calendar"`
+    /// or `["mail","calendar"]`. Absent = mail.
+    features: serde_json::Value,
+    /// MCS1 incremental re-consent: an existing linked row (id or address)
+    /// to upgrade IN PLACE. `features` then names what to add.
+    inbox: String,
+}
+
+/// `features` as a string or a list of strings.
+fn parse_features(v: &serde_json::Value) -> Result<Option<Features>, String> {
+    match v {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(s) => Features::parse(s),
+        serde_json::Value::Array(items) => {
+            let mut words = Vec::with_capacity(items.len());
+            for i in items {
+                words.push(
+                    i.as_str()
+                        .ok_or_else(|| "'features' must be a string or a list of strings".to_string())?
+                        .to_string(),
+                );
+            }
+            Features::parse(&words.join(","))
+        }
+        _ => Err("'features' must be a string or a list of strings".to_string()),
+    }
+}
+
+/// A client id that is still the source placeholder can't link anything:
+/// teach the owner to configure one instead of letting the provider answer
+/// an opaque "app not found".
+fn require_configured_client(provider: OauthProvider, client: &ClientChoice) -> Result<(), CliResponse> {
+    if !oauth::is_placeholder_client_id(&client.id) {
+        return Ok(());
+    }
+    let how = match provider {
+        OauthProvider::Microsoft => {
+            "register an app in Microsoft Entra (any organisation directory + personal accounts, \
+             'Allow public client flows' on, delegated Graph permissions openid profile email \
+             offline_access User.Read Mail.ReadWrite Mail.Send Calendars.ReadWrite), then run \
+             'k2 mail oauth-config set --provider microsoft --client-id <application id> \
+             [--tenant <tenant>]' or use Settings → Email Link → OAuth apps"
+        }
+        OauthProvider::Gmail => {
+            "set your own Google OAuth Desktop client with 'k2 mail oauth-config set --provider \
+             gmail --client-id <id> --secret-stdin' or Settings → Email Link → OAuth apps"
+        }
+    };
+    Err(error_response(
+        "409 Conflict",
+        "not_configured",
+        &format!("this K2 build has no {} OAuth app configured — {how}", provider.as_str()),
+    ))
 }
 
 /// POST `/cli/mail/link/oauth/start` — begin an OAuth link. Microsoft →
@@ -568,6 +760,22 @@ pub fn handle_link_oauth_start(body: &[u8]) -> CliResponse {
             return error_response("400 Bad Request", "usage", &format!("invalid JSON body: {e}"))
         }
     };
+    let requested = match parse_features(&b.features) {
+        Ok(f) => f,
+        Err(h) => return error_response("400 Bad Request", "usage", &h),
+    };
+    if !b.inbox.trim().is_empty() {
+        return start_upgrade(&b, requested);
+    }
+    let features = requested.unwrap_or(Features::MAIL);
+    if !features.mail {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "a new link needs the mail feature — use --features mail or mail,calendar \
+             (calendar-only links arrive with Google calendars)",
+        );
+    }
     if b.address.trim().is_empty() {
         return error_response(
             "400 Bad Request",
@@ -606,92 +814,229 @@ pub fn handle_link_oauth_start(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(resp) => return resp,
     };
-    let address = b.address.trim().to_string();
+    let plan = LinkPlan {
+        provider,
+        client: oauth::resolve_client(provider),
+        features,
+        address: b.address.trim().to_string(),
+        target: LinkTarget::New { project_id },
+    };
+    start_plan(plan, b.client_capture, b.redirect_uri.trim())
+}
+
+/// MCS1 `k2 mail link upgrade`: re-consent an EXISTING OAuth row for more
+/// features. The row is found by id or address; its provider and address
+/// are the row's own (a mismatching body value is a usage error); the new
+/// consent asks for the union of what it has and what is asked.
+fn start_upgrade(b: &StartBody, requested: Option<Features>) -> CliResponse {
+    let Some(add) = requested else {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "an upgrade needs 'features' — what to add: mail, calendar or mail,calendar",
+        );
+    };
+    let Some(row) = external::inbox_for_id_or_address(&b.inbox) else {
+        return error_response(
+            "404 Not Found",
+            "not_found",
+            &format!(
+                "no linked inbox '{}' — 'k2 mail link list' shows what's connected",
+                b.inbox.trim()
+            ),
+        );
+    };
+    let fields = match external::read_oauth_fields(&row.id) {
+        Ok(f) => f,
+        Err(e) => return error_response("502 Bad Gateway", "engine", &e),
+    };
+    let provider = match fields.provider.as_deref().and_then(OauthProvider::from_str) {
+        Some(p) if fields.auth_kind == external::AUTH_OAUTH => p,
+        _ => {
+            return error_response(
+                "400 Bad Request",
+                "usage",
+                &format!(
+                    "'{}' is linked with an app password, not OAuth — remove it ('k2 mail link \
+                     remove') and link it again with --provider gmail|microsoft",
+                    row.email_address
+                ),
+            )
+        }
+    };
+    if !b.provider.trim().is_empty() && OauthProvider::from_str(b.provider.trim()) != Some(provider) {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            &format!("'{}' is a {} link", row.email_address, provider.as_str()),
+        );
+    }
+    if !b.address.trim().is_empty() && !b.address.trim().eq_ignore_ascii_case(&row.email_address) {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "'address' and 'inbox' name different accounts — pass just the inbox to upgrade",
+        );
+    }
+    let have = external::read_oauth_meta(&row.id)
+        .and_then(|m| Features::parse(&m.features).ok().flatten())
+        .unwrap_or(Features::MAIL);
+    let plan = LinkPlan {
+        provider,
+        client: oauth::resolve_client(provider),
+        features: have.union(add),
+        address: row.email_address.clone(),
+        target: LinkTarget::Upgrade { row_id: row.id.clone() },
+    };
+    start_plan(plan, b.client_capture, b.redirect_uri.trim())
+}
+
+/// Route a plan to its provider's flow. The request's shape is checked
+/// first (a usage error teaches before anything else), then that a real
+/// client is configured.
+fn start_plan(plan: LinkPlan, client_capture: bool, redirect_uri: &str) -> CliResponse {
+    if client_capture && plan.provider.config().default_flow == FlowKind::DeviceCode {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "clientCapture is only for Gmail loopback — Microsoft uses device flow",
+        );
+    }
+    if client_capture {
+        if redirect_uri.is_empty() {
+            return error_response(
+                "400 Bad Request",
+                "usage",
+                "clientCapture requires redirectUri (http://127.0.0.1:<port>/cb)",
+            );
+        }
+        if let Err(h) = validate_client_redirect_uri(redirect_uri) {
+            return error_response("400 Bad Request", "usage", &h);
+        }
+    }
+    if let Err(resp) = require_configured_client(plan.provider, &plan.client) {
+        return resp;
+    }
     let link_id = uuid::Uuid::new_v4().to_string();
-    match provider.config().default_flow {
+    match plan.provider.config().default_flow {
         FlowKind::DeviceCode => {
-            if b.client_capture {
+            if client_capture {
                 return error_response(
                     "400 Bad Request",
                     "usage",
                     "clientCapture is only for Gmail loopback — Microsoft uses device flow",
                 );
             }
-            start_device(provider, &link_id, &project_id, &address)
+            start_device(plan, &link_id)
         }
-        FlowKind::Loopback if b.client_capture => {
-            start_loopback_client_capture(
-                provider,
-                &link_id,
-                &project_id,
-                &address,
-                b.redirect_uri.trim(),
-            )
+        FlowKind::Loopback if client_capture => {
+            start_loopback_client_capture(plan, &link_id, redirect_uri)
         }
-        FlowKind::Loopback => start_loopback(provider, &link_id, &project_id, &address),
+        FlowKind::Loopback => start_loopback(plan, &link_id),
     }
 }
 
-/// Microsoft device-code entry: `device_start`, record the pending link,
-/// spawn the poll task, return the user-facing code+URL (never the
-/// `device_code`).
-fn start_device(
-    provider: OauthProvider,
-    link_id: &str,
-    project_id: &str,
-    address: &str,
-) -> CliResponse {
+/// The loopback consent URL's extra params: `login_hint` always (the
+/// account picker preselects the address being linked), and
+/// `include_granted_scopes=true` on an upgrade (Google incremental auth).
+fn loopback_extra(plan: &LinkPlan) -> Vec<(&'static str, String)> {
+    let mut extra = vec![("login_hint", plan.address.clone())];
+    if matches!(plan.target, LinkTarget::Upgrade { .. }) {
+        extra.push(("include_granted_scopes", "true".to_string()));
+    }
+    extra
+}
+
+fn build_consent_url(
+    plan: &LinkPlan,
+    redirect_uri: &str,
+    state: &str,
+    challenge: &str,
+) -> Result<String, oauth::OauthError> {
+    let extra = loopback_extra(plan);
+    let extra_refs: Vec<(&str, &str)> = extra.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    oauth::loopback_build_url_scoped(
+        plan.provider,
+        Some(&plan.client.id),
+        redirect_uri,
+        state,
+        challenge,
+        &oauth::scope_for(plan.provider, plan.features),
+        &extra_refs,
+    )
+}
+
+/// The common start answer fields (MCS1: features + upgrade).
+fn plan_fields(plan: &LinkPlan, v: &mut serde_json::Value) {
+    v["features"] = serde_json::json!(plan.features.as_db());
+    v["upgrade"] = serde_json::json!(matches!(plan.target, LinkTarget::Upgrade { .. }));
+    v["address"] = serde_json::json!(plan.address);
+}
+
+/// Microsoft device-code entry: `device_start` with the plan's scope set
+/// and client, record the pending link, spawn the poll task, return the
+/// user-facing code+URL (never the `device_code`).
+fn start_device(plan: LinkPlan, link_id: &str) -> CliResponse {
     let http = ReqwestHttp::default();
-    let device = match oauth::device_start(provider, None, &http) {
+    let scope = oauth::scope_for(plan.provider, plan.features);
+    let device = match oauth::device_start_scoped(plan.provider, Some(&plan.client.id), &scope, &http)
+    {
         Ok(d) => d,
         Err(e) => {
-            return error_response(
+            let f = oauth::classify_link_error(plan.provider, &e, &plan.client.id);
+            let code = if f.code == "oauth_error" { "engine" } else { f.code };
+            let mut resp = error_response(
                 "502 Bad Gateway",
-                "engine",
-                &format!("could not begin device authorization: {e}"),
-            )
+                code,
+                &format!("could not begin device authorization: {}", f.hint),
+            );
+            if let Some(url) = f.admin_consent_url {
+                if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&resp.body) {
+                    v["error"]["adminConsentUrl"] = serde_json::json!(url);
+                    resp.body = v.to_string();
+                }
+            }
+            return resp;
         }
     };
-    insert_pending(link_id, address);
-    let (lid, pid, addr, dc, interval, expires) = (
+    insert_pending_plan(link_id, &plan.address, matches!(plan.target, LinkTarget::Upgrade { .. }));
+    let (lid, dc, interval, expires) = (
         link_id.to_string(),
-        project_id.to_string(),
-        address.to_string(),
         device.device_code.clone(),
         device.interval,
         device.expires_in,
     );
+    let thread_plan = plan.clone();
     std::thread::spawn(move || {
         let secrets = FileSecretStore::default();
         let http = ReqwestHttp::default();
         let mut now_fn = || chrono::Utc::now().timestamp();
         let mut sleep_fn = |d: Duration| std::thread::sleep(d);
         run_device_flow(
-            &secrets, &http, provider, &lid, &pid, &addr, &dc, interval, expires, &mut now_fn,
-            &mut sleep_fn,
+            &secrets, &http, &thread_plan, &lid, &dc, interval, expires, &mut now_fn, &mut sleep_fn,
         );
     });
-    ok_json(serde_json::json!({
+    let mut v = serde_json::json!({
         "ok": true,
         "flow": "device",
         "linkId": link_id,
         "userCode": device.user_code,
         "verificationUrl": device.verification_uri,
         "expiresIn": device.expires_in,
-        "hint": format!("go to {} and enter {}", device.verification_uri, device.user_code),
-    }))
+        "hint": format!(
+            "go to {} and enter {} — sign in as {}",
+            device.verification_uri, device.user_code, plan.address
+        ),
+    });
+    plan_fields(&plan, &mut v);
+    ok_json(v)
 }
 
 /// Gmail loopback entry: bind the 127.0.0.1 listener, build the consent
 /// URL, OPEN the system browser (teach `remote_unsupported` if it can't),
 /// record the pending link, spawn the await-and-exchange task, return the
 /// "browser opened" acknowledgement.
-fn start_loopback(
-    provider: OauthProvider,
-    link_id: &str,
-    project_id: &str,
-    address: &str,
-) -> CliResponse {
+fn start_loopback(plan: LinkPlan, link_id: &str) -> CliResponse {
     let (listener, addr) = match oauth::bind_ephemeral_loopback() {
         Ok(v) => v,
         Err(e) => {
@@ -720,8 +1065,7 @@ fn start_loopback(
             )
         }
     };
-    let url = match oauth::loopback_build_url(provider, None, &redirect_uri, &state, &pkce.challenge)
-    {
+    let url = match build_consent_url(&plan, &redirect_uri, &state, &pkce.challenge) {
         Ok(u) => u,
         Err(e) => {
             return error_response(
@@ -743,18 +1087,17 @@ fn start_loopback(
             ),
         );
     }
-    insert_pending(link_id, address);
+    insert_pending_plan(link_id, &plan.address, matches!(plan.target, LinkTarget::Upgrade { .. }));
     // The PKCE verifier travels into the flow thread alongside `state` and
     // is consumed only by the token exchange — it never touches the
     // registry, a log line, or the response.
-    let (lid, pid, addr2, ruri, st, verifier) = (
+    let (lid, ruri, st, verifier) = (
         link_id.to_string(),
-        project_id.to_string(),
-        address.to_string(),
         redirect_uri.clone(),
         state.clone(),
         pkce.verifier.clone(),
     );
+    let thread_plan = plan.clone();
     std::thread::spawn(move || {
         let secrets = FileSecretStore::default();
         let http = ReqwestHttp::default();
@@ -762,10 +1105,8 @@ fn start_loopback(
         run_loopback_flow(
             &secrets,
             &http,
-            provider,
+            &thread_plan,
             &lid,
-            &pid,
-            &addr2,
             listener,
             &ruri,
             &st,
@@ -774,24 +1115,20 @@ fn start_loopback(
             &mut now_fn,
         );
     });
-    ok_json(serde_json::json!({
+    let mut v = serde_json::json!({
         "ok": true,
         "flow": "loopback",
         "linkId": link_id,
         "hint": "a browser window opened — approve access there; this terminal is waiting",
-    }))
+    });
+    plan_fields(&plan, &mut v);
+    ok_json(v)
 }
 
 /// Gmail remote path: client binds 127.0.0.1 and will open the browser.
 /// Daemon holds PKCE verifier + state until `POST …/complete`. Never opens
 /// a browser on the daemon host.
-fn start_loopback_client_capture(
-    provider: OauthProvider,
-    link_id: &str,
-    project_id: &str,
-    address: &str,
-    redirect_uri: &str,
-) -> CliResponse {
+fn start_loopback_client_capture(plan: LinkPlan, link_id: &str, redirect_uri: &str) -> CliResponse {
     if redirect_uri.is_empty() {
         return error_response(
             "400 Bad Request",
@@ -813,8 +1150,7 @@ fn start_loopback_client_capture(
             )
         }
     };
-    let url = match oauth::loopback_build_url(provider, None, redirect_uri, &state, &pkce.challenge)
-    {
+    let url = match build_consent_url(&plan, redirect_uri, &state, &pkce.challenge) {
         Ok(u) => u,
         Err(e) => {
             return error_response(
@@ -824,7 +1160,7 @@ fn start_loopback_client_capture(
             )
         }
     };
-    insert_pending(link_id, address);
+    insert_pending_plan(link_id, &plan.address, matches!(plan.target, LinkTarget::Upgrade { .. }));
     {
         let mut map = capture_registry().lock().unwrap_or_else(|p| p.into_inner());
         // Drop expired captures so a long-lived daemon does not accumulate.
@@ -833,9 +1169,7 @@ fn start_loopback_client_capture(
         map.insert(
             link_id.to_string(),
             ClientCapture {
-                provider,
-                project_id: project_id.to_string(),
-                address: address.to_string(),
+                plan: plan.clone(),
                 state: state.clone(),
                 verifier: pkce.verifier.clone(),
                 redirect_uri: redirect_uri.to_string(),
@@ -844,7 +1178,7 @@ fn start_loopback_client_capture(
         );
     }
     // authorizationUrl is public (state + challenge only). Verifier stays here.
-    ok_json(serde_json::json!({
+    let mut v = serde_json::json!({
         "ok": true,
         "flow": "loopback",
         "linkId": link_id,
@@ -852,7 +1186,9 @@ fn start_loopback_client_capture(
         "state": state,
         "clientCapture": true,
         "hint": "open the authorization URL in a browser on this machine; the app captures the redirect",
-    }))
+    });
+    plan_fields(&plan, &mut v);
+    ok_json(v)
 }
 
 // ── POST /cli/mail/link/oauth/complete (owner; client-capture only) ─────
@@ -963,38 +1299,36 @@ pub fn handle_link_oauth_complete(body: &[u8]) -> CliResponse {
     let http = ReqwestHttp::default();
     let now = chrono::Utc::now().timestamp();
     match oauth::loopback_exchange(
-        cap.provider,
+        cap.plan.provider,
         code,
         &cap.redirect_uri,
         &cap.verifier,
-        None,
-        None,
+        Some(&cap.plan.client.id),
+        cap.plan.client.secret.as_deref(),
         &http,
     ) {
         Ok(tokens) => {
-            complete_with_tokens(
-                &secrets,
-                cap.provider,
-                link_id,
-                &cap.project_id,
-                &cap.address,
-                &tokens,
-                now,
-            );
+            complete_with_tokens(&secrets, &http, &cap.plan, link_id, &tokens, now);
             let map = registry().lock().unwrap_or_else(|p| p.into_inner());
-            let state = map
-                .get(link_id)
-                .map(|e| e.status.as_str())
-                .unwrap_or("connected");
-            ok_json(serde_json::json!({
+            let entry = map.get(link_id).cloned();
+            let mut v = serde_json::json!({
                 "ok": true,
-                "state": state,
+                "state": entry.as_ref().map(|e| e.status.as_str()).unwrap_or("connected"),
                 "linkId": link_id,
-                "address": cap.address,
-            }))
+                "address": cap.plan.address,
+            });
+            if let Some(e) = entry {
+                if let Some(code) = e.code {
+                    v["code"] = serde_json::json!(code);
+                }
+                if let Some(h) = e.hint {
+                    v["hint"] = serde_json::json!(h);
+                }
+            }
+            ok_json(v)
         }
         Err(e) => {
-            set_terminal(link_id, LinkStatus::Error, Some(format!("oauth error: {e}")));
+            fail_from_oauth(link_id, &cap.plan, &e);
             error_response(
                 "502 Bad Gateway",
                 "engine",
@@ -1025,9 +1359,16 @@ pub fn handle_link_oauth_status(params: &HashMap<String, String>) -> CliResponse
                 "ok": true,
                 "state": e.status.as_str(),
                 "address": e.address,
+                "upgrade": e.upgrade,
             });
             if let Some(h) = &e.hint {
                 body["hint"] = serde_json::json!(h);
+            }
+            if let Some(c) = &e.code {
+                body["code"] = serde_json::json!(c);
+            }
+            if let Some(u) = &e.admin_consent_url {
+                body["adminConsentUrl"] = serde_json::json!(u);
             }
             ok_json(body)
         }
@@ -1120,6 +1461,44 @@ mod tests {
 
     fn body_json(resp: &CliResponse) -> serde_json::Value {
         serde_json::from_str(&resp.body).expect("valid JSON body")
+    }
+
+    /// A fake unsigned id_token carrying `claims`.
+    fn fake_id_token(claims: serde_json::Value) -> String {
+        use base64::Engine as _;
+        let b64 = |v: &serde_json::Value| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string())
+        };
+        format!("{}.{}.sig", b64(&serde_json::json!({"alg": "none"})), b64(&claims))
+    }
+
+    /// A token-endpoint success body with an id_token for `claims`.
+    fn token_body(access: &str, refresh: &str, scope: &str, claims: serde_json::Value) -> String {
+        serde_json::json!({
+            "access_token": access,
+            "refresh_token": refresh,
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "scope": scope,
+            "id_token": fake_id_token(claims),
+        })
+        .to_string()
+    }
+
+    /// A NEW-link plan with a fixed test client (BYO-shaped, so the stamp
+    /// is checkable).
+    fn plan_new(provider: OauthProvider, project: &str, address: &str, features: Features) -> LinkPlan {
+        LinkPlan {
+            provider,
+            client: ClientChoice {
+                id: "test-client-id".to_string(),
+                secret: (provider == OauthProvider::Gmail).then(|| "test-secret".to_string()),
+                source: oauth::ClientSource::Byo,
+            },
+            features,
+            address: address.to_string(),
+            target: LinkTarget::New { project_id: project.to_string() },
+        }
     }
 
     fn insert_project() -> String {
@@ -1244,6 +1623,10 @@ mod tests {
 
     #[test]
     fn client_capture_start_returns_authorization_url_without_browser() {
+        // A configured (BYO) client: the REPLACE_ME placeholder is refused
+        // with `not_configured` before any consent URL is built (MCS1).
+        oauth::test_byo::clear();
+        oauth::test_byo::set_client_id(OauthProvider::Gmail, "byo-gmail.apps.googleusercontent.com");
         let pid = insert_project();
         let ws = format!("/tmp/loauth-{}", &pid[..8]);
         let body = serde_json::json!({
@@ -1318,13 +1701,17 @@ mod tests {
         let link_id = uuid::Uuid::new_v4().to_string();
         insert_pending(&link_id, &address);
 
-        // authorization_pending (400) → then a success token body.
+        // authorization_pending (400) → then a success token body whose
+        // id_token says the right account signed in (work tenant).
+        let ok_body = token_body(
+            "AT-secret",
+            "RT-secret",
+            &oauth::scope_for(OauthProvider::Microsoft, Features { mail: true, calendar: true }),
+            serde_json::json!({ "preferred_username": address, "tid": "tenant-guid-1" }),
+        );
         let http = MockHttp::new(&[
             (400, r#"{"error":"authorization_pending"}"#),
-            (
-                200,
-                r#"{"access_token":"AT-secret","refresh_token":"RT-secret","token_type":"Bearer","expires_in":3600,"scope":"https://graph.microsoft.com/Mail.ReadWrite"}"#,
-            ),
+            (200, ok_body.as_str()),
         ]);
         let store = MemStore::default();
         let mut clock = 1_000i64;
@@ -1333,19 +1720,25 @@ mod tests {
             clock
         };
         let mut sleep_fn = |_d: Duration| {};
+        let plan = plan_new(
+            OauthProvider::Microsoft,
+            &project,
+            &address,
+            Features { mail: true, calendar: true },
+        );
         run_device_flow(
             &store,
             &http,
-            OauthProvider::Microsoft,
+            &plan,
             &link_id,
-            &project,
-            &address,
             "DEVICE-CODE-secret",
             5,
             900,
             &mut now_fn,
             &mut sleep_fn,
         );
+        // The poll carried the plan's client id (resolved once at start).
+        assert_eq!(http.field(1, "client_id").as_deref(), Some("test-client-id"));
 
         // Registry flipped to connected.
         let params: HashMap<String, String> =
@@ -1375,8 +1768,224 @@ mod tests {
         assert!(vaulted.contains("AT-secret") && vaulted.contains("RT-secret"));
         // The success response body carried NO token.
         assert!(!resp.body.contains("AT-secret") && !resp.body.contains("RT-secret"));
+        // MCS1: the row is stamped with what was consented, the minting
+        // client and the checked account (the id_token is never vaulted).
+        let meta = external::read_oauth_meta(&id).expect("meta");
+        assert_eq!(meta.features, "mail,calendar");
+        assert_eq!(meta.oauth_client.as_deref(), Some("byo"));
+        assert_eq!(meta.oauth_client_hash, Some(oauth::client_hash("test-client-id")));
+        assert_eq!(meta.account_kind.as_deref(), Some("work"));
+        assert_eq!(meta.account_tenant.as_deref(), Some("tenant-guid-1"));
+        assert!(meta.account_checked_at.is_some());
+        assert!(meta.granted_scopes.unwrap().contains("Mail.Send"));
+        assert!(!vaulted.contains("id_token"), "the id_token is never vaulted");
 
         cleanup(&project);
+    }
+
+    #[test]
+    fn device_flow_account_mismatch_stores_nothing() {
+        let project = insert_project();
+        let address = format!("typed-{}@company.com", &project[..8]);
+        let link_id = uuid::Uuid::new_v4().to_string();
+        insert_pending(&link_id, &address);
+        let body = token_body(
+            "AT-mm",
+            "RT-mm",
+            oauth::OauthProvider::Microsoft.config().scope,
+            serde_json::json!({ "preferred_username": "someone-else@company.com", "tid": "t" }),
+        );
+        // The id_token doesn't match → the check asks /me, which this mock
+        // refuses (default get_bearer) → mismatch.
+        let http = MockHttp::new(&[(200, body.as_str())]);
+        let store = MemStore::default();
+        let plan = plan_new(OauthProvider::Microsoft, &project, &address, Features::MAIL);
+        run_device_flow(
+            &store, &http, &plan, &link_id, "DC", 5, 900, &mut || 1_000i64, &mut |_d: Duration| {},
+        );
+        let params = HashMap::from([("linkId".to_string(), link_id)]);
+        let status = body_json(&handle_link_oauth_status(&params));
+        assert_eq!(status["state"], "error");
+        assert_eq!(status["code"], "account_mismatch");
+        let hint = status["hint"].as_str().unwrap();
+        assert!(hint.contains("someone-else@company.com") && hint.contains(&address), "{hint}");
+        assert!(row_oauth(&address).is_none(), "nothing stored on a mismatch");
+        assert!(store.map.lock().unwrap().is_empty(), "nothing vaulted on a mismatch");
+        cleanup(&project);
+    }
+
+    #[test]
+    fn device_flow_admin_consent_teaches_the_admin_url() {
+        oauth::test_byo::clear();
+        let project = insert_project();
+        let address = format!("ac-{}@company.com", &project[..8]);
+        let link_id = uuid::Uuid::new_v4().to_string();
+        insert_pending(&link_id, &address);
+        let http = MockHttp::new(&[(
+            400,
+            r#"{"error":"invalid_grant","error_description":"AADSTS65001: The user or administrator has not consented to use the application"}"#,
+        )]);
+        let store = MemStore::default();
+        let plan = plan_new(OauthProvider::Microsoft, &project, &address, Features::MAIL);
+        run_device_flow(
+            &store, &http, &plan, &link_id, "DC", 5, 900, &mut || 1_000i64, &mut |_d: Duration| {},
+        );
+        let params = HashMap::from([("linkId".to_string(), link_id)]);
+        let status = body_json(&handle_link_oauth_status(&params));
+        assert_eq!(status["code"], "admin_consent_required");
+        assert_eq!(
+            status["adminConsentUrl"],
+            "https://login.microsoftonline.com/organizations/adminconsent?client_id=test-client-id"
+        );
+        assert!(row_oauth(&address).is_none());
+        cleanup(&project);
+    }
+
+    #[test]
+    fn upgrade_replaces_the_bundle_in_place_and_keeps_the_row() {
+        let project = insert_project();
+        let address = format!("up-{}@company.com", &project[..8]);
+        let store = MemStore::default();
+        // A mail-only link first.
+        let link_a = uuid::Uuid::new_v4().to_string();
+        insert_pending(&link_a, &address);
+        let claims = serde_json::json!({ "preferred_username": address, "tid": "t-1" });
+        let first = token_body(
+            "AT-1",
+            "RT-1",
+            oauth::OauthProvider::Microsoft.config().scope,
+            claims.clone(),
+        );
+        let plan = plan_new(OauthProvider::Microsoft, &project, &address, Features::MAIL);
+        run_device_flow(
+            &store,
+            &MockHttp::new(&[(200, first.as_str())]),
+            &plan,
+            &link_a,
+            "DC",
+            5,
+            900,
+            &mut || 1_000i64,
+            &mut |_d: Duration| {},
+        );
+        let row = external::inbox_for_address(&address).expect("row");
+        // A grant on the row must survive the upgrade.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE mail_external_inboxes SET primary_level = 'send' WHERE id = ?1",
+                rusqlite::params![row.id],
+            )
+            .unwrap();
+        }
+        // A start for an upgrade with no features is a usage error.
+        let resp = handle_link_oauth_start(
+            serde_json::json!({ "inbox": address }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        // An upgrade signed in as someone else keeps the old bundle.
+        let link_b = uuid::Uuid::new_v4().to_string();
+        insert_pending(&link_b, &address);
+        let wrong = token_body(
+            "AT-wrong",
+            "RT-wrong",
+            &oauth::scope_for(OauthProvider::Microsoft, Features { mail: true, calendar: true }),
+            serde_json::json!({ "preferred_username": "other@company.com", "tid": "t-1" }),
+        );
+        let up_plan = LinkPlan {
+            target: LinkTarget::Upgrade { row_id: row.id.clone() },
+            features: Features { mail: true, calendar: true },
+            ..plan.clone()
+        };
+        run_device_flow(
+            &store,
+            &MockHttp::new(&[(200, wrong.as_str())]),
+            &up_plan,
+            &link_b,
+            "DC",
+            5,
+            900,
+            &mut || 2_000i64,
+            &mut |_d: Duration| {},
+        );
+        let kept = oauth::load_tokens(&store, &row.id).unwrap();
+        assert_eq!(kept.access_token, "AT-1", "a failed upgrade keeps the old bundle");
+        // The real upgrade: same row id, new bundle, calendar recorded.
+        let link_c = uuid::Uuid::new_v4().to_string();
+        insert_pending(&link_c, &address);
+        let good = token_body(
+            "AT-2",
+            "RT-2",
+            &oauth::scope_for(OauthProvider::Microsoft, Features { mail: true, calendar: true }),
+            claims,
+        );
+        run_device_flow(
+            &store,
+            &MockHttp::new(&[(200, good.as_str())]),
+            &up_plan,
+            &link_c,
+            "DC",
+            5,
+            900,
+            &mut || 3_000i64,
+            &mut |_d: Duration| {},
+        );
+        let params = HashMap::from([("linkId".to_string(), link_c)]);
+        let status = body_json(&handle_link_oauth_status(&params));
+        assert_eq!(status["state"], "connected", "{status}");
+        assert_eq!(status["upgrade"], false, "insert_pending marks a plain link");
+        let after = external::inbox_for_address(&address).expect("row");
+        assert_eq!(after.id, row.id, "upgraded in place");
+        assert_eq!(oauth::load_tokens(&store, &row.id).unwrap().access_token, "AT-2");
+        assert_eq!(external::read_oauth_meta(&row.id).unwrap().features, "mail,calendar");
+        let level: String = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT primary_level FROM mail_external_inboxes WHERE id = ?1",
+                rusqlite::params![row.id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(level, "send", "levels survive the upgrade");
+        cleanup(&project);
+    }
+
+    #[test]
+    fn start_refuses_a_placeholder_client_and_unknown_features() {
+        oauth::test_byo::clear();
+        let pid = insert_project();
+        let ws = format!("/tmp/loauth-{}", &pid[..8]);
+        // The placeholder check is pure (the baked id depends on the build
+        // env, so it is driven with an explicit placeholder client).
+        let placeholder = ClientChoice {
+            id: "REPLACE_ME-microsoft-client-id".to_string(),
+            secret: None,
+            source: oauth::ClientSource::Baked,
+        };
+        let resp = require_configured_client(OauthProvider::Microsoft, &placeholder)
+            .expect_err("a placeholder client is refused");
+        assert_eq!(resp.status, "409 Conflict", "{}", resp.body);
+        let real = ClientChoice { id: "6731de76-real".to_string(), ..placeholder.clone() };
+        assert!(require_configured_client(OauthProvider::Microsoft, &real).is_ok());
+        let j = body_json(&resp);
+        assert_eq!(j["error"]["code"], "not_configured");
+        assert!(j["error"]["hint"].as_str().unwrap().contains("oauth-config set --provider microsoft"));
+        let bad = serde_json::json!({
+            "address": "a@contoso.example", "provider": "microsoft", "workspace": ws,
+            "features": "mail,contacts",
+        });
+        assert_eq!(handle_link_oauth_start(bad.to_string().as_bytes()).status, "400 Bad Request");
+        let cal_only = serde_json::json!({
+            "address": "a@contoso.example", "provider": "microsoft", "workspace": ws,
+            "features": ["calendar"],
+        });
+        let r = handle_link_oauth_start(cal_only.to_string().as_bytes());
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        assert!(r.body.contains("mail feature"), "{}", r.body);
+        cleanup(&pid);
     }
 
     #[test]
@@ -1389,13 +1998,12 @@ mod tests {
         let store = MemStore::default();
         let mut now_fn = || 1_000i64;
         let mut sleep_fn = |_d: Duration| {};
+        let plan = plan_new(OauthProvider::Microsoft, &project, &address, Features::MAIL);
         run_device_flow(
             &store,
             &http,
-            OauthProvider::Microsoft,
+            &plan,
             &link_id,
-            &project,
-            &address,
             "DC",
             5,
             900,
@@ -1438,19 +2046,21 @@ mod tests {
         });
 
         // Token exchange reply (loopback_exchange POSTs the token endpoint).
-        let http = MockHttp::new(&[(
-            200,
-            r#"{"access_token":"GAT-secret","refresh_token":"GRT-secret","token_type":"Bearer","expires_in":3599,"scope":"https://mail.google.com/"}"#,
-        )]);
+        let reply = token_body(
+            "GAT-secret",
+            "GRT-secret",
+            "https://mail.google.com/ openid https://www.googleapis.com/auth/userinfo.email",
+            serde_json::json!({ "email": address, "email_verified": true }),
+        );
+        let http = MockHttp::new(&[(200, reply.as_str())]);
         let store = MemStore::default();
         let mut now_fn = || 2_000i64;
+        let plan = plan_new(OauthProvider::Gmail, &project, &address, Features::MAIL);
         run_loopback_flow(
             &store,
             &http,
-            OauthProvider::Gmail,
+            &plan,
             &link_id,
-            &project,
-            &address,
             listener,
             &redirect_uri,
             &state,
@@ -1461,8 +2071,11 @@ mod tests {
         let served = client.join().unwrap();
         assert!(served.contains("close this tab"), "close-tab page served: {served}");
 
-        // PKCE (M2): the flow's verifier round-tripped into the token POST.
+        // PKCE (M2): the flow's verifier round-tripped into the token POST,
+        // with the plan's client id + secret (resolved once at start).
         assert_eq!(http.field(0, "code_verifier").as_deref(), Some("PKCE-VERIFIER-abc"));
+        assert_eq!(http.field(0, "client_id").as_deref(), Some("test-client-id"));
+        assert_eq!(http.field(0, "client_secret").as_deref(), Some("test-secret"));
 
         let params: HashMap<String, String> =
             HashMap::from([("linkId".to_string(), link_id)]);
@@ -1518,19 +2131,21 @@ mod tests {
         // bad-state connection had reached the exchange, the genuine one
         // would panic on the empty queue — so a single reply PROVES only the
         // state-valid callback exchanged.
-        let http = MockHttp::new(&[(
-            200,
-            r#"{"access_token":"GAT","refresh_token":"GRT","token_type":"Bearer","expires_in":3599,"scope":"https://mail.google.com/"}"#,
-        )]);
+        let reply = token_body(
+            "GAT",
+            "GRT",
+            "https://mail.google.com/",
+            serde_json::json!({ "email": address }),
+        );
+        let http = MockHttp::new(&[(200, reply.as_str())]);
         let store = MemStore::default();
         let mut now_fn = || 4_000i64;
+        let plan = plan_new(OauthProvider::Gmail, &project, &address, Features::MAIL);
         run_loopback_flow(
             &store,
             &http,
-            OauthProvider::Gmail,
+            &plan,
             &link_id,
-            &project,
-            &address,
             listener,
             &redirect_uri,
             &good_state,
@@ -1579,13 +2194,12 @@ mod tests {
         let http = MockHttp::new(&[]);
         let store = MemStore::default();
         let mut now_fn = || 3_000i64;
+        let plan = plan_new(OauthProvider::Gmail, &project, &address, Features::MAIL);
         run_loopback_flow(
             &store,
             &http,
-            OauthProvider::Gmail,
+            &plan,
             &link_id,
-            &project,
-            &address,
             listener,
             &redirect_uri,
             "EXPECTED-state",

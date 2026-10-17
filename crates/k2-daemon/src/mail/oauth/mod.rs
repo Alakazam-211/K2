@@ -199,7 +199,10 @@ pub static GMAIL: ProviderConfig = ProviderConfig {
     device_auth_url: Some("https://oauth2.googleapis.com/device/code"),
     token_url: "https://oauth2.googleapis.com/token",
     revoke_url: Some("https://oauth2.googleapis.com/revoke"),
-    scope: "https://mail.google.com/",
+    // MCS1: the `mail` feature set ([`scope_for`] with mail only) —
+    // identity (`openid email`, for the account check) + the IMAP/SMTP
+    // XOAUTH2 scope. `scope_for` is the source; a test pins them equal.
+    scope: "openid email https://mail.google.com/",
     extra_auth_params: &[("access_type", "offline"), ("prompt", "consent")],
     default_flow: FlowKind::Loopback,
     // Injected at build time (env `K2_GMAIL_CLIENT_ID`); `REPLACE_ME` fallback.
@@ -223,7 +226,12 @@ pub static MICROSOFT: ProviderConfig = ProviderConfig {
     // token (revocation is tenant/consent management) — unlink wipes the
     // vault entry, which is the effective local revoke.
     revoke_url: None,
-    scope: "https://graph.microsoft.com/Mail.ReadWrite offline_access",
+    // MCS1: the `mail` feature set ([`scope_for`] with mail only) —
+    // identity (`openid profile email offline_access User.Read`, for the
+    // account check and the refresh token) + Graph mail read/write and
+    // send. `scope_for` is the source; a test pins them equal.
+    scope: "openid profile email offline_access https://graph.microsoft.com/User.Read \
+            https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send",
     extra_auth_params: &[],
     default_flow: FlowKind::DeviceCode,
     // Injected at build time (env `K2_MICROSOFT_CLIENT_ID`); `REPLACE_ME`
@@ -307,6 +315,15 @@ pub(crate) mod test_byo {
     thread_local! {
         static IDS: RefCell<HashMap<&'static str, String>> = RefCell::new(HashMap::new());
         static SECRETS: RefCell<HashMap<&'static str, String>> = RefCell::new(HashMap::new());
+        static TENANT: RefCell<String> = const { RefCell::new(String::new()) };
+    }
+
+    /// MCS1: the thread-local Microsoft tenant fake (empty = `common`).
+    pub fn set_tenant(t: &str) {
+        TENANT.with(|v| *v.borrow_mut() = t.to_string());
+    }
+    pub fn tenant() -> String {
+        TENANT.with(|v| v.borrow().clone())
     }
 
     pub fn set_client_id(p: OauthProvider, v: &str) {
@@ -318,6 +335,7 @@ pub(crate) mod test_byo {
     pub fn clear() {
         IDS.with(|m| m.borrow_mut().clear());
         SECRETS.with(|m| m.borrow_mut().clear());
+        TENANT.with(|v| v.borrow_mut().clear());
     }
     pub fn client_id(p: OauthProvider) -> Option<String> {
         IDS.with(|m| m.borrow().get(p.as_str()).cloned())
@@ -346,6 +364,10 @@ pub struct Tokens {
     /// Lifetime in seconds from issuance (used to compute an absolute
     /// `token_expires_at`).
     pub expires_in: i64,
+    /// The OpenID Connect id_token from the token endpoint (MCS1 account
+    /// check reads its claims). Never vaulted, never logged; `None` on a
+    /// refresh and on bundles loaded from the vault.
+    pub id_token: Option<String>,
 }
 
 impl std::fmt::Debug for Tokens {
@@ -356,6 +378,7 @@ impl std::fmt::Debug for Tokens {
             .field("scope", &self.scope)
             .field("token_type", &self.token_type)
             .field("expires_in", &self.expires_in)
+            .field("id_token", &self.id_token.as_ref().map(|_| "<redacted>"))
             .finish()
     }
 }
@@ -370,6 +393,10 @@ pub struct FreshAccess {
     /// True if this call performed a refresh (so the caller knows to
     /// write `token_expires_at` back to the row).
     pub refreshed: bool,
+    /// The granted scope string of the (possibly refreshed) bundle, when
+    /// the provider reported one. Non-secret: the caller mirrors it into
+    /// `granted_scopes` (MCS1 backfill for rows linked before 0188).
+    pub scope: Option<String>,
 }
 
 impl std::fmt::Debug for FreshAccess {
@@ -378,6 +405,7 @@ impl std::fmt::Debug for FreshAccess {
             .field("access_token", &"<redacted>")
             .field("token_expires_at", &self.token_expires_at)
             .field("refreshed", &self.refreshed)
+            .field("scope", &self.scope)
             .finish()
     }
 }
@@ -447,6 +475,14 @@ pub struct HttpResponse {
 /// body regardless of status.
 pub trait HttpClient: Send + Sync {
     fn post_form(&self, url: &str, form: &[(&str, &str)]) -> Result<HttpResponse, OauthError>;
+
+    /// One Bearer-authed JSON GET (MCS1 account check: Graph `/me`, the
+    /// Gmail profile). The token rides only the Authorization header. The
+    /// default refuses, so a test double that never expects a GET fails
+    /// loudly when one happens.
+    fn get_bearer(&self, url: &str, _bearer: &str) -> Result<HttpResponse, OauthError> {
+        Err(OauthError::Config(format!("this HTTP client cannot GET {url}")))
+    }
 }
 
 /// `application/x-www-form-urlencoded` value encoding: unreserved
@@ -508,6 +544,23 @@ impl HttpClient for ReqwestHttp {
         let body = resp.text().unwrap_or_default();
         Ok(HttpResponse { status, body })
     }
+
+    fn get_bearer(&self, url: &str, bearer: &str) -> Result<HttpResponse, OauthError> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(self.timeout)
+            .build()
+            .map_err(|e| OauthError::Http(format!("http client build: {e}")))?;
+        let resp = client
+            .get(url)
+            .bearer_auth(bearer)
+            .header("Accept", "application/json")
+            .send()
+            // reqwest's error carries the URL/host, never the header.
+            .map_err(|e| OauthError::Http(format!("GET {url}: {e}")))?;
+        let status = resp.status().as_u16();
+        let body = resp.text().unwrap_or_default();
+        Ok(HttpResponse { status, body })
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -564,6 +617,7 @@ fn tokens_from_value(v: &serde_json::Value) -> Result<Tokens, OauthError> {
         // A token with no lifetime is treated as already-expiring so the
         // next use refreshes rather than trusting it forever.
         expires_in: as_i64(v, "expires_in").unwrap_or(0),
+        id_token: v.get("id_token").and_then(|s| s.as_str()).map(str::to_string),
     })
 }
 
@@ -616,12 +670,23 @@ pub fn device_start(
     client_id_override: Option<&str>,
     http: &dyn HttpClient,
 ) -> Result<DeviceStart, OauthError> {
+    device_start_scoped(provider, client_id_override, provider.config().scope, http)
+}
+
+/// [`device_start`] with an explicit scope string (MCS1: the scope set is
+/// a function of the features asked for, [`scope_for`]).
+pub fn device_start_scoped(
+    provider: OauthProvider,
+    client_id_override: Option<&str>,
+    scope: &str,
+    http: &dyn HttpClient,
+) -> Result<DeviceStart, OauthError> {
     let cfg = provider.config();
-    let url = cfg.device_auth_url.ok_or_else(|| {
+    let url = device_auth_url(provider).ok_or_else(|| {
         OauthError::Config(format!("{} has no device-authorization endpoint", cfg.name))
     })?;
     let cid = client_id(provider, client_id_override);
-    let resp = http.post_form(url, &[("client_id", cid.as_str()), ("scope", cfg.scope)])?;
+    let resp = http.post_form(&url, &[("client_id", cid.as_str()), ("scope", scope)])?;
     let v = parse_json(resp.status, &resp.body)?;
     if let Some(e) = provider_error(&v) {
         return Err(e);
@@ -678,10 +743,9 @@ pub fn device_poll(
     client_id_override: Option<&str>,
     http: &dyn HttpClient,
 ) -> Result<Poll, OauthError> {
-    let cfg = provider.config();
     let cid = client_id(provider, client_id_override);
     let resp = http.post_form(
-        cfg.token_url,
+        &token_url(provider),
         &[
             ("client_id", cid.as_str()),
             ("device_code", device_code),
@@ -791,22 +855,45 @@ pub fn loopback_build_url(
     state: &str,
     code_challenge: &str,
 ) -> Result<String, OauthError> {
+    loopback_build_url_scoped(
+        provider,
+        client_id_override,
+        redirect_uri,
+        state,
+        code_challenge,
+        provider.config().scope,
+        &[],
+    )
+}
+
+/// [`loopback_build_url`] with an explicit scope string and extra
+/// query params (MCS1: `login_hint`, and `include_granted_scopes=true`
+/// for an incremental re-consent). `extra` never carries a secret.
+pub fn loopback_build_url_scoped(
+    provider: OauthProvider,
+    client_id_override: Option<&str>,
+    redirect_uri: &str,
+    state: &str,
+    code_challenge: &str,
+    scope: &str,
+    extra: &[(&str, &str)],
+) -> Result<String, OauthError> {
     let cfg = provider.config();
-    let auth = cfg
-        .auth_url
+    let auth = auth_url(provider)
         .ok_or_else(|| OauthError::Config(format!("{} has no authorization endpoint", cfg.name)))?;
     let cid = client_id(provider, client_id_override);
     let mut params: Vec<(&str, &str)> = vec![
         ("client_id", cid.as_str()),
         ("redirect_uri", redirect_uri),
         ("response_type", "code"),
-        ("scope", cfg.scope),
+        ("scope", scope),
         ("state", state),
         // PKCE S256 (M2): binds the issued code to our per-flow verifier.
         ("code_challenge", code_challenge),
         ("code_challenge_method", "S256"),
     ];
     params.extend(cfg.extra_auth_params.iter().copied());
+    params.extend(extra.iter().copied());
     Ok(format!("{auth}?{}", encode_form(&params)))
 }
 
@@ -853,7 +940,6 @@ pub fn loopback_exchange(
     client_secret_override: Option<&str>,
     http: &dyn HttpClient,
 ) -> Result<Tokens, OauthError> {
-    let cfg = provider.config();
     let cid = client_id(provider, client_id_override);
     // Resolved once, hoisted so the borrow outlives `form` (it is a
     // token-grade owned String; never logged). `None` for Microsoft.
@@ -873,7 +959,7 @@ pub fn loopback_exchange(
     if let Some(secret) = secret.as_deref() {
         form.push(("client_secret", secret));
     }
-    let resp = http.post_form(cfg.token_url, &form)?;
+    let resp = http.post_form(&token_url(provider), &form)?;
     tokens_or_error(&resp)
 }
 
@@ -906,7 +992,6 @@ pub fn refresh(
     client_secret_override: Option<&str>,
     http: &dyn HttpClient,
 ) -> Result<Tokens, OauthError> {
-    let cfg = provider.config();
     let cid = client_id(provider, client_id_override);
     // Hoisted so the owned secret String outlives `form` (never logged).
     let secret = client_secret(provider, client_secret_override);
@@ -921,7 +1006,7 @@ pub fn refresh(
     if let Some(secret) = secret.as_deref() {
         form.push(("client_secret", secret));
     }
-    let resp = http.post_form(cfg.token_url, &form)?;
+    let resp = http.post_form(&token_url(provider), &form)?;
     tokens_or_error(&resp)
 }
 
@@ -935,16 +1020,51 @@ pub fn revoke(
     token: &str,
     http: &dyn HttpClient,
 ) -> Result<(), OauthError> {
-    let cfg = provider.config();
-    let Some(url) = cfg.revoke_url else {
+    let Some(url) = revoke_url(provider) else {
         return Ok(());
     };
     // Google's revoke takes the token as `token=<value>`. Best-effort:
     // any reply (2xx or not) is acceptable; a transport error is
     // swallowed so unlink always proceeds.
-    match http.post_form(url, &[("token", token)]) {
+    match http.post_form(&url, &[("token", token)]) {
         Ok(_) => Ok(()),
         Err(_) => Ok(()),
+    }
+}
+
+/// What a revoke at the provider did (MCS1 / MCS-A11: unlink reports it,
+/// and a failure never blocks the unlink).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RevokeOutcome {
+    /// The provider accepted the revoke (or the token was already invalid).
+    Revoked,
+    /// The provider has no single-token revoke (Microsoft).
+    Unsupported,
+    /// The revoke call failed; the reason carries no token.
+    Failed(String),
+}
+
+/// Revoke `token` at the provider and REPORT the outcome (unlike
+/// [`revoke`], which swallows it). Google answers 200 on success and 400
+/// `invalid_token` when the token is already dead — both mean nothing is
+/// left to revoke. The token never rides the returned reason.
+pub fn revoke_report(provider: OauthProvider, token: &str, http: &dyn HttpClient) -> RevokeOutcome {
+    let Some(url) = revoke_url(provider) else {
+        return RevokeOutcome::Unsupported;
+    };
+    match http.post_form(&url, &[("token", token)]) {
+        Ok(resp) if (200..300).contains(&resp.status) => RevokeOutcome::Revoked,
+        Ok(resp) => {
+            let code = serde_json::from_str::<serde_json::Value>(&resp.body)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string));
+            match code.as_deref() {
+                Some("invalid_token") => RevokeOutcome::Revoked,
+                Some(c) => RevokeOutcome::Failed(format!("HTTP {}: {c}", resp.status)),
+                None => RevokeOutcome::Failed(format!("HTTP {}", resp.status)),
+            }
+        }
+        Err(e) => RevokeOutcome::Failed(e.to_string()),
     }
 }
 
@@ -1037,6 +1157,7 @@ fn load_tokens_with_expiry(
         // The vault stores no lifetime; the row's `token_expires_at` is
         // the source of truth. Treat a loaded token as expiry-unknown.
         expires_in: 0,
+        id_token: None,
     };
     let vaulted_expiry = as_i64(&v, "token_expires_at");
     Ok((tokens, vaulted_expiry))
@@ -1116,6 +1237,7 @@ pub fn access_token_for(
                 access_token: stored.access_token,
                 token_expires_at: exp,
                 refreshed: false,
+                scope: stored.scope,
             });
         }
     }
@@ -1139,6 +1261,7 @@ pub fn access_token_for(
             // fall back to the caller's expiry only defensively.
             token_expires_at: vaulted_expiry.or(token_expires_at).unwrap_or(now),
             refreshed: true,
+            scope: current.scope,
         });
     }
 
@@ -1165,14 +1288,662 @@ pub fn access_token_for(
         scope: fresh.scope.or(current.scope),
         token_type: fresh.token_type,
         expires_in: fresh.expires_in,
+        id_token: None,
     };
     let new_expiry = store_tokens(secrets, row_id, &merged, now)?;
     Ok(FreshAccess {
         access_token: merged.access_token,
         token_expires_at: new_expiry,
         refreshed: true,
+        scope: merged.scope,
     })
     // `_guard` drops here → the per-inbox lock is released.
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MCS1 — endpoints (tenant + test fakes), scope sets per feature, the
+// minting client, the account check, link-error teaching
+// ─────────────────────────────────────────────────────────────────────
+
+/// The base URL of the provider fakes (`tests/fakes/oauth-providers`),
+/// compiled ONLY into a `provider-fakes` build (PRD §8.2 / §9.10): a
+/// release build has no override, so nothing that can set env can
+/// redirect tokens. `K2_PROVIDER_FAKES_URL=http://127.0.0.1:<port>`.
+fn fake_base() -> Option<String> {
+    #[cfg(feature = "provider-fakes")]
+    {
+        std::env::var("K2_PROVIDER_FAKES_URL")
+            .ok()
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+    }
+    #[cfg(not(feature = "provider-fakes"))]
+    {
+        None
+    }
+}
+
+/// Microsoft's consumer (personal account) tenant id: a `tid` equal to it
+/// marks an outlook.com / hotmail / live account.
+pub const MS_CONSUMER_TENANT: &str = "9188040d-6c67-4c5b-b112-36a304b66dad";
+
+/// Validate + normalize a Microsoft authority (`mailOauthMicrosoftTenant`).
+/// Empty → `common`. Accepts `common`, `organizations`, `consumers`, a
+/// tenant GUID, or a tenant domain (`contoso.onmicrosoft.com`). Anything
+/// else is a usage error naming the accepted shapes.
+pub fn validate_tenant(raw: &str) -> Result<String, String> {
+    let t = raw.trim().to_ascii_lowercase();
+    if t.is_empty() {
+        return Ok("common".to_string());
+    }
+    if matches!(t.as_str(), "common" | "organizations" | "consumers") {
+        return Ok(t);
+    }
+    let is_guid = {
+        let parts: Vec<&str> = t.split('-').collect();
+        parts.len() == 5
+            && [8usize, 4, 4, 4, 12]
+                .iter()
+                .zip(parts.iter())
+                .all(|(n, p)| p.len() == *n && p.chars().all(|c| c.is_ascii_hexdigit()))
+    };
+    let is_domain = t.len() <= 253
+        && t.contains('.')
+        && !t.starts_with('.')
+        && !t.ends_with('.')
+        && !t.contains("..")
+        && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    if is_guid || is_domain {
+        Ok(t)
+    } else {
+        Err(format!(
+            "invalid Microsoft tenant '{}' — use common, organizations, consumers, a tenant id \
+             (GUID) or a tenant domain such as contoso.onmicrosoft.com",
+            raw.trim()
+        ))
+    }
+}
+
+/// The box's Microsoft authority (the `mailOauthMicrosoftTenant` setting;
+/// `common` when unset or unreadable).
+pub fn microsoft_tenant() -> String {
+    #[cfg(not(test))]
+    let raw = k2_core::app_settings::load().mail_oauth_microsoft_tenant;
+    #[cfg(test)]
+    let raw = test_byo::tenant();
+    validate_tenant(&raw).unwrap_or_else(|_| "common".to_string())
+}
+
+fn ms_login_base() -> String {
+    match fake_base() {
+        Some(b) => format!("{b}/ms/login"),
+        None => "https://login.microsoftonline.com".to_string(),
+    }
+}
+
+/// Authorization endpoint (loopback flow).
+pub fn auth_url(provider: OauthProvider) -> Option<String> {
+    match provider {
+        OauthProvider::Gmail => Some(match fake_base() {
+            Some(b) => format!("{b}/google/auth"),
+            None => GMAIL.auth_url?.to_string(),
+        }),
+        OauthProvider::Microsoft => Some(format!(
+            "{}/{}/oauth2/v2.0/authorize",
+            ms_login_base(),
+            microsoft_tenant()
+        )),
+    }
+}
+
+/// Device-authorization endpoint (device flow).
+pub fn device_auth_url(provider: OauthProvider) -> Option<String> {
+    match provider {
+        OauthProvider::Gmail => Some(match fake_base() {
+            Some(b) => format!("{b}/google/device/code"),
+            None => GMAIL.device_auth_url?.to_string(),
+        }),
+        OauthProvider::Microsoft => Some(format!(
+            "{}/{}/oauth2/v2.0/devicecode",
+            ms_login_base(),
+            microsoft_tenant()
+        )),
+    }
+}
+
+/// Token endpoint (device poll, loopback exchange, refresh).
+pub fn token_url(provider: OauthProvider) -> String {
+    match provider {
+        OauthProvider::Gmail => match fake_base() {
+            Some(b) => format!("{b}/google/token"),
+            None => GMAIL.token_url.to_string(),
+        },
+        OauthProvider::Microsoft => {
+            format!("{}/{}/oauth2/v2.0/token", ms_login_base(), microsoft_tenant())
+        }
+    }
+}
+
+/// Revoke endpoint (`None` = the provider has no single-token revoke).
+pub fn revoke_url(provider: OauthProvider) -> Option<String> {
+    match provider {
+        OauthProvider::Gmail => Some(match fake_base() {
+            Some(b) => format!("{b}/google/revoke"),
+            None => GMAIL.revoke_url?.to_string(),
+        }),
+        OauthProvider::Microsoft => None,
+    }
+}
+
+/// The Microsoft Graph v1.0 base (the Graph mail backend and the `/me`
+/// account check).
+pub fn graph_base() -> String {
+    match fake_base() {
+        Some(b) => format!("{b}/ms/graph/v1.0"),
+        None => "https://graph.microsoft.com/v1.0".to_string(),
+    }
+}
+
+/// The Gmail profile endpoint (account check fallback; the
+/// `https://mail.google.com/` scope covers it, MCS-A10).
+pub fn gmail_profile_url() -> String {
+    match fake_base() {
+        Some(b) => format!("{b}/google/gmail/v1/users/me/profile"),
+        None => "https://gmail.googleapis.com/gmail/v1/users/me/profile".to_string(),
+    }
+}
+
+/// The admin-consent URL a tenant admin opens to approve the app for the
+/// whole tenant (`admin_consent_required`). A specific configured tenant
+/// is used as-is; `common`/`consumers` fall back to `organizations`.
+pub fn admin_consent_url(client_id: &str) -> String {
+    let t = microsoft_tenant();
+    let authority = match t.as_str() {
+        "common" | "consumers" => "organizations".to_string(),
+        other => other.to_string(),
+    };
+    format!(
+        "https://login.microsoftonline.com/{authority}/adminconsent?client_id={}",
+        form_encode(client_id)
+    )
+}
+
+// ── Scope sets per feature (PRD §3.2) ────────────────────────────────────
+
+/// What a link is consented for. A link always carries the identity
+/// scopes; `mail` and `calendar` add their sets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Features {
+    pub mail: bool,
+    pub calendar: bool,
+}
+
+impl Features {
+    pub const MAIL: Features = Features { mail: true, calendar: false };
+
+    /// Parse `mail`, `calendar`, `mail,calendar` (commas or spaces, any
+    /// order, case-insensitive). Empty → `None` (the caller picks the
+    /// default). Unknown words are a usage error.
+    pub fn parse(raw: &str) -> Result<Option<Features>, String> {
+        let mut f = Features::default();
+        let mut any = false;
+        for w in raw.split(|c: char| c == ',' || c.is_whitespace()).filter(|w| !w.is_empty()) {
+            match w.to_ascii_lowercase().as_str() {
+                "mail" => f.mail = true,
+                "calendar" | "calendars" => f.calendar = true,
+                other => {
+                    return Err(format!(
+                        "unknown feature '{other}' — use mail, calendar or mail,calendar"
+                    ))
+                }
+            }
+            any = true;
+        }
+        Ok(if any { Some(f) } else { None })
+    }
+
+    /// The stored spelling (`features` column): `mail`, `calendar` or
+    /// `mail,calendar`.
+    pub fn as_db(self) -> String {
+        match (self.mail, self.calendar) {
+            (true, true) => "mail,calendar".to_string(),
+            (false, true) => "calendar".to_string(),
+            _ => "mail".to_string(),
+        }
+    }
+
+    pub fn union(self, other: Features) -> Features {
+        Features { mail: self.mail || other.mail, calendar: self.calendar || other.calendar }
+    }
+}
+
+const GOOGLE_IDENTITY: &[&str] = &["openid", "email"];
+const GOOGLE_MAIL: &[&str] = &["https://mail.google.com/"];
+/// Sensitive (not restricted) Calendar API scopes. Re-checked against
+/// Google's scope list when Google calendars are built (MCS-A9).
+const GOOGLE_CALENDAR: &[&str] = &[
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+    "https://www.googleapis.com/auth/calendar.freebusy",
+];
+const MS_IDENTITY: &[&str] =
+    &["openid", "profile", "email", "offline_access", "https://graph.microsoft.com/User.Read"];
+const MS_MAIL: &[&str] =
+    &["https://graph.microsoft.com/Mail.ReadWrite", "https://graph.microsoft.com/Mail.Send"];
+const MS_CALENDAR: &[&str] = &["https://graph.microsoft.com/Calendars.ReadWrite"];
+
+/// The space-separated scope string for `features` (PRD §3.2 table).
+/// Both providers return ONE refresh token for the whole set, so a row
+/// keeps one vaulted bundle whatever it was consented for.
+pub fn scope_for(provider: OauthProvider, features: Features) -> String {
+    let (identity, mail, calendar) = match provider {
+        OauthProvider::Gmail => (GOOGLE_IDENTITY, GOOGLE_MAIL, GOOGLE_CALENDAR),
+        OauthProvider::Microsoft => (MS_IDENTITY, MS_MAIL, MS_CALENDAR),
+    };
+    let mut out: Vec<&str> = identity.to_vec();
+    if features.mail {
+        out.extend_from_slice(mail);
+    }
+    if features.calendar {
+        out.extend_from_slice(calendar);
+    }
+    out.join(" ")
+}
+
+/// Does a granted scope string carry `want`? Microsoft answers either the
+/// bare (`Mail.Send`) or the resource-qualified
+/// (`https://graph.microsoft.com/Mail.Send`) spelling; both match,
+/// case-insensitively.
+pub fn scope_granted(granted: &str, want: &str) -> bool {
+    const GRAPH: &str = "https://graph.microsoft.com/";
+    let norm = |s: &str| {
+        let lower = s.to_ascii_lowercase();
+        lower.strip_prefix(GRAPH).map(str::to_string).unwrap_or(lower)
+    };
+    let want = norm(want);
+    granted.split_whitespace().any(|g| norm(g) == want)
+}
+
+/// The scopes K2 itself would need for each feature, checked against a
+/// granted string: the features the grant actually covers.
+pub fn features_granted(provider: OauthProvider, granted: &str) -> Features {
+    let all = |set: &[&str]| set.iter().all(|s| scope_granted(granted, s));
+    match provider {
+        OauthProvider::Gmail => Features {
+            mail: all(GOOGLE_MAIL),
+            calendar: all(&GOOGLE_CALENDAR[..1]),
+        },
+        OauthProvider::Microsoft => Features {
+            mail: scope_granted(granted, "Mail.ReadWrite"),
+            calendar: all(MS_CALENDAR),
+        },
+    }
+}
+
+// ── The minting client (PRD §3.2: refresh by the issuing client) ─────────
+
+/// Which client a link was minted with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientSource {
+    /// K2's built-in (build-time baked) app.
+    Baked,
+    /// The owner's own app (`k2 mail oauth-config set`).
+    Byo,
+}
+
+impl ClientSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClientSource::Baked => "baked",
+            ClientSource::Byo => "byo",
+        }
+    }
+}
+
+/// A resolved OAuth client: the id, the (Google-only) secret and where it
+/// came from. `Debug` redacts the secret.
+#[derive(Clone)]
+pub struct ClientChoice {
+    pub id: String,
+    pub secret: Option<String>,
+    pub source: ClientSource,
+}
+
+impl std::fmt::Debug for ClientChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientChoice")
+            .field("id", &self.id)
+            .field("secret", &self.secret.as_ref().map(|_| "<redacted>"))
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+impl ClientChoice {
+    /// The non-secret fingerprint stamped on the row (`oauth_client_hash`).
+    pub fn hash(&self) -> String {
+        client_hash(&self.id)
+    }
+}
+
+/// sha256(client id), first 16 hex chars. A client id is public; the hash
+/// only detects "the BYO app was swapped since this row was minted".
+pub fn client_hash(id: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(id.trim().as_bytes());
+    h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Is this client id still the public-source placeholder (no real app
+/// was baked in and none is configured)?
+pub fn is_placeholder_client_id(id: &str) -> bool {
+    id.trim().is_empty() || id.trim().starts_with("REPLACE_ME")
+}
+
+/// K2's built-in client for `provider`, ignoring any BYO override.
+pub fn baked_client(provider: OauthProvider) -> ClientChoice {
+    let cfg = provider.config();
+    ClientChoice {
+        id: cfg.client_id_placeholder.to_string(),
+        secret: cfg.client_secret_placeholder.map(str::to_string),
+        source: ClientSource::Baked,
+    }
+}
+
+/// The client a NEW link uses right now: the owner's stored BYO app when
+/// set, else the baked one. Resolution matches [`client_id`] /
+/// [`client_secret`] exactly (a BYO Google id without a BYO secret keeps
+/// the baked secret, as before).
+pub fn resolve_client(provider: OauthProvider) -> ClientChoice {
+    match stored_client_id(provider) {
+        Some(id) => ClientChoice {
+            id,
+            secret: client_secret(provider, None),
+            source: ClientSource::Byo,
+        },
+        None => baked_client(provider),
+    }
+}
+
+/// The client to refresh a row with: the one stamped on the row at link
+/// time. `None` (a row from before 0188) keeps today's resolution. A
+/// `byo` row whose app was removed or swapped since fails loud with the
+/// fix — never a silent refresh against a different app.
+pub fn issuing_client(
+    provider: OauthProvider,
+    stamped: Option<&str>,
+    stamped_hash: Option<&str>,
+) -> Result<ClientChoice, String> {
+    match stamped {
+        None => Ok(resolve_client(provider)),
+        Some("baked") => Ok(baked_client(provider)),
+        Some("byo") => {
+            let Some(id) = stored_client_id(provider) else {
+                return Err(format!(
+                    "this inbox was linked with your own {} OAuth app, which is no longer \
+                     configured — set it again with 'k2 mail oauth-config set --provider {} …', \
+                     or relink with 'k2 mail link upgrade <address>'",
+                    provider.as_str(),
+                    provider.as_str()
+                ));
+            };
+            if let Some(h) = stamped_hash.filter(|h| !h.is_empty()) {
+                if client_hash(&id) != h {
+                    return Err(format!(
+                        "this inbox was linked with a different {} OAuth app than the one \
+                         configured now — relink it with 'k2 mail link upgrade <address>' \
+                         (refresh never moves an inbox to another app)",
+                        provider.as_str()
+                    ));
+                }
+            }
+            Ok(ClientChoice {
+                id,
+                secret: client_secret(provider, None),
+                source: ClientSource::Byo,
+            })
+        }
+        Some(other) => Err(format!("unrecognized oauth_client '{other}' on the inbox row")),
+    }
+}
+
+// ── Account check (PRD §3.2) ─────────────────────────────────────────────
+
+/// Who signed in, as far as the id_token (and `/me` / the Gmail profile)
+/// tell. `identities` are lower-cased addresses; never a token.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AccountInfo {
+    pub identities: Vec<String>,
+    /// Microsoft `tid` / Google Workspace `hd`.
+    pub tenant: Option<String>,
+    /// `personal` | `work` (Microsoft), `consumer` | `workspace` (Google).
+    pub kind: Option<String>,
+}
+
+impl AccountInfo {
+    fn push(&mut self, s: Option<&str>) {
+        if let Some(v) = s.map(str::trim).filter(|v| v.contains('@')) {
+            let v = v.to_ascii_lowercase();
+            if !self.identities.contains(&v) {
+                self.identities.push(v);
+            }
+        }
+    }
+
+    /// Does the signed-in account equal `address` (case-folded)?
+    pub fn matches(&self, address: &str) -> bool {
+        let a = address.trim().to_ascii_lowercase();
+        self.identities.iter().any(|i| *i == a)
+    }
+}
+
+/// The claims of an id_token (the JWT payload), unverified. It came
+/// straight from the provider's token endpoint over TLS in this same
+/// exchange, which OIDC Core §3.1.3.7 allows in place of a signature
+/// check. `None` for a malformed token.
+pub fn id_token_claims(id_token: &str) -> Option<serde_json::Value> {
+    let payload = id_token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Read who signed in from the id_token claims: Google `email`
+/// (+`email_verified`), `hd`; Microsoft `email`, `preferred_username`,
+/// `upn`, `tid`.
+pub fn account_from_claims(provider: OauthProvider, claims: &serde_json::Value) -> AccountInfo {
+    let mut info = AccountInfo::default();
+    let s = |k: &str| claims.get(k).and_then(|v| v.as_str());
+    match provider {
+        OauthProvider::Gmail => {
+            let verified = claims.get("email_verified").and_then(|v| v.as_bool()) != Some(false);
+            if verified {
+                info.push(s("email"));
+            }
+            match s("hd").map(str::trim).filter(|h| !h.is_empty()) {
+                Some(hd) => {
+                    info.tenant = Some(hd.to_ascii_lowercase());
+                    info.kind = Some("workspace".to_string());
+                }
+                None => info.kind = Some("consumer".to_string()),
+            }
+        }
+        OauthProvider::Microsoft => {
+            info.push(s("email"));
+            info.push(s("preferred_username"));
+            info.push(s("upn"));
+            if let Some(tid) = s("tid").map(str::trim).filter(|t| !t.is_empty()) {
+                let tid = tid.to_ascii_lowercase();
+                info.kind = Some(
+                    if tid == MS_CONSUMER_TENANT { "personal" } else { "work" }.to_string(),
+                );
+                info.tenant = Some(tid);
+            }
+        }
+    }
+    info
+}
+
+/// The account check failed: the address typed is not the account that
+/// consented. `signed_in` is what the provider reported (for the hint).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountMismatch {
+    pub signed_in: Option<String>,
+}
+
+/// Check that the account that just consented is `address` (PRD §3.2).
+/// The id_token claims answer first; when they don't match (a Microsoft
+/// UPN that differs from the mailbox address, or no id_token), Graph
+/// `/me` (mail, UPN, proxy addresses) or the Gmail profile is asked with
+/// the new access token. Nothing is stored by this function.
+pub fn check_account(
+    provider: OauthProvider,
+    tokens: &Tokens,
+    address: &str,
+    http: &dyn HttpClient,
+) -> Result<AccountInfo, AccountMismatch> {
+    let mut info = tokens
+        .id_token
+        .as_deref()
+        .and_then(id_token_claims)
+        .map(|c| account_from_claims(provider, &c))
+        .unwrap_or_default();
+    if info.matches(address) {
+        return Ok(info);
+    }
+    match provider {
+        OauthProvider::Microsoft => {
+            let url = format!(
+                "{}/me?$select=mail,userPrincipalName,proxyAddresses,otherMails",
+                graph_base()
+            );
+            if let Ok(resp) = http.get_bearer(&url, &tokens.access_token) {
+                if (200..300).contains(&resp.status) {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp.body) {
+                        info.push(v.get("mail").and_then(|x| x.as_str()));
+                        info.push(v.get("userPrincipalName").and_then(|x| x.as_str()));
+                        for key in ["proxyAddresses", "otherMails"] {
+                            for a in v.get(key).and_then(|x| x.as_array()).into_iter().flatten() {
+                                // proxyAddresses read `SMTP:primary@x` / `smtp:alias@x`.
+                                let raw = a.as_str().unwrap_or("");
+                                let addr = raw
+                                    .strip_prefix("SMTP:")
+                                    .or_else(|| raw.strip_prefix("smtp:"))
+                                    .unwrap_or(raw);
+                                info.push(Some(addr));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        OauthProvider::Gmail => {
+            if let Ok(resp) = http.get_bearer(&gmail_profile_url(), &tokens.access_token) {
+                if (200..300).contains(&resp.status) {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp.body) {
+                        info.push(v.get("emailAddress").and_then(|x| x.as_str()));
+                    }
+                }
+            }
+        }
+    }
+    if info.matches(address) {
+        Ok(info)
+    } else {
+        Err(AccountMismatch { signed_in: info.identities.first().cloned() })
+    }
+}
+
+// ── Link-error teaching (PRD §3.2 Microsoft tenant and consent) ─────────
+
+/// A link failure with a stable code + a hint a person can act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkFailure {
+    pub code: &'static str,
+    pub hint: String,
+    /// `admin_consent_required` only: the URL a tenant admin opens.
+    pub admin_consent_url: Option<String>,
+}
+
+/// Map a token-endpoint / device-start error to a teaching failure. The
+/// AADSTS codes are Microsoft's stable error numbers; anything unknown
+/// keeps the provider's own text under `oauth_error`.
+pub fn classify_link_error(provider: OauthProvider, err: &OauthError, client_id: &str) -> LinkFailure {
+    let text = err.to_string();
+    let has = |code: &str| text.contains(code);
+    if provider == OauthProvider::Microsoft {
+        if has("AADSTS65001") || has("AADSTS90094") || has("AADSTS90008") {
+            let url = admin_consent_url(client_id);
+            return LinkFailure {
+                code: "admin_consent_required",
+                hint: format!(
+                    "this Microsoft tenant needs an administrator to approve K2 before people \
+                     can link their mailboxes. A tenant admin opens {url}, approves, then you run \
+                     the link again. ({text})"
+                ),
+                admin_consent_url: Some(url),
+            };
+        }
+        if has("AADSTS53") || has("AADSTS50097") {
+            return LinkFailure {
+                code: "device_code_blocked",
+                hint: format!(
+                    "your tenant's Conditional Access policy blocked the device-code sign-in. \
+                     Ask your Microsoft 365 admin to allow it for K2, or note this error and \
+                     tell Alakazam (a browser sign-in fallback is planned). ({text})"
+                ),
+                admin_consent_url: None,
+            };
+        }
+        if has("AADSTS7000218") {
+            return LinkFailure {
+                code: "client_misconfigured",
+                hint: format!(
+                    "the Microsoft app registration does not allow public client flows — in \
+                     Entra → App registrations → <app> → Authentication, set 'Allow public \
+                     client flows' to Yes, then link again. ({text})"
+                ),
+                admin_consent_url: None,
+            };
+        }
+        if has("AADSTS700016") || has("AADSTS50020") || has("AADSTS90002") || has("AADSTS50059")
+        {
+            return LinkFailure {
+                code: "client_misconfigured",
+                hint: format!(
+                    "Microsoft could not use this app for this account — check the client id \
+                     and the tenant ('k2 mail oauth-config show'). A single-tenant app needs \
+                     '--tenant <its tenant id>'; one for any organisation or personal accounts \
+                     needs 'common'. ({text})"
+                ),
+                admin_consent_url: None,
+            };
+        }
+        if has("AADSTS70011") || has("AADSTS65005") {
+            return LinkFailure {
+                code: "client_misconfigured",
+                hint: format!(
+                    "the Microsoft app registration does not allow the scopes K2 asks for — add \
+                     the delegated Graph permissions openid, profile, email, offline_access, \
+                     User.Read, Mail.ReadWrite, Mail.Send and Calendars.ReadWrite. ({text})"
+                ),
+                admin_consent_url: None,
+            };
+        }
+    }
+    if text.contains("'invalid_client'") || text.contains("unauthorized_client") {
+        return LinkFailure {
+            code: "client_misconfigured",
+            hint: format!(
+                "the {} OAuth app was refused — check 'k2 mail oauth-config show' (a build \
+                 without a real client id needs your own app). ({text})",
+                provider.as_str()
+            ),
+            admin_consent_url: None,
+        };
+    }
+    LinkFailure { code: "oauth_error", hint: format!("oauth error: {text}"), admin_consent_url: None }
 }
 
 #[cfg(test)]

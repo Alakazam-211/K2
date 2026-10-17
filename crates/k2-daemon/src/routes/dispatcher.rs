@@ -10543,7 +10543,7 @@ async fn handle_one_request(
         // their own access. SQLite-only (no engine dial) but still runs
         // in spawn_blocking so with_request_principal is thread-local
         // for the handler chain (matches other mail dual-auth arms).
-        p if p == "/cli/mail/inboxes" => {
+        p if p == "/cli/mail/inboxes" || p == "/cli/mail/capabilities" => {
             let _ = stream.read(&mut buf).await;
             let (auth_ok, scoped_principal) =
                 token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());

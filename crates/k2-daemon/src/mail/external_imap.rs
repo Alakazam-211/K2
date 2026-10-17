@@ -46,7 +46,9 @@ use crate::mail::external::{
 };
 use crate::mail::jmap::{EmailSummary, MailAddr};
 use crate::mail::messages::{ListError, ListFilter, MailFolder, ManageOutcome};
-use crate::mail::oauth::{self, OauthProvider, ReqwestHttp};
+use crate::mail::oauth::{OauthProvider, ReqwestHttp};
+#[cfg(test)]
+use crate::mail::oauth;
 use crate::mail::secrets::FileSecretStore;
 use imap::types::{Flag, Name};
 use imap::{ClientBuilder, ConnectionMode, TlsKind};
@@ -181,29 +183,22 @@ fn oauth_login(inbox: &MailExternalInbox, auth: &external::OauthFields) -> Resul
     // O1 engine: fresh access token (refreshing within the 60s skew),
     // via the production vault + HTTP client. `now` is injected into the
     // engine; here it is the wall clock.
+    // MCS1: minted by the client that linked the row; the refreshed expiry
+    // and granted scopes are persisted inside `fresh_access_token`.
     let secrets = FileSecretStore::default();
     let http = ReqwestHttp::default();
     let now = chrono::Utc::now().timestamp();
-    let fresh = oauth::access_token_for(
-        &secrets,
+    let access_token = external::fresh_access_token(
         &inbox.id,
         provider,
         auth.token_expires_at,
-        now,
-        None,
-        None,
+        &secrets,
         &http,
-    )
-    .map_err(|e| format!("oauth token for inbox {}: {e}", inbox.id))?;
-
-    // Persist the new expiry so the NEXT login reuses the token instead
-    // of refreshing again (the refresh already re-vaulted the bundle).
-    if fresh.refreshed {
-        external::persist_token_expiry(&inbox.id, fresh.token_expires_at);
-    }
+        now,
+    )?;
 
     let client = connect(inbox)?;
-    xoauth2_authenticate(client, &inbox.username, &fresh.access_token)
+    xoauth2_authenticate(client, &inbox.username, &access_token)
 }
 
 // ── ⚠ LIVE-BOX #4: SASL XOAUTH2 auth + Google continuation-error class ──
@@ -3112,6 +3107,7 @@ mod tests {
             scope: Some("https://mail.google.com/".into()),
             token_type: "Bearer".into(),
             expires_in: 3600,
+            id_token: None,
         };
         oauth::store_tokens(&store, "rowA", &seed, 0).expect("seed");
 

@@ -575,6 +575,15 @@ pub struct AppSettings {
     /// secret, ever (the set route rejects one). Empty = baked default.
     #[serde(default)]
     pub mail_oauth_microsoft_client_id: String,
+    /// K2 Mail OAuth v2 (MCS1) — the Microsoft identity-platform authority
+    /// the box links through: `common` (any work or personal account),
+    /// `organizations`, `consumers`, or one tenant (a GUID or a verified
+    /// domain such as `contoso.onmicrosoft.com`). A single-tenant BYO app
+    /// registration needs its own tenant here (`/common` refuses it).
+    /// Empty (the default) = `common`. Non-secret; set with
+    /// `k2 mail oauth-config set --provider microsoft --tenant <t>`.
+    #[serde(default)]
+    pub mail_oauth_microsoft_tenant: String,
     #[serde(default)]
     pub editor: EditorSettings,
     /// Style System P3 — the user's Style selection (style / palette /
@@ -982,6 +991,7 @@ impl Default for AppSettings {
             mail_default_domain: String::new(),
             mail_oauth_gmail_client_id: String::new(),
             mail_oauth_microsoft_client_id: String::new(),
+            mail_oauth_microsoft_tenant: String::new(),
             editor: EditorSettings::default(),
             style: StyleSettings::default(),
             companion: CompanionSettings::default(),

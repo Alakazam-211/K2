@@ -24585,12 +24585,33 @@ cmd_schema() {
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {
+      "name": "mail capabilities",
+      "usage": "k2 mail capabilities [<address>] [--json]",
+      "description": "What each inbox you can use can do: source (hosted | imap | google | microsoft), mail read/draft/compose/send, calendar read/write/invite/rsvp + free/busy reach, the linked account's kind/tenant, and a 'missing' list of {cap, reason, fix} for every capability that is off (reason: level | scope_not_granted | owner_disabled | backend_unsupported | not_built). Agents see their own grants at their level; the owner (outside a workspace) sees every inbox. An inbox you can't use is not_found.",
+      "args": [{"name": "address", "required": false}],
+      "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
+    },
+    {
+      "name": "mail oauth-config",
+      "usage": "k2 mail oauth-config show | set --provider gmail|microsoft [--client-id <id>] [--secret-stdin] [--tenant <t>] | clear --provider gmail|microsoft [--json]",
+      "description": "OWNER verb (agents exit 3): your own Google / Microsoft OAuth app for Email Link instead of K2's built-in one, and the Microsoft tenant (common | organizations | consumers | a tenant id or domain). The Gmail client secret rides stdin only and is never shown again. 'show' reports which app is in effect and whether one is configured at all (a build without a baked app needs yours). Links refresh with the app that minted them.",
+      "args": [{"name": "subcommand", "required": false}],
+      "flags": [
+        {"name": "--provider", "arg": "p", "description": "gmail | microsoft (set/clear)."},
+        {"name": "--client-id", "arg": "id", "description": "The app's client (application) id (public)."},
+        {"name": "--secret-stdin", "arg": null, "description": "Gmail only: read the client secret from stdin."},
+        {"name": "--tenant", "arg": "t", "description": "Microsoft only: common | organizations | consumers | a tenant id or domain."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "mail link",
-      "usage": "k2 mail link add <address> (--host <imap-host> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] [--smtp-host <h>] [--smtp-port <n>] [--smtp-tls implicit-tls|starttls] | --provider gmail|microsoft) --workspace <ws> | list | remove <address>",
+      "usage": "k2 mail link add <address> (--host <imap-host> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] [--smtp-host <h>] [--smtp-port <n>] [--smtp-tls implicit-tls|starttls] | --provider gmail|microsoft [--features mail|mail,calendar]) --workspace <ws> | upgrade <address> --features calendar|mail,calendar | list | remove <address>",
       "description": "Connect the user's OWN external email accounts as LINKED assistant inboxes (was 'mail external') — OWNER verbs (agent tokens exit 3). Two add paths: (1) generic IMAP with an app-password (Gmail app-password, Fastmail, company IMAP), or (2) OAuth with --provider gmail|microsoft (NO password): Gmail links over IMAP-XOAUTH2 via the system browser + a 127.0.0.1 loopback (do it ON the daemon's machine; a remote daemon returns a 'link on the daemon's box' teaching error), Microsoft over the Microsoft Graph API via a device code you enter in any browser. The OAuth flow runs SERVER-SIDE (the daemon polls/exchanges); codes and tokens NEVER reach the CLI and are vaulted daemon-side. Each inbox binds to ONE PRIMARY workspace whose agents read it (via messages/read/wait) and save reply drafts via 'k2 mail draft'. Drafting is always on; sending is OFF by default — raise a workspace to level 'send' to let its agents send via SMTP (app-password and Gmail-OAuth inboxes send over SMTP; Microsoft-OAuth is draft-only until Graph send lands). Share with more workspaces via 'k2 mail access grant'. The password/tokens are vaulted daemon-side, never in the DB, never in output, never on argv.",
       "args": [{"name": "address", "required": false}],
       "flags": [
-        {"name": "--provider", "arg": "p", "description": "OAuth link: gmail (IMAP-XOAUTH2, system-browser loopback) | microsoft (Graph, device code). No --host/password; the daemon runs the flow and the CLI long-polls to connected (add)."},
+        {"name": "--provider", "arg": "p", "description": "OAuth link: gmail (IMAP-XOAUTH2, system-browser loopback) | microsoft (Graph, device code). No --host/password; the daemon runs the flow and the CLI long-polls to connected (add). The signed-in account must be <address> (else account_mismatch, nothing stored)."},
+        {"name": "--features", "arg": "f", "description": "OAuth: what to consent for — mail (default) or mail,calendar (add); what to ADD to an existing OAuth link, re-consented in place keeping its grants and ids (upgrade)."},
         {"name": "--host", "arg": "h", "description": "IMAP server (generic-IMAP add)."},
         {"name": "--workspace", "arg": "ws", "description": "The PRIMARY workspace to bind (add)."},
         {"name": "--pass-stdin", "arg": null, "description": "Read the app-password from stdin (add)."},
@@ -37727,7 +37748,8 @@ _mail_py() {
     M_USER="${M_USER:-}" M_NAME="${M_NAME:-}" \
     M_DRAFTS_FOLDER="${M_DRAFTS_FOLDER:-}" \
     M_PASS="${M_PASS:-}" M_PASS_REF="${M_PASS_REF:-}" \
-    M_PROVIDER="${M_PROVIDER:-}" \
+    M_PROVIDER="${M_PROVIDER:-}" M_FEATURES="${M_FEATURES:-}" M_TENANT="${M_TENANT:-}" \
+    M_OAUTH_SECRET="${M_OAUTH_SECRET:-}" \
     M_SMTP_HOST="${M_SMTP_HOST:-}" M_SMTP_PORT="${M_SMTP_PORT:-}" M_SMTP_TLS="${M_SMTP_TLS:-}" \
     M_HOSTNAME="${M_HOSTNAME:-}" \
     M_IP="${M_IP:-}" M_ALL="${M_ALL:-false}" \
@@ -37792,7 +37814,7 @@ def die(err, exit_code=None):
         # owner surfaces for valid agent passports (not "invalid token").
         # 0.45.0: agent_send_path_only = an agent asked for an IMAP/SMTP
         # secret; the hint already names `k2 mail send` + the owner verb.
-        exit_code = 3 if code in ("gated", "forbidden", "owner_only", "agent_send_path_only") else 2 if code == "usage" else 1
+        exit_code = 3 if code in ("gated", "forbidden", "owner_only", "agent_send_path_only", "capability_missing") else 2 if code == "usage" else 1
     sys.exit(exit_code)
 
 def _is_socket_timeout(exc):
@@ -38912,27 +38934,38 @@ elif verb == "external_add":
         print("(k2 mail draft --to/--subject compose, or draft <id> reply);")
         print("sending FROM it needs level 'send' AND workspace Sending=on (k2 mail send/reply).")
 
-elif verb == "link_oauth_add":
+elif verb in ("link_oauth_add", "link_oauth_upgrade"):
     # O4 owner verb: begin an OAuth link (Gmail loopback / Microsoft
     # device flow) and LONG-POLL to completion. The daemon runs the whole
     # flow server-side; codes/tokens NEVER reach this CLI — we only see
     # the user-facing code+URL (device) or a "browser opened" ack
-    # (loopback), then poll a state.
+    # (loopback), then poll a state. MCS1: `upgrade` re-consents an
+    # existing row in place for more features (same flow, `inbox` set).
     provider = env("M_PROVIDER")
-    body = {"address": env("M_ADDRESS"), "provider": provider,
-            "workspace": env("M_WORKSPACE")}
+    upgrade = verb == "link_oauth_upgrade"
+    if upgrade:
+        body = {"inbox": env("M_ADDRESS"), "features": env("M_FEATURES")}
+        if provider:
+            body["provider"] = provider
+    else:
+        body = {"address": env("M_ADDRESS"), "provider": provider,
+                "workspace": env("M_WORKSPACE")}
+        if env("M_FEATURES"):
+            body["features"] = env("M_FEATURES")
     # start dials the provider (device) or binds a loopback + opens the
     # browser (Gmail); a remote-daemon Gmail returns a teaching error here.
     d = call("POST", "/cli/mail/link/oauth/start", body=body, timeout=45)
     flow = d.get("flow")
     link_id = d.get("linkId")
+    provider = provider or ("microsoft" if flow == "device" else "gmail")
     if flow == "device":
-        sys.stderr.write("To connect %s: open %s and enter the code %s\n"
-                         % (env("M_ADDRESS"), d.get("verificationUrl", "?"),
-                            d.get("userCode", "?")))
+        sys.stderr.write("To %s %s (%s): open %s and enter the code %s — sign in as %s\n"
+                         % ("upgrade" if upgrade else "connect", env("M_ADDRESS"),
+                            d.get("features", "mail"), d.get("verificationUrl", "?"),
+                            d.get("userCode", "?"), d.get("address") or env("M_ADDRESS")))
     else:
-        sys.stderr.write("A browser window opened — approve access to %s there.\n"
-                         % env("M_ADDRESS"))
+        sys.stderr.write("A browser window opened — approve access to %s there (%s).\n"
+                         % (env("M_ADDRESS"), d.get("features", "mail")))
     sys.stderr.write("Waiting for approval (Ctrl-C to stop; the link stays pending)…\n")
     # Bounded status long-poll (the wait idiom): poll every 3s up to the
     # device-code lifetime ceiling. The daemon holds the flow, not us.
@@ -38959,6 +38992,9 @@ elif verb == "link_oauth_add":
     if state == "connected":
         if as_json:
             print(dumps(final))
+        elif upgrade:
+            print("upgraded %s (%s)" % (final.get("address") or env("M_ADDRESS"), provider))
+            print(final.get("hint") or "its grants, levels and ids are unchanged.")
         else:
             print("connected %s -> workspace %s (%s)"
                   % (final.get("address") or env("M_ADDRESS"),
@@ -38966,9 +39002,14 @@ elif verb == "link_oauth_add":
             print(final.get("hint")
                   or "agents in that workspace can now read it and save reply drafts.")
     else:
-        # denied / expired / error — a clear failure, non-zero exit.
-        die({"code": "error",
-             "hint": final.get("hint") or ("the link %s" % state)}, 1)
+        # denied / expired / error — a clear failure, non-zero exit. The
+        # code is stable (account_mismatch, admin_consent_required,
+        # device_code_blocked, scope_not_granted, client_misconfigured, …).
+        hint = final.get("hint") or ("the link %s" % state)
+        if final.get("adminConsentUrl") and final["adminConsentUrl"] not in hint:
+            hint += " Admin consent: %s" % final["adminConsentUrl"]
+        die({"code": final.get("code") or ("denied" if state == "denied" else "error"),
+             "hint": hint}, 1)
 
 elif verb == "external_remove":
     d = call("POST", "/cli/mail/external/remove", body={"address": env("M_ADDRESS")})
@@ -38976,6 +39017,94 @@ elif verb == "external_remove":
         print(dumps(d))
     else:
         print("removed %s — its stored credential was deleted from the vault." % d.get("address", "?"))
+        # MCS1: Google tokens are revoked at Google; Microsoft has no
+        # per-token revoke — the hint says where to remove the consent.
+        if d.get("revokeHint"):
+            print(d["revokeHint"])
+
+elif verb == "capabilities":
+    # MCS1: what each inbox can do. Agent view inside a workspace (own
+    # grants, at your level); the owner view outside one.
+    params = {"project": ws_path} if ws_path else {}
+    if env("M_ADDRESS"):
+        params["address"] = env("M_ADDRESS")
+    d = request("GET", "/cli/mail/capabilities", params=params)
+    if d is None:
+        die({"code": "daemon_unreachable",
+             "hint": "no response from the K2 daemon (is it running?)"})
+    # Outside any workspace the cwd is not a registered workspace: ask for
+    # the owner view instead (the daemon gates it to owner/admin).
+    err = d.get("error") if isinstance(d.get("error"), dict) else None
+    if err and "project" in params and str(err.get("hint", "")).startswith("no agent/workspace named"):
+        params.pop("project")
+        d = request("GET", "/cli/mail/capabilities", params=params)
+        if d is None:
+            die({"code": "daemon_unreachable",
+                 "hint": "no response from the K2 daemon (is it running?)"})
+    if isinstance(d.get("error"), dict):
+        die(d["error"])
+    if as_json:
+        print(dumps(d))
+    else:
+        rows = [d] if env("M_ADDRESS") else (d.get("inboxes") or [])
+        if not rows:
+            print("no inboxes — 'k2 mail inboxes' lists what you can reach")
+        for r in rows:
+            c = r.get("capabilities") or {}
+            mail = c.get("mail") or {}
+            cal = c.get("calendar") or {}
+            on = lambda m: ",".join(k for k in ("read", "draft", "compose", "send", "write", "invite", "rsvp") if m.get(k) is True) or "-"
+            lvl = r.get("yourLevel")
+            print("%s  [%s]%s" % (r.get("address", "?"), c.get("source", "?"),
+                                  ("  level %s" % lvl) if lvl else ""))
+            print("  mail: %s   calendar: %s   free/busy: %s"
+                  % (on(mail), on(cal), cal.get("freebusy", "none")))
+            acct = c.get("account")
+            if acct:
+                print("  account: %s%s%s"
+                      % (acct.get("kind") or "unknown",
+                         (" tenant %s" % acct["tenant"]) if acct.get("tenant") else "",
+                         "" if acct.get("checked") else " (not checked — 'k2 mail link upgrade' checks it)"))
+            for m in c.get("missing") or []:
+                print("  - %s off (%s): %s" % (m.get("cap"), m.get("reason"), m.get("fix")))
+
+elif verb in ("oauth_config_show", "oauth_config_set", "oauth_config_clear"):
+    # MCS1: the owner's own OAuth app per provider + the Microsoft tenant.
+    # The Gmail secret rode stdin into M_OAUTH_SECRET; it goes out once in
+    # the POST body and is never printed (the daemon never returns it).
+    prov = env("M_PROVIDER")
+    if verb == "oauth_config_show":
+        d = call("GET", "/cli/mail/oauth-config")
+    elif verb == "oauth_config_set":
+        body = {"provider": prov}
+        if env("M_CLIENT_ID"):
+            body["clientId"] = env("M_CLIENT_ID")
+        if env("M_TENANT"):
+            body["tenant"] = env("M_TENANT")
+        if env("M_OAUTH_SECRET"):
+            body["clientSecret"] = env("M_OAUTH_SECRET")
+        d = call("POST", "/cli/mail/oauth-config/set", body=body)
+    else:
+        d = call("POST", "/cli/mail/oauth-config/clear", body={"provider": prov})
+    if as_json:
+        print(dumps(d))
+    else:
+        provs = d.get("providers") or {d.get("provider", prov): d}
+        for name in ("gmail", "microsoft"):
+            p = provs.get(name)
+            if p is None or (prov and name != prov and verb != "oauth_config_show"):
+                continue
+            if prov and verb == "oauth_config_show" and name != prov:
+                continue
+            line = "%s: %s app %s%s" % (
+                name, "your own" if p.get("source") == "custom" else "K2's built-in",
+                p.get("clientId") or "?",
+                "" if p.get("configured", True) else "  (NOT CONFIGURED — linking will refuse)")
+            if name == "gmail":
+                line += "  secret %s" % ("set" if p.get("secretSet") else "not set")
+            if name == "microsoft" and p.get("tenant"):
+                line += "  tenant %s" % p["tenant"]
+            print(line)
 
 # ── S11 unified inbox surface (helpers hoisted above the verb chain) ──
 elif verb == "inboxes":
@@ -41357,24 +41486,27 @@ cmd_mail_external() {
     if _wants_help "$@"; then cmd_help_mail_link; exit 0; fi
     local sub=""
     case "${1:-}" in
-        add|list|remove) sub="$1"; shift ;;
+        add|list|remove|upgrade) sub="$1"; shift ;;
         "") cmd_help_mail_link; exit 0 ;;
         -*) sub="list" ;;  # bare `k2 mail link --json` = list
         grant|revoke)
             _mail_err "usage" "per-workspace access moved — use 'k2 mail access ${1} <address> <workspace>'"
             exit 2 ;;
         *)
-            _mail_err "usage" "unknown link command '${1:-}' — usage: k2 mail link <add|list|remove>"
+            _mail_err "usage" "unknown link command '${1:-}' — usage: k2 mail link <add|upgrade|list|remove>"
             exit 2 ;;
     esac
     local address="" workspace="" host="" port="" tls="" user="" name="" \
           drafts_folder="" pass_stdin=false pass_ref="" as_json=false \
-          ws_arg="" level="" smtp_host="" smtp_port="" smtp_tls="" provider=""
+          ws_arg="" level="" smtp_host="" smtp_port="" smtp_tls="" provider="" features=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --provider)
                 [ $# -ge 2 ] || { _mail_err "usage" "--provider requires gmail or microsoft"; exit 2; }
                 provider="$2"; shift 2 ;;
+            --features)
+                [ $# -ge 2 ] || { _mail_err "usage" "--features requires mail, calendar or mail,calendar"; exit 2; }
+                features="$2"; shift 2 ;;
             --level)
                 [ $# -ge 2 ] || { _mail_err "usage" "--level requires read, draft, or send"; exit 2; }
                 level="$2"; shift 2 ;;
@@ -41452,9 +41584,13 @@ cmd_mail_external() {
                     exit 2
                 fi
                 local M_VERB="link_oauth_add" M_JSON="$as_json" M_ADDRESS="$address" \
-                      M_WORKSPACE="$workspace" M_PROVIDER="$provider"
+                      M_WORKSPACE="$workspace" M_PROVIDER="$provider" M_FEATURES="$features"
                 _mail_py
                 return
+            fi
+            if [ -n "$features" ]; then
+                _mail_err "usage" "--features is for OAuth links (--provider gmail|microsoft)"
+                exit 2
             fi
             if [ -z "$address" ] || [ -z "$host" ] || [ -z "$workspace" ]; then
                 _mail_err "usage" "link add requires <address> --host <imap-host> --workspace <ws> (+ --pass-stdin | --pass-ref <ref>)  |  OAuth: --provider gmail|microsoft --workspace <ws>"
@@ -41483,6 +41619,19 @@ cmd_mail_external() {
                   M_SMTP_HOST="$smtp_host" M_SMTP_PORT="$smtp_port" M_SMTP_TLS="$smtp_tls" \
                   M_PASS="$pass" M_PASS_REF="$pass_ref"
             _mail_py ;;
+        upgrade)
+            # MCS1: incremental re-consent IN PLACE (same row, grants, ids).
+            if [ -z "$address" ] || [ -z "$features" ]; then
+                _mail_err "usage" "link upgrade requires <address> --features mail|calendar|mail,calendar"
+                exit 2
+            fi
+            if [ -n "$host" ] || $pass_stdin || [ -n "$pass_ref" ] || [ -n "$workspace" ]; then
+                _mail_err "usage" "link upgrade takes only <address> --features (the row keeps its workspace)"
+                exit 2
+            fi
+            local M_VERB="link_oauth_upgrade" M_JSON="$as_json" M_ADDRESS="$address" \
+                  M_PROVIDER="$provider" M_FEATURES="$features"
+            _mail_py ;;
         list)
             local M_VERB="link_list" M_JSON="$as_json"
             _mail_py ;;
@@ -41494,6 +41643,90 @@ cmd_mail_external() {
             local M_VERB="external_remove" M_JSON="$as_json" M_ADDRESS="$address"
             _mail_py ;;
     esac
+}
+
+# MCS1: `k2 mail capabilities [<address>]` — what each inbox you can see
+# can do (mail read/draft/compose/send, calendar read/write/invite/rsvp,
+# free/busy reach) and, for anything off, why + the fix. Agents see their
+# own grants; the owner sees every inbox.
+cmd_mail_capabilities() {
+    if _wants_help "$@"; then cmd_help_mail_capabilities; exit 0; fi
+    local address="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail capabilities [<address>] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$address" ]; then address="$1"; shift
+                else
+                    _mail_err "usage" "unexpected extra argument '$1'"
+                    exit 2
+                fi ;;
+        esac
+    done
+    local M_VERB="capabilities" M_JSON="$as_json" M_ADDRESS="$address"
+    _mail_py
+}
+
+# MCS1: `k2 mail oauth-config show|set|clear` — the owner's own OAuth app
+# per provider (BYO) + the Microsoft tenant. OWNER verb (agents exit 3).
+# The Gmail client secret rides stdin only (--secret-stdin), never argv.
+cmd_mail_oauth_config() {
+    if _wants_help "$@"; then cmd_help_mail_oauth_config; exit 0; fi
+    local sub=""
+    case "${1:-}" in
+        show|set|clear) sub="$1"; shift ;;
+        ""|-*) sub="show" ;;
+        *)
+            _mail_err "usage" "unknown oauth-config command '${1:-}' — usage: k2 mail oauth-config <show|set|clear>"
+            exit 2 ;;
+    esac
+    local provider="" client_id="" secret_stdin=false tenant="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --provider)
+                [ $# -ge 2 ] || { _mail_err "usage" "--provider requires gmail or microsoft"; exit 2; }
+                provider="$2"; shift 2 ;;
+            --client-id)
+                [ $# -ge 2 ] || { _mail_err "usage" "--client-id requires the app's client (application) id"; exit 2; }
+                client_id="$2"; shift 2 ;;
+            --tenant)
+                [ $# -ge 2 ] || { _mail_err "usage" "--tenant requires common|organizations|consumers|<tenant id or domain>"; exit 2; }
+                tenant="$2"; shift 2 ;;
+            --secret-stdin) secret_stdin=true; shift ;;
+            --json) as_json=true; shift ;;
+            *)
+                _mail_err "usage" "unexpected argument '$1' — see k2 mail oauth-config --help"
+                exit 2 ;;
+        esac
+    done
+    case "$provider" in
+        ""|gmail|microsoft) : ;;
+        *) _mail_err "usage" "--provider must be gmail or microsoft"; exit 2 ;;
+    esac
+    local secret=""
+    case "$sub" in
+        set)
+            [ -n "$provider" ] || { _mail_err "usage" "oauth-config set requires --provider gmail|microsoft"; exit 2; }
+            if [ -z "$client_id" ] && [ -z "$tenant" ]; then
+                _mail_err "usage" "oauth-config set requires --client-id (Microsoft may pass just --tenant)"
+                exit 2
+            fi
+            if $secret_stdin; then
+                [ "$provider" = "gmail" ] || { _mail_err "usage" "--secret-stdin is for Gmail only (Microsoft is a public client)"; exit 2; }
+                IFS= read -r secret || true
+                [ -n "$secret" ] || { _mail_err "usage" "--secret-stdin: no secret on stdin (pipe it in)"; exit 2; }
+            fi
+            ;;
+        clear)
+            [ -n "$provider" ] || { _mail_err "usage" "oauth-config clear requires --provider gmail|microsoft"; exit 2; }
+            ;;
+    esac
+    local M_VERB="oauth_config_$sub" M_JSON="$as_json" M_PROVIDER="$provider" \
+          M_CLIENT_ID="$client_id" M_TENANT="$tenant" M_OAUTH_SECRET="$secret"
+    _mail_py
 }
 
 # ── S11 unified inbox surface: inboxes / link / access ──────────────────
@@ -44917,6 +45150,8 @@ USAGE
 DISCOVER & READ
   inboxes                     Every inbox you can use (hosted + linked) + your level
                               (aliases: addresses, list)
+  capabilities [<address>]    What each inbox can do (mail / calendar) and, for
+                              anything off, why + the fix
   domains                     Verified domains you can mint on (workspace default marked)
   messages [<address>]        Newest-first summaries of your mail
   read <message-id>           One full message (marks it read)
@@ -44939,7 +45174,11 @@ ORGANIZE (needs canManage; delete needs canDelete — the owner grants these via
   folder list|create|rename   Folder management on an inbox
 
 CONNECT & SHARE
-  link add|list|remove        Connect your OWN external IMAP accounts (was 'external')
+  link add|upgrade|list|remove
+                              Connect your OWN external accounts (IMAP, Gmail or
+                              Microsoft 365 OAuth); upgrade adds calendar consent
+  oauth-config show|set|clear Your own Google / Microsoft OAuth app + the Microsoft
+                              tenant (owner)
   access grant|revoke|primary|level|manage
                               Manage who can use an inbox (read < draft < send) and
                               the canManage/canDelete caps — PRIMARY/owner surface
@@ -45574,6 +45813,18 @@ browser; Gmail opens the system browser on the daemon's machine (do it on
 that machine — a remote daemon returns a clear "link on the daemon's box"
 message). The command then waits for you to approve, and connects.
 
+The account that signs in must BE the address you typed — otherwise the
+link fails with account_mismatch and nothing is stored. --features picks
+what to consent for (mail, or mail,calendar); add calendar to an existing
+link later with `k2 mail link upgrade` (same inbox, grants and ids).
+Removing a Google link revokes K2's access at Google; Microsoft has no
+per-token revoke, so remove tells you where to remove the consent.
+
+Microsoft needs an OAuth app: K2's built-in one, or your own set with
+`k2 mail oauth-config set --provider microsoft --client-id <id>
+[--tenant <t>]`. A tenant that requires admin consent fails with
+admin_consent_required and prints the admin-consent URL.
+
 USAGE
   k2 mail link add <address> --host <imap-host> --workspace <ws>
                    (--pass-stdin | --pass-ref <ref>)
@@ -45582,15 +45833,19 @@ USAGE
                    [--drafts-folder <folder>]
                    [--smtp-host <h>] [--smtp-port <n>]
                    [--smtp-tls implicit-tls|starttls] [--json]
-  k2 mail link add <address> --provider gmail|microsoft --workspace <ws> [--json]
+  k2 mail link add <address> --provider gmail|microsoft --workspace <ws>
+                   [--features mail|mail,calendar] [--json]
+  k2 mail link upgrade <address> --features calendar|mail,calendar [--json]
   k2 mail link list [--json]
   k2 mail link remove <address> [--json]
 
-FLAGS (OAuth add)
+FLAGS (OAuth add / upgrade)
   --provider <p>         gmail (IMAP-XOAUTH2, system-browser + loopback) or
                          microsoft (Microsoft Graph, device code). No --host
                          or password — the daemon runs the OAuth flow.
-  --workspace <ws>       The PRIMARY workspace this inbox binds to
+  --workspace <ws>       The PRIMARY workspace this inbox binds to (add)
+  --features <f>         mail (default) or mail,calendar. upgrade: what to
+                         ADD to an existing OAuth link, re-consented in place
 
 FLAGS (add)
   --host <h>             The IMAP server, e.g. imap.gmail.com
@@ -45615,6 +45870,77 @@ EXAMPLES
       --workspace acme-ops --pass-ref env:ACME_MAIL_PW
   k2 mail link add rosson@gmail.com --provider gmail --workspace ~/DevProjects/K2
   k2 mail link add me@company.com --provider microsoft --workspace acme-ops
+  k2 mail link add me@company.com --provider microsoft --workspace acme-ops \
+      --features mail,calendar
+  k2 mail link upgrade me@company.com --features calendar
+EOF
+}
+
+cmd_help_mail_capabilities() {
+    cat <<'EOF'
+What each inbox you can use can do — and, for anything that is off, why
+and the fix.
+
+USAGE
+  k2 mail capabilities [<address>] [--json]
+
+Inside a workspace you see your own inboxes at your access level; outside
+one (owner) every inbox on the box. Per inbox:
+  source     hosted | imap | google | microsoft
+  mail       read, draft, compose, send
+  calendar   read, write, invite, rsvp; free/busy reach (box | none);
+             scheduling
+  account    linked Google / Microsoft only: personal | work | consumer |
+             workspace, the tenant, and whether the signed-in account was
+             checked against the address
+  missing    {cap, reason, fix} for every capability that is off. reason:
+             level (ask your human to raise it), scope_not_granted (the owner
+             re-consents with 'k2 mail link upgrade'), owner_disabled,
+             backend_unsupported, not_built
+
+An inbox you can't use answers not_found, like every mail verb.
+EOF
+}
+
+cmd_help_mail_oauth_config() {
+    cat <<'EOF'
+Your own OAuth app for Email Link, per provider — used instead of K2's
+built-in app — and the Microsoft tenant. OWNER verb (agents exit 3).
+
+USAGE
+  k2 mail oauth-config show [--json]
+  k2 mail oauth-config set --provider gmail --client-id <id> [--secret-stdin] [--json]
+  k2 mail oauth-config set --provider microsoft [--client-id <id>] [--tenant <t>] [--json]
+  k2 mail oauth-config clear --provider gmail|microsoft [--json]
+
+FLAGS
+  --provider <p>     gmail | microsoft
+  --client-id <id>   The app's client (application) id. Public, not a secret.
+  --secret-stdin     Gmail only: read the Desktop client's secret from stdin
+                     (never argv). Vaulted daemon-side, never shown again.
+  --tenant <t>       Microsoft only: common (default: any work or personal
+                     account) | organizations | consumers | a tenant id or
+                     domain. A single-tenant app registration needs its tenant.
+
+A link remembers which app minted it and always refreshes with that app:
+swap or clear your app and those links ask you to relink
+('k2 mail link upgrade <address> --features mail').
+
+MICROSOFT APP REGISTRATION (Entra → App registrations → New)
+  Supported accounts  any organizational directory + personal accounts
+                      (or one tenant, then pass --tenant)
+  Authentication      'Allow public client flows' = Yes (device code)
+  API permissions     delegated Microsoft Graph: openid, profile, email,
+                      offline_access, User.Read, Mail.ReadWrite, Mail.Send,
+                      Calendars.ReadWrite
+
+EXAMPLES
+  k2 mail oauth-config show
+  k2 mail oauth-config set --provider microsoft \
+      --client-id 00000000-0000-0000-0000-000000000000 --tenant organizations
+  printf %s "$GOOGLE_SECRET" | k2 mail oauth-config set --provider gmail \
+      --client-id 123-abc.apps.googleusercontent.com --secret-stdin
+  k2 mail oauth-config clear --provider microsoft
 EOF
 }
 
@@ -54858,6 +55184,10 @@ case "${1:-help}" in
             # and the unified per-workspace access surface.
             link)        shift 2; cmd_mail_link "$@" ;;
             access)      shift 2; cmd_mail_access "$@" ;;
+            # MCS1: per-inbox capabilities (agent verb) and the owner's
+            # OAuth app config (owner verb; agents exit 3 server-side).
+            capabilities) shift 2; cmd_mail_capabilities "$@" ;;
+            oauth-config) shift 2; cmd_mail_oauth_config "$@" ;;
             # Owner/admin: per-workspace agent-send mode (every OS).
             sending)     shift 2; cmd_mail_sending "$@" ;;
             # Back-compat: `mail external` → `mail link`.

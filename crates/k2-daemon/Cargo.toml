@@ -59,6 +59,12 @@ airgap = ["k2-core/airgap"]
 # the helper built with it refuses to sign. Build the daemon and the helper
 # with the same value or the daemon refuses the helper (pin mismatch).
 sew-test-pins = ["k2-root-proto/sew-test-pins"]
+
+# TEST ONLY (prd-app-mail-calendar-surfaces-v1 §8.2 / §9.10): compile the
+# provider base-URL override (`K2_PROVIDER_FAKES_URL`) so a headless daemon
+# talks to tests/fakes/oauth-providers instead of Google / Microsoft. Release
+# builds never enable it, so nothing that can set env can redirect tokens.
+provider-fakes = []
 sew-test-pins-upgrade = ["sew-test-pins", "k2-root-proto/sew-test-pins-upgrade"]
 
 [dependencies]

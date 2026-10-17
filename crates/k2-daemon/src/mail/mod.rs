@@ -119,6 +119,7 @@ pub mod app_password;
 pub mod bans;
 pub mod calendar;
 pub mod calendar_share;
+pub mod capabilities;
 pub mod catchall;
 pub mod cert_names;
 pub mod cert_owner;

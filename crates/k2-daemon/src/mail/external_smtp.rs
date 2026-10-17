@@ -310,23 +310,16 @@ fn resolve_smtp_auth(
              not this XOAUTH2 path"
         ));
     }
-    let fresh = oauth::access_token_for(
-        secrets,
+    // MCS1: the linking client mints it; expiry + scopes persist inside.
+    let access_token = external::fresh_access_token(
         &inbox.id,
         provider,
         fields.token_expires_at,
-        now,
-        None,
-        None,
+        secrets,
         http,
-    )
-    .map_err(|e| format!("oauth token for inbox {}: {e}", inbox.id))?;
-    // Persist the refreshed expiry so the NEXT send reuses the token
-    // (the refresh already re-vaulted the bundle). Best-effort.
-    if fresh.refreshed {
-        external::persist_token_expiry(&inbox.id, fresh.token_expires_at);
-    }
-    Ok(SmtpAuth::Xoauth2 { access_token: fresh.access_token })
+        now,
+    )?;
+    Ok(SmtpAuth::Xoauth2 { access_token })
 }
 
 /// Production wrapper: read the row's O1 auth columns, then resolve the
@@ -1036,6 +1029,7 @@ mod tests {
             scope: Some("https://mail.google.com/".into()),
             token_type: "Bearer".into(),
             expires_in: 3600,
+            id_token: None,
         };
         // Store at now=0 → absolute expiry 3600.
         oauth::store_tokens(&store, &inbox.id, &seed, 0).expect("seed vault");

@@ -98,6 +98,59 @@ pub fn handle_inboxes(params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
+// ── GET /cli/mail/capabilities (MCS1) ───────────────────────────────────
+
+/// GET `/cli/mail/capabilities[?address=]` — what each inbox can do
+/// (PRD §3.1). Same identity rule as `inboxes`: a scoped agent (or a
+/// `project=` claim) sees only the inboxes it has access to, at its level;
+/// no identity = the owner view of every inbox (owner-or-admin, enforced in
+/// the dispatcher's shared clause). With `address`, one inbox — an inbox
+/// the caller can't see answers the masked `not_found` (CAL19: capability
+/// answers never probe what exists).
+pub fn handle_capabilities(params: &HashMap<String, String>) -> CliResponse {
+    let catalog = handle_inboxes(params);
+    if catalog.status != "200 OK" {
+        return catalog;
+    }
+    let v: serde_json::Value = match serde_json::from_str(&catalog.body) {
+        Ok(v) => v,
+        Err(e) => {
+            return error_response("500 Internal Server Error", "engine", &format!("catalog: {e}"))
+        }
+    };
+    let rows = v["inboxes"].as_array().cloned().unwrap_or_default();
+    let shape = |r: &serde_json::Value| {
+        serde_json::json!({
+            "address": r["address"],
+            "source": r["source"],
+            "yourLevel": r["yourLevel"],
+            "capabilities": r["capabilities"],
+        })
+    };
+    let wanted = params.get("address").map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty());
+    match wanted {
+        Some(addr) => match rows
+            .iter()
+            .find(|r| r["address"].as_str().map(|a| a.eq_ignore_ascii_case(&addr)).unwrap_or(false))
+        {
+            Some(r) => {
+                let mut out = shape(r);
+                out["ok"] = serde_json::json!(true);
+                ok_json(out)
+            }
+            None => error_response(
+                "404 Not Found",
+                "not_found",
+                &format!("no inbox '{addr}' in this workspace — 'k2 mail inboxes' lists yours"),
+            ),
+        },
+        None => {
+            let list: Vec<serde_json::Value> = rows.iter().map(shape).collect();
+            ok_json(serde_json::json!({ "ok": true, "count": list.len(), "inboxes": list }))
+        }
+    }
+}
+
 // ── POST /cli/mail/access/grant ─────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize, Default)]
@@ -485,6 +538,90 @@ mod tests {
 
         cleanup(&a_id);
         cleanup(&b_id);
+    }
+
+    /// MCS1: `capabilities` rides every catalog row and the dedicated route;
+    /// the agent view sees only its own inboxes at its level, and an inbox
+    /// it can't see is the masked not_found (no existence oracle).
+    #[test]
+    fn capabilities_route_projects_the_catalog_with_masking() {
+        let (aname, apath) = unique("capA");
+        let a_id = insert_project(&aname, &apath);
+        let (bname, bpath) = unique("capB");
+        let b_id = insert_project(&bname, &bpath);
+        let addr_a = format!("cap-a-{}@acc.example", &a_id[..8]);
+        let addr_ms = format!("cap-ms-{}@contoso.example", &b_id[..8]);
+        seed_hosted(&a_id, &addr_a);
+        // B's Microsoft link, consented for mail only (MCS1 scope set).
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, kind, \
+                 host, port, username, created_at, auth_kind, provider, features, \
+                 granted_scopes, account_kind, account_checked_at) \
+                 VALUES (?1, ?2, ?3, 'graph', 'graph.microsoft.com', 443, ?3, 1, 'oauth', \
+                 'microsoft', 'mail', ?4, 'work', 5)",
+                rusqlite::params![
+                    uuid::Uuid::new_v4().to_string(),
+                    b_id,
+                    addr_ms,
+                    crate::mail::oauth::scope_for(
+                        crate::mail::oauth::OauthProvider::Microsoft,
+                        crate::mail::oauth::Features::MAIL
+                    ),
+                ],
+            )
+            .expect("seed ms link");
+        }
+
+        // Owner view: both inboxes, capabilities on the inboxes rows too.
+        let all = body_json(&handle_inboxes(&HashMap::new()));
+        let ms_row = all["inboxes"].as_array().unwrap().iter()
+            .find(|i| i["address"] == addr_ms.as_str()).expect("listed");
+        assert_eq!(ms_row["capabilities"]["source"], "microsoft");
+        assert_eq!(ms_row["capabilities"]["account"]["kind"], "work");
+
+        // One inbox by address (owner).
+        let mut p = HashMap::new();
+        p.insert("address".to_string(), addr_ms.to_uppercase());
+        let one = handle_capabilities(&p);
+        assert_eq!(one.status, "200 OK", "{}", one.body);
+        let one = body_json(&one);
+        assert_eq!(one["address"], addr_ms.as_str());
+        assert_eq!(one["capabilities"]["mail"]["read"], true);
+        let cal = one["capabilities"]["missing"].as_array().unwrap().iter()
+            .find(|m| m["cap"] == "calendar.read").expect("calendar.read missing");
+        assert_eq!(cal["reason"], "scope_not_granted");
+
+        // Agent A: sees its hosted inbox only; B's link is masked.
+        let mut pa = HashMap::new();
+        pa.insert("project".to_string(), apath.clone());
+        let mine = body_json(&handle_capabilities(&pa));
+        let rows = mine["inboxes"].as_array().unwrap();
+        assert!(rows.iter().any(|r| r["address"] == addr_a.as_str()));
+        assert!(!rows.iter().any(|r| r["address"] == addr_ms.as_str()), "{mine}");
+        let row_a = rows.iter().find(|r| r["address"] == addr_a.as_str()).unwrap();
+        assert_eq!(row_a["yourLevel"], "send");
+        assert_eq!(row_a["capabilities"]["mail"]["send"], true);
+        pa.insert("address".to_string(), addr_ms.clone());
+        let masked = handle_capabilities(&pa);
+        assert_eq!(masked.status, "404 Not Found", "{}", masked.body);
+        assert_eq!(body_json(&masked)["error"]["code"], "not_found");
+
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute(
+                "DELETE FROM mail_external_inboxes WHERE owner_project_id = ?1",
+                rusqlite::params![b_id],
+            );
+        }
+        cleanup(&a_id);
+        cleanup(&b_id);
+        let _ = bpath;
+        let _ = bname;
+        let _ = aname;
     }
 
     #[test]

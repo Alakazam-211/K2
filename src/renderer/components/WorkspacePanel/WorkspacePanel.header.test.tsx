@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // 0.46.0 (Rosson 2026-10-16): the Workspace tab no longer shows the agent's
 // display name or handle (they live on the Agent tab). Its header puts View
-// Wiki on the left and keeps the notifications bell on the right.
+// Wiki on the left and, on the right, the Thread push phone toggle beside
+// the completion bell.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, screen } from '@testing-library/react'
 import { createStore } from 'zustand/vanilla'
@@ -25,6 +26,11 @@ vi.mock('./UrlsPortsSection', () => ({ UrlsPortsSection: () => null }))
 vi.mock('./WorkspaceApiSection', () => ({ WorkspaceApiSection: () => null }))
 vi.mock('./WorkspaceCompletionSoundToggle', () => ({
   WorkspaceCompletionSoundBell: () => <button type="button" data-testid="completion-bell">bell</button>,
+}))
+vi.mock('./WorkspacePhonePushToggle', () => ({
+  WorkspacePhonePushBell: ({ project }: { project: { id: string } }) => (
+    <button type="button" data-testid="phone-push-bell" data-project={project.id}>phone</button>
+  ),
 }))
 
 import WorkspacePanel from './WorkspacePanel'
@@ -70,7 +76,7 @@ describe('Workspace tab header', () => {
     expect(screen.queryByText('cortana-handle')).toBeNull()
   })
 
-  it('puts View Wiki on the left and keeps the bell on the right', () => {
+  it('puts View Wiki on the left and the phone toggle beside the bell on the right', () => {
     render(true)
     const header = screen.getByTestId('workspace-panel-header')
     const kids = Array.from(header.children)
@@ -78,7 +84,11 @@ describe('Workspace tab header', () => {
     expect(kids[0].textContent).toBe('View Wiki')
     expect(kids[1]).toBe(screen.getByTestId('workspace-panel-bell'))
     expect(kids[1].className).toContain('ml-auto')
-    expect(kids[1].contains(screen.getByTestId('completion-bell'))).toBe(true)
+    expect(Array.from(kids[1].children)).toEqual([
+      screen.getByTestId('phone-push-bell'),
+      screen.getByTestId('completion-bell'),
+    ])
+    expect(screen.getByTestId('phone-push-bell').dataset.project).toBe('p1')
     expect(header.className).not.toContain('justify-end')
   })
 
@@ -93,11 +103,15 @@ describe('Workspace tab header', () => {
     usePageViewStore.getState().setPage('agents')
   })
 
-  it('a room on another server keeps the bell and offers no Wiki', () => {
+  it('a room on another server keeps the phone toggle and the bell and offers no Wiki', () => {
     render(false)
     const header = screen.getByTestId('workspace-panel-header')
     expect(Array.from(header.children)).toEqual([screen.getByTestId('workspace-panel-bell')])
     expect(screen.getByTestId('workspace-panel-bell').className).toContain('ml-auto')
+    expect(Array.from(screen.getByTestId('workspace-panel-bell').children)).toEqual([
+      screen.getByTestId('phone-push-bell'),
+      screen.getByTestId('completion-bell'),
+    ])
     expect(screen.queryByText('View Wiki')).toBeNull()
   })
 })

@@ -1,10 +1,11 @@
-// Workspace settings → "Design mode" switch (late decision Q-F2). Mount it
-// next to the completion sound toggle at integration.
+// Workspace settings → "Design mode" switch (late decision Q-F2), next to
+// the completion sound toggle. The caller passes the server it writes to
+// (MS79: no `primaryScope()` here).
 
 import { useCallback, useState } from 'react'
 import { emit } from '@tauri-apps/api/event'
 import { useProjectsStore } from '@/stores/projects'
-import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 import { isDesignModeEnabled, setDesignMode } from './design-mode-setting'
 
 export type DesignModeProject = { id: string; path: string; designModeEnabled?: number }
@@ -25,8 +26,8 @@ export function DesignModeSettingRow({
   scope,
 }: {
   project: DesignModeProject
-  /** Defaults to the window's server. */
-  scope?: ServerScope
+  /** The server the workspace lives on. */
+  scope: ServerScope
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -37,7 +38,7 @@ export function DesignModeSettingRow({
     setBusy(true)
     setError(null)
     try {
-      await writeDesignMode(scope ?? primaryScope(), project, !enabled)
+      await writeDesignMode(scope, project, !enabled)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {

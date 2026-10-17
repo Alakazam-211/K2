@@ -259,6 +259,95 @@ fn every_route_is_classified_post_only_where_it_mutates_and_on_the_agent_list() 
     }
 }
 
+// ── a release build without a Sew pin ───────────────────────────────────
+
+const NOT_RELEASED: &str = "Sew isn't available in this K2 release yet. It will be turned on in a later K2 update.";
+
+/// A release build while K2's Sew pins are placeholders: enable, preflight,
+/// upgrade, voice preflight and voice install refuse `sew_not_released`
+/// before any effect (no helper call, no row, no voice record), even for
+/// the owner with a tarball in hand; status says so plainly.
+#[test]
+fn unreleased_pin_refuses_every_install_path_before_any_effect() {
+    let t = t();
+    with_media(&t);
+    *t.ops.released.lock().unwrap() = false;
+    for (path, body) in [
+        ("/cli/sew/server/enable", json!({"tarballPath": TARBALL})),
+        ("/cli/sew/server/enable", json!({"tarballPath": TARBALL, "voice": {"mediaTarballPath": MEDIA}})),
+        ("/cli/sew/server/enable", json!({"identity": "standalone"})),
+        ("/cli/sew/server/upgrade", json!({"tarballPath": TARBALL})),
+        ("/cli/sew/server/upgrade", json!({"tarballPath": TARBALL, "dryRun": true})),
+        ("/cli/sew/media/install", json!({"mediaTarballPath": MEDIA})),
+    ] {
+        let (st, v) = t.call(&Who::Owner, path, body.clone());
+        assert_eq!(st, "409 Conflict", "{path} {body}: {v}");
+        assert_eq!(code(&v), "sew_not_released", "{path} {body}: {v}");
+        assert_eq!(v["error"]["hint"], NOT_RELEASED, "{path}");
+    }
+    for path in ["/cli/sew/preflight", "/cli/sew/media/preflight"] {
+        let (st, v) = t.get(&Who::Owner, path);
+        assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "sew_not_released"), "{path}: {v}");
+        assert_eq!(v["error"]["hint"], NOT_RELEASED, "{path}");
+    }
+    // The supervisor entry points refuse on their own too.
+    assert_eq!(sup::enable_begin(&t.env, &sup::EnableRequest::default()).err().unwrap().code, "sew_not_released");
+    assert_eq!(sup::upgrade_begin(&t.env, &sup::UpgradeRequest::default()).err().unwrap().code, "sew_not_released");
+    assert_eq!(
+        crate::sew::voice::install_begin(&t.env, &crate::sew::voice::InstallRequest::default()).err().unwrap().code,
+        "sew_not_released"
+    );
+    assert!(t.ops.argvs().is_empty(), "no helper call at all: {:?}", t.ops.argvs());
+    assert!(crate::sew::store::load().is_none(), "no Sew row");
+    assert!(t.ops.voice.lock().unwrap().is_none(), "no voice record");
+    assert!(!t.env.latch.load(std::sync::atomic::Ordering::SeqCst), "the latch is free");
+    // Status: plain words, not an error.
+    let (st, v) = t.get(&Who::Owner, "/cli/sew/status");
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["released"], false);
+    assert_eq!(v["notice"], NOT_RELEASED);
+    assert_eq!(v["state"], "not-installed");
+}
+
+/// A box that already runs Sew (installed by a pinned build) and then
+/// takes a release build without a pin: upgrade refuses and changes
+/// nothing; status still reports the install, with the notice.
+#[test]
+fn unreleased_pin_refuses_upgrade_on_a_running_install() {
+    let t = t();
+    t.enable();
+    let before = crate::sew::store::load().unwrap();
+    let (_, was) = t.get(&Who::Owner, "/cli/sew/status");
+    assert_eq!(was["released"], true);
+    *t.ops.released.lock().unwrap() = false;
+    let (st, v) = t.call(&Who::Owner, "/cli/sew/server/upgrade", json!({"tarballPath": TARBALL}));
+    assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "sew_not_released"), "{v}");
+    assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
+    let after = crate::sew::store::load().unwrap();
+    assert_eq!((after.status, after.installed_version), (before.status, before.installed_version));
+    let (st, v) = t.get(&Who::Owner, "/cli/sew/status");
+    assert_eq!(st, "200 OK");
+    assert_eq!(v["state"], was["state"], "status still reports the install");
+    assert_eq!(v["installedVersion"], was["installedVersion"]);
+    assert_eq!(v["released"], false);
+    assert_eq!(v["notice"], NOT_RELEASED);
+}
+
+/// With a pin (the test-signer fixtures here; `sew-test-pins` likewise)
+/// nothing changes: status says released, no notice, and enable runs.
+#[test]
+fn pinned_build_is_unchanged() {
+    let t = t();
+    let (st, v) = t.get(&Who::Owner, "/cli/sew/status");
+    assert_eq!(st, "200 OK");
+    assert_eq!(v["released"], true);
+    assert!(v.get("notice").is_none(), "{v}");
+    assert_eq!(t.get(&Who::Owner, "/cli/sew/preflight").0, "200 OK");
+    assert_eq!(t.get(&Who::Owner, "/cli/sew/media/preflight").0, "200 OK");
+    t.enable();
+    assert_eq!(crate::sew::store::load().unwrap().status, "running");
+}
+
 // ── voice + users + standalone (K13/K14, 0.46.0 demo) ───────────────────
 
 const MEDIA: &str = "/home/k2/sew-media.tar.gz";

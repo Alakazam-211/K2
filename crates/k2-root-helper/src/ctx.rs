@@ -190,6 +190,10 @@ pub struct Ctx {
     pub self_exe: PathBuf,
     /// This build trusts the TEST key (`--features test-keys`).
     pub test_keys: bool,
+    /// This build pins a real Sew release (`sew::sew_release_pinned`); while
+    /// false the Sew install verbs refuse `sew_not_released`. Tests flip it
+    /// to check the release-build refusal.
+    pub sew_pinned: bool,
     pub exec: Box<dyn Exec>,
     pub procs: Box<dyn Procs>,
     pub rand: Box<dyn Random>,
@@ -211,6 +215,7 @@ impl Ctx {
             arch: std::env::consts::ARCH,
             self_exe: crate::sys::self_exe(),
             test_keys: cfg!(feature = "test-keys"),
+            sew_pinned: k2_root_proto::sew::sew_release_pinned(),
             exec: Box::new(RealExec),
             procs: Box::new(crate::sys::RealProcs),
             rand: Box::new(crate::sys::RealRandom),

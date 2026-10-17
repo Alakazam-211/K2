@@ -119,6 +119,50 @@ fn status_reports_pin_binary_staging_and_units_without_running_sew() {
     assert!(sew_calls(&t).is_empty(), "status never runs sew as root");
 }
 
+// ── release build without a Sew pin ──────────────────────────────────────
+
+/// A release build while K2's Sew pins are placeholders: every install verb
+/// refuses `sew_not_released` before any effect, even with the pinned
+/// binary already on the box and a valid stage in hand.
+#[test]
+fn unreleased_pin_refuses_every_install_verb_before_any_effect() {
+    let mut t = box_root();
+    t.ctx.sew_pinned = false;
+    with_pin_installed(&t);
+    let cases: Vec<(Vec<&str>, Vec<u8>)> = vec![
+        (vec!["engine", "sew", "stage"], pin_tarball()),
+        (vec!["engine", "sew", "stage-media"], media_tarball()),
+        (vec!["engine", "sew", "install-bin"], vec![]),
+        (vec!["engine", "sew", "install"], install_body().into_bytes()),
+        (vec!["engine", "sew", "upgrade"], vec![]),
+        (vec!["engine", "sew", "media", "install"], br#"{"public_url":"wss://voice.box.k2.dev"}"#.to_vec()),
+    ];
+    for (argv, stdin) in cases {
+        let o = t.call_in(&argv, &stdin);
+        assert_eq!(o.code, exit::STATE, "{argv:?}: {}", o.stderr);
+        assert!(o.stderr.starts_with("sew_not_released: "), "{argv:?}: {}", o.stderr);
+        assert!(o.stderr.contains(SEW_NOT_RELEASED_MESSAGE), "{argv:?}: {}", o.stderr);
+    }
+    assert!(!t.p(SEW_STAGE_TARBALL).exists());
+    assert!(!t.p(SEW_STAGE_MEDIA_TARBALL).exists());
+    assert!(!t.p(SEW_STAGE_INSTALL_JSON).exists());
+    assert!(sew_calls(&t).is_empty(), "nothing ran as root");
+    assert!(systemctl_calls(&t).is_empty(), "no unit touched: {:?}", systemctl_calls(&t));
+    // Reads and clean-up verbs still answer.
+    ok(&t.call(&["engine", "sew", "status"]));
+    ok(&t.call(&["engine", "sew", "unstage"]));
+}
+
+/// The same box with a pin (test-signer here; `sew-test-pins` likewise):
+/// stage works as before.
+#[test]
+fn pinned_build_stages_as_before() {
+    let t = box_root();
+    assert!(t.ctx.sew_pinned, "helper tests build with test-signer: the fixture pin");
+    ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+    assert!(t.p(SEW_STAGE_TARBALL).exists());
+}
+
 // ── stage / install-bin ──────────────────────────────────────────────────
 
 #[test]

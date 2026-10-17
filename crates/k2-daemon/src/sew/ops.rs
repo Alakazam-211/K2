@@ -114,6 +114,13 @@ pub trait SewOps: Send + Sync {
     fn voice_load(&self) -> Option<Value>;
     /// Write the voice record (`None` removes it).
     fn voice_save(&self, v: Option<&Value>) -> Result<(), String>;
+
+    /// This build pins a published Sew release
+    /// (`k2_root_proto::sew::sew_release_pinned`). While false every
+    /// install path refuses `sew_not_released`. Tests override it.
+    fn sew_released(&self) -> bool {
+        k2_root_proto::sew::sew_release_pinned()
+    }
 }
 
 /// A control-plane answer that was not 2xx (`status` 0 = unreachable).
@@ -586,6 +593,8 @@ pub mod fake {
         /// `engine sew stage-media` happened (status reports it staged).
         pub media_staged: Mutex<bool>,
         pub media_state: Mutex<Value>,
+        /// [`SewOps::sew_released`] (true: the test-signer fixture pin).
+        pub released: Mutex<bool>,
     }
 
     pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -662,6 +671,7 @@ pub mod fake {
                 last_leaf: Mutex::new(None),
                 media_staged: Mutex::new(false),
                 media_state: Mutex::new(json!({"installed": true, "enabled": true, "state": "running", "alarms": ["port_443_unavailable"]})),
+                released: Mutex::new(true),
             }
         }
 
@@ -865,6 +875,9 @@ pub mod fake {
     }
 
     impl SewOps for FakeOps {
+        fn sew_released(&self) -> bool {
+            *self.released.lock().unwrap()
+        }
         fn linux(&self) -> bool {
             self.linux
         }

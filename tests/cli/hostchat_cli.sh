@@ -12,6 +12,8 @@
 #   3. A setup link prints to stdout only (never stderr); --json prints raw.
 #   4. Exit codes: 400 → 2, 403/409 → 3, usage errors → 2 before any request.
 #   5. Person-only steps refuse inside a K2 terminal before any request.
+#   6. A release without a Sew pin: enable/preflight/upgrade/media install
+#      exit 3 with sew_not_released; status says so plainly, exit 0.
 # Fake values only (example.test, made-up ids). Never touches the real ~/.k2.
 
 set -euo pipefail
@@ -100,7 +102,14 @@ class H(BaseHTTPRequestHandler):
         b = json.loads(body) if body else {}
         p = parsed.path
         status, out = 200, {"ok": True}
-        if p == "/cli/sew/status":
+        unreleased = os.path.exists(os.path.join(work, "unreleased"))
+        msg = "Sew isn't available in this K2 release yet. It will be turned on in a later K2 update."
+        if unreleased and p == "/cli/sew/status":
+            out = {"ok": True, "supported": True, "state": "not-installed", "released": False, "notice": msg}
+        elif unreleased and p in ("/cli/sew/server/enable", "/cli/sew/server/upgrade", "/cli/sew/preflight",
+                                  "/cli/sew/media/install", "/cli/sew/media/preflight"):
+            status, out = 409, {"ok": False, "error": {"code": "sew_not_released", "hint": msg}}
+        elif p == "/cli/sew/status":
             state["polls"] += 1
             done = state["polls"] >= 2
             out = {"ok": True, "supported": True, "state": "running" if done else "installing", "identityProvider": "standalone",
@@ -296,6 +305,21 @@ assert_eq "agent: purge refused (exit 3)" "$rc" "3"
 run cell hostchat rotate-master --drop-prev
 assert_eq "agent: drop-prev refused (exit 3)" "$rc" "3"
 assert_eq "person-only refusals send nothing" "$(nreq)" "$before"
+
+echo "== release without a Sew pin =="
+touch "$WORK/unreleased"
+NR="Sew isn't available in this K2 release yet. It will be turned on in a later K2 update."
+run owner hostchat status
+assert_eq "unreleased: status exit 0" "$rc" "0"
+assert_eq "unreleased: status says so plainly" "$out" "Sew: $NR"
+for verb in "enable --tarball sew.tar.gz" "preflight" "upgrade --tarball sew.tar.gz" "media install --tarball sew-media.tar.gz --no-wait" "media preflight"; do
+    # shellcheck disable=SC2086
+    run owner hostchat $verb
+    assert_eq "unreleased: $verb → exit 3" "$rc" "3"
+    assert_contains "unreleased: $verb says sew_not_released" "$err" '"error": "sew_not_released"'
+    assert_contains "unreleased: $verb gives the message" "$err" "$NR"
+done
+rm -f "$WORK/unreleased"
 
 echo
 echo "hostchat CLI: $pass passed, $fail failed"

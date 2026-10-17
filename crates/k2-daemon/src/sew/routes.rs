@@ -326,6 +326,7 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         }
         "/cli/sew/preflight" => {
             need_credential(who)?;
+            sup::need_released(&env)?;
             let req = sup::EnableRequest {
                 tarball_path: params.get("tarballPath").filter(|p| p.starts_with('/')).map(PathBuf::from),
                 recovery_key_file: None,
@@ -345,6 +346,7 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         }
         "/cli/sew/server/enable" => {
             need_manage(who)?;
+            sup::need_released(&env)?;
             let v = json_body(body)?;
             let provider = match s(&v, "identity") {
                 None | Some("k2") => None,
@@ -427,12 +429,14 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         }
         "/cli/sew/media/preflight" => {
             need_credential(who)?;
+            sup::need_released(&env)?;
             let checks = super::voice::preflight(&env);
             let ready = !checks.iter().any(|c| c["status"] == "fail");
             Ok(json!({"ok": true, "ready": ready, "checks": checks}))
         }
         "/cli/sew/media/install" => {
             need_manage(who)?;
+            sup::need_released(&env)?;
             let v = json_body(body)?;
             let req = voice_request(&v)?;
             voice_install(env, &req, background)
@@ -504,6 +508,7 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         }
         "/cli/sew/server/upgrade" => {
             need_manage(who)?;
+            sup::need_released(&env)?;
             let v = json_body(body)?;
             let req = sup::UpgradeRequest { tarball_path: abs_path(&v, "tarballPath")?, dry_run: b(&v, "dryRun") };
             match sup::upgrade_begin(&env, &req)? {

@@ -1394,13 +1394,11 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // 0179 — Design mode per-workspace switch (prd-browser-design-mode-v1
         // late decision, Rosson 2026-10-16): `projects.design_mode_enabled`,
         // DEFAULT 1. Took 0179 at integration (0178 is the Changes notes).
-        //
         // Additive only: renumber freely on a slip (and edit the two
         // migration-order tests below).
         (
             "0179_workspace_design_mode",
             include_str!("../../drizzle_sql/0179_workspace_design_mode.sql"),
-        ),
         ),
         // 0180 — a clone carries its Threads (prd-clone-carries-threads-
         // and-vault-v1 §5.2): `overlay_imports` (one row per imported

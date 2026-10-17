@@ -878,6 +878,7 @@ impl Rewrite<'_> {
             choice: None,
             secret: None,
             widget: None,
+            design: None,
             author: None,
             external: None,
             imported: Some(meta),

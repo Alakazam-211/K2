@@ -1,10 +1,11 @@
 // Thread push (prd-thread-push-notifications-v1 S5): the caller's own push
-// prefs on the window's server, kept live. Shared by Settings →
-// Notifications and the workspace Agent tab's phone switch, so both show
-// the daemon's one truth and refetch on `notify_prefs_changed`.
+// prefs on one server (the window's, unless a room passes its scope), kept
+// live. Shared by Settings → Notifications, the workspace Agent tab's phone
+// switch and the Workspace drawer's phone toggle, so all show the daemon's
+// one truth and refetch on `notify_prefs_changed`.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { primaryScope } from '@/kessel/server-scope'
+import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { onNotifyPrefsChanged } from '@/stores/session-events'
 import { fetchNotifyPrefs, isYouAuthor, type NotifyPrefs } from './notify-api'
 
@@ -23,8 +24,9 @@ export interface NotifyPrefsState {
   adopt: (next: NotifyPrefs) => void
 }
 
-/** `enabled` false: nothing is fetched or subscribed (an older server). */
-export function useNotifyPrefs(enabled: boolean): NotifyPrefsState {
+/** `enabled` false: nothing is fetched or subscribed (an older server).
+ *  `scope`: the server to read (a room's drawer passes `room.scope`). */
+export function useNotifyPrefs(enabled: boolean, scope: ServerScope = primaryScope()): NotifyPrefsState {
   const [prefs, setPrefs] = useState<NotifyPrefs | null>(null)
   const [error, setError] = useState<string | null>(null)
   /** Only the newest read lands (a refetch can overtake an older one). */
@@ -33,7 +35,7 @@ export function useNotifyPrefs(enabled: boolean): NotifyPrefsState {
   const reload = useCallback(() => {
     if (!enabled) return
     const gen = ++generation.current
-    fetchNotifyPrefs().then(
+    fetchNotifyPrefs(scope).then(
       (p) => {
         if (gen !== generation.current) return
         setPrefs(p)
@@ -44,7 +46,7 @@ export function useNotifyPrefs(enabled: boolean): NotifyPrefsState {
         setError(e instanceof Error ? e.message : String(e))
       },
     )
-  }, [enabled])
+  }, [enabled, scope])
 
   useEffect(() => {
     if (!enabled) {
@@ -53,12 +55,12 @@ export function useNotifyPrefs(enabled: boolean): NotifyPrefsState {
       return
     }
     reload()
-    const off = onNotifyPrefsChanged(primaryScope(), reload)
+    const off = onNotifyPrefsChanged(scope, reload)
     return () => {
       off()
       generation.current += 1
     }
-  }, [enabled, reload])
+  }, [enabled, scope, reload])
 
   const adopt = useCallback((next: NotifyPrefs) => {
     generation.current += 1

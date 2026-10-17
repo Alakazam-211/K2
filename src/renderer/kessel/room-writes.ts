@@ -93,6 +93,7 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
 
   // The Workspace panel.
   'workspace/set': 'the drawer’s completion bell and Hide API sessions toggle on B',
+  'notify/prefs': 'the drawer’s phone toggle sets the caller’s own Thread push for this workspace on B',
   'git/create-worktree': 'New worktree in B’s workspace',
   'workspaces/delete': 'Close Worktree on B',
   'git/remove-worktree': 'Recycle Worktree on B',

@@ -4,10 +4,11 @@
 // `currentColor`.
 //
 //   Home, Agents, Projects, Tickets, Wiki, Server, Admin, Run, Drawer,
-//   Clock, Mug, Help, Pin, PinOff
+//   Clock, Mug, Help, Pin, PinOff, Smartphone, SmartphoneOff
 //     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `library`,
 //     `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`,
-//     `circle-help`, `pin`, `pin-off`),
+//     `circle-help`, `pin`, `pin-off`, `smartphone`; SmartphoneOff is
+//     `smartphone` plus the bell's 2,2 → 22,22 slash),
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
 //   Settings
@@ -292,6 +293,29 @@ export function PinOffIcon(props: K2IconProps = {}): React.JSX.Element {
       <path d="M15 9.34V6h3V2H7.89" />
       <path d="M2 2l20 20" />
       <path d="M9 9v2l-4 3v3h12" />
+    </svg>
+  )
+}
+
+/** Thread pushes to your phone (the Workspace drawer's toggle): Lucide
+ *  `smartphone`, squared (no corner radius). */
+export function SmartphoneIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('smartphone', props)}>
+      <rect width="14" height="20" x="5" y="2" />
+      <path d="M12 18h.01" />
+    </svg>
+  )
+}
+
+/** Thread pushes off: `SmartphoneIcon` with the same slash as the drawer's
+ *  muted bell. */
+export function SmartphoneOffIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('smartphone-off', props)}>
+      <rect width="14" height="20" x="5" y="2" />
+      <path d="M12 18h.01" />
+      <path d="M2 2l20 20" />
     </svg>
   )
 }

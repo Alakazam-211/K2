@@ -61,6 +61,10 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     // held to and the default assignee. Same floor as
     // `POST /cli/tickets/settings` (Admin).
     "tickets",
+    // 0.46.1 Thread push previews: the server-wide switch that lets message
+    // text ride pushes (through K2's relay and Apple/Google). A Member must
+    // not turn previews on (or off) for everyone's phones.
+    "pushMessagePreviews",
 ];
 
 /// LM5 (prd-lan-mode-toggle-tls-docs-v1 §11) — keys only the Owner may
@@ -611,6 +615,30 @@ mod tests {
                 k2_core::app_settings::load().push_gateway_url.as_deref(),
                 Some("https://push.example")
             );
+        });
+    }
+
+    /// 0.46.1: `pushMessagePreviews` defaults on, a Member can't flip it
+    /// (atomic 403), and an Admin or the Owner can.
+    #[test]
+    fn push_message_previews_is_owner_or_admin_only() {
+        with_temp_home(|| {
+            assert!(k2_core::app_settings::load().push_message_previews, "default on");
+            let admin = session_actor("adminpv", connect_users::Role::Admin);
+            let member = session_actor("memberpv", connect_users::Role::Member);
+            let r = handle_settings_update(br#"{"pushMessagePreviews":false,"defaultAgent":"codex"}"#, member);
+            assert_eq!(r.status, "403 Forbidden", "member: {}", r.body);
+            assert!(r.body.contains("pushMessagePreviews"), "{}", r.body);
+            let s = k2_core::app_settings::load();
+            assert!(s.push_message_previews, "403 leaves it on");
+            assert_eq!(s.default_agent, "claude", "nothing half-applied");
+            let r = handle_settings_update(br#"{"pushMessagePreviews":false}"#, admin);
+            assert_eq!(r.status, "200 OK", "admin: {}", r.body);
+            assert!(!k2_core::app_settings::load().push_message_previews);
+            let r = handle_settings_update(br#"{"pushMessagePreviews":true}"#, SettingsActor::Owner);
+            assert_eq!(r.status, "200 OK", "owner: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["pushMessagePreviews"], true, "the merged settings carry the key");
         });
     }
 

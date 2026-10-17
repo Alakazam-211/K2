@@ -963,7 +963,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 crate::thread_activity::note_reply(&resolved.conversation_id);
                 // Thread push (§6.1): an agent reply may push; a human
                 // `from` (an owner-token shell post) never does (TP14).
-                push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Text);
+                push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Text, &text);
             }
             CliResponse::ok_json(with_moved_from(
                 serde_json::json!({
@@ -992,7 +992,9 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
 
 /// Thread push trigger (prd-thread-push-notifications-v1 §6.1) for the
 /// three agent-reply sites. App guests are never a push source (TP13).
-fn push_agent_post(resolved: &ResolvedOverlay, from: &str, seq: i64, kind: k2_core::push::ThreadMsgKind) {
+/// `text` is the reply's text or a choice card's question (its push
+/// preview, 0.46.1); a secret card passes `""` and never previews.
+fn push_agent_post(resolved: &ResolvedOverlay, from: &str, seq: i64, kind: k2_core::push::ThreadMsgKind, text: &str) {
     if request_skin().is_some() {
         return;
     }
@@ -1003,6 +1005,7 @@ fn push_agent_post(resolved: &ResolvedOverlay, from: &str, seq: i64, kind: k2_co
         from,
         seq,
         kind,
+        text,
     );
 }
 
@@ -1085,7 +1088,7 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
             drop(conn);
             // TW4 (a): an agent's card is its Thread reply.
             crate::thread_activity::note_reply(&resolved.conversation_id);
-            push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Choice);
+            push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Choice, prompt.trim());
             let choice = item.doc.choice.as_ref();
             let labels: Vec<String> = choice
                 .map(|c| c.options.iter().map(|o| o.label.clone()).collect())
@@ -1259,7 +1262,7 @@ fn create_secret_card(
     if !quiet {
         crate::thread_activity::note_reply(&resolved.conversation_id);
         // A secret card pushes name-only, never its name or prompt (§7).
-        push_agent_post(resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret);
+        push_agent_post(resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret, "");
     }
     Ok(item)
 }
@@ -5229,7 +5232,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_posts_at_all_three_sites_push_name_only() {
+    fn agent_posts_at_all_three_sites_push_previews_but_never_secrets() {
         let _home = crate::test_support::TempHome::new();
         let _db = k2_core::db::scoped_for_test();
         k2_core::push_devices::upsert_device("ovlpush-dev", "apns", "ovlpush-tok", "owner").expect("phone");
@@ -5238,13 +5241,13 @@ mod tests {
         let (sec_ws, sec_conv) = push_ws("s");
         let mark = crate::push_routes::test_push_capture::mark();
 
-        let r = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": text_ws, "text": "secret plans", "from": "k2" }));
+        let r = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": text_ws, "text": "## Plan\n\nThe **launch** plan is ready. Read it tonight. Then sleep.", "from": "k2" }));
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let seq = json_body(&r)["seq"].as_i64().expect("seq");
         let r = post_json(
             "/cli/thread/ask",
             &HashMap::new(),
-            serde_json::json!({ "addr": ask_ws, "prompt": "Ship it?", "options": "Go,Stop", "from": "k2" }),
+            serde_json::json!({ "addr": ask_ws, "prompt": "Ship *it*?", "options": "Go,Stop", "from": "k2" }),
         );
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let r = post_json(
@@ -5260,14 +5263,20 @@ mod tests {
         assert_eq!(t[0].principal, "owner");
         assert_eq!(t[0].device_usernames, vec!["owner".to_string()]);
         assert_eq!(t[0].addr, text_ws);
-        assert_eq!(thread_pushes(mark, &ask_conv)[0].msg_kind, k2_core::push::ThreadMsgKind::Choice);
+        let c = thread_pushes(mark, &ask_conv);
+        assert_eq!(c[0].msg_kind, k2_core::push::ThreadMsgKind::Choice);
+        assert_eq!(k2_core::push::PushEvent::ThreadPost(c[0].clone()).body(), "Ship it?", "a choice card shows its question");
         let s = thread_pushes(mark, &sec_conv);
         assert_eq!(s[0].msg_kind, k2_core::push::ThreadMsgKind::Secret);
         let ev = k2_core::push::PushEvent::ThreadPost(s[0].clone());
         let wire = k2_core::push::K2Cloud::payload(&ev, &k2_core::push::PushStamp::default(), "owner").to_string();
         assert!(!wire.contains("STRIPE") && !wire.contains("stripe"), "a secret card never names the secret: {wire}");
         let wire = k2_core::push::K2Cloud::payload(&k2_core::push::PushEvent::ThreadPost(t[0].clone()), &Default::default(), "owner").to_string();
-        assert!(!wire.contains("secret plans"), "name-only: {wire}");
+        // 0.46.1: the text reply previews its first two sentences, markdown stripped.
+        assert_eq!(t[0].preview, "Plan — The launch plan is ready.");
+        assert!(wire.contains("\"body\":\"Plan — The launch plan is ready.\""), "preview in the body: {wire}");
+        assert!(!wire.contains("Then sleep") && !wire.contains("**"), "two sentences, stripped: {wire}");
+        assert!(s[0].preview.is_empty(), "a secret card carries no preview");
     }
 
     #[test]

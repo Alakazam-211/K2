@@ -7818,6 +7818,43 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
                 .await;
         }
+        // 0.46.1 previews — `GET /cli/push/device?deviceId=` reads a
+        // phone's stored `previews` + the server's `previewsAllowed`. Same
+        // caller resolution as the POSTs below (owner token → "owner", a
+        // live Connect session → its username; never a param). A POST here
+        // goes to the arm below, which answers 405.
+        p if !is_post && p == crate::push_routes::DEVICE_PATH => {
+            let username = if !super::http::token_ok(&query, state.token.as_str()) {
+                None
+            } else if super::http::token_is_owner(&query, state.token.as_str()) {
+                Some("owner".to_string())
+            } else {
+                super::http::extract_token(&query).and_then(k2_core::connect_users::validate_session)
+            };
+            let _ = stream.read(&mut buf).await;
+            let Some(username) = username else {
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"invalid or missing token"}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            };
+            let params = super::http::parse_params(p, &query);
+            let result = tokio::task::spawn_blocking(move || {
+                crate::push_routes::handle_device_get(&params, &username)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         // Companion C4 — `/cli/push/*` mutations (register-device /
         // unregister-device). JSON-bodied POSTs; token_ok (ANY authed
         // user: owner or a live connect-user session) + require_post

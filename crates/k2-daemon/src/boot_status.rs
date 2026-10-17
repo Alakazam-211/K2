@@ -330,6 +330,13 @@ pub const FEATURE_GROKBOTS: &str = "grokbots-v1";
 /// `POST /cli/zen/call` on this computer's daemon.
 pub const FEATURE_GARDEN_DATA: &str = "garden-data-v1";
 
+/// Thread push message previews (0.46.1): `POST /cli/push/register-device`
+/// takes `previews` (absent = keep the stored value), its reply and
+/// `GET /cli/push/device` carry `previews` + `previewsAllowed`, and a
+/// Thread push body may be a message preview. K2 Companion sends
+/// `previews` only to a server with this key.
+pub const FEATURE_PUSH_PREVIEWS: &str = "push-previews-v1";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -364,6 +371,8 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_GROKBOTS);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
+        // Same DB as 0157: migration 0189 (push_devices.previews) ran with it.
+        out.push(FEATURE_PUSH_PREVIEWS);
     }
     out
 }
@@ -409,7 +418,8 @@ mod tests {
                 "sources-v1",
                 "garden-data-v1",
                 "grokbots-v1",
-                "thread-push-v1"
+                "thread-push-v1",
+                "push-previews-v1"
             ]
         );
     }

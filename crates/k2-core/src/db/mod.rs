@@ -1411,6 +1411,11 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // of a source's bound secret (sources.secret_workspace) and the
         // Garden/widget proposal queue (zen_proposals). Additive only.
         ("0181_gardens_manage", include_str!("../../drizzle_sql/0181_gardens_manage.sql")),
+        // 0189 — Thread push previews (0.46.1): `push_devices.previews`,
+        // nullable (NULL = on). 0182–0188 are taken on other 0.46.1 lanes;
+        // additive only, renumber freely on a slip (and edit the
+        // migration-order tests below).
+        ("0189_push_device_previews", include_str!("../../drizzle_sql/0189_push_device_previews.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2074,7 +2079,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0181_gardens_manage",
+            last_name, "0189_push_device_previews",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2118,6 +2123,7 @@ mod tests {
                 "0179_workspace_design_mode",
                 "0180_clone_imports",
                 "0181_gardens_manage",
+                "0189_push_device_previews",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2163,6 +2169,7 @@ mod tests {
                 "0179_workspace_design_mode",
                 "0180_clone_imports",
                 "0181_gardens_manage",
+                "0189_push_device_previews",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2185,6 +2192,44 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM _migrations WHERE name >= '0165'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(again, tail.len() as i64, "the 0.46.0 tail is recorded once: {tail:?}");
+    }
+
+    /// A 0.46.0 database (last migration 0181) with a registered phone
+    /// upgrades through 0189: the device row keeps its data, its new
+    /// `previews` column is NULL (= on), and a second run is a no-op.
+    #[test]
+    fn a_046_0_database_upgrades_through_0189_push_device_previews() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0181_gardens_manage")).unwrap();
+        let cols = |conn: &Connection| -> Vec<String> {
+            let mut stmt = conn.prepare("PRAGMA table_info(push_devices)").unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(1)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        assert!(!cols(&conn).iter().any(|c| c == "previews"), "0.46.0 has no previews column");
+        conn.execute(
+            "INSERT INTO push_devices (device_id, platform, token, username, created_at, updated_at, last_seen_at) \
+             VALUES ('d-old', 'apns', 'tok-old', 'owner', 1, 2, 3)",
+            [],
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        assert!(cols(&conn).iter().any(|c| c == "previews"), "0189 adds push_devices.previews");
+        let (token, previews, seen): (String, Option<i64>, i64) = conn
+            .query_row(
+                "SELECT token, previews, last_seen_at FROM push_devices WHERE device_id = 'd-old'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((token.as_str(), seen), ("tok-old", 3), "the old row keeps its data");
+        assert_eq!(previews, None, "never set: NULL, which reads as previews on");
+
+        run_migrations(&conn).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0189_push_device_previews'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "recorded once");
     }
 
     /// 0.46.0: one held-request table for every kind (grace and egress), a
@@ -2395,7 +2440,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0181 (Gardens manage) is the newest; roll it back first. Its
+            // 0189 (push previews) is the newest: forget it (its column
+            // stays; re-adding it is skipped as a duplicate column).
+            conn.execute("DELETE FROM _migrations WHERE name = '0189_push_device_previews'", []).unwrap();
+            // 0181 (Gardens manage) came before it; roll it back next. Its
             // projects column stays (re-adding it is skipped as a duplicate
             // column), its sources column went with the table.
             conn.execute_batch("DROP TABLE zen_proposals;").unwrap();

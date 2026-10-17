@@ -858,6 +858,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/publish/subdomain/unclaim", Member),
     // decision-k2-runtime-v1 stage 0: `k2 app validate` (parse + leak lints).
     get("/cli/publish/validate", Member),
+    get("/cli/push/device", Member),
     post("/cli/push/register-device", Member),
     post("/cli/push/unregister-device", Member),
     post("/cli/relations/create", Member),

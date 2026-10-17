@@ -19,8 +19,18 @@
 //!   push, the next window is [`BACKOFF`] (5 min) instead of [`WINDOW`]
 //!   (45 s). A `viewing` frame resets it to 45 s.
 //! - Budget: each dispatch takes one token from the daemon's Thread bucket
-//!   (30/h, 5/h on the shared relay token). Over budget, the held count is
-//!   kept and rides the next push.
+//!   (30/h, 5/h on the shared relay token) per gateway call it makes.
+//!   Over budget, the held count is kept and rides the next push.
+//!
+//! **Previews (0.46.1).** A push's body is a preview of the latest post
+//! (`k2_core::push::preview`), never for a secret card. The owner's
+//! `pushMessagePreviews` switch off → no preview for anyone. Otherwise each
+//! phone's own `previews` choice decides; when one person's phones
+//! disagree, the dispatch is TWO gateway calls (preview / generic) and
+//! takes two tokens. If only one token is left, it goes out as ONE generic
+//! call to all of that person's phones (nobody misses the push, no text
+//! leaks to a phone that said no). PRIVACY: a preview passes through K2's
+//! relay and Apple (APNs) or Google (FCM).
 //!
 //! **Viewing (TP26).** Checked at FLUSH time, not post time: a `viewing`
 //! frame that lands before the window flushes still quiets the push.
@@ -56,6 +66,19 @@ pub struct Post {
     pub avatar_rev: String,
     /// The workspace's colour at post time (`data.agentColor`).
     pub agent_color: String,
+    /// The post's message preview (`k2_core::push::preview::message_preview`
+    /// of the text, or a choice card's question); `""` for a secret card or
+    /// nothing readable. The raw text is never held.
+    pub preview: String,
+}
+
+/// How one person's phones split on previews right now.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PreviewSplit {
+    /// Phones with previews on.
+    pub on: usize,
+    /// Phones with previews off.
+    pub off: usize,
 }
 
 /// What the coalescer needs from the daemon.
@@ -65,8 +88,13 @@ pub trait PushEnv {
     fn recipients(&self, project_id: &str) -> Vec<Recipient>;
     /// Is `person` looking at `conversation_id` at `now`? (TP26, TP28)
     fn viewing(&self, person: &str, conversation_id: &str, now: Instant) -> bool;
-    /// Take one dispatch from the Thread budget at `now`.
-    fn take_budget(&self, now: Instant) -> bool;
+    /// Take `calls` gateway calls from the Thread budget at `now`, all or
+    /// nothing.
+    fn take_budget(&self, now: Instant, calls: usize) -> bool;
+    /// The owner's `pushMessagePreviews` switch.
+    fn previews_allowed(&self) -> bool;
+    /// How these logins' phones split on previews.
+    fn preview_split(&self, device_usernames: &[String]) -> PreviewSplit;
     /// Send one dispatch (air-gap is checked again inside).
     fn send(&self, event: PushEvent);
     /// Air-gap on: nothing is held or sent.
@@ -185,7 +213,30 @@ impl Coalescer {
             w.viewed_since_push = true;
             return;
         }
-        if !env.take_budget(now) {
+        // Previews: the master switch, then this person's phones. A split
+        // (some on, some off) is two gateway calls: one with the preview,
+        // one generic.
+        let mut preview = if env.previews_allowed() && w.post.kind != ThreadMsgKind::Secret {
+            w.post.preview.clone()
+        } else {
+            String::new()
+        };
+        let mut calls = 1;
+        if !preview.is_empty() {
+            let split = env.preview_split(&w.devices);
+            if split.on == 0 {
+                preview.clear();
+            } else if split.off > 0 {
+                calls = 2;
+            }
+        }
+        let mut granted = env.take_budget(now, calls);
+        if !granted && calls == 2 {
+            // One token left: one generic call to every phone.
+            preview.clear();
+            granted = env.take_budget(now, 1);
+        }
+        if !granted {
             // Over budget: keep the count for the next push and try again
             // after another window (logged by the env, never queued).
             crate::push_routes::note_budget_drop(k2_core::push::budget::BudgetClass::Thread);
@@ -206,6 +257,8 @@ impl Coalescer {
             // The latest post's look: a trailing push shows the current avatar.
             avatar_rev: w.post.avatar_rev.clone(),
             agent_color: w.post.agent_color.clone(),
+            // The latest post's preview ("N new messages · …" when count > 1).
+            preview,
         });
         w.pending = 0;
         w.last_push = Some(now);
@@ -251,8 +304,18 @@ impl PushEnv for DaemonEnv {
         crate::thread_viewers::global().is_viewing(person, conversation_id, now)
     }
 
-    fn take_budget(&self, now: Instant) -> bool {
-        crate::push_routes::take_thread_budget(now)
+    fn take_budget(&self, now: Instant, calls: usize) -> bool {
+        crate::push_routes::take_thread_budget(now, calls)
+    }
+
+    fn previews_allowed(&self) -> bool {
+        crate::push_routes::previews_allowed()
+    }
+
+    fn preview_split(&self, device_usernames: &[String]) -> PreviewSplit {
+        let devices = k2_core::push_devices::list_devices_for_usernames(device_usernames).unwrap_or_default();
+        let on = devices.iter().filter(|d| d.previews).count();
+        PreviewSplit { on, off: devices.len() - on }
     }
 
     fn send(&self, event: PushEvent) {
@@ -319,6 +382,14 @@ fn agent_name_for(from: &str) -> String {
     }
 }
 
+/// A post's preview: never for a secret card.
+fn post_preview(kind: ThreadMsgKind, text: &str) -> String {
+    match kind {
+        ThreadMsgKind::Secret => String::new(),
+        ThreadMsgKind::Text | ThreadMsgKind::Choice => k2_core::push::preview::message_preview(text),
+    }
+}
+
 /// True when `from` names a human on this server (TP14).
 fn is_human_from(from: &str) -> bool {
     let owner = crate::workspace_msg::resolve_owner_from();
@@ -329,7 +400,9 @@ fn is_human_from(from: &str) -> bool {
     }
 }
 
-/// The trigger (§6.1). `from` is the stored `item.doc.from`.
+/// The trigger (§6.1). `from` is the stored `item.doc.from`; `text` is
+/// the post's text (a choice card's question; ignored for a secret card),
+/// kept only as its preview.
 pub fn on_agent_post(
     conversation_id: &str,
     project_id: &str,
@@ -337,6 +410,7 @@ pub fn on_agent_post(
     from: &str,
     seq: i64,
     kind: ThreadMsgKind,
+    text: &str,
 ) {
     if crate::push_routes::airgap_blocks() || is_human_from(from) {
         return;
@@ -352,6 +426,7 @@ pub fn on_agent_post(
         kind,
         avatar_rev,
         agent_color,
+        preview: post_preview(kind, text),
     };
     ensure_ticker();
     lock().post(&DaemonEnv, post, Instant::now());
@@ -372,6 +447,12 @@ mod tests {
         budget: Cell<Option<u32>>,
         sent: RefCell<Vec<ThreadPush>>,
         airgap: Cell<bool>,
+        /// The owner's master switch (`None` = default on).
+        previews_off: Cell<bool>,
+        /// Logins whose phones have previews OFF.
+        previews_off_logins: RefCell<HashSet<String>>,
+        /// Gateway calls taken from the budget, in order.
+        calls_taken: RefCell<Vec<usize>>,
     }
 
     impl Fake {
@@ -400,15 +481,28 @@ mod tests {
         fn viewing(&self, person: &str, conversation_id: &str, _now: Instant) -> bool {
             self.viewers.borrow().contains(&(person.to_string(), conversation_id.to_string()))
         }
-        fn take_budget(&self, _now: Instant) -> bool {
-            match self.budget.get() {
+        fn take_budget(&self, _now: Instant, calls: usize) -> bool {
+            let calls32 = calls as u32;
+            let ok = match self.budget.get() {
                 None => true,
-                Some(0) => false,
+                Some(n) if n < calls32 => false,
                 Some(n) => {
-                    self.budget.set(Some(n - 1));
+                    self.budget.set(Some(n - calls32));
                     true
                 }
+            };
+            if ok {
+                self.calls_taken.borrow_mut().push(calls);
             }
+            ok
+        }
+        fn previews_allowed(&self) -> bool {
+            !self.previews_off.get()
+        }
+        fn preview_split(&self, device_usernames: &[String]) -> PreviewSplit {
+            let off_set = self.previews_off_logins.borrow();
+            let off = device_usernames.iter().filter(|u| off_set.contains(*u)).count();
+            PreviewSplit { on: device_usernames.len() - off, off }
         }
         fn send(&self, event: PushEvent) {
             match event {
@@ -431,7 +525,12 @@ mod tests {
             kind,
             avatar_rev: "0123456789abcdef".into(),
             agent_color: "#22c55e".into(),
+            preview: String::new(),
         }
+    }
+
+    fn said(conv: &str, seq: i64, kind: ThreadMsgKind, text: &str) -> Post {
+        Post { preview: post_preview(kind, text), ..post(conv, seq, kind) }
     }
 
     fn secs(n: u64) -> Duration {
@@ -478,7 +577,7 @@ mod tests {
         assert_eq!((sent[1].count, sent[1].seq), (4, 104), "trailing: 4 new messages, last seq");
         let a = PushEvent::ThreadPost(sent[0].clone());
         let b = PushEvent::ThreadPost(sent[1].clone());
-        assert_eq!(b.body(), "4 new messages");
+        assert_eq!(b.body(), "4 new messages", "posts without text: the count alone");
         assert_eq!(a.collapse_id(), b.collapse_id(), "the trailing push replaces the banner");
         assert_eq!(sent[1].device_usernames, vec!["owner".to_string(), "z3thon".to_string()]);
         // Nothing more after the next (quiet) window closes.
@@ -609,5 +708,121 @@ mod tests {
         c.post(&env, post("c6", 1, ThreadMsgKind::Text), Instant::now());
         assert!(env.sent().is_empty());
         assert!(c.state("c6", "owner").is_none());
+    }
+
+    // ── Previews (0.46.1) ────────────────────────────────────────────
+
+    /// Leading push: the post's preview. Trailing push: "N new messages ·
+    /// <latest preview>". The updated "4 new messages" test, with text.
+    #[test]
+    fn previews_ride_the_leading_and_trailing_pushes() {
+        let env = Fake::with(&[("owner", &["owner"])]);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.post(&env, said("pv1", 1, ThreadMsgKind::Text, "## Done\n\nThe **build** is green. Shipping next. Then lunch."), t0);
+        for i in 0..3u64 {
+            c.post(&env, said("pv1", 2 + i as i64, ThreadMsgKind::Text, &format!("Step {} finished.", i + 2)), t0 + secs(5 + i));
+        }
+        c.tick(&env, t0 + WINDOW);
+        let sent = env.sent();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(PushEvent::ThreadPost(sent[0].clone()).body(), "Done — The build is green.");
+        assert_eq!(PushEvent::ThreadPost(sent[1].clone()).body(), "3 new messages · Step 4 finished.");
+        assert_eq!(*env.calls_taken.borrow(), vec![1, 1]);
+    }
+
+    /// A secret card never carries text — even as the latest of a
+    /// coalesced batch; a choice card shows its question.
+    #[test]
+    fn secret_posts_never_preview_and_choices_show_the_question() {
+        assert_eq!(post_preview(ThreadMsgKind::Secret, "the key is hunter2"), "");
+        let env = Fake::with(&[("owner", &["owner"])]);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.post(&env, said("pv2", 1, ThreadMsgKind::Choice, "Ship **0.46.1** tonight? Or wait for QA."), t0);
+        c.post(&env, said("pv2", 2, ThreadMsgKind::Text, "Some text."), t0 + secs(1));
+        c.post(&env, said("pv2", 3, ThreadMsgKind::Secret, "the key is hunter2"), t0 + secs(2));
+        c.tick(&env, t0 + WINDOW);
+        let sent = env.sent();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(PushEvent::ThreadPost(sent[0].clone()).body(), "Ship 0.46.1 tonight? Or wait for QA.");
+        let trailing = PushEvent::ThreadPost(sent[1].clone());
+        assert_eq!(trailing.body(), "2 new messages", "the latest is a secret: no preview");
+        assert!(sent[1].preview.is_empty());
+        let stamp = k2_core::push::PushStamp::default();
+        assert!(!k2_core::push::K2Cloud::payload(&trailing, &stamp, "owner").to_string().contains("hunter2"));
+    }
+
+    /// The owner's switch off → every push is generic and one call.
+    #[test]
+    fn master_switch_off_means_generic_for_everyone() {
+        let env = Fake::with(&[("owner", &["owner", "z3thon"]), ("gina", &["gina"])]);
+        env.previews_off.set(true);
+        let mut c = Coalescer::new();
+        c.post(&env, said("pv3", 1, ThreadMsgKind::Text, "Private numbers: 42."), Instant::now());
+        let sent = env.sent();
+        assert_eq!(sent.len(), 2);
+        for t in &sent {
+            assert!(t.preview.is_empty(), "{t:?}");
+            assert_eq!(PushEvent::ThreadPost(t.clone()).body(), "New message in Thread");
+        }
+        assert_eq!(*env.calls_taken.borrow(), vec![1, 1]);
+    }
+
+    /// One person's phones disagree → the dispatch takes TWO budget calls
+    /// and carries the preview (K2Cloud splits it per device). All off →
+    /// generic, one call. Only one token left → one generic call.
+    #[test]
+    fn per_device_previews_take_one_call_per_payload_variant() {
+        let env = Fake::with(&[("owner", &["owner", "z3thon"]), ("gina", &["gina"])]);
+        env.previews_off_logins.borrow_mut().insert("z3thon".into());
+        env.previews_off_logins.borrow_mut().insert("gina".into());
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.post(&env, said("pv4", 1, ThreadMsgKind::Text, "Ready for review."), t0);
+        let by: HashMap<_, _> = env.sent().into_iter().map(|t| (t.principal.clone(), t)).collect();
+        assert_eq!(by["owner"].preview, "Ready for review.", "owner's phones split: preview carried");
+        assert!(by["gina"].preview.is_empty(), "gina's only phone said no: generic");
+        let mut taken = env.calls_taken.borrow().clone();
+        taken.sort();
+        assert_eq!(taken, vec![1, 2], "split person = 2 calls, the other = 1");
+
+        // Budget for one call only: the split person still gets ONE push,
+        // generic, and nothing more is spent.
+        let env = Fake::with(&[("owner", &["owner", "z3thon"])]);
+        env.previews_off_logins.borrow_mut().insert("z3thon".into());
+        env.budget.set(Some(1));
+        let mut c = Coalescer::new();
+        c.post(&env, said("pv5", 1, ThreadMsgKind::Text, "Ready for review."), t0);
+        let sent = env.sent();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].preview.is_empty(), "fallback is generic: no text to the phone that said no");
+        assert_eq!(*env.calls_taken.borrow(), vec![1]);
+        assert_eq!(env.budget.get(), Some(0));
+
+        // And the split payloads themselves: K2Cloud sends the preview to
+        // the on-phone and the generic body to the off-phone.
+        let event = PushEvent::ThreadPost(ThreadPush { preview: "Ready for review.".into(), ..sent[0].clone() });
+        let dev = |t: &str, previews: bool| k2_core::push_devices::PushDevice {
+            device_id: format!("d-{t}"),
+            platform: "apns".into(),
+            token: t.into(),
+            username: "owner".into(),
+            created_at: 1,
+            updated_at: 1,
+            last_seen_at: 1,
+            previews,
+        };
+        let devices = [dev("on", true), dev("off", false)];
+        let groups = k2_core::push::K2Cloud::payload_groups(&event, &devices);
+        let shape: Vec<(String, Vec<String>)> =
+            groups.iter().map(|(e, d)| (e.body(), d.iter().map(|x| x.token.clone()).collect())).collect();
+        assert_eq!(
+            shape,
+            vec![
+                ("Ready for review.".to_string(), vec!["on".to_string()]),
+                ("New message in Thread".to_string(), vec!["off".to_string()]),
+            ]
+        );
     }
 }

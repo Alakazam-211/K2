@@ -30,6 +30,7 @@ import {
   COUNTER_ICON_GAP_PX,
   COUNTER_ICON_PX,
   COUNTER_SPINNER_EM,
+  COUNTER_SPINNER_SVG_EM,
   STOPPED_LINGER_MS,
   counterSpoken,
   counterWidthPx,
@@ -198,15 +199,32 @@ const ICON: Record<StripCounterKey | 'check', (size: number) => React.JSX.Elemen
 
 /** Running subagents: the app's working glyph (plan-agent-status-unify-v1:
  *  the 3×3 cell spinner replaces the braille everywhere), in the theme's
- *  working colour. It stills itself for reduced motion. */
+ *  working colour. It stills itself for reduced motion.
+ *
+ *  Sized in em of the count beside it, so it follows the text size: the
+ *  grid's ink is as tall as the digits (COUNTER_SPINNER_INK_EM), like the
+ *  braille was. The layout box keeps the braille's 0.8em × 1em (the counter
+ *  width estimates use it); the svg's empty margin overflows it, centred.
+ *  The box sits 0.14em below the baseline so the ink spans the digits. */
 function WorkingMark(): React.JSX.Element {
-  const px = Math.ceil(COUNTER_SPINNER_EM * COUNTER_FONT_PX)
+  const svg = `${COUNTER_SPINNER_SVG_EM}em`
   return (
     <span
       data-zen-drawer-spinner=""
-      style={{ display: 'inline-flex', width: px, height: px, verticalAlign: '-0.15em', color: 'var(--zen-working)' }}
+      style={{
+        display: 'inline-block',
+        position: 'relative',
+        width: `${COUNTER_SPINNER_EM}em`,
+        height: '1em',
+        verticalAlign: '-0.14em',
+        color: 'var(--zen-working)',
+      }}
     >
-      <WorkingGrid size={px} />
+      <span
+        style={{ position: 'absolute', left: '50%', top: '50%', display: 'flex', transform: 'translate(-50%, -50%)' }}
+      >
+        <WorkingGrid size={svg} />
+      </span>
     </span>
   )
 }

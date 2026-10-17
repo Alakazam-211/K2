@@ -18,6 +18,7 @@ import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenAgentRow, ZenThreadView } from '@/lib/zen/zen-data'
 import type { ZenWidgetDecl } from '@/lib/zen/zen-page'
 import type { ThreadTurn } from '@/components/SessionView/overlayThread'
+import { COUNTER_SPINNER_EM, COUNTER_SPINNER_INK_EM, COUNTER_SPINNER_SVG_EM } from '@/components/SessionView/threadStrip'
 import { ZEN_RECENT_FIRST_KEY, useZenRecentFirstStore } from '@/lib/zen/zen-recent-first'
 import { ZenAgentsWidget } from './ZenAgentsWidget'
 import { ZenConversation } from './ZenConversationWidget'
@@ -421,6 +422,16 @@ describe('the activity drawer (`activity-drawer`)', () => {
     const spinner = el('[data-zen-drawer-count="subagents"] [data-zen-drawer-spinner]')
     expect(spinner.style.color).toBe('var(--zen-working)')
     expect(spinner.querySelectorAll('svg[data-agent-working] rect')).toHaveLength(9)
+    // Sized in em of the count (follows the text size): the grid's ink
+    // (14 of its 24 units) is as tall as the digits, like the braille was.
+    const svg = spinner.querySelector('svg[data-agent-working]') as SVGElement
+    expect([svg.getAttribute('width'), svg.getAttribute('height')]).toEqual([
+      `${COUNTER_SPINNER_SVG_EM}em`,
+      `${COUNTER_SPINNER_SVG_EM}em`,
+    ])
+    expect(Math.abs((COUNTER_SPINNER_SVG_EM * 14) / 24 - COUNTER_SPINNER_INK_EM)).toBeLessThan(0.001)
+    expect(COUNTER_SPINNER_INK_EM).toBeGreaterThanOrEqual(0.7)
+    expect([spinner.style.width, spinner.style.height]).toEqual([`${COUNTER_SPINNER_EM}em`, '1em'])
     expect(document.querySelector('[data-zen-drawer] .zen-braille, [data-zen-drawer] .braille-spinner')).toBeNull()
     expect(el('[data-zen-drawer-count="subagents"]').textContent).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
     act(() => void fireEvent.click(el('[data-zen-drawer-tile]')))

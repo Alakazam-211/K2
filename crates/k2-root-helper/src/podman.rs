@@ -38,9 +38,19 @@ fn sha256_hex(bytes: &[u8]) -> String {
     sha2::Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// os-release text: `/etc/os-release` when it is a regular file, else
+/// `/usr/lib/os-release` (Debian and Ubuntu link the first to the second;
+/// links are never followed).
+fn os_release(ctx: &Ctx) -> String {
+    match read_cfg(ctx, OS_RELEASE, 64 * 1024) {
+        Ok(Some(b)) => String::from_utf8_lossy(&b).into_owned(),
+        _ => read_cfg_text(ctx, OS_RELEASE_USR).unwrap_or_default(),
+    }
+}
+
 /// The box's os-release line the bundle is for, or a refusal.
 pub fn supported(ctx: &Ctx) -> HResult<String> {
-    let text = read_cfg_text(ctx, OS_RELEASE)?;
+    let text = os_release(ctx);
     supported_os(&text).ok_or_else(|| {
         let (id, ver) = os_id(&text).unwrap_or_else(|| ("unknown".into(), "?".into()));
         Fail::state(format!(
@@ -400,7 +410,7 @@ pub fn status_json(ctx: &Ctx) -> J {
         (Some(true), Some(u)) => file_state(ctx, USER_GENERATOR, user_generator(u).as_bytes()),
         (Some(true), None) => "drift",
     };
-    let os = read_cfg_text(ctx, OS_RELEASE).ok().and_then(|t| supported_os(&t));
+    let os = supported_os(&os_release(ctx));
     json!({
         "installed": marker.is_some(),
         "version": marker.as_ref().map(|m| m["version"].clone()),

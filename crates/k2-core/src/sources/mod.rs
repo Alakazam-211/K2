@@ -201,6 +201,9 @@ pub struct FetchPlan {
     pub headers: Vec<(String, String)>,
     /// Vault secret name (resolved by the daemon).
     pub secret: Option<String>,
+    /// The workspace whose own secret this is (0181); `None`: the
+    /// server's. Applies to `secret` and to a `UrlRef::Secret`.
+    pub secret_workspace: Option<String>,
     pub timeout_secs: u32,
     pub max_bytes: u32,
 }

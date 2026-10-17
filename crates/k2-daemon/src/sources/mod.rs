@@ -31,6 +31,9 @@ pub mod tinker_routes;
 pub mod trigger_routes;
 pub mod wake;
 
+#[cfg(test)]
+mod manage_tests;
+
 /// Set by the 0.46.0 hand-off when present [GV63]: no fetch starts and
 /// fires are suppressed with `draining` while it is up.
 pub static DRAINING: AtomicBool = AtomicBool::new(false);

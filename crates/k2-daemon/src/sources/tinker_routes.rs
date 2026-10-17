@@ -125,6 +125,7 @@ fn draft_row(v: &Validated, now: i64) -> SourceRow {
         created_at: now,
         updated_at: now,
         removed_at: None,
+        secret_workspace: None,
     }
 }
 
@@ -169,6 +170,7 @@ fn plans(s: &Subject) -> Result<Vec<(Option<String>, FetchPlan)>, SourceErr> {
         lan_exact_ip: s.row.lan,
         headers: spec.headers.clone(),
         secret: spec.secret.clone(),
+        secret_workspace: None,
         timeout_secs: spec.timeout_secs,
         max_bytes: spec.max_bytes,
     };

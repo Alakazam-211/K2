@@ -357,6 +357,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             removed_at: None,
+            secret_workspace: None,
         };
         let view = build(&row, &st, proj.as_ref(), Viewer::Person, 1_200);
         assert_eq!(view.phase, Phase::Live, "one box down never stales the source (GV55)");

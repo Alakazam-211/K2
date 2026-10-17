@@ -82,6 +82,25 @@ function parseReasons(raw: unknown): Partial<Record<UserWidgetCap, string>> {
   return out
 }
 
+/** Garden v3: the manifest's `sources` (`"config"` or fixed names), else null. */
+function parseManifestSources(raw: unknown): 'config' | string[] | null {
+  if (raw === 'config') return 'config'
+  if (Array.isArray(raw)) return raw.filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+  return null
+}
+
+/** Garden v3: the addresses the daemon bound to this placement (`sources.*`
+ *  refuses `not_bound` for anything else). Unreadable means none: closed. */
+function parseSourceAddresses(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const a of raw) {
+    const s = typeof a === 'string' ? a.trim() : ''
+    if (s && !out.includes(s)) out.push(s)
+  }
+  return out
+}
+
 /**
  * One custom widget from `page.widgets` (`kind: "custom"`). `base` is what
  * the page parser already read (id, column, props). The caps are
@@ -123,5 +142,9 @@ export function parseZenCustomWidget(
     warnings: parseFindings(raw.warnings),
     origin,
     paused: parseZenWidgetPause(raw.paused),
+    // Garden v3: without these the bridge's `bound()` is empty and every
+    // `sources.*` call refuses `not_bound`, whatever the placement names.
+    sources: parseManifestSources(raw.sources),
+    sourceAddresses: parseSourceAddresses(raw.sourceAddresses),
   }
 }

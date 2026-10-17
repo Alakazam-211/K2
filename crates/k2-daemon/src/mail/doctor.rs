@@ -234,7 +234,7 @@ pub fn outbound_25_coaching(reason: &str) -> String {
          it; DigitalOcean effectively never; Hetzner unblocks via support ticket after \
          the first paid invoice (~1 month); Linode is friendliest (set rDNS + records \
          first, then ticket). Relay mode works everywhere — switch with \
-         `k2 mail config --domain <domain> --send-mode relay`"
+         `k2 hostmail config --domain <domain> --send-mode relay`"
     )
 }
 
@@ -1201,7 +1201,7 @@ fn domain_checks(
     now: i64,
 ) -> Vec<DoctorCheck> {
     let summary = dns_verify::verify_rows(resolver, &d.domain, &mut d.rows, now);
-    let show_hint = format!("`k2 mail domain show {}` has the expected-vs-live diff", d.domain);
+    let show_hint = format!("`k2 hostmail domain show {}` has the expected-vs-live diff", d.domain);
     let mut out = Vec::new();
     let mut push = |id: &str, label: String, ok: bool, gates: bool, detail: String| {
         out.push(DoctorCheck {
@@ -1743,24 +1743,56 @@ pub fn latest_run_json(raw_domain: Option<&str>) -> Result<Option<serde_json::Va
     }
 }
 
-/// The gate `config::set_send_mode` consults before allowing
-/// `direct` (PRD §8.3/§9): requires a stored SERVER-LEVEL run whose
-/// grade is not `fail`. The refusal TEACHES — failing checks,
-/// provider realities, and the relay escape hatch.
-pub fn direct_send_gate() -> Result<serde_json::Value, String> {
-    let run = latest_run_json(None).map_err(|e| match e {
-        DocError::Usage(h)
-        | DocError::NotFound(h)
-        | DocError::NoRun(h)
-        | DocError::NotReady(h)
-        | DocError::Engine(h) => h,
-    })?;
-    let Some(run) = run else {
-        return Err(
-            "direct mode is locked until the deliverability doctor grades this box — \
-             run `k2 mail doctor` first (direct unlocks on a non-failing grade)"
+/// The newest stored run that can vouch for direct send on one domain:
+/// the server-level run or that domain's own run, whichever is newer.
+/// Reads only.
+fn latest_gate_run(domain_id: Option<&str>) -> Option<serde_json::Value> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let row: Option<(String, String, String, i64)> = conn
+        .query_row(
+            "SELECT id, results_json, grade, ran_at FROM mail_doctor_runs \
+             WHERE domain_id IS NULL OR domain_id = ?1 \
+             ORDER BY ran_at DESC, rowid DESC LIMIT 1",
+            rusqlite::params![domain_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .ok();
+    let (id, results, grade, ran_at) = row?;
+    let mut v: serde_json::Value =
+        serde_json::from_str(&results).unwrap_or_else(|_| serde_json::json!({}));
+    v["id"] = serde_json::json!(id);
+    v["grade"] = serde_json::json!(grade);
+    v["ranAt"] = serde_json::json!(ran_at);
+    Some(v)
+}
+
+/// The gate `config::set_send_mode` consults before allowing `direct`
+/// on a domain (PRD §8.3/§9): the newest stored run that covers it —
+/// a SERVER-LEVEL run, or a run for THAT domain — must not grade
+/// `fail`. A per-domain run executes every box-level gating check
+/// (port 25, rDNS/FCrDNS, banner, STARTTLS, open relay, blocklists)
+/// plus the domain's own records, so a passing one proves at least as
+/// much as a server-level run (0.46.1: it used to be ignored). Newest
+/// wins, so a later failing run of either kind re-locks. `domain_id`
+/// `None` = server-level runs only. The refusal TEACHES — failing
+/// checks, provider realities, and the relay escape hatch.
+pub fn direct_send_gate(domain: Option<(&str, &str)>) -> Result<serde_json::Value, String> {
+    let (domain_id, domain_name) = match domain {
+        Some((id, name)) => (Some(id), Some(name)),
+        None => (None, None),
+    };
+    let Some(run) = latest_gate_run(domain_id) else {
+        return Err(match domain_name {
+            Some(d) => format!(
+                "direct mode is locked until the deliverability doctor grades this box — \
+                 run `k2 hostmail doctor {d}` (or `k2 hostmail doctor` for the whole box) \
+                 first; direct unlocks on a non-failing grade"
+            ),
+            None => "direct mode is locked until the deliverability doctor grades this box — \
+                     run `k2 hostmail doctor` first (direct unlocks on a non-failing grade)"
                 .to_string(),
-        );
+        });
     };
     let grade = run["grade"].as_str().unwrap_or("fail");
     if grade == "fail" {
@@ -1772,9 +1804,10 @@ pub fn direct_send_gate() -> Result<serde_json::Value, String> {
             "direct mode is locked — the last doctor run failed on: {}. Provider \
              realities if outbound port 25 is the blocker: GCP never unblocks it, \
              DigitalOcean effectively never, Hetzner takes a support ticket + ~1 month. \
-             Relay mode works everywhere: `k2 mail config --domain <domain> --send-mode \
-             relay`. Re-run `k2 mail doctor` after fixing.",
-            if blockers.is_empty() { "(unrecorded checks)".to_string() } else { blockers.join(", ") }
+             Relay mode works everywhere: `k2 hostmail config --domain <domain> --send-mode \
+             relay`. Re-run `k2 hostmail doctor{}` after fixing.",
+            if blockers.is_empty() { "(unrecorded checks)".to_string() } else { blockers.join(", ") },
+            domain_name.map(|d| format!(" {d}")).unwrap_or_default()
         ));
     }
     Ok(serde_json::json!({ "grade": grade, "ranAt": run["ranAt"] }))
@@ -1801,7 +1834,7 @@ fn nightly_tick_interval() -> std::time::Duration {
 /// ever probed (a stopped/disabled/installing/erroring sidecar would
 /// grade garbage and the probes assume a live loopback SMTP), and a
 /// running one is due when there is no server-level run yet or the
-/// last one is a day old. `k2 mail doctor` / the Settings card can
+/// last one is a day old. `k2 hostmail doctor` / the Settings card can
 /// always force a run regardless.
 pub fn nightly_due(server_status: Option<&str>, last_ran_at: Option<i64>, now: i64) -> bool {
     if server_status != Some("running") {
@@ -2508,7 +2541,7 @@ mod tests {
         assert!(r.direct_blockers.contains(&"spf".to_string()));
         assert!(!r.direct_blockers.contains(&"mx".to_string()), "MX informs, never gates direct");
         assert_eq!(check(&r, "mx").status, ST_FAIL);
-        assert!(check(&r, "spf").detail.contains("k2 mail domain show"), "points at the diff");
+        assert!(check(&r, "spf").detail.contains("k2 hostmail domain show"), "points at the diff");
 
         // Missing DMARC nags (warn), never fails.
         let (mut dns, mut d) = domain_ctx();
@@ -2659,17 +2692,21 @@ mod tests {
         let _g = crate::mail::mail_server_test_lock();
         clear_runs();
 
-        // No run on file → locked, names the doctor verb.
-        let err = direct_send_gate().expect_err("locked");
-        assert!(err.contains("k2 mail doctor"), "{err}");
+        // No run on file → locked, names the real doctor verb.
+        let err = direct_send_gate(None).expect_err("locked");
+        assert!(err.contains("`k2 hostmail doctor`"), "{err}");
+        assert!(!err.contains("k2 mail doctor"), "the moved verb is gone: {err}");
+        let err = direct_send_gate(Some(("dom-doctor-test", "acme.dev"))).expect_err("locked");
+        assert!(err.contains("`k2 hostmail doctor acme.dev`"), "{err}");
 
         // Failing run → locked with blockers + provider realities.
         let env = FakeEnv { outbound_25: Err("blocked"), ..FakeEnv::default() };
         let report = run_checks(&healthy_dns(), &env, &ctx(), None, 1000);
         let _ = persist_run(None, &report).expect("persist");
-        let err = direct_send_gate().expect_err("locked");
+        let err = direct_send_gate(None).expect_err("locked");
         assert!(err.contains("outbound-25"), "{err}");
         assert!(err.contains("GCP") && err.contains("Hetzner"), "{err}");
+        assert!(err.contains("k2 hostmail config --domain"), "{err}");
 
         // Warn passes the gate (only fail locks).
         let mut dns = healthy_dns();
@@ -2677,8 +2714,45 @@ mod tests {
         let report = run_checks(&dns, &FakeEnv::default(), &ctx(), None, 1000);
         assert_eq!(report.grade, ST_WARN);
         let _ = persist_run(None, &report).expect("persist");
-        let v = direct_send_gate().expect("warn unlocks");
+        let v = direct_send_gate(None).expect("warn unlocks");
         assert_eq!(v["grade"], "warn");
+        clear_runs();
+    }
+
+    /// 0.46.1 (partii): a passing per-domain run unlocks direct for THAT
+    /// domain — it runs every box gating check too. It never unlocks
+    /// another domain or the server-level read, and the newest run of
+    /// either kind wins (a later failing one re-locks).
+    #[test]
+    fn direct_gate_accepts_a_passing_run_for_that_domain() {
+        let _g = crate::mail::mail_server_test_lock();
+        clear_runs();
+        let me = Some(("dom-doctor-test", "acme.dev"));
+
+        let (dns, mut d) = domain_ctx();
+        let dom_report = run_checks(&dns, &FakeEnv::default(), &ctx(), Some(&mut d), 1000);
+        assert_ne!(dom_report.grade, ST_FAIL, "fixture domain run must not fail");
+        let _ = persist_run(Some("dom-doctor-test"), &dom_report).expect("persist domain");
+        let v = direct_send_gate(me).expect("a passing run for the domain unlocks it");
+        assert_eq!(v["grade"], dom_report.grade);
+        assert!(direct_send_gate(None).is_err(), "server-level read ignores domain runs");
+        assert!(
+            direct_send_gate(Some(("dom-other", "other.dev"))).is_err(),
+            "another domain's run never unlocks this one"
+        );
+
+        // A newer failing server-level run re-locks (newest wins)…
+        let env = FakeEnv { outbound_25: Err("blocked"), ..FakeEnv::default() };
+        let report = run_checks(&healthy_dns(), &env, &ctx(), None, 1000);
+        let _ = persist_run(None, &report).expect("persist failing server run");
+        let err = direct_send_gate(me).expect_err("newer failing run locks");
+        assert!(err.contains("outbound-25") && err.contains("k2 hostmail doctor acme.dev"), "{err}");
+
+        // …and a newer passing domain run unlocks again.
+        let (dns, mut d) = domain_ctx();
+        let dom_report = run_checks(&dns, &FakeEnv::default(), &ctx(), Some(&mut d), 1000);
+        let _ = persist_run(Some("dom-doctor-test"), &dom_report).expect("persist domain 2");
+        direct_send_gate(me).expect("newest passing domain run unlocks");
         clear_runs();
     }
 

@@ -19,9 +19,10 @@
 //!   the REF is persisted; config reads report `hasCredentials`, never
 //!   the ref target's value.
 //! - **Direct mode is doctor-gated** (PRD §8.3/§9): flipping a domain
-//!   to `direct` requires a stored server-level doctor run whose grade
-//!   is not `fail`; the refusal lists the failing checks and the
-//!   provider coaching ([`super::doctor::direct_send_gate`]).
+//!   to `direct` requires that the newest stored doctor run covering it
+//!   (server-level, or that domain's own run) does not grade `fail`;
+//!   the refusal lists the failing checks and the provider coaching
+//!   ([`super::doctor::direct_send_gate`]).
 //! - **Pending domains cannot leave receive-only** until DNS verifies
 //!   (no `direct` or `relay` before live records match).
 //! - **Relay routes are pushed to Stalwart** when a domain enters
@@ -702,7 +703,7 @@ pub fn set_send_mode(
     };
     let Some(row) = row else {
         return Err(CfgError::NotFound(format!(
-            "domain '{domain}' is not hosted here — add it first (k2 mail domain add)"
+            "domain '{domain}' is not hosted here — add it first (k2 hostmail domain add)"
         )));
     };
     if row.status == "pending" && mode != "receive-only" {
@@ -720,7 +721,8 @@ pub fn set_send_mode(
             // The doctor gate (PRD §8.3/§9): a failing grade on the
             // direct-send prerequisites keeps the toggle locked, with
             // the failing checks + provider coaching in the refusal.
-            super::doctor::direct_send_gate().map_err(CfgError::Locked)?;
+            super::doctor::direct_send_gate(Some((row.id.as_str(), domain.as_str())))
+                .map_err(CfgError::Locked)?;
             if row.send_mode == "relay" {
                 engine_required(engine)?
                     .apply_relay_route(&domain, None)
@@ -1260,7 +1262,7 @@ pub(crate) mod tests {
         assert!(matches!(&err, CfgError::Usage(h) if h.contains("direct, relay, receive-only")), "{err:?}");
         let err = set_send_mode(&secrets, None, "ghost-cfg.example", "receive-only", None)
             .expect_err("refuse");
-        assert!(matches!(&err, CfgError::NotFound(h) if h.contains("k2 mail domain add")), "{err:?}");
+        assert!(matches!(&err, CfgError::NotFound(h) if h.contains("k2 hostmail domain add")), "{err:?}");
     }
 
     #[test]
@@ -1273,7 +1275,10 @@ pub(crate) mod tests {
         clear_doctor_runs();
         let err = set_send_mode(&secrets, None, "cfg-direct.example", "direct", None)
             .expect_err("locked");
-        assert!(matches!(&err, CfgError::Locked(h) if h.contains("k2 mail doctor")), "{err:?}");
+        assert!(
+            matches!(&err, CfgError::Locked(h) if h.contains("`k2 hostmail doctor cfg-direct.example`")),
+            "{err:?}"
+        );
 
         // Failing grade → locked, lists blockers + provider realities.
         seed_doctor_run("fail");

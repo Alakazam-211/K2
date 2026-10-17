@@ -1637,7 +1637,7 @@ function ApprovalsPanel({
           <p className="text-[11px] text-[var(--color-text-muted)] italic">
             Nothing waiting. Agent sends land here when a workspace&rsquo;s send mode is
             &ldquo;approval&rdquo; (the default is off — enable it per workspace with{' '}
-            <span className="font-mono">k2 mail config --agent-send approval</span>).
+            <span className="font-mono">k2 hostmail config --agent-send approval</span>).
           </p>
         ) : (
           <div className="space-y-2">

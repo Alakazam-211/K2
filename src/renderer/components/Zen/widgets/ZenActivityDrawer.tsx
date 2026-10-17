@@ -102,15 +102,19 @@ function writeZenDrawerExpanded(on: boolean): void {
   }
 }
 
+/** The ear's fill: the darker surface, in every state (no hover change). */
+export const ZEN_DRAWER_EAR_FILL = 'var(--zen-surface)'
+
 /** A Zen root, or the desktop Thread's box (it draws this drawer too). */
 const DRAWER_SCOPE = `:is([data-zen-root], [${THREAD_ZEN_SCOPE_ATTR}])`
 
-// The ear on a message box has no hover fill (Rosson 2026-10-16: "as soon
-// as I go to a second line, the dog ear's background changes to match the
-// text area"). The box grows upward and pushes the ear up, so a pointer
-// resting on the ear ends up on the field after a line or two, or when the
-// box stacks: the hover fill came and went with the typing. Only the free
-// tile (no box under it, nothing moves it) keeps one.
+// The ear's fill is the darker surface, always (Rosson 2026-10-16: the
+// shade it used to take on hover). It had a hover fill on the raised fill,
+// and the message box grows upward and pushes the ear up, so a pointer
+// resting on the ear ended up on the field after a line or two, or when the
+// box stacked: the ear switched to the field's colour as you typed. No
+// hover change now, on the box or as a free tile. Stop takes the raised
+// fill so it still reads as a button on the darker ear.
 //
 // Tags tint by kind: the fill is the hue at ~16%, the ink the hue mixed
 // toward the text colour. Zen tokens, so every theme keeps its look.
@@ -122,8 +126,6 @@ export const ZEN_DRAWER_CSS = `
 @keyframes zen-drawer-shimmer { 0% { opacity: 1; } 50% { opacity: 0.55; } 100% { opacity: 1; } }
 ${DRAWER_SCOPE} [data-zen-drawer][data-phase="in"] { animation: zen-drawer-in ${ZEN_DRAWER_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1.12) both; }
 ${DRAWER_SCOPE} [data-zen-drawer][data-phase="out"] { animation: zen-drawer-out ${ZEN_DRAWER_MS}ms cubic-bezier(0.4, 0, 0.8, 0.4) both; }
-${DRAWER_SCOPE} [data-zen-drawer-tile] { transition: background-color 140ms ease; }
-${DRAWER_SCOPE} [data-zen-drawer-attached="false"] [data-zen-drawer-tile]:hover { background: var(--zen-surface); }
 ${DRAWER_SCOPE} .zen-drawer-shimmer { animation: zen-drawer-shimmer 1.6s ease-in-out infinite; }
 ${DRAWER_SCOPE} .zen-drawer-tag { border-radius: 9999px; background: color-mix(in srgb, var(--zen-tag-hue) 16%, transparent); color: color-mix(in srgb, var(--zen-tag-hue) 70%, var(--zen-text)); }
 ${DRAWER_SCOPE} .zen-drawer-count { display: inline-flex; align-items: center; flex: none; white-space: nowrap; line-height: 18px; }
@@ -474,7 +476,7 @@ export function ZenActivityDrawer({
           style={{
             overflow: 'hidden',
             color: 'var(--zen-text)',
-            background: 'var(--zen-surface-raised)',
+            background: ZEN_DRAWER_EAR_FILL,
             border: '1px solid var(--zen-border)',
             borderStyle: display.tone === 'unverifiable' ? 'dashed' : 'solid',
             ...(attached
@@ -482,7 +484,7 @@ export function ZenActivityDrawer({
               : { borderRadius: 'calc(var(--zen-radius) + 2px)' }),
             ...chamferVars({
               cut: attached ? [CHAMFER_CUT.drawer, CHAMFER_CUT.drawer, 0, 0] : CHAMFER_CUT.drawer,
-              fill: 'var(--zen-surface-raised)',
+              fill: ZEN_DRAWER_EAR_FILL,
               edge: 'var(--zen-border)',
               border: 1,
               outset: attached ? '-1px -1px 0 -1px' : undefined,
@@ -583,10 +585,10 @@ export function ZenActivityDrawer({
               fontSize: 11,
               lineHeight: `${ZEN_DRAWER_STOP_H_PX - 2}px`,
               color: 'var(--zen-text)',
-              background: 'var(--zen-surface)',
+              background: 'var(--zen-surface-raised)',
               border: '1px solid var(--zen-border)',
               // K2's square Style: chamfered like Send, scaled to its height.
-              ...chamferVars({ cut: chamferCutFor(ZEN_DRAWER_STOP_H_PX), fill: 'var(--zen-surface)', edge: 'var(--zen-border)', border: 1 }),
+              ...chamferVars({ cut: chamferCutFor(ZEN_DRAWER_STOP_H_PX), fill: 'var(--zen-surface-raised)', edge: 'var(--zen-border)', border: 1 }),
             }}
           >
             Stop

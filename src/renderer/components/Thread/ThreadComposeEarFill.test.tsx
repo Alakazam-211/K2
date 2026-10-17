@@ -4,19 +4,24 @@
 // the text area. It should stay the same colour it was." Then, a later try:
 // the change came on the line where the box stacks instead.
 //
-// The ear (the activity drawer's tab on the message box) had a hover fill.
-// The box grows upward and pushes the ear up, so a pointer resting on the
-// ear ends up on the field after a line or two (or after the stacking jump):
-// the ear lost its hover fill and took the field's fill. How many lines it
-// took depended only on where the pointer rested.
+// The ear (the activity drawer's tab on the message box) had a hover fill,
+// the darker surface. The box grows upward and pushes the ear up, so a
+// pointer resting on the ear ended up on the field after a line or two (or
+// after the stacking jump): the ear lost the darker shade and took the
+// field's fill. Rosson chose the darker shade: the ear is always that shade
+// (`--zen-surface`), with no hover change, on the box or as a free tile.
 //
 // The check: in every composer state (1 line, 2 lines, stacked, back to 1),
-// with the pointer on the ear or away from it, the rules that paint the
-// ear's fill are the same, and so are its own style and attributes.
+// with the pointer on the ear or away from it, the ear paints
+// `var(--zen-surface)`: its own style says so and no stylesheet rule
+// (hover, the field's glass wash, a stacked rule) overrides its fill. The
+// square Style's chamfer clears the element's own background and paints
+// the shape from `--ch-fill` instead; that rule is the only one allowed.
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import { coerceThreadTurn, type ThreadTurn } from '@/components/SessionView/overlayThread'
-import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
+import { ZEN_DRAWER_EAR_FILL, ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
+import { CHAMFER_SCOPE } from './chamfer'
 import {
   THREAD_ZEN_DESKTOP_TOKENS,
   ThreadComposeBox,
@@ -146,6 +151,28 @@ function earOwn(tile: Element): Record<string, string> {
   return own
 }
 
+/** The square Style's chamfer clears the element's own background (its
+ *  `::after` paints `--ch-fill`); no other rule may touch the ear's fill. */
+function allowedRules(style: string): string[] {
+  if (style !== 'square') return []
+  // The CSSOM reports the shorthand and its longhand.
+  return [
+    `${CHAMFER_SCOPE} [data-chamfer] { background-color: transparent !important }`,
+    `${CHAMFER_SCOPE} [data-chamfer] { background: transparent !important }`,
+  ].sort()
+}
+
+/** What the ear paints: `--ch-fill` under the square Style's chamfer, its
+ *  own background otherwise. Both are the darker surface. */
+function expectDarkerShade(tile: Element, style: string): void {
+  const own = (tile as HTMLElement).style
+  expect(ZEN_DRAWER_EAR_FILL).toBe('var(--zen-surface)')
+  expect(own.getPropertyValue('--ch-fill')).toBe('var(--zen-surface)')
+  expect(own.background).toBe('var(--zen-surface)')
+  const painted = style === 'square' ? own.getPropertyValue('--ch-fill') : own.background
+  expect(painted).toBe('var(--zen-surface)')
+}
+
 function earTile(container: HTMLElement): Element {
   const tile = container.querySelector('[data-zen-drawer-tile]')
   if (!tile) throw new Error('the ear did not render')
@@ -179,19 +206,18 @@ describe('the activity ear keeps its fill while the message box changes', () => 
         expect(box?.getAttribute('data-stacked') ?? null).toBe(state.stacked ? 'true' : null)
         seen.push({ state: state.name, own: earOwn(tile), pointerOn: fillRules(tile, true), pointerOff: fillRules(tile, false) })
       }
-      // Something does paint the ear (the check isn't vacuous).
-      expect(seen[0].pointerOff.length).toBeGreaterThan(0)
       for (const s of seen) {
         expect({ state: s.state, own: s.own }).toEqual({ state: s.state, own: seen[0].own })
         // A pointer left where the ear was must not recolour it when the
         // box pushes the ear away (or back under it).
-        expect({ state: s.state, fill: s.pointerOn }).toEqual({ state: s.state, fill: seen[0].pointerOff })
-        expect({ state: s.state, fill: s.pointerOff }).toEqual({ state: s.state, fill: seen[0].pointerOff })
+        expect({ state: s.state, fill: s.pointerOn }).toEqual({ state: s.state, fill: allowedRules(style) })
+        expect({ state: s.state, fill: s.pointerOff }).toEqual({ state: s.state, fill: allowedRules(style) })
       }
+      expectDarkerShade(tile, style)
     })
   }
 
-  it('a free tile (no message box under it) keeps its hover fill', () => {
+  it('a free tile (no message box under it) is the darker shade too, no hover change', () => {
     document.documentElement.setAttribute('data-style', 'square')
     const { container } = render(
       <div data-k2-thread-zen="" style={THREAD_ZEN_DESKTOP_TOKENS}>
@@ -200,11 +226,23 @@ describe('the activity ear keeps its fill while the message box changes', () => 
       </div>,
     )
     const tile = earTile(container)
-    const added = fillRules(tile, true).filter((r) => !fillRules(tile, false).includes(r))
-    expect(added).toEqual([
-      ':is([data-zen-root], [data-k2-thread-zen]) [data-zen-drawer-attached="false"] [data-zen-drawer-tile]:hover { background: var(--zen-surface) }',
-      'html[data-style="square"] [data-k2-thread-zen] [data-zen-drawer-attached="false"] [data-zen-drawer-tile][data-chamfer]:hover { --ch-fill: var(--zen-surface) !important }',
-    ])
+    expect(fillRules(tile, true)).toEqual(allowedRules('square'))
+    expect(fillRules(tile, false)).toEqual(allowedRules('square'))
+    expectDarkerShade(tile, 'square')
+  })
+
+  it('Stop keeps the raised fill, so it still reads as a button on the ear', () => {
+    const turn = TURN
+    const { container } = render(
+      <div data-k2-thread-zen="" style={THREAD_ZEN_DESKTOP_TOKENS}>
+        <ThreadZenStyles />
+        <ZenActivityDrawer turn={turn} onStop={() => {}} />
+      </div>,
+    )
+    const stop = container.querySelector('[data-zen-drawer-stop]') as HTMLElement | null
+    if (!stop) throw new Error('Stop did not render')
+    expect(stop.style.background).toBe('var(--zen-surface-raised)')
+    expect(stop.style.getPropertyValue('--ch-fill')).toBe('var(--zen-surface-raised)')
   })
 
   it('the box itself does change when it stacks (the toggle is real)', () => {

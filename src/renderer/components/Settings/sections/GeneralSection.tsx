@@ -40,7 +40,7 @@ import { jittered } from '@/lib/backoff'
 // `/cli/settings/{get,update}`; route them through the host-aware
 // daemon-settings client instead so the toggle works against any daemon.
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
-import { useSettingsStore, sanitizeOwnerDisplayName, OWNER_DISPLAY_NAME_MAX, normalizeWorkspaceSwitchFocus } from '@/stores/settings'
+import { useSettingsStore, normalizeWorkspaceSwitchFocus } from '@/stores/settings'
 import { SettingDropdown } from '../controls/SettingControls'
 import { useUpdateStore } from '@/stores/update'
 import { checkForUpdate } from '@/hooks/useUpdateChecker'
@@ -59,6 +59,7 @@ import { RemoteRoomsPreviewRow } from './RemoteRoomsPreviewRow'
 import { AppFontRows } from '../shared/AppFontRows'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
 import { YourAccountRow } from './YourAccountRow'
+import { OwnerDisplayNameInput } from './OwnerDisplayNameInput'
 import {
   parseSessionViewTab,
   parseSplitPaneView,
@@ -704,26 +705,9 @@ function NewAgentViewRow(): React.JSX.Element {
 // resolves it from app_settings (`ownerDisplayName`) and NEVER from the
 // request body (D3), falling back to "owner" when blank. Backed by
 // `settings.ownerDisplayName` (persisted via the daemon's app_settings
-// deep-merge), mirroring the typed-input ergonomics of ActiveWindowHoursRow.
+// deep-merge). The input is shared with the profile modal
+// (`OwnerDisplayNameInput`).
 function OwnerDisplayNameRow(): React.JSX.Element {
-  const ownerDisplayName = useSettingsStore((s) => s.ownerDisplayName)
-  const setOwnerDisplayName = useSettingsStore((s) => s.setOwnerDisplayName)
-  // Local draft so the user can type freely; commit (sanitized) on blur
-  // or Enter. The store re-sanitizes and the daemon re-sanitizes again.
-  const [draft, setDraft] = useState<string>(ownerDisplayName)
-
-  useEffect(() => {
-    setDraft(ownerDisplayName)
-  }, [ownerDisplayName])
-
-  const commit = useCallback(() => {
-    const next = sanitizeOwnerDisplayName(draft)
-    setDraft(next)
-    if (next !== ownerDisplayName) {
-      void setOwnerDisplayName(next)
-    }
-  }, [draft, ownerDisplayName, setOwnerDisplayName])
-
   return (
     <div
       className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
@@ -739,20 +723,7 @@ function OwnerDisplayNameRow(): React.JSX.Element {
         </p>
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
-        <input
-          type="text"
-          value={draft}
-          placeholder="owner"
-          maxLength={OWNER_DISPLAY_NAME_MAX}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.currentTarget.blur()
-            }
-          }}
-          className="w-40 px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag"
-        />
+        <OwnerDisplayNameInput />
       </div>
     </div>
   )

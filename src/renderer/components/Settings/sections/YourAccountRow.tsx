@@ -15,7 +15,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
 import { SettingDropdown } from '../controls/SettingControls'
-import { ownerLinkAccess, useOwnerAccounts, OWNER_LINK_EXPLAINER } from './OwnerAccountToggle'
+import { ownerLinkAccess, useOwnerAccounts, OWNER_LINK_EXPLAINER, type OwnerAccountsState } from './OwnerAccountToggle'
 import { threadPushAvailable } from './useNotifyPrefs'
 
 /** Dropdown value for "None". */
@@ -74,7 +74,8 @@ function asRole(v: unknown): string | null {
   return v === 'owner' || v === 'admin' || v === 'member' ? v : null
 }
 
-function parseUsers(raw: unknown): AccountChoice[] {
+/** `GET /cli/users` → the enabled logins the dropdown may offer. */
+export function parseAccountChoices(raw: unknown): AccountChoice[] {
   const users = (raw as { users?: unknown } | null)?.users
   if (!Array.isArray(users)) return []
   const out: AccountChoice[] = []
@@ -83,6 +84,46 @@ function parseUsers(raw: unknown): AccountChoice[] {
     if (typeof r.username === 'string' && r.disabled !== true) out.push({ username: r.username, role: asRole(r.role) ?? 'member' })
   }
   return out
+}
+
+/** The dropdown's options: None, "z3thon + 1 more" when several are
+ *  linked, the Owner/Admin logins, and a linked login that isn't one. */
+export function yourAccountOptions(users: AccountChoice[], accounts: string[]): { value: string; label: string; badge?: string }[] {
+  const opts: { value: string; label: string; badge?: string }[] = [{ value: NO_ACCOUNT, label: 'None' }]
+  if (accounts.length > 1) opts.push({ value: MANY_ACCOUNTS, label: yourAccountLabel(accounts) })
+  for (const c of accountChoices(users)) opts.push({ value: c.username, label: c.username, badge: c.role === 'owner' ? 'Owner' : 'Admin' })
+  // A linked login that is not Owner/Admin (or disabled) still shows.
+  for (const a of accounts) {
+    if (accounts.length === 1 && !opts.some((o) => o.value === a)) opts.push({ value: a, label: a })
+  }
+  return opts
+}
+
+/** The "Your account" dropdown itself. Shared by Settings → General and
+ *  the profile modal so both write the same way (`owner.setAccounts`,
+ *  optimistic with rollback). */
+export function YourAccountSelect({
+  users,
+  owner,
+  readOnly,
+}: {
+  users: AccountChoice[]
+  owner: OwnerAccountsState
+  readOnly: boolean
+}): React.JSX.Element {
+  const options = useMemo(() => yourAccountOptions(users, owner.accounts), [users, owner.accounts])
+  return (
+    <SettingDropdown
+      value={yourAccountValue(owner.accounts)}
+      options={options}
+      disabled={readOnly || owner.busy !== null}
+      ariaLabel="Your account"
+      onChange={(v) => {
+        const next = nextOwnerAccounts(owner.accounts, v)
+        if (next) void owner.setAccounts(next)
+      }}
+    />
+  )
 }
 
 export function YourAccountRow(): React.JSX.Element | null {
@@ -100,7 +141,7 @@ export function YourAccountRow(): React.JSX.Element | null {
         if (cancelled) return
         setWho(next)
         if (ownerLinkAccess(next.ownerToken, next.role) === 'hidden') return
-        const list = parseUsers(await daemonCliGet<unknown>(primaryScope(), 'users'))
+        const list = parseAccountChoices(await daemonCliGet<unknown>(primaryScope(), 'users'))
         if (!cancelled) setUsers(list)
       } catch (e) {
         if (!cancelled) console.debug('[settings] your account: whoami/users skipped:', e)
@@ -113,18 +154,6 @@ export function YourAccountRow(): React.JSX.Element | null {
 
   const access = who ? ownerLinkAccess(who.ownerToken, who.role) : 'hidden'
   const owner = useOwnerAccounts(available && access !== 'hidden')
-
-  const options = useMemo(() => {
-    const choices = accountChoices(users ?? [])
-    const opts: { value: string; label: string; badge?: string }[] = [{ value: NO_ACCOUNT, label: 'None' }]
-    if (owner.accounts.length > 1) opts.push({ value: MANY_ACCOUNTS, label: yourAccountLabel(owner.accounts) })
-    for (const c of choices) opts.push({ value: c.username, label: c.username, badge: c.role === 'owner' ? 'Owner' : 'Admin' })
-    // A linked login that is not Owner/Admin (or disabled) still shows.
-    for (const a of owner.accounts) {
-      if (owner.accounts.length === 1 && !opts.some((o) => o.value === a)) opts.push({ value: a, label: a })
-    }
-    return opts
-  }, [users, owner.accounts])
 
   if (!available || access === 'hidden' || !owner.loaded || users === null) return null
   const readOnly = access === 'read'
@@ -149,16 +178,7 @@ export function YourAccountRow(): React.JSX.Element | null {
           </p>
         )}
       </div>
-      <SettingDropdown
-        value={yourAccountValue(owner.accounts)}
-        options={options}
-        disabled={readOnly || owner.busy !== null}
-        ariaLabel="Your account"
-        onChange={(v) => {
-          const next = nextOwnerAccounts(owner.accounts, v)
-          if (next) void owner.setAccounts(next)
-        }}
-      />
+      <YourAccountSelect users={users} owner={owner} readOnly={readOnly} />
     </div>
   )
 }

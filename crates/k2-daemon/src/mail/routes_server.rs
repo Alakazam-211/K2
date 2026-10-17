@@ -221,6 +221,11 @@ pub fn handle_status(params: &HashMap<String, String>) -> CliResponse {
     // fallback to the last failed ACME task. Registry reads bounded to
     // 2 s and cached 60 s (Settings polls this).
     if installed {
+        // `?fresh=1` (the CLI's `k2 hostmail status`): read Stalwart's
+        // task + registry state now instead of the 60 s Settings cache.
+        if params.get("fresh").map(String::as_str) == Some("1") {
+            crate::mail::defaults::invalidate_status_cache();
+        }
         crate::mail::defaults::fill_status(&mut body, hostname.as_deref());
     }
     // Linux only: the root door enable / cert restart / boot reconcile

@@ -22,10 +22,23 @@
 //!
 //! **Inbox (CAL19):** param `address`. Absent → the ONE active hosted row
 //! the caller's workspace owns ([`access::primary_hosted`]): 0 → 404
-//! `not_found`, more than 1 → 400 `usage` listing them. A linked inbox →
-//! 400 `hosted_only`, only AFTER the access gate passed (no existence
-//! leak). Event ids are opaque `ev_…` tokens carrying their inbox
-//! address, exactly like mail's `m_…` message ids.
+//! `not_found`, more than 1 → 400 `usage` listing them. Event ids are
+//! opaque `ev_…` tokens carrying their inbox address, exactly like mail's
+//! `m_…` message ids (capped at 1 KiB before decoding, MCS-A23).
+//!
+//! **Linked inboxes (MCS3, prd-app-mail-calendar-surfaces-v1 §3.1/§3.4):**
+//! [`resolve_target`] routes a LINKED inbox — only AFTER the access gate
+//! passed, so a linked inbox the caller can't see still answers the masked
+//! `not_found` (CAL19) — to its provider: Microsoft 365 → Microsoft Graph
+//! ([`crate::mail::calendar_graph`], same verbs, same wire shapes plus
+//! `source`). Anything a linked inbox can't do answers 409
+//! `capability_missing` `{cap, reason, fix}`: Google (`not_built` until
+//! MCS4, or `scope_not_granted`), an app-password IMAP inbox
+//! (`backend_unsupported`), a Microsoft link consented for mail only
+//! (`scope_not_granted`, fix `k2 mail link upgrade … --features
+//! calendar`), or the owner's `linkedCalendars` switch off
+//! (`owner_disabled`). The hosted path below is unchanged (MCS-A16:
+//! [`CalendarApi`] stays the Stalwart internals).
 //!
 //! **Account (CAL16):** the Stalwart account id comes ONLY from the
 //! address row; no client `accountId` is ever read. The admin API key can
@@ -89,23 +102,23 @@ const DEFAULT_WINDOW_DAYS: i64 = 7;
 /// by the window, so this also bounds the server's work).
 const MAX_WINDOW_DAYS: i64 = 366;
 /// `events` page size: default and hard cap.
-const DEFAULT_EVENTS: usize = 100;
-const MAX_EVENTS: usize = 500;
+pub(crate) const DEFAULT_EVENTS: usize = 100;
+pub(crate) const MAX_EVENTS: usize = 500;
 /// `freebusy` reads at most this many (expanded) events per window.
 const FREEBUSY_MAX_EVENTS: usize = 2000;
 /// `CalendarEvent/get` batch size.
 const GET_BATCH: usize = 100;
 /// `wait` polls `CalendarEvent/changes` every this many seconds.
-const WAIT_POLL_SECS: u64 = 2;
+pub(crate) const WAIT_POLL_SECS: u64 = 2;
 /// `wait` timeout default / max (mirrors `k2 mail wait`).
 const WAIT_DEFAULT_TIMEOUT_SECS: u64 = 300;
 const WAIT_MAX_TIMEOUT_SECS: u64 = 900;
 /// Field caps for draft writes.
-const MAX_TITLE: usize = 500;
-const MAX_LOCATION: usize = 500;
-const MAX_NOTES: usize = 20_000;
+pub(crate) const MAX_TITLE: usize = 500;
+pub(crate) const MAX_LOCATION: usize = 500;
+pub(crate) const MAX_NOTES: usize = 20_000;
 /// The time zone stored when the caller names none.
-const DEFAULT_TZ: &str = "Etc/UTC";
+pub(crate) const DEFAULT_TZ: &str = "Etc/UTC";
 
 /// Opaque event-id prefix (`ev_<b64url(address \n jmap-id)>`).
 const EVENT_ID_PREFIX: &str = "ev_";
@@ -155,7 +168,7 @@ const FULL_PROPS: &[&str] = &[
 
 // ── Response helpers ────────────────────────────────────────────────────
 
-fn error_response(status: &'static str, code: &str, hint: &str) -> CliResponse {
+pub(crate) fn error_response(status: &'static str, code: &str, hint: &str) -> CliResponse {
     CliResponse {
         status,
         content_type: "application/json",
@@ -163,19 +176,19 @@ fn error_response(status: &'static str, code: &str, hint: &str) -> CliResponse {
     }
 }
 
-fn usage(hint: impl AsRef<str>) -> CliResponse {
+pub(crate) fn usage(hint: impl AsRef<str>) -> CliResponse {
     error_response("400 Bad Request", "usage", hint.as_ref())
 }
 
-fn engine_err(hint: impl AsRef<str>) -> CliResponse {
+pub(crate) fn engine_err(hint: impl AsRef<str>) -> CliResponse {
     error_response("502 Bad Gateway", "engine", hint.as_ref())
 }
 
-fn ok_json(v: Value) -> CliResponse {
+pub(crate) fn ok_json(v: Value) -> CliResponse {
     CliResponse::ok_json(v.to_string())
 }
 
-fn invites_need_send(what: &str) -> CliResponse {
+pub(crate) fn invites_need_send(what: &str) -> CliResponse {
     error_response(
         "409 Conflict",
         "invites_need_send_level",
@@ -242,7 +255,7 @@ impl CalendarApi for StalwartClient {
 }
 
 /// The production engine (503 `not_ready` when the server isn't up).
-fn engine() -> Result<StalwartClient, CliResponse> {
+pub(crate) fn engine() -> Result<StalwartClient, CliResponse> {
     crate::mail::domains::engine_from_db()
         .map(|(client, _host)| client)
         .map_err(|hint| error_response("503 Service Unavailable", "not_ready", &hint))
@@ -252,7 +265,7 @@ fn engine() -> Result<StalwartClient, CliResponse> {
 
 /// 409 `calendars_disabled` when the owner turned calendars off for
 /// hosted addresses (S2 DAV policy). NULL policy = Stalwart default (on).
-fn calendars_enabled_gate() -> Result<(), CliResponse> {
+pub(crate) fn calendars_enabled_gate() -> Result<(), CliResponse> {
     match crate::mail::dav::load_policy() {
         Ok(Some(p)) if p.calendars == crate::mail::dav::OnOff::Off => Err(error_response(
             "409 Conflict",
@@ -269,7 +282,7 @@ fn calendars_enabled_gate() -> Result<(), CliResponse> {
 
 /// GET identity: the stamped scoped principal wins over `project=`
 /// (same as `k2 mail messages`). Returns the caller's workspace uuid.
-fn caller_from_params(params: &HashMap<String, String>) -> Result<String, CliResponse> {
+pub(crate) fn caller_from_params(params: &HashMap<String, String>) -> Result<String, CliResponse> {
     match crate::mail::identity::resolve_caller_params(params) {
         Ok((_path, id)) => Ok(id),
         Err(resp) => {
@@ -284,7 +297,7 @@ fn caller_from_params(params: &HashMap<String, String>) -> Result<String, CliRes
 }
 
 /// POST identity: request-scoped principal first, else the body claim.
-fn caller_from_body(project: &str) -> Result<String, CliResponse> {
+pub(crate) fn caller_from_body(project: &str) -> Result<String, CliResponse> {
     crate::mail::identity::resolve_caller(project).map(|(_path, id)| id)
 }
 
@@ -304,7 +317,7 @@ pub struct CalInbox {
     pub peers: Vec<HostedAddr>,
 }
 
-fn gate_error(err: ReadError) -> CliResponse {
+pub(crate) fn gate_error(err: ReadError) -> CliResponse {
     match err {
         ReadError::Usage(h) => usage(h),
         ReadError::NotFound(h) => error_response("404 Not Found", "not_found", &h),
@@ -312,13 +325,22 @@ fn gate_error(err: ReadError) -> CliResponse {
     }
 }
 
+/// Where a calendar verb runs (MCS3): the hosted Stalwart account, or a
+/// linked Microsoft 365 mailbox over Graph.
+pub enum CalTarget {
+    Hosted(CalInbox),
+    Graph(crate::mail::calendar_graph::GraphCalInbox),
+}
+
 /// Resolve the inbox for a calendar verb: explicit `address`, else the
-/// single hosted inbox the caller owns. Masked like the mail gate.
-pub fn resolve_inbox(
+/// single hosted inbox the caller owns. Masked like the mail gate. A
+/// LINKED inbox is routed to its provider, or refused with
+/// `capability_missing` — only after the access gate passed.
+pub fn resolve_target(
     project_id: &str,
     explicit: Option<&str>,
     need: Level,
-) -> Result<CalInbox, CliResponse> {
+) -> Result<CalTarget, CliResponse> {
     let address = match explicit.map(str::trim).filter(|s| !s.is_empty()) {
         Some(a) => a.to_string(),
         None => {
@@ -352,15 +374,7 @@ pub fn resolve_inbox(
     // CAL19: only AFTER access passed, so a linked inbox the caller
     // cannot see still answers the masked not_found above.
     if inbox.source == Source::Linked {
-        return Err(error_response(
-            "400 Bad Request",
-            "hosted_only",
-            &format!(
-                "'{}' is a linked inbox — calendars are available on hosted (K2-minted) \
-                 inboxes only",
-                inbox.address
-            ),
-        ));
+        return crate::mail::calendar_graph::linked_target(inbox, need).map(CalTarget::Graph);
     }
     let Some(account_id) = inbox.account_id.filter(|s| !s.trim().is_empty()) else {
         return Err(engine_err(format!(
@@ -373,14 +387,38 @@ pub fn resolve_inbox(
         .into_iter()
         .filter(|h| h.account_id != account_id)
         .collect();
-    Ok(CalInbox { address: inbox.address, account_id, level: inbox.your_level, peers })
+    Ok(CalTarget::Hosted(CalInbox { address: inbox.address, account_id, level: inbox.your_level, peers }))
 }
+
+/// [`resolve_target`] for the HOSTED-only callers (S4 share code and the
+/// S3 tests): a routable linked inbox answers 409 `hosted_only` here.
+pub fn resolve_inbox(
+    project_id: &str,
+    explicit: Option<&str>,
+    need: Level,
+) -> Result<CalInbox, CliResponse> {
+    match resolve_target(project_id, explicit, need)? {
+        CalTarget::Hosted(i) => Ok(i),
+        CalTarget::Graph(g) => Err(error_response(
+            "409 Conflict",
+            "hosted_only",
+            &format!("'{}' is a linked inbox — this verb is hosted-only", g.address),
+        )),
+    }
+}
+
+/// The longest `ev_…` token decoded (MCS-A23: Graph ids are long, but a
+/// token is never allowed to grow unbounded).
+const MAX_EVENT_TOKEN: usize = 1024;
 
 pub fn encode_event_id(address: &str, jmap_id: &str) -> String {
     format!("{EVENT_ID_PREFIX}{}", B64URL.encode(format!("{address}\n{jmap_id}")))
 }
 
 pub fn decode_event_id(token: &str) -> Option<(String, String)> {
+    if token.trim().len() > MAX_EVENT_TOKEN {
+        return None;
+    }
     let raw = token.trim().strip_prefix(EVENT_ID_PREFIX)?;
     let bytes = B64URL.decode(raw).ok()?;
     let s = String::from_utf8(bytes).ok()?;
@@ -400,6 +438,9 @@ pub fn encode_shared_event_id(viewer: &str, jmap_id: &str, owner: &str) -> Strin
 
 /// Any event id → (inbox address, jmap id, owner address when shared).
 pub fn decode_event_ref(token: &str) -> Option<(String, String, Option<String>)> {
+    if token.trim().len() > MAX_EVENT_TOKEN {
+        return None;
+    }
     if let Some((a, id)) = decode_event_id(token) {
         return Some((a, id, None));
     }
@@ -411,6 +452,35 @@ pub fn decode_event_ref(token: &str) -> Option<(String, String, Option<String>)>
             Some((v.to_string(), id.to_string(), owner))
         }
         _ => None,
+    }
+}
+
+/// An event id resolved to where it lives (MCS3).
+pub(crate) enum EventTarget {
+    Hosted(CalInbox, String, Option<HostedAddr>),
+    Graph(crate::mail::calendar_graph::GraphCalInbox, String),
+}
+
+/// [`resolve_event`] across providers: a hosted event (own or shared),
+/// or an event on a linked Microsoft 365 calendar.
+pub(crate) fn resolve_event_target(
+    project_id: &str,
+    token: &str,
+    need: Level,
+) -> Result<EventTarget, CliResponse> {
+    let Some((address, id, owner)) = decode_event_ref(token) else {
+        return Err(usage("invalid event id — use an id from 'k2 calendar events'"));
+    };
+    match resolve_target(project_id, Some(&address), need) {
+        Ok(CalTarget::Graph(g)) => {
+            if owner.is_some() {
+                return Err(event_not_found(token));
+            }
+            Ok(EventTarget::Graph(g, id))
+        }
+        Ok(CalTarget::Hosted(_)) | Err(_) => {
+            resolve_event(project_id, token, need).map(|(i, j, o)| EventTarget::Hosted(i, j, o))
+        }
     }
 }
 
@@ -427,8 +497,9 @@ fn resolve_event(
     let Some((address, jmap_id, owner)) = decode_event_ref(token) else {
         return Err(usage("invalid event id — use an id from 'k2 calendar events'"));
     };
-    let inbox = match resolve_inbox(project_id, Some(&address), need) {
-        Ok(inbox) => inbox,
+    let inbox = match resolve_target(project_id, Some(&address), need) {
+        Ok(CalTarget::Hosted(inbox)) => inbox,
+        Ok(CalTarget::Graph(_)) => return Err(event_not_found(token)),
         Err(resp) if resp.status.starts_with("404") => return Err(event_not_found(token)),
         Err(resp) => return Err(resp),
     };
@@ -442,7 +513,7 @@ fn resolve_event(
     Ok((inbox, jmap_id, owner))
 }
 
-fn event_not_found(token: &str) -> CliResponse {
+pub(crate) fn event_not_found(token: &str) -> CliResponse {
     error_response(
         "404 Not Found",
         "not_found",
@@ -470,7 +541,7 @@ pub fn parse_instant(raw: &str, field: &str) -> Result<DateTime<Utc>, String> {
 }
 
 /// RFC 3339 instant only (event start/end: a bare date is ambiguous).
-fn parse_event_instant(raw: &str, field: &str) -> Result<DateTime<Utc>, String> {
+pub(crate) fn parse_event_instant(raw: &str, field: &str) -> Result<DateTime<Utc>, String> {
     DateTime::parse_from_rfc3339(raw.trim())
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|_| {
@@ -490,7 +561,7 @@ pub fn rfc3339_utc(dt: &DateTime<Utc>) -> String {
 
 /// The `[start, end)` window of a read: defaults to now .. now + 7 days,
 /// `end` must follow `start`, and the span is capped at 366 days.
-fn window(
+pub(crate) fn window(
     params: &HashMap<String, String>,
     now: DateTime<Utc>,
 ) -> Result<(DateTime<Utc>, DateTime<Utc>), CliResponse> {
@@ -633,7 +704,7 @@ fn event_utc_span(ev: &Value) -> (Option<DateTime<Utc>>, Option<DateTime<Utc>>) 
 // ── Participants / alerts (CAL20) ───────────────────────────────────────
 
 /// `mailto:x@y` / `x@y` → `x@y`, lowercased.
-fn strip_mailto(s: &str) -> String {
+pub(crate) fn strip_mailto(s: &str) -> String {
     let s = s.trim();
     let lower = s.to_ascii_lowercase();
     let s = if lower.starts_with("mailto:") { &s[7..] } else { s };
@@ -694,7 +765,7 @@ pub fn has_email_alert(alerts: Option<&Value>) -> bool {
     })
 }
 
-fn email_alert_refused() -> CliResponse {
+pub(crate) fn email_alert_refused() -> CliResponse {
     error_response(
         "409 Conflict",
         "email_alerts_need_send_level",
@@ -1232,14 +1303,15 @@ pub fn handle_list(params: &HashMap<String, String>) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
+    let inbox =
+        match resolve_target(&project_id, params.get("address").map(String::as_str), Level::Read) {
+            Ok(CalTarget::Hosted(i)) => i,
+            Ok(CalTarget::Graph(g)) => return crate::mail::calendar_graph::handle_list(&g),
+            Err(r) => return r,
+        };
     if let Err(r) = calendars_enabled_gate() {
         return r;
     }
-    let inbox = match resolve_inbox(&project_id, params.get("address").map(String::as_str), Level::Read)
-    {
-        Ok(i) => i,
-        Err(r) => return r,
-    };
     match engine() {
         Ok(api) => list_with(&api, &inbox),
         Err(r) => r,
@@ -1288,14 +1360,17 @@ pub fn handle_events(params: &HashMap<String, String>) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
+    let inbox =
+        match resolve_target(&project_id, params.get("address").map(String::as_str), Level::Read) {
+            Ok(CalTarget::Hosted(i)) => i,
+            Ok(CalTarget::Graph(g)) => {
+                return crate::mail::calendar_graph::handle_events(&g, params, Utc::now())
+            }
+            Err(r) => return r,
+        };
     if let Err(r) = calendars_enabled_gate() {
         return r;
     }
-    let inbox = match resolve_inbox(&project_id, params.get("address").map(String::as_str), Level::Read)
-    {
-        Ok(i) => i,
-        Err(r) => return r,
-    };
     match engine() {
         Ok(api) => events_with(&api, &inbox, params, Utc::now()),
         Err(r) => r,
@@ -1415,13 +1490,16 @@ pub fn handle_show(params: &HashMap<String, String>) -> CliResponse {
     let Some(token) = crate::cli::opt_param(params, "id") else {
         return usage("missing 'id' — an event id from 'k2 calendar events'");
     };
+    let (inbox, jmap_id, owner) = match resolve_event_target(&project_id, &token, Level::Read) {
+        Ok(EventTarget::Hosted(i, j, o)) => (i, j, o),
+        Ok(EventTarget::Graph(g, id)) => {
+            return crate::mail::calendar_graph::handle_show(&g, &id, &token)
+        }
+        Err(r) => return r,
+    };
     if let Err(r) = calendars_enabled_gate() {
         return r;
     }
-    let (inbox, jmap_id, owner) = match resolve_event(&project_id, &token, Level::Read) {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
     match engine() {
         Ok(api) => match &owner {
             None => show_with(&api, &inbox, &jmap_id, &token),
@@ -1473,14 +1551,17 @@ pub fn handle_freebusy(params: &HashMap<String, String>) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
+    let inbox =
+        match resolve_target(&project_id, params.get("address").map(String::as_str), Level::Read) {
+            Ok(CalTarget::Hosted(i)) => i,
+            Ok(CalTarget::Graph(g)) => {
+                return crate::mail::calendar_graph::handle_freebusy(&g, params, Utc::now())
+            }
+            Err(r) => return r,
+        };
     if let Err(r) = calendars_enabled_gate() {
         return r;
     }
-    let inbox = match resolve_inbox(&project_id, params.get("address").map(String::as_str), Level::Read)
-    {
-        Ok(i) => i,
-        Err(r) => return r,
-    };
     match engine() {
         Ok(api) => freebusy_with(&api, &inbox, params, Utc::now()),
         Err(r) => r,
@@ -1499,7 +1580,7 @@ pub enum BusyKind {
 }
 
 impl BusyKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             BusyKind::Tentative => "tentative",
             BusyKind::Unavailable => "unavailable",
@@ -1670,7 +1751,7 @@ pub fn merge_busy(mut spans: Vec<BusySpan>) -> Vec<BusySpan> {
 
 /// A query failure the caller can fix (too many expansions, bad filter)
 /// is a 400; the rest are 502.
-fn query_err(e: String) -> CliResponse {
+pub(crate) fn query_err(e: String) -> CliResponse {
     if e.contains("invalidArguments") || e.contains("unsupportedFilter") {
         usage(format!(
             "{e} — the window holds too many occurrences or an unsupported filter; \
@@ -1692,14 +1773,22 @@ pub fn handle_wait(params: &HashMap<String, String>) -> CliResponse {
         Ok(t) => t,
         Err(r) => return r,
     };
+    let inbox =
+        match resolve_target(&project_id, params.get("address").map(String::as_str), Level::Read) {
+            Ok(CalTarget::Hosted(i)) => i,
+            Ok(CalTarget::Graph(g)) => {
+                return crate::mail::calendar_graph::handle_wait(
+                    &g,
+                    &project_id,
+                    params,
+                    timeout_secs,
+                )
+            }
+            Err(r) => return r,
+        };
     if let Err(r) = calendars_enabled_gate() {
         return r;
     }
-    let inbox = match resolve_inbox(&project_id, params.get("address").map(String::as_str), Level::Read)
-    {
-        Ok(i) => i,
-        Err(r) => return r,
-    };
     let api = match engine() {
         Ok(a) => a,
         Err(r) => return r,
@@ -1719,7 +1808,7 @@ pub fn handle_wait(params: &HashMap<String, String>) -> CliResponse {
     wait_with(&api, &inbox, since.as_deref(), timeout_secs, &mut elapsed, &mut sleep)
 }
 
-fn parse_wait_timeout(params: &HashMap<String, String>) -> Result<u64, CliResponse> {
+pub(crate) fn parse_wait_timeout(params: &HashMap<String, String>) -> Result<u64, CliResponse> {
     match params.get("timeout").map(|v| v.trim().parse::<u64>()) {
         None => Ok(WAIT_DEFAULT_TIMEOUT_SECS),
         Some(Ok(n)) if (1..=WAIT_MAX_TIMEOUT_SECS).contains(&n) => Ok(n),
@@ -1967,13 +2056,13 @@ pub struct WriteBody {
     pub alerts: Option<Value>,
 }
 
-fn parse_body(body: &[u8]) -> Result<WriteBody, CliResponse> {
+pub(crate) fn parse_body(body: &[u8]) -> Result<WriteBody, CliResponse> {
     serde_json::from_slice(body).map_err(|e| usage(format!("invalid JSON body: {e}")))
 }
 
 /// IANA-ish zone name check (no tz database here; Stalwart validates
 /// the name itself and rejects unknown zones in the set).
-fn valid_tz(tz: &str) -> bool {
+pub(crate) fn valid_tz(tz: &str) -> bool {
     !tz.is_empty()
         && tz.len() <= 64
         && tz
@@ -1981,7 +2070,7 @@ fn valid_tz(tz: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+'))
 }
 
-fn check_len(v: &Option<String>, field: &str, max: usize) -> Result<(), CliResponse> {
+pub(crate) fn check_len(v: &Option<String>, field: &str, max: usize) -> Result<(), CliResponse> {
     match v {
         Some(s) if s.chars().count() > max => {
             Err(usage(format!("'{field}' is too long (max {max} characters)")))
@@ -2055,13 +2144,14 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
     if b.id.is_some() {
         return usage("create takes no 'id' — use 'k2 calendar update <id>' to change an event");
     }
+    let inbox = match resolve_target(&project_id, b.address.as_deref(), Level::Draft) {
+        Ok(CalTarget::Hosted(i)) => i,
+        Ok(CalTarget::Graph(g)) => return crate::mail::calendar_graph::handle_create(&g, &b),
+        Err(r) => return r,
+    };
     if let Err(r) = calendars_enabled_gate() {
         return r;
     }
-    let inbox = match resolve_inbox(&project_id, b.address.as_deref(), Level::Draft) {
-        Ok(i) => i,
-        Err(r) => return r,
-    };
     match engine() {
         Ok(api) => create_with(&api, &inbox, &b),
         Err(r) => r,
@@ -2265,13 +2355,16 @@ pub fn handle_update(body: &[u8]) -> CliResponse {
     if b.address.is_some() || b.calendar.is_some() {
         return usage("update takes the inbox from the event id — no 'address' or 'calendar'");
     }
+    let (inbox, jmap_id, owner) = match resolve_event_target(&project_id, &token, Level::Draft) {
+        Ok(EventTarget::Hosted(i, j, o)) => (i, j, o),
+        Ok(EventTarget::Graph(g, id)) => {
+            return crate::mail::calendar_graph::handle_update(&g, &id, &token, &b)
+        }
+        Err(r) => return r,
+    };
     if let Err(r) = calendars_enabled_gate() {
         return r;
     }
-    let (inbox, jmap_id, owner) = match resolve_event(&project_id, &token, Level::Draft) {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
     match engine() {
         Ok(api) => update_at(&api, &inbox, owner.as_ref(), &jmap_id, &token, &b),
         Err(r) => r,
@@ -2512,13 +2605,16 @@ pub fn handle_delete(body: &[u8]) -> CliResponse {
     let Some(token) = b.id.clone().filter(|s| !s.trim().is_empty()) else {
         return usage("delete requires 'id' — an event id from 'k2 calendar events'");
     };
+    let (inbox, jmap_id, owner) = match resolve_event_target(&project_id, &token, Level::Draft) {
+        Ok(EventTarget::Hosted(i, j, o)) => (i, j, o),
+        Ok(EventTarget::Graph(g, id)) => {
+            return crate::mail::calendar_graph::handle_delete(&g, &id, &token)
+        }
+        Err(r) => return r,
+    };
     if let Err(r) = calendars_enabled_gate() {
         return r;
     }
-    let (inbox, jmap_id, owner) = match resolve_event(&project_id, &token, Level::Draft) {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
     match engine() {
         Ok(api) => delete_at(&api, &inbox, owner.as_ref(), &jmap_id, &token),
         Err(r) => r,
@@ -2910,14 +3006,18 @@ mod tests {
     }
 
     #[test]
-    fn linked_inbox_is_hosted_only_but_only_after_access_passes() {
+    /// MCS3: an app-password IMAP inbox has no calendar API — 409
+    /// `capability_missing` / `backend_unsupported`, but only after the
+    /// access gate passed (a stranger still gets the masked not_found).
+    fn linked_imap_inbox_is_capability_missing_but_only_after_access_passes() {
         let (owner, _) = insert_project("lnk-own");
         let (other, _) = insert_project("lnk-oth");
         let linked = addr("linked");
         seed_linked(&owner, &linked);
         let r = resolve_inbox(&owner, Some(&linked), Level::Read).expect_err("linked");
-        assert!(r.status.starts_with("400"));
-        assert_eq!(code_of(&r), "hosted_only");
+        assert!(r.status.starts_with("409"), "{} {}", r.status, r.body);
+        assert_eq!(code_of(&r), "capability_missing");
+        assert!(r.body.contains("backend_unsupported"), "{}", r.body);
         // A workspace with no access never learns it is linked.
         let r = resolve_inbox(&other, Some(&linked), Level::Read).expect_err("masked");
         assert!(r.status.starts_with("404"));

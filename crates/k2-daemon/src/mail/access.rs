@@ -1127,6 +1127,8 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
     // MCS1 capabilities: the owner's hosted calendar switch, read BEFORE the
     // DB lock (load_policy takes it). An unreadable policy reports calendars
     // off rather than claiming a capability the verbs would refuse.
+    // MCS3: the owner's switch for calendars on linked inboxes.
+    let linked_calendars_on = k2_core::app_settings::load().linked_calendars;
     let hosted_calendars_on = matches!(
         crate::mail::dav::load_policy(),
         Ok(p) if p.as_ref().map(|p| p.calendars != crate::mail::dav::OnOff::Off).unwrap_or(true)
@@ -1217,6 +1219,7 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
                 meta: meta.as_ref(),
                 level: your.unwrap_or(row.source.max_level()),
                 hosted_calendars_on,
+                linked_calendars_on,
             },
         );
         // Source-specific fields.

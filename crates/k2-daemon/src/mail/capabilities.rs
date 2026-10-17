@@ -36,6 +36,9 @@ pub struct CapInput<'a> {
     pub level: Level,
     /// The owner's hosted calendar policy (S2 DAV policy) is on.
     pub hosted_calendars_on: bool,
+    /// MCS3: the owner's `linkedCalendars` switch (calendars on linked
+    /// Google / Microsoft inboxes).
+    pub linked_calendars_on: bool,
 }
 
 /// The backend family one inbox rides.
@@ -199,10 +202,17 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
             Backend::Google | Backend::Microsoft if !calendar_scope => {
                 Verdict::off("scope_not_granted", upgrade_fix(address, "calendar"))
             }
-            Backend::Google | Backend::Microsoft => Verdict::off(
+            Backend::Google | Backend::Microsoft if !input.linked_calendars_on => Verdict::off(
+                "owner_disabled",
+                "the owner turned calendars on linked inboxes off — 'k2 mail link calendars on' \
+                 (owner)",
+            ),
+            // MCS3: Microsoft 365 calendars run over Graph.
+            Backend::Microsoft => Verdict::on(),
+            Backend::Google => Verdict::off(
                 "not_built",
-                "calendars on linked Google / Microsoft inboxes are not available in this K2 \
-                 version (the consent is already in place)",
+                "Google calendars are not available in this K2 version (the consent is \
+                 already in place)",
             ),
         };
         v.needs(level, want, address)
@@ -224,10 +234,12 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
         v.needs(level, want, address)
     };
     let cal_read = cal_base(Level::Read);
-    let freebusy = if cal_read.on && backend == Backend::Hosted {
-        "box"
-    } else {
-        "none"
+    // Free/busy reach: the box's own mailboxes for hosted; the mailbox
+    // itself for Microsoft (multi-attendee `tenant` reach is MCS9).
+    let freebusy = match (cal_read.on, backend) {
+        (true, Backend::Hosted) => "box",
+        (true, Backend::Microsoft) => "self",
+        _ => "none",
     };
     let calendar = [
         ("read", cal_read),
@@ -313,6 +325,7 @@ mod tests {
             meta: None,
             level: Level::Send,
             hosted_calendars_on: true,
+            linked_calendars_on: true,
         });
         assert_eq!(v["source"], "hosted");
         assert_eq!(v["mail"]["read"], true);
@@ -339,6 +352,7 @@ mod tests {
             meta: None,
             level: Level::Read,
             hosted_calendars_on: false,
+            linked_calendars_on: true,
         });
         assert_eq!(v["calendar"]["read"], false);
         assert_eq!(
@@ -365,6 +379,7 @@ mod tests {
             meta: Some(&m),
             level: Level::Send,
             hosted_calendars_on: true,
+            linked_calendars_on: true,
         });
         assert_eq!(v["source"], "microsoft");
         assert_eq!(v["mail"]["read"], true);
@@ -397,6 +412,7 @@ mod tests {
             }),
             level: Level::Send,
             hosted_calendars_on: true,
+            linked_calendars_on: true,
         });
         assert_eq!(v["mail"]["send"], false);
         assert_eq!(v["account"]["checked"], false);
@@ -418,6 +434,7 @@ mod tests {
             meta: None,
             level: Level::Draft,
             hosted_calendars_on: true,
+            linked_calendars_on: true,
         });
         assert_eq!(v["source"], "imap");
         assert_eq!(v["mail"]["draft"], true);
@@ -448,6 +465,7 @@ mod tests {
             meta: Some(&m),
             level: Level::Send,
             hosted_calendars_on: true,
+            linked_calendars_on: true,
         });
         assert_eq!(v["source"], "google");
         assert_eq!(v["mail"]["send"], true);

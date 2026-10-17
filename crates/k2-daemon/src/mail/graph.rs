@@ -179,13 +179,17 @@ const RETRY_AFTER_CAP_SECS: u64 = 60;
 // The injected HTTP seam (production: RealGraphHttp; tests: a mock)
 // ─────────────────────────────────────────────────────────────────────
 
-/// One HTTP verb Graph uses. `Delete` is intentionally ABSENT — this
-/// module has no permanent-delete path (delete = move to Deleted Items).
+/// One HTTP verb Graph uses. Mail never uses `Delete` — this module has
+/// no permanent-delete path for a MESSAGE (delete = move to Deleted
+/// Items). `Delete` exists only for calendar EVENTS (MCS3,
+/// `mail::calendar_graph`): a draft event the agent may delete, which
+/// Exchange keeps in Deleted Items too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphMethod {
     Get,
     Post,
     Patch,
+    Delete,
 }
 
 impl GraphMethod {
@@ -194,6 +198,7 @@ impl GraphMethod {
             GraphMethod::Get => "GET",
             GraphMethod::Post => "POST",
             GraphMethod::Patch => "PATCH",
+            GraphMethod::Delete => "DELETE",
         }
     }
 }
@@ -223,6 +228,19 @@ pub trait GraphHttp: Send + Sync {
         url: &str,
         body: Option<&serde_json::Value>,
     ) -> Result<GraphResponse, String>;
+    /// [`Self::send`] with extra request headers (MCS3 calendars:
+    /// `Prefer: outlook.timezone="UTC"`). Never an Authorization header —
+    /// the impl adds that. The default drops the headers (mail mocks).
+    fn send_with(
+        &self,
+        method: GraphMethod,
+        url: &str,
+        body: Option<&serde_json::Value>,
+        headers: &[(&'static str, String)],
+    ) -> Result<GraphResponse, String> {
+        let _ = headers;
+        self.send(method, url, body)
+    }
     /// Authed GET of raw bytes (attachment `$value`, raw-message MIME
     /// `$value`) — kept off [`Self::send`] so binary never round-trips
     /// through a `String`.
@@ -307,17 +325,33 @@ impl GraphHttp for RealGraphHttp {
         url: &str,
         body: Option<&serde_json::Value>,
     ) -> Result<GraphResponse, String> {
+        self.send_with(method, url, body, &[])
+    }
+
+    fn send_with(
+        &self,
+        method: GraphMethod,
+        url: &str,
+        body: Option<&serde_json::Value>,
+        headers: &[(&'static str, String)],
+    ) -> Result<GraphResponse, String> {
         let token = self.bearer_token()?;
         let client = Self::client()?;
         let mut req = match method {
             GraphMethod::Get => client.get(url),
             GraphMethod::Post => client.post(url),
             GraphMethod::Patch => client.patch(url),
+            GraphMethod::Delete => client.delete(url),
         }
         // The token rides ONLY this header, on this one call — never
         // logged, never echoed into an error below.
         .bearer_auth(&token)
         .header("Accept", "application/json");
+        for (k, v) in headers {
+            if !k.eq_ignore_ascii_case("authorization") {
+                req = req.header(*k, v.as_str());
+            }
+        }
         if let Some(b) = body {
             let payload = serde_json::to_string(b)
                 .map_err(|e| format!("graph {} body serialize: {e}", method.as_str()))?;
@@ -406,7 +440,7 @@ fn decode_att_blob(token: &str) -> Option<(String, String)> {
 /// Graph message ids are opaque and can carry `/`, `+`, `=`). Reuses the
 /// OAuth `form_encode` unreserved set (encodes space as `%20`), which is
 /// a safe superset for a path segment.
-fn path_encode(id: &str) -> String {
+pub(crate) fn path_encode(id: &str) -> String {
     form_encode(id)
 }
 
@@ -424,7 +458,7 @@ fn unix_to_graph_iso(secs: i64) -> String {
 
 /// Assemble `base?k1=enc(v1)&k2=enc(v2)` (keys literal so `$filter` reads
 /// as `$filter`, values percent-encoded).
-fn with_query(base: &str, pairs: &[(&str, String)]) -> String {
+pub(crate) fn with_query(base: &str, pairs: &[(&str, String)]) -> String {
     if pairs.is_empty() {
         return base.to_string();
     }
@@ -1258,7 +1292,7 @@ impl ManageBackend for GraphBackend {
 /// Pull the human `error.message` out of a Graph error body (`{"error":
 /// {"code","message"}}`), else a short raw excerpt. Never a token (Graph
 /// error bodies carry none; the Bearer only ever rides a REQUEST header).
-fn graph_error_excerpt(body: &str) -> String {
+pub(crate) fn graph_error_excerpt(body: &str) -> String {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
         if let Some(msg) = v.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
             return msg.chars().take(200).collect();

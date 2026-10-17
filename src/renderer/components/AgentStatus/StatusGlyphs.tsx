@@ -47,8 +47,9 @@ const EDGE: ReadonlyArray<readonly [number, number]> = [
 /** Working: a 3×3 grid of 4-unit cells with 1-unit gaps in the needs-you
  *  square's box. A lit head runs clockwise round the 8 edge cells (0.8s a
  *  lap, a 2-cell fading tail); the centre stays dim. Reduced motion: still,
- *  with the top row and right column lit (a part-filled square). */
-export function WorkingGrid({ size = STATUS_SLOT_PX }: { size?: number }): React.JSX.Element {
+ *  with the top row and right column lit (a part-filled square). `size` is
+ *  px, or a CSS length (e.g. `1.2em`) to follow the surrounding text. */
+export function WorkingGrid({ size = STATUS_SLOT_PX }: { size?: number | string }): React.JSX.Element {
   const still = useReducedMotion()
   return (
     <svg

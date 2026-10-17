@@ -763,14 +763,14 @@ describe('frosted glass behind the message box', () => {
     expect(FOOTER_TINT_STOPS_OPAQUE.at(-1)).toEqual([6, 95])
   })
 
-  it('the field and the tab on the bar are see-through (stronger in light), opaque with reduced transparency', () => {
+  it('the field on the bar is see-through (stronger in light), opaque with reduced transparency; the tab keeps its own fill', () => {
     const field = '[data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]'
     const tab = '[data-k2-thread-zen] [data-zen-compose] [data-zen-drawer-tile]'
     const wash = (pct: number): string => `background: color-mix(in srgb, var(--zen-surface-raised) ${pct}%, transparent) !important; --ch-fill: color-mix(in srgb, var(--zen-surface-raised) ${pct}%, transparent) !important;`
     expect(FOOTER_GLASS_WASH).toEqual({ dark: 72, light: 86 })
-    const dark = ruleFor(THREAD_FOOTER_FADE_CSS, `${field}, ${tab} {`)
+    const dark = ruleFor(THREAD_FOOTER_FADE_CSS, `${field} {`)
     expect(dark).toContain(wash(72))
-    const light = ruleFor(THREAD_FOOTER_FADE_CSS, `html[data-scheme="light"] ${field}, html[data-scheme="light"] ${tab} {`)
+    const light = ruleFor(THREAD_FOOTER_FADE_CSS, `html[data-scheme="light"] ${field} {`)
     expect(light).toContain(wash(86))
     for (const head of ['@media (prefers-reduced-transparency: reduce)', '@supports not ((-webkit-backdrop-filter']) {
       const body = block(head)
@@ -780,8 +780,10 @@ describe('frosted glass behind the message box', () => {
       expect(body, head).toContain(`html[data-scheme="light"] ${field}`)
       expect(body, head).toContain('var(--zen-canvas) 95%, transparent) 6px')
     }
-    // Only the desktop bar's own field and tab (not Zen's box, not a drawer
-    // under a list with no box).
+    // The activity tab keeps its own darker fill in every state of the box
+    // (Rosson 2026-10-16), so no glass rule names it.
+    expect(THREAD_FOOTER_FADE_CSS).not.toContain(tab)
+    // Only the desktop bar's own field (not Zen's box).
     expect(THREAD_FOOTER_FADE_CSS.split('\n').filter((l) => l.includes('surface-raised')).every((l) => l.includes('[data-k2-thread-zen] [data-zen-compose] '))).toBe(true)
   })
 

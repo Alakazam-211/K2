@@ -43297,7 +43297,7 @@ cmd_hostchat() {
         media) _hostchat_media "$@"; return ;;
         users|user) _hostchat_users "$@"; return ;;
     esac
-    local as_json=0 tarball="" recovery="" identity="" voice=0 voice_url="" media_tarball="" node_ip="" wait=1
+    local as_json=0 tarball="" recovery="" identity="" voice=0 voice_flag=0 voice_url="" media_tarball="" node_ip="" wait=1
     local health=0 dry=0 confirm=0 drop_grants=0 drop_prev=0 keep_backups=0 host="" public_url="" pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -43305,8 +43305,8 @@ cmd_hostchat() {
             --tarball) tarball="${2:?--tarball FILE}"; shift 2 ;;
             --recovery-key-file) recovery="${2:?--recovery-key-file FILE}"; shift 2 ;;
             --identity) identity="${2:?--identity k2|standalone}"; shift 2 ;;
-            --voice) voice=1; shift ;;
-            --voice-url) voice=1; voice_url="${2:?--voice-url wss://HOST}"; shift 2 ;;
+            --voice) voice=1; voice_flag=1; shift ;;
+            --voice-url) voice=1; voice_flag=1; voice_url="${2:?--voice-url wss://HOST}"; shift 2 ;;
             --media-tarball) voice=1; media_tarball="${2:?--media-tarball FILE}"; shift 2 ;;
             --node-ip) node_ip="${2:?--node-ip IP}"; shift 2 ;;
             --no-wait) wait=0; shift ;;
@@ -43327,6 +43327,22 @@ cmd_hostchat() {
         esac
     done
     case "$identity" in ""|k2|standalone) ;; *) echo '{"error":"usage","hint":"--identity is k2 or standalone"}' >&2; exit 2 ;; esac
+    # The voice flags ride `enable` only, and --media-tarball also rides
+    # upgrade and rollback (Sew's upgrade contract: the voice engine moves
+    # with the core). Anywhere else they were silently dropped. Refuse
+    # before any request.
+    if [ "$sub" != "enable" ] && { [ "$voice_flag" = "1" ] || [ -n "$node_ip" ]; }; then
+        echo "{\"error\":\"usage\",\"hint\":\"--voice, --voice-url and --node-ip only apply to k2 hostchat enable. k2 hostchat $sub does not set up voice; to install or replace voice from a tarball: k2 hostchat media install --tarball FILE\"}" >&2
+        exit 2
+    fi
+    if [ -n "$media_tarball" ]; then
+        case "$sub" in
+            enable|upgrade|rollback) ;;
+            *)
+                echo "{\"error\":\"usage\",\"hint\":\"--media-tarball only applies to k2 hostchat enable, upgrade and rollback. To install or replace voice from a tarball: k2 hostchat media install --tarball FILE\"}" >&2
+                exit 2 ;;
+        esac
+    fi
     abs() { case "$1" in ""|/*) printf '%s' "$1" ;; *) printf '%s/%s' "$PWD" "$1" ;; esac; }
     case "$sub" in
         status)

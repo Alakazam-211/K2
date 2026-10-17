@@ -17,6 +17,9 @@
 #   7. upgrade sends tarballPath + mediaTarballPath, waits on /cli/sew/status
 #      until the result, exits 0 only on "done"; a refusal exits 3 with
 #      upgradeProgress.lastError (the reason) on stderr.
+#   8. Voice flags (--voice, --voice-url, --node-ip) outside enable, and
+#      --media-tarball outside enable/upgrade/rollback, exit 2 before any
+#      request (they used to be dropped silently).
 # Fake values only (example.test, made-up ids). Never touches the real ~/.k2.
 
 set -euo pipefail
@@ -248,6 +251,21 @@ assert_contains "enable: turn line" "$out" "turn-box.k2.dev:5349"
 
 run owner hostchat enable --identity ldap
 assert_eq "bad identity → exit 2" "$rc" "2"
+
+# 0.46.1: voice flags outside enable used to be dropped silently.
+before="$(nreq)"
+# upgrade and rollback take --media-tarball (Sew's upgrade contract);
+# everywhere else it, like the other voice flags, is refused.
+run owner hostchat doctor --media-tarball sew-media.tar.gz
+assert_eq "doctor --media-tarball → exit 2" "$rc" "2"
+assert_contains "doctor --media-tarball names the real verb" "$err" "k2 hostchat media install --tarball FILE"
+assert_contains "doctor --media-tarball names the verbs that take it" "$err" "enable, upgrade and rollback"
+run owner hostchat upgrade --tarball sew.tar.gz --voice-url wss://hearth.box.example.test
+assert_eq "upgrade --voice-url → exit 2" "$rc" "2"
+assert_contains "upgrade --voice-url says voice flags are enable's" "$err" "only apply to k2 hostchat enable"
+run owner hostchat upgrade --tarball sew.tar.gz --node-ip 203.0.113.7
+assert_eq "upgrade --node-ip → exit 2" "$rc" "2"
+assert_eq "voice-flag refusals send nothing" "$(nreq)" "$before"
 
 echo "== voice =="
 run owner hostchat media install --url wss://hearth.box.example.test --node-ip 203.0.113.7 --tarball sew-media.tar.gz --no-wait

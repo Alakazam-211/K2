@@ -254,8 +254,8 @@ const FROZEN: &[(&str, &str)] = &[
     // colour in haunted (its accent sits too near the needs-you orange).
     ("theme:basic", "ee73d0d510936337"),
     // 0.46.0 (GS45, Rosson 2026-10-16): K2 Companion's look, Garden 1's
-    // default theme.
-    ("theme:glass", "161b7599eafd08cc"),
+    // default theme; working is its accent (#0a84ff) like the others.
+    ("theme:glass", "a2b7408849a57305"),
     // The Diary's study (Rosson 2026-10-08), new in 0.45.1; 0.45.2 draws
     // a creepier one (haunted-background-2.webp; GS45, Rosson 2026-10-08).
     ("theme:haunted", "d4380bff6abfb969"),

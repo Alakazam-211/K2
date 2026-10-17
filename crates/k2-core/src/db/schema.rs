@@ -98,11 +98,13 @@ pub struct Project {
     pub heartbeat_mode: String,
     pub heartbeat_schedule: Option<String>,
     pub heartbeat_last_fire: Option<String>,
-    /// #67 — per-workspace remote-instruct opt-in (migration 0054).
-    /// 1 = connect-users (role >= Member) may instruct this workspace's
-    /// agent via the composer; 0 (default) = deny. The owner is always
-    /// allowed regardless; the app-level `allowRemoteInstruct` is a
-    /// global master OR'd on top (back-compat). Fail-closed: default 0.
+    /// #67 — per-agent "Let agents on other servers message this agent"
+    /// (internal name remote-instruct, migration 0054). 1 = listed in the
+    /// roster paired servers see and federated live messages deliver;
+    /// 0 (default) = not listed, federated live messages declined. Since
+    /// 2026-10-16 it does not gate people who log in here (owner, Admins,
+    /// Members). The app-level `allowRemoteInstruct` is a global master
+    /// OR'd on top (back-compat). Fail-closed: default 0.
     pub allow_remote_instruct: i64,
     /// DNS K1 — per-workspace DNS-manage opt-in (migration 0079).
     /// 1 = agents may manage DNS records for this workspace; 0 (default)

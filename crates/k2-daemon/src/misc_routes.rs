@@ -246,12 +246,14 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             }
             Err(r) => r,
         },
-        // #67 — per-workspace remote-instruct opt-in. POST (Admin, 0.44.4) with `enable=`
+        // #67 — per-agent "Let agents on other servers message this agent"
+        // (internal name: remote-instruct). POST (Admin, 0.44.4) with `enable=`
         // mirrors the `/cli/worktree` pattern (path-scoped write via
-        // `update_project_setting`). Default OFF / fail-closed; the daemon
-        // still ENFORCES the gate server-side in `authorize_send_message`
-        // (this route only records the per-workspace opt-in + drives the
-        // renderer composer-hide). The owner is always allowed regardless.
+        // `update_project_setting`). Default OFF / fail-closed. Since
+        // 2026-10-16 it covers FEDERATED agents only: the roster served to
+        // peers lists the agent, and federated inbound delivers, only when
+        // it (or the app master) is on. People who log in here (owner,
+        // Admins, Members) can always message the agent.
         "/cli/remote-instruct" => match need_project(params) {
             Ok(p) => {
                 let enable = bool_param(params, "enable");

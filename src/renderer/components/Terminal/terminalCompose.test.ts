@@ -171,35 +171,25 @@ describe('mapMsgResponseToStatus', () => {
 })
 
 // ── Composer 1c (D4) — renderer-hide predicate ───────────────────────
-// Mirrors the daemon's authorize_send_message gate. The composer shows iff
-// the host is local (owner) OR the host opted into remote instruction. The
-// daemon enforces the real gate; this is defense-in-depth only.
+// Rosson 2026-10-16: people who log in can always message agents, so the
+// composer shows for the owner and every login; the per-agent "Let agents on
+// other servers message this agent" switch is not an input. Only a view-only
+// room hides it.
 
 describe('composerPermitted', () => {
-  // CONTRACT (2026-06-27): the composer ALWAYS renders. Authorization moved
-  // entirely server-side — the daemon 403s an unauthorized send regardless of
-  // what the renderer shows (owner always allowed; connect-user gated
-  // per-workspace). The renderer no longer hides the bar (a vanishing composer
-  // was confusing, and remote-instruct is the K2-as-a-server default).
-  it('local host (owner) is permitted', () => {
-    expect(composerPermitted({ isLocalHost: true, allowRemoteInstruct: false })).toBe(true)
+  it('shows for any room that can send (owner or a Member/Admin login)', () => {
+    expect(composerPermitted({ readOnly: false })).toBe(true)
   })
 
-  it('remote host is permitted by default — composer no longer vanishes on remote', () => {
-    expect(composerPermitted({ isLocalHost: false, allowRemoteInstruct: false })).toBe(true)
+  it('hides only in a view-only room', () => {
+    expect(composerPermitted({ readOnly: true })).toBe(false)
   })
 
-  it('remote host is permitted even with every opt-in OFF (daemon is the gate)', () => {
-    expect(
-      composerPermitted({ isLocalHost: false, allowRemoteInstruct: false, perWorkspaceAllow: false })
-    ).toBe(true)
-  })
-
-  it('remote host is permitted with the app-level master / per-workspace ON too', () => {
-    expect(composerPermitted({ isLocalHost: false, allowRemoteInstruct: true })).toBe(true)
-    expect(
-      composerPermitted({ isLocalHost: false, allowRemoteInstruct: false, perWorkspaceAllow: true })
-    ).toBe(true)
+  it('takes no switch input: the federation switch never hides the composer', () => {
+    expect(composerPermitted.length).toBe(1)
+    // A caller that still passes the old switch fields gets the same answer.
+    const legacy = { readOnly: false, allowRemoteInstruct: false, perWorkspaceAllow: false }
+    expect(composerPermitted(legacy)).toBe(true)
   })
 })
 

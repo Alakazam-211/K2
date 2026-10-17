@@ -8,7 +8,7 @@
 // same PTY bytes as the terminal (cancel the current turn) without
 // stealing compose focus; empty Enter/Return injects CR. Other raw TUI
 // control (arrows, menu nav) still goes through the terminal itself. Renderer-hide is gated by
-// composerPermitted (1c); the daemon enforces the same gate server-side.
+// composerPermitted (1c: only a view-only room hides it); the daemon decides by role.
 //
 // File drops: local paths are inserted into the draft; on a remote host the
 // same `.k2/downloads` upload path as terminal drops runs first, then the
@@ -120,26 +120,15 @@ export function TerminalComposeBar({
   onInjectInput,
   sendDestination,
 }: TerminalComposeBarProps): React.JSX.Element | null {
-  // 1c (D4) + #67 renderer-hide: shown iff the active host is LOCAL (owner)
-  // OR the app-level master is on OR the ACTIVE WORKSPACE opted into remote
-  // instruction (default OFF). The daemon enforces the same gate per-workspace
-  // server-side; this hide is defense-in-depth only.
+  // 1c (D4) renderer-hide: the owner and every login (Admin or Member) get
+  // the composer whatever the "Let agents on other servers message this
+  // agent" switch says — that switch covers federated agents only (Rosson
+  // 2026-10-16). The daemon decides by role (`authorize_send_message`).
   // Home M4: the ROOM's server decides, and its own project record (MS3).
   const room = useRoom()
   const scope = room.scope
-  const isLocalHost = !scope.isRemote
-  const allowRemoteInstruct = useSettingsStore((s) => s.allowRemoteInstruct)
-  // Per-workspace opt-in for the room's shown workspace. Approximate on
-  // the renderer (the daemon resolves the EXACT target session's workspace);
-  // good enough for the convenience hide.
-  const roomProjectId = room.activeProjectId()
-  const perWorkspaceAllow = useRoomProjects((projects) => {
-    const active = projects.find((p) => p.id === roomProjectId)
-    return (active?.allowRemoteInstruct ?? 0) === 1
-  })
   // A view-only room sends nothing to its server: no composer.
-  const permitted =
-    !room.readOnly && composerPermitted({ isLocalHost, allowRemoteInstruct, perWorkspaceAllow })
+  const permitted = composerPermitted({ readOnly: room.readOnly })
   // Match Code Editor → Appearance → Font Size (default 12).
   const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
   // MS3 — the pane's workspace path resolves in its room's own list.

@@ -1529,7 +1529,7 @@ if st == "sent":
 if st == "queued":
     print("QUEUED\t%s" % (d.get("hint", "") or "")); sys.exit(0)
 if st == "declined":
-    print("DECLINED\t%s" % (d.get("reason") or "declined by peer")); sys.exit(0)
+    print("DECLINED\t%s" % (d.get("hint") or d.get("reason") or "declined by peer")); sys.exit(0)
 print("OTHER")
 ')
     skind="${sres%%$'\t'*}"

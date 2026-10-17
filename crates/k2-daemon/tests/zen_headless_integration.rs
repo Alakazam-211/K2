@@ -718,8 +718,8 @@ async fn tg1_2_tg1_3_policy_removed_routes_keep_alive_and_no_grant_route() {
         assert!(!zen_dir(&home.0).join("themes/evil").exists(), "a refused theme/new wrote nothing");
         assert!(!zen_dir(&home.0).join("active.json").exists(), "a refused theme switch wrote nothing");
 
-        // Oversize body → 413.
-        let big = format!(r#"{{"name":"x","pad":"{}"}}"#, "x".repeat(70 * 1024));
+        // Oversize body (past zen_routes::MAX_BODY, 320 KiB) → 413.
+        let big = format!(r#"{{"name":"x","pad":"{}"}}"#, "x".repeat(330 * 1024));
         let (s, b) = Conn::open(port).request("POST", &format!("/cli/zen/garden/new?token={tok}"), Some(&big));
         assert_eq!(s, 413, "{b}");
 

@@ -245,11 +245,12 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
         assert_eq!(s, 405, "GET {p}");
     }
 
-    // Templates: the two starts, then the Diary, with nothing to allow.
+    // Templates: the two starts, then the Diary (with nothing to allow), then
+    // the Kanban catalog Garden.
     let (s, v) = call(port, "GET", &format!("/cli/zen/templates?token={tok}"), None);
     assert_eq!(s, 200, "{v}");
     let shorts: Vec<&str> = v["templates"].as_array().expect("templates").iter().filter_map(|t| t["short"].as_str()).collect();
-    assert_eq!(shorts, vec!["texting", "blank", "diary"]);
+    assert_eq!(shorts, vec!["texting", "blank", "diary", "kanban"]);
     assert!(v["templates"][2].get("needsGrant").is_none(), "no permissions: {v}");
     assert_eq!(v["templates"][2]["newUsers"], true);
 
@@ -360,10 +361,11 @@ async fn tuw1_widgets_round_trip_on_the_real_daemon() {
         let (s, v) = call(port, "POST", &format!("/cli/zen/widget/resume?token={session}"), Some("{}"));
         assert_eq!((s, v["error"].as_str()), (403, Some("owner_only")), "{role}: {v}");
     }
-    // 65 KB body, sent in full → 413. The daemon answers from the declared
-    // length, then drains the rest of the body before closing, so the whole
-    // write succeeds and the 413 is read (no reset).
-    let big = format!("{{\"name\":\"{}\"}}", "x".repeat(65 * 1024));
+    // A body past the Zen cap (zen_routes::MAX_BODY, 320 KiB), sent in full
+    // → 413. The daemon answers from the declared length, then drains the
+    // rest of the body before closing, so the whole write succeeds and the
+    // 413 is read (no reset).
+    let big = format!("{{\"name\":\"{}\"}}", "x".repeat(330 * 1024));
     let (s, _) = Conn::try_open(port).expect("connect").request("POST", &format!("/cli/zen/widget/new?token={tok}"), Some(&big));
     assert_eq!(s, 413);
     task.abort();
@@ -586,7 +588,9 @@ async fn oversized_full_body_reads_413_not_a_reset() {
     let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_temp_home(|_home| {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
-        let zen = format!("{{\"name\":\"{}\"}}", "x".repeat(65 * 1024));
+        // Past the Zen cap (zen_routes::MAX_BODY, 320 KiB since one widget
+        // file must fit).
+        let zen = format!("{{\"name\":\"{}\"}}", "x".repeat(330 * 1024));
         let brief = format!("{{\"title\":\"t\",\"briefHtml\":\"{}\"}}", "y".repeat(3 * 1024 * 1024));
         for (path, body) in [
             (format!("/cli/zen/widget/new?token={OWNER_TOKEN}"), &zen),

@@ -41641,9 +41641,13 @@ def line(k, x):
     if x is not None and x != "" and x != []:
         print("%-16s %s" % (k + ":", x))
 if verb in ("status",):
+    if v.get("released") is False and v.get("state") == "not-installed":
+        print("Sew: " + (v.get("notice") or "not available in this K2 release yet")); sys.exit(0)
     if not v.get("supported", True):
         print("Sew: not supported here (Linux boxes only)"); sys.exit(0)
     line("Sew", v.get("state"))
+    if v.get("released") is False:
+        line("notice", v.get("notice"))
     line("identity", v.get("identityProvider"))
     line("version", v.get("installedVersion") or ("pin " + str(v.get("pinnedVersion"))))
     line("install id", v.get("installId"))

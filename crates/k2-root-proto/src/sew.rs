@@ -269,6 +269,29 @@ pub fn pinned() -> &'static SewRelease {
     releases().last().expect("the Sew pin table is never empty")
 }
 
+/// The refusal code and words every Sew install path uses while this K2
+/// release pins no published Sew release ([`sew_release_pinned`] false):
+/// the daemon's `/cli/sew/*` routes, `k2 hostchat` and the root helper.
+pub const SEW_NOT_RELEASED: &str = "sew_not_released";
+pub const SEW_NOT_RELEASED_MESSAGE: &str =
+    "Sew isn't available in this K2 release yet. It will be turned on in a later K2 update.";
+
+/// True when `rel` pins at least one real artifact (not every entry is a
+/// placeholder).
+pub fn release_is_pinned(rel: &SewRelease) -> bool {
+    rel.artifacts.iter().any(|a| !checksum_is_placeholder(a))
+}
+
+/// Whether this build pins a real Sew release. False on a release build
+/// while [`SEW_RELEASES`]' last entry is a placeholder (Sew SW1 not
+/// published); true with `sew-test-pins` (Sew's test builds) and in
+/// `test-signer` builds (K2's fixtures). While false, enable, preflight,
+/// upgrade and voice install refuse with [`SEW_NOT_RELEASED`] before any
+/// effect.
+pub fn sew_release_pinned() -> bool {
+    release_is_pinned(pinned())
+}
+
 /// True when an artifact entry is a placeholder or malformed (install
 /// refuses: never ship an unverifiable install path).
 pub fn checksum_is_placeholder(a: &SewArtifact) -> bool {
@@ -795,6 +818,23 @@ mod tests {
         }
         assert!(artifact_in(pin, "x86_64").unwrap_err().contains("no Sew pin"));
         assert!(artifact_in(pin, "riscv64").unwrap_err().contains("unsupported"));
+    }
+
+    #[test]
+    fn release_pinned_is_false_only_for_the_placeholder_table() {
+        // The real table is placeholder-only (Sew SW1 not published).
+        assert!(!release_is_pinned(SEW_RELEASES.last().unwrap()));
+        assert!(release_is_pinned(TEST_RELEASES.last().unwrap()));
+        let want = cfg!(feature = "test-signer") || cfg!(feature = "sew-test-pins");
+        assert_eq!(sew_release_pinned(), want, "test-signer or sew-test-pins pins a release; a default build does not");
+        assert_eq!(SEW_NOT_RELEASED, "sew_not_released");
+    }
+
+    #[cfg(all(feature = "sew-test-pins", not(feature = "test-signer")))]
+    #[test]
+    fn sew_test_pins_are_a_pinned_release() {
+        assert!(release_is_pinned(SEW_TEST_PINS.last().unwrap()));
+        assert!(sew_release_pinned());
     }
 
     #[test]

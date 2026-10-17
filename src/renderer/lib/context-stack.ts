@@ -472,7 +472,7 @@ export const DEFAULT_CATALOG_ENTRIES: ContextCatalogEntry[] = [
     kind: 'live',
     recommended: false,
     description:
-      'Live list of humans on this K2 box (username, role, disabled). Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names.',
+      'Live list of humans on this K2 box (username with their real name when set, e.g. z3thon — Rosson Long; role; disabled). Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names.',
     author: 'K2',
     tags: ['live', 'roster', 'users'],
   },

@@ -340,7 +340,7 @@ pub fn list_builtin_catalog() -> Vec<ContextCatalogEntry> {
             "User roster",
             USERS_ROSTER_SOURCE,
             "live",
-            "Live list of humans on this K2 box (username, role, disabled). Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names.",
+            "Live list of humans on this K2 box (username with their real name when set, e.g. z3thon — Rosson Long; role; disabled). Regenerates whenever AGENTS.md is rewritten. Do not `k2 msg` these names.",
             None,
             false,
             &["live", "roster", "users"],

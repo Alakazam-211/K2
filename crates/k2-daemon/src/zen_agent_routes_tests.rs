@@ -91,7 +91,7 @@ fn without_the_switch_a_garden_put_becomes_a_proposal_a_person_approves() {
     let agent = workspace("w-plain", false);
     let g = garden1(&e.f);
     let before = disk(&e.f, &g);
-    let (s, v) = call("/cli/zen/garden/put", false, &agent, json!({"garden": g, "text": page("#abcdef"), "note": "brighter"}));
+    let (s, v) = call("/cli/zen/garden/put", false, &agent, json!({"garden": g, "text": page("#2a4d8f"), "note": "brighter"}));
     assert_eq!(s, "200 OK", "{v}");
     assert_eq!(v["proposed"], true, "{v}");
     assert_eq!(disk(&e.f, &g), before, "a proposal writes nothing");
@@ -101,7 +101,7 @@ fn without_the_switch_a_garden_put_becomes_a_proposal_a_person_approves() {
     assert_eq!(s, "200 OK", "{l}");
     assert!(l["proposals"].as_array().is_some_and(|a| a.iter().any(|p| p["id"] == id.as_str())), "{l}");
     let (_, sh) = get("/cli/zen/proposals/show", &agent, &[("id", &id)]);
-    assert_eq!(sh["proposal"]["content"], page("#abcdef"), "{sh}");
+    assert_eq!(sh["proposal"]["content"], page("#2a4d8f"), "{sh}");
     assert_eq!(sh["proposal"]["stale"], false, "{sh}");
     // The agent without the switch can't approve its own proposal.
     let (s, v) = call("/cli/zen/proposals/approve", false, &agent, json!({"id": id}));
@@ -109,7 +109,7 @@ fn without_the_switch_a_garden_put_becomes_a_proposal_a_person_approves() {
     // The person approves: the page lands.
     let (s, v) = call("/cli/zen/proposals/approve", true, &Caller::Owner, json!({"id": id}));
     assert_eq!(s, "200 OK", "{v}");
-    assert_eq!(disk(&e.f, &g).as_deref(), Some(page("#abcdef").as_str()));
+    assert_eq!(disk(&e.f, &g).as_deref(), Some(page("#2a4d8f").as_str()));
     let (s, v) = call("/cli/zen/proposals/approve", true, &Caller::Owner, json!({"id": id}));
     assert_eq!((s.as_str(), v["error"].as_str()), ("409 Conflict", Some("not_pending")), "{v}");
 }

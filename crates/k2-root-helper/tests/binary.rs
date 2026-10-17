@@ -37,17 +37,25 @@ fn the_binary_carries_exactly_one_matching_marker() {
 #[cfg(not(feature = "sew-test-pins"))]
 #[test]
 fn a_default_build_carries_no_sew_test_pins() {
-    // Sew 0.1.0 / 0.1.1 aarch64 test builds: tarball, binary, media
-    // tarball and media binary sha256 (K2-PIN.txt + release.json).
+    // Sew 0.1.0 / 0.1.1 aarch64 test builds: tarball and binary sha256 of
+    // the core, media, transcriber and recorder (release.json).
     const TEST_PIN_HASHES: &[&str] = &[
         "922f8f285a87bd22309eab916d000874004c02765a77d8abc7a74349a99b9006",
         "4dfe51382507e748830a0e008fb96a19cecc7c6d2adb9063c0b2dc533f669837",
         "2ebb00641837b17a7253d7984656c62a4c102705a0002cc18a8645f827d596a6",
         "5edf44e592c28ec3831b495434b98323133ab6438cd5ed74e43e84cea10883d6",
+        "62630e62965cf3aa46d923a934a2a1bde2920b4ecff7b4cdb29dcf25922aff29",
+        "e54b37f67dd701f4eed85a6a124c3f7be12ccc77a33a4fe2dd616804973fc919",
+        "9370335de788e47e4be40aca4c9a8907bfc5112a708962146c594380b7260308",
+        "110ebcaa87bf55283b0197dfdd8b209d73ac32d4eb164de3193409a594a05be1",
         "82fe9e196887b9cfa34528275e535df1b82f7f26309c97025767ee6821e189ba",
         "35d334be98c5610d45f72c3d19e82eaca02ea3b17ecc37910532f26f9f3f0ade",
         "a7d01cae2b5da55b0dfd5541a61833a03a175ccdc408dbe78f3ea6d8f187c328",
         "35958529b04ccf31a70bfbf147ee64f9803c44fb935c2523c76cc69030423355",
+        "95a4260fe6297e4fa95bb8f68b40d52145530151b91e160cb8ffe56a70f15660",
+        "13e1301969d726652c40f81a5aaac9b2cb45b9ef15aee003aebd3a7ca299460b",
+        "231e744a1f824a918b898d9b5c2107a68a028fea6bd9ad2af63dbecfe7a4f3fa",
+        "dd113b1d5844098b5cc92d04849291b6a5a9c678f064d6fbb270da214f5a284a",
     ];
     let bytes = std::fs::read(bin()).expect("read built helper");
     let text = String::from_utf8_lossy(&bytes);

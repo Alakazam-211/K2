@@ -10,15 +10,18 @@
 # <release-dir> holds sew-<v>-release.json and SHA256SUMS (and, when
 # present, the tarballs themselves). Before printing anything it checks:
 #   - every core artifact's tarball and binary sha256 against SHA256SUMS
-#     (both must be listed: `<sha>  <tarball>` and
-#     `<sha>  sew (extracted from <tarball>)`);
+#     (both must be listed: `<sha>  <tarball>` and the binary as either
+#     `<sha>  sew (extracted from <tarball>)` (0.1.x) or
+#     `<sha>  <tarball without .tar.gz>/sew` (0.2.0 on));
 #   - every tarball that is in the directory: its sha256, and the sha256 of
 #     its single binary member (`sew` or `sew-<sidecar>`), against
-#     release.json;
-#   - sidecar tarballs not in SHA256SUMS are checked against their
-#     `<tarball>.sha256` file when present.
-# Any mismatch exits 1 and prints nothing on stdout. Only the `media`
-# sidecar is pinned (K2's table has no slot for the others).
+#     release.json; licence members beside it (`LICENSE`, `NOTICE`,
+#     `THIRD_PARTY_NOTICES.md`, from 0.2.0) must be regular files;
+#   - sidecar tarballs and binaries listed in SHA256SUMS (either form), or
+#     in a `<tarball>.sha256` file, must match release.json.
+# Any mismatch exits 1 and prints nothing on stdout. The `media`,
+# `transcriber` and `recorder` sidecars are pinned; any other is refused
+# (K2's table has no slot for it).
 #
 # Default output is a `SewRelease { … }` expression for SEW_RELEASES;
 # `--const NAME` wraps it as `const NAME: SewRelease = …;` (the test tables).
@@ -63,6 +66,8 @@ HEX = re.compile(r"[0-9a-f]{64}")
 def sha(b):
     return hashlib.sha256(b).hexdigest()
 
+NOTICES = ("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md")
+
 def check_file(art, member):
     """Hash the tarball and its binary member when the tarball is here."""
     p = os.path.join(d, art["file"])
@@ -79,7 +84,19 @@ def check_file(art, member):
             b = t.extractfile(ms[0]).read()
             if sha(b) != art["binary_sha256"]:
                 errors.append(f"{art['file']}: {member} sha256 {sha(b)} != release.json {art['binary_sha256']}")
+        for m in t.getmembers():
+            name = m.name.lstrip("./")
+            if name in NOTICES and not m.isfile():
+                errors.append(f"{art['file']}: licence member '{name}' is not a regular file")
     return True
+
+def binary_sum(tarball, member):
+    """The binary's line in SHA256SUMS, in either form."""
+    stem = tarball[: -len(".tar.gz")] if tarball.endswith(".tar.gz") else tarball
+    for key in (f"{member} (extracted from {tarball})", f"{stem}/{member}"):
+        if key in sums:
+            return key, sums[key]
+    return f"{stem}/{member}", None
 
 def shape(art, where):
     for k in ("arch", "triple", "file", "sha256", "binary_sha256"):
@@ -103,29 +120,39 @@ for a in core:
         continue
     if sums.get(a["file"]) != a["sha256"]:
         errors.append(f"{a['file']}: SHA256SUMS has {sums.get(a['file'])}, release.json {a['sha256']}")
-    key = f"sew (extracted from {a['file']})"
-    if sums.get(key) != a["binary_sha256"]:
-        errors.append(f"{key}: SHA256SUMS has {sums.get(key)}, release.json {a['binary_sha256']}")
+    key, listed = binary_sum(a["file"], "sew")
+    if listed != a["binary_sha256"]:
+        errors.append(f"{key}: SHA256SUMS has {listed}, release.json {a['binary_sha256']}")
     check_file(a, "sew")
 
-media = None
+SIDECARS = ("media", "transcriber", "recorder")
+side_rel = {}
 for s in rel.get("sidecars") or []:
-    if s.get("name") != "media":
+    name = s.get("name")
+    if name not in SIDECARS:
+        errors.append(f"sidecar {name!r}: K2's pin table has no slot for it")
+        continue
+    if name in side_rel:
+        errors.append(f"sidecar {name}: listed twice")
         continue
     if not s.get("version") or not re.fullmatch(r"\d+\.\d+\.\d+", s["version"]):
-        errors.append(f"sidecar media: bad version {s.get('version')!r}")
+        errors.append(f"sidecar {name}: bad version {s.get('version')!r}")
+    member = f"sew-{name}"
     for a in s.get("artifacts") or []:
-        if not shape(a, "sidecar media"):
+        if not shape(a, f"sidecar {name}"):
             continue
         if a["file"] in sums and sums[a["file"]] != a["sha256"]:
             errors.append(f"{a['file']}: SHA256SUMS has {sums[a['file']]}, release.json {a['sha256']}")
+        key, listed = binary_sum(a["file"], member)
+        if listed is not None and listed != a["binary_sha256"]:
+            errors.append(f"{key}: SHA256SUMS has {listed}, release.json {a['binary_sha256']}")
         side = os.path.join(d, a["file"] + ".sha256")
         if os.path.isfile(side):
             listed = open(side).read().split()[0]
             if listed != a["sha256"]:
                 errors.append(f"{a['file']}.sha256 has {listed}, release.json {a['sha256']}")
-        check_file(a, "sew-media")
-    media = s
+        check_file(a, member)
+    side_rel[name] = s
 
 if errors:
     for e in errors:
@@ -155,15 +182,17 @@ def artslice(lst, ind):
 
 ind = ""
 lines = ["SewRelease {", f"    version: \"{version}\",", f"    artifacts: {artslice(core, '    ')},"]
-if media:
-    lines += [
-        "    media: Some(SewSidecar {",
-        f"        version: \"{media['version']}\",",
-        f"        artifacts: {artslice(media['artifacts'], '        ')},",
-        "    }),",
-    ]
-else:
-    lines.append("    media: None,")
+for name in SIDECARS:
+    s = side_rel.get(name)
+    if s:
+        lines += [
+            f"    {name}: Some(SewSidecar {{",
+            f"        version: \"{s['version']}\",",
+            f"        artifacts: {artslice(s['artifacts'], '        ')},",
+            "    }),",
+        ]
+    else:
+        lines.append(f"    {name}: None,")
 lines.append("}")
 expr = "\n".join(lines)
 if const:

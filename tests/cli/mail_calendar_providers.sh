@@ -12,6 +12,13 @@
 #         account_mismatch, admin_consent_required, capabilities (owner +
 #         agent, masked), `link upgrade` in place, a Google link through the
 #         client-capture path, unlink revokes at Google.
+#   MCS2  Microsoft mail parity over Graph: compose + reply drafts with an
+#         attachment (never sent), approval mode queues a linked send and
+#         `hostmail approvals approve` hands it to Graph sendMail (with the
+#         attachment, saved to Sent), gate `on` replies via createReply →
+#         send to the locked sender, a >3 MB attachment is refused before
+#         anything is audited, capabilities show send, Microsoft unlink says
+#         where to remove consent.
 #
 # Build first (the daemon MUST carry the test-only provider override):
 #   cargo build -p k2-provider-fakes
@@ -258,6 +265,78 @@ want_rc 0 "unlink Google"
 has "$OUT" "revoked at Google" "unlink says it revoked"
 jok "$(fake_log)" 'j["revoked"] == ["refresh"]' "the refresh token was revoked at Google"
 ok "unlink revoked the Google grant first"
+
+echo "== MCS2: Microsoft drafts (compose + reply, attachments, never sent) =="
+printf 'quarterly numbers\n' >"$REPO/q.txt"
+run agent mail draft --to bob@dest.example --subject "Proposal" --body "draft text" --from "$MS" --attach q.txt
+want_rc 0 "agent compose draft on Graph"
+run agent mail messages "$MS" --json
+want_rc 0 "agent reads the Graph inbox"
+MSG_ID="$(printf %s "$OUT" | python3 -c 'import json,sys; v=json.load(sys.stdin); print([m["id"] for m in v["messages"] if m["subject"]=="Hello from Alice"][0])')"
+[ -n "$MSG_ID" ] || fail "seeded message id"
+run agent mail draft "$MSG_ID" --body "reply draft" --attach q.txt
+want_rc 0 "agent reply draft on Graph"
+LOG="$(fake_log)"
+jok "$LOG" 'any(d.get("subject") == "Proposal" and d["toRecipients"][0]["emailAddress"]["address"] == "bob@dest.example" and [a["name"] for a in d["attachments"]] == ["q.txt"] for d in j["drafts"])' "compose draft with its attachment"
+jok "$LOG" 'any(d.get("replyTo") == "msg-1" and d["body"]["content"] == "reply draft" and len(d["attachments"]) == 1 for d in j["drafts"])' "reply draft with its attachment"
+jok "$LOG" 'j["sent"] == []' "a draft never sends"
+ok "compose + reply drafts with attachments, nothing sent"
+
+echo "== MCS2: approval mode queues a linked send; approve hands it to Graph =="
+run agent mail send carol@dest.example --subject "Q3" --body "numbers attached" --from "$MS" --attach q.txt
+want_rc 3 "draft level can't send"
+run owner mail access level "$MS" "$REPO" --level send
+want_rc 0 "owner raises the level to send"
+run owner mail sending "$REPO" approval
+want_rc 0 "owner sets sending to approval"
+run agent mail capabilities "$MS" --json
+jok "$OUT" 'j["capabilities"]["mail"]["send"] and j["capabilities"]["mail"]["compose"]' "send + compose on at send level"
+run agent mail send carol@dest.example --subject "Q3" --body "numbers attached" --from "$MS" --attach q.txt --json
+want_rc 0 "agent send under approval"
+jok "$OUT" 'j["status"] == "pending_approval" and j["queued"]' "queued for approval"
+OUT_ID="$(printf %s "$OUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+jok "$(fake_log)" 'j["sent"] == []' "nothing left before approval"
+run agent mail outbox "$OUT_ID" --json
+jok "$OUT" 'j["outbound"]["status"] == "pending_approval" and j["outbound"]["attachments"]["names"] == ["q.txt"]' "outbox shows the held send"
+run owner hostmail approvals --json
+jok "$OUT" 'any(p["id"] == "'"$OUT_ID"'" for p in j["pending"])' "the owner's queue lists it"
+run agent hostmail approvals approve "$OUT_ID"
+want_rc 3 "an agent can't approve"
+run owner hostmail approvals approve "$OUT_ID" --json
+want_rc 0 "owner approves"
+jok "$OUT" 'j["status"] == "submitted"' "approved → submitted"
+LOG="$(fake_log)"
+jok "$LOG" 'len(j["sent"]) == 1 and j["sent"][0]["via"] == "sendMail" and j["sent"][0]["saveToSentItems"] is True and j["sent"][0]["message"]["toRecipients"][0]["emailAddress"]["address"] == "carol@dest.example" and [a["name"] for a in j["sent"][0]["message"]["attachments"]] == ["q.txt"]' "Graph sendMail carried the message + attachment"
+run agent mail outbox "$OUT_ID" --json
+jok "$OUT" 'j["outbound"]["status"] == "submitted"' "outbox: submitted"
+ok "approval → approve → Graph sendMail (attachment, saved to Sent)"
+
+echo "== MCS2: gate on — reply over Graph (createReply → send) =="
+run owner mail sending "$REPO" on
+want_rc 0 "owner sets sending on"
+run agent mail reply "$MSG_ID" --body "Friday works" --json
+want_rc 0 "agent reply on Graph"
+jok "$OUT" 'j["status"] == "submitted" and j["to"] == "alice@example.com" and j["via"] == "graph"' "reply submitted to the locked sender"
+LOG="$(fake_log)"
+jok "$LOG" 'any(s["via"] == "send" and s["message"]["body"]["content"] == "Friday works" and s["message"]["toRecipients"][0]["emailAddress"]["address"] == "alice@example.com" for s in j["sent"])' "createReply → send"
+ok "reply went out via createReply → send"
+
+echo "== MCS2: a >3 MB attachment is refused before anything is audited =="
+python3 -c 'import sys; open(sys.argv[1], "wb").write(b"\0" * (3 * 1024 * 1024 + 1))' "$REPO/big.bin"
+before="$(sql "SELECT COUNT(*) FROM mail_outbound")"
+run agent mail send carol@dest.example --subject "big" --body "x" --from "$MS" --attach big.bin
+want_rc 1 "oversize attachment"
+has "$ERR" "attachment_too_large" "code attachment_too_large"
+[ "$(sql "SELECT COUNT(*) FROM mail_outbound")" = "$before" ] || fail "no audit row for a refused send"
+jok "$(fake_log)" 'len(j["sent"]) == 2' "nothing more was sent"
+ok "attachment_too_large, no row, nothing sent"
+
+echo "== MCS2: Microsoft unlink =="
+run owner mail link remove "$MS"
+want_rc 0 "unlink Microsoft"
+has "$OUT" "myapps.microsoft.com" "unlink says where to remove consent"
+[ "$(sql "SELECT COUNT(*) FROM mail_external_inboxes WHERE email_address='$MS'")" = "0" ] || fail "row gone"
+ok "Microsoft unlink explains consent removal"
 
 echo
 echo "PASS: $pass checks"

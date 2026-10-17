@@ -85,6 +85,90 @@ const SUMMARY_SELECT: &str =
 const FULL_SELECT: &str = "id,subject,receivedDateTime,from,toRecipients,ccRecipients,isRead,\
      hasAttachments,conversationId,body,internetMessageHeaders";
 
+/// Graph's inline attachment limits (PRD §3.3 / MCS-A4): one file attachment
+/// may carry at most 3 MB, and one request at most 4 MB. Bigger files need
+/// an upload session on the draft, which K2 does not build yet — they
+/// answer `attachment_too_large` instead.
+pub const GRAPH_INLINE_ATTACHMENT_MAX: usize = 3 * 1024 * 1024;
+pub const GRAPH_REQUEST_MAX: usize = 4 * 1024 * 1024;
+
+/// One attachment K2 hands to Graph (the caller already read + capped it).
+pub struct GraphAttachment<'a> {
+    pub filename: &'a str,
+    pub content_type: &'a str,
+    pub bytes: &'a [u8],
+}
+
+/// A Graph send/draft failure. `TooLarge` is the caller's to fix (400
+/// `attachment_too_large`); `NotFound` is the masked missing source
+/// message; `Engine` is everything else (no token, no body in the text).
+#[derive(Debug, PartialEq, Eq)]
+pub enum GraphSendError {
+    TooLarge(String),
+    NotFound(String),
+    Engine(String),
+}
+
+impl std::fmt::Display for GraphSendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GraphSendError::TooLarge(h) | GraphSendError::NotFound(h) | GraphSendError::Engine(h) => {
+                f.write_str(h)
+            }
+        }
+    }
+}
+
+/// What a Graph send handed to Microsoft (for the outbox trail). Never the
+/// body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphReceipt {
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub subject: String,
+    pub attachments: Vec<String>,
+}
+
+/// Refuse attachments Graph won't take inline: any file over 3 MB, or a
+/// set whose base64 (+ the message) would push one request past 4 MB.
+pub fn check_inline_attachments(atts: &[GraphAttachment], body_len: usize) -> Result<(), GraphSendError> {
+    let mut total = body_len;
+    for a in atts {
+        if a.bytes.len() > GRAPH_INLINE_ATTACHMENT_MAX {
+            return Err(GraphSendError::TooLarge(format!(
+                "attachment '{}' is {} bytes — Microsoft 365 inboxes take attachments up to 3 MB \
+                 each in this K2 version (larger files need an upload session, not built yet); \
+                 share a link instead",
+                a.filename,
+                a.bytes.len()
+            )));
+        }
+        // base64 grows 4/3, plus the JSON wrapper.
+        total = total.saturating_add(a.bytes.len().div_ceil(3) * 4 + 512);
+    }
+    if total > GRAPH_REQUEST_MAX {
+        return Err(GraphSendError::TooLarge(format!(
+            "attachments total too large for one Microsoft 365 request (~{total} bytes encoded, \
+             max 4 MB) — send fewer or smaller files, or share a link"
+        )));
+    }
+    Ok(())
+}
+
+fn recipients_json(list: &[String]) -> Vec<serde_json::Value> {
+    list.iter().map(|a| serde_json::json!({ "emailAddress": { "address": a } })).collect()
+}
+
+fn file_attachment_json(a: &GraphAttachment) -> serde_json::Value {
+    use base64::engine::general_purpose::STANDARD;
+    serde_json::json!({
+        "@odata.type": "#microsoft.graph.fileAttachment",
+        "name": a.filename,
+        "contentType": a.content_type,
+        "contentBytes": STANDARD.encode(a.bytes),
+    })
+}
+
 /// Throttling (⚠ LIVE-BOX #3): bounded retries on a 429, and a hard cap
 /// on how long a single `Retry-After` may park a request (a hostile /
 /// buggy header must never hang the daemon).
@@ -784,27 +868,246 @@ impl GraphBackend {
     /// save_reply_draft` APPEND path), so the Graph backend satisfies the
     /// full seam surface.
     pub fn save_reply_draft(&self, account_id: &str, email_id: &str, body: &str) -> Result<String, String> {
-        self.check_handle(account_id)?;
-        let Some(graph_id) = decode_graph_email_id(email_id) else {
-            return Err(format!("malformed graph message token '{email_id}'"));
-        };
-        // createReply lands a draft (In-Reply-To/References set by Graph).
-        let reply_url = Self::url(&format!("/me/messages/{}/createReply", path_encode(graph_id)));
-        let resp = self.send(GraphMethod::Post, &reply_url, None)?;
+        self.save_reply_draft_with(account_id, email_id, body, &[]).map_err(|e| e.to_string())
+    }
+
+    /// [`Self::save_reply_draft`] with attachments (MCS2): createReply →
+    /// PATCH the body → one POST per attachment onto the draft. NEVER
+    /// `/send`.
+    pub fn save_reply_draft_with(
+        &self,
+        account_id: &str,
+        email_id: &str,
+        body: &str,
+        attachments: &[GraphAttachment],
+    ) -> Result<String, GraphSendError> {
+        self.check_handle(account_id).map_err(GraphSendError::Engine)?;
+        check_inline_attachments(attachments, 0)?;
+        let draft = self.create_reply(email_id)?;
+        self.patch_message(&draft.id, &serde_json::json!({
+            "body": { "contentType": "text", "content": body },
+        }))?;
+        self.attach_all(&draft.id, attachments)?;
+        Ok("Drafts".to_string())
+    }
+
+    /// MCS2: a brand-new (compose) DRAFT in the account's Drafts folder —
+    /// `POST /me/messages`, then one POST per attachment. NEVER `/send`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_compose_draft(
+        &self,
+        account_id: &str,
+        to: &[String],
+        cc: &[String],
+        bcc: &[String],
+        subject: &str,
+        body: &str,
+        attachments: &[GraphAttachment],
+    ) -> Result<String, GraphSendError> {
+        self.check_handle(account_id).map_err(GraphSendError::Engine)?;
+        check_inline_attachments(attachments, 0)?;
+        let mut msg = serde_json::json!({
+            "subject": subject,
+            "body": { "contentType": "text", "content": body },
+            "toRecipients": recipients_json(to),
+        });
+        if !cc.is_empty() {
+            msg["ccRecipients"] = serde_json::json!(recipients_json(cc));
+        }
+        if !bcc.is_empty() {
+            msg["bccRecipients"] = serde_json::json!(recipients_json(bcc));
+        }
+        let url = Self::url("/me/messages");
+        let resp = self.send(GraphMethod::Post, &url, Some(&msg)).map_err(GraphSendError::Engine)?;
         let draft = self
-            .json_ok(resp, "create reply draft")?
-            .ok_or_else(|| "the source message is no longer on the server".to_string())?;
+            .json_ok(resp, "create draft")
+            .map_err(GraphSendError::Engine)?
+            .ok_or_else(|| GraphSendError::Engine("graph create draft: 404".to_string()))?;
         let draft_id = draft
             .get("id")
             .and_then(|s| s.as_str())
-            .ok_or_else(|| "createReply reply carried no draft id".to_string())?;
-        // PATCH the body text onto the draft (never a send).
-        let patch_url = Self::url(&format!("/me/messages/{}", path_encode(draft_id)));
-        let patch = serde_json::json!({ "body": { "contentType": "text", "content": body } });
-        let resp = self.send(GraphMethod::Patch, &patch_url, Some(&patch))?;
-        self.json_ok(resp, "patch draft body")?;
+            .ok_or_else(|| GraphSendError::Engine("create draft reply carried no id".to_string()))?
+            .to_string();
+        self.attach_all(&draft_id, attachments)?;
         Ok("Drafts".to_string())
     }
+
+    /// MCS2 SEND (PRD §3.3): `POST /me/sendMail` with `saveToSentItems:
+    /// true`. Blind copies ride `bccRecipients` (Exchange keeps them off
+    /// the delivered headers, like the SMTP envelope). Attachments go
+    /// inline (≤ 3 MB each, ≤ 4 MB request). Graph answers 202 Accepted —
+    /// accepted for delivery, never "delivered".
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_mail(
+        &self,
+        account_id: &str,
+        to: &[String],
+        cc: &[String],
+        bcc: &[String],
+        subject: &str,
+        body: &str,
+        attachments: &[GraphAttachment],
+    ) -> Result<GraphReceipt, GraphSendError> {
+        self.check_handle(account_id).map_err(GraphSendError::Engine)?;
+        if to.is_empty() {
+            return Err(GraphSendError::Engine("a message needs at least one recipient".to_string()));
+        }
+        check_inline_attachments(attachments, body.len() + subject.len())?;
+        let mut message = serde_json::json!({
+            "subject": subject,
+            "body": { "contentType": "text", "content": body },
+            "toRecipients": recipients_json(to),
+        });
+        if !cc.is_empty() {
+            message["ccRecipients"] = serde_json::json!(recipients_json(cc));
+        }
+        if !bcc.is_empty() {
+            message["bccRecipients"] = serde_json::json!(recipients_json(bcc));
+        }
+        if !attachments.is_empty() {
+            message["attachments"] =
+                serde_json::Value::Array(attachments.iter().map(file_attachment_json).collect());
+        }
+        let payload = serde_json::json!({ "message": message, "saveToSentItems": true });
+        let url = Self::url("/me/sendMail");
+        let resp = self.send(GraphMethod::Post, &url, Some(&payload)).map_err(GraphSendError::Engine)?;
+        self.expect_accepted(resp, "sendMail")?;
+        Ok(GraphReceipt {
+            to: to.to_vec(),
+            cc: cc.to_vec(),
+            subject: subject.to_string(),
+            attachments: attachments.iter().map(|a| a.filename.to_string()).collect(),
+        })
+    }
+
+    /// MCS2 REPLY (PRD §3.3): `createReply` (Graph locks the recipient to
+    /// the original sender and threads it) → PATCH the body (+ policy
+    /// blind copies) → attachments → `POST …/send`. Returns who it went to.
+    pub fn send_reply(
+        &self,
+        account_id: &str,
+        email_id: &str,
+        body: &str,
+        bcc: &[String],
+        attachments: &[GraphAttachment],
+    ) -> Result<GraphReceipt, GraphSendError> {
+        self.check_handle(account_id).map_err(GraphSendError::Engine)?;
+        check_inline_attachments(attachments, body.len())?;
+        let draft = self.create_reply(email_id)?;
+        if draft.to.is_empty() {
+            return Err(GraphSendError::Engine(
+                "the source message has no sender address to reply to".to_string(),
+            ));
+        }
+        let mut patch = serde_json::json!({ "body": { "contentType": "text", "content": body } });
+        if !bcc.is_empty() {
+            patch["bccRecipients"] = serde_json::json!(recipients_json(bcc));
+        }
+        self.patch_message(&draft.id, &patch)?;
+        self.attach_all(&draft.id, attachments)?;
+        let url = Self::url(&format!("/me/messages/{}/send", path_encode(&draft.id)));
+        let resp = self.send(GraphMethod::Post, &url, None).map_err(GraphSendError::Engine)?;
+        self.expect_accepted(resp, "send reply")?;
+        Ok(GraphReceipt {
+            to: draft.to,
+            cc: Vec::new(),
+            subject: draft.subject,
+            attachments: attachments.iter().map(|a| a.filename.to_string()).collect(),
+        })
+    }
+
+    /// Who a reply to `email_id` would go to and its subject — read from
+    /// the source message (the approval queue shows it before anything is
+    /// sent). `None` = no such message (masked by the caller).
+    pub fn reply_preview(&self, account_id: &str, email_id: &str) -> Result<Option<(String, String)>, String> {
+        self.check_handle(account_id)?;
+        let Some(full) = self.fetch_full(account_id, email_id)? else {
+            return Ok(None);
+        };
+        let Some(sender) = full.summary.from.first().map(|a| a.email.clone()) else {
+            return Err("the source message has no sender address to reply to".to_string());
+        };
+        Ok(Some((sender, crate::mail::send::reply_subject(&full.summary.subject))))
+    }
+
+    /// `POST …/createReply` → the new draft's id, recipients and subject.
+    fn create_reply(&self, email_id: &str) -> Result<ReplyDraft, GraphSendError> {
+        let Some(graph_id) = decode_graph_email_id(email_id) else {
+            return Err(GraphSendError::NotFound(format!("malformed graph message token '{email_id}'")));
+        };
+        // createReply lands a draft (In-Reply-To/References set by Graph).
+        let reply_url = Self::url(&format!("/me/messages/{}/createReply", path_encode(graph_id)));
+        let resp = self.send(GraphMethod::Post, &reply_url, None).map_err(GraphSendError::Engine)?;
+        let draft = self
+            .json_ok(resp, "create reply draft")
+            .map_err(GraphSendError::Engine)?
+            .ok_or_else(|| {
+                GraphSendError::NotFound("the source message is no longer on the server".to_string())
+            })?;
+        let id = draft
+            .get("id")
+            .and_then(|s| s.as_str())
+            .ok_or_else(|| GraphSendError::Engine("createReply reply carried no draft id".to_string()))?
+            .to_string();
+        let to = draft
+            .get("toRecipients")
+            .map(parse_recipient_list)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| a.email)
+            .collect();
+        let subject = draft.get("subject").and_then(|s| s.as_str()).unwrap_or_default().to_string();
+        Ok(ReplyDraft { id, to, subject })
+    }
+
+    fn patch_message(&self, id: &str, patch: &serde_json::Value) -> Result<(), GraphSendError> {
+        let url = Self::url(&format!("/me/messages/{}", path_encode(id)));
+        let resp = self.send(GraphMethod::Patch, &url, Some(patch)).map_err(GraphSendError::Engine)?;
+        self.json_ok(resp, "patch draft").map_err(GraphSendError::Engine)?;
+        Ok(())
+    }
+
+    /// One `POST …/attachments` per file (each ≤ 3 MB, checked by the
+    /// caller first).
+    fn attach_all(&self, draft_id: &str, attachments: &[GraphAttachment]) -> Result<(), GraphSendError> {
+        for a in attachments {
+            let url = Self::url(&format!("/me/messages/{}/attachments", path_encode(draft_id)));
+            let resp = self
+                .send(GraphMethod::Post, &url, Some(&file_attachment_json(a)))
+                .map_err(GraphSendError::Engine)?;
+            if resp.status == 413 {
+                return Err(GraphSendError::TooLarge(format!(
+                    "Microsoft refused attachment '{}' as too large",
+                    a.filename
+                )));
+            }
+            self.json_ok(resp, "add attachment").map_err(GraphSendError::Engine)?;
+        }
+        Ok(())
+    }
+
+    /// A send answers 202 Accepted with no body; anything else is an
+    /// engine error carrying only Graph's own message.
+    fn expect_accepted(&self, resp: GraphResponse, what: &str) -> Result<(), GraphSendError> {
+        match resp.status {
+            200..=299 => Ok(()),
+            413 => Err(GraphSendError::TooLarge(format!(
+                "Microsoft refused the {what} request as too large (max 4 MB)"
+            ))),
+            404 => Err(GraphSendError::NotFound(format!("graph {what}: not found"))),
+            s => Err(GraphSendError::Engine(format!(
+                "graph {what}: HTTP {s}: {}",
+                graph_error_excerpt(&resp.body)
+            ))),
+        }
+    }
+}
+
+/// The draft `createReply` made.
+struct ReplyDraft {
+    id: String,
+    to: Vec<String>,
+    subject: String,
 }
 
 impl ReadBackend for GraphBackend {
@@ -1323,6 +1626,196 @@ mod tests {
         assert_eq!(seen[1].body.as_ref().unwrap()["body"]["content"], "Thanks!");
         // NEVER a /send — the user reviews + sends themselves.
         assert!(seen.iter().all(|s| !s.url.contains("/send")), "no send: {seen:?}");
+    }
+
+    // ── MCS2: send, reply, compose drafts, attachments ──
+
+    fn att<'a>(name: &'a str, bytes: &'a [u8]) -> GraphAttachment<'a> {
+        GraphAttachment { filename: name, content_type: "application/pdf", bytes }
+    }
+
+    #[test]
+    fn send_mail_posts_sendmail_with_bcc_attachments_and_saves_to_sent() {
+        let mock = MockGraph::new(vec![(202, None, "")]);
+        let be = backend(mock.clone());
+        let pdf = b"%PDF-1.7 tiny".to_vec();
+        let r = be
+            .send_mail(
+                "row-1",
+                &["pat@dest.example".to_string()],
+                &["cc@dest.example".to_string()],
+                &["owner@shop.example".to_string()],
+                "Quarterly",
+                "Numbers attached.",
+                &[att("q.pdf", &pdf)],
+            )
+            .expect("send");
+        assert_eq!(r.to, vec!["pat@dest.example".to_string()]);
+        assert_eq!(r.attachments, vec!["q.pdf".to_string()]);
+        let seen = mock.seen();
+        assert_eq!(seen.len(), 1, "one request");
+        assert_eq!(seen[0].method, GraphMethod::Post);
+        assert!(seen[0].url.ends_with("/me/sendMail"), "{}", seen[0].url);
+        let b = seen[0].body.clone().unwrap();
+        assert_eq!(b["saveToSentItems"], true);
+        let m = &b["message"];
+        assert_eq!(m["subject"], "Quarterly");
+        assert_eq!(m["body"]["contentType"], "text");
+        assert_eq!(m["toRecipients"][0]["emailAddress"]["address"], "pat@dest.example");
+        assert_eq!(m["ccRecipients"][0]["emailAddress"]["address"], "cc@dest.example");
+        assert_eq!(m["bccRecipients"][0]["emailAddress"]["address"], "owner@shop.example");
+        assert_eq!(m["attachments"][0]["@odata.type"], "#microsoft.graph.fileAttachment");
+        assert_eq!(m["attachments"][0]["name"], "q.pdf");
+        use base64::engine::general_purpose::STANDARD;
+        assert_eq!(m["attachments"][0]["contentBytes"], STANDARD.encode(&pdf));
+    }
+
+    #[test]
+    fn send_mail_refuses_an_attachment_over_3mb_before_any_request() {
+        let mock = MockGraph::new(vec![]); // any request would panic
+        let be = backend(mock.clone());
+        let big = vec![0u8; GRAPH_INLINE_ATTACHMENT_MAX + 1];
+        let err = be
+            .send_mail("row-1", &["a@b.example".into()], &[], &[], "s", "b", &[att("big.bin", &big)])
+            .expect_err("too large");
+        assert!(matches!(&err, GraphSendError::TooLarge(h) if h.contains("3 MB")), "{err:?}");
+        assert!(mock.seen().is_empty());
+        // Two files under 3 MB each but over 4 MB together are refused too.
+        let two = vec![0u8; 2 * 1024 * 1024];
+        let err = be
+            .send_mail(
+                "row-1",
+                &["a@b.example".into()],
+                &[],
+                &[],
+                "s",
+                "b",
+                &[att("a.bin", &two), att("b.bin", &two)],
+            )
+            .expect_err("request too large");
+        assert!(matches!(&err, GraphSendError::TooLarge(h) if h.contains("4 MB")), "{err:?}");
+    }
+
+    #[test]
+    fn send_mail_maps_graph_errors_without_leaking_the_body() {
+        let mock = MockGraph::new(vec![(
+            403,
+            None,
+            r#"{"error":{"code":"ErrorAccessDenied","message":"Access is denied. Check credentials"}}"#,
+        )]);
+        let be = backend(mock);
+        let err = be
+            .send_mail("row-1", &["a@b.example".into()], &[], &[], "s", "secret body", &[])
+            .expect_err("denied");
+        match err {
+            GraphSendError::Engine(h) => {
+                assert!(h.contains("403") && h.contains("Access is denied"), "{h}");
+                assert!(!h.contains("secret body"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn send_reply_creates_patches_attaches_then_sends_to_the_locked_sender() {
+        let mock = MockGraph::new(vec![
+            (
+                201,
+                None,
+                r#"{"id":"R1","subject":"RE: Hi","toRecipients":[{"emailAddress":{"address":"alice@example.com"}}]}"#,
+            ),
+            (200, None, r#"{"id":"R1"}"#),
+            (201, None, r#"{"id":"ATT1"}"#),
+            (202, None, ""),
+        ]);
+        let be = backend(mock.clone());
+        let r = be
+            .send_reply(
+                "row-1",
+                "graph:AAA",
+                "Thanks!",
+                &["owner@shop.example".to_string()],
+                &[att("n.pdf", b"x")],
+            )
+            .expect("reply");
+        assert_eq!(r.to, vec!["alice@example.com".to_string()]);
+        assert_eq!(r.subject, "RE: Hi");
+        let seen = mock.seen();
+        assert!(seen[0].url.ends_with("/me/messages/AAA/createReply"), "{}", seen[0].url);
+        assert_eq!(seen[1].method, GraphMethod::Patch);
+        assert_eq!(seen[1].body.as_ref().unwrap()["body"]["content"], "Thanks!");
+        assert_eq!(
+            seen[1].body.as_ref().unwrap()["bccRecipients"][0]["emailAddress"]["address"],
+            "owner@shop.example"
+        );
+        assert!(seen[2].url.ends_with("/me/messages/R1/attachments"), "{}", seen[2].url);
+        assert_eq!(seen[3].method, GraphMethod::Post);
+        assert!(seen[3].url.ends_with("/me/messages/R1/send"), "{}", seen[3].url);
+        assert!(seen.iter().all(|s| !s.url.ends_with("/sendMail")));
+    }
+
+    #[test]
+    fn send_reply_to_a_missing_message_is_not_found() {
+        let mock = MockGraph::new(vec![(404, None, r#"{"error":{"code":"ErrorItemNotFound"}}"#)]);
+        let be = backend(mock);
+        let err = be.send_reply("row-1", "graph:GONE", "x", &[], &[]).expect_err("gone");
+        assert!(matches!(err, GraphSendError::NotFound(_)), "{err:?}");
+    }
+
+    #[test]
+    fn compose_draft_posts_a_message_and_attachments_and_never_sends() {
+        let mock = MockGraph::new(vec![(201, None, r#"{"id":"D1"}"#), (201, None, r#"{"id":"A1"}"#)]);
+        let be = backend(mock.clone());
+        let folder = be
+            .save_compose_draft(
+                "row-1",
+                &["pat@dest.example".to_string()],
+                &[],
+                &["hidden@dest.example".to_string()],
+                "Proposal",
+                "Draft text",
+                &[att("p.pdf", b"pdf")],
+            )
+            .expect("draft");
+        assert_eq!(folder, "Drafts");
+        let seen = mock.seen();
+        assert!(seen[0].url.ends_with("/me/messages"), "{}", seen[0].url);
+        let b = seen[0].body.clone().unwrap();
+        assert_eq!(b["subject"], "Proposal");
+        assert_eq!(b["toRecipients"][0]["emailAddress"]["address"], "pat@dest.example");
+        assert_eq!(b["bccRecipients"][0]["emailAddress"]["address"], "hidden@dest.example");
+        assert!(seen[1].url.ends_with("/me/messages/D1/attachments"), "{}", seen[1].url);
+        assert_eq!(seen[1].body.as_ref().unwrap()["name"], "p.pdf");
+        assert!(seen.iter().all(|s| !s.url.contains("/send")), "a draft never sends: {seen:?}");
+    }
+
+    #[test]
+    fn reply_draft_with_attachment_never_sends() {
+        let mock = MockGraph::new(vec![
+            (201, None, r#"{"id":"DR","toRecipients":[]}"#),
+            (200, None, r#"{"id":"DR"}"#),
+            (201, None, r#"{"id":"A1"}"#),
+        ]);
+        let be = backend(mock.clone());
+        be.save_reply_draft_with("row-1", "graph:AAA", "ok", &[att("a.txt", b"a")]).expect("draft");
+        let seen = mock.seen();
+        assert_eq!(seen.len(), 3);
+        assert!(seen.iter().all(|s| !s.url.contains("/send")), "{seen:?}");
+    }
+
+    #[test]
+    fn reply_preview_reads_the_source_sender_and_subject() {
+        let msg = r#"{"id":"AAA","subject":"Lunch?","receivedDateTime":"2026-07-08T10:15:00Z",
+            "isRead":true,"hasAttachments":false,
+            "from":{"emailAddress":{"name":"Alice","address":"alice@example.com"}},
+            "toRecipients":[],"body":{"contentType":"text","content":"hi"}}"#;
+        let mock = MockGraph::new(vec![(200, None, msg)]);
+        let be = backend(mock);
+        let (to, subject) = be.reply_preview("row-1", "graph:AAA").unwrap().expect("some");
+        assert_eq!(to, "alice@example.com");
+        assert_eq!(subject, "Re: Lunch?");
+        let mock = MockGraph::new(vec![(404, None, "{}")]);
+        assert!(backend(mock).reply_preview("row-1", "graph:NOPE").unwrap().is_none());
     }
 
     // ── attachments (bytes over get_bytes) ──

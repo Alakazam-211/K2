@@ -29,7 +29,10 @@ _k2_oauth_is_placeholder() {
 
 # Require Gmail client id + secret for any shipping daemon build.
 # This is the customer-facing path (Google invalid_client when REPLACE_ME ships).
-# Microsoft is optional unless K2_REQUIRE_MICROSOFT_OAUTH=1 (separate product track).
+# Microsoft is REQUIRED by default since MCS2 turned the Settings "Connect
+# Microsoft" button on (prd-app-mail-calendar-surfaces-v1 §3.2): set
+# K2_REQUIRE_MICROSOFT_OAUTH=0 to build without it (dev-build.sh and
+# build-local.sh do; a shipping build must not).
 require_mail_oauth_build_env() {
     local missing=0
     if _k2_oauth_is_placeholder "${K2_GMAIL_CLIENT_ID:-}"; then
@@ -43,7 +46,7 @@ require_mail_oauth_build_env() {
         missing=1
     fi
     if _k2_oauth_is_placeholder "${K2_MICROSOFT_CLIENT_ID:-}"; then
-        if [ "${K2_REQUIRE_MICROSOFT_OAUTH:-0}" = "1" ]; then
+        if [ "${K2_REQUIRE_MICROSOFT_OAUTH:-1}" = "1" ]; then
             echo "FATAL: K2_MICROSOFT_CLIENT_ID unset or REPLACE_ME (K2_REQUIRE_MICROSOFT_OAUTH=1)." >&2
             missing=1
         else
@@ -96,7 +99,7 @@ assert_daemon_oauth_not_placeholder() {
         echo "  option_env! did not bake the Gmail secret — token exchange would fail." >&2
         exit 1
     fi
-    if [ "${K2_REQUIRE_MICROSOFT_OAUTH:-0}" = "1" ]; then
+    if [ "${K2_REQUIRE_MICROSOFT_OAUTH:-1}" = "1" ]; then
         if _k2_oauth_is_placeholder "${K2_MICROSOFT_CLIENT_ID:-}"; then
             echo "FATAL: K2_MICROSOFT_CLIENT_ID required but unset/placeholder" >&2
             exit 1

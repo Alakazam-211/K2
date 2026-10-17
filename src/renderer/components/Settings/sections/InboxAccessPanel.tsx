@@ -51,6 +51,7 @@ export function sendStateNote(
         blocked: true,
         text: "Send is blocked: this workspace's agent sending is off, so its agents get 'gated' when they send.",
       }
+    // Daemons before MCS2 (linked approval hand-off) still answer this.
     case 'blocked_approval':
       return {
         blocked: true,
@@ -73,7 +74,8 @@ function withLevel(p: InboxParticipant, level: InboxLevel, source: Inbox['source
   let sendState: SendState = 'no_send_level'
   if (level === 'send') {
     if (p.agentSend === 'on') sendState = 'on'
-    else if (p.agentSend === 'approval') sendState = source === 'hosted' ? 'approval' : 'blocked_approval'
+    // MCS2: linked inboxes queue for approval too (the approval hand-off).
+    else if (p.agentSend === 'approval') sendState = 'approval'
     else sendState = 'blocked_off'
   }
   return { ...p, level, sendState }

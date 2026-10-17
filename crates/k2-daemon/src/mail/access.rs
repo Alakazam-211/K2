@@ -1104,18 +1104,19 @@ fn workspace_agent_send_conn(
 /// workspace's agent-send gate:
 /// - `no_send_level` — the level is read or draft;
 /// - `on` — level send and the gate is on: sends go out;
-/// - `approval` — level send, gate approval, hosted inbox: sends queue;
-/// - `blocked_off` — level send but the gate is off: every send is gated;
-/// - `blocked_approval` — level send, gate approval, LINKED inbox: linked
-///   has no approval queue, so sends are gated until the gate is on.
-pub fn send_state(level: &str, mode: &str, source: Source) -> &'static str {
+/// - `approval` — level send, gate approval: sends queue for the owner
+///   (hosted AND, since MCS2's linked approval hand-off, linked inboxes);
+/// - `blocked_off` — level send but the gate is off: every send is gated.
+///
+/// (`blocked_approval` — linked + approval — is gone with MCS2; clients
+/// keep understanding it from older daemons.)
+pub fn send_state(level: &str, mode: &str, _source: Source) -> &'static str {
     if level != "send" {
         return "no_send_level";
     }
-    match (mode, source) {
-        ("on", _) => "on",
-        ("approval", Source::Hosted) => "approval",
-        ("approval", Source::Linked) => "blocked_approval",
+    match mode {
+        "on" => "on",
+        "approval" => "approval",
         _ => "blocked_off",
     }
 }
@@ -1626,11 +1627,11 @@ mod tests {
         assert_eq!(row(&mine, &linked)["yourAgentSend"], "off");
         assert_eq!(row(&mine, &linked)["yourSendState"], "blocked_off");
 
-        // Approval: hosted queues; linked has no queue → still blocked.
+        // Approval: both queue for the owner (MCS2 linked approval hand-off).
         set_gate(&appa, "approval");
         let mine = catalog_json(Some(&appa));
         assert_eq!(row(&mine, &hosted)["yourSendState"], "approval");
-        assert_eq!(row(&mine, &linked)["yourSendState"], "blocked_approval");
+        assert_eq!(row(&mine, &linked)["yourSendState"], "approval");
 
         // On: send really works.
         set_gate(&appa, "on");

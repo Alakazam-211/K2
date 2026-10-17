@@ -24563,7 +24563,7 @@ cmd_schema() {
         {"name": "--from", "arg": "linked-addr", "description": "Compose: which linked inbox to draft FROM (needed with several; one may be implicit)."},
         {"name": "--body", "arg": "text", "description": "The draft text."},
         {"name": "--body-file", "arg": "f", "description": "Read the draft text from a file."},
-        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). IMAP linked inboxes only. Max 10 files, 25MB total."},
+        {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). Linked inboxes (IMAP: max 10 files, 25MB total; Microsoft 365: 3MB per file, else attachment_too_large)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -24607,7 +24607,7 @@ cmd_schema() {
     {
       "name": "mail link",
       "usage": "k2 mail link add <address> (--host <imap-host> (--pass-stdin | --pass-ref <ref>) [--port <n>] [--tls implicit-tls|starttls] [--user <login>] [--name <display>] [--drafts-folder <f>] [--smtp-host <h>] [--smtp-port <n>] [--smtp-tls implicit-tls|starttls] | --provider gmail|microsoft [--features mail|mail,calendar]) --workspace <ws> | upgrade <address> --features calendar|mail,calendar | list | remove <address>",
-      "description": "Connect the user's OWN external email accounts as LINKED assistant inboxes (was 'mail external') — OWNER verbs (agent tokens exit 3). Two add paths: (1) generic IMAP with an app-password (Gmail app-password, Fastmail, company IMAP), or (2) OAuth with --provider gmail|microsoft (NO password): Gmail links over IMAP-XOAUTH2 via the system browser + a 127.0.0.1 loopback (do it ON the daemon's machine; a remote daemon returns a 'link on the daemon's box' teaching error), Microsoft over the Microsoft Graph API via a device code you enter in any browser. The OAuth flow runs SERVER-SIDE (the daemon polls/exchanges); codes and tokens NEVER reach the CLI and are vaulted daemon-side. Each inbox binds to ONE PRIMARY workspace whose agents read it (via messages/read/wait) and save reply drafts via 'k2 mail draft'. Drafting is always on; sending is OFF by default — raise a workspace to level 'send' to let its agents send via SMTP (app-password and Gmail-OAuth inboxes send over SMTP; Microsoft-OAuth is draft-only until Graph send lands). Share with more workspaces via 'k2 mail access grant'. The password/tokens are vaulted daemon-side, never in the DB, never in output, never on argv.",
+      "description": "Connect the user's OWN external email accounts as LINKED assistant inboxes (was 'mail external') — OWNER verbs (agent tokens exit 3). Two add paths: (1) generic IMAP with an app-password (Gmail app-password, Fastmail, company IMAP), or (2) OAuth with --provider gmail|microsoft (NO password): Gmail links over IMAP-XOAUTH2 via the system browser + a 127.0.0.1 loopback (do it ON the daemon's machine; a remote daemon returns a 'link on the daemon's box' teaching error), Microsoft over the Microsoft Graph API via a device code you enter in any browser. The OAuth flow runs SERVER-SIDE (the daemon polls/exchanges); codes and tokens NEVER reach the CLI and are vaulted daemon-side. Each inbox binds to ONE PRIMARY workspace whose agents read it (via messages/read/wait) and save reply drafts via 'k2 mail draft'. Drafting is always on; sending is OFF by default — raise a workspace to level 'send' to let its agents send (app-password and Gmail-OAuth inboxes over SMTP, Microsoft 365 over Microsoft Graph), governed by the workspace's Email sending mode (off / approval / on). Share with more workspaces via 'k2 mail access grant'. The password/tokens are vaulted daemon-side, never in the DB, never in output, never on argv.",
       "args": [{"name": "address", "required": false}],
       "flags": [
         {"name": "--provider", "arg": "p", "description": "OAuth link: gmail (IMAP-XOAUTH2, system-browser loopback) | microsoft (Graph, device code). No --host/password; the daemon runs the flow and the CLI long-polls to connected (add). The signed-in account must be <address> (else account_mismatch, nothing stored)."},
@@ -45689,8 +45689,9 @@ USAGE
 
 MODES
   off        Agents can't send (the default)
-  approval   Hosted sends wait in `k2 hostmail approvals`. Linked inboxes
-             have no approval queue: they need 'on' to send
+  approval   Sends wait in `k2 hostmail approvals` (hosted and linked
+             inboxes; an approved linked send leaves through its own
+             provider — SMTP or Microsoft Graph)
   on         Agents send under the owner's rules (always-BCC, limits)
 
 ARGUMENTS

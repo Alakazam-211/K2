@@ -36,9 +36,8 @@ use std::collections::HashMap;
 use crate::cli_response::CliResponse;
 use crate::mail::access::{self, AccessInbox, Source};
 use crate::mail::domains;
-use crate::mail::external::{self, ExtError};
-use crate::mail::external_imap::RealImapOps;
-use crate::mail::external_smtp::{self, RealSmtpOps};
+use crate::mail::external;
+use crate::mail::external_smtp;
 use crate::mail::messages::{self, ReadError};
 use crate::mail::routes_messages::WaitSlot;
 use crate::mail::secrets::{FileSecretStore, SecretStore as _};
@@ -89,17 +88,6 @@ fn read_error_response(err: ReadError) -> CliResponse {
         ReadError::Usage(hint) => error_response("400 Bad Request", "usage", &hint),
         ReadError::NotFound(hint) => error_response("404 Not Found", "not_found", &hint),
         ReadError::Engine(hint) => error_response("502 Bad Gateway", "engine", &hint),
-    }
-}
-
-/// LINKED-send ops errors → the shared {code, hint} shapes. `NotFound`
-/// stays masked (a stale source id answers like a missing message).
-fn ext_error_response(err: ExtError) -> CliResponse {
-    match err {
-        ExtError::Usage(h) => error_response("400 Bad Request", "usage", &h),
-        ExtError::NotFound(h) => error_response("404 Not Found", "not_found", &h),
-        ExtError::Exists(h) => error_response("409 Conflict", "exists", &h),
-        ExtError::Engine(h) => error_response("502 Bad Gateway", "engine", &h),
     }
 }
 
@@ -273,27 +261,9 @@ fn dispatch_and_respond(
              'k2 mail outbox <id>' (or cancel with 'k2 mail outbox cancel <id>')",
         );
     }
-    let _slot = if wait_timeout.is_some() && gate == Gate::Approval {
-        match WaitSlot::try_acquire(project_id) {
-            Some(s) => Some(s),
-            None => {
-                return CliResponse {
-                    status: "429 Too Many Requests",
-                    content_type: "application/json",
-                    body: serde_json::json!({
-                        "ok": false,
-                        "error": {
-                            "code": "rate_limited",
-                            "hint": "this workspace already has the maximum wait calls open — \
-                                     retry without 'wait', then poll 'k2 mail outbox'",
-                        },
-                    })
-                    .to_string(),
-                }
-            }
-        }
-    } else {
-        None
+    let _slot = match wait_slot(project_id, gate, wait_timeout) {
+        Ok(s) => s,
+        Err(resp) => return resp,
     };
     let req = OutboundRequest {
         project_id,
@@ -306,6 +276,45 @@ fn dispatch_and_respond(
         Ok(o) => o,
         Err(e) => return send_error_response(e),
     };
+    respond_outcome(outcome, &store, project_path, agent_name, wait_timeout)
+}
+
+/// The `--wait` slot for an approval-mode send (bounded per workspace).
+fn wait_slot(
+    project_id: &str,
+    gate: Gate,
+    wait_timeout: Option<u64>,
+) -> Result<Option<WaitSlot>, CliResponse> {
+    if wait_timeout.is_none() || gate != Gate::Approval {
+        return Ok(None);
+    }
+    match WaitSlot::try_acquire(project_id) {
+        Some(s) => Ok(Some(s)),
+        None => Err(CliResponse {
+            status: "429 Too Many Requests",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "rate_limited",
+                    "hint": "this workspace already has the maximum wait calls open — \
+                             retry without 'wait', then poll 'k2 mail outbox'",
+                },
+            })
+            .to_string(),
+        }),
+    }
+}
+
+/// Shape the gate's outcome (shared by hosted and linked sends): queued
+/// (optionally held until decided), scheduled, submitted or failed.
+fn respond_outcome(
+    outcome: SendOutcome,
+    store: &DbOutboundStore,
+    project_path: &str,
+    agent_name: &str,
+    wait_timeout: Option<u64>,
+) -> CliResponse {
     match outcome {
         SendOutcome::Scheduled { id, send_after } => {
             let when = crate::mail::schedule::format_send_after(send_after);
@@ -416,17 +425,105 @@ fn dispatch_and_respond(
 
 // ── LINKED send (§17.5, GATED — same mail_agent_send as hosted) ─────────
 
-/// Apply the workspace `mail_agent_send` gate to a linked/BYO SMTP send
-/// (E4 / hole #3). Hosted already ran this before Stalwart; linked used
-/// to bypass it. Semantics via [`send::allow_linked_send`]: off → 403
-/// `gated`; approval → 403 `gated` with a hosted-only-queue teaching;
-/// on → allow. Fail-closed on unreadable/unrecognized mode.
-fn require_linked_send_gate(project_path: &str) -> Result<(), CliResponse> {
-    let gate = match send::gate_for_path(project_path) {
-        Ok(g) => g,
-        Err(e) => return Err(send_error_response(e)),
+/// The workspace `mail_agent_send` gate for a LINKED send (E4 / hole #3):
+/// off → 403 `gated`; approval → queue (MCS2's linked approval hand-off);
+/// on → send now. Fail-closed on an unreadable/unrecognized mode.
+fn linked_send_gate(project_path: &str) -> Result<Gate, CliResponse> {
+    let gate = send::gate_for_path(project_path).map_err(send_error_response)?;
+    send::allow_linked_send(gate).map_err(send_error_response)?;
+    Ok(gate)
+}
+
+/// A submission error → the shared {code, hint} shapes.
+fn submit_error_response(err: crate::mail::submit::SubmitError) -> CliResponse {
+    use crate::mail::submit::SubmitError;
+    match err {
+        SubmitError::Usage { code, hint } => error_response("400 Bad Request", code, &hint),
+        SubmitError::NotFound(h) => error_response("404 Not Found", "not_found", &h),
+        SubmitError::Engine(h) => error_response("502 Bad Gateway", "engine", &h),
+    }
+}
+
+/// The send backend for a linked inbox (SMTP or Microsoft Graph). A
+/// missing vaulted credential is 503 `not_ready` (never a leaked secret).
+fn linked_submit(
+    inbox: &MailExternalInbox,
+) -> Result<Box<dyn crate::mail::submit::MailSubmit>, CliResponse> {
+    crate::mail::submit::submit_for_linked(inbox)
+        .map_err(|h| error_response("503 Service Unavailable", "not_ready", &h))
+}
+
+/// Microsoft 365 takes attachments inline only up to 3 MB each / 4 MB a
+/// request in this K2 version: refuse BEFORE anything is audited, queued
+/// or sent (400 `attachment_too_large`).
+fn graph_attachment_precheck(
+    inbox: &MailExternalInbox,
+    attachments: &[external_smtp::OutAttachment],
+    text_len: usize,
+) -> Result<(), CliResponse> {
+    if inbox.kind != "graph" {
+        return Ok(());
+    }
+    let atts: Vec<crate::mail::graph::GraphAttachment> = attachments
+        .iter()
+        .map(|a| crate::mail::graph::GraphAttachment {
+            filename: &a.filename,
+            content_type: &a.content_type,
+            bytes: &a.bytes,
+        })
+        .collect();
+    crate::mail::graph::check_inline_attachments(&atts, text_len)
+        .map_err(|e| submit_error_response(e.into()))
+}
+
+/// MCS2: a LINKED send or reply through the governed pipeline — rate
+/// limits + audit row first, then approval queue or the provider (SMTP or
+/// Graph) — with the same answer shapes as before for a direct send.
+#[allow(clippy::too_many_arguments)]
+fn dispatch_linked(
+    project_id: &str,
+    project_path: &str,
+    agent_name: &str,
+    inbox: &MailExternalInbox,
+    msg: &OutboundMessage,
+    submit: &dyn crate::mail::submit::MailSubmit,
+    gate: Gate,
+    wait_timeout: Option<u64>,
+    attachments: &[external_smtp::OutAttachment],
+) -> CliResponse {
+    let store = DbOutboundStore::default();
+    let _slot = match wait_slot(project_id, gate, wait_timeout) {
+        Ok(s) => s,
+        Err(resp) => return resp,
     };
-    send::allow_linked_send(gate).map_err(send_error_response)
+    let req = OutboundRequest { project_id, agent_name, account_id: &inbox.id, message: msg, send_after: None };
+    let (outcome, receipt) =
+        match send::gate_and_dispatch_linked(&store, submit, gate, &req, attachments, now_secs()) {
+            Ok(o) => o,
+            Err(e) => return send_error_response(e),
+        };
+    let via = if submit.backend() == "graph" { "Microsoft Graph" } else { "SMTP" };
+    match (outcome, receipt) {
+        (SendOutcome::Submitted { id }, Some(r)) => {
+            let mut v = serde_json::json!({
+                "ok": true,
+                "id": id,
+                "status": "submitted",
+                "from": inbox.email_address,
+                "via": submit.backend(),
+                "hint": format!(
+                    "submitted from {} via {via} — accepted by the provider (K2 doesn't confirm \
+                     final delivery); see it in 'k2 mail outbox {id}'",
+                    inbox.email_address
+                ),
+            });
+            if msg.reply_source.is_some() {
+                v["to"] = serde_json::json!(r.to.first().cloned().unwrap_or_default());
+            }
+            ok_json(v)
+        }
+        (outcome, _) => respond_outcome(outcome, &store, project_path, agent_name, wait_timeout),
+    }
 }
 
 /// Resolve a linked inbox's vaulted app-password (same key as IMAP).
@@ -642,151 +739,6 @@ fn hosted_attachments_unsupported() -> CliResponse {
     )
 }
 
-/// Linked send over SMTP after `can_send` (effective 'send') AND the
-/// workspace `mail_agent_send` gate ([`require_linked_send_gate`]) have
-/// both passed. Audit/rate-limit machinery stays hosted-side; once SMTP
-/// succeeds we record a submitted outbox row (issue #31.5).
-fn dispatch_linked_send(
-    project_id: &str,
-    agent_name: &str,
-    inbox: MailExternalInbox,
-    msg: &OutboundMessage,
-    attachments: &[external_smtp::OutAttachment],
-) -> CliResponse {
-    let password = match linked_password(&inbox) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
-    match external_smtp::send_linked_message(
-        &RealSmtpOps,
-        &inbox,
-        &password,
-        &msg.to,
-        &msg.cc,
-        &msg.all_bcc(),
-        &msg.subject,
-        &msg.text_body,
-        attachments,
-    ) {
-        Ok(receipt) => {
-            record_linked_outbox(
-                project_id,
-                agent_name,
-                &inbox.email_address,
-                &receipt,
-                &msg.text_body,
-                &msg.bcc,
-                &msg.policy_bcc,
-            );
-            ok_json(serde_json::json!({
-                "ok": true,
-                "status": "submitted",
-                "from": inbox.email_address,
-                "hint": format!(
-                    "submitted from {} via SMTP — accepted by the provider (K2 doesn't confirm \
-                     final delivery); see it in 'k2 mail outbox'",
-                    inbox.email_address
-                ),
-            }))
-        }
-        Err(e) => ext_error_response(e),
-    }
-}
-
-/// #31.5: record a SUCCESSFUL linked SMTP submission in the outbox so the
-/// agent has a "what did I just send" trail (`k2 mail outbox`). The mail
-/// is already gone by the time we get here — a failed audit write is
-/// logged, NEVER fatal (never turns a real send into a reported failure).
-/// The row lands `submitted` (accepted-for-delivery — never "delivered").
-fn record_linked_outbox(
-    project_id: &str,
-    agent_name: &str,
-    from: &str,
-    receipt: &external_smtp::LinkedReceipt,
-    body: &str,
-    agent_bcc: &[String],
-    policy_bcc: &[String],
-) {
-    let msg = OutboundMessage {
-        from_name: Some(agent_name.to_string()),
-        from: from.to_string(),
-        to: receipt.to.clone(),
-        cc: receipt.cc.clone(),
-        bcc: agent_bcc.to_vec(),
-        policy_bcc: policy_bcc.to_vec(),
-        subject: receipt.subject.clone(),
-        text_body: body.to_string(),
-        in_reply_to: None,
-        references: None,
-    };
-    let store = DbOutboundStore::default();
-    if let Err(e) = send::record_linked_submitted(
-        &store,
-        project_id,
-        agent_name,
-        &msg,
-        &receipt.attachments,
-        now_secs(),
-    ) {
-        k2_core::log_debug!(
-            "[mail/send] linked outbox audit write failed (the send itself succeeded): {e}"
-        );
-    }
-}
-
-/// Linked REPLY over SMTP (same gate as [`dispatch_linked_send`]).
-/// Fetches the source over IMAP, threads, and submits.
-/// `source_uid_token` is the linked message's `uid:…` id.
-fn dispatch_linked_reply(
-    project_id: &str,
-    agent_name: &str,
-    inbox: MailExternalInbox,
-    source_uid_token: &str,
-    body: &str,
-    attachments: &[external_smtp::OutAttachment],
-    policy_bcc: &[String],
-) -> CliResponse {
-    let password = match linked_password(&inbox) {
-        Ok(p) => p,
-        Err(resp) => return resp,
-    };
-    match external_smtp::send_linked_reply(
-        &RealImapOps,
-        &RealSmtpOps,
-        &inbox,
-        &password,
-        source_uid_token,
-        body,
-        attachments,
-        policy_bcc,
-    ) {
-        Ok(receipt) => {
-            record_linked_outbox(
-                project_id,
-                agent_name,
-                &inbox.email_address,
-                &receipt,
-                body,
-                &[],
-                policy_bcc,
-            );
-            let recipient = receipt.to.first().cloned().unwrap_or_default();
-            ok_json(serde_json::json!({
-                "ok": true,
-                "status": "submitted",
-                "from": inbox.email_address,
-                "to": recipient,
-                "hint": format!(
-                    "reply submitted from {} to {} via SMTP — accepted by the provider; see it \
-                     in 'k2 mail outbox'",
-                    inbox.email_address, recipient
-                ),
-            }))
-        }
-        Err(e) => ext_error_response(e),
-    }
-}
-
 // ── POST /cli/mail/send ─────────────────────────────────────────────────
 
 /// S5: gated outbound. Body: `{project, to (string|[string]), subject,|[string]), subject,
@@ -906,6 +858,8 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         text_body: body_text.to_string(),
         in_reply_to: None,
         references: None,
+        reply_source: None,
+        attachments: Vec::new(),
     };
     send::apply_policy_bcc(&mut msg, policy_bcc);
     if let Err(e) = send::check_recipient_limit(&msg) {
@@ -929,18 +883,21 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         || v["sendIn"].as_str().or_else(|| v["send_in"].as_str()).is_some();
 
     match from_inbox.source {
-        // ── LINKED: mail_agent_send gate then SMTP (§17.5 / E4) ──
+        // ── LINKED: mail_agent_send gate, then the governed pipeline over
+        // SMTP or Microsoft Graph (§17.5 / E4; MCS2 approval hand-off) ──
         Source::Linked => {
             if schedule_requested {
                 return error_response(
                     "400 Bad Request",
                     "usage",
-                    "--at/--in scheduling is for hosted K2 mailboxes; linked/BYO sends                      immediately over SMTP (no schedule queue)",
+                    "--at/--in scheduling is for hosted K2 mailboxes; a linked inbox sends \
+                     now or queues for approval (no schedule queue)",
                 );
             }
-            if let Err(resp) = require_linked_send_gate(&path) {
-                return resp;
-            }
+            let gate = match linked_send_gate(&path) {
+                Ok(g) => g,
+                Err(resp) => return resp,
+            };
             let Some(inbox) = from_inbox.linked else {
                 return error_response(
                     "502 Bad Gateway",
@@ -953,7 +910,26 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                 Ok(a) => a,
                 Err(resp) => return resp,
             };
-            dispatch_linked_send(&project_id, &agent_name, inbox, &msg, &attachments)
+            if let Err(resp) =
+                graph_attachment_precheck(&inbox, &attachments, subject.len() + body_text.len())
+            {
+                return resp;
+            }
+            let submit = match linked_submit(&inbox) {
+                Ok(s) => s,
+                Err(resp) => return resp,
+            };
+            dispatch_linked(
+                &project_id,
+                &path,
+                &agent_name,
+                &inbox,
+                &msg,
+                submit.as_ref(),
+                gate,
+                wait_timeout,
+                &attachments,
+            )
         }
         // ── HOSTED: the existing governed Stalwart path ──
         Source::Hosted => {
@@ -1116,11 +1092,14 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
     }
 
     match from_inbox.source {
-        // ── LINKED: mail_agent_send gate then threaded SMTP (E4) ──
+        // ── LINKED: mail_agent_send gate, then the governed pipeline; the
+        // provider threads and locks the recipient (SMTP re-reads the
+        // source over IMAP; Graph uses createReply) (E4; MCS2) ──
         Source::Linked => {
-            if let Err(resp) = require_linked_send_gate(&path) {
-                return resp;
-            }
+            let gate = match linked_send_gate(&path) {
+                Ok(g) => g,
+                Err(resp) => return resp,
+            };
             let Some(inbox) = from_inbox.linked else {
                 return error_response(
                     "502 Bad Gateway",
@@ -1128,21 +1107,55 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                     "linked inbox row missing from the resolved sender (unexpected)",
                 );
             };
-            // `email_id` is the linked message's `uid:…` token (the
-            // reply threading + IMAP source-fetch happen in external_smtp).
             let attachments = match read_workspace_attachments(&path, &attach_specs) {
                 Ok(a) => a,
                 Err(resp) => return resp,
             };
+            if let Err(resp) = graph_attachment_precheck(&inbox, &attachments, body_text.len()) {
+                return resp;
+            }
+            let submit = match linked_submit(&inbox) {
+                Ok(s) => s,
+                Err(resp) => return resp,
+            };
+            // Who the reply goes to (the source's sender, locked) and its
+            // subject — read BEFORE anything is audited, queued or sent, so
+            // an approval shows the real recipient. `email_id` is the
+            // linked message's backend id (`uid:…` / `graph:…`).
+            let (recipient, subject) = match submit.reply_preview(&email_id) {
+                Ok(Some(p)) => p,
+                Ok(None) => return masked(),
+                Err(e) => return submit_error_response(e),
+            };
             let agent_name = k2_core::workspace::display::agent_display_name(&path);
-            dispatch_linked_reply(
+            let mut msg = OutboundMessage {
+                from_name: Some(agent_name.clone()),
+                from: inbox.email_address.clone(),
+                to: vec![recipient],
+                cc: Vec::new(),
+                bcc: Vec::new(),
+                policy_bcc: Vec::new(),
+                subject,
+                text_body: body_text.to_string(),
+                in_reply_to: None,
+                references: None,
+                reply_source: Some(email_id.clone()),
+                attachments: Vec::new(),
+            };
+            send::apply_policy_bcc(&mut msg, policy_bcc);
+            if let Err(e) = send::check_recipient_limit(&msg) {
+                return send_error_response(e);
+            }
+            dispatch_linked(
                 &project_id,
+                &path,
                 &agent_name,
-                inbox,
-                &email_id,
-                body_text,
+                &inbox,
+                &msg,
+                submit.as_ref(),
+                gate,
+                wait_timeout,
                 &attachments,
-                &policy_bcc,
             )
         }
         // ── HOSTED: the existing governed reply path ──
@@ -1210,6 +1223,8 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                     ctx.references.as_deref(),
                     ctx.message_id.as_deref(),
                 ),
+                reply_source: None,
+                attachments: Vec::new(),
             };
             send::apply_policy_bcc(&mut msg, policy_bcc);
             if let Err(e) = send::check_recipient_limit(&msg) {
@@ -1436,28 +1451,42 @@ pub fn handle_approvals_approve(body: &[u8]) -> CliResponse {
     send::auto_deny_expired(now);
 
     let store = DbOutboundStore::default();
-    let engine = domains::engine_from_db();
-    let backend: Result<&dyn SubmitBackend, String> = match &engine {
-        Ok((client, _)) => Ok(client),
-        Err(e) => Err(e.clone()),
+    // MCS2: the approval hand-off resolves the backend from the From
+    // address — a LINKED inbox leaves through its own provider (SMTP or
+    // Microsoft Graph); a hosted one through the local Stalwart (only
+    // dialled when the message is hosted).
+    let engine = std::cell::OnceCell::new();
+    let mut resolve = |msg: &OutboundMessage| -> Result<Box<dyn crate::mail::submit::MailSubmit + '_>, String> {
+        if let Some(inbox) = external::inbox_for_address(&msg.from) {
+            return crate::mail::submit::submit_for_linked(&inbox);
+        }
+        let account = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT stalwart_account_id FROM mail_addresses \
+                 WHERE address = ?1 AND status = 'active'",
+                rusqlite::params![msg.from],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
+        };
+        let client = match engine.get_or_init(domains::engine_from_db) {
+            Ok((client, _)) => client,
+            Err(e) => return Err(format!("mail server unavailable: {e}")),
+        };
+        let account = account.ok_or_else(|| {
+            format!("sender address unavailable: sender address '{}' is no longer active", msg.from)
+        })?;
+        Ok(Box::new(crate::mail::submit::HostedSubmit {
+            backend: client as &dyn SubmitBackend,
+            account_id: account,
+        }))
     };
-    let mut account_for_from = |from: &str| -> Result<String, String> {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        conn.query_row(
-            "SELECT stalwart_account_id FROM mail_addresses \
-             WHERE address = ?1 AND status = 'active'",
-            rusqlite::params![from],
-            |r| r.get::<_, Option<String>>(0),
-        )
-        .ok()
-        .flatten()
-        .ok_or_else(|| format!("sender address '{from}' is no longer active"))
-    };
-    match send::approve_and_submit(
+    match send::approve_and_submit_with(
         &store,
-        backend,
-        &mut account_for_from,
+        &mut resolve,
         id,
         decided_by.unwrap_or("owner"),
         note,
@@ -2053,6 +2082,8 @@ mod tests {
             text_body: "the linked body".to_string(),
             in_reply_to: None,
             references: None,
+            reply_source: None,
+            attachments: Vec::new(),
         };
         let id = send::record_linked_submitted(&store, &project_id, "Agent", &msg, &[], now_secs())
             .expect("record linked send");
@@ -2104,6 +2135,8 @@ mod tests {
             text_body: "see attached".to_string(),
             in_reply_to: None,
             references: None,
+            reply_source: None,
+            attachments: Vec::new(),
         };
         let names = vec!["invoice.pdf".to_string(), "photo.jpg".to_string()];
         let id = send::record_linked_submitted(
@@ -2286,6 +2319,8 @@ mod tests {
             text_body: "b".to_string(),
             in_reply_to: None,
             references: None,
+            reply_source: None,
+            attachments: Vec::new(),
         };
         let now = now_secs();
         for _ in 0..send::RATE_LIMIT_HOURLY {
@@ -2439,6 +2474,8 @@ mod tests {
             text_body: "b".to_string(),
             in_reply_to: None,
             references: None,
+            reply_source: None,
+            attachments: Vec::new(),
         };
         let foreign_id = store
             .insert(&NewOutbound {
@@ -2566,14 +2603,13 @@ mod tests {
         assert_eq!(resp.status, "503 Service Unavailable", "on must pass the gate: {}", resp.body);
         assert_eq!(body_json(&resp)["error"]["code"], "not_ready");
 
-        // approval → linked refuses with the hosted-only-queue teaching.
+        // approval → since MCS2 a linked reply queues too: it passes the
+        // gate and reaches the same provider step (no credential → 503).
         let r = set("approval");
         assert_eq!(r.status, "200 OK", "{}", r.body);
         let resp = reply();
-        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
-        let v = body_json(&resp);
-        assert_eq!(v["error"]["code"], "gated");
-        assert!(v["error"]["hint"].as_str().unwrap().contains("approval"), "{v}");
+        assert_eq!(resp.status, "503 Service Unavailable", "approval passes the gate: {}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "not_ready");
 
         // Back off → gated again.
         let r = set("off");
@@ -2588,20 +2624,44 @@ mod tests {
     /// E4: linked send under approval mode refuses with a clear
     /// teaching (approval queue is hosted-only) — no SMTP, no queue row.
     #[test]
-    fn linked_send_approval_mode_refuses_with_teaching() {
+    fn linked_send_approval_mode_queues_without_sending() {
         let (name, path) = unique("lapp");
         let project_id = insert_project(&name, &path);
         let linked = format!("me-{}@linked.example", &project_id[..8]);
-        seed_linked(&project_id, &linked, "send");
+        let row = seed_linked(&project_id, &linked, "send");
+        // An app-password row: its credential in the (test) vault, so the
+        // SMTP backend resolves — and approval mode never dials it.
+        FileSecretStore::default()
+            .store_exact(&external::vault_key(&row), "app-pw")
+            .expect("vault the test credential");
         set_gating(&path, "approval");
         let resp = handle_send(&send_body(&path, serde_json::json!({ "from": linked })));
-        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
         let v = body_json(&resp);
-        assert_eq!(v["error"]["code"], "gated");
-        let hint = v["error"]["hint"].as_str().unwrap();
-        assert!(hint.contains("approval"), "{hint}");
-        assert!(hint.contains("hosted"), "{hint}");
-        assert_eq!(outbound_count(&project_id), 0, "approval does not queue linked");
+        assert_eq!(v["status"], "pending_approval", "{v}");
+        assert_eq!(v["queued"], true);
+        let id = v["id"].as_str().unwrap().to_string();
+        assert_eq!(outbound_count(&project_id), 1, "MCS2: approval queues a linked send");
+        // The owner's queue lists it with its preview; nothing left the box.
+        let list = body_json(&handle_approvals_list(&HashMap::new()));
+        assert!(
+            list["pending"].as_array().unwrap().iter().any(|p| p["id"] == id.as_str()),
+            "{list}"
+        );
+        // Deny it (no SMTP dial in this test) and tidy up.
+        let resp = handle_approvals_deny(
+            serde_json::json!({ "id": id, "note": "test" }).to_string().as_bytes(),
+        );
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let _ = FileSecretStore::default().delete(&external::vault_key(&row));
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute(
+                "DELETE FROM mail_outbound WHERE owner_project_id = ?1",
+                rusqlite::params![project_id],
+            );
+        }
         cleanup_linked(&project_id);
     }
 
@@ -2949,30 +3009,213 @@ mod tests {
         cleanup(&project_id, Some(&domain));
     }
 
-    /// Linked sends record agent vs policy BCCs in the outbox trail too.
-    #[test]
-    fn linked_outbox_records_agent_and_policy_bcc() {
-        let (name, path) = unique("linkbcc");
-        let project_id = insert_project(&name, &path);
-        let receipt = external_smtp::LinkedReceipt {
+    /// A recording [`crate::mail::submit::MailSubmit`] double (never dials).
+    struct RecordingMailSubmit {
+        sent: std::sync::Mutex<Vec<(Option<String>, OutboundMessage, Vec<String>)>>,
+        fail: bool,
+    }
+    impl crate::mail::submit::MailSubmit for RecordingMailSubmit {
+        fn backend(&self) -> &'static str {
+            "graph"
+        }
+        fn submit(
+            &self,
+            msg: &OutboundMessage,
+            atts: &[external_smtp::OutAttachment],
+        ) -> Result<crate::mail::submit::Receipt, crate::mail::submit::SubmitError> {
+            if self.fail {
+                return Err(crate::mail::submit::SubmitError::Engine("provider said no".into()));
+            }
+            let names: Vec<String> = atts.iter().map(|a| a.filename.clone()).collect();
+            self.sent.lock().unwrap().push((None, msg.clone(), names.clone()));
+            Ok(crate::mail::submit::Receipt {
+                to: msg.to.clone(),
+                cc: msg.cc.clone(),
+                subject: msg.subject.clone(),
+                attachments: names,
+            })
+        }
+        fn reply(
+            &self,
+            src: &str,
+            msg: &OutboundMessage,
+            atts: &[external_smtp::OutAttachment],
+        ) -> Result<crate::mail::submit::Receipt, crate::mail::submit::SubmitError> {
+            let names: Vec<String> = atts.iter().map(|a| a.filename.clone()).collect();
+            self.sent.lock().unwrap().push((Some(src.to_string()), msg.clone(), names.clone()));
+            Ok(crate::mail::submit::Receipt {
+                to: msg.to.clone(),
+                cc: Vec::new(),
+                subject: msg.subject.clone(),
+                attachments: names,
+            })
+        }
+        fn reply_preview(
+            &self,
+            _src: &str,
+        ) -> Result<Option<(String, String)>, crate::mail::submit::SubmitError> {
+            Ok(Some(("pat@dest.example".into(), "Re: Hi".into())))
+        }
+    }
+
+    fn linked_msg(from: &str) -> OutboundMessage {
+        OutboundMessage {
+            from_name: Some("Agent".into()),
+            from: from.to_string(),
             to: vec!["pat@dest.example".to_string()],
             cc: Vec::new(),
+            bcc: vec!["boss@shop.example".to_string()],
+            policy_bcc: vec!["owner@shop.example".to_string()],
             subject: "Hi".to_string(),
+            text_body: "body".to_string(),
+            in_reply_to: None,
+            references: None,
+            reply_source: None,
             attachments: Vec::new(),
+        }
+    }
+
+    /// MCS2: a linked send with gate `on` writes its audit row FIRST, then
+    /// the provider runs, then the row is `sent` — agent vs policy BCCs
+    /// stay apart in the trail.
+    #[test]
+    fn linked_on_mode_audits_first_and_records_agent_and_policy_bcc() {
+        let (name, path) = unique("linkbcc");
+        let project_id = insert_project(&name, &path);
+        let store = DbOutboundStore::default();
+        let submit = RecordingMailSubmit { sent: Default::default(), fail: false };
+        let msg = linked_msg("me@gmail.example");
+        let req = OutboundRequest {
+            project_id: &project_id,
+            agent_name: "Agent",
+            account_id: "row-x",
+            message: &msg,
+            send_after: None,
         };
-        record_linked_outbox(
-            &project_id,
-            "Agent",
-            "me@gmail.com",
-            &receipt,
-            "body",
-            &["boss@shop.example".to_string()],
-            &["owner@shop.example".to_string()],
-        );
+        let atts = vec![external_smtp::OutAttachment {
+            filename: "a.pdf".into(),
+            content_type: "application/pdf".into(),
+            bytes: vec![1, 2, 3],
+        }];
+        let (outcome, receipt) =
+            send::gate_and_dispatch_linked(&store, &submit, Gate::On, &req, &atts, now_secs())
+                .expect("dispatch");
+        assert!(matches!(outcome, SendOutcome::Submitted { .. }), "{outcome:?}");
+        assert_eq!(receipt.expect("receipt").attachments, vec!["a.pdf".to_string()]);
+        assert_eq!(submit.sent.lock().unwrap().len(), 1);
         let v = body_json(&handle_outbox(&params(&[("project", &path)])));
         assert_eq!(v["count"], 1, "{v}");
+        assert_eq!(v["outbox"][0]["status"], "submitted");
         assert_eq!(v["outbox"][0]["bcc"], serde_json::json!(["boss@shop.example"]));
         assert_eq!(v["outbox"][0]["policyBcc"], serde_json::json!(["owner@shop.example"]));
+        assert_eq!(v["outbox"][0]["attachments"]["names"], serde_json::json!(["a.pdf"]));
         cleanup(&project_id, None);
+    }
+
+    /// MCS2: a provider failure leaves an audited `failed` row with the
+    /// reason; nothing is reported as sent.
+    #[test]
+    fn linked_on_mode_provider_failure_is_a_failed_row() {
+        let (name, path) = unique("linkfail");
+        let project_id = insert_project(&name, &path);
+        let store = DbOutboundStore::default();
+        let submit = RecordingMailSubmit { sent: Default::default(), fail: true };
+        let msg = linked_msg("me@gmail.example");
+        let req = OutboundRequest {
+            project_id: &project_id,
+            agent_name: "Agent",
+            account_id: "row-x",
+            message: &msg,
+            send_after: None,
+        };
+        let (outcome, _) =
+            send::gate_and_dispatch_linked(&store, &submit, Gate::On, &req, &[], now_secs())
+                .expect("dispatch");
+        assert!(matches!(outcome, SendOutcome::SubmitFailed { .. }), "{outcome:?}");
+        let v = body_json(&handle_outbox(&params(&[("project", &path)])));
+        assert_eq!(v["outbox"][0]["status"], "failed");
+        assert!(v["outbox"][0]["note"].as_str().unwrap().contains("provider said no"));
+        cleanup(&project_id, None);
+    }
+
+    /// MCS2 (MCS-A5): approval mode queues a LINKED message (attachments
+    /// captured into the body file); approve hands it to the resolved
+    /// provider — the reply keeps its source id; nothing left before.
+    #[test]
+    fn linked_approval_queues_then_approve_hands_off_to_the_provider() {
+        let (name, path) = unique("linkappr");
+        let project_id = insert_project(&name, &path);
+        let store = DbOutboundStore::default();
+        let queued = RecordingMailSubmit { sent: Default::default(), fail: false };
+        let mut msg = linked_msg("me@contoso.example");
+        msg.reply_source = Some("graph:AAA".to_string());
+        let req = OutboundRequest {
+            project_id: &project_id,
+            agent_name: "Agent",
+            account_id: "row-x",
+            message: &msg,
+            send_after: None,
+        };
+        let atts = vec![external_smtp::OutAttachment {
+            filename: "q.txt".into(),
+            content_type: "text/plain".into(),
+            bytes: b"quarterly".to_vec(),
+        }];
+        let (outcome, receipt) =
+            send::gate_and_dispatch_linked(&store, &queued, Gate::Approval, &req, &atts, now_secs())
+                .expect("queue");
+        let SendOutcome::Queued { id, .. } = outcome else { panic!("{outcome:?}") };
+        assert!(receipt.is_none());
+        assert!(queued.sent.lock().unwrap().is_empty(), "nothing leaves before approval");
+        // The stored message carries the source + the attachment bytes.
+        let stored = store.load_message(&id).expect("stored");
+        assert_eq!(stored.reply_source.as_deref(), Some("graph:AAA"));
+        assert_eq!(stored.attachments.len(), 1);
+        assert!(!format!("{stored:?}").contains("quarterly"), "Debug never shows bytes");
+
+        let at_approve = RecordingMailSubmit { sent: Default::default(), fail: false };
+        let mut resolve = |m: &OutboundMessage| -> Result<Box<dyn crate::mail::submit::MailSubmit + '_>, String> {
+            assert_eq!(m.from, "me@contoso.example");
+            Ok(Box::new(RecordingMailSubmitRef(&at_approve)))
+        };
+        let out = send::approve_and_submit_with(&store, &mut resolve, &id, "owner", None, now_secs())
+            .expect("approve");
+        assert_eq!(out, send::ApproveOutcome::Submitted);
+        let sent = at_approve.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].0.as_deref(), Some("graph:AAA"), "a reply goes out as a reply");
+        assert_eq!(sent[0].2, vec!["q.txt".to_string()], "the captured attachment rode along");
+        let v = body_json(&handle_outbox(&params(&[("project", &path), ("id", &id)])));
+        assert_eq!(v["outbound"]["status"], "submitted");
+        cleanup(&project_id, None);
+    }
+
+    /// Borrowing wrapper so a test can keep the recorder after approve.
+    struct RecordingMailSubmitRef<'a>(&'a RecordingMailSubmit);
+    impl crate::mail::submit::MailSubmit for RecordingMailSubmitRef<'_> {
+        fn backend(&self) -> &'static str {
+            self.0.backend()
+        }
+        fn submit(
+            &self,
+            msg: &OutboundMessage,
+            atts: &[external_smtp::OutAttachment],
+        ) -> Result<crate::mail::submit::Receipt, crate::mail::submit::SubmitError> {
+            self.0.submit(msg, atts)
+        }
+        fn reply(
+            &self,
+            src: &str,
+            msg: &OutboundMessage,
+            atts: &[external_smtp::OutAttachment],
+        ) -> Result<crate::mail::submit::Receipt, crate::mail::submit::SubmitError> {
+            self.0.reply(src, msg, atts)
+        }
+        fn reply_preview(
+            &self,
+            src: &str,
+        ) -> Result<Option<(String, String)>, crate::mail::submit::SubmitError> {
+            self.0.reply_preview(src)
+        }
     }
 }

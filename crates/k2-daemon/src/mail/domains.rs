@@ -62,6 +62,14 @@ pub const ST_WRONG: &str = "wrong";
 pub const ST_UNKNOWN: &str = "unknown";
 pub const ST_UNVERIFIABLE: &str = "unverifiable";
 pub const ST_OPTIONAL: &str = "optional";
+/// 0.46.1: an advanced row K2 tells you NOT to publish yet (the
+/// MTA-STS + client-autoconfig names on an external zone, which can't
+/// get a certificate there). Display-only — never persisted.
+pub const ST_SKIP: &str = "skip";
+
+/// The note on a [`ST_SKIP`] row.
+pub const EXTERNAL_ZONE_SKIP_NOTE: &str =
+    "skip for now: these names can't get a certificate on an external zone yet";
 
 /// One row of the DNS record table (§6.2). Wire + storage shape (the
 /// routes serialize these camelCase straight into responses).
@@ -704,17 +712,72 @@ fn rewrite_embedded_mail_host(s: &str, current: &str) -> String {
     out
 }
 
-/// C23: expected DMARC is always `p=none` (copy = doctor = CLI).
+/// C23: expected DMARC is always `p=none` (copy = doctor = CLI), and it
+/// always carries a `rua=` report address (0.46.1: a `p=none` with no
+/// `rua` — however it got into the zone — is replaced by the canonical
+/// `rua=mailto:postmaster@<domain>` line; a `p=none` with its own `rua`
+/// is kept).
 pub fn apply_dmarc_p_none(rows: &mut [RecordRow], domain: &str) {
     let expected = format!("v=DMARC1; p=none; rua=mailto:postmaster@{domain}");
     for row in rows.iter_mut() {
         if row.id == "dmarc" {
-            if !crate::mail::dns_verify::dmarc_p_none(&row.expected) {
+            let has_rua = row.expected.to_ascii_lowercase().contains("rua=");
+            if !crate::mail::dns_verify::dmarc_p_none(&row.expected) || !has_rua {
                 row.expected = expected.clone();
                 row.expected_display = format!("\"{expected}\"");
                 row.chunks = vec![expected];
             }
             return;
+        }
+    }
+}
+
+/// Is this mail domain's zone on K2's nameservers with DNS write (so K2
+/// can issue per-name certificates for it by DNS-01)? `*.k2.dev` zones
+/// are K2's own. The same test `k2 hostmail cert names issue` applies
+/// (`domains::acme::check_extra_name_issuable`).
+pub fn zone_is_k2_hosted(conn: &Connection, domain: &str) -> bool {
+    let d = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    if d == "k2.dev" || d.ends_with(".k2.dev") {
+        return true;
+    }
+    matches!(
+        k2_core::domains::get_binding(conn, &d),
+        Ok(Some(b)) if b.dns_write && !b.is_pending_ns()
+    )
+}
+
+/// The advanced rows that need a certificate of their own: the
+/// `mta-sts` / `autoconfig` / `autodiscover` / `ua-auto-config` names and
+/// the `_mta-sts` policy TXT (it announces the `mta-sts` endpoint).
+fn needs_own_certificate(row: &RecordRow, domain: &str) -> bool {
+    if row.category != CAT_ADVANCED {
+        return false;
+    }
+    let n = row.name.trim_end_matches('.').to_ascii_lowercase();
+    n == format!("_mta-sts.{domain}")
+        || super::cert_names::EXTRA_LABELS
+            .iter()
+            .any(|l| n == format!("{l}.{domain}"))
+}
+
+/// 0.46.1 (partii): on an external zone (DNS not on ns1/ns2.k2.dev),
+/// those names can't get a certificate today — `cert names issue` is
+/// DNS-01 on a K2-hosted zone only, and Stalwart's ACME is locked to the
+/// mail host — so publishing them makes a broken MTA-STS policy
+/// endpoint and autoconfig hosts with the wrong certificate. Mark them
+/// [`ST_SKIP`] with the note; [`render_zone_file`] leaves them out.
+/// Display only (`domain show` / `check`): never persisted, so the rows
+/// come back on their own once the zone moves to K2.
+pub fn apply_external_zone_skips(rows: &mut [RecordRow], domain: &str, k2_hosted: bool) {
+    if k2_hosted {
+        return;
+    }
+    let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    for row in rows.iter_mut().filter(|r| needs_own_certificate(r, &domain)) {
+        row.status = ST_SKIP.to_string();
+        if !row.purpose.contains(EXTERNAL_ZONE_SKIP_NOTE) {
+            row.purpose = format!("{} — {EXTERNAL_ZONE_SKIP_NOTE}", row.purpose);
         }
     }
 }
@@ -726,7 +789,7 @@ pub fn apply_dmarc_p_none(rows: &mut [RecordRow], domain: &str) {
 pub fn render_zone_file(domain: &str, rows: &[RecordRow]) -> String {
     let mut out = format!("; K2 Mail DNS records for {domain}\n; records can take up to 48 h to propagate\n");
     for row in rows {
-        if row.category == CAT_INSTRUCTION {
+        if row.category == CAT_INSTRUCTION || row.status == ST_SKIP {
             continue;
         }
         // The mail host's A row belongs in this zone file only when the
@@ -1025,7 +1088,8 @@ const PROPAGATION_NOTE: &str = "records can take up to 48 h to propagate";
 
 /// Full per-domain JSON (the `show` shape; `add`/`check` return it too).
 pub fn domain_json(conn: &Connection, row: &MailDomain) -> serde_json::Value {
-    let rows = effective_rows(conn, row);
+    let mut rows = effective_rows(conn, row);
+    apply_external_zone_skips(&mut rows, &row.domain, zone_is_k2_hosted(conn, &row.domain));
     let dmarc_valid = rows.iter().any(|r| r.id == "dmarc" && r.status == ST_VALID);
     serde_json::json!({
         "ok": true,
@@ -1525,6 +1589,108 @@ ua-auto-config.acme.dev.	3600	IN	CNAME	mail.acme.dev.
             "C23 must not keep p=reject: {}",
             dmarc.expected
         );
+    }
+
+    /// 0.46.1 (partii): the DMARC line K2 lists always carries a report
+    /// address — a `p=none;` with no `rua` is replaced by the canonical
+    /// line; a `p=none` with its own `rua` is kept.
+    #[test]
+    fn dmarc_expected_always_carries_rua() {
+        let canonical = "v=DMARC1; p=none; rua=mailto:postmaster@acme.dev";
+        let mut rows = build_rows(
+            "acme.dev",
+            &parse_zone_file("_dmarc.acme.dev. IN TXT \"v=DMARC1; p=none;\"\n"),
+            Some("mail.acme.dev"),
+        );
+        apply_dmarc_p_none(&mut rows, "acme.dev");
+        let dmarc = rows.iter().find(|r| r.id == "dmarc").expect("dmarc");
+        assert_eq!(dmarc.expected, canonical);
+        assert_eq!(dmarc.chunks, vec![canonical.to_string()]);
+
+        let custom = "v=DMARC1; p=none; rua=mailto:dmarc@reports.example";
+        let mut rows = build_rows(
+            "acme.dev",
+            &parse_zone_file(&format!("_dmarc.acme.dev. IN TXT \"{custom}\"\n")),
+            Some("mail.acme.dev"),
+        );
+        apply_dmarc_p_none(&mut rows, "acme.dev");
+        assert_eq!(rows.iter().find(|r| r.id == "dmarc").expect("dmarc").expected, custom);
+
+        // Synthesized (no DMARC in the zone) and the fixture: canonical.
+        let mut rows = fixture_rows();
+        apply_dmarc_p_none(&mut rows, "acme.dev");
+        assert_eq!(rows.iter().find(|r| r.id == "dmarc").expect("dmarc").expected, canonical);
+    }
+
+    /// 0.46.1 (partii): on an external zone the MTA-STS + autoconfig
+    /// names read `skip` with the note and leave the zone file; TLS-RPT,
+    /// SRV, TLSA and the required rows are untouched. A K2-hosted zone
+    /// keeps them all.
+    #[test]
+    fn external_zone_skips_names_that_cannot_get_a_certificate() {
+        let mut rows = fixture_rows();
+        apply_dmarc_p_none(&mut rows, "acme.dev");
+        let before = rows.clone();
+        apply_external_zone_skips(&mut rows, "acme.dev", true);
+        assert_eq!(rows, before, "a K2-hosted zone keeps every row");
+
+        apply_external_zone_skips(&mut rows, "acme.dev", false);
+        let skipped: Vec<&str> =
+            rows.iter().filter(|r| r.status == ST_SKIP).map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            skipped,
+            vec![
+                "autoconfig.acme.dev",
+                "autodiscover.acme.dev",
+                "mta-sts.acme.dev",
+                "_mta-sts.acme.dev",
+                "ua-auto-config.acme.dev"
+            ],
+            "{rows:#?}"
+        );
+        for r in rows.iter().filter(|r| r.status == ST_SKIP) {
+            assert!(r.purpose.ends_with(EXTERNAL_ZONE_SKIP_NOTE), "{}", r.purpose);
+        }
+        for keep in ["_smtp._tls.acme.dev", "_jmap._tcp.acme.dev", "_25._tcp.mail.acme.dev"] {
+            let r = rows.iter().find(|r| r.name == keep).expect(keep);
+            assert_eq!(r.status, ST_OPTIONAL, "{keep}");
+        }
+        assert!(rows.iter().filter(|r| r.category != CAT_ADVANCED).all(|r| r.status != ST_SKIP));
+        // Idempotent: a second pass doesn't stack the note.
+        let once = rows.clone();
+        apply_external_zone_skips(&mut rows, "acme.dev", false);
+        assert_eq!(rows, once);
+
+        let zone = render_zone_file("acme.dev", &rows);
+        for gone in ["autoconfig.acme.dev.", "autodiscover.acme.dev.", "mta-sts.acme.dev.", "_mta-sts.acme.dev.", "ua-auto-config.acme.dev."] {
+            assert!(!zone.lines().any(|l| l.starts_with(gone)), "{gone} must leave the zone file:\n{zone}");
+        }
+        assert!(zone.contains("_smtp._tls.acme.dev."), "{zone}");
+        assert!(zone.contains("rua=mailto:postmaster@acme.dev"), "{zone}");
+    }
+
+    /// K2's own `*.k2.dev` zones are K2-hosted; an apex with no binding,
+    /// a BYO binding (no DNS write) or a pending_ns one is external.
+    #[test]
+    fn zone_is_k2_hosted_follows_the_binding() {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let apex = format!("ext-{}.example", &uuid::Uuid::new_v4().simple().to_string()[..12]);
+        assert!(zone_is_k2_hosted(&conn, "lztek.k2.dev"));
+        assert!(!zone_is_k2_hosted(&conn, &apex), "no binding = external");
+        for (dns_write, status, hosted) in [(0, None, false), (1, Some("pending_ns"), false), (1, Some("active"), true)] {
+            conn.execute("DELETE FROM domain_bindings WHERE apex = ?1", rusqlite::params![apex])
+                .expect("clear binding");
+            conn.execute(
+                "INSERT INTO domain_bindings (apex, zone_id, dns_write, created_at, status, nameservers, auto_created) \
+                 VALUES (?1, 'z', ?2, 1, ?3, NULL, 0)",
+                rusqlite::params![apex, dns_write, status],
+            )
+            .expect("seed binding");
+            assert_eq!(zone_is_k2_hosted(&conn, &apex), hosted, "dns_write={dns_write} status={status:?}");
+        }
+        conn.execute("DELETE FROM domain_bindings WHERE apex = ?1", rusqlite::params![apex])
+            .expect("clean binding");
     }
 
     // ── SPF split-config (§8.3) ──

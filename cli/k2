@@ -37997,7 +37997,9 @@ def print_outbound_detail(r):
 
 DOMAIN_MARKS = {"valid": "valid", "missing": "MISSING", "wrong": "WRONG",
                 "pending": "pending", "unverifiable": "manual",
-                "optional": "optional", "unknown": "?"}
+                "optional": "optional", "unknown": "?",
+                # 0.46.1: don't publish yet (external zone, no certificate)
+                "skip": "skip for now"}
 
 def print_domain(d):
     print("domain  : %s  (%s)" % (d.get("domain", "?"), d.get("status", "?")))

@@ -249,6 +249,32 @@ k2 app box prepare --runtime runc > "$SANDBOX/out" 2>&1; rc=$?
 set -e
 expect_eq "prepare refuses an unknown runtime (exit 2)" "$rc" "2"
 
+echo "== K2's Podman bundle (0.46.1 lane P) =="
+# --dry-run is a read: it answers on any box and runs no mutating root verb.
+set +e
+out="$(k2 app box prepare --dry-run --json)"; rc=$?
+set -e
+expect_eq "prepare --dry-run answers (exit 0)" "$rc" "0"
+expect_has "dry run says so" "$out" '"dryRun":true'
+expect_has "dry run changes nothing" "$out" '"changed":false'
+expect_has "dry run reports the Podman decision" "$out" '"podman":{"action":'
+expect_has "dry run lists the steps" "$out" '"apps packages install"'
+human="$(k2 app box prepare --dry-run 2>&1 || true)"
+expect_has "dry run prints its verdict" "$human" "Dry run: nothing changed."
+# Uninstall needs a protocol-7 helper on Linux: refused here, exit 3.
+set +e
+k2 app box podman uninstall > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "podman uninstall without a protocol-7 helper exits 3" "$rc" "3"
+case "$(cat "$SANDBOX/out")" in
+    *linux_only*|*helper_needed*) ok "podman uninstall names why (linux_only / helper_needed)" ;;
+    *) bad "podman uninstall names why: $(cat "$SANDBOX/out")" ;;
+esac
+set +e
+k2 app box podman remove > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "podman takes only uninstall (exit 2)" "$rc" "2"
+
 echo "== guarded engine (S11/S12) =="
 # Same rule: a sandbox never has a protocol-6 helper, so the engine install
 # refuses before any download or root call, and a guarded deploy without an

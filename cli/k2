@@ -7015,11 +7015,23 @@ The box (Linux):
                                        v2, Podman 5+, pasta, crun/youki, the k2app
                                        user and its ids, linger, delegation,
                                        io.cost, reserved ports, nft, helper.
-  k2 app box prepare [--runtime crun|youki] [--json]
+  k2 app box prepare [--runtime crun|youki] [--install-podman|--yes]
+                     [--dry-run] [--podman-from DIR] [--json]
                                        Owner: run the root helper's box prep
                                        (distro Podman + crun; youki is opt-in;
                                        AppArmor's parser where the kernel has
                                        AppArmor on, then the k2-app profile).
+                                       Ubuntu 24.04 / Debian 12 ship Podman < 5:
+                                       --install-podman (or a yes at the prompt)
+                                       installs K2's pinned Podman 5 in
+                                       /opt/k2/podman for the k2app user only;
+                                       the distro's Podman is untouched. Never
+                                       without asking. --dry-run prints every
+                                       change and changes nothing (agents may
+                                       run it). --podman-from: air-gapped, a
+                                       folder holding the pinned tarball.
+  k2 app box podman uninstall [--json] Owner: remove K2's Podman (refused while
+                                       Apps run).
   k2 app engine install [--from DIR] [--json]
                                        Owner: install/update k2-app-engine (the
                                        guarded engine, signed with the root-helper
@@ -7050,6 +7062,22 @@ for c in b.get("checks", []):
     if c.get("fix") and c.get("status") in ("fail", "warn", "unknown"):
         line += "  -> " + c["fix"]
     print(line)
+'
+}
+
+# Lane P: what box prep offers to install (stdin = the podman_install_needed refusal).
+_app_box_podman_offer() {
+    python3 -c '
+import json, sys
+e = json.load(sys.stdin).get("error", {})
+p = e.get("podman", {})
+b = p.get("bundle", {})
+print(e.get("hint", ""))
+print("  K2 Podman %s (%s), sha256-pinned:" % (b.get("version"), b.get("source")))
+print("    from   %s" % b.get("url"))
+for w in b.get("writes", []):
+    print("    writes %s" % w)
+print("    %s" % b.get("distroPodman", ""))
 '
 }
 
@@ -7108,9 +7136,36 @@ print("k2-app-engine %s installed and answering (protocol %s, runtime %s, %s)" %
 cmd_app_box() {
     case "${1:-}" in
         ""|doctor|status) shift || true; cmd_app_doctor "$@" ;;
+        podman)
+            # Lane P: k2 app box podman uninstall [--json] (owner).
+            shift
+            [ "${1:-}" = "uninstall" ] || { echo "usage: k2 app box podman uninstall [--json]" >&2; exit 2; }
+            shift
+            local json_out=0 raw
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) json_out=1; shift ;;
+                    -h|--help) _app_rt_usage; return 0 ;;
+                    *) echo "Unknown argument: $1" >&2; exit 2 ;;
+                esac
+            done
+            raw="$(K2_CP_MAX_TIME=300 _compute_send POST /cli/app/box/podman/uninstall '{}')"
+            _compute_split "$raw"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+r = json.load(sys.stdin).get("result", {})
+gone = r.get("removed") or []
+print("K2 Podman removed: " + (", ".join(gone) if gone else "nothing was installed"))
+for k in r.get("kept") or []:
+    print("  kept " + k)
+print("The distro Podman is as it was.")'
+            fi
+            ;;
         prepare)
             shift
-            local runtime="" json_out=0 cores="" mem="" tasks=""
+            local runtime="" json_out=0 cores="" mem="" tasks="" install_podman="" dry_run="" podman_from=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --runtime) runtime="${2:-}"; shift 2 ;;
@@ -7118,6 +7173,9 @@ cmd_app_box() {
                     --cores-mem-min) cores="${2:-}"; shift 2 ;;
                     --apps-mem-max) mem="${2:-}"; shift 2 ;;
                     --apps-tasks-max) tasks="${2:-}"; shift 2 ;;
+                    --install-podman|--yes|-y) install_podman=1; shift ;;
+                    --dry-run) dry_run=1; shift ;;
+                    --podman-from) podman_from="${2:-}"; shift 2 ;;
                     --json) json_out=1; shift ;;
                     -h|--help) _app_rt_usage; return 0 ;;
                     *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -7128,12 +7186,59 @@ cmd_app_box() {
             for n in "$cores" "$mem" "$tasks"; do
                 case "$n" in ""|*[!0-9]*) [ -z "$n" ] || { echo "sizes are plain numbers (MiB, tasks)" >&2; exit 2; } ;; esac
             done
+            [ -n "$podman_from" ] && { podman_from="$(_app_rt_abs "$podman_from")"; install_podman=1; }
             local body raw
             body="$(_compute_json K2_CJ_runtime="$runtime" K2_CJ_coresMemMinMib_n="$cores" \
-                K2_CJ_appsMemMaxMib_n="$mem" K2_CJ_appsTasksMax_n="$tasks")"
+                K2_CJ_appsMemMaxMib_n="$mem" K2_CJ_appsTasksMax_n="$tasks" \
+                K2_CJ_installPodman_b="$install_podman" K2_CJ_dryRun_b="$dry_run" K2_CJ_podmanFrom="$podman_from")"
             raw="$(K2_CP_MAX_TIME=900 _compute_send POST /cli/app/box/prepare "$body")"
             _compute_split "$raw"
+            # Lane P: Podman < 5 on Ubuntu 24.04 / Debian 12. Ask a person at
+            # a terminal; scripts and agents pass --install-podman (or --yes).
+            if [ "$_CP_STATUS" = "409" ] && [ "$json_out" != 1 ] && [ -z "$install_podman" ] \
+                && [ -t 0 ] && [ -t 1 ] \
+                && printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("error",{}).get("code")=="podman_install_needed" else 1)' 2>/dev/null; then
+                printf '%s' "$_CP_BODY" | _app_box_podman_offer
+                local yn=""
+                printf 'Install it now? [y/N] '
+                read -r yn || yn=""
+                case "$yn" in
+                    y|Y|yes|YES)
+                        body="$(_compute_json K2_CJ_runtime="$runtime" K2_CJ_coresMemMinMib_n="$cores" \
+                            K2_CJ_appsMemMaxMib_n="$mem" K2_CJ_appsTasksMax_n="$tasks" K2_CJ_installPodman_b=1)"
+                        raw="$(K2_CP_MAX_TIME=900 _compute_send POST /cli/app/box/prepare "$body")"
+                        _compute_split "$raw"
+                        ;;
+                    *) echo "Nothing changed." >&2; exit 2 ;;
+                esac
+            fi
             if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; fi
+            if [ "$_CP_STATUS" = "200" ] && [ -n "$dry_run" ] && [ "$json_out" != 1 ]; then
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+p = v.get("podman", {})
+print("Dry run: nothing changed.")
+a = p.get("action")
+if a == "keep":
+    print("  Podman %s (%s): nothing to install" % (p.get("have"), p.get("source")))
+elif a == "distro":
+    print("  Podman %s: %s" % (p.get("have") or "none", p.get("note", "")))
+else:
+    b = p.get("bundle", {})
+    print("  Podman %s on %s: %s K2 Podman %s (%s)" % (p.get("have") or "none", p.get("os"), "would install" if a == "install" else "needs --install-podman to install", b.get("version"), b.get("source")))
+    print("    from   %s" % b.get("url"))
+    print("    sha256 %s (%s bytes)" % (b.get("sha256"), b.get("size")))
+    for w in b.get("writes", []):
+        print("    writes %s" % w)
+    print("    %s" % b.get("distroPodman", ""))
+print("Steps prepare would run:")
+for s in v.get("steps", []):
+    print("  " + s)
+'
+                printf '%s' "$_CP_BODY" | _app_box_print
+                return 0
+            fi
             if [ "$_CP_STATUS" != "200" ]; then
                 if [ "$json_out" != 1 ]; then
                     printf '%s' "$_CP_BODY" | python3 -c '
@@ -7166,7 +7271,7 @@ for s in json.load(sys.stdin).get("steps", []):
             fi
             ;;
         -h|--help) _app_rt_usage ;;
-        *) echo "Unknown: k2 app box $1 (doctor|prepare)" >&2; exit 2 ;;
+        *) echo "Unknown: k2 app box $1 (doctor|prepare|podman uninstall)" >&2; exit 2 ;;
     esac
 }
 
@@ -8117,6 +8222,17 @@ EGRESS (guarded Apps, --engine guarded)
   (k2 app egress rm) is instant. k2 app egress <app-id> shows what the
   App tried; K2 tells you when it tries a host that isn't allowed. Keys
   never go in the App: use the vault.
+
+THE BOX (Linux)
+  k2 app doctor says whether the box is ready. k2 app box prepare (the
+  owner's) sets it up through the root helper. Walled Apps need Podman 5+.
+  Ubuntu 24.04 and Debian 12 ship 4.x: prepare stops with
+  podman_install_needed. With --install-podman (or a yes at the prompt)
+  it installs K2's pinned, sha256-checked Podman 5 in /opt/k2/podman, for
+  the k2app user only. The distro's Podman is left as it is. It never
+  installs without being asked. Any agent may run
+  k2 app box prepare --dry-run to see what would change; the install is
+  your owner's call.
 
 WHO MAY
   An agent needs "Allow this agent to manage Apps" on its workspace and

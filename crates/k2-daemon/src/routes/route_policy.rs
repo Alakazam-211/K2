@@ -183,6 +183,8 @@ pub const ROUTES: &[Route] = &[
     get("/cli/app/approvals", Member),
     post("/cli/app/approve", Owner),
     get("/cli/app/box", Admin),
+    // Lane P: remove K2's Podman bundle (prepare --install-podman put it in).
+    post("/cli/app/box/podman/uninstall", Owner),
     post("/cli/app/box/prepare", Owner),
     post("/cli/app/build", Member),
     // 0.46.0 grace: clean mode on narrows (anyone, own Apps for passports);

@@ -38,6 +38,7 @@ import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { reloadZenWidget, zenPlacementKey } from '@/lib/zen/zen-custom-run'
 import { ZenFillReloadContext } from '@/lib/zen/zen-fill-reload'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
+import { ZEN_GLASS_PILL_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
 import { zenMenuLabel, zenThemeLabel, type ZenChromeItem } from '@/lib/zen/zen-page'
 import { currentDesktopOs } from '@/lib/zen/zen-platform'
 import { ZEN_CHORD_LABEL } from '@/lib/zen/zen-shortcut'
@@ -460,6 +461,7 @@ export function ZenMenu({
         data-zen-menu-button={item.id}
         data-zen-soft-button=""
         {...ZEN_GLASS_PROPS}
+        {...ZEN_GLASS_PILL_PROPS}
         onClick={() => {
           if (open) close()
           else {
@@ -494,6 +496,7 @@ export function ZenMenu({
           <div
             ref={listRef}
             role="menu"
+            {...ZEN_TILE_RAISED_PROPS}
             aria-label={label}
             data-zen-menu-list={item.id}
             data-zen-menu-panel={panel}

@@ -22,6 +22,7 @@ import { SecretCard } from '@/components/SessionView/SecretCard'
 import type { OverlayThreadItem, ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
+import { ZEN_SOLID_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
 
 import {
   CHAMFER_CUT,
@@ -441,6 +442,7 @@ export function ThreadLoadOlder({
       type="button"
       data-zen-load-older=""
       data-zen-soft-button=""
+      {...ZEN_SOLID_PROPS}
       data-chamfer=""
       data-testid={testId}
       disabled={loading}
@@ -533,6 +535,7 @@ export function ThreadComposeBox({
       {drawer}
       <div
         data-zen-compose-box=""
+        {...ZEN_TILE_RAISED_PROPS}
         data-chamfer=""
         data-stacked={stacked ? 'true' : undefined}
         className="flex items-end gap-2"
@@ -633,6 +636,7 @@ export function ThreadSendButton({
       aria-label={label}
       title={title}
       data-zen-send=""
+      {...ZEN_TILE_RAISED_PROPS}
       data-chamfer=""
       disabled={!canSend}
       onClick={onClick}
@@ -682,6 +686,7 @@ export function ThreadAttachmentChip({
   return (
     <span
       data-zen-attachment={name}
+      {...ZEN_SOLID_PROPS}
       data-chamfer=""
       title={title}
       className="inline-flex max-w-[16rem] items-center gap-1.5"

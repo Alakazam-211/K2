@@ -358,8 +358,8 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
             "postgres",
             "fail",
             if pg.is_empty() { "no PostgreSQL binaries under /usr/lib/postgresql".to_string() } else { format!("PostgreSQL {pg:?}") },
-            "install PostgreSQL 16 or newer binaries without creating a second cluster (provision-k2-server.sh --with-sew); \
-             K2 never runs apt",
+            "install PostgreSQL 16 or newer server binaries as root (the postgresql-16 package; on Ubuntu 22.04 and \
+             Debian 12 it comes from apt.postgresql.org) without creating a second cluster; K2 never runs apt",
         )),
     }
     let helper_ok = match helper_check(env) {
@@ -569,7 +569,7 @@ pub fn enable_begin<'a>(env: &Env<'a>, req: &EnableRequest) -> R<Result<Latch<'a
                 409,
                 format!(
                     "this Sew install uses identity '{had}'; it can only change with a fresh install \
-                     (k2 hostchat uninstall --purge, then k2 hostchat enable --identity {})",
+                     (k2 hostchat purge --confirm-hostname <host>, then k2 hostchat enable --identity {})",
                     req.provider()
                 ),
             ));
@@ -1856,8 +1856,8 @@ pub fn rollback_with(env: &Env, req: &RollbackRequest) -> R<Value> {
                 "rollback_refused",
                 409,
                 format!(
-                    "{}. A rollback across a schema change needs a restore: k2 hostchat backup list, then k2 hostchat backup \
-                     restore <id> --confirm",
+                    "{}. A rollback across a schema change needs a restore: list the backups with k2 hostchat backups, \
+                     then k2 hostchat restore <bundle-id> --confirm",
                     sew_message(&v)
                 ),
             ))
@@ -2033,7 +2033,7 @@ pub fn restore(env: &Env, bundle_id: &str) -> R<Value> {
         return Err(unsupported());
     }
     if !pin::bundle_id_ok(bundle_id) {
-        return Err(no("bad_request", 400, "name a backup id from k2 hostchat backup list"));
+        return Err(no("bad_request", 400, "name a backup id from k2 hostchat backups"));
     }
     let row = need_row(false)?;
     // A stopped or failed Sew is when a restore is needed most (S29 VM
@@ -2050,7 +2050,7 @@ pub fn restore(env: &Env, bundle_id: &str) -> R<Value> {
         Ok(listed) => {
             let exists = listed["backups"].as_array().is_some_and(|a| a.iter().any(|b| b["id"] == bundle_id));
             if !exists {
-                return Err(no("bundle_not_found", 404, format!("no backup '{bundle_id}' (k2 hostchat backup list)")));
+                return Err(no("bundle_not_found", 404, format!("no backup '{bundle_id}' (k2 hostchat backups)")));
             }
         }
         Err(f) if f.code == "mgmt_unreachable" => {}
@@ -2097,7 +2097,7 @@ pub fn restore(env: &Env, bundle_id: &str) -> R<Value> {
             let safety = v.pointer("/sew/safety_bundle").and_then(Value::as_str).map(|s| format!(" {s}")).unwrap_or_default();
             format!(
                 "(the restore stopped partway: Sew's data may be changed or empty; restore Sew's pre-restore safety \
-                 bundle{safety} from k2 hostchat backup list)"
+                 bundle{safety} with k2 hostchat restore <bundle-id> --confirm; k2 hostchat backups lists it)"
             )
         };
         Some(format!("sew restore: exit {exit}: {} {tail}", sew_message(&v)))

@@ -94,6 +94,23 @@ pub enum SendError {
 
 // ── The gate (D4 — fail-closed, pre-mortem #11) ─────────────────────────
 
+/// Where the owner changes a workspace's agent-send mode. Both controls
+/// exist on every OS (agent-send gates linked/BYO sends too, which run on
+/// macOS): the `k2 mail sending` owner command and the per-workspace
+/// Settings control. Every `gated` hint names them, never a hosted-only
+/// page.
+pub const AGENT_SEND_CONTROLS: &str =
+    "`k2 mail sending <workspace> on` (the owner runs it from a terminal outside a K2 \
+     agent session) or Settings → Workspaces / Agents → <workspace> → Email sending";
+
+/// The `gated` hint for a workspace whose agent-send mode is `off`.
+pub fn agent_send_off_hint() -> String {
+    format!(
+        "outbound email is disabled for this workspace. Your human can turn it on with \
+         {AGENT_SEND_CONTROLS}"
+    )
+}
+
 /// The effective send gate for one request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gate {
@@ -113,7 +130,8 @@ pub fn effective_gate(mode: Result<String, String>) -> Result<Gate, SendError> {
         Ok(m) if m == "on" => Ok(Gate::On),
         Ok(other) => Err(SendError::Engine(format!(
             "unrecognized send-gating mode '{other}' — refusing to send (fail-closed); \
-             fix the setting in Settings → Email → Sending"
+             your human can reset it with `k2 mail sending <workspace> off|approval|on` or \
+             Settings → Workspaces / Agents → <workspace> → Email sending"
         ))),
         Err(e) => Err(SendError::Engine(format!(
             "could not read the send-gating setting — refusing to send (fail-closed): {e}"
@@ -138,18 +156,12 @@ pub fn gate_for_path(project_path: &str) -> Result<Gate, SendError> {
 pub fn allow_linked_send(gate: Gate) -> Result<(), SendError> {
     match gate {
         Gate::On => Ok(()),
-        Gate::Off => Err(SendError::Gated(
-            "outbound email is disabled for this workspace. Your human can enable it in \
-             Settings → Email → Sending"
-                .to_string(),
-        )),
-        Gate::Approval => Err(SendError::Gated(
+        Gate::Off => Err(SendError::Gated(agent_send_off_hint())),
+        Gate::Approval => Err(SendError::Gated(format!(
             "outbound email requires approval for this workspace, but the approval queue \
              only covers hosted K2 mailboxes — linked/BYO send needs mode 'on'. Your human \
-             can set Sending to 'on' in Settings → Email → Sending, or send from a hosted \
-             address"
-                .to_string(),
-        )),
+             can set it with {AGENT_SEND_CONTROLS}, or send from a hosted address"
+        ))),
     }
 }
 
@@ -997,11 +1009,7 @@ pub fn gate_and_dispatch(
     check_rate_limits(store, &req.message.from, now)?;
     let future_after = req.send_after.filter(|t| *t > now);
     match gate {
-        Gate::Off => Err(SendError::Gated(
-            "outbound email is disabled for this workspace. Your human can enable it in \
-             Settings → Email → Sending"
-                .to_string(),
-        )),
+        Gate::Off => Err(SendError::Gated(agent_send_off_hint())),
         Gate::Approval => {
             let id = store
                 .insert(&NewOutbound {
@@ -1476,7 +1484,11 @@ mod tests {
         match err {
             SendError::Gated(h) => {
                 assert!(h.contains("disabled"), "{h}");
-                assert!(h.contains("Settings → Email → Sending"), "{h}");
+                // Names controls that exist on every OS — never the
+                // hosted-only Email page (Appa/Baden, macOS 0.45.4).
+                assert!(h.contains("`k2 mail sending <workspace> on`"), "{h}");
+                assert!(h.contains("Workspaces / Agents → <workspace> → Email sending"), "{h}");
+                assert!(!h.contains("Settings → Email → Sending"), "{h}");
             }
             other => panic!("expected Gated, got {other:?}"),
         }
@@ -1490,6 +1502,8 @@ mod tests {
                     h.contains("linked") || h.contains("BYO") || h.contains("'on'"),
                     "{h}"
                 );
+                assert!(h.contains("`k2 mail sending <workspace> on`"), "{h}");
+                assert!(!h.contains("Settings → Email → Sending"), "{h}");
             }
             other => panic!("expected Gated, got {other:?}"),
         }

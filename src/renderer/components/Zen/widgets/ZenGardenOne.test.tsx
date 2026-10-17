@@ -426,7 +426,7 @@ describe('the activity drawer (`activity-drawer`)', () => {
     expect([svg.getAttribute('data-cols'), svg.querySelectorAll('rect').length]).toEqual(['2', 6])
     // Sized in em of the count (follows the text size): the grid's ink
     // (14 of its 24 units tall, 9 wide) is ~1px over the digits' 0.72em at
-    // 12px, with 1px between it and the count.
+    // 12px, with 2px between it and the count.
     expect([svg.getAttribute('width'), svg.getAttribute('height')]).toEqual([
       `${Number(((COUNTER_SPINNER_SVG_EM * 19) / 24).toFixed(3))}em`,
       `${COUNTER_SPINNER_SVG_EM}em`,
@@ -439,7 +439,7 @@ describe('the activity drawer (`activity-drawer`)', () => {
     expect([spinner.style.width, spinner.style.height, spinner.style.marginRight]).toEqual([
       `${COUNTER_SPINNER_EM}em`,
       '1em',
-      '1px',
+      '2px',
     ])
     expect(document.querySelector('[data-zen-drawer] .zen-braille, [data-zen-drawer] .braille-spinner')).toBeNull()
     expect(el('[data-zen-drawer-count="subagents"]').textContent).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)

@@ -100,6 +100,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - `k2 workspace create` makes missing parent folders instead of failing.
 - External Data answers with one confirm code: anything that needs your Touch ID or password says `vault_confirm_required` (a 0.45.x server's `confirm_required` is still understood).
 - Help reads its glossary from the server shown in the top bar.
+- Each Chatter line now carries its message's delivery id, so `k2 msg who` can look up who sent it.
 - A closed drawer's arrow has the same dividing line as the tabs next to it.
 - Closing a drawer or the project chat no longer flickers open for a frame.
 - Home and Agents each remember their own selected agent, and moving to Home or Agents follows your workspace-switch focus setting (the Thread's message box first).

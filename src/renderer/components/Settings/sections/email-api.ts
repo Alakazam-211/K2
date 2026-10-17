@@ -440,7 +440,7 @@ export interface MissingCapability {
   /** `mail.send`, `calendar.read`, `calendar.write`, … */
   cap: string
   /** `level` | `scope_not_granted` | `owner_disabled` |
-   *  `backend_unsupported` | `not_built` */
+   *  `backend_unsupported` | `not_built` (invites only since MCS4) */
   reason: string
   fix: string
 }
@@ -629,11 +629,17 @@ export async function linkOauthStart(args: {
 
 /** POST /cli/mail/link/oauth/start `{inbox, features}` — MCS1's in-place
  *  re-consent of an EXISTING OAuth link for more features (same row,
- *  grants and ids). Microsoft answers a device flow; poll
+ *  grants and ids). Microsoft answers a device flow; Google (MCS4) a
+ *  client-capture loopback flow when `clientCapture` + `redirectUri` are
+ *  passed (Google incremental consent, `include_granted_scopes`). Poll
  *  {@link linkOauthStatus} like a new link. Owner-gated. */
 export async function linkOauthUpgrade(args: {
   inbox: string
-  features: 'calendar' | 'mail,calendar'
+  features: 'calendar' | 'mail' | 'mail,calendar'
+  /** Google: the desktop client binds the loopback and relays the code. */
+  clientCapture?: boolean
+  /** `http://127.0.0.1:<port>/cb` from `oauth_loopback_bind`. */
+  redirectUri?: string
 }): Promise<OauthStartResult> {
   return daemonCliPost(primaryScope(), 'mail/link/oauth/start', args)
 }

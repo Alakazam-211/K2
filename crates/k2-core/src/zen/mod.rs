@@ -42,6 +42,7 @@
 //! ([`TEMPLATES`]) and returned as the resolved page's layout, widgets and
 //! controls.
 
+pub mod agent_edit;
 pub mod builtin_widgets;
 pub mod bundle;
 pub mod defaults;

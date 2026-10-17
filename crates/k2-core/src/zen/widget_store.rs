@@ -199,7 +199,7 @@ impl ZenFiles {
     }
 
     /// A user widget name (a folder), or 400.
-    fn user_widget_name(&self, name: &str) -> Result<String, ZenError> {
+    pub(crate) fn user_widget_name(&self, name: &str) -> Result<String, ZenError> {
         match parse_widget_ref(name.trim()) {
             Ok(WidgetRef::User(n)) => Ok(n),
             Ok(WidgetRef::Builtin { .. }) => Err(ZenError::BadRequest(format!(

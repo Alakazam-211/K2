@@ -753,7 +753,7 @@ fn packages_install_uses_the_distro_and_gates_on_podman_5_with_pasta() {
         calls_of(&t, ENV),
         vec![
             "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get update -q".to_string(),
-            "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -q --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold podman crun passt uidmap dbus-user-session skopeo catatonit".to_string(),
+            "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -q --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold podman crun passt uidmap dbus-user-session skopeo catatonit nftables".to_string(),
         ]
     );
 
@@ -816,7 +816,7 @@ fn apparmor_install_effect(t: &T, prog: &str) {
     ));
 }
 
-const APT_INSTALL: &str = "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -q --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold podman crun passt uidmap dbus-user-session skopeo catatonit";
+const APT_INSTALL: &str = "DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y -q --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold podman crun passt uidmap dbus-user-session skopeo catatonit nftables";
 
 #[test]
 fn packages_install_adds_apparmor_when_the_kernel_has_it_and_the_parser_is_missing() {

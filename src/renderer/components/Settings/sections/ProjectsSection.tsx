@@ -107,6 +107,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Allow this agent to operate compute nodes', description: 'Lets this workspace\'s agent pause, drain, resume, narrow, update and restart services on your compute machines without asking each time; root actions still wait for you (k2 compute operate)', keywords: ['agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Manage K2 projects', description: 'Lets this workspace\'s agent create, rename and delete K2 projects and add or remove their members (k2 project); on by default. Off: it can still read projects and post in its project chat', keywords: ['agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-gardens', section: 'projects', label: 'Manage Gardens and data sources', description: 'Lets this workspace\'s agent approve data sources, bind secrets it may already use, pause, pin, enable triggers and edit Gardens and widgets with no confirm (k2 sources, k2 zen); every act is logged. Off: it proposes and you approve', keywords: ['agents_can_manage_gardens', 'gardens_manage', 'gardens', 'garden', 'zen', 'widgets', 'data sources', 'sources', 'triggers', 'approve', 'k2 sources', 'k2 zen', 'passport', 'agent'] },
+  { id: 'projects.mail-agent-send', section: 'projects', label: 'Let this agent send email', description: 'Per-workspace agent send mode (off, approval, on) for hosted and linked inboxes; same as k2 mail sending', keywords: ['mail_agent_send', 'agent send', 'sending', 'send', 'email', 'mail', 'gmail', 'linked', 'gated', 'approval', 'outbound'] },
   { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Allow agents to manage hosted mail on this host', description: 'Per-workspace passport for k2 hostmail enable/disable and domain list/add/check (uninstall, domain remove, OAuth, access stay owner)', keywords: ['mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
 ]
 
@@ -1387,6 +1388,9 @@ function ProjectDetail({
             <SettingsGroup title="DNS">
               <DnsManageToggle project={project} fetchProjects={fetchProjects} />
             </SettingsGroup>
+            <SettingsGroup title="Email sending">
+              <MailAgentSendControl project={project} />
+            </SettingsGroup>
             <SettingsGroup title="Hosted mail">
               <MailManageToggle project={project} />
             </SettingsGroup>
@@ -2508,6 +2512,101 @@ export function AgentsManageGardensToggle({
             Locked Gardens stay yours.
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// Per-workspace agent-send mode (`projects.mail_agent_send`): may this
+// workspace's agents SEND email, from hosted AND linked inboxes. Every OS
+// (linked sends run on macOS too). The daemon owns the value: read via
+// GET /cli/mail/config?workspace=, written via POST /cli/mail/config/set
+// `{workspace, agentSend}` (Admin floor; the agent's own session is
+// refused server-side). Same switch as `k2 mail sending <ws> <mode>`.
+// Not on the projects row, so no fetchProjects() here.
+type MailAgentSendMode = 'off' | 'approval' | 'on'
+
+function MailAgentSendControl({
+  project,
+}: {
+  project: ProjectWithWorkspaces
+}): React.JSX.Element {
+  const [mode, setMode] = useState<MailAgentSendMode | null>(null)
+  const [inherited, setInherited] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    daemonCliGet<{
+      workspace?: { agentSend?: { effective?: string; override?: string | null } }
+    }>(primaryScope(), 'mail/config', { workspace: project.path })
+      .then((d) => {
+        if (cancelled) return
+        const eff = d.workspace?.agentSend?.effective
+        setMode(eff === 'on' || eff === 'approval' ? eff : 'off')
+        setInherited(d.workspace?.agentSend?.override == null)
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [project.path])
+
+  const change = async (next: string): Promise<void> => {
+    if (busy || (next !== 'off' && next !== 'approval' && next !== 'on')) return
+    const before = mode
+    const beforeInherited = inherited
+    setBusy(true)
+    setError(null)
+    setMode(next)
+    setInherited(false)
+    try {
+      await daemonCliPost(primaryScope(), 'mail/config/set', {
+        workspace: project.path,
+        agentSend: next,
+      })
+    } catch (err) {
+      setMode(before)
+      setInherited(beforeInherited)
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="border border-[var(--color-border)] p-3" data-settings-id="projects.mail-agent-send">
+      <div className="flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+            Let this agent send email
+          </div>
+          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+            Covers hosted K2 mailboxes and linked inboxes (Gmail, Outlook, IMAP). The inbox
+            level (send) picks which inbox; this picks whether the agent may send at all.
+            Approval queues hosted mailboxes only: a linked inbox needs On. Same as{' '}
+            <span className="font-mono">k2 mail sending &lt;workspace&gt; on</span>.
+            {inherited && mode !== null ? ' Using the server default.' : ''}
+          </div>
+          {error && (
+            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1">{error}</div>
+          )}
+        </div>
+        <SettingDropdown
+          ariaLabel="Agent email sending"
+          value={mode ?? ''}
+          placeholder="…"
+          disabled={busy || mode === null}
+          onChange={(v) => void change(v)}
+          options={[
+            { value: 'off', label: 'Off' },
+            { value: 'approval', label: 'Approval' },
+            { value: 'on', label: 'On' },
+          ]}
+        />
       </div>
     </div>
   )

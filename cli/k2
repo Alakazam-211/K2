@@ -38698,6 +38698,36 @@ elif verb == "config_set":
     else:
         print(d.get("hint") or "mail config updated.")
 
+elif verb in ("sending_get", "sending_set"):
+    # `k2 mail sending <ws> [off|approval|on]` — the per-workspace
+    # agent-send mode. Same daemon route + owner gate as
+    # `k2 hostmail config --workspace <ws> --agent-send`, but works on
+    # every OS (it gates linked/BYO sends, which run on macOS too).
+    ws = env("M_WORKSPACE")
+    if verb == "sending_set":
+        call("POST", "/cli/mail/config/set",
+             body={"workspace": ws, "agentSend": env("M_AGENT_SEND")})
+    d = call("GET", "/cli/mail/config", params={"workspace": ws})
+    w = d.get("workspace") or {}
+    a = w.get("agentSend") or {}
+    if as_json:
+        print(dumps({"ok": True, "workspace": ws, "project": w.get("project"),
+                     "agentSend": a.get("effective"), "override": a.get("override"),
+                     "default": a.get("default"), "changed": verb == "sending_set"}))
+    else:
+        eff = a.get("effective") or "?"
+        src = "set for this workspace" if a.get("override") is not None \
+            else "server default"
+        lead = "agent email sending for %s is now %s" if verb == "sending_set" \
+            else "agent email sending for %s: %s"
+        print((lead % (ws, eff)) + " (%s)" % src)
+        if eff == "approval":
+            print("note: approval queues hosted K2 mailboxes only; a linked inbox "
+                  "(Gmail, Outlook, IMAP) needs 'on' to send")
+        elif eff == "off":
+            print("agents in this workspace can't send email. Turn it on with: "
+                  "k2 mail sending %s on" % ws)
+
 elif verb == "approvals_list":
     d = call("GET", "/cli/mail/approvals/list")
     rows = d.get("pending") or []
@@ -40891,6 +40921,46 @@ cmd_mail_config() {
           M_ADDRESS_CAP="$address_cap" M_QUOTA_BYTES="$quota_bytes" M_QUOTA_GB="$quota_gb" \
           M_QUOTA_MESSAGES="$quota_messages" M_WORKSPACE="$workspace" \
           M_ALWAYS_BCC="$always_bcc" M_ALWAYS_BCC_SET="$always_bcc_set"
+    _mail_py
+}
+
+# `k2 mail sending <workspace> [off|approval|on]` — show or set whether a
+# workspace's agents may send email (hosted AND linked inboxes). Owner/
+# admin verb on every OS; the daemon refuses an agent changing its own
+# workspace (owner_only) and agents without mail-manage.
+cmd_mail_sending() {
+    if _wants_help "$@"; then cmd_help_mail_sending; exit 0; fi
+    local workspace="" mode="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — see k2 mail sending --help"
+                exit 2 ;;
+            *)
+                if [ -z "$workspace" ]; then workspace="$1"
+                elif [ -z "$mode" ]; then mode="$1"
+                else
+                    _mail_err "usage" "unexpected extra argument '$1' — usage: k2 mail sending <workspace> [off|approval|on]"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$workspace" ]; then
+        _mail_err "usage" "missing <workspace> — usage: k2 mail sending <workspace> [off|approval|on]"
+        exit 2
+    fi
+    local verb="sending_get"
+    if [ -n "$mode" ]; then
+        case "$mode" in
+            off|approval|on) verb="sending_set" ;;
+            *)
+                _mail_err "usage" "invalid mode '$mode' — valid: off, approval, on"
+                exit 2 ;;
+        esac
+    fi
+    local M_VERB="$verb" M_JSON="$as_json" M_WORKSPACE="$workspace" M_AGENT_SEND="$mode"
     _mail_py
 }
 
@@ -44785,6 +44855,9 @@ CONNECT & SHARE
   access grant|revoke|primary|level|manage
                               Manage who can use an inbox (read < draft < send) and
                               the canManage/canDelete caps — PRIMARY/owner surface
+  sending <workspace> [off|approval|on]
+                              Show or set whether a workspace's agents may SEND
+                              (hosted and linked inboxes; every OS). Owner/admin
 
 SERVER ADMIN → k2 hostmail
   status · enable · disable · rotate-admin · password rotate · domain · create · delete · doctor · config · approvals · catchall · alias · forward
@@ -45259,6 +45332,49 @@ FLAGS
                          workspaceOverrides[].alwaysBcc in `k2 hostmail
                          config`. Needs --workspace.
   --json                 JSON output
+
+Per-workspace --agent-send (and --always-bcc) also work on macOS — they
+gate linked inboxes too. `k2 mail sending <ws> [off|approval|on]` is the
+short form for agent-send.
+EOF
+}
+
+cmd_help_mail_sending() {
+    cat <<'EOF'
+Show or set whether a workspace's agents may SEND email — from hosted K2
+mailboxes and from linked inboxes (Gmail, Outlook, IMAP) alike. This is
+the switch behind the `gated` error on `k2 mail send` / `k2 mail reply`.
+The inbox LEVEL (`k2 mail access level`) says which inbox an agent may
+use; this mode says whether that workspace may send at all. Works on
+every OS (macOS included).
+
+Owner/admin verb. Run it from a terminal outside a K2 agent session. An
+agent can't change its own workspace (exit 3 owner_only); an agent whose
+workspace may manage hosted mail may set it for OTHER workspaces; other
+agents exit 3. Member logins are refused (Admin floor).
+
+Same setting as `k2 hostmail config --workspace <ws> --agent-send <m>`,
+and as Settings → Workspaces / Agents → <workspace> → Email sending.
+
+USAGE
+  k2 mail sending <workspace>                   Show the mode
+  k2 mail sending <workspace> off|approval|on   Set it
+
+MODES
+  off        Agents can't send (the default)
+  approval   Hosted sends wait in `k2 hostmail approvals`. Linked inboxes
+             have no approval queue: they need 'on' to send
+  on         Agents send under the owner's rules (always-BCC, limits)
+
+ARGUMENTS
+  <workspace>            Workspace name, path or UUID
+
+FLAGS
+  --json                 JSON output
+
+EXAMPLES
+  k2 mail sending appa
+  k2 mail sending appa on
 EOF
 }
 
@@ -54644,6 +54760,8 @@ case "${1:-help}" in
             # and the unified per-workspace access surface.
             link)        shift 2; cmd_mail_link "$@" ;;
             access)      shift 2; cmd_mail_access "$@" ;;
+            # Owner/admin: per-workspace agent-send mode (every OS).
+            sending)     shift 2; cmd_mail_sending "$@" ;;
             # Back-compat: `mail external` → `mail link`.
             external)    shift 2; cmd_mail_external "$@" ;;
             # Owner/hosting verbs moved to `k2 hostmail` — redirect.

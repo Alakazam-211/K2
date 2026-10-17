@@ -7,9 +7,11 @@ import { invoke } from '@tauri-apps/api/core'
 // invoke (host-only, out of scope).
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
-import { useRoom, useRoomProjects, useRoomTabs } from '@/components/Room/RoomContext'
+import { useRoom, useRoomProjects, useRoomSupports, useRoomTabs } from '@/components/Room/RoomContext'
 import { parseTrayList } from '@/components/AgentPane/inbox-browser'
 import { usePageViewStore } from '@/stores/page-view'
+import { openWikiOnRoomServer } from '@/lib/room-wiki-open'
+import { isWebClient } from '@/lib/is-web'
 import { showContextMenu } from '@/lib/context-menu'
 import WorktreeDialog from '@/components/Sidebar/WorktreeDialog'
 import { HeartbeatsPanel } from '@/components/HeartbeatsPanel/HeartbeatsPanel'
@@ -43,6 +45,12 @@ export default function WorkspacePanel(): React.JSX.Element {
     return id ? projects.find((p) => p.id === id) ?? null : null
   }, [room]))
   const openAgentPane = useRoomTabs((s) => s.openAgentPane)
+  // View Wiki: the Wiki page reads the window's server. A room on another
+  // server switches the window there first (0.46.0, `lib/room-wiki-open.ts`),
+  // so that server must have the wiki routes, and the web client (no
+  // switcher) does not offer it.
+  const roomHasWiki = useRoomSupports('wiki')
+  const showWiki = room.isPrimary || (roomHasWiki && !isWebClient())
 
   // Worktrees section collapse state, persisted per-workspace.
   // Default OPEN — worktrees are the action surface for review work,
@@ -128,14 +136,20 @@ export default function WorkspacePanel(): React.JSX.Element {
       <div className="flex-shrink-0 px-3 py-2 border-b border-[var(--color-border)]">
         <div className="flex items-center gap-1.5" data-testid="workspace-panel-header">
           {/* Workspace knowledge base / brain map (prd-workspace-kb). The Wiki
-              page reads the window's server, so a room on another server
-              does not offer it (MS3: B's path means nothing on A). */}
-          {room.isPrimary && (
+              page reads the window's server (MS3: B's path means nothing on
+              A), so in a room on another server the click switches the
+              window to that server, then opens this workspace's Wiki. */}
+          {showWiki && (
             <button
               type="button"
               className="flex items-center gap-1.5 px-2 py-1 hover:bg-[var(--color-bg-elevated)] transition-colors cursor-pointer no-drag"
-              onClick={() => usePageViewStore.getState().openWiki(activeProject.path)}
-              title="Open the workspace knowledge base graph"
+              onClick={() => {
+                if (room.isPrimary) usePageViewStore.getState().openWiki(activeProject.path)
+                else openWikiOnRoomServer(room.scope.hostKey, activeProject)
+              }}
+              title={room.isPrimary
+                ? 'Open the workspace knowledge base graph'
+                : `Switch this window to ${room.scope.label} and open the workspace knowledge base graph`}
             >
               <svg className="w-3 h-3 text-[var(--color-accent)] flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="6" cy="6" r="2.5" />

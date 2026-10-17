@@ -133,6 +133,11 @@ export const FEATURES = {
    *  above this (an older server refuses the unknown cap). Confirm at the
    *  release cut. */
   'agent-config-write': '0.45.6',
+  /** GET /cli/wiki/index + /cli/wiki/note — the Wiki page's routes (first
+   *  shipped in 0.40.47, `c3153b1d5`). Gates the Workspace tab's View Wiki
+   *  in a room on another server (0.46.0): it switches the window there,
+   *  so that server must have the routes. Local is always true. */
+  wiki: '0.40.47',
 } as const
 
 export type FeatureKey = keyof typeof FEATURES

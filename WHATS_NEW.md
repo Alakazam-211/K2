@@ -3,6 +3,12 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.1
+
+### Remote switch
+- **People who log in can always message any agent.** The owner, Admins and Members can message every agent from its Thread or the terminal composer, whatever its remote switch says. The switch is now **Let agents on other servers message this agent** (and, for all agents at once, **Let agents on other servers message every agent** in Settings → K2 Connect): off means connected servers don't see the agent and their agents can't message it.
+- Fixed: an agent was shown to other servers whenever 'Allow agents to create connections' was on. Now only 'Let agents on other servers message this agent' (or the master in Settings → K2 Connect) makes it visible. If a connected server's link to one of your agents stops working after updating, turn that switch on.
+
 ## 0.46.0 — Runtime for Apps
 
 **Getting your Apps ready for 0.46.1 (nothing is taken away yet)**

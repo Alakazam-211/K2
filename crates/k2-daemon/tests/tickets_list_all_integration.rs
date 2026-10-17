@@ -307,6 +307,61 @@ async fn waiting_count_counts_needs_discussion_and_me_scopes_to_the_login() {
     });
 }
 
+/// 0.46.0 smoke (Rosson on z3mbpZ): a ticket assigned to `z3thon`, the
+/// Connect login he linked as "This is me (owner)", must be "Waiting on
+/// me" for the owner token. Unlinked, the owner counts only `owner`
+/// assignments. Linked, the owner token AND the `z3thon` session count it,
+/// and whoami's `ticketMe` (the board's "me") carries the same names.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owner_linked_account_tickets_are_waiting_on_the_owner() {
+    let _g = lock();
+    with_temp_home(|| {
+        k2_core::app_settings::update(serde_json::json!({ "ownerDisplayName": "Rosson Link" }))
+            .expect("set owner display name");
+        connect_users::add_user("tlbz3thon", "password123").expect("add_user");
+        let linked = connect_users::create_session("tlbz3thon");
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+
+        let read = |tok: &str| -> i64 {
+            let r = http(d.port, "GET", &format!("/cli/feedback/waiting-count?me=1&token={tok}"), None);
+            assert_eq!(r.status, 200, "waiting-count; body={}", r.body);
+            let v = json(&r.body);
+            assert_eq!(v["scope"], serde_json::json!("me"), "{}", r.body);
+            v["count"].as_i64().unwrap_or_else(|| panic!("count must be a number: {}", r.body))
+        };
+        let ticket_me = |tok: &str| -> serde_json::Value {
+            let r = http(d.port, "GET", &format!("/cli/auth/whoami?token={tok}"), None);
+            assert_eq!(r.status, 200, "whoami; body={}", r.body);
+            json(&r.body)["ticketMe"].clone()
+        };
+
+        // Unlinked: the owner is `owner` + display name; z3thon is z3thon.
+        assert_eq!(ticket_me(OWNER_TOKEN), serde_json::json!(["owner", "rosson link"]));
+        assert_eq!(ticket_me(linked.as_str()), serde_json::json!(["tlbz3thon"]));
+        let owner_before = read(OWNER_TOKEN);
+        let linked_before = read(linked.as_str());
+        seed_linked_ticket("assigned to the linked login", "waiting", &["TLBz3thon "]);
+        seed_linked_ticket("assigned to owner", "needs_discussion", &["owner"]);
+        assert_eq!(read(OWNER_TOKEN) - owner_before, 1, "unlinked owner: only the `owner` ticket");
+        assert_eq!(read(linked.as_str()) - linked_before, 1, "unlinked z3thon: only their own ticket");
+
+        // Link z3thon as the owner (Settings → People → "This is me (owner)").
+        let r = http(
+            d.port,
+            "POST",
+            &format!("/cli/owner/accounts?token={OWNER_TOKEN}"),
+            Some(r#"{"accounts":["tlbz3thon"]}"#),
+        );
+        assert_eq!(r.status, 200, "link owner account; body={}", r.body);
+
+        let both = serde_json::json!(["owner", "rosson link", "tlbz3thon"]);
+        assert_eq!(ticket_me(OWNER_TOKEN), both, "owner token: owner + display + linked");
+        assert_eq!(ticket_me(linked.as_str()), both, "linked login: the same person");
+        assert_eq!(read(OWNER_TOKEN) - owner_before, 2, "linked owner: both tickets");
+        assert_eq!(read(linked.as_str()) - linked_before, 2, "linked login: both tickets");
+    });
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_passport_is_refused_waiting_count() {
     let _g = lock();

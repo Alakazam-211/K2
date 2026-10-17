@@ -162,32 +162,59 @@ pub fn handle_show_gated(params: &HashMap<String, String>, skin: Option<SkinPass
 
 // ── Tickets badge count ───────────────────────────────────────────────
 
-/// The assignee names that mean "me" for a login, mirroring the
-/// renderer's `myAssigneeNames` (Feedback/feedback-api.ts): the owner is
-/// the wire literal `owner` plus the owner's display name (agents may
-/// assign the owner by that name); a Connect user is their username.
+/// The assignee names that mean "me" for a login — the ONE definition the
+/// waiting-count badge (`me=1`) and the Tickets board (`ticketMe` on
+/// `GET /cli/auth/whoami`, read by `useTicketMe`) share, so they cannot
+/// drift. Uses the person-key rules of [`k2_core::notify_prefs::People`]:
+/// - the owner token, or a Connect login that is the owner person (linked
+///   via "This is me (owner)" / `ownerAccounts`, or the sole Owner-role
+///   login) → the wire literal `owner`, the owner's display name (agents
+///   may assign the owner by that name), every owner-linked account name,
+///   every Connect login that resolves to the owner, and the caller's own
+///   username;
+/// - any other Connect user → their username.
+///
 /// Lower-cased and trimmed, no duplicates, no blanks.
 pub fn my_assignee_names(
     owner: bool,
     username: Option<&str>,
     owner_display_name: Option<&str>,
+    people: &k2_core::notify_prefs::People,
 ) -> Vec<String> {
+    let user = username.map(str::trim).filter(|u| !u.is_empty());
+    let owner_person =
+        owner || user.is_some_and(|u| people.person_key(u) == k2_core::notify_prefs::OWNER);
     let mut names: Vec<String> = Vec::new();
-    if owner {
-        names.push("owner".to_string());
+    if owner_person {
+        names.push(k2_core::notify_prefs::OWNER.to_string());
         if let Some(display) = owner_display_name.map(str::trim).filter(|d| !d.is_empty()) {
             names.push(display.to_string());
         }
-    } else if let Some(user) = username.map(str::trim).filter(|u| !u.is_empty()) {
+        names.extend(people.linked.iter().map(|l| l.trim().to_string()));
+        names.extend(people.owner_aliases());
+    }
+    if let Some(user) = user {
         names.push(user.to_string());
     }
     let mut out: Vec<String> = Vec::new();
-    for n in names.into_iter().map(|n| n.to_lowercase()) {
-        if !out.contains(&n) {
+    for n in names.into_iter().map(|n| n.trim().to_lowercase()) {
+        if !n.is_empty() && !out.contains(&n) {
             out.push(n);
         }
     }
     out
+}
+
+/// [`my_assignee_names`] with the live People (`connect-users.json` +
+/// `ownerAccounts`) and owner display name. Blocking file reads — call it
+/// off the async runtime where it matters.
+pub fn my_assignee_names_now(owner: bool, username: Option<&str>) -> Vec<String> {
+    let settings = k2_core::app_settings::load();
+    let people = k2_core::notify_prefs::People::load().unwrap_or_else(|e| {
+        eprintln!("[feedback] people load failed; me = linked accounts only: {e}");
+        k2_core::notify_prefs::People { users: Vec::new(), linked: settings.owner_accounts.clone() }
+    });
+    my_assignee_names(owner, username, settings.owner_display_name.as_deref(), &people)
 }
 
 /// `GET /cli/feedback/waiting-count[?me=1]` — the Tickets badge.
@@ -210,19 +237,58 @@ pub fn handle_waiting_count(me: Option<Vec<String>>) -> CliResponse {
 #[cfg(test)]
 mod badge_me_tests {
     use super::my_assignee_names;
+    use k2_core::connect_users::{ConnectUserView, Role};
+    use k2_core::notify_prefs::People;
 
-    /// Same cases as the renderer's `myAssigneeNames` tests.
+    fn user(name: &str, role: Role) -> ConnectUserView {
+        ConnectUserView {
+            username: name.to_string(),
+            created_at: chrono::Utc::now(),
+            disabled: false,
+            role,
+            was_viewer: false,
+            can_clone: true,
+        }
+    }
+
+    /// Same cases as the renderer's `myAssigneeNames` tests (no links).
     #[test]
     fn my_assignee_names_mirrors_the_renderer() {
-        assert_eq!(my_assignee_names(true, None, Some(" Rosson ")), vec!["owner", "rosson"]);
-        assert_eq!(my_assignee_names(true, None, Some("   ")), vec!["owner"]);
-        assert_eq!(my_assignee_names(true, None, None), vec!["owner"]);
+        let none = People::default();
+        assert_eq!(my_assignee_names(true, None, Some(" Rosson "), &none), vec!["owner", "rosson"]);
+        assert_eq!(my_assignee_names(true, None, Some("   "), &none), vec!["owner"]);
+        assert_eq!(my_assignee_names(true, None, None, &none), vec!["owner"]);
         // Display name "Owner" folds into the wire literal: one entry.
-        assert_eq!(my_assignee_names(true, None, Some("Owner")), vec!["owner"]);
+        assert_eq!(my_assignee_names(true, None, Some("Owner"), &none), vec!["owner"]);
         // A Connect user is their username; the owner display name is not theirs.
-        assert_eq!(my_assignee_names(false, Some(" Julie "), Some("Rosson")), vec!["julie"]);
-        assert!(my_assignee_names(false, None, Some("Rosson")).is_empty());
-        assert!(my_assignee_names(false, Some("  "), None).is_empty());
+        assert_eq!(my_assignee_names(false, Some(" Julie "), Some("Rosson"), &none), vec!["julie"]);
+        assert!(my_assignee_names(false, None, Some("Rosson"), &none).is_empty());
+        assert!(my_assignee_names(false, Some("  "), None, &none).is_empty());
+    }
+
+    /// The 0.46.0 smoke bug: "This is me (owner)" links the Connect login
+    /// `z3thon`; a ticket assigned to `z3thon` is the owner's.
+    #[test]
+    fn owner_linked_accounts_are_me_for_the_owner_and_the_linked_login() {
+        let people = People {
+            users: vec![user("z3thon", Role::Admin), user("julie", Role::Member)],
+            linked: vec![" Z3thon ".to_string()],
+        };
+        assert_eq!(
+            my_assignee_names(true, None, Some("Rosson"), &people),
+            vec!["owner", "rosson", "z3thon"]
+        );
+        // The linked login itself is the owner person: same set.
+        assert_eq!(
+            my_assignee_names(false, Some("z3thon"), Some("Rosson"), &people),
+            vec!["owner", "rosson", "z3thon"]
+        );
+        // An unlinked user stays just themself.
+        assert_eq!(my_assignee_names(false, Some("julie"), Some("Rosson"), &people), vec!["julie"]);
+        // Unlinked: the owner token is not z3thon (z3thon is an Admin, not the sole Owner).
+        let unlinked = People { users: people.users.clone(), linked: Vec::new() };
+        assert_eq!(my_assignee_names(true, None, None, &unlinked), vec!["owner"]);
+        assert_eq!(my_assignee_names(false, Some("z3thon"), None, &unlinked), vec!["z3thon"]);
     }
 }
 

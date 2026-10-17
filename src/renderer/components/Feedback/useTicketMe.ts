@@ -1,7 +1,9 @@
 // "Me" for the Tickets board's Mine / Waiting on me filters: the current
-// login on this window's server (owner or a Connect user), from
-// `GET /cli/auth/whoami`, plus the owner's display name (agents may assign
-// the owner by that name). Resolved once per board mount.
+// login on this window's server, from `GET /cli/auth/whoami`. The daemon
+// sends the names as `ticketMe` (owner + display name + owner-linked
+// Connect accounts), the same list its `waiting-count?me=1` badge counts;
+// an older daemon without it falls back to owner + display name / the
+// username (`myAssigneeNames`). Resolved once per board mount.
 
 import { useEffect, useMemo, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
@@ -12,6 +14,8 @@ import { myAssigneeNames } from './feedback-api'
 export interface TicketWhoami {
   owner?: boolean
   username?: string | null
+  /** The daemon's "me" assignee names (lower-cased); absent on older daemons. */
+  ticketMe?: string[]
 }
 
 export function fetchTicketWhoami(): Promise<TicketWhoami> {

@@ -34,8 +34,10 @@ interface FeedbackState {
    *  kept as a field so pre-switcher consumers (the page gate, the
    *  notification visibility check, tests) read it unchanged. */
   isOpen: boolean
-  /** Waiting tickets on the window's server that the page can show (top-bar
-   *  badge; 0 hides). Belongs to the window's server: reset on a switch. */
+  /** Tickets waiting on someone (waiting or needs discussion) on the
+   *  window's server that the page can show (top-bar + Zen badge; 0 hides).
+   *  Only this login's tickets when the server reports `tickets-badge-me`.
+   *  Belongs to the window's server: reset on a switch. */
   waitingCount: number
   /** The last refresh failed, or the connection dropped since the last good
    *  one: `waitingCount` may be out of date. The badge dims and says so. */
@@ -48,7 +50,7 @@ interface FeedbackState {
   open: () => void
   close: () => void
   toggle: () => void
-  /** Re-read the host-wide waiting count from the window's server. */
+  /** Re-read the waiting count from the window's server. */
   refreshWaitingCount: () => Promise<void>
 }
 
@@ -82,7 +84,11 @@ export const useFeedbackStore = create<FeedbackState>((set) => ({
       return
     }
     try {
-      const count = await fetchWaitingCount()
+      // A server with `tickets-badge-me` counts only this login's tickets,
+      // matching the board's default "Waiting on me" filter. An older one
+      // keeps its host-wide count.
+      const me = primaryScope().serverSupports('tickets-badge-me')
+      const count = await fetchWaitingCount({ me })
       if (epoch !== hostEpoch) return
       set({ waitingCount: count, waitingStale: false, waitingUnsupported: false })
     } catch (err) {

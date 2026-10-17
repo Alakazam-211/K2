@@ -25,6 +25,11 @@ export const REPORTED_FEATURES = {
    *  list in one GET (with an Unlinked workspace group); a server without
    *  the key shows the badge as a dimmed `?` (prd-tickets-badge-orphans). */
   'tickets-list-all': 'tickets-list-all',
+  /** `GET /cli/feedback/waiting-count` counts waiting + needs_discussion
+   *  and takes `me=1`: only tickets assigned to the calling login, the
+   *  board's "Waiting on me" count. The Tickets badge sends `me=1` only to
+   *  a server with this key; an older one keeps its host-wide count. */
+  'tickets-badge-me': 'tickets-badge-me',
   /** `GET /cli/thread/latest?addrs=` (prd-zen-mode-v1 Z41): the newest
    *  Thread item per addr in one request, for Zen's list previews. A server
    *  without the key gets one `GET /cli/thread?addr=&limit=1` per row. */

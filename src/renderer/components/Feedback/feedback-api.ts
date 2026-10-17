@@ -171,13 +171,18 @@ async function fetchFeedbackFanOut(
   return sortNewestFirst(results.flat())
 }
 
-/** Waiting-count for the top-bar badge: one host-wide GET. Throws on ANY
- *  failure — there is no per-workspace fallback, because that turned a dead
- *  host into a count of 0 (prd-tickets-badge-orphans TB8). The store keeps
- *  the last number and marks it stale. */
-export async function fetchWaitingCount(): Promise<number> {
+/** Waiting-count for the Tickets badge (top bar + Zen nav rail): one GET.
+ *  `me: true` asks for the "Waiting on me" count (tickets assigned to this
+ *  login; the daemon works out who from the token). Send it only to a
+ *  server that reports `tickets-badge-me`. Without it the count is
+ *  host-wide. Throws on ANY failure — there is no per-workspace fallback,
+ *  because that turned a dead host into a count of 0
+ *  (prd-tickets-badge-orphans TB8). The store keeps the last number and
+ *  marks it stale. */
+export async function fetchWaitingCount(opts: { me?: boolean } = {}): Promise<number> {
   const res = await daemonCliGet<{ ok: boolean; count: number }>(primaryScope(),
     'feedback/waiting-count',
+    opts.me ? { me: 1 } : undefined,
   )
   if (typeof res.count !== 'number') {
     throw new Error('feedback/waiting-count: response has no count')

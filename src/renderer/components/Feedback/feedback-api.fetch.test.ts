@@ -65,6 +65,14 @@ describe('fetchWaitingCount (T7)', () => {
     await expect(fetchWaitingCount()).resolves.toBe(2)
     expect(cli.get).toHaveBeenCalledTimes(1)
     expect(cli.get.mock.calls[0][1]).toBe('feedback/waiting-count')
+    expect(cli.get.mock.calls[0][2]).toBeUndefined()
+  })
+
+  it('me: true asks for the "Waiting on me" count with me=1', async () => {
+    cli.get.mockResolvedValueOnce({ ok: true, count: 1, scope: 'me' })
+    await expect(fetchWaitingCount({ me: true })).resolves.toBe(1)
+    expect(cli.get.mock.calls[0][1]).toBe('feedback/waiting-count')
+    expect(cli.get.mock.calls[0][2]).toEqual({ me: 1 })
   })
 
   it('rejects when waiting-count rejects, and fires no feedback/list GET', async () => {

@@ -917,19 +917,6 @@ pub const ROUTES: &[Route] = &[
     // ingress, LAN, air-gap) at once — Owner only.
     post("/cli/settings/reset", Owner),
     post("/cli/settings/update", Member),
-    // Sew chat-pass keys (S28 §10, K6): Owner/Admin people; the emergency
-    // wipe additionally needs a vault confirm (person-proof).
-    get("/cli/sew/keys", Admin),
-    post("/cli/sew/keys/drop-previous", Admin),
-    post("/cli/sew/keys/rotate", Admin),
-    // Sew owner handoff mint (S32 §11.1, K7): the owner token or an
-    // Owner-role Connect login, plus a vault confirm (person-proof).
-    post("/cli/sew/owner-handoff", Owner),
-    // Sew chat pass (S28 §9, K7): every Connect login role mints its own
-    // member pass; App sessions, the owner token and a handoff code
-    // (no credential) pass the login gate to the handler's own checks.
-    post("/cli/sew/pass", Member),
-    // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §5.1).
     // Sew on K2 (S29 K12): reads for any login; the server lifecycle is
     // Admin for logins (owner token, or an agent passport whose workspace
     // has "Manage Sew" on, pass through to the handler). Purge, the
@@ -937,6 +924,11 @@ pub const ROUTES: &[Route] = &[
     // handler (owner + a vault confirm).
     get("/cli/sew/backups", Member),
     get("/cli/sew/job", Member),
+    // Sew chat-pass keys (S28 §10, K6): Owner/Admin people; the emergency
+    // wipe additionally needs a vault confirm (person-proof).
+    get("/cli/sew/keys", Admin),
+    post("/cli/sew/keys/drop-previous", Admin),
+    post("/cli/sew/keys/rotate", Admin),
     // Voice (K13) and standalone users: the same Manage Sew gate in the
     // handler; Admin floor for logins.
     post("/cli/sew/media/install", Admin),
@@ -945,6 +937,13 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sew/media/renew", Admin),
     post("/cli/sew/media/uninstall", Admin),
     post("/cli/sew/media/url", Admin),
+    // Sew owner handoff mint (S32 §11.1, K7): the owner token or an
+    // Owner-role Connect login, plus a vault confirm (person-proof).
+    post("/cli/sew/owner-handoff", Owner),
+    // Sew chat pass (S28 §9, K7): every Connect login role mints its own
+    // member pass; App sessions, the owner token and a handoff code
+    // (no credential) pass the login gate to the handler's own checks.
+    post("/cli/sew/pass", Member),
     get("/cli/sew/preflight", Member),
     post("/cli/sew/server/backup", Admin),
     post("/cli/sew/server/config", Admin),
@@ -965,6 +964,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sew/users/reset", Admin),
     post("/cli/sew/users/revoke", Admin),
     post("/cli/sew/users/role", Admin),
+    // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §5.1).
     get("/cli/sidecar/list", Member),
     post("/cli/sidecar/new", Admin),
     post("/cli/sidecar/stop", Admin),

@@ -296,6 +296,12 @@ interface Project {
   // open. Written via POST /cli/agent-access/set `toggle:
   // 'projects_manage'` (Admin). Absent on older daemons → treated as on.
   agentsCanManageProjects?: number
+  // Agents run Gardens end to end (0181) — "Manage Gardens and data
+  // sources" (0/1, default 0). On: the agent approves sources, binds
+  // secrets it may already use, pauses, pins, enables triggers and edits
+  // Gardens with no confirm (audited). Written via POST
+  // /cli/agent-access/set `toggle: 'gardens_manage'` (Owner/Admin).
+  agentsCanManageGardens?: number
 }
 
 export interface ProjectWithWorkspaces extends Project {

@@ -106,6 +106,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-use-compute', section: 'projects', label: 'Allow compute nodes', description: 'Lets this workspace\'s agents run builds and tests on the machines switched on in Settings → Compute (k2 compute run); on grants every machine, and ones added later', keywords: ['agents_can_use_compute', 'compute', 'compute nodes', 'node', 'machines', 'build', 'tests', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Allow this agent to operate compute nodes', description: 'Lets this workspace\'s agent pause, drain, resume, narrow, update and restart services on your compute machines without asking each time; root actions still wait for you (k2 compute operate)', keywords: ['agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Manage K2 projects', description: 'Lets this workspace\'s agent create, rename and delete K2 projects and add or remove their members (k2 project); on by default. Off: it can still read projects and post in its project chat', keywords: ['agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
+  { id: 'projects.agents-can-manage-gardens', section: 'projects', label: 'Manage Gardens and data sources', description: 'Lets this workspace\'s agent approve data sources, bind secrets it may already use, pause, pin, enable triggers and edit Gardens and widgets with no confirm (k2 sources, k2 zen); every act is logged. Off: it proposes and you approve', keywords: ['agents_can_manage_gardens', 'gardens_manage', 'gardens', 'garden', 'zen', 'widgets', 'data sources', 'sources', 'triggers', 'approve', 'k2 sources', 'k2 zen', 'passport', 'agent'] },
   { id: 'projects.mail-manage-enabled', section: 'projects', label: 'Allow agents to manage hosted mail on this host', description: 'Per-workspace passport for k2 hostmail enable/disable and domain list/add/check (uninstall, domain remove, OAuth, access stay owner)', keywords: ['mail_manage_enabled', 'hostmail', 'mail', 'passport', 'agent', 'domain'] },
 ]
 
@@ -1401,6 +1402,7 @@ function ProjectDetail({
               <AgentsUseComputeToggle project={project} />
               <AgentsOperateComputeToggle project={project} />
               <AgentsManageProjectsToggle project={project} />
+              <AgentsManageGardensToggle project={project} />
             </SettingsGroup>
 
             <div className="pt-2 border-t border-[var(--color-border)]">
@@ -2414,6 +2416,96 @@ export function AgentsManageProjectsToggle({
             their members (k2 project). On by default. Off: it can still read projects and post in
             its project chat. Every project created or deleted and every member change is logged.
             You (the owner) always can.
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Agents run Gardens end to end (0181, Rosson 2026-10-16) — "Manage Gardens
+// and data sources". DEFAULTS OFF. On: this workspace's agent approves data
+// sources (its own proposals and others'), binds a secret it may already
+// use, pauses, pins, enables triggers and edits Gardens and widgets with no
+// confirm; every act is an Access Audit line. Off: it proposes and a person
+// approves. Same single writer as the rows above: POST
+// /cli/agent-access/set `{workspace, toggle: 'gardens_manage', value}`
+// (Owner/Admin; an agent can never flip it). Optimistic store patch; no
+// projects refetch here.
+export function AgentsManageGardensToggle({
+  project,
+}: {
+  project: ProjectWithWorkspaces
+}): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const enabled = (project.agentsCanManageGardens ?? 0) === 1
+
+  const toggle = async (): Promise<void> => {
+    if (busy) return
+    const next = !enabled
+    const before = project.agentsCanManageGardens
+    setBusy(true)
+    useProjectsStore.setState((s) => ({
+      projects: s.projects.map((p) =>
+        p.id === project.id ? { ...p, agentsCanManageGardens: next ? 1 : 0 } : p,
+      ),
+    }))
+    try {
+      await daemonCliPost(primaryScope(), 'agent-access/set', {
+        workspace: project.path,
+        toggle: 'gardens_manage',
+        value: next,
+      })
+      noteOptimisticProjectsMutationSuccess()
+      emitProjectsChanged()
+    } catch (err) {
+      useProjectsStore.setState((s) => ({
+        projects: s.projects.map((p) =>
+          p.id === project.id ? { ...p, agentsCanManageGardens: before } : p,
+        ),
+      }))
+      console.error('[agent-access] gardens_manage write failed', err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="border border-[var(--color-border)] p-3">
+      <div className="flex items-start gap-3">
+        <button
+          onClick={toggle}
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Manage Gardens and data sources"
+          disabled={busy}
+          data-settings-id="projects.agents-can-manage-gardens"
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
+          title={
+            enabled
+              ? 'This workspace\'s agent approves data sources and edits Gardens itself (logged)'
+              : 'This workspace\'s agent proposes data sources and Garden changes; you approve'
+          }
+        >
+          <span
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+            Manage Gardens and data sources
+          </div>
+          <div className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
+            Lets this workspace&rsquo;s agent approve data sources (its own and others&rsquo;), pause and
+            pin them, turn on triggers and edit your Gardens and widgets without asking you (k2 sources,
+            k2 zen). It binds only a secret it can already use: its own workspace&rsquo;s, or a
+            server-wide one if &ldquo;Allow managing server-wide secrets&rdquo; is on too, and only to that
+            source&rsquo;s site. Every act is logged in Access Audit. Off: it proposes and you approve.
+            Locked Gardens stay yours.
           </div>
         </div>
       </div>

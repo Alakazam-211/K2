@@ -127,10 +127,7 @@ async fn drain(env: &Env) {
     for _ in 0..40 {
         hook::force_due_for_tests().unwrap();
         worker::pass_once(&cfg()).await.expect("pass");
-        if rows()
-            .iter()
-            .all(|r| r.state != "pending" || r.op == "sew_session_revoke")
-        {
+        if rows().iter().all(|r| r.state != "pending") {
             return;
         }
     }
@@ -188,6 +185,64 @@ async fn grant_create_provisions_member_and_owner_with_actor_attribution() {
     );
     let t = hook::get_target(CHAT_KIND).unwrap().unwrap();
     assert!(t.healthy && t.last_ok_at.is_some());
+    env.sew.assert_clean();
+}
+
+/// S28 §12 on S27's outbox (0.46.1): a chat member's logout, password
+/// change and removal reach Sew's `POST /mgmt/v1/sessions/revoke` with
+/// the row's `Idempotency-Key`; a revoke for a member Sew never had (404)
+/// is done, not retried. No test sink: the real writer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_revokes_reach_sews_sessions_revoke() {
+    let env = setup().await;
+    k2_core::sew_revoke::clear_sink();
+    enable(&env);
+    let ann = skin::add_principal("ann").unwrap();
+    skin::set_principal_password("ann", Some("s3cret-horse-battery")).unwrap();
+    chat("principal", "ann", None, "owner-token");
+    drain(&env).await;
+
+    // Logout of one session → {k2_sid}.
+    let (meta, _raw) = skin::create_session_token("ann").expect("login");
+    assert!(skin::revoke_token(&meta.id).unwrap());
+    // A password change with a live session → {external_id}.
+    skin::create_session_token("ann").expect("login again");
+    skin::set_principal_password("ann", Some("another-horse-battery")).unwrap();
+    drain(&env).await;
+
+    let sid = format!("skn_{}", meta.id);
+    let posts: Vec<_> = env
+        .sew
+        .posts()
+        .into_iter()
+        .filter(|c| c.path == "/mgmt/v1/sessions/revoke")
+        .collect();
+    assert_eq!(posts.len(), 2, "{}", env.sew.log());
+    assert_eq!(posts[0].body, serde_json::json!({ "k2_sid": sid }));
+    assert_eq!(posts[1].body, serde_json::json!({ "external_id": pext(&ann.id) }));
+    let revs: Vec<_> = rows()
+        .into_iter()
+        .filter(|r| r.op == "sew_session_revoke")
+        .collect();
+    assert_eq!(revs.len(), 2);
+    for (post, row) in posts.iter().zip(&revs) {
+        assert_eq!(post.key.as_deref(), Some(row.idem_key.as_str()));
+        assert_eq!((row.state.as_str(), post.status), ("done", 200));
+    }
+    assert_eq!(env.sew.revoked().len(), 2);
+
+    // A member Sew does not know: 404 → done (G11), never blocked.
+    let bo = skin::add_principal("bo").unwrap();
+    skin::set_principal_password("bo", Some("s3cret-horse-battery")).unwrap();
+    skin::insert_chat_grant_for_tests(&bo.id).unwrap();
+    skin::create_session_token("bo").expect("bo logs in");
+    assert!(skin::remove_principal("bo").unwrap());
+    drain(&env).await;
+    let bo_row = rows()
+        .into_iter()
+        .find(|r| r.op == "sew_session_revoke" && r.subject_key == format!("revoke:{}", pext(&bo.id)))
+        .expect("bo's revoke row");
+    assert_eq!((bo_row.state.as_str(), bo_row.last_status), ("done", Some(404)));
     env.sew.assert_clean();
 }
 

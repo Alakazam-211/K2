@@ -6,7 +6,7 @@
 //! process-wide recording sink below is only ever read by one test at a
 //! time.
 
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 
 use super::*;
 use crate::connect_users;
@@ -23,17 +23,17 @@ static SEEN: Mutex<Vec<Seen>> = Mutex::new(Vec::new());
 /// Ops whose label contains one of these fail in the sink.
 static FAIL_ON: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// Install the recording sink on every call: the outbox-path tests in
+/// `tool_hook` clear it (under the same env lock) to reach S27's real
+/// writer.
 fn recorder() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        sew_revoke::set_sink(Arc::new(|conn: &rusqlite::Connection, op: &SewSessionRevoke| {
-            if FAIL_ON.lock().unwrap().iter().any(|f| op.label().contains(f.as_str())) {
-                return Err("outbox write failed (test)".into());
-            }
-            SEEN.lock().unwrap().push(Seen { op: op.clone(), in_tx: !conn.is_autocommit() });
-            Ok(())
-        }));
-    });
+    sew_revoke::set_sink(Arc::new(|conn: &rusqlite::Connection, op: &SewSessionRevoke| {
+        if FAIL_ON.lock().unwrap().iter().any(|f| op.label().contains(f.as_str())) {
+            return Err("outbox write failed (test)".into());
+        }
+        SEEN.lock().unwrap().push(Seen { op: op.clone(), in_tx: !conn.is_autocommit() });
+        Ok(())
+    }));
     SEEN.lock().unwrap().clear();
     FAIL_ON.lock().unwrap().clear();
 }

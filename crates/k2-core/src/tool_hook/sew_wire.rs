@@ -43,7 +43,7 @@ pub const MGMT_PROVISION: &str = "/mgmt/v1/principals/provision";
 pub const MGMT_UPDATE: &str = "/mgmt/v1/principals/update";
 pub const MGMT_DEPROVISION: &str = "/mgmt/v1/principals/deprovision";
 pub const MGMT_OWNER_SET: &str = "/mgmt/v1/owner/set";
-/// Reserved for S28 (`sew_session_revoke`, S27-A12). S27 never calls it.
+/// S28's `sew_session_revoke` op (S27-A12), delivered by the worker.
 pub const MGMT_SESSIONS_REVOKE: &str = "/mgmt/v1/sessions/revoke";
 
 // ── headers (`sew_proto::http`) ──────────────────────────────────────
@@ -411,8 +411,9 @@ pub struct DeprovisionResponse {
     pub sessions_revoked: u64,
 }
 
-/// `POST /mgmt/v1/sessions/revoke` — reserved for S28's
-/// `sew_session_revoke` op (S27-A12). S27 never builds one.
+/// `POST /mgmt/v1/sessions/revoke` — S28's `sew_session_revoke` op
+/// (S27-A12). K2 sends exactly one of the two fields
+/// ([`crate::sew_revoke::SewSessionRevoke::payload`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RevokeSessionsRequest {

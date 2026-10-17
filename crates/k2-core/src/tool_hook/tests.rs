@@ -749,43 +749,91 @@ fn due_heads_keep_subject_order_and_wait_for_the_person() {
     drop_ws(&wid);
 }
 
+fn revoke_rows() -> Vec<outbox::OutboxRow> {
+    rows()
+        .into_iter()
+        .filter(|r| r.op == "sew_session_revoke")
+        .collect()
+}
+
+/// S28 §12 wired to S27 (0.46.1): a skin logout and a password change of
+/// a chat member queue `sew_session_revoke` on the chat outbox, each on
+/// its own `revoke:…` subject, delivered even while the person's own
+/// provisioning queue is blocked.
 #[test]
-fn reserved_sew_session_revoke_is_never_selected_or_blocked() {
+fn session_revokes_ride_the_chat_outbox_on_their_own_subject() {
     let _e = setup();
+    crate::sew_revoke::clear_sink();
     enable_chat();
     let ann = person("ann");
-    let now = outbox::now_secs();
+    skin::set_principal_password("ann", Some("s3cret-horse-battery")).unwrap();
+    grant("principal", "ann", None).unwrap();
+    let prov = rows_for(&pext(&ann.id))
+        .into_iter()
+        .find(|r| r.op == "provision")
+        .expect("ann's provision");
+    record_blocked(&prov.id, Some(400), "blocked (test)").unwrap();
+
+    // Logout of one session → {k2_sid: skn_<id>}.
+    let (meta, _raw) = skin::create_session_token("ann").expect("chat-only login");
+    assert!(skin::revoke_token(&meta.id).unwrap());
+    let rv = revoke_rows();
+    assert_eq!(rv.len(), 1, "{rv:?}");
+    let sid = format!("skn_{}", meta.id);
+    assert_eq!(rv[0].subject_key, format!("revoke:k2_sid:{sid}"));
+    assert_eq!(payload(&rv[0]), serde_json::json!({ "k2_sid": sid }));
+    assert_eq!(rv[0].cause, "session_revoke");
+    assert_eq!(rv[0].tool, CHAT_KIND);
+    assert_eq!((rv[0].state.as_str(), rv[0].attempts), (STATE_PENDING, 0));
+    assert!(rv[0].idem_key.starts_with("k2ob_"));
+
+    // Due although ann's provision is blocked: a revoke is its own queue.
+    let due_now = due(CHAT_KIND, 100).unwrap();
+    assert!(due_now.iter().any(|r| r.id == rv[0].id), "{due_now:?}");
+    assert!(due_now.iter().all(|r| r.id != prov.id));
+
+    // A password change ends every session → {external_id}.
+    skin::create_session_token("ann").expect("login again");
+    skin::set_principal_password("ann", Some("another-horse-battery")).unwrap();
+    let rv = revoke_rows();
+    assert_eq!(rv.len(), 2, "{rv:?}");
+    assert_eq!(rv[1].subject_key, format!("revoke:{}", pext(&ann.id)));
+    assert_eq!(payload(&rv[1]), serde_json::json!({ "external_id": pext(&ann.id) }));
+}
+
+/// No chat target row (Sew never set up here): nothing is queued, and the
+/// revoke itself still happens. With a target, a rolled-back write leaves
+/// no row (same transaction).
+#[test]
+fn session_revoke_needs_a_chat_target_and_rolls_back_with_its_write() {
+    let _e = setup();
+    crate::sew_revoke::clear_sink();
+    let bo = person("bo");
+    skin::set_principal_password("bo", Some("s3cret-horse-battery")).unwrap();
+    skin::insert_chat_grant_for_tests(&bo.id).unwrap();
+    let (meta, raw) = skin::create_session_token("bo").expect("login");
+    assert!(skin::revoke_token(&meta.id).unwrap());
+    assert!(skin::resolve_skin_token(&raw).is_none(), "the K2 session ended");
+    assert!(revoke_rows().is_empty(), "no target → no row");
+
+    enable_chat();
+    let op = crate::sew_revoke::SewSessionRevoke::K2Sid("skn_rolled_back".into());
     skin::with_skin_conn(|c| {
-        outbox::enqueue(
-            c,
-            &[NewOp {
-                tool: CHAT_KIND,
-                op: Op::SewSessionRevoke,
-                subject_key: pext(&ann.id),
-                payload: serde_json::json!({ "external_id": pext(&ann.id) }),
-                grant_id: None,
-                grant_rev: None,
-                cause: Cause::GrantDelete,
-                after_subject: None,
-            }],
-            "owner-token",
-            now,
-        )
+        let tx = c.unchecked_transaction().map_err(|e| e.to_string())?;
+        crate::sew_revoke::enqueue(&tx, &op)?;
+        // Dropped without commit: the write failed after the enqueue.
+        drop(tx);
+        Ok(())
     })
     .unwrap();
-    grant("principal", "ann", None).unwrap();
-    let due: Vec<_> = due(CHAT_KIND, 100).unwrap();
-    assert!(due.iter().all(|r| r.op != "sew_session_revoke"));
-    assert!(
-        due.iter()
-            .any(|r| r.subject_key == pext(&ann.id) && r.op == "provision"),
-        "a later provision for the same subject is not held up by an op S27 does not deliver"
-    );
-    let revoke = rows()
-        .into_iter()
-        .find(|r| r.op == "sew_session_revoke")
-        .unwrap();
-    assert_eq!((revoke.state.as_str(), revoke.attempts), (STATE_PENDING, 0));
+    assert!(revoke_rows().is_empty(), "rolled back with its write");
+    skin::with_skin_conn(|c| {
+        let tx = c.unchecked_transaction().map_err(|e| e.to_string())?;
+        crate::sew_revoke::enqueue(&tx, &op)?;
+        tx.commit().map_err(|e| e.to_string())
+    })
+    .unwrap();
+    assert_eq!(revoke_rows().len(), 1);
 }
 
 #[test]

@@ -19,7 +19,7 @@
 // Stop, which sends Esc to the agent's PTY, shows while the turn can be
 // stopped (`threadStripView(...).stoppable`, the strip's own rule).
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ThreadTurn } from '@/components/SessionView/overlayThread'
 import { CHAMFER_CUT, THREAD_ZEN_SCOPE_ATTR, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
 import { WorkingGrid } from '@/components/AgentStatus/StatusGlyphs'
@@ -83,6 +83,42 @@ export function zenDrawerCounterBudget(width: number, clock: string): number {
   return width - 24 - 8 - 24 - estimateStripTextPx(clock, COUNTER_FONT_PX) - STEP_MIN_PX
 }
 
+// ── One pulse for the dot and the words ─────────────────────────────────
+//
+// Rosson 2026-10-17: "The pulse for the words and the pulse for the square
+// dot to the left of the words: can we make those be in sync? I was getting
+// a headache just looking at that." The dot ran the shared `zen-pulse`
+// (opacity + scale, `--zen-anim-workingPulse-duration`: 1.4s on the
+// desktop, 1.2s in Garden 1) and the thinking words their own 1.6s fade,
+// each starting whenever it mounted, so the two beat against each other.
+// Now both run ONE keyframe on ONE timing: the slower of the two, 1.6s
+// ease-in-out ("The slower of the two is better."). Each also takes a
+// negative delay from the page clock when its pulse starts
+// (`zenDrawerPulseDelay`), so every pulse sits on the same phase however
+// late it mounted (expand / collapse, a step turning into thinking).
+
+/** The drawer's pulse period (ms), dot and words alike. */
+export const ZEN_DRAWER_PULSE_MS = 1600
+/** The drawer's pulse curve, dot and words alike. */
+export const ZEN_DRAWER_PULSE_EASE = 'ease-in-out'
+/** The one `animation` both the dot and the words play. */
+export const ZEN_DRAWER_PULSE_ANIMATION = `zen-drawer-pulse ${ZEN_DRAWER_PULSE_MS}ms ${ZEN_DRAWER_PULSE_EASE} infinite`
+
+/** The `animation-delay` that puts a pulse starting at `nowMs` (the page
+ *  clock, `performance.now()`) on the shared phase: `-(now mod period)`. */
+export function zenDrawerPulseDelay(nowMs: number, periodMs = ZEN_DRAWER_PULSE_MS): string {
+  const into = Math.round(((nowMs % periodMs) + periodMs) % periodMs)
+  return into === 0 ? '0ms' : `-${into}ms`
+}
+
+/** The delay for one pulsing element, read when its pulse starts and kept
+ *  while it runs (a new delay mid-run would jump its phase). `mountKey`
+ *  changes when the element remounts (its animation starts again). */
+function usePulseDelay(on: boolean, mountKey: unknown): string | undefined {
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => (on ? zenDrawerPulseDelay(performance.now()) : undefined), [on, mountKey])
+}
+
 /** Expanded or not, on this computer. */
 export const ZEN_DRAWER_EXPANDED_KEY = 'k2.zen.activityDrawerExpanded'
 
@@ -123,10 +159,10 @@ export const ZEN_DRAWER_CSS = `
 @keyframes zen-drawer-out { from { transform: none; } to { transform: translateY(calc(100% + 8px)); } }
 @keyframes zen-drawer-fade-in { from { opacity: 0; } }
 @keyframes zen-drawer-fade-out { to { opacity: 0; } }
-@keyframes zen-drawer-shimmer { 0% { opacity: 1; } 50% { opacity: 0.55; } 100% { opacity: 1; } }
+@keyframes zen-drawer-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 ${DRAWER_SCOPE} [data-zen-drawer][data-phase="in"] { animation: zen-drawer-in ${ZEN_DRAWER_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1.12) both; }
 ${DRAWER_SCOPE} [data-zen-drawer][data-phase="out"] { animation: zen-drawer-out ${ZEN_DRAWER_MS}ms cubic-bezier(0.4, 0, 0.8, 0.4) both; }
-${DRAWER_SCOPE} .zen-drawer-shimmer { animation: zen-drawer-shimmer 1.6s ease-in-out infinite; }
+${DRAWER_SCOPE} [data-zen-drawer] [data-zen-pulse], ${DRAWER_SCOPE} [data-zen-drawer] .zen-drawer-pulse-text { animation: ${ZEN_DRAWER_PULSE_ANIMATION}; }
 ${DRAWER_SCOPE} .zen-drawer-tag { border-radius: 9999px; background: color-mix(in srgb, var(--zen-tag-hue) 16%, transparent); color: color-mix(in srgb, var(--zen-tag-hue) 70%, var(--zen-text)); }
 ${DRAWER_SCOPE} .zen-drawer-count { display: inline-flex; align-items: center; flex: none; white-space: nowrap; line-height: 18px; }
 ${DRAWER_SCOPE} .zen-drawer-code { --zen-tag-hue: var(--zen-text-muted); color: inherit; padding: 1px 5px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
@@ -139,7 +175,7 @@ ${DRAWER_SCOPE} .zen-drawer-tag-background { --zen-tag-hue: var(--zen-text-muted
 @media (prefers-reduced-motion: reduce) {
   ${DRAWER_SCOPE} [data-zen-drawer][data-phase="in"] { animation: zen-drawer-fade-in 160ms ease-out both; }
   ${DRAWER_SCOPE} [data-zen-drawer][data-phase="out"] { animation: zen-drawer-fade-out 160ms ease-in both; }
-  ${DRAWER_SCOPE} .zen-drawer-shimmer, ${DRAWER_SCOPE} [data-zen-pulse] { animation: none !important; }
+  ${DRAWER_SCOPE} .zen-drawer-pulse-text, ${DRAWER_SCOPE} [data-zen-pulse] { animation: none !important; }
 }
 `
 
@@ -389,6 +425,12 @@ export function ZenActivityDrawer({
   }, [phase])
 
   const [expanded, setExpanded] = useState(readZenDrawerExpanded)
+  // Expanding or collapsing remounts the dot and the words (other branch).
+  const shownLine = line ?? (phase === 'out' ? last.current : null)
+  const dotPulses = shownLine?.tone === 'working'
+  const wordsPulse = (expanded ? shownLine?.detail.step?.kind : shownLine?.step.kind) === 'thinking'
+  const dotDelay = usePulseDelay(dotPulses, expanded)
+  const wordsDelay = usePulseDelay(wordsPulse, expanded)
   const toggle = (): void => {
     setExpanded((on) => {
       writeZenDrawerExpanded(!on)
@@ -425,6 +467,7 @@ export function ZenActivityDrawer({
       data-zen-drawer-dot=""
       data-zen-pulse={display.tone === 'working' ? '' : undefined}
       style={{
+        animationDelay: dotDelay,
         display: 'inline-block',
         flex: 'none',
         width: 8,
@@ -502,8 +545,12 @@ export function ZenActivityDrawer({
               {d.step ? (
                 <span data-zen-drawer-step-full="" className="flex min-w-0 items-baseline" style={{ gap: 8, fontSize: 13, lineHeight: '19px' }}>
                   <span
-                    className={`min-w-0 flex-1 break-words ${d.step.kind === 'thinking' ? 'zen-drawer-shimmer' : ''}`}
-                    style={d.step.kind === 'needs' ? { color: 'var(--zen-needs-you)' } : undefined}
+                    data-zen-drawer-step-text=""
+                    className={`min-w-0 flex-1 break-words ${d.step.kind === 'thinking' ? 'zen-drawer-pulse-text' : ''}`}
+                    style={{
+                      animationDelay: d.step.kind === 'thinking' ? wordsDelay : undefined,
+                      ...(d.step.kind === 'needs' ? { color: 'var(--zen-needs-you)' } : {}),
+                    }}
                   >
                     <StepBody step={d.step} />
                   </span>
@@ -534,8 +581,9 @@ export function ZenActivityDrawer({
               {dot}
               <span
                 data-zen-drawer-step=""
-                className={`min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap ${display.step.kind === 'thinking' ? 'zen-drawer-shimmer' : ''}`}
+                className={`min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap ${display.step.kind === 'thinking' ? 'zen-drawer-pulse-text' : ''}`}
                 style={{
+                  animationDelay: display.step.kind === 'thinking' ? wordsDelay : undefined,
                   fontSize: 13,
                   lineHeight: '18px',
                   color: display.step.kind === 'needs' ? 'var(--zen-needs-you)' : muted ? 'var(--zen-text-muted)' : 'var(--zen-text)',

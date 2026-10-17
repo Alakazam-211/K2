@@ -344,12 +344,6 @@ export function GeneralSection(): React.JSX.Element {
           <AppFontRows where="general" lastHasBorder={false} />
         </div>
 
-        {/* App font (0.45.7): the same setting as Editors / Fonts → Code.
-            Sits below the app and CLI versions (Rosson 2026-10-16). */}
-        <div className="border border-[var(--color-border)]" data-settings-id="general.font">
-          <AppFontRows where="general" lastHasBorder={false} />
-        </div>
-
         {/* Desktop only: open Chromium DevTools (prod + debug) for diagnosing
             remote freezes / network. Pref is thin-client localStorage. */}
         {webFeatures.appDevTools && <DevToolsRow />}

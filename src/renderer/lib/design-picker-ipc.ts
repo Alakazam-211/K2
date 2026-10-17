@@ -51,7 +51,7 @@ export interface PickPayload {
 
 export interface PickKey {
   type: 'key'
-  key: 'toggle-select' | 'escape'
+  key: 'escape'
 }
 
 export type PickEvent = PickPayload | PickKey
@@ -76,9 +76,8 @@ export function pickDisarm({ itemId, parentWindow }: Target): Promise<void> {
   return invoke<void>('browser_pick_disarm', { itemId, parentWindow })
 }
 
-/** Drain picks and key presses. Poll ~120 ms while armed and ~400 ms while
- * the Design tab is shown (for the in-page S key). Do not gate on the pane
- * being visible: a frozen pane is hidden but still answers. */
+/** Drain picks and Esc presses. Poll ~120 ms while armed. Do not gate on
+ * the pane being visible: a frozen pane is hidden but still answers. */
 export function pickPoll({ itemId, parentWindow }: Target): Promise<PickPoll> {
   return invoke<PickPoll>('browser_pick_poll', { itemId, parentWindow })
 }

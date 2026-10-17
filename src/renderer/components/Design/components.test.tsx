@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Fail loud: the Select button's pressed state, Send disabled on an empty
+// Fail loud: the palette (Select) toggle and its colour, Send disabled on an empty
 // tray, the pop-up's overlay claim (which freezes the page) and its keys,
 // the tray's actions, the web stub, and the Design mode switch.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -20,7 +20,7 @@ vi.mock('@/stores/projects', async () => {
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { overlayClaims, resetBrowserOverlaysForTest } from '@/lib/browser-overlay'
-import { DesignToolbar } from './DesignToolbar'
+import { DesignPaletteButton, DesignToolbar } from './DesignToolbar'
 import { NotePopover } from './NotePopover'
 import { NoteTray } from './NoteTray'
 import { DesignWebStub } from './DesignWebStub'
@@ -46,11 +46,27 @@ afterEach(() => {
 
 const element: NoteElement = { selector: 'button.cta', tag: 'button', classes: ['cta'], text: 'Buy', html: '' }
 
+describe('DesignPaletteButton', () => {
+  it('is the Select toggle: accent while on, the normal icon colour while off', () => {
+    const onToggle = vi.fn()
+    const { rerender } = render(<DesignPaletteButton armed onToggle={onToggle} />)
+    const btn = screen.getByRole('button', { name: 'Select an element' })
+    expect(btn.getAttribute('aria-pressed')).toBe('true')
+    expect(btn.className).toContain('text-[var(--color-accent)]')
+    expect(btn.querySelector('[data-k2-icon="palette"]')).toBeTruthy()
+    fireEvent.click(btn)
+    expect(onToggle).toHaveBeenCalledTimes(1)
+    rerender(<DesignPaletteButton armed={false} onToggle={onToggle} />)
+    const off = screen.getByRole('button', { name: 'Select an element' })
+    expect(off.getAttribute('aria-pressed')).toBe('false')
+    expect(off.className).not.toContain('text-[var(--color-accent)]')
+    expect(off.className).toContain('text-[var(--color-text-secondary)]')
+  })
+})
+
 describe('DesignToolbar', () => {
   function toolbar(over: Partial<Parameters<typeof DesignToolbar>[0]> = {}) {
     const props = {
-      armed: false,
-      onToggleSelect: vi.fn(),
       noteCount: 0,
       sending: false,
       canRetry: false,
@@ -62,14 +78,12 @@ describe('DesignToolbar', () => {
     return { ...r, props }
   }
 
-  it('Select shows its pressed state and toggles', () => {
-    const { props, rerender } = toolbar()
-    const select = screen.getByRole('button', { name: /select/i })
-    expect(select.getAttribute('aria-pressed')).toBe('false')
-    fireEvent.click(select)
-    expect(props.onToggleSelect).toHaveBeenCalledTimes(1)
-    rerender(<DesignToolbar {...props} armed />)
-    expect(screen.getByRole('button', { name: /select/i }).getAttribute('aria-pressed')).toBe('true')
+  it('has no Select button and never mentions an S key', () => {
+    toolbar({ armed: true })
+    expect(screen.queryByRole('button', { name: /select/i })).toBeNull()
+    const bar = screen.getByTestId('design-toolbar')
+    expect(bar.textContent).not.toMatch(/\bS\b/)
+    expect(bar.querySelector('kbd')).toBeNull()
   })
 
   it('Send is disabled with no notes and enabled with some', () => {
@@ -118,29 +132,41 @@ describe('NotePopover', () => {
     expect(overlayClaims()).toHaveLength(0)
   })
 
-  it('⌘Enter adds with the chosen intent; empty text never adds', () => {
+  it('⌘↩ sends now with the chosen intent; plain Return does not', () => {
     const onAdd = vi.fn()
-    render(<NotePopover open element={element} anchor={anchor} container={container} onAdd={onAdd} onCancel={vi.fn()} />)
+    const onSendNow = vi.fn()
+    render(<NotePopover open element={element} anchor={anchor} container={container} onAdd={onAdd} onSendNow={onSendNow} onCancel={vi.fn()} />)
     const box = screen.getByRole('textbox')
+    // Nothing typed and an empty tray: nothing to send.
     fireEvent.keyDown(box, { key: 'Enter', metaKey: true })
-    expect(onAdd).not.toHaveBeenCalled()
+    expect(onSendNow).not.toHaveBeenCalled()
     fireEvent.change(box, { target: { value: '  make it primary  ' } })
     fireEvent.click(screen.getByRole('radio', { name: 'Question' }))
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onSendNow).not.toHaveBeenCalled()
     fireEvent.keyDown(box, { key: 'Enter', metaKey: true })
-    expect(onAdd).toHaveBeenCalledWith('make it primary', 'question')
+    expect(onSendNow).toHaveBeenCalledWith('make it primary', 'question')
+    expect(onAdd).not.toHaveBeenCalled()
   })
 
-  it('Ctrl+Enter adds too; the Add button adds', () => {
+  it('Ctrl+Enter sends now too; with nothing typed it sends the tray', () => {
+    const onSendNow = vi.fn()
+    render(<NotePopover open element={element} anchor={anchor} container={container} onAdd={vi.fn()} onSendNow={onSendNow} trayCount={2} onCancel={vi.fn()} />)
+    expect(screen.getByTestId('design-popover-hint').textContent).toContain('the 2 notes')
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', ctrlKey: true })
+    expect(onSendNow).toHaveBeenCalledWith('', 'change')
+  })
+
+  it('the Add button adds; a full tray turns Add off with the hint', () => {
     const onAdd = vi.fn()
-    render(<NotePopover open element={element} anchor={anchor} container={container} onAdd={onAdd} onCancel={vi.fn()} />)
-    const box = screen.getByRole('textbox')
-    fireEvent.change(box, { target: { value: 'x' } })
-    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true })
+    const { rerender } = render(<NotePopover open element={element} anchor={anchor} container={container} onAdd={onAdd} onCancel={vi.fn()} />)
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'x' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add' }))
-    expect(onAdd.mock.calls).toEqual([
-      ['x', 'change'],
-      ['x', 'change'],
-    ])
+    expect(onAdd.mock.calls).toEqual([['x', 'change']])
+    rerender(<NotePopover open element={element} anchor={anchor} container={container} onAdd={onAdd} addDisabledReason="Send these first; up to 6 notes" onCancel={vi.fn()} />)
+    const add = screen.getByRole('button', { name: 'Add' }) as HTMLButtonElement
+    expect(add.disabled).toBe(true)
+    expect(screen.getByTestId('design-popover-hint').textContent).toContain('Send these first; up to 6 notes')
   })
 
   it('Esc cancels', () => {

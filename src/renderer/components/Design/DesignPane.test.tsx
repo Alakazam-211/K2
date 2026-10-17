@@ -4,8 +4,10 @@
 //    Browser pane never sends the flag;
 //  - its own Chat | page split (a design slot), the "Chat is open beside"
 //    rule, and the split width saved per window per room;
-//  - S / Select → pick → the note pop-up (an overlay claim, which freezes
-//    the page) → tray → badges → one Send to `browser/notes`;
+//  - Select on when the tab opens; the chrome-bar palette toggles it
+//    (accent while on); pick → the note pop-up (an overlay claim, which
+//    freezes the page) → tray → badges → one Send to `browser/notes`;
+//    ⌘↩ in the pop-up sends the typed note plus the tray at once;
 //  - closing the tab drops its notes; a workspace switch does not.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -239,7 +241,66 @@ describe('Chat | page split (DD5, DD6, D-A7)', () => {
   })
 })
 
+describe('the palette is the Select toggle', () => {
+  it('sits in the chrome bar after Back / Forward, before the URL, on and accent-coloured at open', async () => {
+    const ipc = fakeIpc([])
+    renderDesign(ipc)
+    await flush()
+    const palette = screen.getByRole('button', { name: 'Select an element' })
+    expect(palette.getAttribute('aria-pressed')).toBe('true')
+    expect(palette.className).toContain('text-[var(--color-accent)]')
+    expect(ipc.calls).toContain('arm:i-design')
+    // Order in the chrome bar: Back, Forward, palette, then the URL field.
+    const forward = screen.getByRole('button', { name: 'Forward' })
+    const url = document.querySelector('[data-browser-address]') as HTMLElement
+    expect(forward.compareDocumentPosition(palette) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(palette.compareDocumentPosition(url) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // No Select button, no S hint anywhere in the pane.
+    expect(screen.queryByRole('button', { name: /^select$/i })).toBeNull()
+    expect(document.querySelector('kbd')).toBeNull()
+
+    act(() => {
+      fireEvent.click(palette)
+    })
+    await flush()
+    expect(palette.getAttribute('aria-pressed')).toBe('false')
+    expect(palette.className).not.toContain('text-[var(--color-accent)]')
+    expect(ipc.calls.at(-1)).toBe('disarm:i-design')
+    act(() => {
+      fireEvent.click(palette)
+    })
+    await flush()
+    expect(palette.getAttribute('aria-pressed')).toBe('true')
+    expect(ipc.calls.at(-1)).toBe('arm:i-design')
+  })
+})
+
 describe('pick → note → tray → Send', () => {
+  it('⌘↩ in the pop-up sends the typed note plus the tray in one post', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    const res = useDesignNotesStore.getState().add('i-design', { comment: 'pinned earlier', url: 'http://localhost:5173/pricing', title: 'Pricing' })
+    if (!res.ok) throw new Error(res.reason)
+    renderDesign(fakeIpc([{ events: [PICK], navSeq: 1 }]))
+    await flush()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(450)
+    })
+    const field = screen.getByRole('dialog', { name: 'Note for the agent' }).querySelector('textarea') as HTMLTextAreaElement
+    act(() => {
+      fireEvent.change(field, { target: { value: 'bigger' } })
+    })
+    await act(async () => {
+      fireEvent.keyDown(field, { key: 'Enter', metaKey: true })
+    })
+    await flush()
+    expect(screen.queryByRole('dialog', { name: 'Note for the agent' })).toBeNull()
+    const posts = vi.mocked(daemonCliPost).mock.calls.filter((c) => c[1] === 'browser/notes')
+    expect(posts).toHaveLength(1)
+    expect((posts[0][2] as { notes: { comment: string }[] }).notes.map((n) => n.comment)).toEqual(['pinned earlier', 'bigger'])
+    expect(useDesignNotesStore.getState().trays['i-design'].notes).toEqual([])
+  })
+
+
   it('a pick opens the pop-up (an overlay claim), Add pins a note, badges follow, Send posts once', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
     const ipc = fakeIpc([{ events: [PICK], navSeq: 1 }])

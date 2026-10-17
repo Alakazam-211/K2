@@ -90,6 +90,9 @@ interface BrowserPaneProps {
   /** DOM strip between the chrome bar and the dock (the Design toolbar and
    *  notes tray). It never overlaps the page, so it never freezes it. */
   aboveDock?: React.ReactNode
+  /** Chrome-bar controls after Back / Forward and before the URL field
+   *  (the Design tab's palette, which toggles Select). */
+  navExtra?: React.ReactNode
   /** The dock element (where the native page sits), for callers that place
    *  DOM beside the page (the Design note pop-up). */
   dockRef?: React.MutableRefObject<HTMLDivElement | null>
@@ -207,6 +210,7 @@ export function BrowserPane({
   standalone = false,
   design = false,
   aboveDock,
+  navExtra,
   dockRef,
 }: BrowserPaneProps): React.JSX.Element {
   // Home M3 — URL / page-meta stamps go to this pane's room's tabs store.
@@ -747,6 +751,7 @@ export function BrowserPane({
             <polyline points="4 2 7 5 4 8" />
           </svg>
         </button>
+        {navExtra}
         </div>
         <input
           ref={addressRef}

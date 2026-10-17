@@ -49,7 +49,7 @@ export interface PickResult {
 }
 
 /** One event the picker IPC drains from the page (sibling src-tauri work). */
-export type PickEvent = PickResult | { type: 'key'; key: 'toggle-select' | 'escape' }
+export type PickEvent = PickResult | { type: 'key'; key: 'escape' }
 
 export type PickPoll = { events: PickEvent[]; navSeq: number } | null
 

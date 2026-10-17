@@ -623,7 +623,16 @@ export async function linkOauthComplete(args: {
  *  may carry a `hint`. Never returns tokens or codes. */
 export async function linkOauthStatus(
   linkId: string,
-): Promise<{ state: 'pending' | 'connected' | 'denied' | 'expired' | 'error'; address?: string; hint?: string }> {
+): Promise<{
+  state: 'pending' | 'connected' | 'denied' | 'expired' | 'error'
+  address?: string
+  hint?: string
+  /** Stable failure code (account_mismatch, admin_consent_required,
+   *  device_code_blocked, scope_not_granted, client_misconfigured, …). */
+  code?: string
+  /** admin_consent_required only: the page a tenant admin approves K2 on. */
+  adminConsentUrl?: string
+}> {
   return daemonCliGet(primaryScope(), 'mail/link/oauth/status', { linkId })
 }
 
@@ -650,6 +659,11 @@ export interface OauthProviderConfig {
   clientId?: string
   /** Whether a client secret is vaulted (Gmail only; Microsoft is public). */
   secretSet: boolean
+  /** A real client id is in effect (a build with no baked app still
+   *  carries a placeholder). Absent on daemons before MCS2. */
+  configured?: boolean
+  /** Microsoft only: the identity-platform authority (`common` default). */
+  tenant?: string
 }
 
 /** GET /cli/mail/oauth-config — per-provider BYO-OAuth client state. The

@@ -71,9 +71,6 @@ impl Backend {
     }
 }
 
-/// Does the Microsoft Graph backend send yet? MCS2 builds Graph
-/// `sendMail` + reply; until then a granted `Mail.Send` is not enough.
-pub const GRAPH_SEND_BUILT: bool = false;
 
 /// One capability's verdict: on, or off with a reason + fix.
 struct Verdict {
@@ -165,25 +162,15 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
             "backend_unsupported",
             "drafts are saved into linked inboxes only — a hosted inbox sends with 'k2 mail send'",
         ),
-        Backend::Microsoft if !GRAPH_SEND_BUILT => Verdict::off(
-            "not_built",
-            "new (compose) drafts on Microsoft 365 inboxes are not available in this K2 version \
-             — reply drafts are",
-        ),
         _ if !mail_scope => Verdict::off("scope_not_granted", upgrade_fix(address, "mail")),
         _ => Verdict::on(),
     };
-    let send_backend = match backend {
-        Backend::Microsoft if !GRAPH_SEND_BUILT => Verdict::off(
-            "not_built",
-            "sending from Microsoft 365 inboxes is not available in this K2 version — save a \
-             draft with 'k2 mail draft'",
-        ),
-        Backend::Microsoft if !send_scope => {
-            Verdict::off("scope_not_granted", upgrade_fix(address, "mail"))
-        }
-        _ if !send_scope => Verdict::off("scope_not_granted", upgrade_fix(address, "mail")),
-        _ => Verdict::on(),
+    // MCS2: Microsoft sends over Graph (`sendMail` / createReply → send)
+    // once `Mail.Send` is granted (a pre-MCS1 link never asked for it).
+    let send_backend = if send_scope {
+        Verdict::on()
+    } else {
+        Verdict::off("scope_not_granted", upgrade_fix(address, "mail"))
     };
     let level = input.level;
     let mail = [
@@ -390,9 +377,10 @@ mod tests {
         );
         assert_eq!(v["account"]["kind"], "work");
         assert_eq!(v["account"]["checked"], true);
-        if !GRAPH_SEND_BUILT {
-            assert_eq!(missing_for(&v, "mail.send").unwrap()["reason"], "not_built");
-        }
+        // MCS2: Mail.Send granted → Graph send + compose drafts are on.
+        assert_eq!(v["mail"]["send"], true);
+        assert_eq!(v["mail"]["compose"], true);
+        assert!(missing_for(&v, "mail.send").is_none());
     }
 
     #[test]

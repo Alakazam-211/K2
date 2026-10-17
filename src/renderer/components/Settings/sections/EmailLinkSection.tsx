@@ -140,7 +140,8 @@ function CopyButton({ text, title }: { text: string; title?: string }): React.JS
 // page** (same native child-webview as tab browsers). The IMAP app-password
 // form is hidden while the session is live. Works for local and remote
 // daemons (PKCE verifier stays on the daemon; code is relayed via complete).
-// Microsoft: device flow card (coming soon). Tokens never render.
+// Microsoft: device flow card (enabled once a Microsoft app is configured,
+// MCS2). Tokens never render.
 
 const OAUTH_POLL_MS = 3000
 const OAUTH_MAX_MS = 10 * 60 * 1000 // hard bound if the provider gives none
@@ -163,22 +164,118 @@ type OauthFlow =
 
 type OauthResult =
   | { kind: 'connected'; address?: string }
-  | { kind: 'failed'; state: 'denied' | 'expired' | 'error'; hint?: string }
+  | {
+      kind: 'failed'
+      state: 'denied' | 'expired' | 'error'
+      hint?: string
+      code?: string
+      adminConsentUrl?: string
+    }
   | { kind: 'remote_unsupported'; message: string }
   | { kind: 'error'; message: string }
+
+/** What the "Connect Microsoft" button can do, from the daemon's OAuth app
+ *  config (MCS2). `cfg` is `null` while loading and `'error'` when the read
+ *  failed. Enabled only when a real Microsoft client id is in effect —
+ *  either baked into this build or the owner's own (OAuth apps, below). */
+export function microsoftLinkState(cfg: OauthConfig | null | 'error'): {
+  enabled: boolean
+  badge: string | null
+  title: string
+} {
+  if (cfg === null) {
+    return { enabled: false, badge: null, title: 'Checking for a Microsoft app…' }
+  }
+  if (cfg === 'error') {
+    return {
+      enabled: false,
+      badge: 'Unavailable',
+      title: "Couldn't read the OAuth app config from the daemon",
+    }
+  }
+  const ms = cfg.providers.microsoft
+  if (ms.configured === undefined) {
+    // A daemon from before Graph send: Microsoft linking isn't offered here.
+    return { enabled: false, badge: 'Coming soon', title: 'Microsoft (Outlook / 365) linking is coming soon' }
+  }
+  if (!ms.configured) {
+    return {
+      enabled: false,
+      badge: 'Needs an app',
+      title:
+        'No Microsoft app on this K2 build — add your Entra app id under OAuth apps (advanced) below',
+    }
+  }
+  return {
+    enabled: true,
+    badge: null,
+    title: 'Sign in with a device code (Outlook / Microsoft 365)',
+  }
+}
+
+/** The "Connect Microsoft" button, enabled only when a Microsoft OAuth app
+ *  is configured (see {@link microsoftLinkState}). */
+export function MicrosoftConnectButton({
+  cfg,
+  canStart,
+  busy,
+  onStart,
+}: {
+  cfg: OauthConfig | null | 'error'
+  canStart: boolean
+  busy: boolean
+  onStart: () => void
+}): React.JSX.Element {
+  const st = microsoftLinkState(cfg)
+  return (
+    <button
+      type="button"
+      disabled={!st.enabled || !canStart}
+      onClick={onStart}
+      title={st.title}
+      data-testid="connect-microsoft"
+      className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+    >
+      {busy ? 'Starting…' : 'Connect Microsoft (Outlook / 365)'}
+      {st.badge && (
+        <span className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide border border-[var(--color-border)] flex-shrink-0">
+          {st.badge}
+        </span>
+      )}
+    </button>
+  )
+}
 
 function OauthConnect({
   canMutate,
   onConnected,
   onSessionActiveChange,
+  oauthRevision = 0,
 }: {
   canMutate: boolean
   /** Refresh the connected-inbox list + select the new inbox. */
   onConnected: (address: string) => void
   /** Parent hides IMAP chrome and expands the panel while the browser is up. */
   onSessionActiveChange?: (active: boolean) => void
+  /** Bumped when the owner saves/resets an OAuth app, so the Microsoft
+   *  button re-reads whether one is configured. */
+  oauthRevision?: number
 }): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
+  const [oauthCfg, setOauthCfg] = useState<OauthConfig | null | 'error'>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetchOauthConfig()
+      .then((c) => {
+        if (!cancelled) setOauthCfg(c)
+      })
+      .catch(() => {
+        if (!cancelled) setOauthCfg('error')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [oauthRevision])
 
   const [project, setProject] = useState('')
   const [address, setAddress] = useState('')
@@ -369,7 +466,13 @@ function OauthConnect({
           setFlow(null)
           onConnectedRef.current(s.address ?? address.trim())
         } else if (s.state === 'denied' || s.state === 'expired' || s.state === 'error') {
-          setResult({ kind: 'failed', state: s.state, hint: s.hint })
+          setResult({
+            kind: 'failed',
+            state: s.state,
+            hint: s.hint,
+            code: s.code,
+            adminConsentUrl: s.adminConsentUrl,
+          })
           closeOauthBrowser(oauthBrowserItemIdRef.current ?? undefined)
           oauthBrowserItemIdRef.current = null
           setFlow(null)
@@ -546,17 +649,12 @@ function OauthConnect({
         >
           {busy === 'gmail' ? 'Starting…' : 'Connect Gmail'}
         </button>
-        <button
-          type="button"
-          disabled
-          title="Microsoft (Outlook / 365) linking is coming soon"
-          className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-        >
-          Connect Microsoft (Outlook / 365)
-          <span className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide border border-[var(--color-border)] flex-shrink-0">
-            Coming soon
-          </span>
-        </button>
+        <MicrosoftConnectButton
+          cfg={oauthCfg}
+          canStart={canStart}
+          busy={busy === 'microsoft'}
+          onStart={() => void start('microsoft')}
+        />
       </div>
 
       {flow?.kind === 'device' && (
@@ -606,9 +704,22 @@ function OauthConnect({
               ? 'Access was denied.'
               : result.state === 'expired'
                 ? 'The request expired before it was approved.'
-                : 'Something went wrong linking the account.'}
+                : result.code === 'account_mismatch'
+                  ? 'A different account signed in.'
+                  : result.code === 'admin_consent_required'
+                    ? 'Your Microsoft 365 admin needs to approve K2 first.'
+                    : 'Something went wrong linking the account.'}
             {result.hint ? ` ${result.hint}` : ''}
           </p>
+          {result.adminConsentUrl && (
+            <button
+              type="button"
+              onClick={() => void openUrl(result.adminConsentUrl as string)}
+              className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer mr-2"
+            >
+              Open the admin consent page
+            </button>
+          )}
           <button
             type="button"
             onClick={reset}
@@ -819,12 +930,22 @@ function OauthClientRow({
   )
 }
 
-function OauthAppsSection({ canMutate }: { canMutate: boolean }): React.JSX.Element {
+function OauthAppsSection({
+  canMutate,
+  onChanged,
+}: {
+  canMutate: boolean
+  /** Tell the Connect buttons an OAuth app was saved or reset. */
+  onChanged?: () => void
+}): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [config, setConfig] = useState<OauthConfig | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [revision, setRevision] = useState(0)
-  const bump = useCallback(() => setRevision((r) => r + 1), [])
+  const bump = useCallback(() => {
+    setRevision((r) => r + 1)
+    onChanged?.()
+  }, [onChanged])
 
   // Lazy-load: only hit the daemon once the section is expanded (and on
   // refetch after a save/reset). Collapsed = network-silent.
@@ -942,6 +1063,9 @@ function AddInboxForm({
   const [draftsFolder, setDraftsFolder] = useState('')
   const [password, setPassword] = useState('')
   const [gmailOauthActive, setGmailOauthActive] = useState(false)
+  // Bumped when an OAuth app is saved/reset so "Connect Microsoft" re-reads it.
+  const [oauthRevision, setOauthRevision] = useState(0)
+  const bumpOauthRevision = useCallback(() => setOauthRevision((r) => r + 1), [])
 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1024,7 +1148,7 @@ function AddInboxForm({
             Connect one of your email accounts and pick the workspace that will be its{' '}
             <strong>Primary</strong>. Prefer <strong>Connect Gmail</strong> (opens Google consent
             in this page). Or use an app-password over IMAP below. The Primary manages the account
-            and can grant other workspaces access. K2 never sends from the account.
+            and can grant other workspaces access. Agents send from it only at the Send level, under the workspace's sending mode.
           </p>
         </div>
       )}
@@ -1034,10 +1158,13 @@ function AddInboxForm({
           canMutate={canMutate}
           onConnected={onAdded}
           onSessionActiveChange={handleGmailOauthActive}
+          oauthRevision={oauthRevision}
         />
       </div>
 
-      {!gmailOauthActive && <OauthAppsSection canMutate={canMutate} />}
+      {!gmailOauthActive && (
+        <OauthAppsSection canMutate={canMutate} onChanged={bumpOauthRevision} />
+      )}
 
       {!gmailOauthActive && (
         <div className="border-t border-[var(--color-border)] pt-4 space-y-3">

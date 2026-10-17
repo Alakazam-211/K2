@@ -148,20 +148,16 @@ pub fn gate_for_path(project_path: &str) -> Result<Gate, SendError> {
     ))
 }
 
-/// Linked/BYO SMTP send gate (hole #3 / E4). Same `mail_agent_send`
-/// setting as hosted: **off** refuses, **on** allows. **approval**
-/// refuses with a clear teaching — the Approvals queue + approve path
-/// submit via Stalwart (hosted only); linked SMTP has no approve→SMTP
-/// hand-off yet, so we never queue a message that cannot be approved.
+/// Linked/BYO send gate (hole #3 / E4). Same `mail_agent_send` setting
+/// as hosted: **off** refuses, **on** allows, and — since MCS2's linked
+/// approval hand-off (prd-app-mail-calendar-surfaces-v1 §3.3, MCS-A5) —
+/// **approval** queues: an approved linked message leaves through its own
+/// provider ([`approve_and_submit_with`] resolves a
+/// [`crate::mail::submit::MailSubmit`] from the From address).
 pub fn allow_linked_send(gate: Gate) -> Result<(), SendError> {
     match gate {
-        Gate::On => Ok(()),
+        Gate::On | Gate::Approval => Ok(()),
         Gate::Off => Err(SendError::Gated(agent_send_off_hint())),
-        Gate::Approval => Err(SendError::Gated(format!(
-            "outbound email requires approval for this workspace, but the approval queue \
-             only covers hosted K2 mailboxes — linked/BYO send needs mode 'on'. Your human \
-             can set it with {AGENT_SEND_CONTROLS}, or send from a hosted address"
-        ))),
     }
 }
 
@@ -203,6 +199,63 @@ pub struct OutboundMessage {
     /// Reply threading: original References + original Message-ID.
     #[serde(default)]
     pub references: Option<String>,
+    /// MCS2, LINKED replies: the backend id of the message being answered
+    /// (`uid:…` IMAP, `graph:…` Graph). The provider re-reads it at send
+    /// time and locks the recipient to its sender (SMTP threading /
+    /// Graph `createReply`). `None` for a fresh message and for hosted
+    /// replies (which carry their own threading headers above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_source: Option<String>,
+    /// MCS2, LINKED sends under approval: the attachment files, captured at
+    /// queue time (the workspace file may change before a human decides).
+    /// Stored base64 inside the 0600 body file, never in the DB, never
+    /// logged. Empty for hosted sends (hosted attachments aren't built).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<StoredAttachment>,
+}
+
+/// One attachment held in an outbound body file (MCS2). `Debug` prints
+/// the size only — never the bytes.
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredAttachment {
+    pub filename: String,
+    pub content_type: String,
+    /// Standard base64 of the file bytes.
+    pub data_b64: String,
+}
+
+impl std::fmt::Debug for StoredAttachment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredAttachment")
+            .field("filename", &self.filename)
+            .field("content_type", &self.content_type)
+            .field("data_b64", &format_args!("<{} chars>", self.data_b64.len()))
+            .finish()
+    }
+}
+
+impl StoredAttachment {
+    pub fn from_out(a: &crate::mail::external_smtp::OutAttachment) -> StoredAttachment {
+        use base64::Engine as _;
+        StoredAttachment {
+            filename: a.filename.clone(),
+            content_type: a.content_type.clone(),
+            data_b64: base64::engine::general_purpose::STANDARD.encode(&a.bytes),
+        }
+    }
+
+    pub fn to_out(&self) -> Result<crate::mail::external_smtp::OutAttachment, String> {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(self.data_b64.as_bytes())
+            .map_err(|e| format!("stored attachment '{}' is corrupt: {e}", self.filename))?;
+        Ok(crate::mail::external_smtp::OutAttachment {
+            filename: self.filename.clone(),
+            content_type: self.content_type.clone(),
+            bytes,
+        })
+    }
 }
 
 impl OutboundMessage {
@@ -1093,11 +1146,40 @@ pub enum ApproveOutcome {
     Scheduled { send_after: i64 },
 }
 
-/// Approve one pending outbound and submit it (or hold as scheduled).
+/// Approve one pending HOSTED outbound and submit it (or hold as
+/// scheduled) — the pre-MCS2 entry point, kept for the hosted-only
+/// callers; it resolves every message to `backend` + the From's account.
 pub fn approve_and_submit(
     store: &dyn OutboundStore,
     backend: Result<&dyn SubmitBackend, String>,
     account_id_for_from: &mut dyn FnMut(&str) -> Result<String, String>,
+    id: &str,
+    decided_by: &str,
+    note: Option<&str>,
+    now: i64,
+) -> Result<ApproveOutcome, SendError> {
+    let mut resolve = |msg: &OutboundMessage| -> Result<Box<dyn crate::mail::submit::MailSubmit + '_>, String> {
+        let b = match &backend {
+            Ok(b) => *b,
+            Err(e) => return Err(format!("mail server unavailable: {e}")),
+        };
+        let account = account_id_for_from(&msg.from)
+            .map_err(|e| format!("sender address unavailable: {e}"))?;
+        Ok(Box::new(crate::mail::submit::HostedSubmit { backend: b, account_id: account }))
+    };
+    approve_and_submit_with(store, &mut resolve, id, decided_by, note, now)
+}
+
+/// MCS2 (PRD §3.3, MCS-A5): approve one pending outbound and hand it to
+/// the backend `resolve` picks for its From address — hosted JMAP, linked
+/// SMTP, or Microsoft Graph — so the approval queue covers linked inboxes
+/// too. Same atomic `pending → approved` CAS first; a resolve/submit
+/// failure marks the row `failed` with the reason (never a body, never a
+/// credential). A LINKED reply re-reads its source and re-locks the
+/// recipient at send time.
+pub fn approve_and_submit_with<'r>(
+    store: &dyn OutboundStore,
+    resolve: &mut dyn FnMut(&OutboundMessage) -> Result<Box<dyn crate::mail::submit::MailSubmit + 'r>, String>,
     id: &str,
     decided_by: &str,
     note: Option<&str>,
@@ -1139,26 +1221,102 @@ pub fn approve_and_submit(
         let _ = store.append_note(id, &format!("submit failed: {reason}"), now);
         Ok(ApproveOutcome::FailedToSubmit(reason.to_string()))
     };
-    let backend = match backend {
-        Ok(b) => b,
-        Err(e) => return fail(store, &format!("mail server unavailable: {e}")),
-    };
     let msg = match store.load_message(id) {
         Ok(m) => m,
         Err(e) => return fail(store, &format!("stored message unreadable: {e}")),
     };
-    let account_id = match account_id_for_from(&msg.from) {
-        Ok(a) => a,
-        Err(e) => return fail(store, &format!("sender address unavailable: {e}")),
+    let submit = match resolve(&msg) {
+        Ok(s) => s,
+        Err(e) => return fail(store, &e),
     };
-    match backend.submit(&account_id, &msg) {
-        Ok(()) => {
+    let mut attachments = Vec::with_capacity(msg.attachments.len());
+    for a in &msg.attachments {
+        match a.to_out() {
+            Ok(o) => attachments.push(o),
+            Err(e) => return fail(store, &e),
+        }
+    }
+    let sent = match msg.reply_source.as_deref() {
+        Some(src) => submit.reply(src, &msg, &attachments),
+        None => submit.submit(&msg, &attachments),
+    };
+    match sent {
+        Ok(_) => {
             if let Err(e) = store.transition(id, "approved", "sent", None, None, now) {
                 k2_core::log_debug!("[mail/send] sent-mark failed for {id}: {e}");
             }
             Ok(ApproveOutcome::Submitted)
         }
-        Err(e) => fail(store, &e),
+        Err(e) => fail(store, &e.to_string()),
+    }
+}
+
+/// MCS2 (PRD §3.3, MCS-A5): the governed pipeline for a LINKED inbox —
+/// the same rate limits and audit-row-first rule as hosted, then:
+/// approval → a `pending` row (attachments captured into the body file);
+/// on → an `approved` row, then the provider (`submit`), then `sent` or
+/// `failed`. No row, no send. Linked scheduling stays hosted-only (the
+/// route refuses `--at/--in` before this).
+pub fn gate_and_dispatch_linked(
+    store: &dyn OutboundStore,
+    submit: &dyn crate::mail::submit::MailSubmit,
+    gate: Gate,
+    req: &OutboundRequest,
+    attachments: &[crate::mail::external_smtp::OutAttachment],
+    now: i64,
+) -> Result<(SendOutcome, Option<crate::mail::submit::Receipt>), SendError> {
+    check_rate_limits(store, &req.message.from, now)?;
+    let names: Vec<String> = attachments.iter().map(|a| a.filename.clone()).collect();
+    match gate {
+        Gate::Off => Err(SendError::Gated(agent_send_off_hint())),
+        Gate::Approval => {
+            let mut held = req.message.clone();
+            held.attachments = attachments.iter().map(StoredAttachment::from_out).collect();
+            let id = store
+                .insert(&NewOutbound {
+                    owner_project_id: req.project_id,
+                    agent_name: req.agent_name,
+                    message: &held,
+                    status: "pending",
+                    decided_by: None,
+                    attachment_names: &names,
+                    send_after: None,
+                    now,
+                })
+                .map_err(SendError::Engine)?;
+            Ok((SendOutcome::Queued { id, send_after: None }, None))
+        }
+        Gate::On => {
+            let id = store
+                .insert(&NewOutbound {
+                    owner_project_id: req.project_id,
+                    agent_name: req.agent_name,
+                    message: req.message,
+                    status: "approved",
+                    decided_by: Some("policy:agent-send-on"),
+                    attachment_names: &names,
+                    send_after: None,
+                    now,
+                })
+                .map_err(SendError::Engine)?;
+            let sent = match req.message.reply_source.as_deref() {
+                Some(src) => submit.reply(src, req.message, attachments),
+                None => submit.submit(req.message, attachments),
+            };
+            match sent {
+                Ok(receipt) => {
+                    if let Err(e) = store.transition(&id, "approved", "sent", None, None, now) {
+                        k2_core::log_debug!("[mail/send] sent-mark failed for {id}: {e}");
+                    }
+                    Ok((SendOutcome::Submitted { id }, Some(receipt)))
+                }
+                Err(e) => {
+                    let _ = store.transition(&id, "approved", "failed", None, None, now);
+                    let _ = store.append_note(&id, &format!("submit failed: {e}"), now);
+                    Ok((SendOutcome::SubmitFailed { id, error: e.to_string() }, None))
+                }
+            }
+        }
     }
 }
 
@@ -1347,6 +1505,8 @@ mod tests {
             text_body: "All green.".to_string(),
             in_reply_to: None,
             references: None,
+            reply_source: None,
+            attachments: Vec::new(),
         }
     }
 
@@ -1473,12 +1633,13 @@ mod tests {
         assert!(matches!(&err, SendError::Engine(h) if h.contains("banana")), "{err:?}");
     }
 
-    /// E4: linked/BYO SMTP — off blocks, on allows, approval refuses
-    /// with a teaching (hosted-only queue) rather than queueing a
-    /// message that approve cannot SMTP-submit.
+    /// E4: linked/BYO send — off blocks, on allows, and since MCS2's
+    /// linked approval hand-off approval queues too (approve resolves the
+    /// linked provider).
     #[test]
-    fn linked_send_gate_off_blocks_on_allows_approval_refuses_with_teaching() {
+    fn linked_send_gate_off_blocks_on_and_approval_allow() {
         assert!(allow_linked_send(Gate::On).is_ok());
+        assert!(allow_linked_send(Gate::Approval).is_ok(), "MCS2: linked approval queues");
 
         let err = allow_linked_send(Gate::Off).expect_err("off must block");
         match err {
@@ -1488,21 +1649,6 @@ mod tests {
                 // hosted-only Email page (Appa/Baden, macOS 0.45.4).
                 assert!(h.contains("`k2 mail sending <workspace> on`"), "{h}");
                 assert!(h.contains("Workspaces / Agents → <workspace> → Email sending"), "{h}");
-                assert!(!h.contains("Settings → Email → Sending"), "{h}");
-            }
-            other => panic!("expected Gated, got {other:?}"),
-        }
-
-        let err = allow_linked_send(Gate::Approval).expect_err("approval must refuse linked");
-        match err {
-            SendError::Gated(h) => {
-                assert!(h.contains("approval"), "{h}");
-                assert!(h.contains("hosted"), "{h}");
-                assert!(
-                    h.contains("linked") || h.contains("BYO") || h.contains("'on'"),
-                    "{h}"
-                );
-                assert!(h.contains("`k2 mail sending <workspace> on`"), "{h}");
                 assert!(!h.contains("Settings → Email → Sending"), "{h}");
             }
             other => panic!("expected Gated, got {other:?}"),

@@ -420,24 +420,10 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
         },
     };
 
+    // MCS2 (MCS-A4): Microsoft 365 (Graph) inboxes take compose drafts and
+    // draft attachments too (inline, ≤ 3 MB each — larger answers
+    // `attachment_too_large` until upload sessions exist).
     let backend = messages::backend_for_address(&inbox.email_address);
-    if matches!(backend, MailBackend::Graph) {
-        if matches!(kind, DraftKind::Compose { .. }) {
-            return error_response(
-                "400 Bad Request",
-                "usage",
-                "composing a new draft is not supported on Microsoft 365 (Graph) inboxes yet \
-                 — reply to an existing message with 'k2 mail draft <id> --body' (createReply)",
-            );
-        }
-        if !attach_specs.is_empty() {
-            return error_response(
-                "400 Bad Request",
-                "usage",
-                "attachments on drafts aren't supported on Microsoft 365 (Graph) inboxes yet",
-            );
-        }
-    }
 
     let attachments = match routes_send::read_workspace_attachments(&path, &attach_specs) {
         Ok(a) => a,
@@ -464,14 +450,37 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
 
     match backend {
         MailBackend::Graph => {
-            let DraftKind::Reply { email_id, .. } = &kind else {
-                unreachable!("Graph compose refused above");
-            };
             let http = std::sync::Arc::new(graph::RealGraphHttp::new(inbox.id.clone()));
             let backend = graph::GraphBackend::new(inbox.clone(), http);
-            match backend.save_reply_draft(&inbox.id, email_id, &b.body) {
+            let atts: Vec<graph::GraphAttachment> = parts
+                .iter()
+                .map(|p| graph::GraphAttachment {
+                    filename: &p.filename,
+                    content_type: &p.content_type,
+                    bytes: &p.bytes,
+                })
+                .collect();
+            let saved = match &kind {
+                DraftKind::Reply { email_id, .. } => {
+                    backend.save_reply_draft_with(&inbox.id, email_id, &b.body, &atts)
+                }
+                DraftKind::Compose { to, cc, bcc, subject } => backend.save_compose_draft(
+                    &inbox.id, to, cc, bcc, subject, &b.body, &atts,
+                ),
+            };
+            match saved {
                 Ok(folder) => ok_draft(folder),
-                Err(hint) => error_response("502 Bad Gateway", "engine", &hint),
+                Err(graph::GraphSendError::TooLarge(h)) => {
+                    error_response("400 Bad Request", "attachment_too_large", &h)
+                }
+                Err(graph::GraphSendError::NotFound(_)) => error_response(
+                    "404 Not Found",
+                    "not_found",
+                    &format!("no message '{}' in this workspace", b.id),
+                ),
+                Err(graph::GraphSendError::Engine(h)) => {
+                    error_response("502 Bad Gateway", "engine", &h)
+                }
             }
         }
         _ => {
@@ -1066,40 +1075,61 @@ mod tests {
     }
 
     #[test]
-    fn draft_graph_compose_and_graph_attach_are_teaching_errors() {
+    /// MCS2 (MCS-A4): a Microsoft 365 inbox takes compose drafts and draft
+    /// attachments now — the request reaches the Graph backend (here it
+    /// stops at the missing vaulted token, never a network call), and an
+    /// attachment over Graph's 3 MB inline limit is `attachment_too_large`
+    /// before anything is created.
+    fn draft_graph_compose_and_graph_attach_reach_graph() {
         let (name, path) = unique("graph-compose");
         let project_id = insert_project(&name, &path);
         let mine = format!("mine-{}@ext.example", &project_id[..8]);
         seed_linked(&project_id, &mine, "graph", "oauth", Some("Drafts"));
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE mail_external_inboxes SET provider = 'microsoft' \
+                 WHERE email_address = ?1",
+                rusqlite::params![mine],
+            )
+            .expect("provider");
+        }
 
         let resp = handle_draft(
             serde_json::json!({
                 "project": path,
                 "to": "someone@x.example",
                 "subject": "Hello",
-                "body": "nope",
+                "body": "compose on graph",
             })
             .to_string()
             .as_bytes(),
         );
-        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert_eq!(resp.status, "502 Bad Gateway", "{}", resp.body);
         let hint = body_json(&resp)["error"]["hint"].as_str().expect("hint").to_string();
-        assert!(hint.contains("Graph") || hint.contains("createReply"), "{hint}");
+        assert!(hint.contains("oauth"), "reached the Graph token step: {hint}");
+        assert!(!hint.contains("not supported"), "{hint}");
 
+        // A 3 MB + 1 file in the workspace → attachment_too_large, no call.
+        std::fs::create_dir_all(&path).expect("workspace dir");
+        let big = std::path::Path::new(&path).join("big.bin");
+        std::fs::write(&big, vec![0u8; crate::mail::graph::GRAPH_INLINE_ATTACHMENT_MAX + 1])
+            .expect("big file");
         let token = messages::encode_message_id(&mine, "graph:AAA");
         let resp = handle_draft(
             serde_json::json!({
                 "project": path,
                 "id": token,
                 "body": "hi",
-                "attachments": ["a.pdf"],
+                "attachments": ["big.bin"],
             })
             .to_string()
             .as_bytes(),
         );
+        let _ = std::fs::remove_dir_all(&path);
         assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
-        let hint = body_json(&resp)["error"]["hint"].as_str().expect("hint").to_string();
-        assert!(hint.contains("attachment"), "{hint}");
+        assert_eq!(body_json(&resp)["error"]["code"], "attachment_too_large", "{}", resp.body);
 
         cleanup_project(&project_id);
     }

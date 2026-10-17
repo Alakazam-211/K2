@@ -175,6 +175,7 @@ pub mod routes_server;
 pub mod schedule;
 pub mod secrets;
 pub mod send;
+pub mod submit;
 pub mod sieve_user;
 pub mod spam;
 pub mod helper;

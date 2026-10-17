@@ -21,7 +21,7 @@ import {
   type ActivityRow,
 } from '@/stores/activity'
 import { sessionsStatus, worseUnseen, type UnseenOutcome } from '@/lib/agent-status'
-import { PinnedChatStatus, TabSlotRest, TabTitleGrid } from '@/components/TabBar/TabStatus'
+import { PinnedChatStatus, TAB_MAX_PX, TAB_MIN_PX, TabSlotRest, TabTitleGrid } from '@/components/TabBar/TabStatus'
 import { pinOf, sessionsOf, usePinnedSizeStore } from '@/stores/pinned-size'
 import { applyPinSize, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
 import PinDimensionsModal from '@/components/PaneLayout/PinDimensionsModal'
@@ -51,7 +51,7 @@ import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
 import { cachedChangesAvailable, probeChangesAvailable } from '@/stores/git-changes'
-import { PinnedTabSlotGlyph, TabPinButton } from '@/components/TabBar/TabPin'
+import { PinnedTabMark } from '@/components/TabBar/TabPin'
 import { clampTabDropIndex, isPinnedDesignTab, isPinnedTab } from '@/lib/pinned-tabs'
 import { PaletteIcon } from '@/components/icons/K2Icons'
 import { isDesignModeEnabled } from '@/components/Design/design-mode-setting'
@@ -689,17 +689,6 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     [removeTabFromGroup, groupIndex, room]
   )
 
-  // Pin / unpin from the tab itself (hover pin, the pinned tab's pin slot,
-  // right-click). A view-only room changes no tabs.
-  const handleTogglePinTab = useCallback(
-    (e: React.MouseEvent, tabId: string) => {
-      e.stopPropagation()
-      if (room.readOnly) return
-      room.tabs.getState().togglePinTab(tabId)
-    },
-    [room]
-  )
-
   const handleTabContextMenu = useCallback(async (e: React.MouseEvent, tabId: string, pinSessionId: string | null) => {
     e.preventDefault()
     e.stopPropagation()
@@ -1146,7 +1135,14 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
               data-tab-id={tab.id}
               data-tab-reorder-index={index}
               data-tab-pinned={isPinnedTab(tab) ? 'true' : undefined}
-              className={`group relative flex h-full min-w-[100px] max-w-[200px] flex-shrink-0 items-center border-r border-[var(--color-border)] px-3 text-xs transition-colors select-none ${
+              // Width (Rosson 2026-10-16): the tab is as wide as its
+              // content (icon + title + status slot + padding), capped at
+              // TAB_MAX_PX where the title truncates, never below
+              // TAB_MIN_PX. No fixed width: a short title gives a narrow
+              // tab. The title grid's hidden sizer keeps the width the
+              // same when the working / status slot changes.
+              style={{ minWidth: TAB_MIN_PX, maxWidth: TAB_MAX_PX }}
+              className={`group relative flex h-full flex-shrink-0 items-center border-r border-[var(--color-border)] px-3 text-xs transition-colors select-none ${
                 isActive
                   ? 'bg-white/[0.08] text-[var(--color-text-primary)]'
                   : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04]'
@@ -1291,9 +1287,6 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   closeTerminalForRenderer; this is purely the
                   visual cue.
                   See `.k2so/prds/heartbeat-active-session-tracking.md`. */}
-              {!room.readOnly && !isPinnedTab(tab) && editingTabId !== tab.id && (
-                <TabPinButton onPin={(e) => handleTogglePinTab(e, tab.id)} />
-              )}
               {(() => {
                 // Detect a heartbeat tab two ways:
                 //   1. `heartbeatName` stamped on the terminal data
@@ -1326,14 +1319,12 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                 // hovering ANYWHERE on the tab swaps it for the close glyph:
                 // × for a regular tab, – (minimize) for a heartbeat / API
                 // tab. Nothing else moves.
-                // A pinned tab has no ×: its slot is the pin, and a click
-                // there unpins (TabPin.tsx). Close Tab is in its menu. At
-                // rest a pinned session tab shows its status or working, and
-                // the pin where the live / reaped square would be.
+                // A pinned tab hovers the same way (no pin or Unpin on
+                // hover; Pin / Unpin Tab is in its right-click menu). At rest
+                // it shows its status or working, else a static pin where
+                // the live / reaped square would be (TabPin.tsx).
                 const pinned = isPinnedTab(tab)
-                const closeGlyph = pinned ? (
-                  <PinnedTabSlotGlyph />
-                ) : isMinimizeTab ? (
+                const closeGlyph = isMinimizeTab ? (
                   <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
                     <line x1="1.5" y1="4" x2="6.5" y2="4" />
                   </svg>
@@ -1346,7 +1337,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   pinned && (tabView.status === 'live' || tabView.status === 'reaped' || tabView.status === 'idle') && !tabView.working
                     ? null
                     : tabView
-                const rest = isSessionTab && restView ? <TabSlotRest view={restView} /> : null
+                const rest = isSessionTab && restView ? <TabSlotRest view={restView} /> : pinned ? <PinnedTabMark /> : null
                 const slotStyle: React.CSSProperties = { width: 14, height: 14, marginLeft: 'var(--clu-gap)' }
                 if (room.readOnly) {
                   // A view-only room closes nothing, but still shows status.
@@ -1360,13 +1351,11 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   <button
                     className="flex flex-shrink-0 items-center justify-center hover:bg-[var(--color-wash-2)] group/close"
                     style={slotStyle}
-                    data-tab-close-slot={pinned ? 'unpin' : 'close'}
+                    data-tab-close-slot="close"
                     data-tab-status={isSessionTab ? tabView.status : undefined}
-                    onClick={(e) => (pinned ? handleTogglePinTab(e, tab.id) : handleCloseTab(e, tab.id))}
+                    onClick={(e) => handleCloseTab(e, tab.id)}
                     title={
-                      pinned
-                        ? 'Unpin tab'
-                        : isMinimizeTab
+                      isMinimizeTab
                         ? isAgentActive
                           ? 'Session is working — hide anyway (PTY keeps running)'
                           : 'Hide tab — session keeps running in the background'

@@ -8,6 +8,8 @@
 //        and a late answer from the old server never lands (TB16).
 //   A3/TB14: a server that does not report `tickets-list-all` gets a dimmed
 //        `?` and no fetch.
+//   Badge me: a server reporting `tickets-badge-me` is asked for the
+//        "Waiting on me" count (`me: true`); an older one stays host-wide.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -106,6 +108,22 @@ describe('Tickets badge freshness', () => {
     await useFeedbackStore.getState().refreshWaitingCount()
     expect(badge()).toEqual({ count: 2, stale: false, unsupported: false })
     expect(api.fetchWaitingCount).toHaveBeenCalledTimes(1)
+  })
+
+  it('a server with tickets-badge-me is asked for the "Waiting on me" count; an older one for the host-wide count', async () => {
+    useConnectHostStore.getState().selectHost(A)
+    noteServerVersion(homeHostKey(A), '0.45.7', ['tickets-list-all'])
+    api.fetchWaitingCount.mockResolvedValueOnce(5)
+    await useFeedbackStore.getState().refreshWaitingCount()
+    expect(api.fetchWaitingCount).toHaveBeenLastCalledWith({ me: false })
+    expect(badge()).toEqual({ count: 5, stale: false, unsupported: false })
+
+    noteServerVersion(homeHostKey(A), '0.46.0', ['tickets-list-all', 'tickets-badge-me'])
+    api.fetchWaitingCount.mockResolvedValueOnce(2)
+    await useFeedbackStore.getState().refreshWaitingCount()
+    expect(api.fetchWaitingCount).toHaveBeenLastCalledWith({ me: true })
+    expect(badge()).toEqual({ count: 2, stale: false, unsupported: false })
+    expect(api.fetchWaitingCount).toHaveBeenCalledTimes(2)
   })
 
   it('T9: leaving connected marks the badge stale with no fetch; the heal re-reads it once', async () => {

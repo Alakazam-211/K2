@@ -19,6 +19,12 @@ import {
   useStyleStore,
 } from '@/stores/style'
 import { parseSchemeMode } from '@/lib/style-resolve'
+import {
+  normalizeNewAgentView,
+  readNewAgentView,
+  writeNewAgentView,
+  type NewAgentViewPref,
+} from '@/components/SessionView/sessionViewTab'
 // Phase 2 Unit 7a — settings live in the daemon; renderer hits
 // `/cli/settings/{get,update,reset}` directly. The Tauri `settings_*`
 // proxy commands still exist (back-compat for any caller not yet
@@ -221,6 +227,11 @@ interface SettingsState {
   // Thin-client view state — localStorage on THIS install, not the daemon.
   workspaceSwitchFocus: WorkspaceSwitchFocus
 
+  // "New agents open in" — the view (and Split sides) a conversation opens
+  // in when this client has no remembered view for it. Thin-client view
+  // state — localStorage `k2.newAgentView` on THIS install, not the daemon.
+  newAgentView: NewAgentViewPref
+
   // Editor settings
   editor: EditorSettingsBackend
 
@@ -285,6 +296,7 @@ interface SettingsState {
   setUseLlmHitlDetection: (enabled: boolean) => void
   setCompletionSoundEnabled: (enabled: boolean) => void
   setWorkspaceSwitchFocus: (value: WorkspaceSwitchFocus) => void
+  setNewAgentView: (pref: NewAgentViewPref) => void
   updateEditorSettings: (partial: Partial<EditorSettingsBackend>) => void
   updateStyleSettings: (partial: Partial<StyleSettingsBackend>) => void
   setDefaultAgent: (agent: string) => void
@@ -436,6 +448,7 @@ async function persistAndApply(
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       // Caret target is per-install localStorage — never adopt the daemon echo.
       workspaceSwitchFocus: readWorkspaceSwitchFocus(),
+      newAgentView: readNewAgentView(),
       editor: mergeEditorDefaults(result.editor),
       // Style is client-local SSOT — never adopt the daemon echo here.
       style: styleFromLocalStore(),
@@ -480,6 +493,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   useLlmHitlDetection: false,
   completionSoundEnabled: true,
   workspaceSwitchFocus: readWorkspaceSwitchFocus(),
+  newAgentView: readNewAgentView(),
   editor: { ...DEFAULT_EDITOR },
   style: { ...DEFAULT_STYLE },
   defaultAgent: 'claude',
@@ -772,6 +786,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ workspaceSwitchFocus: next })
   },
 
+  setNewAgentView: (pref: NewAgentViewPref) => {
+    const next = normalizeNewAgentView(pref)
+    writeNewAgentView(next)
+    set({ newAgentView: next })
+  },
+
   updateEditorSettings: async (partial: Partial<EditorSettingsBackend>) => {
     const prev = get().editor
     const merged = { ...prev, ...partial }
@@ -896,6 +916,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
       workspaceSwitchFocus: readWorkspaceSwitchFocus(),
+      newAgentView: readNewAgentView(),
       editor: mergeEditorDefaults(result.editor),
       // Always reflect the live local selection — never the daemon echo.
       style: styleFromLocalStore(),

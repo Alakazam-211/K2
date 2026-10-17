@@ -58,6 +58,12 @@ import { primaryScope } from '@/kessel/server-scope'
 import { RemoteRoomsPreviewRow } from './RemoteRoomsPreviewRow'
 import { AppFontRows } from '../shared/AppFontRows'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
+import {
+  parseSessionViewTab,
+  parseSplitPaneView,
+  type SessionViewTab,
+  type SplitPaneView,
+} from '@/components/SessionView/sessionViewTab'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.app-version', section: 'general', group: 'General', label: 'App Version', description: 'K2 version and auto-updater. Right-click the version to toggle automatic update checks.', keywords: ['update', 'version', 'check', 'release', 'automatic', 'disable'] },
@@ -71,6 +77,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.active-window-hours', section: 'general', group: 'Workspaces', label: 'Active Bar window', description: 'How long workspaces stay Active after activity', keywords: ['active', 'bar', 'window', 'hours', 'tenure', 'workspace', 'recent', 'sidebar'] },
   { id: 'general.completion-sound', section: 'general', group: 'Workspaces', label: 'Completion sound', description: 'Play a sound when an agent finishes unwatched', keywords: ['sound', 'chime', 'audio', 'notification', 'agent', 'done', 'finished', 'complete', 'unseen', 'orange', 'amber', 'dot'] },
   { id: 'general.workspace-switch-focus', section: 'general', group: 'Workspaces', label: 'When moving between workspaces, auto-select', description: 'Switching workspaces or project panes (⌘1–⌘9) focuses the terminal or the agent message box so you can type immediately', keywords: ['workspace', 'switch', 'focus', 'terminal', 'composer', 'message', 'agent', 'auto-select', 'input', 'pane', 'project'] },
+  { id: 'general.new-agent-view', section: 'general', group: 'Workspaces', label: 'New agents open in', description: 'The view a new agent opens in: Terminal, Chat (beta), Thread, Chatter, or Split view with the two sides you choose. Agents you already set a view for keep it.', keywords: ['new', 'agent', 'default', 'view', 'open', 'terminal', 'chat', 'thread', 'chatter', 'split', 'split view', 'left', 'right', 'side', 'layout', 'workspace'] },
   { id: 'general.daemon', section: 'general', group: 'Server', label: 'K2 Server', description: 'Background service that keeps agents running when the app is closed', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent'] },
   { id: 'general.keep-daemon-on-quit', section: 'general', group: 'Server', label: 'Keep server running when the window is closed', description: 'When on, clicking the red close button hides the window and keeps the Agent & Companion server running. When off, the red button stops everything. Cmd+Q always closes everything.', keywords: ['daemon', 'server', 'agent', 'companion', 'close', 'red button', 'window', 'hide', 'background', 'persistent'] },
   { id: 'general.clone-personal-computers', section: 'general', group: 'Server', label: "Allow cloning agents to people's personal computers", description: 'When off, Admins and Members cannot clone agents from this server to their own computers. Owner only.', keywords: ['clone', 'copy', 'agent', 'workspace', 'personal', 'computer', 'pull', 'permission', 'migrate'] },
@@ -397,9 +404,7 @@ export function GeneralSection(): React.JSX.Element {
             <p className="text-[10px] text-[var(--color-text-muted)] leading-relaxed -mt-1">
               How workspaces behave in the sidebar Active bar and when agents finish out of view.
             </p>
-            <ActiveWindowHoursRow />
-            <CompletionSoundRow />
-            <WorkspaceSwitchFocusRow />
+            <WorkspaceBehaviorRows />
           </div>
           {/* Full column for Canonical Agent Flow diagram + guide */}
           <div className="border-t border-[var(--color-border)] pt-5 w-full">
@@ -452,6 +457,18 @@ export function GeneralRemoteHostPanel(): React.JSX.Element {
         <UpdateHostRow />
       </div>
     </div>
+  )
+}
+
+/** General → Workspaces rows, in order. Exported for tests. */
+export function WorkspaceBehaviorRows(): React.JSX.Element {
+  return (
+    <>
+      <ActiveWindowHoursRow />
+      <CompletionSoundRow />
+      <WorkspaceSwitchFocusRow />
+      <NewAgentViewRow />
+    </>
   )
 }
 
@@ -564,7 +581,7 @@ function WorkspaceSwitchFocusRow(): React.JSX.Element {
 
   return (
     <div
-      className="flex items-center justify-between py-2"
+      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
       data-settings-id="general.workspace-switch-focus"
     >
       <div className="flex-1 min-w-0 mr-3">
@@ -586,6 +603,94 @@ function WorkspaceSwitchFocusRow(): React.JSX.Element {
         ]}
         onChange={(v) => setWorkspaceSwitchFocus(normalizeWorkspaceSwitchFocus(v))}
       />
+    </div>
+  )
+}
+
+// ── New agents open in ─────────────────────────────────────────────────
+// The view a conversation opens in when this client has no remembered view
+// for it (Terminal / Chat / Thread / Chatter / Split view — the same choices
+// as the view button on an agent). Conversations with a remembered view keep
+// it. Thin-client only (`k2.newAgentView` in localStorage), like the
+// auto-select row above and the per-conversation view memory.
+const NEW_AGENT_VIEW_OPTIONS: { value: SessionViewTab; label: string }[] = [
+  { value: 'terminal', label: 'Terminal' },
+  { value: 'chat', label: 'Chat (beta)' },
+  { value: 'thread', label: 'Thread' },
+  { value: 'chatter', label: 'Chatter' },
+  { value: 'split', label: 'Split view' },
+]
+
+const SPLIT_SIDE_OPTIONS: { value: SplitPaneView; label: string }[] = [
+  { value: 'terminal', label: 'Terminal' },
+  { value: 'chat', label: 'Chat (beta)' },
+  { value: 'thread', label: 'Thread' },
+  { value: 'chatter', label: 'Chatter' },
+]
+
+function NewAgentViewRow(): React.JSX.Element {
+  const pref = useSettingsStore((s) => s.newAgentView)
+  const setNewAgentView = useSettingsStore((s) => s.setNewAgentView)
+  const isSplit = pref.view === 'split'
+
+  return (
+    <div data-settings-id="general.new-agent-view">
+      <div className="flex items-center justify-between py-2">
+        <div className="flex-1 min-w-0 mr-3">
+          <span className="text-xs text-[var(--color-text-secondary)]">
+            New agents open in
+          </span>
+          <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+            The view an agent opens in the first time you see it here. Agents
+            you have already set a view for keep it. Chat needs a harness with
+            a chat view; others open in Terminal.
+          </p>
+        </div>
+        <SettingDropdown
+          value={pref.view}
+          ariaLabel="New agents open in"
+          options={NEW_AGENT_VIEW_OPTIONS}
+          onChange={(v) =>
+            setNewAgentView({ view: parseSessionViewTab(v), split: pref.split })
+          }
+        />
+      </div>
+      {isSplit ? (
+        <div className="pl-3 pb-2 space-y-1" data-testid="new-agent-view-split">
+          <div className="flex items-center justify-between py-1">
+            <span className="text-[11px] text-[var(--color-text-muted)]">Left side</span>
+            <SettingDropdown
+              value={pref.split.left}
+              ariaLabel="Split view left side"
+              options={SPLIT_SIDE_OPTIONS.map((o) => ({
+                ...o,
+                disabled: o.value === pref.split.right,
+              }))}
+              onChange={(v) => {
+                const left = parseSplitPaneView(v, pref.split.left)
+                if (left === pref.split.right) return
+                setNewAgentView({ view: 'split', split: { left, right: pref.split.right } })
+              }}
+            />
+          </div>
+          <div className="flex items-center justify-between py-1">
+            <span className="text-[11px] text-[var(--color-text-muted)]">Right side</span>
+            <SettingDropdown
+              value={pref.split.right}
+              ariaLabel="Split view right side"
+              options={SPLIT_SIDE_OPTIONS.map((o) => ({
+                ...o,
+                disabled: o.value === pref.split.left,
+              }))}
+              onChange={(v) => {
+                const right = parseSplitPaneView(v, pref.split.right)
+                if (right === pref.split.left) return
+                setNewAgentView({ view: 'split', split: { left: pref.split.left, right } })
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -340,8 +340,10 @@ function StepBody({ step }: { step: ThreadStripStep }): React.JSX.Element {
  *  drawer keeps showing the turn it had, so it doesn't slide out and back
  *  in (Rosson 2026-10-16: "if the agent is still working we don't need to
  *  collapse the activity dog ear and then re-open it"). Past this hold with
- *  no new turn, it goes as any ended turn does. */
-export const SUPERSEDE_HOLD_MS = 2_000
+ *  no new turn, it goes as any ended turn does. 3s, as K2 Companion holds
+ *  it (`f7c4d19`): over a tunnel the new turn's first frame can take a
+ *  second or more. */
+export const SUPERSEDE_HOLD_MS = 3_000
 
 /** The turn the drawer draws: `turn`, or while a `superseded` end is
  *  within its hold, the last live state of that same turn (`lastLive`). */
@@ -352,9 +354,9 @@ export function zenDrawerHeldTurn(turn: ThreadTurn | null, lastLive: ThreadTurn 
 }
 
 /** This client's clock, re-read every second while the turn runs (or is
- *  held after a supersede), and once more when a "Stopped" linger or the
- *  supersede hold runs out. */
-function useDrawerNow(turn: ThreadTurn | null): number {
+ *  held after a supersede: `holding`), and once more when a "Stopped"
+ *  linger or the supersede hold runs out. */
+function useDrawerNow(turn: ThreadTurn | null, holding: boolean): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     setNow(Date.now())
@@ -364,6 +366,7 @@ function useDrawerNow(turn: ThreadTurn | null): number {
       return () => clearInterval(id)
     }
     if (turn.end.reason === 'superseded') {
+      if (!holding) return
       const left = turn.end.at + SUPERSEDE_HOLD_MS - (Date.now() + turn.skewMs)
       if (left <= 0) return
       const tick = setInterval(() => setNow(Date.now()), 1_000)
@@ -379,7 +382,7 @@ function useDrawerNow(turn: ThreadTurn | null): number {
       const id = setTimeout(() => setNow(Date.now()), left + 50)
       return () => clearTimeout(id)
     }
-  }, [turn])
+  }, [turn, holding])
   return now
 }
 
@@ -403,10 +406,13 @@ export function ZenActivityDrawer({
    *  with no message box, e.g. a view-only room). */
   attached?: boolean
 }): React.JSX.Element | null {
-  const now = useDrawerNow(turn)
   // The last live state, for the supersede hold (a message sent mid-turn).
+  // No turn (a Thread switch, or the server says none runs) or another
+  // turn's end drops it: a hold never outlives its own turn.
   const lastLive = useRef<ThreadTurn | null>(null)
   if (turn && turn.end === null) lastLive.current = turn
+  else if (!turn || turn.turnId !== lastLive.current?.turnId) lastLive.current = null
+  const now = useDrawerNow(turn, lastLive.current !== null && turn?.end?.reason === 'superseded')
   const drawn = zenDrawerHeldTurn(turn, lastLive.current, now)
   const line = drawn ? threadDrawerLine(drawn, now) : null
   const stoppable = !!onStop && !!drawn && threadStripView(drawn, now)?.stoppable === true

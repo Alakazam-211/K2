@@ -52,7 +52,9 @@ import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
 import { cachedChangesAvailable, probeChangesAvailable } from '@/stores/git-changes'
 import { PinnedTabSlotGlyph, TabPinButton } from '@/components/TabBar/TabPin'
-import { clampTabDropIndex, isPinnedTab } from '@/lib/pinned-tabs'
+import { clampTabDropIndex, isPinnedDesignTab, isPinnedTab } from '@/lib/pinned-tabs'
+import { PaletteIcon } from '@/components/icons/K2Icons'
+import { isDesignModeEnabled } from '@/components/Design/design-mode-setting'
 import { useToastStore } from '@/stores/toast'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import DrawerTabBarToggle from '@/components/Layout/DrawerTabBarToggle'
@@ -71,13 +73,15 @@ function presetMenuIcon(preset: AgentPreset): ReactNode {
   return <AgentIcon agent={preset.label} size={14} />
 }
 
-/** Terminal, New File, Browser, Changes (when the server can do git; C5), then enabled
- *  presets in store order. No separator when none are enabled. */
-function buildPlusMenuItems(
+/** Terminal, New File, Browser, Design (while the workspace's Design mode
+ *  is on; D-A5, Q-F2), Changes (when the server can do git; C5), then
+ *  enabled presets in store order. No separator when none are enabled. */
+export function buildPlusMenuItems(
   presets: AgentPreset[],
   defaultPresetId: string | null,
   sandboxHint: boolean,
   isGitRepo = false,
+  designMode = false,
 ): ContextMenuItemDef[] {
   const enabled = presets.filter((p) => p.enabled !== 0)
   const items: ContextMenuItemDef[] = [
@@ -85,6 +89,7 @@ function buildPlusMenuItems(
     { id: 'new-file', label: 'New File', shortcut: metaChordLabel('Meta+N') ?? undefined },
     { id: 'browser', label: 'Browser' },
   ]
+  if (designMode) items.push({ id: 'design', label: 'Design', icon: <PaletteIcon size={14} /> })
   if (isGitRepo) items.push({ id: 'changes', label: 'Changes', icon: <ChangesTabIcon /> })
   if (enabled.length === 0) return items
   items.push({ id: 'plus-presets-sep', label: '', type: 'separator' })
@@ -219,6 +224,27 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
   // another server is another project.
   const projectId = useRoomProjects((projects) => projects.find((p) => p.path === cwd)?.id ?? null)
 
+  // The workspace's Design mode (daemon setting, Q-F2) adds or removes the
+  // pinned Design tab. The workspace restore already applied it
+  // (`ensurePinnedAgentTabForMode`); this follows a FLIP of the setting on
+  // the same workspace (this window's switch, another client's through
+  // `sync:projects`). A workspace switch is not a flip. Primary strip only.
+  const designProjectPath = useRoomProjects(
+    (projects) => projects.find((p) => p.path === cwd || p.workspaces?.some((w) => w.worktreePath === cwd))?.path ?? null,
+  )
+  const designModeOn = useRoomProjects((projects) => {
+    const p = projects.find((x) => x.path === cwd || x.workspaces?.some((w) => w.worktreePath === cwd))
+    return p ? isDesignModeEnabled(p) : null
+  })
+  const lastDesignModeRef = useRef<{ path: string | null; on: boolean | null }>({ path: designProjectPath, on: designModeOn })
+  useEffect(() => {
+    const last = lastDesignModeRef.current
+    lastDesignModeRef.current = { path: designProjectPath, on: designModeOn }
+    if (groupIndex !== 0 || designProjectPath === null || designModeOn === null) return
+    if (last.path !== designProjectPath || last.on === null || last.on === designModeOn) return
+    room.tabs.getState().ensurePinnedDesignTab(designProjectPath, designModeOn)
+  }, [room, groupIndex, designProjectPath, designModeOn])
+
   // ── Pin-to-size, right-click entry (PRD presence-multiplayer §5.5) ─────
   //
   // The pushpin icon-button (v0.40.27) is gone: pinning lives in the
@@ -334,6 +360,10 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     // Home M5: open in sandbox takes the owner daemon token on the server
     // (`sandbox/open`), so a Home room on another server never offers it.
     const canSandbox = scopeMayWrite(room.scope, 'sandbox/open')
+    // Design shows only for a workspace this room knows whose Design mode
+    // is on (Q-F2), read from the room's own project list (no fetch).
+    const designProject = roomProjectForCwd(room, barCwd) ?? roomActiveProject(room)
+    const designMode = designProject !== null && isDesignModeEnabled(designProject)
     // Snapshot Option. selectItem resolves an id only, so the click and Enter
     // that call it have to record altKey before that promise continues.
     let optionHeld = e.altKey
@@ -350,7 +380,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       shown = optionHeld
       shownGit = isGitRepo
       useContextMenuStore.getState().replaceItems(
-        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, isGitRepo),
+        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, isGitRepo, designMode),
       )
     }
     probeChangesAvailable(room.scope, barCwd).then(
@@ -401,7 +431,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       window.removeEventListener('blur', onBlur)
     }
     try {
-      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, isGitRepo)
+      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, isGitRepo, designMode)
       const picked = await useContextMenuStore.getState().show(rect.left, rect.bottom, items)
       if (!picked) return
       if (picked === 'terminal') {
@@ -414,6 +444,11 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       }
       if (picked === 'browser') {
         room.tabs.getState().openUrlInNewTab('', group)
+        return
+      }
+      if (picked === 'design') {
+        // Always a new Design tab (DD3: many are allowed).
+        room.tabs.getState().openDesignTab(group)
         return
       }
       if (picked === 'changes') {
@@ -973,6 +1008,36 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
             ? resolvePinSessionId(pinItem, pinSessions, projects)
             : null
 
+          // The pinned Design tab (DD3): compact like Chat and Inbox, right
+          // after them, with the palette. No close, no drag, no menu; the
+          // workspace's Design mode setting owns it.
+          if (isPinnedDesignTab(tab)) {
+            const railIndex = tabs.slice(0, index).filter((t) => t.isSystemAgent || isPinnedDesignTab(t)).length
+            return (
+              <div
+                key={tab.id}
+                data-tab-id={tab.id}
+                data-tab-rail=""
+                data-tab-pinned-design=""
+                className={`group sticky z-20 flex h-full w-9 flex-shrink-0 items-center justify-center border-r border-[var(--color-border)] transition-colors select-none cursor-pointer ${
+                  isActive
+                    ? 'text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+                }`}
+                style={{
+                  left: railIndex * 36,
+                  background: isActive
+                    ? 'color-mix(in srgb, white 8%, var(--color-bg-surface))'
+                    : 'var(--color-bg-surface)',
+                }}
+                onClick={() => setActiveTabInGroup(groupIndex, tab.id)}
+                title="Design"
+              >
+                <PaletteIcon />
+              </div>
+            )
+          }
+
           // Pinned system agent tab — compact with just icon.
           // Post-0.36.0 the agent UI is split across two pinned tabs;
           // each gets its own icon based on the agent item's section.
@@ -1037,7 +1102,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
               )
             })()
 
-            const railIndex = tabs.slice(0, index).filter((t) => t.isSystemAgent).length
+            const railIndex = tabs.slice(0, index).filter((t) => t.isSystemAgent || isPinnedDesignTab(t)).length
             return (
               <div
                 key={tab.id}
@@ -1147,6 +1212,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     icon = <ShellTabIcon />
                   } else if (items.some((item) => item.type === 'changes')) {
                     icon = <ChangesTabIcon />
+                  } else if (items.some((item) => item.type === 'design')) {
+                    icon = <PaletteIcon size={14} />
                   } else if (items.some((item) => item.type === 'browser')) {
                     // After file and terminal. A mixed tab never reaches here.
                     const browser = items.find((item) => item.type === 'browser')

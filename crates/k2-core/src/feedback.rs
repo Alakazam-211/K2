@@ -412,13 +412,20 @@ fn sentinel_sql_list() -> String {
         .join(",")
 }
 
-/// Host-wide waiting-ticket count (Tickets badge). One query instead of
-/// N per-workspace `list` GETs over a remote tunnel.
+/// The statuses the Tickets badge counts: a ticket still waiting for an
+/// answer and one marked Needs discussion. Same set as the board's
+/// "Waiting on me" filter (`isWaitingOnSomeone`, Rosson 2026-10-16).
+const BADGE_STATUSES_SQL: &str = "('waiting','needs_discussion')";
+
+/// Host-wide Tickets badge count: tickets that are `waiting` or
+/// `needs_discussion`. One query instead of N per-workspace `list` GETs
+/// over a remote tunnel.
 ///
 /// Counts only tickets whose workspace is still registered and is not an
-/// audit sentinel: exactly the "Waiting on you" rows the Tickets page
-/// shows. A ticket from a removed or re-added workspace is unlinked. It
-/// is listed by [`list_host_with`] and never counted here.
+/// audit sentinel: rows the Tickets page can open. A ticket from a
+/// removed or re-added workspace is unlinked. It is listed by
+/// [`list_host_with`] and never counted here. Answered, planned, resolved
+/// and dismissed tickets never count.
 pub fn count_waiting() -> Result<i64, String> {
     let db = crate::db::shared();
     let conn = db.lock();
@@ -429,11 +436,57 @@ pub fn count_waiting() -> Result<i64, String> {
 pub fn count_waiting_with(conn: &rusqlite::Connection) -> Result<i64, String> {
     let sql = format!(
         "SELECT COUNT(*) FROM feedback f JOIN projects p ON p.id = f.project_id \
-         WHERE f.status = 'waiting' AND p.id NOT IN ({})",
+         WHERE f.status IN {BADGE_STATUSES_SQL} AND p.id NOT IN ({})",
         sentinel_sql_list()
     );
     conn.query_row(&sql, [], |row| row.get(0))
         .map_err(|e| format!("count waiting: {e}"))
+}
+
+/// [`count_waiting`] scoped to one login: only tickets with an assignee
+/// in `me` (the board's "Waiting on me" count). `me` are the assignee
+/// names that mean the caller (the daemon's `my_assignee_names`).
+/// Matching is case-insensitive and ignores surrounding spaces, like the
+/// renderer's `isAssignedToMe`. An empty `me` counts nothing.
+pub fn count_waiting_for(me: &[String]) -> Result<i64, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    count_waiting_for_with(&conn, me)
+}
+
+/// [`count_waiting_for`] on a caller-supplied connection.
+pub fn count_waiting_for_with(conn: &rusqlite::Connection, me: &[String]) -> Result<i64, String> {
+    let me: std::collections::HashSet<String> = me
+        .iter()
+        .map(|n| n.trim().to_lowercase())
+        .filter(|n| !n.is_empty())
+        .collect();
+    if me.is_empty() {
+        return Ok(0);
+    }
+    // Compare in Rust, not SQL: SQLite's lower() folds ASCII only, and the
+    // renderer lower-cases with full Unicode rules.
+    let sql = format!(
+        "SELECT f.id, a.username FROM feedback f \
+         JOIN projects p ON p.id = f.project_id \
+         JOIN feedback_assignees a ON a.feedback_id = f.id \
+         WHERE f.status IN {BADGE_STATUSES_SQL} AND p.id NOT IN ({})",
+        sentinel_sql_list()
+    );
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("count waiting for me: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|e| format!("count waiting for me: {e}"))?;
+    let mut mine = std::collections::HashSet::new();
+    for row in rows {
+        let (id, username) = row.map_err(|e| format!("count waiting for me: {e}"))?;
+        if me.contains(&username.trim().to_lowercase()) {
+            mine.insert(id);
+        }
+    }
+    Ok(mine.len() as i64)
 }
 
 /// One row of the host-wide list: the item plus where it lives. A ticket
@@ -987,6 +1040,56 @@ mod tests {
         conn.execute("DELETE FROM projects WHERE id = 'proj-p'", [])
             .expect("delete project");
         assert_eq!(count_waiting_with(&conn).expect("count"), 0);
+    }
+
+    #[test]
+    fn t1b_count_waiting_counts_needs_discussion_but_not_closed_or_answered() {
+        let conn = crate::db::isolated_test_connection();
+        insert_project(&conn, "proj-p", "Alpha", "/tmp/tb-alpha");
+        insert_ticket(&conn, "proj-p", "waiting", "still waiting", 100);
+        insert_ticket(&conn, "proj-p", "needs_discussion", "needs a talk", 101);
+        for (i, status) in ["answered", "resolved", "dismissed", "planned"].iter().enumerate() {
+            insert_ticket(&conn, "proj-p", status, "not waiting on anyone", 110 + i as i64);
+        }
+        // A needs_discussion ticket on a sentinel stays out.
+        insert_ticket(&conn, "_orphan", "needs_discussion", "on the orphan sentinel", 120);
+
+        assert_eq!(count_waiting_with(&conn).expect("count"), 2);
+    }
+
+    #[test]
+    fn t1c_count_waiting_for_me_counts_only_my_open_tickets() {
+        let conn = crate::db::isolated_test_connection();
+        insert_project(&conn, "proj-p", "Alpha", "/tmp/tb-alpha");
+        let assign = |id: &str, who: &str| {
+            conn.execute(
+                "INSERT INTO feedback_assignees (feedback_id, username, assigned_at) \
+                 VALUES (?1, ?2, 1)",
+                params![id, who],
+            )
+            .expect("assign");
+        };
+        let mine_waiting = insert_ticket(&conn, "proj-p", "waiting", "mine, waiting", 100);
+        assign(&mine_waiting, "owner");
+        let mine_talk = insert_ticket(&conn, "proj-p", "needs_discussion", "mine, talk", 101);
+        // Display-name match is case-insensitive and ignores spaces.
+        assign(&mine_talk, " Rosson ");
+        // Assigned to me twice (owner + display name) still counts once.
+        assign(&mine_talk, "owner");
+        let mine_answered = insert_ticket(&conn, "proj-p", "answered", "mine, answered", 102);
+        assign(&mine_answered, "owner");
+        let mine_resolved = insert_ticket(&conn, "proj-p", "resolved", "mine, resolved", 103);
+        assign(&mine_resolved, "owner");
+        let alices = insert_ticket(&conn, "proj-p", "waiting", "alice's", 104);
+        assign(&alices, "alice");
+        insert_ticket(&conn, "proj-p", "needs_discussion", "unassigned", 105);
+
+        let me = vec!["owner".to_string(), "rosson".to_string()];
+        assert_eq!(count_waiting_for_with(&conn, &me).expect("count"), 2);
+        assert_eq!(count_waiting_for_with(&conn, &["ALICE".to_string()]).expect("count"), 1);
+        assert_eq!(count_waiting_for_with(&conn, &[]).expect("count"), 0);
+        // Host-wide still counts every open ticket on a live workspace.
+        assert_eq!(count_waiting_with(&conn).expect("count"), 4);
     }
 
     #[test]

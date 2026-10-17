@@ -11398,9 +11398,60 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // GET /cli/feedback/waiting-count[?me=1] — the Tickets badge.
+        // Same door as the catchall it used to ride (`token_ok`: owner
+        // token or a Connect-user session; app passes never). Claimed here
+        // because `me=1` needs the caller: owner token → `owner` + the
+        // owner's display name, a session → its username
+        // (`my_assignee_names`), like `/cli/auth/whoami`. The scope comes
+        // from the token, never from a client-sent name. Feature key
+        // `tickets-badge-me` says this daemon honours `me=1`.
+        p if p == "/cli/feedback/waiting-count" => {
+            let params =
+                super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query)
+                    .await;
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let me = if crate::cli::bool_param(&params, "me") {
+                let tok = super::http::extract_token(&query).unwrap_or("");
+                let owner = super::http::ct_eq_token(tok, state.token.as_str());
+                let username = if owner {
+                    None
+                } else {
+                    k2_core::connect_users::validate_session(tok)
+                };
+                Some((owner, username))
+            } else {
+                None
+            };
+            let resp = tokio::task::spawn_blocking(move || {
+                let names = me.map(|(owner, username)| {
+                    let display = if owner {
+                        k2_core::app_settings::load().owner_display_name
+                    } else {
+                        None
+                    };
+                    crate::feedback_routes::my_assignee_names(
+                        owner,
+                        username.as_deref(),
+                        display.as_deref(),
+                    )
+                });
+                crate::feedback_routes::handle_waiting_count(names)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         // Skin tickets GET — dedicated arms before the catchall. Do not
         // fall through to owner 404 `not_found`. waiting-count stays off
-        // this door (catchall / owner glob).
+        // this door (its own `token_ok` arm above).
         p if p == "/cli/feedback/list" || p == "/cli/feedback/show" => {
             let _ = stream.read(&mut buf).await;
             let skin_presented = super::http::extract_token(&query)

@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 //
 // plan-agent-status-unify-v1 S5 (mock-up "Tab strip", AFTER): session tabs
-// draw the shared status model. Status slot = the ranked status, else
-// working (no status, Q7 = B), else live / reaped; the working grid gets
-// its own slot only next to a status, and the title takes that slot when
-// it is free. Hovering the tab swaps only the status slot for ×. The
+// draw the shared status model in ONE status slot: the ranked status, else
+// live / reaped. While working, the 3×3 grid takes that slot and the status
+// moves to a bottom-left corner badge (Rosson 2026-10-16, 0.46.0: no space
+// reserved for working). Hovering the tab swaps only the status slot for ×. The
 // pinned Chat swaps its icon for the grid while working and wears its
 // status as a corner badge (no underline). Done and failed are never the
 // needs-you orange.
@@ -54,14 +54,14 @@ function row(sessionId: string, agentName: string, display: ActivityDisplay, ext
   }
 }
 
-function termTab(id: string, title: string): Tab {
+function termTab(id: string, title: string, extra?: Partial<Tab>): Tab {
   const item: Item = {
     id: `${id}-item`,
     type: 'terminal',
     data: { terminalId: `t-${id}`, cwd: '/ws', command: 'claude', sessionId: `s-${id}` },
   } as Item
   const pg: PaneGroup = { id: `${id}-pg`, items: [item], activeItemIndex: 0 }
-  return { id, title, mosaicTree: pg.id, paneGroups: new Map([[pg.id, pg]]) }
+  return { id, title, mosaicTree: pg.id, paneGroups: new Map([[pg.id, pg]]), ...extra }
 }
 
 function fileTab(id: string): Tab {
@@ -94,23 +94,24 @@ function tabEl(id: string): HTMLElement {
   return el
 }
 
-/** What the tab shows at rest: [status slot's mark, working-slot use]. */
-function restOf(id: string): { slot: string; workingSlot: string | null; title: string | null } {
+/** What the tab shows at rest: the status slot's mark and its corner badge. */
+function restOf(id: string): { slot: string; badge: string | null } {
   const tab = tabEl(id)
   const rest = tab.querySelector('[data-tab-slot-rest]')
   let slot = 'close-only'
+  let badge: string | null = null
   if (rest) {
-    const status = rest.querySelector('[data-slot="status"]')
-    const working = rest.querySelector('[data-slot="working"][data-working]')
-    slot = status ? `status:${status.getAttribute('data-agent-status')}` : working ? 'working' : '?'
+    const working = rest.querySelector(':scope > [data-tab-slot-working] > [data-slot="working"][data-working]')
+    const status = rest.querySelector(':scope > [data-slot="status"]')
+    const pin = rest.querySelector(':scope > [data-tab-pinned-glyph]')
+    slot = working ? 'working' : status ? `status:${status.getAttribute('data-agent-status')}` : pin ? 'pin' : rest.children.length === 0 ? 'empty' : '?'
+    const b = rest.querySelector('[data-tab-badge]')
+    if (b) {
+      const bs = b.querySelector('[data-slot="status"]')
+      badge = bs ? `status:${bs.getAttribute('data-agent-status')}` : b.querySelector('[data-tab-pinned-glyph]') ? 'pin' : '?'
+    }
   }
-  const grid = tab.querySelector('[data-tab-title-grid]')
-  const title = tab.querySelector('[data-tab-title]')
-  return {
-    slot,
-    workingSlot: grid?.getAttribute('data-working-slot') ?? null,
-    title: title instanceof HTMLElement ? title.style.gridColumn : null,
-  }
+  return { slot, badge }
 }
 
 function render(): void {
@@ -131,27 +132,63 @@ afterEach(() => {
 })
 
 describe('session tabs: one status model (S5)', () => {
-  it('working, no status: the grid sits in the status slot; the title takes the free working slot', () => {
+  it('working, live: the grid takes the status slot; live is the bottom-left badge', () => {
     setTabs([termTab('a', 'Refactor auth')])
     seed([row('s-a', 'tab-t-a', 'working')])
     render()
-    expect(restOf('a')).toEqual({ slot: 'working', workingSlot: 'free', title: '1 / span 2' })
+    expect(restOf('a')).toEqual({ slot: 'working', badge: 'status:live' })
   })
 
-  it('working + needs you: the grid takes its own slot, the status slot shows needs you', () => {
+  it('working + needs you: the grid takes the status slot; needs you is the bottom-left badge', () => {
     setTabs([termTab('a', 'Fix flaky test')])
     seed([row('s-a', 'tab-t-a', 'waiting', { children: { subagents: 1, shells: 0, monitors: 0, crons: 0, unknown: 0, owed: 0, waiting: 0 } })])
     render()
-    expect(restOf('a')).toEqual({ slot: 'status:needs-you', workingSlot: 'used', title: '1' })
-    const grid = tabEl('a').querySelector('[data-tab-title-grid] [data-slot="working"] [data-agent-working]')
-    expect(grid).toBeTruthy()
+    expect(restOf('a')).toEqual({ slot: 'working', badge: 'status:needs-you' })
+    const tab = tabEl('a')
+    const badge = tab.querySelector('[data-tab-close-slot] [data-tab-badge]') as HTMLElement
+    // Bottom-left of the 14px slot, hanging 3px out, on the tab's background.
+    expect([badge.style.left, badge.style.bottom, badge.style.right, badge.style.top, badge.style.width, badge.style.height]).toEqual([
+      '-3px',
+      '-3px',
+      '',
+      '',
+      '10px',
+      '10px',
+    ])
+    expect(badge.className.split(' ')).toEqual(expect.arrayContaining(['absolute', 'pointer-events-none']))
+    expect(badge.style.background).toBe('var(--tab-bg, var(--color-bg-surface))')
+    const mark = badge.querySelector('[data-slot="status"]') as HTMLElement
+    expect([mark.style.width, mark.style.height]).toEqual(['8px', '8px'])
+    // Needs you keeps its orange in the badge.
+    expect(mark.style.color).toContain('status-needs-you')
+    // No separate working slot: the grid lives only in the status slot.
+    expect(tab.querySelectorAll('[data-slot="working"]')).toHaveLength(1)
+    expect(tab.querySelector('[data-tab-title-grid]')).toBeNull()
+    expect(tab.querySelector('[aria-hidden="true"].invisible')).toBeNull()
   })
 
-  it('needs you alone (lead waiting, nothing running): no working grid', () => {
+  it('the badge sits on the tab background (active vs inactive)', () => {
+    setTabs([termTab('a', 'Active one'), termTab('b', 'Other one')])
+    seed([row('s-a', 'tab-t-a', 'working'), row('s-b', 'tab-t-b', 'working')])
+    render()
+    expect(tabEl('a').style.getPropertyValue('--tab-bg')).toBe('color-mix(in srgb, white 8%, var(--color-bg-surface))')
+    expect(tabEl('b').style.getPropertyValue('--tab-bg')).toBe('var(--color-bg-surface)')
+  })
+
+  it('a pinned session tab: the pin rests in the slot; working, the grid takes it and the pin is the badge', () => {
+    setTabs([termTab('p', 'Pinned', { isPinnedFile: true }), termTab('q', 'Pinned busy', { isPinnedFile: true })])
+    seed([row('s-p', 'tab-t-p', 'idle'), row('s-q', 'tab-t-q', 'working')])
+    render()
+    expect(restOf('p')).toEqual({ slot: 'pin', badge: null })
+    expect(restOf('q')).toEqual({ slot: 'working', badge: 'pin' })
+  })
+
+  it('needs you alone (lead waiting, nothing running): the status in the slot, no grid, no badge', () => {
     setTabs([termTab('a', 'Release notes')])
     seed([row('s-a', 'tab-t-a', 'waiting')])
     render()
-    expect(restOf('a')).toEqual({ slot: 'status:needs-you', workingSlot: 'free', title: '1 / span 2' })
+    expect(restOf('a')).toEqual({ slot: 'status:needs-you', badge: null })
+    expect(tabEl('a').querySelector('[data-slot="working"]')).toBeNull()
   })
 
   it('done and failed (not viewed in this window) are ✓ and ×, ranked failed > done', () => {
@@ -181,8 +218,8 @@ describe('session tabs: one status model (S5)', () => {
     setTabs([termTab('a', 'zsh'), termTab('b', 'Old review')])
     seed([row('s-a', 'tab-t-a', 'idle')])
     render()
-    expect(restOf('a').slot).toBe('status:live')
-    expect(restOf('b').slot).toBe('status:reaped')
+    expect(restOf('a')).toEqual({ slot: 'status:live', badge: null })
+    expect(restOf('b')).toEqual({ slot: 'status:reaped', badge: null })
     expect(tabEl('a').querySelector('[data-live-square="live"]')).toBeTruthy()
     expect(tabEl('b').querySelector('[data-live-square="reaped"]')).toBeTruthy()
   })
@@ -206,25 +243,32 @@ describe('session tabs: one status model (S5)', () => {
     expect(hover?.querySelector('svg line')).toBeTruthy()
     // The tab itself is the hover group (not the 14px slot).
     expect(tabEl('a').className.split(' ')).toContain('group')
-    // The working grid is outside the slot, so hovering never hides it.
-    expect(slot.querySelector('[data-agent-working]')).toBeNull()
+    // The working grid and its badge are the resting mark, so hovering
+    // swaps them both for ×.
+    expect(slot.querySelector('[data-tab-slot-rest] [data-agent-working]')).toBeTruthy()
+    expect(slot.querySelector('[data-tab-slot-rest] [data-tab-badge]')).toBeTruthy()
+    expect(slot.querySelector('[data-tab-slot-hover] [data-agent-working]')).toBeNull()
   })
 
-  it('the slot is 14px with the cluster gap, and the tab sizes as title + working slot either way', () => {
+  it('the slot is 14px with the cluster gap, working or not; the title is one plain truncating span', () => {
     setTabs([termTab('a', 'Investigate websocket reconnect flake'), termTab('b', 'Investigate websocket reconnect flake')])
     seed([row('s-a', 'tab-t-a', 'idle'), row('s-b', 'tab-t-b', 'waiting', { lead: { state: 'working', outcome: 'none', since: 0, promptId: null } })])
     render()
     for (const id of ['a', 'b']) {
       const slot = tabEl(id).querySelector('[data-tab-close-slot]') as HTMLElement
       expect([id, slot.style.width, slot.style.height, slot.style.marginLeft]).toEqual([id, '14px', '14px', 'var(--clu-gap)'])
-      const grid = tabEl(id).querySelector('[data-tab-title-grid]') as HTMLElement
-      expect([id, grid.style.gridTemplateColumns]).toEqual([id, 'minmax(0, max-content) 14px'])
-      // The hidden sizer holds column 1 at the title's width.
-      const sizer = grid.firstElementChild as HTMLElement
-      expect([id, sizer.getAttribute('aria-hidden'), sizer.textContent]).toEqual([id, 'true', 'Investigate websocket reconnect flake'])
+      const title = tabEl(id).querySelector('[data-tab-title]') as HTMLElement
+      expect([id, title.textContent, title.className.split(' ').includes('truncate'), title.children.length]).toEqual([
+        id,
+        'Investigate websocket reconnect flake',
+        true,
+        0,
+      ])
+      // Exactly one copy of the title (no hidden sizer).
+      expect([id, (tabEl(id).textContent ?? '').split('Investigate websocket reconnect flake').length - 1]).toEqual([id, 1])
     }
-    expect(restOf('a').workingSlot).toBe('free')
-    expect(restOf('b').workingSlot).toBe('used')
+    expect(restOf('a')).toEqual({ slot: 'status:live', badge: null })
+    expect(restOf('b')).toEqual({ slot: 'working', badge: 'status:needs-you' })
   })
 
   it('session tabs keep the working grid at 14px (only the pinned Chat draws it larger)', () => {
@@ -251,7 +295,7 @@ describe('session tabs: one status model (S5)', () => {
   it('file tabs keep only the close slot', () => {
     setTabs([fileTab('f')])
     render()
-    expect(tabEl('f').querySelector('[data-tab-title-grid]')).toBeNull()
+    expect(tabEl('f').querySelector('[data-slot="working"]')).toBeNull()
     expect(tabEl('f').querySelector('[data-tab-slot-rest]')).toBeNull()
     expect(tabEl('f').querySelector('[data-tab-close-slot="close"] svg line')).toBeTruthy()
   })

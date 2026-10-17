@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 //
 // Tab width (Rosson 2026-10-16, 0.46.0): a tab is as wide as its content
-// (padding + icon + title + working slot + status slot), capped at
-// TAB_MAX_PX where the title truncates, never below TAB_MIN_PX. A short
-// title gives a narrow tab; the working / status slot changing never moves
-// the width (the title grid's hidden sizer). The pinned Chat keeps its own
-// fixed size.
+// (padding + icon + title + status slot), capped at TAB_MAX_PX where the
+// title truncates, never below TAB_MIN_PX. A short title gives a narrow
+// tab. Working takes the status slot's place (its status becomes a corner
+// badge), so no space is reserved for it and the width never moves when it
+// toggles. The pinned Chat keeps its own fixed size.
 //
 // jsdom has no layout, so `intrinsicWidth` models the browser's max-content
 // sizing over the REAL rendered DOM: every child of the tab must be one of
@@ -118,18 +118,22 @@ function childWidth(child: HTMLElement): number {
   // Absolutely positioned decorations (drop lines, sandbox bar) take no room.
   if (child.classList.contains('absolute')) return 0
   if (child.matches('span.mr-1\\.5')) return ICON_PX
-  if (child.matches('[data-tab-title-grid]')) {
-    const cols = child.style.gridTemplateColumns
-    const m = /^minmax\(0, max-content\) (\d+)px$/.exec(cols)
-    if (!m) throw new Error(`title grid columns changed: "${cols}"`)
-    const sizer = child.firstElementChild
-    if (!(sizer instanceof HTMLElement) || sizer.getAttribute('aria-hidden') !== 'true') throw new Error('title grid lost its hidden sizer')
-    // Column 1 = the sizer's text; then the gap and the working slot column.
-    return (sizer.textContent ?? '').length * CHAR_PX + GAP_PX + Number(m[1])
+  if (child.matches('span.truncate')) {
+    if (child.children.length !== 0) throw new Error('the title holds more than its text')
+    return (child.textContent ?? '').length * CHAR_PX
   }
-  if (child.matches('span.truncate')) return (child.textContent ?? '').length * CHAR_PX
   if (child.matches('[data-tab-close-slot], [data-tab-status-slot]')) {
-    return px(child.style.width, 'slot width') + px(child.style.marginLeft, 'slot margin')
+    // Whatever rests inside (status, or the working grid + its badge) must
+    // fit the fixed slot: the grid's box is the slot's size, and the badge
+    // is absolutely positioned.
+    const w = px(child.style.width, 'slot width')
+    for (const box of Array.from(child.querySelectorAll<HTMLElement>('[data-tab-slot-working], [data-slot="working"]'))) {
+      if (px(box.style.width, 'working box width') > w) throw new Error('the working grid is wider than the slot')
+    }
+    for (const badge of Array.from(child.querySelectorAll<HTMLElement>('[data-tab-badge]'))) {
+      if (!badge.classList.contains('absolute')) throw new Error('the badge takes room')
+    }
+    return w + px(child.style.marginLeft, 'slot margin')
   }
   throw new Error(`unexpected tab child takes room: <${child.tagName.toLowerCase()} class="${child.className}">`)
 }
@@ -206,25 +210,38 @@ describe('tab width follows the title', () => {
     setTabs([termTab('a', 'Refactor auth')])
     seed([row('s-a', 'idle')])
     render()
-    const grid = (): HTMLElement => tabEl('a').querySelector('[data-tab-title-grid]') as HTMLElement
     const widths: number[] = []
-    const slots: string[] = []
+    const shown: string[] = []
     const record = (): void => {
       widths.push(intrinsicWidth('a'))
-      slots.push(grid().getAttribute('data-working-slot') ?? '?')
+      const tab = tabEl('a')
+      const working = tab.querySelector('[data-tab-slot-rest] [data-slot="working"][data-working]') ? 'grid' : 'status'
+      const badge = tab.querySelector('[data-tab-badge] [data-slot="status"]')?.getAttribute('data-agent-status') ?? '-'
+      shown.push(`${working}/${badge}`)
+      // Never a second slot: the tab's children are icon, title, status slot.
+      expect(tab.querySelectorAll('[data-slot="working"]').length).toBeLessThanOrEqual(1)
     }
-    record() // idle: the title runs into the free working slot
+    record() // idle: live in the slot
     seed([row('s-a', 'working')])
-    record() // working, no status: grid in the status slot
+    record() // working: grid in the slot, live as the badge
     seed([row('s-a', 'waiting', workingLead)])
-    record() // working + a status: grid takes its own slot
+    record() // working + needs you: grid in the slot, needs you as the badge
     seed([row('s-a', 'idle')])
     record()
     // The toggles really happened...
-    expect(slots).toEqual(['free', 'free', 'used', 'free'])
+    expect(shown).toEqual(['status/-', 'grid/live', 'grid/needs-you', 'status/-'])
     // ...and the width never moved.
     expect(new Set(widths).size).toBe(1)
     expect(widths[0]).toBeLessThan(TAB_MAX_PX)
+  })
+
+  it('a working tab is exactly as wide as an idle one with the same title (nothing reserved)', () => {
+    setTabs([termTab('a', 'Refactor auth'), termTab('b', 'Refactor auth')])
+    seed([row('s-a', 'idle'), row('s-b', 'waiting', workingLead)])
+    render()
+    expect(intrinsicWidth('b')).toBe(intrinsicWidth('a'))
+    // padding + icon + title + gap + 14px slot: no working column.
+    expect(intrinsicWidth('a')).toBe(PADDING_PX + ICON_PX + 'Refactor auth'.length * CHAR_PX + GAP_PX + 14)
   })
 
   it('a pinned tab sizes the same way (its static pin rests in the status slot)', () => {

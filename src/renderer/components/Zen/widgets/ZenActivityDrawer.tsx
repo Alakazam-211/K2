@@ -32,7 +32,7 @@ import {
   COUNTER_SPINNER_COLS,
   COUNTER_SPINNER_EM,
   COUNTER_SPINNER_GAP_PX,
-  COUNTER_SPINNER_RAISE_PX,
+  COUNTER_SPINNER_LEAD_PX,
   COUNTER_SPINNER_SVG_EM,
   STOPPED_LINGER_MS,
   counterSpoken,
@@ -208,10 +208,10 @@ const ICON: Record<StripCounterKey | 'check', (size: number) => React.JSX.Elemen
  *  Sized in em of the count beside it, so it follows the text size: the
  *  grid's ink is COUNTER_SPINNER_INK_EM tall (0.8em − 2px at 12px). The
  *  layout box is the ink's width (COUNTER_SPINNER_EM; the counter width
- *  estimate uses it) × 1em, plus a 2px gap before the count; the svg's
- *  empty margin overflows it. The box sits 0.14em below the baseline
- *  (centred on the digits) and the grid is raised COUNTER_SPINNER_RAISE_PX
- *  from there (Rosson's tune). */
+ *  estimate uses it) × 1em, plus 1px more after the agent icon than its
+ *  usual gap, and a 2px gap before the count; the svg's
+ *  empty margin overflows it, centred. The box sits 0.14em below the
+ *  baseline so the grid is centred on the digits. */
 function WorkingMark(): React.JSX.Element {
   const svg = `${COUNTER_SPINNER_SVG_EM}em`
   return (
@@ -222,6 +222,7 @@ function WorkingMark(): React.JSX.Element {
         position: 'relative',
         width: `${COUNTER_SPINNER_EM}em`,
         height: '1em',
+        marginLeft: COUNTER_SPINNER_LEAD_PX,
         marginRight: COUNTER_SPINNER_GAP_PX,
         verticalAlign: '-0.14em',
         color: 'var(--zen-working)',
@@ -229,7 +230,7 @@ function WorkingMark(): React.JSX.Element {
     >
       <span
         data-zen-drawer-spinner-grid=""
-        style={{ position: 'absolute', left: '50%', top: '50%', display: 'flex', transform: `translate(-50%, calc(-50% - ${COUNTER_SPINNER_RAISE_PX}px))` }}
+        style={{ position: 'absolute', left: '50%', top: '50%', display: 'flex', transform: 'translate(-50%, -50%)' }}
       >
         <WorkingGrid size={svg} cols={COUNTER_SPINNER_COLS} />
       </span>

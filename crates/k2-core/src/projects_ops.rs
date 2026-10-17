@@ -179,15 +179,21 @@ fn check_manifest_icons(project_path: &Path) -> Option<std::path::PathBuf> {
 }
 
 pub fn detect_project_icon(project_path: &str) -> Option<String> {
+    detect_project_icon_file(project_path).map(|(_, data_url)| data_url)
+}
+
+/// [`detect_project_icon`] plus the file the icon was read from (the
+/// [`project_icon_rev`] cache stamps that file's mtime + length).
+fn detect_project_icon_file(project_path: &str) -> Option<(std::path::PathBuf, String)> {
     let path = Path::new(project_path);
     if let Some(pkg_icon) = check_package_json_icon(path) {
         if let Some(data_url) = read_icon_as_data_url(&pkg_icon) {
-            return Some(data_url);
+            return Some((pkg_icon, data_url));
         }
     }
     if let Some(manifest_icon) = check_manifest_icons(path) {
         if let Some(data_url) = read_icon_as_data_url(&manifest_icon) {
-            return Some(data_url);
+            return Some((manifest_icon, data_url));
         }
     }
     let static_paths = [
@@ -224,7 +230,7 @@ pub fn detect_project_icon(project_path: &str) -> Option<String> {
         let full_path = path.join(icon_path);
         if full_path.exists() {
             if let Some(data_url) = read_icon_as_data_url(&full_path) {
-                return Some(data_url);
+                return Some((full_path, data_url));
             }
         }
     }
@@ -242,10 +248,132 @@ pub fn detect_project_icon(project_path: &str) -> Option<String> {
             extension_priority(&ext_a).cmp(&extension_priority(&ext_b))
         });
         if let Some(data_url) = read_icon_as_data_url(&found[0]) {
-            return Some(data_url);
+            return Some((found.swap_remove(0), data_url));
         }
     }
     None
+}
+
+// ── Icon revision (`iconRev` / Thread push `avatarRev`) ────────────────
+
+/// Hex characters in an icon rev.
+pub const ICON_REV_LEN: usize = 16;
+
+/// How long a "this repo has no icon file" answer is reused before the
+/// repo is walked again.
+const NO_ICON_RECHECK: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// The rev of one icon string: the first [`ICON_REV_LEN`] lowercase hex
+/// characters of the SHA-256 of its UTF-8 bytes; `""` for no icon or an
+/// empty one.
+pub fn icon_rev_of(icon: Option<&str>) -> String {
+    use sha2::{Digest, Sha256};
+    match icon {
+        Some(s) if !s.is_empty() => {
+            let digest = Sha256::digest(s.as_bytes());
+            let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+            hex[..ICON_REV_LEN].to_string()
+        }
+        _ => String::new(),
+    }
+}
+
+/// The ONE icon rev for a workspace, shared by `GET /cli/projects/list`
+/// (`iconRev`) and the Thread push (`data.avatarRev`) so the phone can
+/// compare the two directly.
+///
+/// It hashes exactly the string `/cli/projects/get-icon` returns for the
+/// workspace: the stored `projects.icon_url` (a data URL or an http(s)
+/// URL, hashed as text, never fetched) when the row has one, else the data
+/// URL detected from the repo's icon file. Detection is cached per path
+/// and re-read only when the icon file's mtime or length changes (a "no
+/// icon" answer is reused for [`NO_ICON_RECHECK`]), so a list call costs
+/// one `stat` per file-backed row. A detected icon and the same icon
+/// after get-icon has cached it into the row have the same rev.
+pub fn project_icon_rev(icon_url: Option<&str>, path: &str) -> String {
+    match icon_url {
+        // get-icon returns a stored value as is (even an empty one).
+        Some(stored) => icon_rev_of(Some(stored)),
+        None => detected_icon_rev(path),
+    }
+}
+
+/// A workspace's look for a Thread push: `(agentColor, avatarRev)` —
+/// `projects.color` as the projects list shows it, and
+/// [`project_icon_rev`] of the row. Both are `""` when the row is gone.
+/// The DB lock is released before the icon rev is computed.
+pub fn project_push_look(project_id: &str) -> (String, String) {
+    let row: Option<(String, Option<String>, String)> = {
+        let db = db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT color, icon_url, path FROM projects WHERE id = ?1",
+            rusqlite::params![project_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .ok()
+    };
+    match row {
+        Some((color, icon_url, path)) => (color, project_icon_rev(icon_url.as_deref(), &path)),
+        None => (String::new(), String::new()),
+    }
+}
+
+type FileStamp = (Option<std::time::SystemTime>, u64);
+
+struct DetectedRev {
+    /// The icon file and its stamp at detection; `None` = no icon found.
+    file: Option<(std::path::PathBuf, FileStamp)>,
+    rev: String,
+    checked: std::time::Instant,
+}
+
+fn detected_rev_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, DetectedRev>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, DetectedRev>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok(), meta.len()))
+}
+
+fn detected_icon_rev(project_path: &str) -> String {
+    // get-icon refuses an empty path; never walk the daemon's cwd.
+    if project_path.is_empty() {
+        return String::new();
+    }
+    {
+        let cache = detected_rev_cache().lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(entry) = cache.get(project_path) {
+            match &entry.file {
+                Some((file, stamp)) if file_stamp(file).as_ref() == Some(stamp) => {
+                    return entry.rev.clone();
+                }
+                None if entry.checked.elapsed() < NO_ICON_RECHECK => return String::new(),
+                _ => {}
+            }
+        }
+    }
+    // Walk + read outside the cache lock.
+    let entry = match detect_project_icon_file(project_path) {
+        Some((file, data_url)) => {
+            let rev = icon_rev_of(Some(&data_url));
+            let Some(stamp) = file_stamp(&file) else {
+                // The file went away mid-read: answer, but don't cache.
+                return rev;
+            };
+            DetectedRev { file: Some((file, stamp)), rev, checked: std::time::Instant::now() }
+        }
+        None => DetectedRev { file: None, rev: String::new(), checked: std::time::Instant::now() },
+    };
+    let rev = entry.rev.clone();
+    detected_rev_cache()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(project_path.to_string(), entry);
+    rev
 }
 
 // ── Transaction helper ─────────────────────────────────────────────────
@@ -307,28 +435,38 @@ pub struct ProjectWithWorkspaces {
     #[serde(flatten)]
     pub project: Project,
     pub workspaces: Vec<Workspace>,
+    /// [`project_icon_rev`] of this row: the same value a Thread push
+    /// for this workspace carries as `data.avatarRev`; `""` = no icon.
+    pub icon_rev: String,
 }
 
 /// Same sentinel filter as [`projects_list`], plus a nested `workspaces`
 /// array per row. One `db.lock()` covers the project+workspace join so
 /// the HTTP handler does not N+1. Internal callers keep using the flat
-/// [`projects_list`].
+/// [`projects_list`]. `iconRev` is computed after the lock is released
+/// (it may stat or read a repo icon file).
 pub fn projects_list_with_workspaces() -> Result<Vec<ProjectWithWorkspaces>, String> {
-    let db = db::shared();
-    let conn = db.lock();
-    let projects = Project::list(&conn).map_err(|e| e.to_string())?;
-    let mut out = Vec::with_capacity(projects.len());
-    for project in projects {
-        if db::AUDIT_SENTINEL_IDS.contains(&project.id.as_str()) {
-            continue;
+    let rows = {
+        let db = db::shared();
+        let conn = db.lock();
+        let projects = Project::list(&conn).map_err(|e| e.to_string())?;
+        let mut rows = Vec::with_capacity(projects.len());
+        for project in projects {
+            if db::AUDIT_SENTINEL_IDS.contains(&project.id.as_str()) {
+                continue;
+            }
+            let workspaces = Workspace::list(&conn, &project.id).map_err(|e| e.to_string())?;
+            rows.push((project, workspaces));
         }
-        let workspaces = Workspace::list(&conn, &project.id).map_err(|e| e.to_string())?;
-        out.push(ProjectWithWorkspaces {
-            project,
-            workspaces,
-        });
-    }
-    Ok(out)
+        rows
+    };
+    Ok(rows
+        .into_iter()
+        .map(|(project, workspaces)| {
+            let icon_rev = project_icon_rev(project.icon_url.as_deref(), &project.path);
+            ProjectWithWorkspaces { project, workspaces, icon_rev }
+        })
+        .collect())
 }
 
 /// Agent de-generalization S1 (migration 0063) — stamp a freshly
@@ -1553,5 +1691,137 @@ mod tests {
         assert!(!err.contains("Failed to add workspace"));
         assert_eq!(count_projects_at(&path), 1, "still one projects row");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── iconRev / avatarRev ─────────────────────────────────────────────
+
+    fn icon_project(id: &str, path: &str, icon_url: Option<&str>, color: &str) {
+        let db = db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO projects \
+             (id, path, name, color, agent_mode, pinned, tab_order, icon_url) \
+             VALUES (?1, ?2, ?1, ?3, 'off', 0, 0, ?4)",
+            rusqlite::params![id, path, color, icon_url],
+        )
+        .unwrap();
+    }
+
+    fn icon_temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("k2-iconrev-{tag}-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        dir
+    }
+
+    /// The row's `iconRev` as `GET /cli/projects/list` serializes it.
+    fn listed_icon_rev(id: &str) -> String {
+        let listed = projects_list_with_workspaces().expect("list ok");
+        let json = serde_json::to_value(&listed).expect("serialize");
+        let row = json
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap_or_else(|| panic!("row {id} missing"))
+            .clone();
+        row["iconRev"].as_str().expect("iconRev is a string").to_string()
+    }
+
+    fn is_rev(s: &str) -> bool {
+        s.len() == ICON_REV_LEN && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    }
+
+    #[test]
+    fn icon_rev_of_is_sha256_prefix_and_empty_for_none() {
+        // sha256("abc") = ba7816bf8f01cfea…
+        assert_eq!(icon_rev_of(Some("abc")), "ba7816bf8f01cfea");
+        assert_eq!(icon_rev_of(Some("")), "");
+        assert_eq!(icon_rev_of(None), "");
+    }
+
+    /// The list's `iconRev` and the push's `avatarRev` are the same
+    /// function of the same source, and both equal the rev of exactly
+    /// what `/cli/projects/get-icon` returns: data URL, URL, file-backed
+    /// icon, and no icon.
+    #[test]
+    fn icon_rev_list_push_and_get_icon_agree_for_every_source() {
+        let _scoped_db = db::scoped_for_test();
+
+        // 1. A stored data URL.
+        let data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+        let d1 = icon_temp_dir("data");
+        icon_project("rev-data", &d1.to_string_lossy(), Some(data_url), "#112233");
+        let got = projects_get_icon(&d1.to_string_lossy(), Some("rev-data")).expect("get-icon");
+        assert_eq!(got.data_url.as_deref(), Some(data_url));
+        let want = icon_rev_of(Some(data_url));
+        assert!(is_rev(&want), "rev shape: {want}");
+        assert_eq!(listed_icon_rev("rev-data"), want);
+        assert_eq!(project_push_look("rev-data"), ("#112233".to_string(), want.clone()));
+
+        // 2. A stored http(s) URL (hashed as text, never fetched).
+        let url = "https://cdn.example.com/agents/cortana.png";
+        let d2 = icon_temp_dir("url");
+        icon_project("rev-url", &d2.to_string_lossy(), Some(url), "#445566");
+        let got = projects_get_icon(&d2.to_string_lossy(), Some("rev-url")).expect("get-icon");
+        assert_eq!(got.data_url.as_deref(), Some(url));
+        let want_url = icon_rev_of(Some(url));
+        assert!(is_rev(&want_url));
+        assert_ne!(want_url, want, "different sources, different revs");
+        assert_eq!(listed_icon_rev("rev-url"), want_url);
+        assert_eq!(project_push_look("rev-url").1, want_url);
+
+        // 3. A file-backed icon (nothing stored yet; detected from the repo).
+        let d3 = icon_temp_dir("file");
+        std::fs::write(d3.join("favicon.svg"), "<svg xmlns='http://www.w3.org/2000/svg'/>").unwrap();
+        let p3 = d3.to_string_lossy().into_owned();
+        icon_project("rev-file", &p3, None, "#778899");
+        let detected = detect_project_icon(&p3).expect("detects favicon.svg");
+        let want_file = icon_rev_of(Some(&detected));
+        assert!(is_rev(&want_file));
+        assert_eq!(listed_icon_rev("rev-file"), want_file, "list before get-icon caches");
+        assert_eq!(project_push_look("rev-file").1, want_file, "push before get-icon caches");
+
+        // The file changes: the rev follows (mtime/length-keyed cache).
+        std::fs::write(
+            d3.join("favicon.svg"),
+            "<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48'/>",
+        )
+        .unwrap();
+        let detected2 = detect_project_icon(&p3).expect("still detects");
+        let want_file2 = icon_rev_of(Some(&detected2));
+        assert_ne!(want_file2, want_file, "a changed icon must change the rev");
+        assert_eq!(listed_icon_rev("rev-file"), want_file2);
+        assert_eq!(project_push_look("rev-file").1, want_file2);
+
+        // get-icon caches the detected data URL into the row: same rev.
+        let got = projects_get_icon(&p3, Some("rev-file")).expect("get-icon");
+        assert_eq!(got.data_url.as_deref(), Some(detected2.as_str()));
+        assert_eq!(listed_icon_rev("rev-file"), want_file2, "caching must not move the rev");
+        assert_eq!(project_push_look("rev-file").1, want_file2);
+
+        // 4. No icon anywhere.
+        let d4 = icon_temp_dir("none");
+        icon_project("rev-none", &d4.to_string_lossy(), None, "#aabbcc");
+        let got = projects_get_icon(&d4.to_string_lossy(), Some("rev-none")).expect("get-icon");
+        assert!(!got.found);
+        assert_eq!(got.data_url, None);
+        assert_eq!(listed_icon_rev("rev-none"), "");
+        assert_eq!(project_push_look("rev-none"), ("#aabbcc".to_string(), String::new()));
+
+        // Setting a new avatar changes the rev; clearing it falls back.
+        projects_set_icon("rev-data", "data:image/png;base64,AAAA").expect("set");
+        let changed = listed_icon_rev("rev-data");
+        assert_ne!(changed, want);
+        assert_eq!(changed, icon_rev_of(Some("data:image/png;base64,AAAA")));
+        assert_eq!(project_push_look("rev-data").1, changed);
+        projects_clear_icon("rev-data").expect("clear");
+        assert_eq!(listed_icon_rev("rev-data"), "", "cleared, and no icon file in the repo");
+
+        // A gone row: empty look, never a panic.
+        assert_eq!(project_push_look("rev-missing"), (String::new(), String::new()));
+
+        for d in [d1, d2, d3, d4] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 }

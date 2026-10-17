@@ -139,6 +139,14 @@ pub struct ThreadPush {
     /// That person's `push_devices.username` values (their logins).
     /// Empty = nobody, never "everyone".
     pub device_usernames: Vec<String>,
+    /// `data.avatarRev`: [`crate::projects_ops::project_icon_rev`] of the
+    /// workspace (`projectId`) — the same value its `GET
+    /// /cli/projects/list` row carries as `iconRev`. `""` = no avatar
+    /// (the key is always sent).
+    pub avatar_rev: String,
+    /// `data.agentColor`: the workspace's `projects.color` (`#rrggbb`) as
+    /// the projects list shows it; `""` if the row is gone.
+    pub agent_color: String,
 }
 
 /// A push's `data` object: string keys and **string values only** (TP7 —
@@ -335,6 +343,11 @@ impl PushEvent {
                 ("msgKind", t.msg_kind.as_wire().to_string()),
                 ("count", t.count.to_string()),
                 ("principal", t.principal.clone()),
+                // iOS Communication Notifications: the phone's Notification
+                // Service Extension draws the agent's avatar (cached by
+                // rev, compared with the list's `iconRev`) and colour.
+                ("avatarRev", t.avatar_rev.clone()),
+                ("agentColor", t.agent_color.clone()),
             ]),
             // Legacy desktop-era events carry no mobile deep link.
             Self::AgentNeedsAttention { .. } | Self::HeartbeatFailed { .. } => PushData::default(),
@@ -1461,6 +1474,8 @@ mod tests {
             count,
             principal: "owner".into(),
             device_usernames: vec!["owner".into()],
+            avatar_rev: "ba7816bf8f01cfea".into(),
+            agent_color: "#3b82f6".into(),
         })
     }
 
@@ -1525,6 +1540,8 @@ mod tests {
                     "msgKind": "text",
                     "count": "1",
                     "principal": "owner",
+                    "avatarRev": "ba7816bf8f01cfea",
+                    "agentColor": "#3b82f6",
                 },
             })
         );
@@ -1535,7 +1552,7 @@ mod tests {
         assert_eq!(thread_event(ThreadMsgKind::Secret, 3, cid).body(), "3 new messages");
         let secret = K2Cloud::payload(&thread_event(ThreadMsgKind::Secret, 1, cid), &stamp, "owner");
         assert_eq!(secret["data"]["msgKind"], "secret");
-        assert_eq!(secret["data"].as_object().expect("data").len(), 11, "no extra secret fields");
+        assert_eq!(secret["data"].as_object().expect("data").len(), 13, "no extra secret fields");
         // A Thread push is always targeted, never "every device".
         let empty = PushEvent::ThreadPost(ThreadPush {
             device_usernames: vec![],
@@ -1546,6 +1563,34 @@ mod tests {
         });
         assert_eq!(empty.target_usernames(), Some(&[][..]));
         assert_eq!(empty.budget_class(), budget::BudgetClass::Thread);
+    }
+
+    /// Communication Notifications: `avatarRev` + `agentColor` ride every
+    /// Thread push as strings; no avatar is `""` with the key kept. Other
+    /// kinds never carry them.
+    #[test]
+    fn thread_push_data_carries_avatar_rev_and_agent_color() {
+        let cid = "c-avatar";
+        let with = thread_event(ThreadMsgKind::Choice, 1, cid).data();
+        assert_eq!(with.get("avatarRev"), Some("ba7816bf8f01cfea"));
+        assert_eq!(with.get("agentColor"), Some("#3b82f6"));
+        for key in ["kind", "addr", "conversationId", "projectId"] {
+            assert!(with.get(key).is_some(), "existing key {key} kept: {with:?}");
+        }
+        let bare = PushEvent::ThreadPost(ThreadPush {
+            avatar_rev: String::new(),
+            ..match thread_event(ThreadMsgKind::Text, 1, cid) {
+                PushEvent::ThreadPost(t) => t,
+                _ => unreachable!(),
+            }
+        });
+        let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
+        let p = K2Cloud::payload(&bare, &stamp, "owner");
+        assert_eq!(p["data"]["avatarRev"], serde_json::json!(""), "no avatar = empty string, key kept");
+        assert_eq!(p["data"]["agentColor"], serde_json::json!("#3b82f6"));
+        let ticket = PushEvent::FeedbackCommented { feedback_id: "f".into(), assignees: vec![] }.data();
+        assert_eq!(ticket.get("avatarRev"), None);
+        assert_eq!(ticket.get("agentColor"), None);
     }
 
     #[test]

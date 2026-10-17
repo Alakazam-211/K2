@@ -560,6 +560,99 @@ fn purge_after_uninstall_types_back_none() {
     assert!(store::load().is_none());
 }
 
+// ── S27's grant hook follows the install ─────────────────────────────────
+
+fn hook_calls(t: &T) -> Vec<String> {
+    t.ops.hook_calls.lock().unwrap().clone()
+}
+
+#[test]
+fn enable_points_the_grant_hook_at_sew_and_records_it() {
+    let t = t();
+    assert_eq!(grant_hook_boot(&t.env()), json!({"target": "none"}), "nothing installed: no hook");
+    t.enable().unwrap();
+    // Sew's socket, and Sew's own token file: the worker asks the helper.
+    assert_eq!(hook_calls(&t), vec![format!("on {} {}", pin::SEW_MGMT_SOCKET, pin::SEW_MGMT_TOKEN)]);
+    let p = t.row().enable_progress.unwrap();
+    assert_eq!(p["grantHook"], json!({"target": "on"}));
+    assert_eq!(p["owner"], "queued");
+    // Boot re-asserts it for an installed Sew (idempotent).
+    assert_eq!(grant_hook_boot(&t.env())["target"], "on");
+    assert_eq!(hook_calls(&t).len(), 2);
+}
+
+#[test]
+fn a_standalone_install_takes_no_grant_hook() {
+    let t = t();
+    let req = EnableRequest { provider: Some(pin::PROVIDER_STANDALONE.into()), ..t.req() };
+    t.ops.mgmt_status.lock().unwrap()["provider"] = json!("standalone");
+    let env = t.env();
+    let latch = enable_begin(&env, &req).unwrap().unwrap();
+    enable_machine(&env, &req).unwrap();
+    drop(latch);
+    assert!(hook_calls(&t).is_empty(), "{:?}", hook_calls(&t));
+    let p = t.row().enable_progress.unwrap();
+    assert_eq!(p["grantHook"]["target"], "none");
+    assert_eq!(p["owner"], "pending");
+}
+
+#[test]
+fn disable_pauses_uninstall_pauses_or_drops_and_purge_drops_the_grant_hook() {
+    let t = t();
+    t.enabled();
+    t.ops.hook_calls.lock().unwrap().truncate(1);
+    assert_eq!(disable(&t.env()).unwrap()["grantHook"]["target"], "off");
+    assert_eq!(&hook_calls(&t)[1..], ["off"]);
+    t.enable().unwrap();
+    let r = uninstall(&t.env(), false).unwrap();
+    assert_eq!((r["grants"].as_str(), r["grantHook"]["target"].as_str()), (Some("kept"), Some("off")));
+    assert_eq!(&hook_calls(&t)[2..], ["on /run/sew/mgmt.sock /etc/sew/mgmt.token", "off"]);
+    // Boot after an uninstall keeps it off.
+    assert_eq!(grant_hook_boot(&t.env())["target"], "off");
+    t.enable().unwrap();
+    let r = uninstall(&t.env(), true).unwrap();
+    assert_eq!(r["grants"], "dropped");
+    assert!(r["grantHook"]["dropped"].is_object(), "{r}");
+    assert_eq!(&hook_calls(&t)[5..], ["on /run/sew/mgmt.sock /etc/sew/mgmt.token", "drop", "off"]);
+    t.ops.hook_calls.lock().unwrap().clear();
+    t.ops.hook_calls.lock().unwrap().push("on (earlier)".into());
+    assert_eq!(purge(&t.env(), "lztek", false).unwrap()["grantHook"]["target"], "off");
+    assert_eq!(&hook_calls(&t)[1..], ["drop", "off"]);
+}
+
+#[test]
+fn a_box_that_never_had_the_hook_is_left_alone_on_disable() {
+    let t = t();
+    t.enabled();
+    t.ops.hook_calls.lock().unwrap().clear();
+    assert_eq!(disable(&t.env()).unwrap()["grantHook"], json!({"target": "none"}));
+    assert!(hook_calls(&t).is_empty());
+}
+
+#[test]
+fn a_finished_upgrade_gives_an_older_install_its_hook() {
+    let t = t();
+    on_old_release(&t);
+    t.ops.hook_calls.lock().unwrap().clear();
+    let out = upgrade(&t);
+    assert_eq!(out["result"], "done", "{out}");
+    assert_eq!(hook_calls(&t), vec![format!("on {} {}", pin::SEW_MGMT_SOCKET, pin::SEW_MGMT_TOKEN)]);
+}
+
+/// The worker's token source: the supervisor's in-memory cache, filled
+/// through the helper (`engine sew token`), refreshed on demand.
+#[test]
+fn mgmt_token_comes_from_the_helper_and_is_cached_in_memory() {
+    let t = t();
+    let env = t.env();
+    assert_eq!(mgmt_token(&env, false).unwrap(), crate::sew::ops::fake::TOKEN);
+    assert_eq!(mgmt_token(&env, false).unwrap(), crate::sew::ops::fake::TOKEN);
+    let tokens = t.ops.effects().iter().filter(|e| *e == "engine sew token").count();
+    assert_eq!(tokens, 1, "the second read is the cache");
+    mgmt_token(&env, true).unwrap();
+    assert_eq!(t.ops.effects().iter().filter(|e| *e == "engine sew token").count(), 2, "refresh asks again");
+}
+
 // ── upgrade / rollback ───────────────────────────────────────────────────
 
 fn on_old_release(t: &T) {

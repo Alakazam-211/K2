@@ -121,6 +121,26 @@ pub trait SewOps: Send + Sync {
     fn sew_released(&self) -> bool {
         k2_root_proto::sew::sew_release_pinned()
     }
+
+    /// Sew's mgmt socket, for S27's grant-hook target (tests point it at a
+    /// fake Sew).
+    fn mgmt_socket(&self) -> String {
+        k2_root_proto::sew::SEW_MGMT_SOCKET.to_string()
+    }
+
+    // ── S27's grant hook (k2-core `tool_hook`) ───────────────────────────
+    /// The grant-hook targets that exist (kinds). Never creates `skin.db`.
+    fn hook_targets(&self) -> Result<Vec<String>, String> {
+        Ok(k2_core::tool_hook::list_targets()?.into_iter().map(|t| t.kind).collect())
+    }
+    /// Turn the chat target on (with its socket and token file) or off.
+    fn hook_set(&self, enabled: bool, socket: Option<&str>, token_file: Option<&str>, actor: &str) -> Result<(), String> {
+        k2_core::tool_hook::set_target(k2_core::tool_hook::CHAT_KIND, enabled, socket, token_file, actor).map(|_| ())
+    }
+    /// Delete every chat grant and skip the chat target's open rows.
+    fn hook_drop(&self) -> Result<Value, String> {
+        k2_core::tool_hook::drop_target_grants(k2_core::tool_hook::CHAT_KIND).map(|r| json!(r))
+    }
 }
 
 /// A control-plane answer that was not 2xx (`status` 0 = unreachable).
@@ -595,6 +615,13 @@ pub mod fake {
         pub media_state: Mutex<Value>,
         /// [`SewOps::sew_released`] (true: the test-signer fixture pin).
         pub released: Mutex<bool>,
+        /// [`SewOps::mgmt_socket`] (a fake Sew's socket in hook tests).
+        pub mgmt_socket: Mutex<String>,
+        /// Grant-hook calls, in order (`on <socket> <token file>`, `off`,
+        /// `drop`). They reach the real `tool_hook` only with `real_hook`
+        /// (a test that holds a temp HOME); otherwise they are recorded.
+        pub hook_calls: Mutex<Vec<String>>,
+        pub real_hook: bool,
     }
 
     pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -672,6 +699,9 @@ pub mod fake {
                 media_staged: Mutex::new(false),
                 media_state: Mutex::new(json!({"installed": true, "enabled": true, "state": "running", "alarms": ["port_443_unavailable"]})),
                 released: Mutex::new(true),
+                mgmt_socket: Mutex::new(k2_root_proto::sew::SEW_MGMT_SOCKET.to_string()),
+                hook_calls: Mutex::new(vec![]),
+                real_hook: false,
             }
         }
 
@@ -877,6 +907,34 @@ pub mod fake {
     impl SewOps for FakeOps {
         fn sew_released(&self) -> bool {
             *self.released.lock().unwrap()
+        }
+        fn mgmt_socket(&self) -> String {
+            self.mgmt_socket.lock().unwrap().clone()
+        }
+        fn hook_targets(&self) -> Result<Vec<String>, String> {
+            if self.real_hook {
+                return Ok(k2_core::tool_hook::list_targets()?.into_iter().map(|t| t.kind).collect());
+            }
+            let calls = self.hook_calls.lock().unwrap();
+            Ok(if calls.iter().any(|c| c.starts_with("on ")) { vec![k2_core::tool_hook::CHAT_KIND.to_string()] } else { vec![] })
+        }
+        fn hook_set(&self, enabled: bool, socket: Option<&str>, token_file: Option<&str>, actor: &str) -> Result<(), String> {
+            self.hook_calls.lock().unwrap().push(if enabled {
+                format!("on {} {}", socket.unwrap_or("-"), token_file.unwrap_or("-"))
+            } else {
+                "off".to_string()
+            });
+            if self.real_hook {
+                k2_core::tool_hook::set_target(k2_core::tool_hook::CHAT_KIND, enabled, socket, token_file, actor)?;
+            }
+            Ok(())
+        }
+        fn hook_drop(&self) -> Result<Value, String> {
+            self.hook_calls.lock().unwrap().push("drop".into());
+            if self.real_hook {
+                return k2_core::tool_hook::drop_target_grants(k2_core::tool_hook::CHAT_KIND).map(|r| json!(r));
+            }
+            Ok(json!({"grantsDeleted": 0, "rowsSkipped": 0}))
         }
         fn linux(&self) -> bool {
             self.linux

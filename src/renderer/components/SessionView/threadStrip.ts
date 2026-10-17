@@ -291,13 +291,10 @@ export const COUNTER_ICON_GAP_PX = 2
 export const COUNTER_CHECK_PX = 11
 /** Space between the subagents' running and done groups. */
 export const COUNTER_GROUP_GAP_PX = 7
-/** The working grid's ink height, in em of the counter text: the digits'
- *  height (≈ cap height). Rosson's tunes: 0.72em → 0.8em (+1px) → back
- *  1px (0.8em − 1px ≈ 0.72em at the 12px default), with the mark raised
- *  COUNTER_SPINNER_RAISE_PX. */
-export const COUNTER_SPINNER_INK_EM = 0.72
-/** How far (px) the working grid sits above centre on the digits. */
-export const COUNTER_SPINNER_RAISE_PX = 1
+/** The working grid's ink height, in em of the counter text: about 1px
+ *  over the digits' height (≈ 0.72em) at the 12px default (Rosson's tune:
+ *  0.72em read ~1px short), as tall as the braille it replaced. */
+export const COUNTER_SPINNER_INK_EM = 0.8
 /** The counter row uses the narrow 2×3 grid (Rosson: narrow spots get
  *  2×3): its ink is 9 units wide by 14 tall. */
 export const COUNTER_SPINNER_COLS = 2

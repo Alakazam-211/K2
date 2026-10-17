@@ -329,8 +329,12 @@ pub fn apparmor_userns_profiles() -> String {
          \x20 userns,\n\
          }}\n\
          \n\
+         # An App runs stacked as k2-app//&k2-crun (mixed); Ubuntu's kernel\n\
+         # mediates sockets for the k2-crun half too. k2-app still denies\n\
+         # raw and packet sockets.\n\
          profile k2-crun {CRUN} flags=(unconfined) {{\n\
          \x20 userns,\n\
+         \x20 network,\n\
          }}\n\
          \n\
          profile k2-pasta {PASTA}{{,.avx2}} flags=(unconfined) {{\n\
@@ -459,6 +463,10 @@ mod tests {
             assert!(a.contains(&format!("profile {p} /opt/k2/podman/bin/")), "{p}");
         }
         assert_eq!(a.matches("userns,").count(), 3);
+        // The stacked k2-crun half must let the App open sockets (Ubuntu
+        // 24.04 e2e: listen EACCES without it); only k2-crun gets it.
+        assert!(a.contains("profile k2-crun /opt/k2/podman/bin/crun flags=(unconfined) {\n  userns,\n  network,\n}"), "{a}");
+        assert_eq!(a.matches("network,").count(), 1);
         assert_eq!(a.matches("flags=(unconfined)").count(), 3);
         let m = marker("x86_64", BUNDLE[0].sha256);
         let v: serde_json::Value = serde_json::from_str(&m).unwrap();

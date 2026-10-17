@@ -122,8 +122,8 @@ describe('Settings nav Gardens group (0.45.7, Rosson: Gardens get their own sect
   })
 })
 
-describe('Settings nav Language Models group (0.46, Rosson: Models · Subs / Tokens · Usage; was LLMs · Tokens · Token Usage)', () => {
-  it('Language Models is a group: Models, Subs / Tokens, Usage, before Access; Gardens follows Access', () => {
+describe('Settings nav Language Models group (0.46, Rosson: Subs / Tokens · Providers / Models · Usage)', () => {
+  it('Language Models is a group: Subs / Tokens, Providers / Models, Usage, before Access; Gardens follows Access', () => {
     const start = src.indexOf("title: 'Language Models'")
     const gardens = src.indexOf("title: 'Gardens'")
     const server = src.indexOf("title: 'Access'")
@@ -131,8 +131,8 @@ describe('Settings nav Language Models group (0.46, Rosson: Models · Subs / Tok
     expect(gardens).toBeGreaterThan(server)
     expect(src.slice(start, server)).toContain(
       [
-        "{ id: 'agents', label: 'Providers / Models' },",
         "{ id: 'llm-tokens', label: 'Subs / Tokens' },",
+        "{ id: 'agents', label: 'Providers / Models' },",
         "{ id: 'token-usage', label: 'Usage' },",
       ].join('\n        '),
     )

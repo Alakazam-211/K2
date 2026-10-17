@@ -26,7 +26,7 @@ const leafIds = (nav: Nav): Array<SettingsSection | undefined> =>
   nav.flatMap((b) => (b.kind === 'item' ? [b.id] : b.items.map((i) => i.id)))
 
 describe('Settings → Language Models group (was LLMs)', () => {
-  it('is one group with Models, Subs / Tokens, Usage (in that order), whether or not Gardens show', () => {
+  it('is one group with Subs / Tokens, Providers / Models, Usage (in that order), whether or not Gardens show', () => {
     for (const zenGardens of [true, false]) {
       const nav = settingsNav({ zenGardens })
       const group = nav.find((b) => b.kind === 'group' && b.title === 'Language Models')
@@ -34,8 +34,8 @@ describe('Settings → Language Models group (was LLMs)', () => {
         kind: 'group',
         title: 'Language Models',
         items: [
-          { id: 'agents', label: 'Providers / Models' },
           { id: 'llm-tokens', label: 'Subs / Tokens' },
+          { id: 'agents', label: 'Providers / Models' },
           { id: 'token-usage', label: 'Usage' },
         ],
       })

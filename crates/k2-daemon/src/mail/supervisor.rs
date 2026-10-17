@@ -636,11 +636,22 @@ enum TlsProbe {
 
 const TLS_CERT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// The TLS ports the live probe reads: HTTPS/JMAP (443), SMTP submission
+/// over implicit TLS (465) and IMAPS (993). 465 and 993 are always
+/// Stalwart's own listeners; 443 may be fronted by something else, so it
+/// alone never proves what mail clients see (0.46.1 field report: status
+/// said `issued` while 465/993 served the rcgen fallback).
+const MAIL_TLS_PROBE_PORTS: [u16; 3] = [443, 465, 993];
+
 /// C24 / L1: cert state on `status` without `--health`. Probe the live
-/// TLS listener on `{hostname}:443` (2s timeout) with a verifier that
-/// **captures** the leaf and accepts rcgen so a serving self-signed
-/// cert is not reported as `missing` + `selfSigned: false`. ACME is
-/// the mail hostname only — optional names are not in the issuance request.
+/// TLS listeners on `{hostname}` (443, 465, 993 — in parallel, 2 s cap)
+/// with SNI = the mail hostname and a verifier that **captures** the leaf
+/// and accepts rcgen, so a serving self-signed cert is never reported as
+/// `missing` or `issued`. The worst answering port decides `state`; each
+/// port's own verdict rides `ports`. `issued` means a CA-issued leaf that
+/// covers the mail hostname and has not expired — nothing is inferred
+/// from files on disk. ACME is the mail hostname only — optional names
+/// are not in the issuance request.
 pub fn tls_cert_status(hostname: Option<&str>) -> serde_json::Value {
     let host = hostname
         .map(str::trim)
@@ -648,21 +659,74 @@ pub fn tls_cert_status(hostname: Option<&str>) -> serde_json::Value {
         .unwrap_or("");
     #[cfg(test)]
     {
-        let probe = TEST_TLS_PROBE
+        let probes = TEST_TLS_PROBE
             .with(|c| c.borrow().clone())
-            .unwrap_or(TlsProbe::Missing);
-        let dirs = TEST_CERTS_DIR.with(|c| *c.borrow()).unwrap_or(false);
-        return tls_cert_json(host, probe, dirs);
+            .unwrap_or_else(|| vec![(443, TlsProbe::Missing)]);
+        return tls_cert_json(host, &probes, now_secs());
     }
     #[cfg(not(test))]
     {
-        let probe = probe_live_tls(host);
-        let dirs = stalwart_certs_dir_has_files();
-        tls_cert_json(host, probe, dirs)
+        let probes = probe_live_tls_ports(host, &MAIL_TLS_PROBE_PORTS);
+        tls_cert_json(host, &probes, now_secs())
     }
 }
 
-fn tls_cert_json(host: &str, probe: TlsProbe, certs_dir_has_files: bool) -> serde_json::Value {
+/// One port's verdict on a captured probe (pure).
+struct PortVerdict {
+    state: &'static str,
+    self_signed: bool,
+    names: Vec<String>,
+    expires_at: serde_json::Value,
+    not_before: serde_json::Value,
+}
+
+/// Worse verdicts rank higher: the overall `state` is the worst port.
+fn verdict_rank(state: &str) -> u8 {
+    match state {
+        "self-signed" => 5,
+        "mismatch" => 4,
+        "expired" => 3,
+        "unknown" => 2,
+        "issued" => 1,
+        _ => 0, // missing
+    }
+}
+
+fn port_verdict(host: &str, probe: &TlsProbe, now: i64) -> PortVerdict {
+    let missing = || PortVerdict {
+        state: "missing",
+        self_signed: false,
+        names: Vec::new(),
+        expires_at: serde_json::Value::Null,
+        not_before: serde_json::Value::Null,
+    };
+    let TlsProbe::Handshake { leaf_der } = probe else {
+        return missing();
+    };
+    let Some(leaf) = parse_captured_leaf(leaf_der) else {
+        // A leaf was served but it does not parse: never claim `issued`.
+        return PortVerdict { state: "unknown", ..missing() };
+    };
+    let self_signed = looks_rcgen_or_self_signed(&leaf.issuer, &leaf.subject);
+    let state = if self_signed {
+        "self-signed"
+    } else if !host.is_empty() && !leaf_covers_host(&leaf.dns_sans, host) {
+        "mismatch"
+    } else if leaf.not_after < now {
+        "expired"
+    } else {
+        "issued"
+    };
+    PortVerdict {
+        state,
+        self_signed,
+        names: leaf.dns_sans,
+        expires_at: serde_json::json!(leaf.not_after),
+        not_before: serde_json::json!(leaf.not_before),
+    }
+}
+
+fn tls_cert_json(host: &str, probes: &[(u16, TlsProbe)], now: i64) -> serde_json::Value {
     let host_v = if host.is_empty() {
         serde_json::Value::Null
     } else {
@@ -670,34 +734,30 @@ fn tls_cert_json(host: &str, probe: TlsProbe, certs_dir_has_files: bool) -> serd
     };
     // 0.45.1 A2: `names` are the DNS SANs of the leaf actually served —
     // never assumed. No certificate served = no names (`host` stays set).
-    let mut names: Vec<String> = Vec::new();
-    let (state, self_signed, expires_at) = match probe {
-        TlsProbe::Missing => ("missing", false, serde_json::Value::Null),
-        TlsProbe::Handshake { leaf_der } => match parse_captured_leaf(&leaf_der) {
-            Some(CapturedLeaf { issuer, subject, not_after, dns_sans }) => {
-                names = dns_sans;
-                let expires = serde_json::json!(not_after);
-                if looks_rcgen_or_self_signed(&issuer, &subject) {
-                    ("self-signed", true, expires)
-                } else if looks_public_or_acme(&issuer) || certs_dir_has_files {
-                    ("issued", false, expires)
-                } else {
-                    // Handshake succeeded with a non-rcgen leaf.
-                    ("issued", false, expires)
-                }
-            }
-            None => {
-                // Leaf captured but unparseable: still not missing.
-                ("issued", false, serde_json::Value::Null)
-            }
-        },
-    };
+    let mut ports = Vec::new();
+    let mut worst: Option<PortVerdict> = None;
+    for (port, probe) in probes {
+        let v = port_verdict(host, probe, now);
+        ports.push(serde_json::json!({
+            "port": port,
+            "state": v.state,
+            "selfSigned": v.self_signed,
+            "names": v.names,
+            "expiresAt": v.expires_at,
+        }));
+        if worst.as_ref().is_none_or(|w| verdict_rank(v.state) > verdict_rank(w.state)) {
+            worst = Some(v);
+        }
+    }
+    let w = worst.unwrap_or_else(|| port_verdict(host, &TlsProbe::Missing, now));
     serde_json::json!({
         "host": host_v,
-        "names": names,
-        "state": state,
-        "selfSigned": self_signed,
-        "expiresAt": expires_at,
+        "names": w.names,
+        "state": w.state,
+        "selfSigned": w.self_signed,
+        "expiresAt": w.expires_at,
+        "notBefore": w.not_before,
+        "ports": ports,
     })
 }
 
@@ -705,6 +765,7 @@ fn tls_cert_json(host: &str, probe: TlsProbe, certs_dir_has_files: bool) -> serd
 struct CapturedLeaf {
     issuer: String,
     subject: String,
+    not_before: i64,
     not_after: i64,
     /// DNS names in the subjectAltName extension, lowercased, in order.
     dns_sans: Vec<String>,
@@ -714,6 +775,7 @@ fn parse_captured_leaf(der: &[u8]) -> Option<CapturedLeaf> {
     let (_, cert) = x509_parser::parse_x509_certificate(der).ok()?;
     let issuer = cert.issuer().to_string();
     let subject = cert.subject().to_string();
+    let not_before = cert.validity().not_before.timestamp();
     let not_after = cert.validity().not_after.timestamp();
     let mut dns_sans = Vec::new();
     if let Ok(Some(ext)) = cert.subject_alternative_name() {
@@ -726,70 +788,82 @@ fn parse_captured_leaf(der: &[u8]) -> Option<CapturedLeaf> {
             }
         }
     }
-    Some(CapturedLeaf { issuer, subject, not_after, dns_sans })
+    Some(CapturedLeaf { issuer, subject, not_before, not_after, dns_sans })
 }
 
+/// rcgen's default name, the words "self signed", or issuer == subject
+/// (a certificate that signed itself — no CA leaf ever does).
 fn looks_rcgen_or_self_signed(issuer: &str, subject: &str) -> bool {
     let hay = format!("{issuer} {subject}").to_ascii_lowercase();
-    hay.contains("rcgen") || hay.contains("self signed") || hay.contains("self-signed")
+    hay.contains("rcgen")
+        || hay.contains("self signed")
+        || hay.contains("self-signed")
+        || (!issuer.trim().is_empty() && issuer.trim() == subject.trim())
 }
 
-fn looks_public_or_acme(issuer: &str) -> bool {
-    let hay = issuer.to_ascii_lowercase();
-    hay.contains("let's encrypt")
-        || hay.contains("letsencrypt")
-        || hay.contains("zerossl")
-        || hay.contains("zero ssl")
-        || hay.contains("google trust")
-        || hay.contains("gts ca")
-        || hay.contains("amazon")
-        || hay.contains("digicert")
-        || hay.contains("sectigo")
-        || hay.contains("acme")
-}
-
-#[cfg_attr(test, allow(dead_code))]
-fn stalwart_certs_dir_has_files() -> bool {
-    for dir in ["/var/lib/stalwart/certs", "/etc/stalwart/certs"] {
-        let Ok(rd) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        if rd.filter_map(|e| e.ok()).any(|e| e.path().is_file()) {
+/// Does a DNS SAN cover `host` (exact, or a one-label `*.` wildcard)?
+fn leaf_covers_host(sans: &[String], host: &str) -> bool {
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    sans.iter().any(|san| {
+        if *san == host {
             return true;
         }
-    }
-    false
+        match (san.strip_prefix("*."), host.split_once('.')) {
+            (Some(suffix), Some((label, rest))) => !label.is_empty() && rest == suffix,
+            _ => false,
+        }
+    })
 }
 
-/// Probe `{host}:443` with a 2s cap. A capturing verifier accepts the
-/// leaf (including rcgen) so classification can see it. Never hangs
-/// `status`: the worker is abandoned after the timeout.
+/// Probe every port in parallel (one thread each); the whole read is
+/// capped at [`TLS_CERT_PROBE_TIMEOUT`] so `status` never hangs. A port
+/// that does not answer in time reads `missing`.
 #[cfg_attr(test, allow(dead_code))]
-fn probe_live_tls(host: &str) -> TlsProbe {
+fn probe_live_tls_ports(host: &str, ports: &[u16]) -> Vec<(u16, TlsProbe)> {
     if host.is_empty() {
-        return TlsProbe::Missing;
+        return ports.iter().map(|p| (*p, TlsProbe::Missing)).collect();
     }
-    let host = host.to_string();
     let (tx, rx) = std::sync::mpsc::channel();
-    let spawn = std::thread::Builder::new()
-        .name("mail-tls-cert-probe".into())
-        .spawn(move || {
-            let _ = tx.send(probe_live_tls_inner(&host));
-        });
-    if spawn.is_err() {
-        return TlsProbe::Missing;
+    for port in ports {
+        let (tx, host, port) = (tx.clone(), host.to_string(), *port);
+        let _ = std::thread::Builder::new()
+            .name("mail-tls-cert-probe".into())
+            .spawn(move || {
+                let addrs = match std::net::ToSocketAddrs::to_socket_addrs(&(host.as_str(), port)) {
+                    Ok(a) => a.collect::<Vec<_>>(),
+                    Err(_) => Vec::new(),
+                };
+                let _ = tx.send((port, probe_tls_endpoint(&host, &addrs, port == 443)));
+            });
     }
-    rx.recv_timeout(TLS_CERT_PROBE_TIMEOUT)
-        .unwrap_or(TlsProbe::Missing)
+    drop(tx);
+    let deadline = std::time::Instant::now() + TLS_CERT_PROBE_TIMEOUT;
+    let mut got: std::collections::HashMap<u16, TlsProbe> = std::collections::HashMap::new();
+    while got.len() < ports.len() {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match rx.recv_timeout(left) {
+            Ok((port, probe)) => {
+                got.insert(port, probe);
+            }
+            Err(_) => break,
+        }
+    }
+    ports
+        .iter()
+        .map(|p| (*p, got.remove(p).unwrap_or(TlsProbe::Missing)))
+        .collect()
 }
 
-#[cfg_attr(test, allow(dead_code))]
-fn probe_live_tls_inner(host: &str) -> TlsProbe {
+/// One TLS handshake to the first reachable `addrs` entry with SNI =
+/// `sni`. A capturing verifier accepts any leaf (including rcgen) so
+/// classification can see it. ALPN (`http/1.1`, `h2`) is offered on the
+/// HTTPS port only: a mail listener with no overlapping ALPN would
+/// refuse the handshake before sending its certificate.
+fn probe_tls_endpoint(sni: &str, addrs: &[std::net::SocketAddr], offer_http_alpn: bool) -> TlsProbe {
     use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
     use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
     use rustls::{ClientConfig, ClientConnection, DigitallySignedStruct, SignatureScheme};
-    use std::io::{Read, Write};
-    use std::net::{TcpStream, ToSocketAddrs};
+    use std::net::TcpStream;
     use std::sync::{Arc, Mutex};
 
     #[derive(Debug)]
@@ -837,16 +911,12 @@ fn probe_live_tls_inner(host: &str) -> TlsProbe {
         }
     }
 
-    let addrs = match (host, 443u16).to_socket_addrs() {
-        Ok(a) => a.collect::<Vec<_>>(),
-        Err(_) => return TlsProbe::Missing,
-    };
-    if addrs.is_empty() {
+    if sni.is_empty() || addrs.is_empty() {
         return TlsProbe::Missing;
     }
     let mut sock = None;
     for addr in addrs {
-        if let Ok(s) = TcpStream::connect_timeout(&addr, TLS_CERT_PROBE_TIMEOUT) {
+        if let Ok(s) = TcpStream::connect_timeout(addr, TLS_CERT_PROBE_TIMEOUT) {
             sock = Some(s);
             break;
         }
@@ -872,8 +942,10 @@ fn probe_live_tls_inner(host: &str) -> TlsProbe {
         .dangerous()
         .with_custom_certificate_verifier(verifier.clone())
         .with_no_client_auth();
-    config.alpn_protocols = vec![b"http/1.1".to_vec(), b"h2".to_vec()];
-    let Ok(server_name) = ServerName::try_from(host.to_string()) else {
+    if offer_http_alpn {
+        config.alpn_protocols = vec![b"http/1.1".to_vec(), b"h2".to_vec()];
+    }
+    let Ok(server_name) = ServerName::try_from(sni.to_string()) else {
         return TlsProbe::Missing;
     };
     let Ok(mut conn) = ClientConnection::new(Arc::new(config), server_name) else {
@@ -886,9 +958,8 @@ fn probe_live_tls_inner(host: &str) -> TlsProbe {
             Err(_) => break,
         }
     }
-    // Drain any leftover TLS bytes so a slow close does not matter.
-    let _ = sock.read(&mut [0u8; 1]);
-    let _ = sock.flush();
+    // No drain read after the handshake: a TLS 1.2 server sends nothing
+    // more, and a blocking read would eat the whole time budget.
 
     let captured = verifier.leaf.lock().ok().and_then(|g| g.clone());
     match captured {
@@ -918,8 +989,7 @@ pub fn systemd_ground_truth() -> Option<String> {
 thread_local! {
     static TEST_UNIT_STATE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     static TEST_STORE_READY: std::cell::RefCell<Option<bool>> = const { std::cell::RefCell::new(None) };
-    static TEST_TLS_PROBE: std::cell::RefCell<Option<TlsProbe>> = const { std::cell::RefCell::new(None) };
-    static TEST_CERTS_DIR: std::cell::RefCell<Option<bool>> = const { std::cell::RefCell::new(None) };
+    static TEST_TLS_PROBE: std::cell::RefCell<Option<Vec<(u16, TlsProbe)>>> = const { std::cell::RefCell::new(None) };
     static TEST_HELPER_STATE: std::cell::RefCell<Option<HelperState>> = const { std::cell::RefCell::new(None) };
 }
 
@@ -949,12 +1019,11 @@ pub(crate) fn set_test_unit_state(state: Option<&str>) {
     TEST_UNIT_STATE.with(|c| *c.borrow_mut() = state.map(str::to_string));
 }
 
-/// Test seam: inject a captured leaf / missing probe so cert-status
-/// tests never open a socket.
+/// Test seam: inject per-port captured leaves / missing probes so
+/// cert-status tests never open a socket.
 #[cfg(test)]
-fn set_test_tls_cert(probe: Option<TlsProbe>, certs_dir: Option<bool>) {
-    TEST_TLS_PROBE.with(|c| *c.borrow_mut() = probe);
-    TEST_CERTS_DIR.with(|c| *c.borrow_mut() = certs_dir);
+fn set_test_tls_cert(probes: Option<Vec<(u16, TlsProbe)>>) {
+    TEST_TLS_PROBE.with(|c| *c.borrow_mut() = probes);
 }
 
 #[cfg(test)]
@@ -963,13 +1032,19 @@ pub(crate) struct TestTlsCertGuard;
 #[cfg(test)]
 impl Drop for TestTlsCertGuard {
     fn drop(&mut self) {
-        set_test_tls_cert(None, None);
+        set_test_tls_cert(None);
     }
 }
 
+/// Every probed port (443, 465, 993) serves the same `probe`.
 #[cfg(test)]
-fn with_test_tls_cert(probe: TlsProbe, certs_dir: bool) -> TestTlsCertGuard {
-    set_test_tls_cert(Some(probe), Some(certs_dir));
+fn with_test_tls_cert(probe: TlsProbe) -> TestTlsCertGuard {
+    with_test_tls_ports(MAIL_TLS_PROBE_PORTS.iter().map(|p| (*p, probe.clone())).collect())
+}
+
+#[cfg(test)]
+fn with_test_tls_ports(probes: Vec<(u16, TlsProbe)>) -> TestTlsCertGuard {
+    set_test_tls_cert(Some(probes));
     TestTlsCertGuard
 }
 
@@ -3747,10 +3822,6 @@ mod tests {
         end_enable();
     }
 
-    fn mint_leaf_der(cn: &str, org: Option<&str>) -> Vec<u8> {
-        mint_leaf_der_with_sans(cn, org, &[])
-    }
-
     fn mint_leaf_der_with_sans(cn: &str, org: Option<&str>, sans: &[&str]) -> Vec<u8> {
         use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
         let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
@@ -3766,6 +3837,36 @@ mod tests {
         cert.der().to_vec()
     }
 
+    /// A leaf for `sans` signed by a Let's Encrypt-looking CA (issuer !=
+    /// subject). `expired` backdates it. Returns (leaf DER, leaf key DER).
+    fn mint_ca_leaf(sans: &[&str], expired: bool) -> (Vec<u8>, Vec<u8>) {
+        use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+        let ca_key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("ca key");
+        let mut ca = CertificateParams::new(Vec::<String>::new()).expect("ca params");
+        ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, "R11");
+        dn.push(DnType::OrganizationName, "Let's Encrypt");
+        ca.distinguished_name = dn;
+        let ca_cert = ca.self_signed(&ca_key).expect("ca self-sign");
+        let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf = CertificateParams::new(sans.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            .expect("leaf params");
+        let mut ldn = DistinguishedName::new();
+        ldn.push(DnType::CommonName, sans.first().copied().unwrap_or("leaf"));
+        leaf.distinguished_name = ldn;
+        if expired {
+            leaf.not_before = rcgen::date_time_ymd(2020, 1, 1);
+            leaf.not_after = rcgen::date_time_ymd(2020, 4, 1);
+        }
+        let cert = leaf.signed_by(&key, &ca_cert, &ca_key).expect("ca-sign leaf");
+        (cert.der().to_vec(), key.serialize_der())
+    }
+
+    fn handshake(der: Vec<u8>) -> TlsProbe {
+        TlsProbe::Handshake { leaf_der: der }
+    }
+
     /// L1: a captured rcgen leaf is self-signed, never missing+false.
     /// 0.45.1 A2: `names` are the served leaf's real SANs (both of them),
     /// not an assumed `[host]`.
@@ -3776,7 +3877,7 @@ mod tests {
             None,
             &["mail.acme.dev", "Autoconfig.Acme.dev"],
         );
-        let _g = with_test_tls_cert(TlsProbe::Handshake { leaf_der: der }, false);
+        let _g = with_test_tls_cert(handshake(der));
         let v = tls_cert_status(Some("mail.acme.dev"));
         assert_eq!(v["state"].as_str().expect("state"), "self-signed", "{v}");
         assert_eq!(v["selfSigned"].as_bool().expect("selfSigned"), true, "{v}");
@@ -3793,26 +3894,27 @@ mod tests {
     }
 
     /// 0.45.1 A2 / HF10: no certificate served → `names` is empty and
-    /// `host` stays set; a leaf without SANs lists none either.
+    /// `host` stays set. 0.46.1: a CA leaf with no SAN for the host is a
+    /// `mismatch`, never `issued`.
     #[test]
     fn tls_cert_status_names_are_empty_without_a_served_san() {
-        let _g = with_test_tls_cert(TlsProbe::Missing, false);
+        let _g = with_test_tls_cert(TlsProbe::Missing);
         let v = tls_cert_status(Some("mail.acme.dev"));
         assert_eq!(v["names"], serde_json::json!([]), "{v}");
         assert_eq!(v["host"], "mail.acme.dev", "{v}");
         drop(_g);
-        let der = mint_leaf_der("R3", Some("Let's Encrypt"));
-        let _g = with_test_tls_cert(TlsProbe::Handshake { leaf_der: der }, false);
+        let (der, _) = mint_ca_leaf(&[], false);
+        let _g = with_test_tls_cert(handshake(der));
         let v = tls_cert_status(Some("mail.acme.dev"));
-        assert_eq!(v["state"], "issued", "{v}");
+        assert_eq!(v["state"], "mismatch", "{v}");
         assert_eq!(v["names"], serde_json::json!([]), "{v}");
     }
 
-    /// L1: handshake + ACME-looking issuer is issued, not self-signed.
+    /// L1: a CA-issued leaf covering the host is issued, not self-signed.
     #[test]
     fn tls_cert_status_acme_leaf_is_issued() {
-        let der = mint_leaf_der("R3", Some("Let's Encrypt"));
-        let _g = with_test_tls_cert(TlsProbe::Handshake { leaf_der: der }, false);
+        let (der, _) = mint_ca_leaf(&["mail.acme.dev"], false);
+        let _g = with_test_tls_cert(handshake(der));
         let v = tls_cert_status(Some("mail.acme.dev"));
         assert_eq!(v["state"].as_str().expect("state"), "issued", "{v}");
         assert_eq!(v["selfSigned"].as_bool().expect("selfSigned"), false, "{v}");
@@ -3820,31 +3922,156 @@ mod tests {
             v["expiresAt"].as_i64().expect("expiresAt") > 0,
             "expiresAt parsed: {v}"
         );
+        assert!(v["notBefore"].as_i64().expect("notBefore") > 0, "{v}");
+        assert_eq!(v["ports"].as_array().expect("ports").len(), 3, "{v}");
     }
 
     /// L1: no TCP/TLS at all is missing + selfSigned false.
     #[test]
     fn tls_cert_status_no_tls_is_missing() {
-        let _g = with_test_tls_cert(TlsProbe::Missing, true);
+        let _g = with_test_tls_cert(TlsProbe::Missing);
         let v = tls_cert_status(Some("mail.acme.dev"));
         assert_eq!(v["state"].as_str().expect("state"), "missing", "{v}");
         assert_eq!(v["selfSigned"].as_bool().expect("selfSigned"), false, "{v}");
         assert!(v["expiresAt"].is_null(), "{v}");
     }
 
-    /// L1: handshake + certs dir with files is issued even when the
-    /// issuer is not an ACME household name.
+    /// 0.46.1: a certificate that signed itself (issuer == subject) is
+    /// self-signed even without rcgen's name, and certificate files on
+    /// disk no longer turn a served leaf into `issued`.
     #[test]
-    fn tls_cert_status_handshake_plus_certs_dir_is_issued() {
-        let der = mint_leaf_der("mail.acme.dev", Some("Example Org"));
-        let _g = with_test_tls_cert(TlsProbe::Handshake { leaf_der: der }, true);
+    fn tls_cert_status_issuer_equals_subject_is_self_signed() {
+        let der = mint_leaf_der_with_sans("mail.acme.dev", Some("Example Org"), &["mail.acme.dev"]);
+        let _g = with_test_tls_cert(handshake(der));
         let v = tls_cert_status(Some("mail.acme.dev"));
-        assert_eq!(v["state"].as_str().expect("state"), "issued", "{v}");
-        assert_eq!(v["selfSigned"].as_bool().expect("selfSigned"), false, "{v}");
-        assert!(
-            v["expiresAt"].as_i64().expect("expiresAt") > 0,
-            "expiresAt parsed: {v}"
-        );
+        assert_eq!(v["state"].as_str().expect("state"), "self-signed", "{v}");
+        assert_eq!(v["selfSigned"].as_bool().expect("selfSigned"), true, "{v}");
+    }
+
+    /// 0.46.1: an expired CA leaf reads `expired`; a wildcard SAN covers
+    /// one label; an unparseable leaf is `unknown`, never `issued`.
+    #[test]
+    fn tls_cert_status_expired_wildcard_and_unparseable() {
+        let (der, _) = mint_ca_leaf(&["mail.acme.dev"], true);
+        let _g = with_test_tls_cert(handshake(der));
+        assert_eq!(tls_cert_status(Some("mail.acme.dev"))["state"], "expired");
+        drop(_g);
+        let (der, _) = mint_ca_leaf(&["*.acme.dev"], false);
+        let _g = with_test_tls_cert(handshake(der));
+        assert_eq!(tls_cert_status(Some("mail.acme.dev"))["state"], "issued");
+        assert_eq!(tls_cert_status(Some("a.mail.acme.dev"))["state"], "mismatch");
+        drop(_g);
+        let _g = with_test_tls_cert(handshake(vec![0x30, 0x03, 0x01, 0x02, 0x03]));
+        let v = tls_cert_status(Some("mail.acme.dev"));
+        assert_eq!(v["state"], "unknown", "{v}");
+        assert_eq!(v["selfSigned"], false, "{v}");
+    }
+
+    /// 0.46.1 field report (partii on luzz): 443 answered with a real
+    /// certificate while 465 and 993 — Stalwart's own listeners — served
+    /// the rcgen fallback. The worst port decides; each port is listed.
+    #[test]
+    fn tls_cert_status_worst_port_wins() {
+        let (good, _) = mint_ca_leaf(&["mail.acme.dev"], false);
+        let rcgen = mint_leaf_der_with_sans("rcgen self signed cert", None, &["localhost"]);
+        let _g = with_test_tls_ports(vec![
+            (443, handshake(good)),
+            (465, handshake(rcgen.clone())),
+            (993, handshake(rcgen)),
+        ]);
+        let v = tls_cert_status(Some("mail.acme.dev"));
+        assert_eq!(v["state"], "self-signed", "{v}");
+        assert_eq!(v["selfSigned"], true, "{v}");
+        assert_eq!(v["names"], serde_json::json!(["localhost"]), "{v}");
+        let ports = v["ports"].as_array().expect("ports");
+        let by = |p: u64| ports.iter().find(|x| x["port"] == p).expect("port listed")["state"].clone();
+        assert_eq!(by(443), "issued", "{v}");
+        assert_eq!(by(465), "self-signed", "{v}");
+        assert_eq!(by(993), "self-signed", "{v}");
+        drop(_g);
+        // A port that does not answer (993 not bound) never outranks a
+        // real answer.
+        let (good, _) = mint_ca_leaf(&["mail.acme.dev"], false);
+        let _g = with_test_tls_ports(vec![
+            (443, handshake(good.clone())),
+            (465, handshake(good)),
+            (993, TlsProbe::Missing),
+        ]);
+        assert_eq!(tls_cert_status(Some("mail.acme.dev"))["state"], "issued");
+    }
+
+    /// A real local TLS endpoint (rustls server on 127.0.0.1) serving one
+    /// leaf for one connection.
+    fn serve_tls_once(leaf_der: Vec<u8>, key_der: Vec<u8>) -> std::net::SocketAddr {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+        use std::sync::Arc;
+        let cfg = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("server protocol versions")
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![CertificateDer::from(leaf_der)],
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der)),
+        )
+        .expect("server cert");
+        let cfg = Arc::new(cfg);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut conn = rustls::ServerConnection::new(cfg).expect("server conn");
+            let _ = sock.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+            while conn.is_handshaking() {
+                match conn.complete_io(&mut sock) {
+                    Ok((0, 0)) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+        });
+        addr
+    }
+
+    /// 0.46.1: fake TLS endpoints, real SNI handshakes. A self-signed
+    /// rcgen leaf (SAN localhost) reads `self-signed`; a CA leaf matching
+    /// the SNI reads `issued`; a CA leaf for another name reads
+    /// `mismatch`; a closed port reads `missing`.
+    #[test]
+    fn tls_probe_against_fake_endpoints() {
+        let host = "mail.acme.dev";
+        // The rcgen fallback, the way Stalwart mints it (SAN localhost).
+        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
+        let params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).expect("params");
+        let rc = params.self_signed(&key).expect("self-sign");
+        let addr = serve_tls_once(rc.der().to_vec(), key.serialize_der());
+        let probe = probe_tls_endpoint(host, &[addr], false);
+        assert!(matches!(probe, TlsProbe::Handshake { .. }), "handshake captured: {probe:?}");
+        let v = tls_cert_json(host, &[(465, probe)], now_secs());
+        assert_eq!(v["state"], "self-signed", "{v}");
+        assert_eq!(v["selfSigned"], true, "{v}");
+        assert_eq!(v["names"], serde_json::json!(["localhost"]), "{v}");
+
+        let (leaf, key) = mint_ca_leaf(&[host], false);
+        let addr = serve_tls_once(leaf, key);
+        let probe = probe_tls_endpoint(host, &[addr], true);
+        let v = tls_cert_json(host, &[(443, probe)], now_secs());
+        assert_eq!(v["state"], "issued", "{v}");
+        assert_eq!(v["selfSigned"], false, "{v}");
+        assert_eq!(v["names"], serde_json::json!([host]), "{v}");
+
+        let (leaf, key) = mint_ca_leaf(&["other.acme.dev"], false);
+        let addr = serve_tls_once(leaf, key);
+        let probe = probe_tls_endpoint(host, &[addr], false);
+        let v = tls_cert_json(host, &[(993, probe)], now_secs());
+        assert_eq!(v["state"], "mismatch", "{v}");
+
+        // Nothing listening: missing, not issued.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let dead = closed.local_addr().expect("addr");
+        drop(closed);
+        let v = tls_cert_json(host, &[(993, probe_tls_endpoint(host, &[dead], false))], now_secs());
+        assert_eq!(v["state"], "missing", "{v}");
     }
 }
 
@@ -3854,14 +4081,18 @@ mod tests {
 /// Encrypt-looking leaf carrying `sans` (status reports `issued`).
 #[cfg(test)]
 pub(crate) fn with_test_issued_cert(sans: &[&str]) -> TestTlsCertGuard {
-    use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
-    let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
-    let mut params = CertificateParams::new(sans.iter().map(|s| s.to_string()).collect::<Vec<_>>())
-        .expect("SAN params");
+    use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+    let ca_key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("ca key");
+    let mut ca = CertificateParams::new(Vec::<String>::new()).expect("ca params");
+    ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     let mut dn = DistinguishedName::new();
     dn.push(DnType::CommonName, "R11");
     dn.push(DnType::OrganizationName, "Let's Encrypt");
-    params.distinguished_name = dn;
-    let der = params.self_signed(&key).expect("sign").der().to_vec();
-    with_test_tls_cert(TlsProbe::Handshake { leaf_der: der }, true)
+    ca.distinguished_name = dn;
+    let ca_cert = ca.self_signed(&ca_key).expect("ca sign");
+    let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
+    let params = CertificateParams::new(sans.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        .expect("SAN params");
+    let der = params.signed_by(&key, &ca_cert, &ca_key).expect("sign").der().to_vec();
+    with_test_tls_cert(TlsProbe::Handshake { leaf_der: der })
 }

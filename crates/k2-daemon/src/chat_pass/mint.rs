@@ -8,8 +8,11 @@
 //! 1. POST only (route policy; the dispatcher 405s a GET).
 //! 2. Ingress `tunnel` → 403 `loopback_only` (a pass is only useful to Sew
 //!    on this box; BFFs run on the box).
-//! 3. `Origin` or `Sec-Fetch-Mode` present → 403 `browser_not_allowed`
-//!    (browsers always send them on a fetch POST; server BFFs don't).
+//! 3. A browser-shaped head ([`has_browser_headers`]: `Origin`, any
+//!    `Sec-Fetch-Site`/`-Dest`/`-User`, or a `Sec-Fetch-Mode` other than
+//!    `cors`) → 403 `browser_not_allowed` (browsers always send them on a
+//!    fetch POST; server BFFs don't, and Node's `fetch` sends only
+//!    `Sec-Fetch-Mode: cors`).
 //! 4. Body: unknown field → 400 `validation_failed`; `handoff` with a
 //!    bearer → 400.
 //! 5. Credential → [`super::identity`] (refusals there), or the handoff
@@ -78,7 +81,7 @@ pub struct PassRequest<'a> {
     /// `loopback` | `lan` | `tunnel`.
     pub ingress: &'a str,
     pub ip: &'a str,
-    /// An `Origin` or `Sec-Fetch-Mode` header was present.
+    /// A browser-shaped header was present ([`has_browser_headers`]).
     pub browser: bool,
     /// `Authorization: Bearer` only (never `?token=` or a cookie).
     pub bearer: Option<&'a str>,
@@ -96,15 +99,25 @@ pub struct Deps<'a> {
     pub codes: &'a handoff::Store,
 }
 
-/// Whether a request head carries a browser-only header.
+/// Whether a request head is browser-shaped: an `Origin` (every browser
+/// sends it on a POST), any of `Sec-Fetch-Site` / `Sec-Fetch-Dest` /
+/// `Sec-Fetch-User` (browsers send them together), or a `Sec-Fetch-Mode`
+/// other than `cors`.
+///
+/// A lone `Sec-Fetch-Mode: cors` is NOT a browser: Node's built-in
+/// `fetch` (undici) adds exactly that header to every request and nothing
+/// else of the set, and K2's server SDK (`@k2/server`, which Apps use in
+/// the wall) calls `fetch`. Browsers that send `Sec-Fetch-Mode` always
+/// send `Sec-Fetch-Site` with it.
 pub fn has_browser_headers(headers_blob: &str) -> bool {
-    headers_blob.lines().skip(1).any(|l| {
-        l.split_once(':')
-            .map(|(n, _)| {
-                let n = n.trim();
-                n.eq_ignore_ascii_case("origin") || n.eq_ignore_ascii_case("sec-fetch-mode")
-            })
-            .unwrap_or(false)
+    headers_blob.lines().skip(1).take_while(|l| !l.trim().is_empty()).any(|l| {
+        let Some((n, v)) = l.split_once(':') else {
+            return false;
+        };
+        let n = n.trim();
+        let browser_only = ["origin", "sec-fetch-site", "sec-fetch-dest", "sec-fetch-user"];
+        browser_only.iter().any(|b| n.eq_ignore_ascii_case(b))
+            || (n.eq_ignore_ascii_case("sec-fetch-mode") && !v.trim().eq_ignore_ascii_case("cors"))
     })
 }
 

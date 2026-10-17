@@ -302,7 +302,7 @@ export const COUNTER_SPINNER_COLS = 2
  *  width (9/14 of its height), rounded up. The width estimate uses it. */
 export const COUNTER_SPINNER_EM = Math.ceil(((COUNTER_SPINNER_INK_EM * 9) / 14) * 100) / 100
 /** Space (px) between the working grid and the running count after it. */
-export const COUNTER_SPINNER_GAP_PX = 1
+export const COUNTER_SPINNER_GAP_PX = 2
 /** The grid's ink is 14 of its 24-unit height (StatusGlyphs), so the svg is
  *  drawn this many em tall to make the ink COUNTER_SPINNER_INK_EM tall. */
 export const COUNTER_SPINNER_SVG_EM = Number(((COUNTER_SPINNER_INK_EM * 24) / 14).toFixed(3))

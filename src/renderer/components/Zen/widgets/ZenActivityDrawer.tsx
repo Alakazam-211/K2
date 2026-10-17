@@ -208,7 +208,7 @@ const ICON: Record<StripCounterKey | 'check', (size: number) => React.JSX.Elemen
  *  grid's ink is a touch taller than the digits (COUNTER_SPINNER_INK_EM),
  *  like the braille was. The layout box is the ink's width
  *  (COUNTER_SPINNER_EM; the counter width estimate uses it) × 1em, plus a
- *  1px gap before the count; the svg's empty margin overflows it, centred.
+ *  2px gap before the count; the svg's empty margin overflows it, centred.
  *  The box sits 0.14em below the baseline so the ink is centred on the
  *  digits. */
 function WorkingMark(): React.JSX.Element {

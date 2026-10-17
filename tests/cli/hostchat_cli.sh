@@ -14,6 +14,8 @@
 #   5. Person-only steps refuse inside a K2 terminal before any request.
 #   6. A release without a Sew pin: enable/preflight/upgrade/media install
 #      exit 3 with sew_not_released; status says so plainly, exit 0.
+#   7. Voice flags (--media-tarball, --node-ip, ...) outside enable exit 2
+#      before any request (they used to be dropped silently).
 # Fake values only (example.test, made-up ids). Never touches the real ~/.k2.
 
 set -euo pipefail
@@ -219,6 +221,16 @@ assert_contains "enable: turn line" "$out" "turn-box.k2.dev:5349"
 
 run owner hostchat enable --identity ldap
 assert_eq "bad identity → exit 2" "$rc" "2"
+
+# 0.46.1: voice flags outside enable used to be dropped silently.
+before="$(nreq)"
+run owner hostchat upgrade --tarball sew.tar.gz --media-tarball sew-media.tar.gz
+assert_eq "upgrade --media-tarball → exit 2" "$rc" "2"
+assert_contains "upgrade --media-tarball names the real verb" "$err" "k2 hostchat media install --tarball FILE"
+assert_contains "upgrade --media-tarball says upgrade is Sew only" "$err" "upgrade upgrades Sew only"
+run owner hostchat upgrade --tarball sew.tar.gz --node-ip 203.0.113.7
+assert_eq "upgrade --node-ip → exit 2" "$rc" "2"
+assert_eq "voice-flag refusals send nothing" "$(nreq)" "$before"
 
 echo "== voice =="
 run owner hostchat media install --url wss://hearth.box.example.test --node-ip 203.0.113.7 --tarball sew-media.tar.gz --no-wait

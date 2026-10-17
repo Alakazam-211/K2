@@ -54,6 +54,10 @@ pub struct Facts {
     /// The engine's `version` answer, or why it didn't answer (S11).
     pub engine: Option<Result<J, String>>,
     pub skopeo: bool,
+    /// `/etc/os-release` (lane P: is K2's Podman bundle for this box?).
+    pub os_release: Option<String>,
+    /// K2's Podman bundle is installed (`/opt/k2/podman`, lane P).
+    pub podman_bundle: bool,
 }
 
 fn s(v: &Option<String>) -> &str {
@@ -96,6 +100,8 @@ fn c(
 }
 
 const PREPARE: &str = "k2 app box prepare (owner)";
+/// Lane P: the fix on a box K2's Podman bundle is for.
+const PREPARE_PODMAN: &str = "k2 app box prepare --install-podman (owner; --dry-run first to see every change)";
 
 /// The MAC row (§4.2 item 4) from `apps status`'s `mac`. AppArmor on but
 /// the `k2-app` profile not applied is a gate failure: Apps would start
@@ -235,10 +241,25 @@ pub fn doctor(f: &Facts) -> J {
         .as_str()
         .map(str::to_string)
         .or_else(|| f.podman.clone());
+    // Lane P: on Ubuntu 24.04 / Debian 12 box prep installs K2's bundle.
+    let bundle_os = f.os_release.as_deref().and_then(k2_root_proto::podman::supported_os);
+    let bundle = f.podman_bundle || hs("/engine/podmanSource").as_str() == Some("k2");
     out.push(match podman.as_deref() {
+        Some(v) if major(v).is_some_and(|m| m >= PODMAN_MIN_MAJOR) && bundle => {
+            c("podman", "ok", format!("{v} (K2's bundle, {}; the distro's Podman is untouched)", k2_root_proto::podman::PREFIX), None)
+        }
         Some(v) if major(v).is_some_and(|m| m >= PODMAN_MIN_MAJOR) => {
             c("podman", "ok", v.to_string(), None)
         }
+        Some(v) if bundle_os.is_some() => c(
+            "podman",
+            "fail",
+            format!(
+                "Podman {v}: Apps need {PODMAN_MIN_MAJOR}+; box prep can install K2's pinned Podman {} for the k2app user",
+                k2_root_proto::podman::BUNDLE_VERSION
+            ),
+            Some(PREPARE_PODMAN),
+        ),
         Some(v) => c(
             "podman",
             "fail",
@@ -247,11 +268,12 @@ pub fn doctor(f: &Facts) -> J {
             ),
             None,
         ),
+        None if bundle_os.is_some() => c("podman", "fail", "Podman is not installed", Some(PREPARE_PODMAN)),
         None => c("podman", "fail", "Podman is not installed", Some(PREPARE)),
     });
     let pasta = hs("/engine/pasta").as_bool().unwrap_or(f.pasta);
     out.push(if pasta {
-        c("pasta", "ok", "/usr/bin/pasta", None)
+        c("pasta", "ok", k2_root_proto::podman::pick(bundle, k2_root_proto::podman::PASTA, k2_root_proto::apps::PASTA), None)
     } else {
         c(
             "pasta",
@@ -676,13 +698,18 @@ pub fn gather() -> Facts {
             "/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/cgroup.controllers"
         ));
     }
-    f.podman = version_of(k2_root_proto::apps::PODMAN);
-    f.crun = version_of(k2_root_proto::apps::CRUN);
+    // What k2app runs: K2's Podman bundle when installed (lane P).
+    f.os_release = std::fs::read_to_string(k2_root_proto::podman::OS_RELEASE).ok();
+    f.podman_bundle = k2_root_proto::podman::installed();
+    f.podman = version_of(k2_root_proto::podman::podman_bin());
+    f.crun = version_of(k2_root_proto::podman::crun_bin());
     f.youki = version_of(k2_root_proto::apps::YOUKI);
-    f.pasta = std::path::Path::new(k2_root_proto::apps::PASTA).exists();
-    f.conmon = k2_root_proto::apps::CONMON
-        .iter()
-        .find_map(|p| version_of(p));
+    f.pasta = std::path::Path::new(k2_root_proto::podman::pasta_bin()).exists();
+    f.conmon = if f.podman_bundle {
+        version_of(k2_root_proto::podman::CONMON)
+    } else {
+        k2_root_proto::apps::CONMON.iter().find_map(|p| version_of(p))
+    };
     f.headless_confirm = headless_confirm();
     f.skopeo = std::path::Path::new(super::guarded::SKOPEO).exists();
     if std::path::Path::new(k2_root_proto::engine::SOCKET).exists() {
@@ -764,8 +791,16 @@ pub fn prepare_with(
     o: &PrepareOpts,
     call: impl Fn(&[String]) -> Result<String, String>,
 ) -> Result<J, J> {
+    prepare_steps(plan(o), call)
+}
+
+/// Run a given plan (lane P: [`plan`] with the Podman install in it).
+pub fn prepare_steps(
+    plan: Vec<Vec<String>>,
+    call: impl Fn(&[String]) -> Result<String, String>,
+) -> Result<J, J> {
     let mut steps = Vec::new();
-    for argv in plan(o) {
+    for argv in plan {
         let verb = argv.join(" ");
         match call(&argv) {
             Ok(text) => {
@@ -837,10 +872,40 @@ pub(crate) fn box_route(who: &Who) -> R<J> {
     Ok(doctor(&gather()))
 }
 
-/// `POST /cli/app/box/prepare {runtime?, coresMemMinMib?, appsMemMaxMib?, appsTasksMax?}`.
+/// The Podman version the doctor goes by: the helper's view first (it
+/// ran as root), the daemon's second.
+fn podman_seen(f: &Facts) -> Option<String> {
+    f.helper_status
+        .as_ref()
+        .and_then(|v| v.pointer("/engine/podman"))
+        .and_then(J::as_str)
+        .map(str::to_string)
+        .or_else(|| f.podman.clone())
+}
+
+/// `POST /cli/app/box/prepare {runtime?, coresMemMinMib?, appsMemMaxMib?,
+/// appsTasksMax?, installPodman?, dryRun?, podmanFrom?}`. Lane P: on a box
+/// K2's Podman bundle is for, Podman < 5 stops prepare with
+/// `podman_install_needed` unless `installPodman` (then the bundle goes in
+/// before `packages install`); `dryRun` reports and changes nothing.
 pub(crate) fn prepare_route(who: &Who, body: &J) -> R<J> {
-    may_prepare(who)?;
+    use super::podman_install as pi;
+    let pod = pi::parse(body)?;
+    if pod.dry_run {
+        pi::may_dry_run(who)?;
+    } else {
+        may_prepare(who)?;
+    }
     let opts = parse_opts(body)?;
+    if pod.dry_run {
+        let f = gather();
+        let d = pi::decide(podman_seen(&f).as_deref(), f.podman_bundle, f.os_release.as_deref());
+        let p = match d {
+            pi::Decision::Offer { .. } => pi::plan_with_install(plan(&opts)),
+            _ => plan(&opts),
+        };
+        return Ok(pi::dry_run(&d, &pod, &p, app_uid(), doctor(&f)));
+    }
     if !cfg!(target_os = "linux") {
         return Err(no("linux_only", 409, "Apps run on Linux boxes only"));
     }
@@ -852,13 +917,40 @@ pub(crate) fn prepare_route(who: &Who, body: &J) -> R<J> {
             root_helper::helper_needed("App box prep", APPS_MIN_PROTOCOL, &st),
         ));
     }
-    let res = prepare_with(&opts, |argv| root_helper::call_text(argv, None));
+    // Lane P: K2's Podman, opted in, before any step (never on upgrade).
+    let before = gather();
+    let d = pi::decide(podman_seen(&before).as_deref(), before.podman_bundle, before.os_release.as_deref());
+    let tarball = pi::prepare_step(&pod, &d, &st, app_uid())?;
+    let steps = match &tarball {
+        Some(_) => pi::plan_with_install(plan(&opts)),
+        None => plan(&opts),
+    };
+    let res = prepare_steps(steps, |argv| match (&tarball, pi::is_install(argv)) {
+        (Some(b), true) => root_helper::call_text(argv, Some(b)),
+        _ => root_helper::call_text(argv, None),
+    });
     root_helper::invalidate();
+    if tarball.is_some() {
+        let r = match &res {
+            Ok(_) => "ok".to_string(),
+            Err(v) if v["failedStep"] == "apps podman install" => format!(
+                "failed {}",
+                v["steps"].as_array().and_then(|s| s.last()).map(|s| s["error"].to_string()).unwrap_or_default()
+            ),
+            Err(_) => "ok (a later box prep step failed)".to_string(),
+        };
+        pi::audit("app-podman-install", who, &format!("{r} version={}", k2_root_proto::podman::BUNDLE_VERSION));
+    }
     let doc = doctor(&gather());
     match res {
         Ok(mut v) => {
             v["ok"] = json!(true);
             v["runtime"] = json!(opts.runtime.as_str());
+            v["podman"] = match (&tarball, &d) {
+                (Some(_), _) => json!({"action": "installed", "version": k2_root_proto::podman::BUNDLE_VERSION, "prefix": k2_root_proto::podman::PREFIX}),
+                (None, pi::Decision::Keep { version, source }) => json!({"action": "keep", "have": version, "source": source}),
+                (None, _) => json!({"action": "distro"}),
+            };
             v["box"] = doc;
             Ok(v)
         }

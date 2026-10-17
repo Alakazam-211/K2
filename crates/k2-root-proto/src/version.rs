@@ -43,6 +43,8 @@ pub const HANDOFF_MIN_PROTOCOL: u32 = 5;
 /// AR38). Helpers on the fleet answer ≤ 5, so the daemon treats them as
 /// "no App verbs" until they self-update.
 pub const APPS_MIN_PROTOCOL: u32 = 6;
+/// `apps podman install|uninstall` (K2's Podman 5 bundle, 0.46.1 lane P).
+pub const PODMAN_INSTALL_MIN_PROTOCOL: u32 = 7;
 
 pub const HELPER_NAME: &str = "k2-root-helper";
 
@@ -214,6 +216,21 @@ mod tests {
         ] {
             let v = crate::verbs::Verb::parse(needed).expect("apps verb parses");
             assert!(apps.contains(&v), "{needed:?} missing from the catalog");
+        }
+    }
+
+    /// Lane P's verbs need 7: a 6 helper refuses them (unknown argv), so
+    /// the daemon must not ask one.
+    #[test]
+    fn podman_verbs_ride_protocol_7() {
+        assert_eq!(PODMAN_INSTALL_MIN_PROTOCOL, 7);
+        assert!(PODMAN_INSTALL_MIN_PROTOCOL <= PROTOCOL);
+        assert!(PODMAN_INSTALL_MIN_PROTOCOL > APPS_MIN_PROTOCOL);
+        let cat = crate::verbs::catalog();
+        for argv in [&["apps", "podman", "install"][..], &["apps", "podman", "uninstall"]] {
+            let v = crate::verbs::Verb::parse(argv).expect("parses");
+            assert!(cat.contains(&v), "{argv:?}");
+            assert_eq!(v.class(), crate::verbs::Class::Daemon, "{argv:?}");
         }
     }
 

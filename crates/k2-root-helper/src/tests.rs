@@ -1642,3 +1642,7 @@ fn handoff_dropin_refuses_a_user_scope_daemon() {
 // The `apps` namespace (protocol 6) lives in its own file, same fakes.
 #[path = "apps_tests.rs"]
 mod apps_tests;
+
+// K2's Podman bundle (protocol 7, lane P), same fakes.
+#[path = "podman_tests.rs"]
+mod podman_tests;

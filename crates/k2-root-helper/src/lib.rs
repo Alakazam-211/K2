@@ -26,6 +26,7 @@ pub mod keep;
 pub mod mail;
 pub mod mail_data;
 pub mod pg;
+pub mod podman;
 pub mod sys;
 
 #[cfg(test)]
@@ -225,6 +226,8 @@ fn dispatch(
         Verb::AppsCoresSlice(n) => Some(apps::cores_slice(ctx, who, *n)?),
         Verb::AppsBudget(b) => Some(apps::budget(ctx, *b)?),
         Verb::AppsUnprep => Some(apps::unprep(ctx, who)?),
+        Verb::AppsPodmanInstall => Some(podman::install(ctx, stdin)?),
+        Verb::AppsPodmanUninstall => Some(podman::uninstall(ctx)?),
     })
 }
 
@@ -263,6 +266,19 @@ fn audit(
         let p = x.pointer("/apparmor/installed").filter(|p| p.as_array().is_some_and(|a| !a.is_empty()));
         if let Some(p) = p {
             line["apparmorInstalled"] = p.clone();
+        }
+    }
+    // K2's Podman bundle: which build went in (or what came out).
+    if let (Some(Verb::AppsPodmanInstall), Some(x)) = (verb, extra) {
+        for k in ["installed", "sha256", "arch", "os"] {
+            if let Some(v) = x.get(k) {
+                line[if k == "installed" { "podman" } else { k }] = v.clone();
+            }
+        }
+    }
+    if let (Some(Verb::AppsPodmanUninstall), Some(x)) = (verb, extra) {
+        if let Some(v) = x.get("removed") {
+            line["removed"] = v.clone();
         }
     }
     if let Some(Verb::PgPsql { db, .. }) = verb {

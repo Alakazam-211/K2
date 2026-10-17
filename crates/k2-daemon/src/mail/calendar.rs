@@ -26,15 +26,16 @@
 //! opaque `ev_…` tokens carrying their inbox address, exactly like mail's
 //! `m_…` message ids (capped at 1 KiB before decoding, MCS-A23).
 //!
-//! **Linked inboxes (MCS3, prd-app-mail-calendar-surfaces-v1 §3.1/§3.4):**
-//! [`resolve_target`] routes a LINKED inbox — only AFTER the access gate
-//! passed, so a linked inbox the caller can't see still answers the masked
-//! `not_found` (CAL19) — to its provider: Microsoft 365 → Microsoft Graph
-//! ([`crate::mail::calendar_graph`], same verbs, same wire shapes plus
-//! `source`). Anything a linked inbox can't do answers 409
-//! `capability_missing` `{cap, reason, fix}`: Google (`not_built` until
-//! MCS4, or `scope_not_granted`), an app-password IMAP inbox
-//! (`backend_unsupported`), a Microsoft link consented for mail only
+//! **Linked inboxes (MCS3/MCS4, prd-app-mail-calendar-surfaces-v1
+//! §3.1/§3.4):** [`resolve_target`] routes a LINKED inbox — only AFTER the
+//! access gate passed, so a linked inbox the caller can't see still
+//! answers the masked `not_found` (CAL19) — to its calendar provider
+//! behind [`crate::mail::calendar_provider::CalendarProvider`]: Microsoft
+//! 365 → Microsoft Graph ([`crate::mail::calendar_graph`]), Google →
+//! the Google Calendar API ([`crate::mail::calendar_google`]); same verbs,
+//! same wire shapes plus `source`. Anything a linked inbox can't do
+//! answers 409 `capability_missing` `{cap, reason, fix}`: an app-password
+//! IMAP inbox (`backend_unsupported`), a link consented for mail only
 //! (`scope_not_granted`, fix `k2 mail link upgrade … --features
 //! calendar`), or the owner's `linkedCalendars` switch off
 //! (`owner_disabled`). The hosted path below is unchanged (MCS-A16:
@@ -325,11 +326,12 @@ pub(crate) fn gate_error(err: ReadError) -> CliResponse {
     }
 }
 
-/// Where a calendar verb runs (MCS3): the hosted Stalwart account, or a
-/// linked Microsoft 365 mailbox over Graph.
+/// Where a calendar verb runs: the hosted Stalwart account, or a linked
+/// account's calendar provider (Microsoft Graph since MCS3, Google
+/// Calendar since MCS4 — [`crate::mail::calendar_provider`]).
 pub enum CalTarget {
     Hosted(CalInbox),
-    Graph(crate::mail::calendar_graph::GraphCalInbox),
+    Linked(crate::mail::calendar_provider::LinkedCalInbox),
 }
 
 /// Resolve the inbox for a calendar verb: explicit `address`, else the
@@ -374,7 +376,7 @@ pub fn resolve_target(
     // CAL19: only AFTER access passed, so a linked inbox the caller
     // cannot see still answers the masked not_found above.
     if inbox.source == Source::Linked {
-        return crate::mail::calendar_graph::linked_target(inbox, need).map(CalTarget::Graph);
+        return crate::mail::calendar_provider::linked_target(inbox, need).map(CalTarget::Linked);
     }
     let Some(account_id) = inbox.account_id.filter(|s| !s.trim().is_empty()) else {
         return Err(engine_err(format!(
@@ -399,7 +401,7 @@ pub fn resolve_inbox(
 ) -> Result<CalInbox, CliResponse> {
     match resolve_target(project_id, explicit, need)? {
         CalTarget::Hosted(i) => Ok(i),
-        CalTarget::Graph(g) => Err(error_response(
+        CalTarget::Linked(g) => Err(error_response(
             "409 Conflict",
             "hosted_only",
             &format!("'{}' is a linked inbox — this verb is hosted-only", g.address),
@@ -458,11 +460,11 @@ pub fn decode_event_ref(token: &str) -> Option<(String, String, Option<String>)>
 /// An event id resolved to where it lives (MCS3).
 pub(crate) enum EventTarget {
     Hosted(CalInbox, String, Option<HostedAddr>),
-    Graph(crate::mail::calendar_graph::GraphCalInbox, String),
+    Linked(crate::mail::calendar_provider::LinkedCalInbox, String),
 }
 
 /// [`resolve_event`] across providers: a hosted event (own or shared),
-/// or an event on a linked Microsoft 365 calendar.
+/// or an event on a linked Microsoft 365 / Google calendar.
 pub(crate) fn resolve_event_target(
     project_id: &str,
     token: &str,
@@ -472,11 +474,11 @@ pub(crate) fn resolve_event_target(
         return Err(usage("invalid event id — use an id from 'k2 calendar events'"));
     };
     match resolve_target(project_id, Some(&address), need) {
-        Ok(CalTarget::Graph(g)) => {
+        Ok(CalTarget::Linked(g)) => {
             if owner.is_some() {
                 return Err(event_not_found(token));
             }
-            Ok(EventTarget::Graph(g, id))
+            Ok(EventTarget::Linked(g, id))
         }
         Ok(CalTarget::Hosted(_)) | Err(_) => {
             resolve_event(project_id, token, need).map(|(i, j, o)| EventTarget::Hosted(i, j, o))
@@ -499,7 +501,7 @@ fn resolve_event(
     };
     let inbox = match resolve_target(project_id, Some(&address), need) {
         Ok(CalTarget::Hosted(inbox)) => inbox,
-        Ok(CalTarget::Graph(_)) => return Err(event_not_found(token)),
+        Ok(CalTarget::Linked(_)) => return Err(event_not_found(token)),
         Err(resp) if resp.status.starts_with("404") => return Err(event_not_found(token)),
         Err(resp) => return Err(resp),
     };
@@ -1306,7 +1308,7 @@ pub fn handle_list(params: &HashMap<String, String>) -> CliResponse {
     let inbox =
         match resolve_target(&project_id, params.get("address").map(String::as_str), Level::Read) {
             Ok(CalTarget::Hosted(i)) => i,
-            Ok(CalTarget::Graph(g)) => return crate::mail::calendar_graph::handle_list(&g),
+            Ok(CalTarget::Linked(g)) => return crate::mail::calendar_provider::handle_list(&g),
             Err(r) => return r,
         };
     if let Err(r) = calendars_enabled_gate() {
@@ -1363,8 +1365,8 @@ pub fn handle_events(params: &HashMap<String, String>) -> CliResponse {
     let inbox =
         match resolve_target(&project_id, params.get("address").map(String::as_str), Level::Read) {
             Ok(CalTarget::Hosted(i)) => i,
-            Ok(CalTarget::Graph(g)) => {
-                return crate::mail::calendar_graph::handle_events(&g, params, Utc::now())
+            Ok(CalTarget::Linked(g)) => {
+                return crate::mail::calendar_provider::handle_events(&g, params, Utc::now())
             }
             Err(r) => return r,
         };
@@ -1492,8 +1494,8 @@ pub fn handle_show(params: &HashMap<String, String>) -> CliResponse {
     };
     let (inbox, jmap_id, owner) = match resolve_event_target(&project_id, &token, Level::Read) {
         Ok(EventTarget::Hosted(i, j, o)) => (i, j, o),
-        Ok(EventTarget::Graph(g, id)) => {
-            return crate::mail::calendar_graph::handle_show(&g, &id, &token)
+        Ok(EventTarget::Linked(g, id)) => {
+            return crate::mail::calendar_provider::handle_show(&g, &id, &token)
         }
         Err(r) => return r,
     };
@@ -1554,8 +1556,8 @@ pub fn handle_freebusy(params: &HashMap<String, String>) -> CliResponse {
     let inbox =
         match resolve_target(&project_id, params.get("address").map(String::as_str), Level::Read) {
             Ok(CalTarget::Hosted(i)) => i,
-            Ok(CalTarget::Graph(g)) => {
-                return crate::mail::calendar_graph::handle_freebusy(&g, params, Utc::now())
+            Ok(CalTarget::Linked(g)) => {
+                return crate::mail::calendar_provider::handle_freebusy(&g, params, Utc::now())
             }
             Err(r) => return r,
         };
@@ -1776,8 +1778,8 @@ pub fn handle_wait(params: &HashMap<String, String>) -> CliResponse {
     let inbox =
         match resolve_target(&project_id, params.get("address").map(String::as_str), Level::Read) {
             Ok(CalTarget::Hosted(i)) => i,
-            Ok(CalTarget::Graph(g)) => {
-                return crate::mail::calendar_graph::handle_wait(
+            Ok(CalTarget::Linked(g)) => {
+                return crate::mail::calendar_provider::handle_wait(
                     &g,
                     &project_id,
                     params,
@@ -2146,7 +2148,7 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
     }
     let inbox = match resolve_target(&project_id, b.address.as_deref(), Level::Draft) {
         Ok(CalTarget::Hosted(i)) => i,
-        Ok(CalTarget::Graph(g)) => return crate::mail::calendar_graph::handle_create(&g, &b),
+        Ok(CalTarget::Linked(g)) => return crate::mail::calendar_provider::handle_create(&g, &b),
         Err(r) => return r,
     };
     if let Err(r) = calendars_enabled_gate() {
@@ -2357,8 +2359,8 @@ pub fn handle_update(body: &[u8]) -> CliResponse {
     }
     let (inbox, jmap_id, owner) = match resolve_event_target(&project_id, &token, Level::Draft) {
         Ok(EventTarget::Hosted(i, j, o)) => (i, j, o),
-        Ok(EventTarget::Graph(g, id)) => {
-            return crate::mail::calendar_graph::handle_update(&g, &id, &token, &b)
+        Ok(EventTarget::Linked(g, id)) => {
+            return crate::mail::calendar_provider::handle_update(&g, &id, &token, &b)
         }
         Err(r) => return r,
     };
@@ -2607,8 +2609,8 @@ pub fn handle_delete(body: &[u8]) -> CliResponse {
     };
     let (inbox, jmap_id, owner) = match resolve_event_target(&project_id, &token, Level::Draft) {
         Ok(EventTarget::Hosted(i, j, o)) => (i, j, o),
-        Ok(EventTarget::Graph(g, id)) => {
-            return crate::mail::calendar_graph::handle_delete(&g, &id, &token)
+        Ok(EventTarget::Linked(g, id)) => {
+            return crate::mail::calendar_provider::handle_delete(&g, &id, &token)
         }
         Err(r) => return r,
     };
@@ -3086,7 +3088,7 @@ mod tests {
         assert_eq!(body_of(&r)["error"]["cap"], "calendar.write");
 
         match resolve_target(&owner, Some(&with_cal), Level::Draft) {
-            Ok(CalTarget::Graph(g)) => {
+            Ok(CalTarget::Linked(g)) => {
                 assert_eq!(g.address, with_cal);
                 assert_eq!(g.level, Level::Draft, "the owner's primary level");
             }
@@ -3100,7 +3102,7 @@ mod tests {
         // Its event ids resolve to Graph; the shared-event form never does.
         let tok = encode_event_id(&with_cal, "AAMkAGI2-long-graph-id==");
         match resolve_event_target(&owner, &tok, Level::Read) {
-            Ok(EventTarget::Graph(g, id)) => {
+            Ok(EventTarget::Linked(g, id)) => {
                 assert_eq!(g.address, with_cal);
                 assert_eq!(id, "AAMkAGI2-long-graph-id==");
             }
@@ -3121,7 +3123,7 @@ mod tests {
         assert_eq!(reason_of(&r), "owner_disabled");
         assert_eq!(body_of(&r)["error"]["fix"], "k2 mail link calendars on (owner)");
         k2_core::app_settings::update(json!({ "linkedCalendars": true })).expect("switch on");
-        assert!(matches!(resolve_target(&owner, Some(&with_cal), Level::Read), Ok(CalTarget::Graph(_))));
+        assert!(matches!(resolve_target(&owner, Some(&with_cal), Level::Read), Ok(CalTarget::Linked(_))));
 
         // A stranger learns nothing.
         for a in [&mail_only, &with_cal] {
@@ -3134,19 +3136,103 @@ mod tests {
     }
 
     #[test]
-    /// MCS3: Google calendars aren't built (MCS4): with the consent →
-    /// `not_built`, without → `scope_not_granted`.
-    fn google_link_calendar_is_not_built_or_scope_not_granted() {
+    /// MCS4: a Google link routes to the Google Calendar provider with the
+    /// calendar grant (a calendar-only link too) and the owner's switch on;
+    /// a mail-only link answers `scope_not_granted` with the upgrade fix —
+    /// always after the access gate.
+    fn google_link_routes_to_google_or_names_the_missing_capability() {
+        use crate::mail::calendar_provider::LinkedBackend;
+        let _home = k2_core::test_env::TempHome::new();
         let (owner, _) = insert_project("g-own");
+        let (other, _) = insert_project("g-oth");
         let consented = addr("g-cal");
         let mail_only = addr("g-mail");
+        let cal_only = addr("g-calonly");
         seed_oauth_link(&owner, &consented, "gmail", true);
         seed_oauth_link(&owner, &mail_only, "gmail", false);
-        let r = resolve_target(&owner, Some(&consented), Level::Read).err().expect("google");
-        assert_eq!(code_of(&r), "capability_missing");
-        assert_eq!(reason_of(&r), "not_built");
+        let id = seed_oauth_link(&owner, &cal_only, "gmail", true);
+        {
+            use crate::mail::oauth::{scope_for, Features, OauthProvider};
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE mail_external_inboxes SET features = 'calendar', granted_scopes = ?2 WHERE id = ?1",
+                rusqlite::params![id, scope_for(OauthProvider::Gmail, Features { mail: false, calendar: true })],
+            )
+            .expect("calendar-only");
+        }
+        for a in [&consented, &cal_only] {
+            match resolve_target(&owner, Some(a), Level::Draft) {
+                Ok(CalTarget::Linked(g)) => {
+                    assert_eq!(&g.address, a);
+                    assert_eq!(g.backend, LinkedBackend::Google);
+                }
+                Ok(CalTarget::Hosted(_)) => panic!("a Google link is never hosted"),
+                Err(r) => panic!("routable {a}: {} {}", r.status, r.body),
+            }
+        }
+        let tok = encode_event_id(&consented, "abc123/primary");
+        match resolve_event_target(&owner, &tok, Level::Read) {
+            Ok(EventTarget::Linked(g, id)) => {
+                assert_eq!(g.backend, LinkedBackend::Google);
+                assert_eq!(id, "abc123/primary");
+            }
+            _ => panic!("google event"),
+        }
         let r = resolve_target(&owner, Some(&mail_only), Level::Read).err().expect("google");
+        assert_eq!(code_of(&r), "capability_missing");
         assert_eq!(reason_of(&r), "scope_not_granted");
+        assert_eq!(
+            body_of(&r)["error"]["fix"],
+            format!("k2 mail link upgrade {mail_only} --features calendar (owner)")
+        );
+        k2_core::app_settings::update(json!({ "linkedCalendars": false })).expect("switch off");
+        let r = resolve_target(&owner, Some(&consented), Level::Read).err().expect("switched off");
+        assert_eq!(reason_of(&r), "owner_disabled");
+        k2_core::app_settings::update(json!({ "linkedCalendars": true })).expect("switch on");
+        for a in [&consented, &mail_only, &cal_only] {
+            let r = resolve_target(&other, Some(a), Level::Read).err().expect("masked");
+            assert!(r.status.starts_with("404"), "{}", r.body);
+            assert!(!r.body.contains("capability_missing"));
+        }
+        cleanup(&[&owner, &other]);
+    }
+
+    #[test]
+    /// MCS4: a calendar-only Google link answers mail verbs with
+    /// `capability_missing` (mail scope not granted, upgrade fix) and drops
+    /// out of the all-inbox mail sweep; a mail link passes the gate.
+    fn calendar_only_google_link_has_no_mail() {
+        let _home = k2_core::test_env::TempHome::new();
+        let (owner, _) = insert_project("gm-own");
+        let cal_only = addr("gm-calonly");
+        let with_mail = addr("gm-mail");
+        let id = seed_oauth_link(&owner, &cal_only, "gmail", true);
+        let mail_id = seed_oauth_link(&owner, &with_mail, "gmail", false);
+        {
+            use crate::mail::oauth::{scope_for, Features, OauthProvider};
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE mail_external_inboxes SET features = 'calendar', granted_scopes = ?2 WHERE id = ?1",
+                rusqlite::params![id, scope_for(OauthProvider::Gmail, Features { mail: false, calendar: true })],
+            )
+            .expect("calendar-only");
+        }
+        assert!(!crate::mail::capabilities::linked_row_has_mail(&id));
+        assert!(crate::mail::capabilities::linked_row_has_mail(&mail_id));
+        let row = crate::mail::external::inbox_for_address(&cal_only).expect("row");
+        let r = crate::mail::capabilities::mail_scope_gate(&row, "mail.read").expect_err("no mail");
+        assert!(r.status.starts_with("409"), "{}", r.body);
+        assert_eq!(code_of(&r), "capability_missing");
+        assert_eq!(reason_of(&r), "scope_not_granted");
+        assert_eq!(body_of(&r)["error"]["cap"], "mail.read");
+        assert_eq!(
+            body_of(&r)["error"]["fix"],
+            format!("k2 mail link upgrade {cal_only} --features mail (owner)")
+        );
+        let row = crate::mail::external::inbox_for_address(&with_mail).expect("row");
+        assert!(crate::mail::capabilities::mail_scope_gate(&row, "mail.read").is_ok());
         cleanup(&[&owner]);
     }
 

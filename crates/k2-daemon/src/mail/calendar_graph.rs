@@ -54,10 +54,11 @@ use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use serde_json::{json, Value};
 
 use crate::cli_response::CliResponse;
-use crate::mail::access::{AccessInbox, Level};
-use crate::mail::calendar::{
-    self as cal, error_response, event_not_found, invites_need_send, ok_json, rfc3339_utc,
-    usage, BusyKind, BusySpan, WriteBody,
+use crate::mail::access::Level;
+use crate::mail::calendar::{self as cal, ok_json, rfc3339_utc, usage, BusyKind, BusySpan, WriteBody};
+use crate::mail::calendar_provider::{
+    self as linked, CalendarProvider, Changes, DraftEvent, DraftPatch, LinkedCalInbox, StateErr,
+    StoredEvent,
 };
 use crate::mail::graph::{self, GraphHttp, GraphMethod, GraphResponse};
 use k2_core::db::schema::MailExternalInbox;
@@ -86,122 +87,15 @@ const DELTA_MAX_PAGES: usize = 200;
 /// `wait` state tokens over Graph.
 const STATE_PREFIX: &str = "gd_";
 
-// ── The target ──────────────────────────────────────────────────────────
+// ── The target (MCS4: the provider seam owns it) ────────────────────────
 
-/// A linked Microsoft 365 inbox a calendar verb may use (after the access
-/// gate and the capability checks).
-#[derive(Debug, Clone)]
-pub struct GraphCalInbox {
-    pub address: String,
-    pub row: MailExternalInbox,
-    /// The caller's `k2 mail access` level on the inbox.
-    pub level: Level,
-}
-
-/// 409 `capability_missing` with `{cap, reason, fix}` (PRD §3.1). Only
-/// ever answered after the access gate passed.
-pub fn capability_missing(cap: &str, reason: &str, fix: &str, hint: &str) -> CliResponse {
-    CliResponse {
-        status: "409 Conflict",
-        content_type: "application/json",
-        body: json!({
-            "ok": false,
-            "error": {
-                "code": "capability_missing",
-                "hint": hint,
-                "cap": cap,
-                "reason": reason,
-                "fix": fix,
-            },
-        })
-        .to_string(),
-    }
-}
-
-fn cap_name(need: Level) -> &'static str {
-    match need {
-        Level::Read => "calendar.read",
-        Level::Draft => "calendar.write",
-        Level::Send => "calendar.invite",
-    }
-}
-
-/// Route a LINKED inbox (already past the access gate) to its calendar
-/// provider, or say why it can't: Google calendars aren't built yet
-/// (MCS4), an app-password IMAP inbox has no calendar API, a Microsoft
-/// link consented for mail only needs `k2 mail link upgrade`, and the
-/// owner may have turned linked calendars off.
-pub fn linked_target(inbox: AccessInbox, need: Level) -> Result<GraphCalInbox, CliResponse> {
-    let cap = cap_name(need);
-    let Some(row) = inbox.linked.clone() else {
-        return Err(cal::engine_err("linked inbox row missing (unexpected)"));
-    };
-    let address = inbox.address.clone();
-    let fields = crate::mail::external::read_oauth_fields(&row.id).map_err(cal::engine_err)?;
-    let oauth = fields.auth_kind == crate::mail::external::AUTH_OAUTH;
-    let provider = fields.provider.as_deref().unwrap_or("");
-    let meta = crate::mail::external::read_oauth_meta(&row.id).unwrap_or_default();
-    let granted = meta.granted_scopes.as_deref().unwrap_or("");
-    let upgrade_fix = format!("k2 mail link upgrade {address} --features calendar (owner)");
-    let is_graph = row.kind == "graph" || (oauth && provider == "microsoft");
-    if !is_graph {
-        if oauth && provider == "gmail" {
-            let consented = crate::mail::oauth::features_granted(
-                crate::mail::oauth::OauthProvider::Gmail,
-                granted,
-            )
-            .calendar;
-            return Err(if consented {
-                capability_missing(
-                    cap,
-                    "not_built",
-                    "Google calendars arrive in a later K2 version (the consent is in place)",
-                    &format!("'{address}' is a linked Google inbox — Google calendars aren't available in this K2 version yet"),
-                )
-            } else {
-                capability_missing(
-                    cap,
-                    "scope_not_granted",
-                    &upgrade_fix,
-                    &format!("'{address}' was linked for mail only — its owner can add calendar access with '{upgrade_fix}'"),
-                )
-            });
-        }
-        return Err(capability_missing(
-            cap,
-            "backend_unsupported",
-            "link the account with OAuth (k2 mail link add <address> --provider gmail|microsoft) for calendars",
-            &format!(
-                "'{address}' is linked over IMAP with an app password — that has no calendar API"
-            ),
-        ));
-    }
-    if !k2_core::app_settings::load().linked_calendars {
-        return Err(capability_missing(
-            cap,
-            "owner_disabled",
-            "k2 mail link calendars on (owner)",
-            "the owner turned calendars on linked inboxes off for this server — ask your human",
-        ));
-    }
-    let consented = crate::mail::oauth::features_granted(
-        crate::mail::oauth::OauthProvider::Microsoft,
-        granted,
-    )
-    .calendar;
-    if !consented {
-        return Err(capability_missing(
-            cap,
-            "scope_not_granted",
-            &upgrade_fix,
-            &format!(
-                "'{address}' was linked without calendar access — the owner adds it with \
-                 '{upgrade_fix}' (or Settings → Email Link → Add calendar)"
-            ),
-        ));
-    }
-    Ok(GraphCalInbox { address, row, level: inbox.your_level })
-}
+/// A linked Microsoft 365 inbox a calendar verb may use — the
+/// provider-neutral [`LinkedCalInbox`] (MCS4 moved routing, the
+/// capability errors and the verbs into [`crate::mail::calendar_provider`]).
+pub type GraphCalInbox = LinkedCalInbox;
+pub use crate::mail::calendar_provider::{capability_missing, linked_target, CalErr};
+#[cfg(test)]
+use crate::mail::calendar_provider::cap_name;
 
 // ── The Graph client (injectable) ───────────────────────────────────────
 
@@ -210,26 +104,6 @@ pub fn linked_target(inbox: AccessInbox, need: Level) -> Result<GraphCalInbox, C
 pub struct GraphCalendar {
     http: Arc<dyn GraphHttp>,
     sleep: Box<dyn Fn(StdDuration) + Send + Sync>,
-}
-
-/// A Graph calendar failure. `NotFound` is masked by the caller; `Usage`
-/// is the caller's to fix; `Engine` carries only Graph's own error text.
-#[derive(Debug, PartialEq, Eq)]
-pub enum CalErr {
-    NotFound,
-    Usage(String),
-    Engine(String),
-}
-
-fn to_resp(e: CalErr, token: Option<&str>) -> CliResponse {
-    match e {
-        CalErr::NotFound => match token {
-            Some(t) => event_not_found(t),
-            None => error_response("404 Not Found", "not_found", "no such calendar"),
-        },
-        CalErr::Usage(h) => usage(h),
-        CalErr::Engine(h) => cal::engine_err(h),
-    }
 }
 
 impl GraphCalendar {
@@ -301,7 +175,7 @@ impl GraphCalendar {
         }
     }
 
-    pub fn calendars(&self) -> Result<Vec<Value>, CalErr> {
+    pub fn calendar_list(&self) -> Result<Vec<Value>, CalErr> {
         let url = graph::with_query(
             &Self::url("/me/calendars"),
             &[
@@ -315,7 +189,7 @@ impl GraphCalendar {
 
     /// Occurrences overlapping `[start, end)` (expanded by Graph), first
     /// page only; `truncated` when there were more than `limit`.
-    pub fn view(
+    pub fn calendar_view(
         &self,
         start: &DateTime<Utc>,
         end: &DateTime<Utc>,
@@ -344,7 +218,7 @@ impl GraphCalendar {
         Ok((list, truncated))
     }
 
-    pub fn event(&self, id: &str, full: bool) -> Result<Option<Value>, CalErr> {
+    pub fn event_raw(&self, id: &str, full: bool) -> Result<Option<Value>, CalErr> {
         let url = graph::with_query(
             &Self::url(&format!("/me/events/{}", graph::path_encode(id))),
             &[("$select", if full { EVENT_FULL_SELECT } else { EVENT_SELECT }.to_string())],
@@ -356,7 +230,7 @@ impl GraphCalendar {
         }
     }
 
-    pub fn create(&self, calendar: Option<&str>, ev: &Value) -> Result<Value, CalErr> {
+    pub fn create_raw(&self, calendar: Option<&str>, ev: &Value) -> Result<Value, CalErr> {
         let path = match calendar {
             Some(c) => format!("/me/calendars/{}/events", graph::path_encode(c)),
             None => "/me/events".to_string(),
@@ -364,12 +238,12 @@ impl GraphCalendar {
         self.json(self.req(GraphMethod::Post, &Self::url(&path), Some(ev))?, "event create")
     }
 
-    pub fn update(&self, id: &str, patch: &Value) -> Result<Value, CalErr> {
+    pub fn update_raw(&self, id: &str, patch: &Value) -> Result<Value, CalErr> {
         let url = Self::url(&format!("/me/events/{}", graph::path_encode(id)));
         self.json(self.req(GraphMethod::Patch, &url, Some(patch))?, "event update")
     }
 
-    pub fn delete(&self, id: &str) -> Result<(), CalErr> {
+    pub fn delete_raw(&self, id: &str) -> Result<(), CalErr> {
         let url = Self::url(&format!("/me/events/{}", graph::path_encode(id)));
         self.json(self.req(GraphMethod::Delete, &url, None)?, "event delete").map(|_| ())
     }
@@ -695,7 +569,7 @@ fn shape_calendar(c: &Value, address: &str, level: Level) -> Value {
 
 /// A Graph `dateTimeTimeZone` for `dt`: the wall time in `zone` (IANA)
 /// or UTC.
-fn graph_time(dt: &DateTime<Utc>, zone: Option<&str>) -> Result<Value, CliResponse> {
+fn graph_time(dt: &DateTime<Utc>, zone: Option<&str>) -> Result<Value, CalErr> {
     match zone {
         None | Some("UTC") | Some("Etc/UTC") => Ok(json!({ "dateTime": naive_utc(dt), "timeZone": "UTC" })),
         Some(z) => match z.parse::<chrono_tz::Tz>() {
@@ -703,85 +577,198 @@ fn graph_time(dt: &DateTime<Utc>, zone: Option<&str>) -> Result<Value, CliRespon
                 "dateTime": dt.with_timezone(&tz).naive_local().format("%Y-%m-%dT%H:%M:%S").to_string(),
                 "timeZone": z,
             })),
-            Err(_) => Err(usage(format!(
+            Err(_) => Err(CalErr::Usage(format!(
                 "'{z}' is not an IANA time zone name (e.g. America/Los_Angeles)"
             ))),
         },
     }
 }
 
-/// Display alerts → Graph's single reminder.
-fn reminder(alerts: &Value) -> Result<Option<i64>, CliResponse> {
-    let items: Vec<&Value> = match alerts {
-        Value::Array(a) => a.iter().collect(),
-        Value::Object(m) => m.values().collect(),
-        Value::Null => return Ok(None),
-        _ => return Err(usage("'alerts' must be a list")),
-    };
-    match items.as_slice() {
-        [] => Ok(None),
-        [a] => {
-            let off = a
-                .get("offset")
-                .and_then(Value::as_str)
-                .or_else(|| a.pointer("/trigger/offset").and_then(Value::as_str))
-                .ok_or_else(|| usage("each alert needs an 'offset' like -PT15M"))?;
-            let secs = cal::parse_duration_secs(off.trim().trim_start_matches(['-', '+']))
-                .ok_or_else(|| usage(format!("alert offset '{off}' is not an ISO 8601 duration")))?;
-            Ok(Some(secs / 60))
+/// A Graph event → the provider-neutral stored event (draft guard + show).
+fn stored_of(ev: &Value, address: &str, full: bool) -> StoredEvent {
+    StoredEvent {
+        start: graph_instant(ev.get("start")),
+        end: graph_instant(ev.get("end")),
+        // Keep the event's own zone only when it is an IANA name (a
+        // Windows zone name writes UTC).
+        zone: ev
+            .get("originalStartTimeZone")
+            .and_then(Value::as_str)
+            .filter(|z| z.parse::<chrono_tz::Tz>().is_ok())
+            .map(str::to_string),
+        others: graph_others(ev, address),
+        all_day: ev.get("isAllDay").and_then(Value::as_bool).unwrap_or(false),
+        full: if full { shape_full(ev, address) } else { Value::Null },
+    }
+}
+
+// ── The provider (MCS4 seam) ────────────────────────────────────────────
+
+impl CalendarProvider for GraphCalendar {
+    fn source(&self) -> &'static str {
+        "microsoft"
+    }
+
+    fn label(&self) -> &'static str {
+        "Microsoft"
+    }
+
+    fn calendars(&self, g: &LinkedCalInbox) -> Result<Vec<Value>, CalErr> {
+        Ok(self.calendar_list()?.iter().map(|c| shape_calendar(c, &g.address, g.level)).collect())
+    }
+
+    fn view(
+        &self,
+        g: &LinkedCalInbox,
+        start: &DateTime<Utc>,
+        end: &DateTime<Utc>,
+        calendar: Option<&str>,
+        limit: usize,
+    ) -> Result<(Vec<Value>, bool), CalErr> {
+        let (events, truncated) = self.calendar_view(start, end, calendar, limit)?;
+        Ok((events.iter().map(|e| shape_summary(e, &g.address, calendar)).collect(), truncated))
+    }
+
+    fn event(&self, g: &LinkedCalInbox, id: &str, full: bool) -> Result<Option<StoredEvent>, CalErr> {
+        Ok(self.event_raw(id, full)?.map(|ev| stored_of(&ev, &g.address, full)))
+    }
+
+    fn insert(
+        &self,
+        g: &LinkedCalInbox,
+        calendar: Option<&str>,
+        d: &DraftEvent,
+    ) -> Result<(String, Value), CalErr> {
+        let zone = d.zone.as_deref();
+        let mut ev = json!({
+            "subject": d.title,
+            "start": graph_time(&d.start, zone)?,
+            "end": graph_time(&d.end, zone)?,
+            // CAL20: a draft event NEVER carries attendees (Exchange would
+            // send meeting requests the moment one is on it).
+            "attendees": [],
+            "isReminderOn": false,
+        });
+        if let Some(l) = &d.location {
+            ev["location"] = json!({ "displayName": l });
         }
-        _ => Err(usage("Microsoft 365 keeps one reminder per event — pass a single alert")),
-    }
-}
-
-/// The checks every draft write shares (CAL20 + lengths).
-fn draft_checks(g: &GraphCalInbox, b: &WriteBody, what: &str) -> Result<(), CliResponse> {
-    let others = cal::non_owner_participants(b.participants.as_ref(), &g.address);
-    if !others.is_empty() {
-        return Err(invites_need_send(&format!(
-            "{what} names {} participant(s) besides {}",
-            others.len(),
-            g.address
-        )));
-    }
-    if cal::has_email_alert(b.alerts.as_ref()) {
-        return Err(cal::email_alert_refused());
-    }
-    for (v, f, m) in [
-        (&b.title, "title", cal::MAX_TITLE),
-        (&b.location, "location", cal::MAX_LOCATION),
-        (&b.notes, "notes", cal::MAX_NOTES),
-    ] {
-        cal::check_len(v, f, m)?;
-    }
-    if let Some(z) = b.time_zone.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        if !cal::valid_tz(z) {
-            return Err(usage(format!("'{z}' is not an IANA time zone name (e.g. America/Los_Angeles)")));
+        if let Some(n) = &d.notes {
+            ev["body"] = json!({ "contentType": "text", "content": n });
         }
+        if let Some(m) = d.reminders.first() {
+            ev["isReminderOn"] = json!(true);
+            ev["reminderMinutesBeforeStart"] = json!(m);
+        }
+        let created = self.create_raw(calendar, &ev)?;
+        let id = created.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+        Ok((id, shape_summary(&created, &g.address, calendar)))
     }
-    Ok(())
+
+    fn patch(&self, g: &LinkedCalInbox, id: &str, _stored: &StoredEvent, p: &DraftPatch) -> Result<Value, CalErr> {
+        let mut patch = serde_json::Map::new();
+        if let Some(t) = &p.title {
+            patch.insert("subject".into(), json!(t));
+        }
+        if let Some(l) = &p.location {
+            patch.insert("location".into(), json!({ "displayName": l }));
+        }
+        if let Some(n) = &p.notes {
+            patch.insert("body".into(), json!({ "contentType": "text", "content": n }));
+        }
+        match p.reminders.as_deref() {
+            Some([m, ..]) => {
+                patch.insert("isReminderOn".into(), json!(true));
+                patch.insert("reminderMinutesBeforeStart".into(), json!(m));
+            }
+            Some([]) => {
+                patch.insert("isReminderOn".into(), json!(false));
+            }
+            None => {}
+        }
+        if let Some((start, end, zone)) = &p.times {
+            patch.insert("start".into(), graph_time(start, zone.as_deref())?);
+            patch.insert("end".into(), graph_time(end, zone.as_deref())?);
+        }
+        let ev = self.update_raw(id, &Value::Object(patch))?;
+        Ok(shape_summary(&ev, &g.address, None))
+    }
+
+    fn remove(&self, _g: &LinkedCalInbox, id: &str) -> Result<(), CalErr> {
+        self.delete_raw(id)
+    }
+
+    /// `getSchedule` first; when it is refused (some personal accounts),
+    /// the same answer from the expanded calendar view.
+    fn busy(
+        &self,
+        g: &LinkedCalInbox,
+        start: &DateTime<Utc>,
+        end: &DateTime<Utc>,
+    ) -> Result<(Vec<BusySpan>, &'static str, bool), CalErr> {
+        if let Ok(s) = self.schedule(&g.address, start, end) {
+            return Ok((s, "getSchedule", false));
+        }
+        let (events, truncated) = self.calendar_view(start, end, None, cal::MAX_EVENTS)?;
+        let spans = events
+            .iter()
+            .filter(|e| e.get("isCancelled").and_then(Value::as_bool) != Some(true))
+            .filter_map(|e| {
+                let kind = match e.get("showAs").and_then(Value::as_str).unwrap_or("busy") {
+                    "free" => return None,
+                    "tentative" => BusyKind::Tentative,
+                    "oof" => BusyKind::Unavailable,
+                    _ => BusyKind::Busy,
+                };
+                Some((graph_instant(e.get("start"))?, graph_instant(e.get("end"))?, kind))
+            })
+            .collect();
+        Ok((spans, "events", truncated))
+    }
+
+    /// `calendarView/delta`: the state is a `gd_…` token holding only the
+    /// Graph `$deltatoken` / `$skiptoken`.
+    fn changes(&self, _g: &LinkedCalInbox, state: Option<&str>, now: DateTime<Utc>) -> Result<Changes, StateErr> {
+        let token = match state {
+            Some(s) => Some(DeltaToken::decode(s).ok_or(StateErr::Invalid)?),
+            None => None,
+        };
+        let (items, next) = match self.delta(token.as_ref(), now) {
+            Ok(v) => v,
+            Err(CalErr::Usage(m)) if m == "state_expired" => return Err(StateErr::Expired),
+            Err(e) => return Err(StateErr::Other(e)),
+        };
+        let mut out = Changes { state: next.encode(), ..Changes::default() };
+        if token.is_none() {
+            return Ok(out);
+        }
+        for it in &items {
+            let Some(id) = it.get("id").and_then(Value::as_str) else { continue };
+            if it.get("@removed").is_some() {
+                out.destroyed.push(id.to_string());
+            } else {
+                out.updated.push(id.to_string());
+            }
+        }
+        Ok(out)
+    }
+
+    fn wait_poll_secs(&self) -> u64 {
+        GRAPH_WAIT_POLL_SECS
+    }
+
+    fn max_reminders(&self) -> usize {
+        1
+    }
+
+    fn too_many_reminders(&self) -> String {
+        "Microsoft 365 keeps one reminder per event — pass a single alert".to_string()
+    }
 }
 
-// ── Verbs ───────────────────────────────────────────────────────────────
-
-pub fn handle_list(g: &GraphCalInbox) -> CliResponse {
-    list_with(&GraphCalendar::real(&g.row), g)
-}
+// ── Verbs (the provider-neutral verbs over Graph) ───────────────────────
 
 pub fn list_with(c: &GraphCalendar, g: &GraphCalInbox) -> CliResponse {
-    match c.calendars() {
-        Ok(cals) => ok_json(json!({
-            "ok": true,
-            "address": g.address,
-            "source": "microsoft",
-            "calendars": cals.iter().map(|x| shape_calendar(x, &g.address, g.level)).collect::<Vec<_>>(),
-        })),
-        Err(e) => to_resp(e, None),
-    }
-}
-
-pub fn handle_events(g: &GraphCalInbox, params: &HashMap<String, String>, now: DateTime<Utc>) -> CliResponse {
-    events_with(&GraphCalendar::real(&g.row), g, params, now)
+    linked::list_with(c, g)
 }
 
 pub fn events_with(
@@ -790,358 +777,34 @@ pub fn events_with(
     params: &HashMap<String, String>,
     now: DateTime<Utc>,
 ) -> CliResponse {
-    let (start, end) = match cal::window(params, now) {
-        Ok(w) => w,
-        Err(r) => return r,
-    };
-    let limit = match params.get("limit").map(|v| v.trim().parse::<usize>()) {
-        None => cal::DEFAULT_EVENTS,
-        Some(Ok(n)) if n >= 1 => n.min(cal::MAX_EVENTS),
-        _ => return usage(format!("invalid 'limit' — a number from 1 to {}", cal::MAX_EVENTS)),
-    };
-    let calendar = crate::cli::opt_param(params, "calendar");
-    match c.view(&start, &end, calendar.as_deref(), limit) {
-        Ok((events, truncated)) => ok_json(json!({
-            "ok": true,
-            "address": g.address,
-            "start": rfc3339_utc(&start),
-            "end": rfc3339_utc(&end),
-            "calendar": calendar,
-            "events": events.iter().map(|e| shape_summary(e, &g.address, calendar.as_deref())).collect::<Vec<_>>(),
-            "truncated": truncated,
-            "source": "microsoft",
-        })),
-        Err(CalErr::NotFound) => error_response(
-            "404 Not Found",
-            "not_found",
-            "no such calendar on this inbox — see 'k2 calendar list'",
-        ),
-        Err(e) => to_resp(e, None),
-    }
-}
-
-pub fn handle_show(g: &GraphCalInbox, id: &str, token: &str) -> CliResponse {
-    show_with(&GraphCalendar::real(&g.row), g, id, token)
+    linked::events_with(c, g, params, now)
 }
 
 pub fn show_with(c: &GraphCalendar, g: &GraphCalInbox, id: &str, token: &str) -> CliResponse {
-    match c.event(id, true) {
-        Ok(Some(ev)) => ok_json(json!({ "ok": true, "address": g.address, "event": shape_full(&ev, &g.address) })),
-        Ok(None) => event_not_found(token),
-        Err(e) => to_resp(e, Some(token)),
-    }
-}
-
-pub fn handle_create(g: &GraphCalInbox, b: &WriteBody) -> CliResponse {
-    create_with(&GraphCalendar::real(&g.row), g, b)
+    linked::show_with(c, g, id, token)
 }
 
 pub fn create_with(c: &GraphCalendar, g: &GraphCalInbox, b: &WriteBody) -> CliResponse {
-    if let Err(r) = draft_checks(g, b, "this event") {
-        return r;
-    }
-    let title = b.title.as_deref().map(str::trim).unwrap_or("");
-    if title.is_empty() {
-        return usage("create requires a 'title'");
-    }
-    let (Some(s), Some(e)) = (b.start.as_deref(), b.end.as_deref()) else {
-        return usage("create requires 'start' and 'end' (RFC 3339)");
-    };
-    let start = match cal::parse_event_instant(s, "start") {
-        Ok(v) => v,
-        Err(e) => return usage(e),
-    };
-    let end = match cal::parse_event_instant(e, "end") {
-        Ok(v) => v,
-        Err(e) => return usage(e),
-    };
-    if end <= start {
-        return usage("'end' must be after 'start'");
-    }
-    let zone = b.time_zone.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let calendar = b.calendar.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    if let Some(cid) = calendar {
-        // Only the mailbox's own, editable calendars take a draft write.
-        let cals = match c.calendars() {
-            Ok(v) => v,
-            Err(e) => return to_resp(e, None),
-        };
-        let Some(found) = cals.iter().find(|x| x.get("id").and_then(Value::as_str) == Some(cid)) else {
-            return error_response("404 Not Found", "not_found", "no such calendar on this inbox — see 'k2 calendar list'");
-        };
-        let shaped = shape_calendar(found, &g.address, g.level);
-        if shaped["rights"]["write"] != json!(true) {
-            return error_response(
-                "403 Forbidden",
-                "share_rights",
-                "that calendar isn't one this inbox may write (shared to it, or read-only)",
-            );
-        }
-    }
-    let mut ev = json!({
-        "subject": title,
-        "start": match graph_time(&start, zone) { Ok(v) => v, Err(r) => return r },
-        "end": match graph_time(&end, zone) { Ok(v) => v, Err(r) => return r },
-        // CAL20: a draft event NEVER carries attendees (Exchange would
-        // send meeting requests the moment one is on it).
-        "attendees": [],
-        "isReminderOn": false,
-    });
-    if let Some(l) = b.location.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        ev["location"] = json!({ "displayName": l });
-    }
-    if let Some(n) = b.notes.as_deref().filter(|s| !s.trim().is_empty()) {
-        ev["body"] = json!({ "contentType": "text", "content": n });
-    }
-    if let Some(a) = b.alerts.as_ref() {
-        match reminder(a) {
-            Ok(Some(m)) => {
-                ev["isReminderOn"] = json!(true);
-                ev["reminderMinutesBeforeStart"] = json!(m);
-            }
-            Ok(None) => {}
-            Err(r) => return r,
-        }
-    }
-    match c.create(calendar, &ev) {
-        Ok(created) => {
-            let id = created.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-            if id.is_empty() {
-                return cal::engine_err("graph event create: no id in reply");
-            }
-            ok_json(json!({
-                "ok": true,
-                "address": g.address,
-                "id": cal::encode_event_id(&g.address, &id),
-                "calendarId": calendar,
-                "event": shape_summary(&created, &g.address, calendar),
-                "emailSent": false,
-                "source": "microsoft",
-            }))
-        }
-        Err(CalErr::NotFound) => error_response("404 Not Found", "not_found", "no such calendar on this inbox — see 'k2 calendar list'"),
-        Err(e) => to_resp(e, None),
-    }
-}
-
-/// The STORED event's draft guard: present, and no attendee / outside
-/// organizer.
-fn stored_guard(c: &GraphCalendar, g: &GraphCalInbox, id: &str, token: &str, what: &str) -> Result<Value, CliResponse> {
-    let stored = match c.event(id, false) {
-        Ok(Some(ev)) => ev,
-        Ok(None) => return Err(event_not_found(token)),
-        Err(e) => return Err(to_resp(e, Some(token))),
-    };
-    let others = graph_others(&stored, &g.address);
-    if !others.is_empty() {
-        return Err(invites_need_send(&format!(
-            "{what}: this event has {} participant(s) besides {}",
-            others.len(),
-            g.address
-        )));
-    }
-    Ok(stored)
-}
-
-pub fn handle_update(g: &GraphCalInbox, id: &str, token: &str, b: &WriteBody) -> CliResponse {
-    update_with(&GraphCalendar::real(&g.row), g, id, token, b)
+    linked::create_with(c, g, b)
 }
 
 pub fn update_with(c: &GraphCalendar, g: &GraphCalInbox, id: &str, token: &str, b: &WriteBody) -> CliResponse {
-    if let Err(r) = draft_checks(g, b, "this update") {
-        return r;
-    }
-    if b.title.as_deref().is_some_and(|t| t.trim().is_empty()) {
-        return usage("'title' can't be empty");
-    }
-    let parse = |raw: Option<&str>, f: &str| -> Result<Option<DateTime<Utc>>, CliResponse> {
-        raw.map(|s| cal::parse_event_instant(s, f).map_err(usage)).transpose()
-    };
-    let new_start = match parse(b.start.as_deref(), "start") {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    let new_end = match parse(b.end.as_deref(), "end") {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    let stored = match stored_guard(c, g, id, token, "update refused") {
-        Ok(v) => v,
-        Err(r) => return r,
-    };
-    let mut patch = serde_json::Map::new();
-    if let Some(t) = b.title.as_deref() {
-        patch.insert("subject".into(), json!(t.trim()));
-    }
-    if let Some(l) = b.location.as_deref() {
-        patch.insert("location".into(), json!({ "displayName": l.trim() }));
-    }
-    if let Some(n) = b.notes.as_deref() {
-        patch.insert("body".into(), json!({ "contentType": "text", "content": n }));
-    }
-    if let Some(a) = b.alerts.as_ref() {
-        match reminder(a) {
-            Ok(Some(m)) => {
-                patch.insert("isReminderOn".into(), json!(true));
-                patch.insert("reminderMinutesBeforeStart".into(), json!(m));
-            }
-            Ok(None) => {
-                patch.insert("isReminderOn".into(), json!(false));
-            }
-            Err(r) => return r,
-        }
-    }
-    let zone_arg = b.time_zone.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    if new_start.is_some() || new_end.is_some() || zone_arg.is_some() {
-        let (Some(old_start), Some(old_end)) = (graph_instant(stored.get("start")), graph_instant(stored.get("end"))) else {
-            return cal::engine_err("the stored event has no resolvable start/end");
-        };
-        let start = new_start.unwrap_or(old_start);
-        let end = match (new_start, new_end) {
-            (_, Some(e)) => e,
-            (Some(s), None) => s + (old_end - old_start),
-            (None, None) => old_end,
-        };
-        if end <= start {
-            return usage("'end' must be after 'start'");
-        }
-        // Keep the event's own zone when it is an IANA name.
-        let stored_zone = stored
-            .get("originalStartTimeZone")
-            .and_then(Value::as_str)
-            .filter(|z| z.parse::<chrono_tz::Tz>().is_ok());
-        let zone = zone_arg.or(stored_zone);
-        match (graph_time(&start, zone), graph_time(&end, zone)) {
-            (Ok(s), Ok(e)) => {
-                patch.insert("start".into(), s);
-                patch.insert("end".into(), e);
-            }
-            (Err(r), _) | (_, Err(r)) => return r,
-        }
-    }
-    if patch.is_empty() {
-        return usage("nothing to update — pass at least one of title/start/end/timeZone/location/notes");
-    }
-    match c.update(id, &Value::Object(patch)) {
-        Ok(ev) => ok_json(json!({
-            "ok": true,
-            "address": g.address,
-            "id": token,
-            "event": shape_summary(&ev, &g.address, None),
-            "emailSent": false,
-            "source": "microsoft",
-        })),
-        Err(e) => to_resp(e, Some(token)),
-    }
-}
-
-pub fn handle_delete(g: &GraphCalInbox, id: &str, token: &str) -> CliResponse {
-    delete_with(&GraphCalendar::real(&g.row), g, id, token)
+    linked::update_with(c, g, id, token, b)
 }
 
 pub fn delete_with(c: &GraphCalendar, g: &GraphCalInbox, id: &str, token: &str) -> CliResponse {
-    if let Err(r) = stored_guard(c, g, id, token, "delete refused") {
-        return r;
-    }
-    match c.delete(id) {
-        Ok(()) => ok_json(json!({
-            "ok": true,
-            "address": g.address,
-            "id": token,
-            "deleted": true,
-            "emailSent": false,
-        })),
-        Err(e) => to_resp(e, Some(token)),
-    }
+    linked::delete_with(c, g, id, token)
 }
 
-pub fn handle_freebusy(g: &GraphCalInbox, params: &HashMap<String, String>, now: DateTime<Utc>) -> CliResponse {
-    freebusy_with(&GraphCalendar::real(&g.row), g, params, now)
-}
-
-/// Busy windows of the mailbox (titles never leave): `getSchedule`
-/// first; when it is refused (some personal accounts), the same answer
-/// from the expanded calendar view.
 pub fn freebusy_with(
     c: &GraphCalendar,
     g: &GraphCalInbox,
     params: &HashMap<String, String>,
     now: DateTime<Utc>,
 ) -> CliResponse {
-    let (start, end) = match cal::window(params, now) {
-        Ok(w) => w,
-        Err(r) => return r,
-    };
-    let (spans, source, truncated) = match c.schedule(&g.address, &start, &end) {
-        Ok(s) => (s, "getSchedule", false),
-        Err(_) => match c.view(&start, &end, None, cal::MAX_EVENTS) {
-            Ok((events, truncated)) => {
-                let spans = events
-                    .iter()
-                    .filter(|e| e.get("isCancelled").and_then(Value::as_bool) != Some(true))
-                    .filter_map(|e| {
-                        let kind = match e.get("showAs").and_then(Value::as_str).unwrap_or("busy") {
-                            "free" => return None,
-                            "tentative" => BusyKind::Tentative,
-                            "oof" => BusyKind::Unavailable,
-                            _ => BusyKind::Busy,
-                        };
-                        Some((graph_instant(e.get("start"))?, graph_instant(e.get("end"))?, kind))
-                    })
-                    .collect();
-                (spans, "events", truncated)
-            }
-            Err(e) => return to_resp(e, None),
-        },
-    };
-    let clipped: Vec<BusySpan> = spans
-        .into_iter()
-        .filter_map(|(s, e, k)| {
-            let (s, e) = (s.max(start), e.min(end));
-            (e > s).then_some((s, e, k))
-        })
-        .collect();
-    let busy = cal::merge_busy(clipped);
-    ok_json(json!({
-        "ok": true,
-        "address": g.address,
-        "start": rfc3339_utc(&start),
-        "end": rfc3339_utc(&end),
-        "busy": busy.iter().map(|(s, e, k)| json!({
-            "start": rfc3339_utc(s),
-            "end": rfc3339_utc(e),
-            "status": k.as_str(),
-        })).collect::<Vec<_>>(),
-        "source": source,
-        "sharedCalendars": 0,
-        "truncated": truncated,
-    }))
+    linked::freebusy_with(c, g, params, now)
 }
 
-pub fn handle_wait(
-    g: &GraphCalInbox,
-    project_id: &str,
-    params: &HashMap<String, String>,
-    timeout_secs: u64,
-) -> CliResponse {
-    let Some(_slot) = crate::mail::routes_messages::WaitSlot::try_acquire(project_id) else {
-        return error_response(
-            "429 Too Many Requests",
-            "rate_limited",
-            "this workspace already has 4 wait calls open — loop ONE wait, don't fan out",
-        );
-    };
-    let since = crate::cli::opt_param(params, "since_state");
-    let begun = std::time::Instant::now();
-    let mut elapsed = || begun.elapsed().as_secs();
-    let mut sleep = |d: StdDuration| std::thread::sleep(d);
-    wait_with(&GraphCalendar::real(&g.row), g, since.as_deref(), timeout_secs, Utc::now(), &mut elapsed, &mut sleep)
-}
-
-/// Long-poll the calendar delta until something changed or the budget
-/// ran out. Without `since`, the current delta state is read first so
-/// only changes AFTER the call count. Graph doesn't tell created from
-/// updated: every changed id is `updated`; removals are `destroyed`.
 pub fn wait_with(
     c: &GraphCalendar,
     g: &GraphCalInbox,
@@ -1151,65 +814,7 @@ pub fn wait_with(
     elapsed: &mut dyn FnMut() -> u64,
     sleep: &mut dyn FnMut(StdDuration),
 ) -> CliResponse {
-    let expired = || {
-        error_response(
-            "409 Conflict",
-            "state_expired",
-            "Microsoft can no longer list changes since that state — re-read with 'k2 calendar \
-             events' and wait again without --since-state",
-        )
-    };
-    let mut token = match since.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(s) => match DeltaToken::decode(s) {
-            Some(t) => t,
-            None => return usage("invalid --since-state for this inbox — use the 'state' a previous wait returned"),
-        },
-        None => match c.delta(None, now) {
-            Ok((_, t)) => t,
-            Err(CalErr::Usage(m)) if m == "state_expired" => return expired(),
-            Err(e) => return to_resp(e, None),
-        },
-    };
-    loop {
-        let (items, next) = match c.delta(Some(&token), now) {
-            Ok(v) => v,
-            Err(CalErr::Usage(m)) if m == "state_expired" => return expired(),
-            Err(e) => return to_resp(e, None),
-        };
-        token = next;
-        let (mut updated, mut destroyed) = (Vec::new(), Vec::new());
-        for it in &items {
-            let Some(id) = it.get("id").and_then(Value::as_str) else { continue };
-            let enc = cal::encode_event_id(&g.address, id);
-            if it.get("@removed").is_some() {
-                destroyed.push(enc);
-            } else {
-                updated.push(enc);
-            }
-        }
-        if !(updated.is_empty() && destroyed.is_empty()) {
-            return ok_json(json!({
-                "ok": true,
-                "timedOut": false,
-                "address": g.address,
-                "state": token.encode(),
-                "created": [],
-                "updated": updated,
-                "destroyed": destroyed,
-                "source": "microsoft",
-            }));
-        }
-        if elapsed() + GRAPH_WAIT_POLL_SECS > timeout_secs {
-            return ok_json(json!({
-                "ok": true,
-                "timedOut": true,
-                "address": g.address,
-                "state": token.encode(),
-                "source": "microsoft",
-            }));
-        }
-        sleep(StdDuration::from_secs(GRAPH_WAIT_POLL_SECS));
-    }
+    linked::wait_with(c, g, since, timeout_secs, now, elapsed, sleep)
 }
 
 // ── The owner's switch: GET/POST /cli/mail/link/calendars ───────────────
@@ -1385,7 +990,7 @@ mod tests {
     }
 
     fn inbox(level: Level) -> GraphCalInbox {
-        GraphCalInbox { address: ME.into(), row: row(), level }
+        GraphCalInbox { address: ME.into(), row: row(), level, backend: crate::mail::calendar_provider::LinkedBackend::Microsoft }
     }
 
     fn cal(mock: &Arc<Mock>) -> GraphCalendar {

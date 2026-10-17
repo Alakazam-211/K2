@@ -118,6 +118,16 @@ fn control_writes_fail_loudly_without_permission() {
     std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
     let (ok, _, err) = run(&["pause", "--config-dir", ro.to_str().unwrap()]);
     std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // SAFETY: geteuid has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        // Root bypasses directory mode bits, so the 0555 folder does not stop
+        // the write: root is a machine owner. The Linux soak and release gate
+        // run tests as root, so assert that real behaviour instead.
+        assert!(ok, "root ignores 0555, so pause must succeed: {err}");
+        let c = k2_node::config::read_control(&ro.join("control.toml")).unwrap();
+        assert_eq!(c.control, Control::Paused);
+        return;
+    }
     assert!(!ok);
     assert!(err.contains("k2nodectl"), "the error says who may write it: {err}");
 }

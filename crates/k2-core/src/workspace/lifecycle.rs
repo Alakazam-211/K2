@@ -491,6 +491,17 @@ mod tests {
         let res = create_workspace_dir(&path);
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755))
             .expect("chmod back");
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } == 0 {
+            // Root bypasses directory mode bits (CAP_DAC_OVERRIDE), so a 0555
+            // folder does not stop it: the create succeeds. The Linux soak and
+            // release gate run tests as root, so assert that real behaviour
+            // here; the permission-denied copy is covered by non-root runs.
+            res.expect("root ignores 0555, so the create must succeed");
+            assert!(target.is_dir(), "workspace dir not created as root: {path}");
+            std::fs::remove_dir_all(&root).expect("cleanup");
+            return;
+        }
         let err = res.expect_err("create under a read-only folder must fail");
         let blocker = locked.to_string_lossy().into_owned();
         assert!(

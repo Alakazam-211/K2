@@ -2522,6 +2522,8 @@ mod tests {
     /// Mac owner could not turn sending on at all.
     #[test]
     fn linked_reply_follows_agent_send_set_by_the_owner_on_any_os() {
+        // config/set reads the singleton mail_server row: hold the lock.
+        let _mail = crate::mail::mail_server_test_lock();
         let (name, path) = unique("lreply");
         let project_id = insert_project(&name, &path);
         let linked = format!("me-{}@linked.example", &project_id[..8]);

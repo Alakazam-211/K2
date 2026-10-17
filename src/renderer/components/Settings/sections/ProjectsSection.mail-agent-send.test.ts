@@ -24,7 +24,11 @@ describe('Email sending control (per-workspace agent-send)', () => {
 
     const start = src.indexOf('function MailAgentSendControl')
     expect(start).toBeGreaterThan(0)
-    const body = src.slice(start, src.indexOf('function MailManageToggle', start))
+    const body = src.slice(
+      start,
+      src.indexOf('// Per-workspace agents-may-manage-hosted-mail', start),
+    )
+    expect(body.length).toBeGreaterThan(100)
     expect(body).toContain("daemonCliGet<")
     expect(body).toContain("'mail/config', { workspace: project.path }")
     expect(body).toContain("daemonCliPost(primaryScope(), 'mail/config/set'")

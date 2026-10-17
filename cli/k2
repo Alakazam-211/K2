@@ -38424,7 +38424,9 @@ elif verb == "address_delete":
         print("(the mailbox data is kept for the retention window, then purged)")
 
 elif verb == "status":
-    params = {}
+    # fresh=1: Stalwart's ACME task + registry reads now, not the 60 s
+    # cache Settings polls through.
+    params = {"fresh": "1"}
     if env("M_HEALTH") == "true":
         params["health"] = "1"
     # NOT call(): the envelope `ok` means "read succeeded" and the systemd
@@ -38500,6 +38502,12 @@ elif verb == "status":
                 line += " (orders: %s%s)" % (", ".join(order) or "?",
                                              " only" if len(order) == 1 else "")
             print(line)
+            # 0.46.1: the live probe reads 443, 465 and 993; show them when
+            # they disagree (443 can be fronted by something else).
+            ports = [p for p in (cert.get("ports") or []) if isinstance(p, dict)]
+            if len({p.get("state") for p in ports}) > 1:
+                print("           ports: %s" % " · ".join(
+                    "%s %s" % (p.get("port"), p.get("state")) for p in ports))
             if len(names) > 1 or (names and host and names[0] != host):
                 print("           serves: %s" % ", ".join(names))
             if cert.get("note"):

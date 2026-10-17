@@ -916,6 +916,44 @@ fn last_error_falls_back_to_the_acme_task() {
     assert!(last_error_fallback(None, "missing", &serde_json::json!({ "lastTask": null })).is_none());
 }
 
+/// 0.46.1 (partii on luzz): `cert renew` issued the real certificate and
+/// the older Pending task stayed listed. A task older than the served
+/// certificate reads `unknown` (Stalwart's word kept in `staleState`);
+/// a newer one, or any task while the cert is not issued, is untouched.
+#[test]
+fn a_task_older_than_the_served_cert_reads_unknown() {
+    // Served certificate issued 2026-10-17T12:00:00Z.
+    let nb = chrono::DateTime::parse_from_rfc3339("2026-10-17T12:00:00Z").expect("ts").timestamp();
+    let pending_before = || serde_json::json!({ "lastTask": { "id": "t1", "state": "Pending", "at": "2026-10-17T11:00:00Z", "due": "2026-10-17T11:00:00Z" } });
+    let mut acme = pending_before();
+    mark_stale_last_task(&mut acme, "issued", Some(nb));
+    assert_eq!(acme["lastTask"]["state"], "unknown", "{acme}");
+    assert_eq!(acme["lastTask"]["staleState"], "Pending", "{acme}");
+    let note = acme["lastTask"]["note"].as_str().expect("note");
+    assert!(note.contains("Pending") && note.contains("2026-10-17T12:00:00Z"), "{note}");
+
+    // Not issued (self-signed still served): Stalwart's word stands.
+    let mut acme = pending_before();
+    mark_stale_last_task(&mut acme, "self-signed", Some(nb));
+    assert_eq!(acme["lastTask"]["state"], "Pending", "{acme}");
+
+    // A task created after the served cert (the next renewal) stands.
+    let mut acme = serde_json::json!({ "lastTask": { "state": "Pending", "at": "2026-10-17T13:00:00Z" } });
+    mark_stale_last_task(&mut acme, "issued", Some(nb));
+    assert_eq!(acme["lastTask"]["state"], "Pending", "{acme}");
+    assert!(acme["lastTask"].get("staleState").is_none(), "{acme}");
+
+    // No timestamp at all next to an issued cert: unknown, not Pending.
+    let mut acme = serde_json::json!({ "lastTask": { "state": "Pending", "at": null } });
+    mark_stale_last_task(&mut acme, "issued", Some(nb));
+    assert_eq!(acme["lastTask"]["state"], "unknown", "{acme}");
+
+    // No task: nothing to mark.
+    let mut acme = serde_json::json!({ "lastTask": null });
+    mark_stale_last_task(&mut acme, "issued", Some(nb));
+    assert!(acme["lastTask"].is_null(), "{acme}");
+}
+
 #[test]
 fn next_renewal_note_only_for_a_valid_wider_cert_under_a_lock() {
     let locked = serde_json::json!({ "locked": true });

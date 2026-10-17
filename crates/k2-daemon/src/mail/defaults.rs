@@ -1459,6 +1459,50 @@ pub fn last_error_fallback(supervisor_err: Option<&str>, cert_state: &str, acme:
     Some(format!("acme: {reason}"))
 }
 
+/// 0.46.1 (partii on luzz): Stalwart deletes an AcmeRenewal task when it
+/// succeeds, so a Pending/Retry/Failed task that was created (or failed)
+/// before the certificate now served was issued is not the live state
+/// of anything — `cert renew` issued the real certificate and the old
+/// task stayed behind reading `Pending`. Only when the live probe says
+/// `issued`: such a task reads `state: "unknown"`, keeps what Stalwart
+/// said in `staleState`, and carries a note. A task with no timestamp
+/// is unknown too. A task newer than the served certificate (the next
+/// scheduled renewal, a retry) is left as Stalwart reports it.
+pub fn mark_stale_last_task(acme: &mut Value, cert_state: &str, cert_not_before: Option<i64>) {
+    if cert_state != "issued" {
+        return;
+    }
+    let Some(t) = acme.get_mut("lastTask").filter(|t| t.is_object()) else {
+        return;
+    };
+    let at = t
+        .get("at")
+        .and_then(|a| a.as_str())
+        .and_then(|a| chrono::DateTime::parse_from_rfc3339(a).ok())
+        .map(|d| d.timestamp());
+    let stale = match (at, cert_not_before) {
+        (Some(at), Some(nb)) => at < nb,
+        (None, _) => true,
+        (Some(_), None) => false,
+    };
+    if !stale {
+        return;
+    }
+    let was = t["state"].clone();
+    let issued = cert_not_before
+        .and_then(|nb| chrono::DateTime::from_timestamp(nb, 0))
+        .map(|d| format!(" (issued {})", d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)))
+        .unwrap_or_default();
+    t["staleState"] = was.clone();
+    t["state"] = "unknown".into();
+    t["note"] = format!(
+        "Stalwart still lists this task as {} but it predates the certificate now served{issued}; \
+         the served certificate is the live state",
+        was.as_str().unwrap_or("?")
+    )
+    .into();
+}
+
 /// HF9: a valid served cert whose SANs are a strict superset of `[host]`
 /// while the order is locked to `[host]` → the next renewal drops names.
 pub fn next_renewal_note(host: &str, cert_state: &str, served: &[String], acme: &Value) -> Option<String> {
@@ -1489,7 +1533,7 @@ struct StatusReads {
 static STATUS_CACHE: std::sync::Mutex<Option<(std::time::Instant, String, StatusReads)>> =
     std::sync::Mutex::new(None);
 
-fn invalidate_status_cache() {
+pub(crate) fn invalidate_status_cache() {
     *STATUS_CACHE.lock().unwrap_or_else(|p| p.into_inner()) = None;
 }
 
@@ -1598,8 +1642,9 @@ pub fn fill_status(body: &mut Value, host: Option<&str>) {
     let reads = status_reads(host);
     let markers = load_markers().unwrap_or_default();
     body["outbound"] = outbound_status(&reads.routes, &reads.strategies, &markers, last_dnssec_verdict().as_deref());
-    let acme = acme_status(host, &reads.domain, &reads.tasks);
+    let mut acme = acme_status(host, &reads.domain, &reads.tasks);
     let state = body["cert"]["state"].as_str().unwrap_or("missing").to_string();
+    mark_stale_last_task(&mut acme, &state, body["cert"]["notBefore"].as_i64());
     let served: Vec<String> = body["cert"]["names"]
         .as_array()
         .map(|a| a.iter().filter_map(|n| n.as_str().map(str::to_string)).collect())
@@ -1796,6 +1841,9 @@ pub fn acme_check_extras(c: &mut DoctorCheck, acme: &Value, note: Option<&str>) 
                 t["at"].as_str().map(|a| format!(" ({a})")).unwrap_or_default()
             ));
         }
+        if let Some(n) = t["note"].as_str() {
+            extra.push(n.to_string());
+        }
     }
     if let Some(n) = note {
         extra.push(n.to_string());
@@ -1838,6 +1886,8 @@ pub fn doctor_checks_live(
             Err(e) => serde_json::json!({ "error": e }),
         };
         let cert = super::supervisor::tls_cert_status(Some(host));
+        let mut acme = acme;
+        mark_stale_last_task(&mut acme, cert["state"].as_str().unwrap_or("missing"), cert["notBefore"].as_i64());
         let served: Vec<String> = cert["names"]
             .as_array()
             .map(|a| a.iter().filter_map(|n| n.as_str().map(str::to_string)).collect())

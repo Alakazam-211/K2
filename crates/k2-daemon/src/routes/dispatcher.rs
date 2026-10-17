@@ -6374,6 +6374,9 @@ async fn handle_one_request(
                 let browser = crate::chat_pass::mint::has_browser_headers(&headers_blob);
                 let bearer = bearer_token.clone();
                 let owner = state.token.as_str().to_string();
+                // K-M4: the App link this arrived on (task-local; read it
+                // before the blocking hop).
+                let link = crate::apps::gateway::current();
                 tokio::task::spawn_blocking(move || {
                     crate::chat_pass::mint::handle_pass(&crate::chat_pass::mint::PassRequest {
                         ingress: &ingress_label,
@@ -6382,6 +6385,11 @@ async fn handle_one_request(
                         bearer: bearer.as_deref(),
                         owner_token: &owner,
                         body: &body_bytes,
+                        link: link.as_deref().map(|l| crate::chat_pass::mint::OnLink {
+                            app_id: &l.app_id,
+                            service_id: &l.service_id,
+                            link_id: &l.link_id,
+                        }),
                     })
                 })
                 .await

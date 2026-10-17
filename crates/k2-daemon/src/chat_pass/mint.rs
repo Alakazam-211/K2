@@ -16,7 +16,14 @@
 //! 4. Body: unknown field → 400 `validation_failed`; `handoff` with a
 //!    bearer → 400.
 //! 5. Credential → [`super::identity`] (refusals there), or the handoff
-//!    code (401 `handoff_invalid`; marked used before signing).
+//!    code (401 `handoff_invalid`; marked used before signing). **On an
+//!    App's gateway link** (K-M4: Hearth, Meet and any other App on one
+//!    box): the App's own link pass → 403 `credential_not_allowed` (it
+//!    names no person); any credential but a guest session bound to THAT
+//!    App → 403 `pass_wrong_link`; a handoff code → 400. The pass names
+//!    the person (`k2:principal:<id>`), its `sid` is that App session and
+//!    `app` in the answer is the App's service id; the audience is the
+//!    box's one Sew install (`sew:<install id>`), the same for every App.
 //! 6. Rate limit per `sid` and per daemon → 429 `rate_limited` +
 //!    `Retry-After`.
 //! 7. Install id ([`super::link`]) → else 503 `chat_unavailable`.
@@ -76,9 +83,21 @@ impl From<CliResponse> for Reply {
     }
 }
 
+/// The App gateway link a request arrived on (runtime S14). The dispatcher
+/// reads it from [`crate::apps::gateway::current`] before the blocking
+/// hop (the task-local doesn't cross it).
+#[derive(Debug, Clone, Copy)]
+pub struct OnLink<'a> {
+    /// The App's label (`hearth`, `meet`), for hints.
+    pub app_id: &'a str,
+    /// The App's published-service id: what its guest sessions are bound to.
+    pub service_id: &'a str,
+    pub link_id: &'a str,
+}
+
 /// Everything the pass route reads from the request.
 pub struct PassRequest<'a> {
-    /// `loopback` | `lan` | `tunnel`.
+    /// `loopback` | `lan` | `tunnel` | `app-link`.
     pub ingress: &'a str,
     pub ip: &'a str,
     /// A browser-shaped header was present ([`has_browser_headers`]).
@@ -87,6 +106,9 @@ pub struct PassRequest<'a> {
     pub bearer: Option<&'a str>,
     pub owner_token: &'a str,
     pub body: &'a [u8],
+    /// Set when the request came through an App's gateway link: only a
+    /// guest session of THAT App mints there (K-M4, several Apps per box).
+    pub link: Option<OnLink<'a>>,
 }
 
 /// The pieces a test swaps.
@@ -157,6 +179,13 @@ fn rate_limited(retry_ms: i64) -> Reply {
     }
 }
 
+/// K-M4: on an App's link, only that App's guest sessions mint (a Meet
+/// link never mints for a Hearth session, nor for the owner token or a
+/// Connect login). Off a link every credential of the table applies.
+pub fn link_admits(ident: &PassIdentity, link: OnLink<'_>) -> bool {
+    ident.provenance == Provenance::AppSession && ident.app.as_deref() == Some(link.service_id)
+}
+
 /// `POST /cli/sew/pass` with the live keyring, link and limiter.
 pub fn handle_pass(req: &PassRequest<'_>) -> Reply {
     let status = super::link::status_source();
@@ -202,6 +231,9 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
             if bearer.is_some() {
                 return error(400, "validation_failed", "handoff and bearer are exclusive", None).into();
             }
+            if req.link.is_some() {
+                return error(400, "validation_failed", "an App's link never redeems an owner handoff code", None).into();
+            }
             // Rate limit before the code burns, keyed on the code's sid.
             let sid = handoff::sid_for(&code);
             if let Err(ms) = d.limiter.check_and_record(&sid, d.now) {
@@ -236,8 +268,33 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
                 return error(401, "unauthenticated", "send Authorization: Bearer (an App login session, a Connect login, or the owner token)", None)
                     .into();
             };
+            if let Some(l) = req.link {
+                // The App's own link pass names no person.
+                if k2_core::skin::link::resolve_link_pass(bearer, l.link_id, l.service_id).is_some() {
+                    audit("chat-pass", &format!("app:{}", l.app_id), "credential_not_allowed", req.ingress, req.ip);
+                    return error(
+                        403,
+                        "credential_not_allowed",
+                        "the App's own pass names no person: mint with the guest's session (withGuest)",
+                        None,
+                    )
+                    .into();
+                }
+            }
             match identity::classify_with(bearer, req.owner_token, d.owner_connect_is_k2_owner) {
                 Ok(i) => {
+                    if let Some(l) = req.link {
+                        if !link_admits(&i, l) {
+                            audit("chat-pass", &i.actor, "pass_wrong_link", req.ingress, req.ip);
+                            return error(
+                                403,
+                                "pass_wrong_link",
+                                &format!("only a guest session of {} mints a chat pass on its link", l.app_id),
+                                None,
+                            )
+                            .into();
+                        }
+                    }
                     if let Err(ms) = d.limiter.check_and_record(&i.sid, d.now) {
                         audit("chat-pass", &i.actor, "rate_limited", req.ingress, req.ip);
                         return rate_limited(ms);

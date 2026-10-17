@@ -639,15 +639,15 @@ describe('frosted glass behind the message box', () => {
     return THREAD_FOOTER_FADE_CSS.slice(open + 3, end)
   }
 
-  it('the strip starts 4px above whatever is on top of the box: the tab when out, else the field', () => {
-    expect(FOOTER_FADE_PX).toBe(4)
+  it('the strip starts 6px above whatever is on top of the box: the tab when out, else the field', () => {
+    expect(FOOTER_FADE_PX).toBe(6)
     // Slot top at 500; field at 512.
-    expect(threadFadeTop(500, [512])).toBe(8)
-    // The tab out at 480 (above the slot top's padding row): 4px above it.
-    expect(threadFadeTop(500, [480, 512])).toBe(-24)
-    // Nothing to follow: the stylesheet's default (4px above the slot).
+    expect(threadFadeTop(500, [512])).toBe(6)
+    // The tab out at 480 (above the slot top's padding row): 6px above it.
+    expect(threadFadeTop(500, [480, 512])).toBe(-26)
+    // Nothing to follow: the stylesheet's default (6px above the slot).
     expect(threadFadeTop(500, [])).toBeNull()
-    expect(THREAD_FOOTER_FADE_CSS).toContain('top: -4px; pointer-events: none; z-index: 0; transition: top 200ms')
+    expect(THREAD_FOOTER_FADE_CSS).toContain('top: -6px; pointer-events: none; z-index: 0; transition: top 200ms')
     expect(FOOTER_FADE_TARGETS).toEqual(['[data-zen-attachments]', '[data-zen-drawer-clip]', '[data-zen-compose-box]'])
   })
 
@@ -684,8 +684,8 @@ describe('frosted glass behind the message box', () => {
       )
       const view = renderInRoom(room, <ThreadOverlayColumn addr="sales" conversationId="c" active composeBar={composeBar(false)} />)
       const fade = (): HTMLElement => document.querySelector('[data-thread-footer-fade]') as HTMLElement
-      // Closed: 4px above the field (828 - 820 - 4).
-      expect(fade().style.top).toBe('4px')
+      // Closed: 6px above the field (828 - 820 - 6).
+      expect(fade().style.top).toBe('2px')
       // The tab comes out above the field; the slot grows upward.
       rects['[data-testid="agent-session-thread-compose-slot"]'] = 788
       rects['[data-zen-drawer-clip]'] = 796
@@ -693,13 +693,13 @@ describe('frosted glass behind the message box', () => {
       act(() => {
         for (const fire of observers) fire()
       })
-      expect(fade().style.top).toBe('4px')
-      // Out, the top is the tab's (following the field it would be 36px).
+      expect(fade().style.top).toBe('2px')
+      // Out, the top is the tab's (following the field it would be 34px).
       rects['[data-zen-drawer-clip]'] = 790
       act(() => {
         for (const fire of observers) fire()
       })
-      expect(fade().style.top).toBe('-2px')
+      expect(fade().style.top).toBe('-4px')
       // The list pads by the bar's height so the newest message rests above it.
       expect(screen.getByTestId('thread-overlay-list').style.paddingBottom).toBe(`${8 + (900 - 788)}px`)
     } finally {

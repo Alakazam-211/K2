@@ -136,8 +136,10 @@ ${SCOPE} [data-zen-compose-input]:focus { outline: none; }
 
 /** How far (px) the fade reaches above the topmost thing on the message
  *  box: the drawer's tab when it is out, else the field (Rosson: "like 4px
- *  above the status dog ear when it's out, or above the chat area"). */
-export const FOOTER_FADE_PX = 4
+ *  above the status dog ear when it's out, or above the chat area", then
+ *  "start the blur like 2px higher"). The feather and tint ramps (6px)
+ *  finish at that element's top edge. */
+export const FOOTER_FADE_PX = 6
 
 /** What the strip's top follows, topmost first found wins by position:
  *  the file chips, the activity drawer's tab, the field. */

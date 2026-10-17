@@ -65,7 +65,7 @@ fn code(r: &mint::Reply) -> String {
 }
 
 fn req<'a>(bearer: Option<&'a str>, body: &'a [u8]) -> PassRequest<'a> {
-    PassRequest { ingress: "loopback", ip: "127.0.0.1", browser: false, bearer, owner_token: OWNER, body }
+    PassRequest { ingress: "loopback", ip: "127.0.0.1", browser: false, bearer, owner_token: OWNER, body, link: None }
 }
 
 /// Runs `f` with deps over a fresh ring/limiter/code store and a fixed
@@ -399,6 +399,133 @@ fn handoff_redeem_single_use_expiry_cap_and_bearer_exclusive() {
     let audit = audit_text();
     assert!(audit.contains("handoff_invalid:used") && audit.contains("redeemed:"), "{audit}");
     assert!(!audit.contains(&c) && !audit.contains("eyJ"), "{audit}");
+}
+
+// ── K-M4: two Apps on one box (Hearth + Meet) ───────────────────────
+
+const HEARTH_SVC: &str = "svc-hearth-1111";
+const MEET_SVC: &str = "svc-meet-2222";
+
+fn app_grant(principal_id: &str, svc: &str) {
+    k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: principal_id.into(),
+        kind: "app".into(),
+        target_id: svc.into(),
+        role: None,
+        scope: Some("[]".into()),
+        created_by: None,
+    })
+    .expect("app grant");
+}
+
+/// A guest with a chat grant and App grants for `apps`; returns its id.
+fn app_guest(name: &str, apps: &[&str]) -> String {
+    let p = k2_core::skin::add_principal(name).expect("principal");
+    k2_core::skin::set_principal_password(name, Some("s3cret-horse-battery")).expect("pw");
+    k2_core::skin::insert_chat_grant_for_tests(&p.id).expect("chat grant");
+    for a in apps {
+        app_grant(&p.id, a);
+    }
+    p.id
+}
+
+/// K-M4: Meet signs its users in with K2 next to Hearth, through S28 on
+/// each App's own link. Nothing assumes one Sew App per box: each App's
+/// guest sessions mint on that App's link only, every pass names the
+/// person and that App session (`sid`, `app`), the audience is the box's
+/// one Sew install for both, and rate limits are per session.
+#[test]
+fn two_apps_on_one_box_each_mint_for_their_own_guests_k_m4() {
+    let _home = TempHome::new();
+    let r = ring("k-m4");
+    let ada = app_guest("ada", &[HEARTH_SVC, MEET_SVC]);
+    let bo = app_guest("bo", &[MEET_SVC]);
+    let ada_h = k2_core::skin::create_app_session_token("ada", HEARTH_SVC).expect("ada → Hearth");
+    let ada_m = k2_core::skin::create_app_session_token("ada", MEET_SVC).expect("ada → Meet");
+    let bo_m = k2_core::skin::create_app_session_token("bo", MEET_SVC).expect("bo → Meet");
+    assert_eq!(
+        k2_core::skin::create_app_session_token("bo", HEARTH_SVC).expect_err("no Hearth grant"),
+        k2_core::skin::HOST_LOGIN_DENIED,
+        "an App login needs that App's own grant"
+    );
+    let meet_pass = k2_core::skin::link::mint_link_pass(MEET_SVC, "meet", "gw:38602", &["thread:read".into()], &["ws-meet".into()])
+        .expect("Meet's link pass");
+    let hearth = mint::OnLink { app_id: "hearth", service_id: HEARTH_SVC, link_id: "gw:38601" };
+    let meet = mint::OnLink { app_id: "meet", service_id: MEET_SVC, link_id: "gw:38602" };
+    let jwks = r.ring.public_jwks(T0).expect("jwks");
+
+    with_deps(&r, T0, false, |d| {
+        let call = |bearer: &str, body: &[u8], link: Option<mint::OnLink<'_>>| {
+            let mut q = req(Some(bearer), body);
+            if link.is_some() {
+                q.ingress = "app-link";
+            }
+            q.link = link;
+            mint::handle_pass_with(&q, d)
+        };
+        let minted = |x: &mint::Reply, sid: &str, app: &str, sub: &str| {
+            assert_eq!(x.response.status, "200 OK", "{}", x.response.body);
+            let b = body(x);
+            assert_eq!((b["sub"].as_str(), b["sid"].as_str(), b["app"].as_str()), (Some(sub), Some(sid), Some(app)));
+            assert_eq!(b["provenance"], "app-session");
+            let c = verify_with_jwks(b["pass"].as_str().expect("pass"), &jwks, AUD, T0).expect("one Sew install: one audience");
+            assert_eq!((c.sub.as_str(), c.sid.as_str()), (sub, sid));
+        };
+        let ada_sub = format!("k2:principal:{ada}");
+        let bo_sub = format!("k2:principal:{bo}");
+        let sid = |id: &str| format!("skn_{id}");
+
+        // Each App's guests mint on that App's link.
+        minted(&call(&ada_h.raw, b"{}", Some(hearth)), &sid(&ada_h.meta.id), HEARTH_SVC, &ada_sub);
+        minted(&call(&ada_m.raw, b"{}", Some(meet)), &sid(&ada_m.meta.id), MEET_SVC, &ada_sub);
+        minted(&call(&bo_m.raw, b"{}", Some(meet)), &sid(&bo_m.meta.id), MEET_SVC, &bo_sub);
+        assert_ne!(ada_h.meta.id, ada_m.meta.id, "one person, one session per App");
+
+        // Another App's session, the owner token, the App's own link pass
+        // and a handoff code are refused on a link.
+        assert_eq!(code(&call(&ada_h.raw, b"{}", Some(meet))), "pass_wrong_link", "a Hearth session on Meet's link");
+        assert_eq!(code(&call(&bo_m.raw, b"{}", Some(hearth))), "pass_wrong_link", "a Meet session on Hearth's link");
+        assert_eq!(code(&call(OWNER, b"{}", Some(meet))), "pass_wrong_link", "the owner token names no App guest");
+        let x = call(&meet_pass.raw, b"{}", Some(meet));
+        assert_eq!((x.response.status, code(&x).as_str()), ("403 Forbidden", "credential_not_allowed"), "the App's own pass names no person");
+        let mut q = req(None, br#"{"handoff":"k2sho_x"}"#);
+        q.link = Some(meet);
+        assert_eq!(mint::handle_pass_with(&q, d).response.status, "400 Bad Request");
+
+        // Off a link (a legacy --cmd BFF on loopback) both sessions mint.
+        minted(&call(&ada_m.raw, b"{}", None), &sid(&ada_m.meta.id), MEET_SVC, &ada_sub);
+
+        // Limits are per session: Hearth's session runs out, Meet's doesn't.
+        let mut limited = false;
+        for _ in 0..super::ratelimit::PER_SID {
+            let x = call(&ada_h.raw, b"{}", Some(hearth));
+            if x.response.status.starts_with("429") {
+                limited = true;
+                break;
+            }
+            assert_eq!(x.response.status, "200 OK", "{}", x.response.body);
+        }
+        assert!(limited, "Hearth's session hit its own limit");
+        minted(&call(&ada_m.raw, b"{}", Some(meet)), &sid(&ada_m.meta.id), MEET_SVC, &ada_sub);
+    });
+
+    // The pure rule.
+    let i = identity::PassIdentity {
+        sub: "k2:principal:x".into(),
+        sid: "skn_x".into(),
+        actor: "principal:x".into(),
+        provenance: Provenance::AppSession,
+        sew_role: SewRole::Member,
+        caps: Vec::new(),
+        app: Some(MEET_SVC.into()),
+    };
+    assert!(mint::link_admits(&i, meet));
+    assert!(!mint::link_admits(&i, hearth));
+    let host = identity::PassIdentity { app: Some(k2_core::skin::HOST_APP_ID.into()), ..i.clone() };
+    assert!(!mint::link_admits(&host, meet), "a box login is no App's guest");
+    let connect = identity::PassIdentity { provenance: Provenance::ConnectLogin, app: None, ..i };
+    assert!(!mint::link_admits(&connect, meet));
 }
 
 #[test]

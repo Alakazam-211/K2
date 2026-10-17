@@ -3,6 +3,11 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.1
+
+- **People who log in can always message any agent.** The owner, Admins and Members can message every agent from its Thread or the terminal composer, whatever its remote switch says. The switch is now **Let agents on other servers message this agent** (and, for all agents at once, **Let agents on other servers message every agent** in Settings → K2 Connect): off means connected servers don't see the agent and their agents can't message it.
+- Fixed: an agent was shown to other servers whenever 'Allow agents to create connections' was on. Now only 'Let agents on other servers message this agent' (or the master in Settings → K2 Connect) makes it visible. If a connected server's link to one of your agents stops working after updating, turn that switch on.
+
 ## 0.45.7 — Grok Bots at home
 
 - **Grok Bots on your server show up in K2.** If Grok Bot runs on the same computer as your K2 server, K2 can find its agents and list them in Agents with a **Grok Bot** tag. Click one to read its chat, or right-click → **Add to Home** to keep it on My Home and in your Gardens, with live Working / Needs you / Idle status. Questions, connect requests and credential requests from a Grok Bot show as cards you answer in Grok Bot itself; K2 never asks for or shows a secret. Turn it on in Settings → 3rd Party Bots → **Grok Bot**, which first shows the folder and the agents it found. It's off until you turn it on, and only the owner or an admin can change it. Agents and App guests never see Grok Bot chats.

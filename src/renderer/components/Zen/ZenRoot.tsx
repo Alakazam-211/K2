@@ -32,6 +32,7 @@ import { installZenThemeEngine } from '@/lib/zen/zen-theme-engine'
 import { ZEN_KEYFRAMES_CSS } from '@/lib/zen/zen-motion'
 import { ZEN_SHIELD_CSS, ZEN_STYLE_SHIELD } from '@/lib/zen/zen-style-shield'
 import { ZEN_GLASS_CSS } from '@/lib/zen/zen-glass'
+import { ZEN_MATERIALS_CSS, ZenMaterialsContext, zenThemeMaterials, type ZenMaterialsState } from '@/lib/zen/zen-materials'
 import { noteZenEntered } from '@/lib/zen/zen-compose-focus'
 import type { ZenBackgroundFit } from '@/lib/zen/zen-tokens'
 import {
@@ -355,6 +356,12 @@ export function ZenRoot(): React.JSX.Element {
 
   const theme = zenThemeFor(page, systemScheme, inSafeMode, { reducedMotion, reducedTransparency })
   const themeTools = useZenThemeControls(os, page, inSafeMode)
+  // 0.46.0: the Glass theme draws K2 Companion's materials (zen-materials).
+  const materials = inSafeMode ? null : zenThemeMaterials(theme.name)
+  const materialsState = useMemo<ZenMaterialsState>(
+    () => ({ materials, reducedTransparency }),
+    [materials, reducedTransparency],
+  )
 
   // Terminals shown in Zen read the bundle's palette and font from here.
   const terminalKey = theme.terminal ? JSON.stringify(theme.terminal) : ''
@@ -427,6 +434,8 @@ export function ZenRoot(): React.JSX.Element {
       data-zen-scheme={theme.scheme}
       data-zen-safe={inSafeMode ? '' : undefined}
       data-zen-reduced-motion={reducedMotion ? '' : undefined}
+      data-zen-reduced-transparency={reducedTransparency ? '' : undefined}
+      data-zen-materials={materials ?? undefined}
       data-zen-corners={chrome.corners}
       data-zen-stoplights={chrome.stoplights}
       style={style}
@@ -434,6 +443,7 @@ export function ZenRoot(): React.JSX.Element {
       <style data-zen-keyframes="">{ZEN_KEYFRAMES_CSS}</style>
       <style data-zen-shield="">{ZEN_SHIELD_CSS}</style>
       <style data-zen-glass-styles="">{ZEN_GLASS_CSS}</style>
+      <style data-zen-materials-styles="">{ZEN_MATERIALS_CSS}</style>
       {theme.background && (
         <div
           aria-hidden
@@ -452,6 +462,7 @@ export function ZenRoot(): React.JSX.Element {
         />
       )}
       {chrome.stoplights !== 'hidden' && <ZenChromeCluster os={os} onRect={onClusterRect} />}
+      <ZenMaterialsContext.Provider value={materialsState}>
       <ZenK2ChromeContext.Provider value={k2Chrome}>
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       {page ? (
@@ -471,6 +482,7 @@ export function ZenRoot(): React.JSX.Element {
       )}
       </div>
       </ZenK2ChromeContext.Provider>
+      </ZenMaterialsContext.Provider>
       <ZenShortcutSheet os={os} />
       <ZenAddAgentPicker />
     </div>

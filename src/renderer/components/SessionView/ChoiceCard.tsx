@@ -65,6 +65,7 @@ export function ChoiceCard({
               key={`${opt.label}-${i}`}
               type="button"
               data-testid="thread-choice-chip"
+              data-selected={selected ? 'true' : undefined}
               data-chamfer=""
               style={chamferVars({
                 cut: chamferCutFor(26),

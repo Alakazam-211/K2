@@ -27,6 +27,7 @@ import { useCallback, useContext, useState } from 'react'
 import type { ZenGardenSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
+import { ZEN_GLASS_PILL_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
 import { ZEN_SWITCHER_COMPACT_MAX } from '@/lib/zen/zen-overflow'
 import { useZenBind, useZenK2Overlay, ZenChromePlaceContext, ZenRowCompactContext } from '../ZenTemplateControls'
 import { ZenNewGarden } from './ZenNewGarden'
@@ -129,6 +130,7 @@ export function ZenGardenSwitcher({ bridge }: { bridge: ZenWidgetBridge }): Reac
         data-zen-soft-button=""
         data-zen-compact={compact ? '' : undefined}
         {...ZEN_GLASS_PROPS}
+        {...ZEN_GLASS_PILL_PROPS}
         className="flex items-center gap-2 cursor-pointer"
         style={{
           // A shared Zen glass tile (`zen-glass.ts`): background, edge, blur.
@@ -159,6 +161,7 @@ export function ZenGardenSwitcher({ bridge }: { bridge: ZenWidgetBridge }): Reac
             ref={menuRef}
             role="menu"
             data-zen-garden-menu=""
+            {...ZEN_TILE_RAISED_PROPS}
             data-zen-menu-placement={menu.placement}
             className="flex flex-col"
             style={{ ...menu.style, ...ZEN_DROPDOWN_STYLE }}
@@ -191,6 +194,7 @@ export function ZenToggle({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.El
       title="Exit Zen Mode"
       data-zen-switch=""
       data-zen-soft-button=""
+      {...ZEN_GLASS_PILL_PROPS}
       className="flex items-center gap-2 cursor-pointer"
       style={{ height: 30, minWidth: 24, flexShrink: 0, padding: '0 6px 0 12px', borderRadius: 999, color: 'var(--zen-text)' }}
     >

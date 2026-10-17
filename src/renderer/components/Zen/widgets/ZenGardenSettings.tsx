@@ -24,6 +24,7 @@ import { loadZenGardenThemes, setZenTheme } from '@/lib/zen/zen-theme-switch'
 import type { ZenThemeEntry } from '@/lib/zen/zen-page'
 import { zenPinGridText } from '@/lib/zen/zen-pin-grid'
 import { ZenOverlay, zenButtonStyle } from './ZenOverlay'
+import { ZEN_GLASS_PILL_PROPS, ZEN_TILE_PROPS } from '@/lib/zen/zen-materials'
 
 export const ZEN_RECENT_FIRST_LABEL = 'Recent agents first'
 export const ZEN_RECENT_FIRST_NOTE =
@@ -157,7 +158,7 @@ function ThemeRow({ gardenId }: { gardenId: string | null }): React.JSX.Element 
   const failed = state.status === 'failed' || (state.status === 'ready' && state.themes.length === 0)
   return (
     <>
-      <div className="flex items-center justify-between" style={rowStyle}>
+      <div className="flex items-center justify-between" style={rowStyle} {...ZEN_TILE_PROPS}>
         <label id="zen-garden-theme-label" htmlFor="zen-garden-theme-select">
           Theme
         </label>
@@ -223,7 +224,7 @@ export function ZenGardenSettings({
       </Group>
       {pinsOn && (
         <Group id="zen-garden-settings-pins" title="Pinned agents" data="data-zen-garden-settings-pins">
-          <div className="flex items-center justify-between" style={rowStyle}>
+          <div className="flex items-center justify-between" style={rowStyle} {...ZEN_TILE_PROPS}>
             <span>Grid</span>
             <span data-zen-pin-grid-text="" style={{ color: 'var(--zen-text-muted)' }}>
               {zenPinGridText(pinLimit)}
@@ -235,7 +236,7 @@ export function ZenGardenSettings({
         </Group>
       )}
       <Group id="zen-garden-settings-lists" title="Lists" data="data-zen-garden-settings-lists">
-        <div className="flex items-center justify-between" style={rowStyle}>
+        <div className="flex items-center justify-between" style={rowStyle} {...ZEN_TILE_PROPS}>
           <span id="zen-recent-first-label">{ZEN_RECENT_FIRST_LABEL}</span>
           <Switch on={on} onToggle={() => setOn(!on)} labelledBy="zen-recent-first-label" />
         </div>
@@ -268,6 +269,7 @@ export function ZenGardenSettingsButton(props: ZenGardenSettingsProps): React.JS
         aria-haspopup="dialog"
         data-zen-agents-settings=""
         data-zen-soft-button=""
+        {...ZEN_GLASS_PILL_PROPS}
         onClick={() => setOpen(true)}
         className="no-drag flex flex-shrink-0 items-center justify-center cursor-pointer"
         style={{ width: 24, height: 24, borderRadius: 999, color: 'var(--zen-text-muted)' }}

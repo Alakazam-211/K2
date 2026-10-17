@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
+import { ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
 
 /** Portal target: the Zen root (keeps Zen's tokens), else the body. */
 function useZenLayer(anchor: React.RefObject<HTMLElement | null>): HTMLElement | null {
@@ -79,6 +80,7 @@ export function ZenOverlay({
               aria-label={label}
               tabIndex={-1}
               data-testid={testId}
+              {...ZEN_TILE_RAISED_PROPS}
               className="flex flex-col"
               style={{
                 width: `min(${width}px, calc(100vw - 32px))`,

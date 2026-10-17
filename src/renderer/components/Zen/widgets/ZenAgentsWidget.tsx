@@ -65,6 +65,7 @@ import { zenCountsText } from '@/lib/zen/zen-counts'
 import type { ZenHomeSummary, ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenAgentAvatar, ZenWidgetStyles, shortAge, useNowSec, useZenRows } from './zen-widget-kit'
+import { ZEN_GLASS_PILL_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
 import { useZenAddAgentClick } from '../ZenTemplateControls'
 import { requestZenComposeFocus } from '@/lib/zen/zen-compose-focus'
 import { useZenAddAgentStore } from '@/lib/zen/zen-add-agent'
@@ -156,6 +157,7 @@ function HomePicker({
         title="Show another Home here"
         data-zen-home-picker-button=""
         data-zen-soft-button=""
+        {...ZEN_GLASS_PILL_PROPS}
         onClick={() => setOpen((v) => !v)}
         className="flex min-w-0 items-center gap-1 cursor-pointer"
         style={{
@@ -178,6 +180,7 @@ function HomePicker({
           ref={menu.menuRef}
           role="menu"
           data-zen-home-picker-menu=""
+          {...ZEN_TILE_RAISED_PROPS}
           data-placement={menu.placement}
           className="no-drag flex flex-col"
           style={{
@@ -436,6 +439,7 @@ function AgentRow({
               <span
                 className="flex-shrink-0 truncate"
                 data-zen-server-tag=""
+                {...ZEN_GLASS_PILL_PROPS}
                 style={{
                   maxWidth: '9rem',
                   fontSize: '0.72em',

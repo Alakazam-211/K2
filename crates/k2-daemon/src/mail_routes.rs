@@ -48,6 +48,8 @@
 //! | POST /cli/mail/oauth-config/set   | mail/routes_oauth_config.rs |
 //! | POST /cli/mail/oauth-config/clear | mail/routes_oauth_config.rs |
 //! | GET  /cli/mail/oauth-config       | mail/routes_oauth_config.rs |
+//! | GET  /cli/mail/link/calendars     | mail/calendar_graph.rs  |
+//! | POST /cli/mail/link/calendars     | mail/calendar_graph.rs  |
 //! | POST /cli/mail/draft              | mail/routes_external.rs |
 //! | GET  /cli/mail/inboxes            | mail/routes_access.rs   |
 //! | POST /cli/mail/access/grant       | mail/routes_access.rs   |
@@ -240,6 +242,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // Calendars S2: owner DAV policy status (GET) — enable/disable
         // are the POST on the same path. Owner-only (is_owner_level_mutation).
         "/cli/mail/dav" => crate::mail::dav::handle_dav_get(params),
+        // MCS3: the owner's switch for calendars on LINKED inboxes (GET =
+        // state; POST {enabled} sets it). Owner-only (is_owner_level_mutation).
+        "/cli/mail/link/calendars" => {
+            crate::mail::calendar_graph::handle_linked_calendars_get(params)
+        }
         // CAL44: per-name certificates for the extra mail-family names
         // (GET = state; POST = issue/renew). Same gate as cert/renew.
         "/cli/mail/cert/names" => crate::mail::cert_names::handle_get(params),
@@ -468,6 +475,10 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/bans/migrate/restore" => crate::mail::bans::handle_migrate_restore(body),
         // Calendars S2: {action: status|enable|disable, files?: on|off}.
         "/cli/mail/dav" => crate::mail::dav::handle_dav_post(body),
+        // MCS3: {enabled: true|false} — calendars on linked inboxes.
+        "/cli/mail/link/calendars" => {
+            crate::mail::calendar_graph::handle_linked_calendars_post(body)
+        }
         // Calendars S6: Apple setup profile — mints a fresh app password
         // into an unsigned .mobileconfig. Owner/admin (is_owner_level_mutation).
         "/cli/mail/profile" => crate::mail::profile::handle_profile(body),
@@ -531,6 +542,11 @@ pub fn is_owner_level_mutation(path: &str) -> bool {
         // NOT in is_mail_manage_surface: the per-workspace "agents manage
         // hosted mail" toggle must never open it.
         || path == "/cli/mail/dav"
+        // MCS3: the per-box switch for calendars on LINKED inboxes is
+        // owner/admin only — GET status and POST on|off alike — and never
+        // opened by the M5 toggle. (Agent passports are also denied by the
+        // `/cli/mail/link/` session-token prefix.)
+        || path == "/cli/mail/link/calendars"
         // Calendars S6 (CAL6): an Apple setup profile mints a credential
         // for a person's mailbox — owner/admin only, never the M5 toggle.
         || path == "/cli/mail/profile"
@@ -1053,6 +1069,53 @@ mod tests {
         assert_ne!(get.status, "405 Method Not Allowed");
         let post = dispatch_post(p, br#"{"action":"bogus"}"#);
         assert_eq!(post.status, "400 Bad Request", "{}", post.body);
+    }
+
+    /// MCS3: the linked-calendars switch is owner/admin only on BOTH
+    /// methods, the M5 toggle never opens it, an agent passport is denied
+    /// by the `/cli/mail/link/` prefix, and the POST round-trips the
+    /// setting (temp HOME — never the real ~/.k2).
+    #[test]
+    fn linked_calendars_switch_is_owner_only_and_round_trips() {
+        let p = "/cli/mail/link/calendars";
+        assert!(!is_mail_manage_surface(p), "the M5 toggle must not open {p}");
+        assert!(is_owner_level_mutation(p));
+        assert!(is_mail_owner_surface(p));
+        assert!(!crate::session_token::is_agent_verb(p), "scoped token must NOT reach {p}");
+        assert!(mail_manage_authorized(p, true, None).is_ok(), "owner/admin");
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: "no-such-ws".to_string(),
+            agent_address: "agent".to_string(),
+        };
+        let body = mail_manage_authorized(p, false, Some(&principal))
+            .err()
+            .expect("scoped agent must be refused")
+            .body;
+        assert!(body.contains("owner_only"), "{body}");
+        assert!(body.contains("k2 mail link"), "names the verb: {body}");
+        assert!(mail_manage_authorized(p, false, None).is_err(), "Member is refused");
+
+        let _home = k2_core::test_env::TempHome::new();
+        let get = dispatch(p, &HashMap::new()).expect("mail route");
+        assert_eq!(get.status, "200 OK", "{}", get.body);
+        let v: serde_json::Value = serde_json::from_str(&get.body).expect("json");
+        assert_eq!(v["enabled"], true, "default on: {v}");
+        let off = dispatch_post(p, br#"{"enabled":false}"#);
+        assert_eq!(off.status, "200 OK", "{}", off.body);
+        let v: serde_json::Value = serde_json::from_str(&off.body).expect("json");
+        assert_eq!(v["linkedCalendars"], "off");
+        assert_eq!(v["changed"], true);
+        assert!(!k2_core::app_settings::load().linked_calendars, "persisted");
+        let again = dispatch_post(p, br#"{"enabled":false}"#);
+        let v: serde_json::Value = serde_json::from_str(&again.body).expect("json");
+        assert_eq!(v["changed"], false, "{v}");
+        for bad in [&br#"{}"#[..], br#"{"enabled":"yes"}"#, br#"{"enabled":true,"x":1}"#, b"nope"] {
+            let r = dispatch_post(p, bad);
+            assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        }
+        let on = dispatch_post(p, br#"{"enabled":true}"#);
+        assert_eq!(on.status, "200 OK", "{}", on.body);
+        assert!(k2_core::app_settings::load().linked_calendars);
     }
 
     /// Calendars S4 (Rosson's 0.45.0 rule): groups and calendar sharing

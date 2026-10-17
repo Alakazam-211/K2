@@ -704,6 +704,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/import", Admin),
     get("/cli/mail/inboxes", Member),
     post("/cli/mail/link/add", Member),
+    // MCS3: the owner's switch for calendars on linked inboxes.
+    both("/cli/mail/link/calendars", Admin),
     post("/cli/mail/link/oauth/complete", Admin),
     post("/cli/mail/link/oauth/start", Admin),
     get("/cli/mail/link/oauth/status", Admin),

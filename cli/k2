@@ -13489,14 +13489,17 @@ THE LOOP
   2. k2 sources propose --name fleet --label "Fleet" --target a=https://… …
      (or --preset k2-fleet --preset-arg boxes=a,b). It waits as "proposed".
   3. A person approves it: one click in Settings → Gardens → External Data
-     for a secretless public source; a vault confirm when it uses a secret.
+     for a secretless public source; a vault confirm when it uses a secret
+     (one confirm for many: k2 sources approve a b c --secret NAME). An
+     agent with "Manage Gardens and data sources" approves it itself.
   4. k2 sources trigger propose --source fleet --on item_went_crit
      wakes YOU when a box goes red. A person approves it too.
   5. k2 sources show fleet   the definition + the exact card view.
 
 KEYS
   Never paste a key into a URL, header or file. Keys live in the vault; a
-  person binds one to a source (with a confirm) for that exact site. Query
+  person binds one to a source (with a confirm) for that exact site, or an
+  agent with the switch below binds one it may use (no confirm). Query
   keys like token/key/sig are refused; a long token in the path is warned.
   Webhook-style URLs that carry a token are vault "url" secrets (urlSecret).
 
@@ -13510,9 +13513,25 @@ LIMITS
   Agents may: propose, edit/remove their own (not pinned, not read by a
   locked Garden: 423), mute up to 2 h with a reason, simulate up to 1 h,
   refresh (once per 15 s), propose triggers that wake themselves.
-  Agents may not: approve, bind a secret, pin, pause, enable a trigger,
-  raise its cooldown/cap, or point it at another agent (exit 3).
-  LAN addresses and plain http are the owner's only.
+  Without the switch below, agents may not: see pending, approve, bind a
+  secret, pin, pause, enable a trigger (exit 3, person_only).
+  Never, switch or not: set viewers / agentAccess / keep, raise a trigger's
+  cooldown/cap, point a trigger at another agent. LAN and plain http are
+  the owner's only.
+
+"MANAGE GARDENS AND DATA SOURCES" (THE AGENT SWITCH)
+  The owner or an admin turns it on per agent (Settings → Workspaces → <ws>
+  → Agent, or k2 sources access on --workspace <ws> outside K2); an agent
+  never can. With it you act with no person and no confirm: pending,
+  approve (yours and others' on this server), approve a b c --secret NAME
+  (all bound or none), secret, pause/resume, pin/unpin, trigger approve /
+  add / pause / resume. You bind only a secret you may already use: your
+  own workspace's (k2 vault set NAME: scope ws:<you> by default), or a
+  server secret if you also have "Allow managing server-wide secrets"
+  (else exit 3, secret_not_usable). The bind goes only to the source's one
+  site, inside the secret's own sites; it never widens them. Each act is
+  logged with you, your session, the target and the secret's NAME (Access
+  Audit).
 
 GOTCHAS
   Redirects must stay on the same origin (a GitHub release ASSET redirects
@@ -24745,6 +24764,17 @@ LOCKED GARDENS
   marks it locked; K2 puts back any edit to its file, refuses k2 zen
   changes to it (exit 3, garden_locked), and only the person unlocks
   it, in Settings → Gardens.
+
+WRITE THROUGH K2, OR PROPOSE
+  k2 zen garden put <id> --from page.toml   (checked; refused if it has errors)
+  k2 zen widget put <name> index.html --from index.html
+  Without "Manage Gardens and data sources" a put is a PROPOSAL: nothing
+  is written until a person approves it (k2 zen proposals; withdraw your
+  own with reject). With it (the owner/admin turns it on per agent:
+  Settings → Workspaces → <ws> → Agent) a put writes now, garden new makes
+  a Garden, and you may approve proposals; each act is logged with your
+  session. Never K2's built-in widgets (k2:<name>) or defaults: copy one
+  with k2 zen widget new <name> --from k2:<name>.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF

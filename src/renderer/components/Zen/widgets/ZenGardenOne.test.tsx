@@ -425,8 +425,9 @@ describe('the activity drawer (`activity-drawer`)', () => {
     const svg = spinner.querySelector('svg[data-agent-working]') as SVGElement
     expect([svg.getAttribute('data-cols'), svg.querySelectorAll('rect').length]).toEqual(['2', 6])
     // Sized in em of the count (follows the text size): the grid's ink
-    // (14 of its 24 units tall, 9 wide) is 0.8em − 2px at 12px, raised 1px,
-    // with 2px between it and the count.
+    // (14 of its 24 units tall, 9 wide) is 0.8em − 2px at 12px, centred on
+    // the digits (no raise), with 2px between it and the count and 1px
+    // more than the icon's usual gap between the agent icon and it.
     expect([svg.getAttribute('width'), svg.getAttribute('height')]).toEqual([
       `${Number(((COUNTER_SPINNER_SVG_EM * 19) / 24).toFixed(3))}em`,
       `${COUNTER_SPINNER_SVG_EM}em`,
@@ -436,13 +437,17 @@ describe('the activity drawer (`activity-drawer`)', () => {
     expect(Math.abs((COUNTER_SPINNER_SVG_EM * 14) / 24 - COUNTER_SPINNER_INK_EM)).toBeLessThan(0.001)
     expect(COUNTER_SPINNER_SVG_EM).toBe(1.085)
     expect(Math.abs(COUNTER_SPINNER_INK_EM * 12 - (0.8 * 12 - 2))).toBeLessThan(0.1)
-    const raised = spinner.querySelector('[data-zen-drawer-spinner-grid]') as HTMLElement
-    expect(raised.style.transform).toBe('translate(-50%, calc(-50% - 1px))')
-    expect([spinner.style.width, spinner.style.height, spinner.style.marginRight]).toEqual([
+    const centred = spinner.querySelector('[data-zen-drawer-spinner-grid]') as HTMLElement
+    expect([centred.style.transform, spinner.style.verticalAlign]).toEqual(['translate(-50%, -50%)', '-0.14em'])
+    expect([spinner.style.width, spinner.style.height, spinner.style.marginLeft, spinner.style.marginRight]).toEqual([
       `${COUNTER_SPINNER_EM}em`,
       '1em',
+      '1px',
       '2px',
     ])
+    // The agent icon before it keeps its 2px gap, so 3px in all.
+    const agentIcon = spinner.parentElement?.previousElementSibling as SVGElement
+    expect([agentIcon.tagName.toLowerCase(), agentIcon.style.marginRight]).toEqual(['svg', '2px'])
     expect(document.querySelector('[data-zen-drawer] .zen-braille, [data-zen-drawer] .braille-spinner')).toBeNull()
     expect(el('[data-zen-drawer-count="subagents"]').textContent).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
     act(() => void fireEvent.click(el('[data-zen-drawer-tile]')))

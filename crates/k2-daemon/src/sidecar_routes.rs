@@ -1273,11 +1273,12 @@ fn handle_access(
         && toggle != "vault_manage"
         && toggle != "compute_operate"
         && toggle != "projects_manage"
+        && toggle != "gardens_manage"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'compute', 'compute_operate', 'projects_manage' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'compute', 'compute_operate', 'gardens_manage', 'projects_manage' or 'vault_manage'",
         ));
     }
     let value = match v.get("value") {
@@ -1343,6 +1344,20 @@ fn handle_access(
         return Ok((
             serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "projects_manage", "agentsCanManageProjects": value }),
             format!("ok {} projects_manage={value}", ws.handle),
+        ));
+    }
+    if toggle == "gardens_manage" {
+        // Agents run Gardens end to end (0181, Rosson 2026-10-16): "Manage
+        // Gardens and data sources". Default OFF. Same single writer, same
+        // Owner/Admin floor: `/cli/agent-access/set` is not an agent verb,
+        // so an agent can never turn it on, for itself or anyone. The
+        // caller writes the `agent-access-set` Access Audit line.
+        k2_core::workspace::settings::set_agents_can_manage_gardens(&ws.id, value)
+            .map_err(|e| err("workspace_not_found", 404, e))?;
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "gardens_manage", "agentsCanManageGardens": value }),
+            format!("ok {} gardens_manage={value}", ws.handle),
         ));
     }
     if toggle == "vault_manage" {

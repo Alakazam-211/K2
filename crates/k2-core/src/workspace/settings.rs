@@ -1147,6 +1147,42 @@ pub fn set_agents_can_manage_projects(project_id: &str, enable: bool) -> Result<
     Ok(())
 }
 
+/// Agents run Gardens end to end (migration 0181) — the per-agent "Manage
+/// Gardens and data sources" switch (`gardens_manage`). DEFAULT OFF. With
+/// it, the workspace's agent approves data sources, binds secrets it may
+/// already use, pauses, pins, enables triggers and edits Gardens and
+/// widgets with no person confirm (audited). Unknown workspace or a read
+/// error → `false` (fail closed). Keyed on the passport's workspace id.
+pub fn agents_can_manage_gardens(project_id: &str) -> bool {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT agents_can_manage_gardens FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|v| v == 1)
+    .unwrap_or(false)
+}
+
+/// Persist `projects.agents_can_manage_gardens` (0/1). Dedicated writer for
+/// `POST /cli/agent-access/set {toggle: "gardens_manage"}` (Owner/Admin);
+/// not on `workspace/set`, so an agent can never turn it on for itself.
+pub fn set_agents_can_manage_gardens(project_id: &str, enable: bool) -> Result<(), String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let n = conn
+        .execute(
+            "UPDATE projects SET agents_can_manage_gardens = ?1 WHERE id = ?2",
+            rusqlite::params![if enable { 1i64 } else { 0i64 }, project_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("Project not found: {project_id}"));
+    }
+    Ok(())
+}
+
 /// EFFECTIVE agents-may-manage-hosted-mail gate for `project_path`.
 /// Column only: no global master (unlike DNS / connections). Unknown /
 /// unregistered path → `false` (fail-closed).

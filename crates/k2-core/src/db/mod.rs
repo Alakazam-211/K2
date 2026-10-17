@@ -1319,6 +1319,13 @@ pub(crate) fn run_migrations(conn: &Connection) -> Result<()> {
         // 0.46.0. The integrator renumbers on slips (never below a number
         // already live).
         ("0164_garden_data", include_str!("../../drizzle_sql/0164_garden_data.sql")),
+        // 0181 — agents run Gardens end to end (0.46.0): the per-agent
+        // "Manage Gardens and data sources" switch
+        // (projects.agents_can_manage_gardens, DEFAULT 0), the vault scope
+        // of a source's bound secret (sources.secret_workspace) and the
+        // Garden/widget proposal queue (zen_proposals). 0181 is reserved
+        // for this; 0165–0180 belong to other 0.46.x work.
+        ("0181_gardens_manage", include_str!("../../drizzle_sql/0181_gardens_manage.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -1979,7 +1986,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0164_garden_data",
+            last_name, "0181_gardens_manage",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2012,6 +2019,7 @@ mod tests {
                 "0162_agents_manage_projects",
                 "0163_sources",
                 "0164_garden_data",
+                "0181_gardens_manage",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2132,6 +2140,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
+            // 0181 (Gardens manage) came after both; roll it back too. Its
+            // projects column stays (re-adding it is skipped as a
+            // duplicate column), its sources column went with the table.
+            conn.execute_batch("DROP TABLE zen_proposals;").unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0181_gardens_manage'", []).unwrap();
             let last: String = conn
                 .query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
                 .unwrap();

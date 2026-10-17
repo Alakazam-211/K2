@@ -94,10 +94,6 @@ impl DesignRegistry {
         self.nav.remove(key);
     }
 
-    pub fn is_design(&self, key: &str) -> bool {
-        self.nav.contains_key(key)
-    }
-
     /// The current page-load number, or [`NOT_DESIGN`].
     pub fn nav(&self, key: &str) -> Result<u64, String> {
         self.nav.get(key).copied().ok_or_else(|| NOT_DESIGN.to_string())
@@ -264,7 +260,7 @@ mod design_pick_tests {
         r.set_design("w\0a", true);
         assert_eq!(r.nav("w\0a").unwrap(), 2);
         r.set_design("w\0a", false);
-        assert!(!r.is_design("w\0a"));
+        assert!(r.nav("w\0a").is_err(), "a plain Browser view is not a design view");
         assert_eq!(r.bump("w\0a"), None, "a plain view never gets a counter");
         r.set_design("w\0b", true);
         r.remove("w\0b");

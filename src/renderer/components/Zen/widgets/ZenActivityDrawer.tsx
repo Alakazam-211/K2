@@ -32,6 +32,7 @@ import {
   COUNTER_SPINNER_COLS,
   COUNTER_SPINNER_EM,
   COUNTER_SPINNER_GAP_PX,
+  COUNTER_SPINNER_RAISE_PX,
   COUNTER_SPINNER_SVG_EM,
   STOPPED_LINGER_MS,
   counterSpoken,
@@ -205,12 +206,12 @@ const ICON: Record<StripCounterKey | 'check', (size: number) => React.JSX.Elemen
  *  reduced motion.
  *
  *  Sized in em of the count beside it, so it follows the text size: the
- *  grid's ink is a touch taller than the digits (COUNTER_SPINNER_INK_EM),
- *  like the braille was. The layout box is the ink's width
- *  (COUNTER_SPINNER_EM; the counter width estimate uses it) × 1em, plus a
- *  2px gap before the count; the svg's empty margin overflows it, centred.
- *  The box sits 0.14em below the baseline so the ink is centred on the
- *  digits. */
+ *  grid's ink is COUNTER_SPINNER_INK_EM tall (0.8em − 2px at 12px). The
+ *  layout box is the ink's width (COUNTER_SPINNER_EM; the counter width
+ *  estimate uses it) × 1em, plus a 2px gap before the count; the svg's
+ *  empty margin overflows it. The box sits 0.14em below the baseline
+ *  (centred on the digits) and the grid is raised COUNTER_SPINNER_RAISE_PX
+ *  from there (Rosson's tune). */
 function WorkingMark(): React.JSX.Element {
   const svg = `${COUNTER_SPINNER_SVG_EM}em`
   return (
@@ -227,7 +228,8 @@ function WorkingMark(): React.JSX.Element {
       }}
     >
       <span
-        style={{ position: 'absolute', left: '50%', top: '50%', display: 'flex', transform: 'translate(-50%, -50%)' }}
+        data-zen-drawer-spinner-grid=""
+        style={{ position: 'absolute', left: '50%', top: '50%', display: 'flex', transform: `translate(-50%, calc(-50% - ${COUNTER_SPINNER_RAISE_PX}px))` }}
       >
         <WorkingGrid size={svg} cols={COUNTER_SPINNER_COLS} />
       </span>

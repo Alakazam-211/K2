@@ -155,6 +155,21 @@ describe('mergeSerializedLayouts', () => {
     expect(ids(mergeSerializedLayouts(base, local, remote))).toEqual([['chat-theirs', 'n']])
   })
 
+  it('does not duplicate the pinned Design tab when each window made its own (D-A3)', () => {
+    const design = (id: string): SerializedTab => tab(id, `pg-${id}`, { isPinnedDesign: true })
+    const base = layout([systemTab('chat', 'chat')])
+    const local = layout([systemTab('chat', 'chat'), design('design-mine'), tab('n')])
+    const remote = layout([systemTab('chat', 'chat'), design('design-theirs')])
+    expect(ids(mergeSerializedLayouts(base, local, remote))).toEqual([['chat', 'design-theirs', 'n']])
+  })
+
+  it('keeps the pinned Design tab after Chat and before the user-pinned tabs', () => {
+    const base = layout([systemTab('chat', 'chat'), tab('a', 'pg-a', { isPinnedFile: true })])
+    const local = layout([systemTab('chat', 'chat'), tab('a', 'pg-a', { isPinnedFile: true }), tab('d', 'pg-d', { isPinnedDesign: true })])
+    const remote = layout([systemTab('chat', 'chat'), tab('a', 'pg-a', { isPinnedFile: true })])
+    expect(ids(mergeSerializedLayouts(base, local, remote))).toEqual([['chat', 'd', 'a']])
+  })
+
   it('never leaves column 0 empty while a later column has tabs', () => {
     const base = layout([tab('a')], [tab('s')])
     const local = layout([], [tab('s')])

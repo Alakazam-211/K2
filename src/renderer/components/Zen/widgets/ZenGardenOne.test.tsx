@@ -425,19 +425,17 @@ describe('the activity drawer (`activity-drawer`)', () => {
     const svg = spinner.querySelector('svg[data-agent-working]') as SVGElement
     expect([svg.getAttribute('data-cols'), svg.querySelectorAll('rect').length]).toEqual(['2', 6])
     // Sized in em of the count (follows the text size): the grid's ink
-    // (14 of its 24 units tall, 9 wide) is the digits' 0.72em (0.8em − ~1px
-    // at 12px), raised 1px, with 2px between it and the count.
+    // (14 of its 24 units tall, 9 wide) is ~1px over the digits' 0.72em at
+    // 12px, with 2px between it and the count.
     expect([svg.getAttribute('width'), svg.getAttribute('height')]).toEqual([
       `${Number(((COUNTER_SPINNER_SVG_EM * 19) / 24).toFixed(3))}em`,
       `${COUNTER_SPINNER_SVG_EM}em`,
     ])
     // The layout box is the ink's width (2 columns), not the old 0.8em.
-    expect(COUNTER_SPINNER_EM).toBe(0.47)
+    expect(COUNTER_SPINNER_EM).toBe(0.52)
     expect(Math.abs((COUNTER_SPINNER_SVG_EM * 14) / 24 - COUNTER_SPINNER_INK_EM)).toBeLessThan(0.001)
-    expect(COUNTER_SPINNER_SVG_EM).toBe(1.234)
-    expect(Math.abs(COUNTER_SPINNER_INK_EM * 12 - (0.8 * 12 - 1))).toBeLessThan(0.1)
-    const raised = spinner.querySelector('[data-zen-drawer-spinner-grid]') as HTMLElement
-    expect(raised.style.transform).toBe('translate(-50%, calc(-50% - 1px))')
+    expect(COUNTER_SPINNER_SVG_EM).toBe(1.371)
+    expect(Math.abs(COUNTER_SPINNER_INK_EM * 12 - (0.72 * 12 + 1))).toBeLessThan(0.1)
     expect([spinner.style.width, spinner.style.height, spinner.style.marginRight]).toEqual([
       `${COUNTER_SPINNER_EM}em`,
       '1em',

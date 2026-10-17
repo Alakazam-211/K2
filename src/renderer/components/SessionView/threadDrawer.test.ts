@@ -131,8 +131,8 @@ describe('counters', () => {
     const fontPx = 12
     const running = counterWidthPx({ key: 'subagents', count: 3, done: 0 }, fontPx)
     const none = counterWidthPx({ key: 'subagents', count: 0, done: 0 }, fontPx)
-    // 0.47em at 12px = 5.64 → 6, + 2px gap, + the "3" (0.62em → 8).
-    expect(running - none).toBe(6 + 2 + 8)
+    // 0.52em at 12px = 6.24 → 7, + 2px gap, + the "3" (0.62em → 8).
+    expect(running - none).toBe(7 + 2 + 8)
   })
 
   it('the short clock', () => {

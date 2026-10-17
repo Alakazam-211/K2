@@ -11,6 +11,11 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 hostmail domain show` stops recommending records that can't work yet.** On a domain whose DNS isn't on K2's nameservers, the MTA-STS and mail-client autoconfig records now say "skip for now" and are left out of the zone file, because those names can't get a certificate there yet. The DMARC record it lists always includes `rua=mailto:postmaster@<domain>`.
 - **Chat hints point at real commands.** Switching sign-in type points at `k2 hostchat purge`, rollback and restore hints point at `k2 hostchat backups` and `k2 hostchat restore`, and the PostgreSQL hint no longer names a setup flag that doesn't exist.
 - **`k2 hostchat upgrade --media-tarball` is refused instead of ignored.** Voice options only apply to `k2 hostchat enable`; elsewhere K2 now stops and points you at `k2 hostchat media install --tarball`.
+- **`k2 msg who <id>` only ever looks up a sender.** An id that didn't start with `m_` used to send a live message to a workspace named "who".
+- **Clear answers when a command is refused or finds nothing.** `k2 settings` from an agent now says it needs the owner or an admin instead of showing blank settings. `k2 inbox read` with an unknown id says so. `k2 users list` from an agent points to `k2 connections list --users`. `k2 compute get` with an unknown job exits 4. `k2 sources` shows one hint, not two.
+- **`k2 activity` takes `--help` and `--json`, and shows dates.** Before, those flags were read as the number of events. Errors from the server now show instead of "No activity.".
+- **`k2 hostmail status` on a computer without hosted mail says so in one line.** Hosted mail runs on Linux K2 servers; for linked inboxes use `k2 mail inboxes`.
+- **Smaller fixes.** `k2 compute jobs` shows the whole reason a job waits. `k2 app token list` says "No App tokens.". `k2 zen widget errors` says what it checked, and two errors at the same moment no longer share a number. Help text names the right commands and variables.
 
 ## 0.46.0 — Runtime for Apps
 

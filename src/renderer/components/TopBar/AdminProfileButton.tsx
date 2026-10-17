@@ -13,7 +13,8 @@
 //   - labelled rows (one label column, one control column, the Settings
 //     row and type scale): Your name (the owner key), Colour, Your account
 //     (the owner key);
-//   - recent sign-ins (the owner key) and, last, Password.
+//   - Password, then a Security section (collapsed, like the nav's
+//     sections) with recent sign-ins for the owner key.
 //
 // Every control is the SAME component Settings → General uses, so both
 // stay in sync and save the same way (straight away, optimistic, rolled
@@ -57,6 +58,7 @@ import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
 import { saveRememberedPassword, useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
 import { AdminIcon } from '@/components/icons/K2Icons'
+import { NAV_SECTION_HOVER_CLASS, NavSectionChevron, NavSectionLabel } from '@/components/Sidebar/NavSection'
 import {
   loadAdminProfile,
   signInsFor,
@@ -250,6 +252,7 @@ function LoadedProfile({
   const [changing, setChanging] = useState<ConnectHost | null>(null)
   const [ownerChanging, setOwnerChanging] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [securityOpen, setSecurityOpen] = useState(false)
 
   // The owner's linked logins follow the dropdown at once.
   const linked = ownerEdits ? owner.accounts : linkedRead.kind === 'ok' ? linkedRead.value : []
@@ -390,11 +393,9 @@ function LoadedProfile({
               <OwnerDisplayNameInput className="w-full max-w-[240px]" />
             </SettingRow>
           ) : null}
-          <div className={colorView === null ? 'hidden' : undefined}>
-            <SettingRow columns label="Colour" testId="admin-profile-color">
-              <PersonColorPicker scope={scope} onView={setColorView} />
-            </SettingRow>
-          </div>
+          <SettingRow columns label="Colour" testId="admin-profile-color">
+            <PersonColorPicker scope={scope} onView={setColorView} />
+          </SettingRow>
           {ownerEdits && choices ? (
             <SettingRow columns label="Your account" testId="admin-profile-your-account">
               <div className="flex flex-col gap-1 min-w-0">
@@ -409,27 +410,46 @@ function LoadedProfile({
           ) : null}
         </div>
 
-        {showSignIns && signIns.length > 0 ? (
-          <section className="mt-4" data-testid="admin-profile-sign-ins">
-            <h3 className="m-0 mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-              Recent sign-ins
-            </h3>
-            <ul className="m-0 p-0 list-none">
-              {signIns.map((ev, i) => (
-                <SignInRow key={`${ev.ts}-${i}`} ev={ev} showUser={profile.ownerToken} />
-              ))}
-            </ul>
-          </section>
-        ) : null}
-
         {onChangePassword ? (
-          <div className="mt-4" data-testid="admin-profile-account">
+          <div data-testid="admin-profile-account">
             <SettingRow columns label="Password" testId="admin-profile-password">
               <Button variant="quiet" data-testid="admin-profile-change-password" onClick={onChangePassword}>
                 Change password
               </Button>
             </SettingRow>
           </div>
+        ) : null}
+
+        {showSignIns ? (
+          <section className="mt-3" data-testid="admin-profile-security">
+            {/* Collapsed by default, styled like the nav's sections. */}
+            <button
+              type="button"
+              data-testid="admin-profile-security-toggle"
+              onClick={() => setSecurityOpen((v) => !v)}
+              aria-expanded={securityOpen}
+              aria-controls="admin-profile-security-content"
+              className={`no-drag w-full flex items-center gap-1.5 py-1.5 text-left cursor-pointer ${NAV_SECTION_HOVER_CLASS}`}
+            >
+              <NavSectionLabel>Security</NavSectionLabel>
+              <span className="flex-1" />
+              <NavSectionChevron collapsed={!securityOpen} />
+            </button>
+            {securityOpen ? (
+              <div id="admin-profile-security-content" data-testid="admin-profile-sign-ins" className="pb-1">
+                <div className="mb-1 text-[11px] text-[var(--color-text-secondary)]">Recent sign-ins</div>
+                {signIns.length === 0 ? (
+                  <Muted>No sign-ins on record.</Muted>
+                ) : (
+                  <ul className="m-0 p-0 list-none">
+                    {signIns.map((ev, i) => (
+                      <SignInRow key={`${ev.ts}-${i}`} ev={ev} showUser={profile.ownerToken} />
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : null}
+          </section>
         ) : null}
       </>
     )

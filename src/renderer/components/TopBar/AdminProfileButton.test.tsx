@@ -89,6 +89,7 @@ import { __resetZenAvailableForTests } from '@/lib/zen/zen-platform'
 import { useSettingsStore } from '@/stores/settings'
 import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
 import { PASSWORD_CHANGED_NOTICE, ownerPasswordChangedNotice } from './AdminProfileButton'
+import { COLOR_NEEDS_NEWER_SERVER } from '@/components/Presence/PersonColorPicker'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -261,8 +262,8 @@ describe('the Admin profile modal: open and close', () => {
     render(<AdminProfileButton />)
     await openLoaded()
     const first = screen.getByTestId('admin-profile-close')
-    // Password sits last (secondary actions at the bottom).
-    const last = screen.getByTestId('admin-profile-change-password')
+    // The collapsed Security header sits last (secondary things at the bottom).
+    const last = screen.getByTestId('admin-profile-security-toggle')
     last.focus()
     act(() => void fireEvent.keyDown(window, { key: 'Tab' }))
     expect(document.activeElement).toBe(first)
@@ -326,6 +327,17 @@ describe('the Admin profile modal: who you are', () => {
     expect((screen.getByLabelText('Your name') as HTMLInputElement).value).toBe('Rosson Long')
     expect((screen.getByLabelText('Your account') as HTMLButtonElement).textContent).toContain('rosson-phone')
     expect(dialog().textContent).not.toContain('sam')
+
+    // Change password sits above Security; Security starts collapsed.
+    const pw = screen.getByTestId('admin-profile-password')
+    const security = screen.getByTestId('admin-profile-security')
+    expect(pw.compareDocumentPosition(security) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const toggle = screen.getByTestId('admin-profile-security-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(document.querySelector('[data-testid="admin-profile-sign-in"]')).toBeNull()
+    act(() => void fireEvent.click(toggle))
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(text('admin-profile-sign-ins')).toContain('Recent sign-ins')
 
     // Only rosson-phone's sign-in events, newest first; not sam's, not the
     // password change.
@@ -649,15 +661,18 @@ describe('the Admin profile modal: colour', () => {
     await waitFor(() => expect(h.posts).toEqual([{ route: 'people/color', body: { color: '#c026d3' } }]))
   })
 
-  it('an older daemon without the route shows no swatches, and the rest still renders', async () => {
+  it('an older daemon without the route shows the swatches disabled with "Needs a newer K2 server", never hidden', async () => {
     h.routes['people/color'] = new Error('route not found')
     render(<AdminProfileButton />)
     await openLoaded()
-    await waitFor(() => expect(h.calls).toContain('people/color'))
-    await waitFor(() => expect(document.querySelector('[data-testid="person-color-picker"]')).toBeNull())
-    expect(text('admin-profile-color')).not.toContain('Loading')
-    // The empty Colour row is hidden, not left blank.
-    await waitFor(() => expect(screen.getByTestId('admin-profile-color').parentElement?.classList.contains('hidden')).toBe(true))
+    await screen.findByTestId('person-color-needs-newer')
+    expect(text('admin-profile-color')).toContain('Colour')
+    expect(text('person-color-needs-newer')).toBe(COLOR_NEEDS_NEWER_SERVER)
+    expect(COLOR_NEEDS_NEWER_SERVER).toBe('Needs a newer K2 server.')
+    const swatches = [screen.getByTestId('person-color-auto'), ...PALETTE.map((c) => screen.getByTestId(`person-color-${c}`))]
+    for (const s of swatches) expect((s as HTMLButtonElement).disabled).toBe(true)
+    act(() => void fireEvent.click(screen.getByTestId('person-color-#0d9488')))
+    expect(h.posts).toEqual([])
     expect(text('admin-profile-username')).toBe('rosson-phone')
   })
 })

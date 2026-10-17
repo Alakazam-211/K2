@@ -2124,7 +2124,8 @@ mod tests {
     }
 
     /// A 0.45.7 database (last migration 0164) upgrades to 0.46.0: the
-    /// runtime (0165, 0168–0170) and the publish probe grace (0177) apply
+    /// 0.46.0 tail (0165–0181 as landed: runtime, Sew, box services, probe
+    /// grace, review notes, Design mode, clone imports, Gardens manage) apply
     /// in order on top of existing rows, which keep their data and get the
     /// new columns' defaults.
     #[test]
@@ -2183,7 +2184,7 @@ mod tests {
         let again: i64 = conn
             .query_row("SELECT COUNT(*) FROM _migrations WHERE name >= '0165'", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(again, 5);
+        assert_eq!(again, tail.len() as i64, "the 0.46.0 tail is recorded once: {tail:?}");
     }
 
     /// 0.46.0: one held-request table for every kind (grace and egress), a

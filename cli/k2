@@ -25755,7 +25755,7 @@ cmd_schema() {
     {
       "name": "hostmail",
       "usage": "k2 hostmail <status|enable|disable|uninstall|upgrade|rotate-admin|password|domain|create|delete|doctor|backup|config|approvals|import|quota|catchall|alias|forward|ooo|footer|cert|list|spam|queue|acl|autoconfig|app-password|person|dkim|dmarc|ptr|bans|allowlist|calendar|profile> ... (server admin)",
-      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan; calendar reach; upgradeAvailable), upgrade [--dry-run] (explicit Stalwart upgrade to the pin with snapshot + rollback; owner only; never automatic), backup status|plan|set (the box's backup mode, chosen by the it-email agent (mail_manage) with the client; no backups run yet), calendar status|enable|disable [--files on|off] (CalDAV/CardDAV + WebDAV files policy for every hosted address; owner/admin only), profile <addr> --apple [--out <file>] (unsigned Apple .mobileconfig: Mail + Calendar + Contacts with a fresh app password; owner/admin only), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate|keep (IMAP/SMTP once secret; owner, or an IT agent (mail_manage) for any mailbox but its own workspace's — agents without mail_manage never get a mail password; mailbox-password sessions die, app passwords do not), app-password add|list|revoke|keep (extra labeled secrets; mail_manage, same own-mailbox rule for add/keep; secret once), person <addr> on|off (a person's mailbox: an IT agent may set its passwords even in its own workspace; only the owner turns it on for the IT agent's own workspace), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Owner verbs hard-fail for agent tokens SERVER-SIDE: exit 3, requires owner/admin — ask your human.",
+      "description": "K2 email SERVER administration (owner surface): status (server health/version/port plan; calendar reach; upgradeAvailable), upgrade [--dry-run] (explicit Stalwart upgrade to the pin with snapshot + rollback; owner only; never automatic), backup status|plan|set (the box's backup mode, chosen by the it-email agent (mail_manage) with the client; no backups run yet), calendar status|enable|disable [--files on|off] (CalDAV/CardDAV + WebDAV files policy for every hosted address; owner/admin only), profile <addr> --apple [--out <file>] (unsigned Apple .mobileconfig: Mail + Calendar + Contacts with a fresh app password; owner/admin only), enable --hostname <name> (provision/start; POSTs {hostname}), disable (stop the server), domain add|list|show|check|remove (DNS record table + live verification), create/delete (mint/retire hosted addresses), password rotate|keep (IMAP/SMTP once secret; owner, or an IT agent (mail_manage) for any mailbox but its own workspace's — agents without mail_manage never get a mail password; mailbox-password sessions die, app passwords do not), app-password add|list|revoke|keep (extra labeled secrets; mail_manage, same own-mailbox rule for add/keep; secret once), person <addr> on|off (a person's mailbox: an IT agent may set its passwords even in its own workspace; only the owner turns it on for the IT agent's own workspace), catchall/alias/forward, ooo/footer, list/spam/queue/acl/autoconfig, dkim/dmarc, ptr show|set (HELO + reverse DNS via CP), bans/allowlist (BlockedIp + AllowedIp + auth-ban migrate), doctor, config, approvals. A not-installed server is NOT 'mail broken' — 'k2 mail inboxes' still works for linked accounts. Agents: with 'Allow agents to manage hosted mail on this host' on for the agent's OWN workspace (Settings → Workspaces), it may run server enable/disable, domain add/list/show/check, doctor, config, approvals and the mailbox-setting verbs; uninstall, upgrade and domain remove stay owner-only. Otherwise the server refuses: exit 3 owner_only, naming the workspace whose toggle it checked.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (any subcommand)."}]
     },
@@ -47219,8 +47219,14 @@ cmd_help_hostmail() {
     cat <<'EOF'
 k2 hostmail — run the K2 email SERVER (owner surface). Provision the
 server, host domains, mint addresses, check deliverability, and gate
-agent sending. Owner verbs hard-fail for agent tokens SERVER-SIDE
-(exit 3, "requires owner/admin — ask your human").
+agent sending.
+
+Agents: with "Allow agents to manage hosted mail on this host" on for
+the agent's OWN workspace (Settings → Workspaces → that workspace), it
+may run server enable/disable, domain add/list/show/check, doctor,
+config, approvals and the mailbox-setting verbs. uninstall, upgrade and
+domain remove stay owner-only. Otherwise the server refuses (exit 3,
+owner_only) and names the workspace whose toggle it checked.
 
 Not installed here? That is NOT "mail broken" — `k2 mail inboxes` still
 works for LINKED accounts. Hosting is a capability; access is separate.
@@ -56407,7 +56413,8 @@ case "${1:-help}" in
     hostmail)
         # K2 Mail server administration (owner surface) — status, enable/
         # disable, domains, mint addresses, doctor, config, approvals.
-        # Owner verbs hard-fail for agent tokens SERVER-SIDE (exit 3).
+        # Agents: the per-workspace hosted-mail toggle opens the M5 verbs;
+        # uninstall/upgrade/domain remove stay owner-only (server-side, exit 3).
         shift
         cmd_hostmail "$@"
         ;;

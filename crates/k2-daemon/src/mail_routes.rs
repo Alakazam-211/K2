@@ -740,9 +740,47 @@ pub fn owner_only_response() -> crate::cli_response::CliResponse {
 }
 
 /// Teaching response for M5 hostmail manage when a valid scoped hook
-/// hits a workspace whose hosted-mail toggle is OFF.
-pub fn owner_only_manage_response() -> crate::cli_response::CliResponse {
-    owner_only_with_hint(OWNER_ONLY_MANAGE_HINT)
+/// hits a workspace whose hosted-mail toggle is OFF. 0.46.1: it names
+/// the workspace K2 checked — the toggle is per workspace, and a human
+/// who turned it on for another workspace could not tell (partii on
+/// luzz). `workspace_path` None = the passport's workspace is not
+/// registered here. The checked workspace also rides `error.workspace`.
+pub fn owner_only_manage_response_for(
+    workspace_path: Option<&str>,
+    workspace_uuid: &str,
+) -> crate::cli_response::CliResponse {
+    let (hint, ws) = match workspace_path {
+        Some(p) => {
+            let name = std::path::Path::new(p)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| !n.is_empty())
+                .unwrap_or(p);
+            (
+                format!(
+                    "{OWNER_ONLY_MANAGE_HINT} K2 checked workspace '{name}' ({p}): its \
+                     toggle is off. It is per workspace, so turn it on for '{name}' itself."
+                ),
+                serde_json::json!({ "name": name, "path": p, "id": workspace_uuid }),
+            )
+        }
+        None => (
+            format!(
+                "{OWNER_ONLY_MANAGE_HINT} This session's workspace ({workspace_uuid}) is not \
+                 registered on this host, so there is no toggle to check."
+            ),
+            serde_json::json!({ "name": null, "path": null, "id": workspace_uuid }),
+        ),
+    };
+    crate::cli_response::CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "owner_only", "hint": hint, "workspace": ws },
+        })
+        .to_string(),
+    }
 }
 
 /// M15 extra gate after dual-auth. M5 is allowed iff owner-or-admin
@@ -771,7 +809,7 @@ pub fn mail_manage_authorized(
             {
                 return Ok(());
             }
-            return Err(owner_only_manage_response());
+            return Err(owner_only_manage_response_for(ws_path.as_deref(), &p.workspace_uuid));
         }
         return Err(owner_only_response());
     }
@@ -1260,16 +1298,27 @@ mod tests {
 
     #[test]
     fn owner_only_manage_response_names_settings_row() {
-        let r = owner_only_manage_response();
+        let r = owner_only_manage_response_for(Some("/home/k2/ai/partii"), "ws-1");
         assert_eq!(r.status, "403 Forbidden");
         let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
         assert_eq!(v["error"]["code"], "owner_only");
-        let hint = v["error"]["hint"].as_str().unwrap_or("");
+        let hint = v["error"]["hint"].as_str().expect("hint");
         assert!(hint.contains("ask your human"), "got {hint}");
         assert!(
             hint.contains("Allow agents to manage hosted mail on this host"),
             "flag-off hint must name the Settings row: {hint}"
         );
+        // 0.46.1: it names the workspace whose toggle was checked.
+        assert!(hint.contains("K2 checked workspace 'partii' (/home/k2/ai/partii)"), "{hint}");
+        assert_eq!(v["error"]["workspace"]["name"], "partii", "{v}");
+        assert_eq!(v["error"]["workspace"]["path"], "/home/k2/ai/partii", "{v}");
+        assert_eq!(v["error"]["workspace"]["id"], "ws-1", "{v}");
+
+        let r = owner_only_manage_response_for(None, "ws-gone");
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains("(ws-gone) is not registered"), "{hint}");
+        assert!(v["error"]["workspace"]["path"].is_null(), "{v}");
     }
 
     #[test]

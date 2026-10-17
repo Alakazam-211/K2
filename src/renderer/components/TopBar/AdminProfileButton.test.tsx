@@ -325,11 +325,13 @@ describe('the Admin profile modal: who you are', () => {
     expect(text('admin-profile-created')).toContain('2026')
     expect(screen.getByTestId('admin-profile-header').querySelector('[data-presence-chip]')).toBeTruthy()
 
-    // Rows, in order: First name, Last name, Colour, Your account.
+    // Rows, in order: Colour (top), First name, Last name, Your account.
     const labels = Array.from(screen.getByTestId('admin-profile-fields').querySelectorAll('[data-testid^="admin-profile-"] > span:first-child')).map(
       (s) => s.textContent,
     )
-    expect(labels).toEqual(['First name', 'Last name', 'Colour', 'Your account'])
+    expect(labels).toEqual(['Colour', 'First name', 'Last name', 'Your account'])
+    // One avatar in the whole modal: the header chip (the picker has none).
+    expect(dialog().querySelectorAll('[data-presence-chip]').length).toBe(1)
     expect((screen.getByLabelText('First name') as HTMLInputElement).value).toBe('Rosson')
     expect((screen.getByLabelText('Last name') as HTMLInputElement).value).toBe('Long')
     expect((screen.getByLabelText('Your account') as HTMLButtonElement).textContent).toContain('rosson-phone')
@@ -426,7 +428,7 @@ describe('the Admin profile modal: who you are', () => {
     const labels = Array.from(screen.getByTestId('admin-profile-fields').querySelectorAll('[data-testid^="admin-profile-"] > span:first-child')).map(
       (s) => s.textContent,
     )
-    expect(labels).toEqual(['First name', 'Last name', 'Colour'])
+    expect(labels).toEqual(['Colour', 'First name', 'Last name'])
     expect(document.querySelector('[data-testid="admin-profile-owners-account"]')).toBeNull()
     expect(screen.queryByLabelText('Your name')).toBeNull()
     expect((screen.getByLabelText('First name') as HTMLInputElement).disabled).toBe(false)
@@ -723,16 +725,14 @@ describe('the Admin profile modal: colour', () => {
     expect((screen.getByTestId('person-color-well') as HTMLInputElement).type).toBe('color')
     // No preset swatches any more.
     expect(document.querySelector('[data-testid="person-color-#3a9e96"]')).toBeNull()
-    const preview = screen.getByTestId('person-color-picker').querySelector('[data-presence-chip]')
-    if (!preview) throw new Error('no preview chip')
+    // No second avatar beside the picker: the header chip is the preview.
+    expect(screen.getByTestId('person-color-picker').querySelector('[data-presence-chip]')).toBeNull()
     expect(text('admin-profile-color')).toContain('Your linked logins show this colour too.')
 
     act(() => void fireEvent.change(hexField(), { target: { value: '#12AB9F' } }))
     act(() => void fireEvent.keyDown(hexField(), { key: 'Enter' }))
     await waitFor(() => expect(h.posts).toEqual([{ route: 'people/color', body: { color: '#12ab9f' } }]))
     await waitFor(() => expect(screen.getByTestId('person-color-auto').getAttribute('aria-pressed')).toBe('false'))
-    expect(preview.getAttribute('data-person-color')).toBe('#12ab9f')
-    // The header chip follows too.
     expect(screen.getByTestId('admin-profile-header').querySelector('[data-presence-chip]')?.getAttribute('data-person-color')).toBe('#12ab9f')
 
     act(() => void fireEvent.click(screen.getByTestId('person-color-auto')))

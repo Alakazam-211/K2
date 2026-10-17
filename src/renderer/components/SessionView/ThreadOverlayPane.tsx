@@ -302,7 +302,7 @@ function isPersonPost(doc: OverlayDoc): boolean {
 }
 
 /** The author line: "You" on the viewer's own post, else the sender's
- *  name (a person's `from` is their name: the owner's display name, the
+ *  name (a person's `from` is the daemon's stamp: the owner's linked username, the
  *  Connect username, the guest's username; an agent's is its address). */
 export function threadAuthorLabel(
   doc: OverlayDoc,

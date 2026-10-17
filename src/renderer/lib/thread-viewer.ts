@@ -28,9 +28,11 @@ export interface ThreadAuthor {
   kind: string
   /** `owner`, a Connect username, or an app guest's pass username. */
   login: string
-  /** On a card the owner answered: the owner's display name (the name an
-   *  owner post shows in `from`). Absent when none is set, on other kinds,
-   *  and on cards from before the field. */
+  /** On a card the owner answered: the daemon's sender stamp (0.46.0,
+   *  `person_name::sender_identity`: the owner's linked username, else
+   *  `owner`; older cards carry the old display name). The renderer shows
+   *  it as stamped and never re-derives it. Absent on other kinds and on
+   *  cards from before the field. */
   name?: string
 }
 
@@ -86,8 +88,8 @@ export function isOwnThreadPost(
 
 /** Who answered (or dismissed) a card, from the card's `answeredBy` (the
  *  daemon stamps it from the answerer's credential, like a post's
- *  `author`): "You" for the viewer; for the owner token, the owner's
- *  display name (the same name the owner's posts show), or "the owner"
+ *  `author`): "You" for the viewer; for the owner token, the daemon's
+ *  stamp (the linked username, as the owner's posts show), or "the owner"
  *  when none is set; else the login. Null when the card names nobody
  *  (still pending, an agent's own answer, or a card from before the
  *  field), so it renders as before. */

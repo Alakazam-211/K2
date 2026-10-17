@@ -38,6 +38,7 @@ import { homeRooms } from '@/stores/home-rooms'
 import type { HomeRow } from '@/stores/homes'
 import { grokBotIdFromAddress } from '@/lib/grokbots'
 import { closeGrokChat, useGrokBotsStore } from '@/stores/grokbots'
+import { applyWorkspaceSwitchFocus } from '@/lib/workspace-switch-focus'
 
 export { switchTargetForHost } from '@/lib/home-switch'
 
@@ -73,6 +74,10 @@ export function openHomeRow(row: HomeRow): OpenResult {
     // A remote room on screen gives way to the window's own room.
     homeRooms.showPrimary()
     useProjectsStore.getState().setActiveProject(ws.id)
+    // A click, Cmd+N or the auto-select on Home: the switch-focus setting
+    // applies as on Agents, also when the row was already the active one
+    // (setActiveProject's own apply may not run behind a leave guard).
+    applyWorkspaceSwitchFocus()
     return 'selected'
   }
 
@@ -94,6 +99,7 @@ export function openHomeRow(row: HomeRow): OpenResult {
     }
     usePageViewStore.getState().setPage('home')
     void homeRooms.open(row, parsed.host)
+    applyWorkspaceSwitchFocus()
     return 'room'
   }
 

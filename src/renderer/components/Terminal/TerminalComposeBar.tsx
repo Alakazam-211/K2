@@ -37,7 +37,7 @@ import {
 } from '@/lib/pick-compose-files'
 import { useToastStore } from '@/stores/toast'
 import { useSettingsStore } from '@/stores/settings'
-import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
+import { composeBarMayTakeFocus, isEffectivelyHidden } from '@/lib/workspace-switch-focus'
 import {
   type ComposeHistoryItem,
   type ComposeSlashCommand,
@@ -293,14 +293,14 @@ export function TerminalComposeBar({
 
   // Workspace-switch "Message agent" pref: take the caret when this bar
   // mounts (or its session changes) so we win the race against the
-  // terminal-grid remount. Terminal-mode users are left alone.
+  // terminal-grid remount. Terminal-mode users are left alone, and so are
+  // hidden tabs, open dialogs, a caret in another field, and a PTY bar
+  // when the Thread's composer is on screen in the same room (Thread first).
   useEffect(() => {
     if (useSettingsStore.getState().workspaceSwitchFocus !== 'composer') return
     const id = requestAnimationFrame(() => {
       const el = textareaRef.current
-      // Hidden tabs stay mounted (`display:none` + aria-hidden). Focusing
-      // those sends typing to the wrong session.
-      if (!el || isEffectivelyHidden(el)) return
+      if (!el || !composeBarMayTakeFocus(el)) return
       el.focus()
       restoreCaret()
     })

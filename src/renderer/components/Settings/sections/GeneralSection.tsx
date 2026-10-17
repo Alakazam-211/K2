@@ -40,7 +40,7 @@ import { jittered } from '@/lib/backoff'
 // `/cli/settings/{get,update}`; route them through the host-aware
 // daemon-settings client instead so the toggle works against any daemon.
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
-import { useSettingsStore, sanitizeOwnerDisplayName, OWNER_DISPLAY_NAME_MAX } from '@/stores/settings'
+import { useSettingsStore, sanitizeOwnerDisplayName, OWNER_DISPLAY_NAME_MAX, normalizeWorkspaceSwitchFocus } from '@/stores/settings'
 import { SettingDropdown } from '../controls/SettingControls'
 import { useUpdateStore } from '@/stores/update'
 import { checkForUpdate } from '@/hooks/useUpdateChecker'
@@ -548,7 +548,7 @@ function CompletionSoundRow(): React.JSX.Element {
 // When the user switches workspaces (icon rail / Active bar / workspace
 // tab), focus the terminal or the compose bar so they can type immediately.
 // Thin-client only (`k2.workspaceSwitchFocus` in localStorage) — not a
-// daemon setting. `"terminal"` is today's default.
+// daemon setting. `"terminal"` is the default; `"off"` moves nothing.
 function WorkspaceSwitchFocusRow(): React.JSX.Element {
   const value = useSettingsStore((s) => s.workspaceSwitchFocus)
   const setWorkspaceSwitchFocus = useSettingsStore((s) => s.setWorkspaceSwitchFocus)
@@ -563,8 +563,9 @@ function WorkspaceSwitchFocusRow(): React.JSX.Element {
           When moving between workspaces, auto-select
         </span>
         <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-          Switching workspaces — and ⌘1–⌘9 on a project board — focuses
-          the terminal or the agent message box so you can type immediately.
+          Switching workspaces, opening Home, and ⌘1–⌘9 focus the terminal
+          or the agent message box (the Thread's when it is open) so you can
+          type immediately.
         </p>
       </div>
       <SettingDropdown
@@ -572,8 +573,9 @@ function WorkspaceSwitchFocusRow(): React.JSX.Element {
         options={[
           { value: 'terminal', label: 'Terminal' },
           { value: 'composer', label: 'Message agent' },
+          { value: 'off', label: 'Nothing' },
         ]}
-        onChange={(v) => setWorkspaceSwitchFocus(v === 'composer' ? 'composer' : 'terminal')}
+        onChange={(v) => setWorkspaceSwitchFocus(normalizeWorkspaceSwitchFocus(v))}
       />
     </div>
   )

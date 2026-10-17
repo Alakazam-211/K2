@@ -12,8 +12,9 @@ describe('workspaceSwitchFocus localStorage', () => {
     localStorage.removeItem(LS_WORKSPACE_SWITCH_FOCUS)
   })
 
-  it('normalizes only composer; everything else is terminal', () => {
+  it('normalizes composer and off; everything else is terminal', () => {
     expect(normalizeWorkspaceSwitchFocus('composer')).toBe('composer')
+    expect(normalizeWorkspaceSwitchFocus('off')).toBe('off')
     expect(normalizeWorkspaceSwitchFocus('terminal')).toBe('terminal')
     expect(normalizeWorkspaceSwitchFocus('')).toBe('terminal')
     expect(normalizeWorkspaceSwitchFocus('nope')).toBe('terminal')
@@ -28,5 +29,10 @@ describe('workspaceSwitchFocus localStorage', () => {
     writeWorkspaceSwitchFocus('composer')
     expect(localStorage.getItem(LS_WORKSPACE_SWITCH_FOCUS)).toBe('composer')
     expect(readWorkspaceSwitchFocus()).toBe('composer')
+  })
+
+  it('round-trips off on this install', () => {
+    writeWorkspaceSwitchFocus('off')
+    expect(readWorkspaceSwitchFocus()).toBe('off')
   })
 })

@@ -22,6 +22,7 @@ vi.mock('@/stores/page-view', async () => {
 
 import {
   applyWorkspaceSwitchFocus,
+  composeBarMayTakeFocus,
   findVisibleComposeTextarea,
   focusThreadComposeSlotTextarea,
   tryFocusPreferredInputInDashboardPane,
@@ -197,6 +198,63 @@ describe('applyWorkspaceSwitchFocus', () => {
     document.body.appendChild(slot)
 
     expect(findVisibleComposeTextarea()).toBe(ptyTa)
+  })
+
+  it('off moves nothing, not even to the terminal', () => {
+    const { textarea, terminal } = mountPair({ compose: true })
+    workspaceSwitchFocus = 'off'
+
+    applyWorkspaceSwitchFocus()
+
+    expect(document.activeElement).toBe(document.body)
+    expect(document.activeElement).not.toBe(textarea)
+    expect(document.activeElement).not.toBe(terminal)
+  })
+
+  it('does not steal focus from an open dialog', () => {
+    const { textarea } = mountPair({ compose: true })
+    workspaceSwitchFocus = 'composer'
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    const ok = document.createElement('button')
+    dialog.appendChild(ok)
+    document.body.appendChild(dialog)
+    ok.focus()
+
+    applyWorkspaceSwitchFocus()
+
+    expect(document.activeElement).toBe(ok)
+    expect(document.activeElement).not.toBe(textarea)
+  })
+
+  it('a hidden (closed) dialog does not block', () => {
+    const { textarea } = mountPair({ compose: true })
+    workspaceSwitchFocus = 'composer'
+    const dialog = document.createElement('div')
+    dialog.setAttribute('aria-modal', 'true')
+    dialog.style.display = 'none'
+    document.body.appendChild(dialog)
+
+    applyWorkspaceSwitchFocus()
+
+    expect(document.activeElement).toBe(textarea)
+  })
+
+  it('does not steal from a field the user is typing in, but moves off a compose bar', () => {
+    const { textarea } = mountPair({ compose: true })
+    workspaceSwitchFocus = 'terminal'
+    const field = document.createElement('input')
+    document.body.appendChild(field)
+    field.focus()
+
+    applyWorkspaceSwitchFocus()
+    expect(document.activeElement).toBe(field)
+
+    // The caret in a compose bar (the room we are leaving) is ours to move.
+    textarea!.focus()
+    applyWorkspaceSwitchFocus()
+    expect(document.activeElement).not.toBe(textarea)
+    expect(document.activeElement?.hasAttribute('data-terminal-container')).toBe(true)
   })
 
   it('is a no-op when Settings is open', () => {
@@ -399,5 +457,61 @@ describe('focusThreadComposeSlotTextarea', () => {
     expect(ok).toBe(false)
     expect(document.activeElement).toBe(btn)
     expect(document.activeElement).not.toBe(ta)
+  })
+})
+
+describe('composeBarMayTakeFocus (compose-bar mount)', () => {
+  function room(thread: { hidden?: boolean } | null): { pty: HTMLTextAreaElement; thread: HTMLTextAreaElement | null } {
+    document.body.innerHTML = ''
+    const wrap = document.createElement('div')
+    wrap.setAttribute('data-terminal-pane-wrapper', '')
+    const ptyBar = document.createElement('div')
+    ptyBar.setAttribute('data-compose-bar', '')
+    const pty = document.createElement('textarea')
+    ptyBar.appendChild(pty)
+    wrap.appendChild(ptyBar)
+    let threadTa: HTMLTextAreaElement | null = null
+    if (thread) {
+      const slot = document.createElement('div')
+      slot.setAttribute('data-testid', 'agent-session-thread-compose-slot')
+      if (thread.hidden) slot.style.display = 'none'
+      const bar = document.createElement('div')
+      bar.setAttribute('data-compose-bar', '')
+      threadTa = document.createElement('textarea')
+      bar.appendChild(threadTa)
+      slot.appendChild(bar)
+      wrap.appendChild(slot)
+    }
+    document.body.appendChild(wrap)
+    return { pty, thread: threadTa }
+  }
+
+  beforeEach(() => {
+    workspaceSwitchFocus = 'composer'
+    settingsOpen = false
+  })
+
+  it('Thread first: the PTY bar yields when the Thread composer is on screen', () => {
+    const { pty, thread } = room({})
+    expect(composeBarMayTakeFocus(pty)).toBe(false)
+    expect(composeBarMayTakeFocus(thread!)).toBe(true)
+  })
+
+  it('the PTY bar takes it when the Thread is closed or hidden', () => {
+    expect(composeBarMayTakeFocus(room(null).pty)).toBe(true)
+    expect(composeBarMayTakeFocus(room({ hidden: true }).pty)).toBe(true)
+  })
+
+  it('never with Terminal or off, nor over a dialog', () => {
+    const { thread } = room({})
+    workspaceSwitchFocus = 'terminal'
+    expect(composeBarMayTakeFocus(thread!)).toBe(false)
+    workspaceSwitchFocus = 'off'
+    expect(composeBarMayTakeFocus(thread!)).toBe(false)
+    workspaceSwitchFocus = 'composer'
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'alertdialog')
+    document.body.appendChild(dialog)
+    expect(composeBarMayTakeFocus(thread!)).toBe(false)
   })
 })

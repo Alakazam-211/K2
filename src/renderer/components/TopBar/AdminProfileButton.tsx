@@ -444,7 +444,12 @@ function LoadedProfile({
             </SettingRow>
           ) : null}
           <SettingRow columns label="Colour" testId="admin-profile-color">
-            <PersonColorPicker scope={scope} onView={setColorView} />
+            <PersonColorPicker
+              scope={scope}
+              onView={setColorView}
+              previewName={name}
+              previewRole={(role ?? 'member') as PresenceRole}
+            />
           </SettingRow>
           {ownerEdits && choices ? (
             <SettingRow columns label="Your account" testId="admin-profile-your-account">

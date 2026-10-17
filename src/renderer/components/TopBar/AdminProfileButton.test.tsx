@@ -89,7 +89,7 @@ import { __resetZenAvailableForTests } from '@/lib/zen/zen-platform'
 import { useSettingsStore } from '@/stores/settings'
 import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
 import { PASSWORD_CHANGED_NOTICE, ownerPasswordChangedNotice } from './AdminProfileButton'
-import { COLOR_NEEDS_NEWER_SERVER } from '@/components/Presence/PersonColorPicker'
+import { COLOR_NEEDS_NEWER_SERVER, HEX_FORMAT_HINT } from '@/components/Presence/PersonColorPicker'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -118,11 +118,11 @@ function ownerRoutes(): Record<string, unknown> {
     users: USERS,
     'users/audit': AUDIT,
     'tunnel/status': { running: true, public_url: 'https://rosson.k2.dev', frpc_installed: true },
-    'people/color': colorView('owner', null, '#db2777'),
+    'people/color': colorView('owner', null, '#8c62c4'),
   }
 }
 
-const PALETTE = ['#2563eb', '#7c3aed', '#0d9488', '#db2777', '#4f46e5', '#0891b2', '#64748b', '#c026d3']
+const PALETTE = ['#3a9e96', '#3a87a8', '#6a6fc8', '#8c62c4', '#b25cb0', '#c45a86', '#9b7a95', '#64778f']
 
 function colorView(person: string, chosen: string | null, color: string): Record<string, unknown> {
   return { ok: true, palette: PALETTE, person, color, chosen, colors: { [person]: color } }
@@ -186,7 +186,7 @@ function remoteHost(remember = true): Record<string, unknown> {
 function connectAdmin(remember = true): void {
   h.scope = { label: 'Rosson’s Mac', isRemote: true, host: remoteHost(remember) }
   h.routes['auth/whoami'] = { owner: false, username: 'rosson-phone', role: 'admin', mustChangePassword: false }
-  h.routes['people/color'] = colorView('owner', null, '#db2777')
+  h.routes['people/color'] = colorView('owner', null, '#8c62c4')
   delete h.routes['users/audit']
 }
 
@@ -641,23 +641,71 @@ describe('the Admin profile modal: change password (Connect logins only)', () =>
 })
 
 describe('the Admin profile modal: colour', () => {
-  it('shows Automatic + the 8 swatches; a pick posts people/color and marks it', async () => {
-    h.postRoutes['people/color'] = (body) => colorView('owner', body.color as string | null, (body.color as string) ?? '#db2777')
+  function hexField(): HTMLInputElement {
+    return screen.getByTestId('person-color-hex') as HTMLInputElement
+  }
+
+  it('Automatic + a colour well + a hex field + a preview chip; a typed hex posts people/color lowercased', async () => {
+    h.postRoutes['people/color'] = (body) => colorView('owner', body.color as string | null, (body.color as string) ?? '#8c62c4')
     render(<AdminProfileButton />)
     await openLoaded()
     await screen.findByTestId('person-color-picker')
     expect(screen.getByTestId('person-color-auto').getAttribute('aria-pressed')).toBe('true')
-    for (const c of PALETTE) expect(screen.getByTestId(`person-color-${c}`)).toBeTruthy()
-    // The owner person: the linked logins share it.
+    expect((screen.getByTestId('person-color-well') as HTMLInputElement).type).toBe('color')
+    // No preset swatches any more.
+    expect(document.querySelector('[data-testid="person-color-#3a9e96"]')).toBeNull()
+    const preview = screen.getByTestId('person-color-picker').querySelector('[data-presence-chip]')
+    if (!preview) throw new Error('no preview chip')
     expect(text('admin-profile-color')).toContain('Your linked logins show this colour too.')
 
-    act(() => void fireEvent.click(screen.getByTestId('person-color-#0d9488')))
-    await waitFor(() => expect(screen.getByTestId('person-color-#0d9488').getAttribute('aria-pressed')).toBe('true'))
-    expect(screen.getByTestId('person-color-auto').getAttribute('aria-pressed')).toBe('false')
-    expect(h.posts).toEqual([{ route: 'people/color', body: { color: '#0d9488' } }])
+    act(() => void fireEvent.change(hexField(), { target: { value: '#12AB9F' } }))
+    act(() => void fireEvent.keyDown(hexField(), { key: 'Enter' }))
+    await waitFor(() => expect(h.posts).toEqual([{ route: 'people/color', body: { color: '#12ab9f' } }]))
+    await waitFor(() => expect(screen.getByTestId('person-color-auto').getAttribute('aria-pressed')).toBe('false'))
+    expect(preview.getAttribute('data-person-color')).toBe('#12ab9f')
+    // The header chip follows too.
+    expect(screen.getByTestId('admin-profile-header').querySelector('[data-presence-chip]')?.getAttribute('data-person-color')).toBe('#12ab9f')
 
     act(() => void fireEvent.click(screen.getByTestId('person-color-auto')))
     await waitFor(() => expect(h.posts[1]).toEqual({ route: 'people/color', body: { color: null } }))
+  })
+
+  it('the colour well saves after the drag settles', async () => {
+    h.postRoutes['people/color'] = (body) => colorView('owner', body.color as string | null, body.color as string)
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await screen.findByTestId('person-color-picker')
+    act(() => void fireEvent.change(screen.getByTestId('person-color-well'), { target: { value: '#204060' } }))
+    act(() => void fireEvent.change(screen.getByTestId('person-color-well'), { target: { value: '#405060' } }))
+    await waitFor(() => expect(h.posts).toEqual([{ route: 'people/color', body: { color: '#405060' } }]), { timeout: 2000 })
+  })
+
+  it('a bad hex is refused locally with the format hint and never posted', async () => {
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await screen.findByTestId('person-color-picker')
+    for (const bad of ['#abc', 'red', '12ab9f', '#12ab9', '#gg0000']) {
+      act(() => void fireEvent.change(hexField(), { target: { value: bad } }))
+      expect(text('person-color-hex-hint')).toBe(HEX_FORMAT_HINT)
+      expect(hexField().getAttribute('aria-invalid')).toBe('true')
+      act(() => void fireEvent.keyDown(hexField(), { key: 'Enter' }))
+      act(() => void fireEvent.blur(hexField()))
+    }
+    expect(h.posts).toEqual([])
+  })
+
+  it('a refused colour rolls back and says why', async () => {
+    h.routes['people/color'] = colorView('owner', '#3a9e96', '#3a9e96')
+    h.postRoutes['people/color'] = () => {
+      throw new Error('color must be #RRGGBB')
+    }
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await screen.findByTestId('person-color-picker')
+    act(() => void fireEvent.change(hexField(), { target: { value: '#ffffff' } }))
+    act(() => void fireEvent.keyDown(hexField(), { key: 'Enter' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('color must be #RRGGBB')
+    expect(hexField().value).toBe('#3a9e96')
   })
 
   it('a Connect member picks their own colour', async () => {
@@ -665,18 +713,19 @@ describe('the Admin profile modal: colour', () => {
     h.routes = {
       'auth/whoami': { owner: false, username: 'sam', role: 'member', mustChangePassword: false },
       'tunnel/status': { running: false, frpc_installed: true },
-      'people/color': colorView('sam', '#64748b', '#64748b'),
+      'people/color': colorView('sam', '#64778f', '#64778f'),
     }
     h.postRoutes['people/color'] = (body) => colorView('sam', body.color as string, body.color as string)
     render(<AdminProfileButton />)
     await openLoaded()
-    await waitFor(() => expect(screen.getByTestId('person-color-#64748b').getAttribute('aria-pressed')).toBe('true'))
+    await waitFor(() => expect(hexField().value).toBe('#64778f'))
     expect(text('admin-profile-color')).not.toContain('linked logins')
-    act(() => void fireEvent.click(screen.getByTestId('person-color-#c026d3')))
+    act(() => void fireEvent.change(hexField(), { target: { value: '#c026d3' } }))
+    act(() => void fireEvent.blur(hexField()))
     await waitFor(() => expect(h.posts).toEqual([{ route: 'people/color', body: { color: '#c026d3' } }]))
   })
 
-  it('an older daemon without the route shows the swatches disabled with "Needs a newer K2 server", never hidden', async () => {
+  it('an older daemon without the route shows the controls disabled with "Needs a newer K2 server", never hidden', async () => {
     h.routes['people/color'] = new Error('route not found')
     render(<AdminProfileButton />)
     await openLoaded()
@@ -684,10 +733,11 @@ describe('the Admin profile modal: colour', () => {
     expect(text('admin-profile-color')).toContain('Colour')
     expect(text('person-color-needs-newer')).toBe(COLOR_NEEDS_NEWER_SERVER)
     expect(COLOR_NEEDS_NEWER_SERVER).toBe('Needs a newer K2 server.')
-    const swatches = [screen.getByTestId('person-color-auto'), ...PALETTE.map((c) => screen.getByTestId(`person-color-${c}`))]
-    for (const s of swatches) expect((s as HTMLButtonElement).disabled).toBe(true)
-    act(() => void fireEvent.click(screen.getByTestId('person-color-#0d9488')))
+    for (const id of ['person-color-auto', 'person-color-well', 'person-color-hex']) {
+      expect((screen.getByTestId(id) as HTMLInputElement).disabled).toBe(true)
+    }
     expect(h.posts).toEqual([])
     expect(text('admin-profile-username')).toBe('rosson-phone')
   })
 })
+

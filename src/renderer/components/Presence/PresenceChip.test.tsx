@@ -6,7 +6,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
-import { CHAMFER_CLIP, PERSON_COLORS, PresenceChip, PresenceMoreChip, chipInitials, personColor, resolvePersonColor } from './PresenceChip'
+import { CHAMFER_CLIP, CHIP_INK_DARK, CHIP_INK_LIGHT, PERSON_COLORS, PresenceChip, PresenceMoreChip, chipInitials, chipInk, personColor, resolvePersonColor } from './PresenceChip'
 import { PresenceAvatarCluster } from './PresenceWorkspaceAvatars'
 
 afterEach(cleanup)
@@ -158,17 +158,48 @@ describe('server-provided person colour', () => {
     expect(fillColor(container)).toBe('rgb(13, 148, 136)')
   })
 
-  it('an older daemon (no colour) still renders with the hash; owner stays pink', () => {
+  it('an older daemon (no colour) still renders with the hash; owner is violet', () => {
     const { container } = render(<PresenceChip name="owner" role="owner" />)
     expect(container.querySelector('[data-presence-chip]')?.getAttribute('data-person-color')).toBe(personColor('owner'))
-    expect(personColor('owner')).toBe('#db2777')
-    expect(fillColor(container)).toBe('rgb(219, 39, 119)')
+    expect(personColor('owner')).toBe('#8c62c4')
+    expect(fillColor(container)).toBe('rgb(140, 98, 196)')
   })
 
-  it('ignores a value outside the palette', () => {
-    expect(resolvePersonColor('anna', '#ff0000')).toBe(personColor('anna'))
-    expect(resolvePersonColor('anna', '#0D9488')).toBe('#0d9488')
+  it('the Automatic palette is the refreshed eight, matching the daemon order', () => {
+    expect([...PERSON_COLORS]).toEqual(['#3a9e96', '#3a87a8', '#6a6fc8', '#8c62c4', '#b25cb0', '#c45a86', '#9b7a95', '#64778f'])
+    // The daemon's hash pins: "" → 0, "a" → 1, "owner" → 3.
+    expect(personColor('')).toBe('#3a9e96')
+    expect(personColor('a')).toBe('#3a87a8')
+  })
+
+  it('accepts any #rrggbb (lowercased); anything else falls back to the hash', () => {
+    expect(resolvePersonColor('anna', '#FF0000')).toBe('#ff0000')
+    expect(resolvePersonColor('anna', ' #12ab9f ')).toBe('#12ab9f')
+    for (const bad of ['#abc', 'red', 'ff0000', '#ff00000', '#gg0000', '']) {
+      expect(resolvePersonColor('anna', bad)).toBe(personColor('anna'))
+    }
     expect(resolvePersonColor('anna', null)).toBe(personColor('anna'))
+  })
+
+  it('initials are white on dark fills and near-black on light ones', () => {
+    expect(chipInk('#000000')).toBe(CHIP_INK_LIGHT)
+    expect(chipInk('#3a87a8')).toBe(CHIP_INK_LIGHT)
+    expect(chipInk('#ffffff')).toBe(CHIP_INK_DARK)
+    expect(chipInk('#ffe066')).toBe(CHIP_INK_DARK)
+    const { container } = render(<PresenceChip name="anna" role="member" color="#fafafa" />)
+    const fill = [...container.querySelectorAll('[data-presence-chip] > span')].pop() as HTMLElement
+    expect(fill.style.color).toBe('rgb(17, 20, 24)')
+  })
+
+  it('a real name drives the initials and the tooltip', () => {
+    const names = { firstName: 'Rosson', lastName: 'Long' }
+    expect(chipInitials('z3thon', 20, names)).toBe('RL')
+    expect(chipInitials('z3thon', 14, names)).toBe('R')
+    expect(chipInitials('z3thon', 20, { firstName: 'Cher' })).toBe('C')
+    expect(chipInitials('z3thon', 20, null)).toBe('Z')
+    const { container } = render(<PresenceChip name="z3thon" role="admin" names={names} />)
+    expect(container.querySelector('[data-presence-chip]')?.getAttribute('title')).toBe('Rosson Long (z3thon) · admin')
+    expect(container.querySelector('[data-presence-chip]')?.textContent).toBe('RL')
   })
 
   it('roster rows and the Home cluster pass the colour through', () => {

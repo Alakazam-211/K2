@@ -1,6 +1,9 @@
 //! `k2 calendar` on a LINKED Microsoft 365 / Exchange Online inbox, over
 //! Microsoft Graph (prd-app-mail-calendar-surfaces-v1 §3.1/§3.4, slice
-//! MCS3).
+//! MCS3) — one [`CalendarProvider`] behind the MCS4 seam
+//! ([`crate::mail::calendar_provider`], whose provider-neutral verbs own
+//! validation, the draft guard, time math and the wait loop; this module
+//! fetches, writes and shapes).
 //!
 //! [`crate::mail::calendar::resolve_target`] routes here only AFTER the
 //! access gate passed (CAL19 masking holds), and only for a Microsoft

@@ -431,6 +431,27 @@ export interface Inbox {
   host?: string | null
   /** Linked only — the TLS mode. */
   tls?: string | null
+  /** MCS1: what the inbox can do (absent on older daemons). */
+  capabilities?: InboxCapabilities
+}
+
+/** One capability that is off, why, and the fix (MCS1 `missing[]`). */
+export interface MissingCapability {
+  /** `mail.send`, `calendar.read`, `calendar.write`, … */
+  cap: string
+  /** `level` | `scope_not_granted` | `owner_disabled` |
+   *  `backend_unsupported` | `not_built` */
+  reason: string
+  fix: string
+}
+
+/** GET /cli/mail/capabilities (and every `inboxes` row): what one inbox
+ *  can do. Only the fields the UI reads are typed. */
+export interface InboxCapabilities {
+  source: 'hosted' | 'imap' | 'google' | 'microsoft'
+  mail?: Record<string, boolean>
+  calendar?: Record<string, boolean | string>
+  missing?: MissingCapability[]
 }
 
 /** GET /cli/mail/inboxes — the unified catalog (hosted + linked). Access
@@ -602,6 +623,17 @@ export async function linkOauthStart(args: {
   clientCapture?: boolean
   /** `http://127.0.0.1:<port>/cb` from `oauth_loopback_bind`. */
   redirectUri?: string
+}): Promise<OauthStartResult> {
+  return daemonCliPost(primaryScope(), 'mail/link/oauth/start', args)
+}
+
+/** POST /cli/mail/link/oauth/start `{inbox, features}` — MCS1's in-place
+ *  re-consent of an EXISTING OAuth link for more features (same row,
+ *  grants and ids). Microsoft answers a device flow; poll
+ *  {@link linkOauthStatus} like a new link. Owner-gated. */
+export async function linkOauthUpgrade(args: {
+  inbox: string
+  features: 'calendar' | 'mail,calendar'
 }): Promise<OauthStartResult> {
   return daemonCliPost(primaryScope(), 'mail/link/oauth/start', args)
 }

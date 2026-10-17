@@ -44,6 +44,7 @@ import {
   linkOauthComplete,
   linkOauthStart,
   linkOauthStatus,
+  linkOauthUpgrade,
   mailErrorInfo,
   mailErrorMessage,
   removeLinkedInbox,
@@ -1301,17 +1302,194 @@ function AddInboxForm({
   )
 }
 
+// ── Add calendar (MCS3) ──────────────────────────────────────────────────
+//
+// A Microsoft link consented for mail only can't do `k2 calendar`; its
+// capabilities name `scope_not_granted` on the calendar caps. "Add calendar"
+// re-consents the SAME link for calendars (the device-code upgrade path,
+// `k2 mail link upgrade <address> --features calendar`) — grants, levels
+// and ids stay. Google calendars aren't built yet, so Google rows get no
+// button.
+
+/** True when this inbox is a Microsoft link whose calendar caps are off
+ *  only because the consent didn't include calendars. */
+export function needsCalendarConsent(inbox: Pick<Inbox, 'capabilities'>): boolean {
+  const c = inbox.capabilities
+  if (!c || c.source !== 'microsoft') return false
+  return (c.missing ?? []).some((m) => m.cap.startsWith('calendar.') && m.reason === 'scope_not_granted')
+}
+
+type UpgradeFlow = { linkId: string; userCode: string; verificationUrl: string; deadlineMs: number }
+
+export function AddCalendarAccess({
+  inbox,
+  canMutate,
+  onUpgraded,
+  pollMs = OAUTH_POLL_MS,
+}: {
+  inbox: Inbox
+  canMutate: boolean
+  /** Re-read the inbox list (its capabilities change). */
+  onUpgraded: () => void
+  pollMs?: number
+}): React.JSX.Element | null {
+  const [busy, setBusy] = useState(false)
+  const [flow, setFlow] = useState<UpgradeFlow | null>(null)
+  const [failure, setFailure] = useState<{ text: string; adminConsentUrl?: string } | null>(null)
+  const onUpgradedRef = useRef(onUpgraded)
+  onUpgradedRef.current = onUpgraded
+
+  const start = useCallback(async (): Promise<void> => {
+    setBusy(true)
+    setFailure(null)
+    try {
+      const res = await linkOauthUpgrade({ inbox: inbox.address, features: 'calendar' })
+      if (res.flow === 'device') {
+        const bound = Number.isFinite(res.expiresIn) && res.expiresIn > 0 ? res.expiresIn * 1000 : OAUTH_MAX_MS
+        setFlow({
+          linkId: res.linkId,
+          userCode: res.userCode,
+          verificationUrl: res.verificationUrl,
+          deadlineMs: Date.now() + Math.min(bound, OAUTH_MAX_MS),
+        })
+      } else {
+        setFailure({ text: res.hint ?? 'The daemon did not start a Microsoft device sign-in.' })
+      }
+    } catch (e) {
+      setFailure({ text: mailErrorMessage(e) })
+    } finally {
+      setBusy(false)
+    }
+  }, [inbox.address])
+
+  useEffect(() => {
+    if (!flow) return
+    let cancelled = false
+    const tick = async (): Promise<void> => {
+      if (cancelled) return
+      if (Date.now() > flow.deadlineMs) {
+        setFailure({ text: 'The request expired before it was approved.' })
+        setFlow(null)
+        return
+      }
+      try {
+        const st = await linkOauthStatus(flow.linkId)
+        if (cancelled) return
+        if (st.state === 'connected') {
+          setFlow(null)
+          useToastStore.getState().addToast(`Calendar access added for ${inbox.address}`, 'success')
+          onUpgradedRef.current()
+        } else if (st.state === 'denied' || st.state === 'expired' || st.state === 'error') {
+          const lead =
+            st.state === 'denied'
+              ? 'Access was denied.'
+              : st.state === 'expired'
+                ? 'The request expired before it was approved.'
+                : st.code === 'account_mismatch'
+                  ? 'A different account signed in.'
+                  : st.code === 'admin_consent_required'
+                    ? 'Your Microsoft 365 admin needs to approve calendar access first.'
+                    : 'Something went wrong adding calendar access.'
+          setFailure({ text: st.hint ? `${lead} ${st.hint}` : lead, adminConsentUrl: st.adminConsentUrl })
+          setFlow(null)
+        }
+      } catch (e) {
+        if (cancelled) return
+        setFailure({ text: mailErrorMessage(e) })
+        setFlow(null)
+      }
+    }
+    const id = window.setInterval(() => void tick(), pollMs)
+    void tick()
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [flow, inbox.address, pollMs])
+
+  if (!needsCalendarConsent(inbox)) return null
+  return (
+    <div className="space-y-2" data-testid="add-calendar">
+      <SectionTitle>Calendar</SectionTitle>
+      <div className="border border-[var(--color-border)] px-3 py-2 space-y-2">
+        <div className="flex items-center gap-3">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs text-[var(--color-text-primary)]">Calendar isn&rsquo;t connected</p>
+            <p className="text-[10px] text-[var(--color-text-muted)]">
+              This account was linked for mail only. Add calendar access so agents with a grant can
+              use <span className="font-mono">k2 calendar</span> — same inbox, same access.
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="add-calendar-button"
+            disabled={!canMutate || busy || flow !== null}
+            onClick={() => void start()}
+            title={canMutate ? 'Sign in again with a device code to add calendar access' : 'Not available in viewer mode'}
+            className="px-2.5 py-1 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+          >
+            {busy ? 'Starting…' : 'Add calendar'}
+          </button>
+        </div>
+        {flow && (
+          <div className="space-y-2" data-testid="add-calendar-device">
+            <p className="text-[11px] text-[var(--color-text-secondary)]">
+              Go to{' '}
+              <button
+                type="button"
+                onClick={() => void openUrl(flow.verificationUrl)}
+                className="font-mono text-[var(--color-accent)] hover:underline cursor-pointer"
+              >
+                {flow.verificationUrl}
+              </button>{' '}
+              and enter this code, signed in as <span className="font-mono">{inbox.address}</span>:
+            </p>
+            <div className="flex items-center gap-2">
+              <span className="px-2 py-1 text-sm font-mono tracking-widest bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] select-all">
+                {flow.userCode}
+              </span>
+              <CopyButton text={flow.userCode} title="Copy code" />
+            </div>
+            <p className="text-[10px] text-[var(--color-text-muted)]">
+              Waiting for approval… this updates automatically.
+            </p>
+          </div>
+        )}
+        {failure && (
+          <div className="space-y-1">
+            <p className="text-[11px] text-[var(--color-status-error-soft)]" data-testid="add-calendar-error">
+              {failure.text}
+            </p>
+            {failure.adminConsentUrl && (
+              <button
+                type="button"
+                onClick={() => void openUrl(failure.adminConsentUrl as string)}
+                className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+              >
+                Open the admin consent page
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Inbox detail ─────────────────────────────────────────────────────────
 
 function InboxDetail({
   inbox,
   canMutate,
   onRemoved,
+  onChanged,
   patchInbox,
 }: {
   inbox: Inbox
   canMutate: boolean
   onRemoved: () => void
+  /** Re-read the inbox list (capabilities changed server-side). */
+  onChanged: () => void
   /** Optimistically patch this inbox's row in the parent list. */
   patchInbox: (address: string, patch: (i: Inbox) => Inbox) => void
 }): React.JSX.Element {
@@ -1376,6 +1554,8 @@ function InboxDetail({
           {detailRow('Status', inbox.status)}
         </div>
       </div>
+
+      <AddCalendarAccess inbox={inbox} canMutate={canMutate} onUpgraded={onChanged} />
 
       <InboxAccessPanel inbox={inbox} canMutate={canMutate} patchInbox={patchInbox} />
 
@@ -1574,6 +1754,7 @@ export function EmailLinkSection(): React.JSX.Element {
               inbox={selectedInbox}
               canMutate={canMutate}
               patchInbox={patchInbox}
+              onChanged={bump}
               onRemoved={() => {
                 setSelection({ kind: 'add' })
                 bump()

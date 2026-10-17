@@ -181,15 +181,14 @@ pub fn create_menu(handle: &AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error>
 pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
     let id = event.id().as_ref();
     match id {
+        // ⌘, : the accelerator consumes the keystroke, so this event is the
+        // only way Settings opens from the keyboard. Sent from the app
+        // handle, never through a window lookup (see `main_webview`).
         "settings" => {
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.emit("menu:open-settings", ());
-            }
+            let _ = app.emit("menu:open-settings", ());
         }
         "check-for-updates" => {
-            if let Some(win) = app.get_webview_window("main") {
-                let _ = win.emit("menu:check-for-updates", ());
-            }
+            let _ = app.emit("menu:check-for-updates", ());
         }
         "app-zoom-in" | "app-zoom-out" | "app-zoom-reset" => {
             // Zoom via menu items (keyboard zoom handled in App.tsx)
@@ -204,7 +203,7 @@ pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
             };
             ZOOM_LEVEL.store(next, Ordering::Relaxed);
 
-            if let Some(win) = app.get_webview_window("main") {
+            if let Some(win) = main_webview(app) {
                 let scale = next as f64 / 100.0;
                 let js = format!(
                     "window.__k2soZoom={scale};if(typeof window.__k2ApplyPageTitle==='function')window.__k2ApplyPageTitle();"
@@ -352,23 +351,45 @@ pub fn open_new_window(app: &AppHandle) -> Result<(), tauri::Error> {
     Ok(())
 }
 
+/// The main window's own webview. Never `get_webview_window("main")` or
+/// `webview_windows()` in the menu paths: tauri counts a window as a
+/// "webview window" only while it holds one webview, so once a Browser or
+/// Design tab adds its child webview to the window both return nothing and
+/// every menu event (⌘, Settings among them) was silently dropped.
+#[cfg(all(target_os = "macos", feature = "browser-pane"))]
+fn main_webview(app: &AppHandle) -> Option<tauri::Webview> {
+    app.get_webview("main")
+}
+
+/// Without `browser-pane` there are no child webviews.
+#[cfg(all(target_os = "macos", not(feature = "browser-pane")))]
+fn main_webview(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+    app.get_webview_window("main")
+}
+
+/// The focused window's label, counting a window that hosts a Browser or
+/// Design child webview (see `main_webview`).
+#[cfg(target_os = "macos")]
+fn focused_window_label(app: &AppHandle) -> Option<String> {
+    #[cfg(feature = "browser-pane")]
+    let windows = app.windows();
+    #[cfg(not(feature = "browser-pane"))]
+    let windows = app.webview_windows();
+    windows
+        .into_iter()
+        .find(|(_, w)| w.is_focused().unwrap_or(false))
+        .map(|(label, _)| label)
+}
+
 #[cfg(target_os = "macos")]
 fn emit_to_focused(app: &AppHandle, event: &str) {
-    // Emit to the FOCUSED window only. The old "emit to all windows"
-    // loop meant every extra webview (Focus windows, project windows)
-    // ALSO ran the action — a second amplifier in the Cmd+Shift+T
-    // multi-spawn bug (one menu event = one spawn PER WINDOW). A menu
-    // action is user-initiated, so a focused window exists in practice;
-    // if none reports focused (edge: menu clicked during a focus
-    // transition), fall back to "main" rather than all.
-    let focused = app
-        .webview_windows()
-        .into_iter()
-        .find(|(_, w)| w.is_focused().unwrap_or(false));
-    if let Some((_, win)) = focused {
-        let _ = win.emit(event, ());
-    } else if let Some(win) = app.webview_windows().get("main") {
-        let _ = win.emit(event, ());
+    // One emit per menu action (the old "emit from every window" loop ran
+    // the action once PER WINDOW, an amplifier in the Cmd+Shift+T
+    // multi-spawn bug). `Emitter::emit` reaches every untargeted listener
+    // whichever handle sends it, so the app handle sends it once a window
+    // exists (the focused one, else "main").
+    if focused_window_label(app).is_some() || main_webview(app).is_some() {
+        let _ = app.emit(event, ());
     }
 }
 
@@ -378,12 +399,7 @@ fn emit_to_focused(app: &AppHandle, event: &str) {
 /// The renderer listens with target `AnyLabel { label: <its own label> }`.
 #[cfg(target_os = "macos")]
 fn emit_to_focused_window_only(app: &AppHandle, event: &str) {
-    let label = app
-        .webview_windows()
-        .into_iter()
-        .find(|(_, w)| w.is_focused().unwrap_or(false))
-        .map(|(label, _)| label)
-        .unwrap_or_else(|| "main".to_string());
+    let label = focused_window_label(app).unwrap_or_else(|| "main".to_string());
     let _ = app.emit_to(EventTarget::AnyLabel { label }, event, ());
 }
 

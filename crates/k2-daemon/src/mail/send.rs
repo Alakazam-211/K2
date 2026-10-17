@@ -1516,7 +1516,10 @@ mod tests {
         let m = msg();
         let err = gate_and_dispatch(&store, Some(&submit), Gate::Off, &req(&m), 1_000_000)
             .expect_err("gated");
-        assert!(matches!(&err, SendError::Gated(h) if h.contains("Settings → Email")), "{err:?}");
+        assert!(
+            matches!(&err, SendError::Gated(h) if h.contains("`k2 mail sending <workspace> on`")),
+            "{err:?}"
+        );
         assert!(store.inserts.lock().unwrap().is_empty(), "no audit row in off mode");
         assert_eq!(submit.calls.load(Ordering::SeqCst), 0, "NOTHING submits");
     }

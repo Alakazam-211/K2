@@ -240,9 +240,9 @@ mod tests {
         let names: Vec<(&str, &str, &str)> =
             v.candidates.iter().map(|c| (c.username.as_str(), c.role.as_str(), c.display_name.as_str())).collect();
         assert_eq!(names, vec![("julie", "owner", "julie"), ("zed", "admin", "Zed")]);
-        // Each row carries its effective colour: the sole Owner-role login
-        // keys to the owner person (the owner's colour); others their hash.
-        assert_eq!(v.candidates[0].color, "#123456");
+        // Each row carries its own effective colour: nothing is linked, so
+        // even the sole Owner-role login is just itself (not the owner's).
+        assert_eq!(v.candidates[0].color, crate::person_color::hash_color("julie"));
         assert_eq!(v.candidates[1].color, crate::person_color::hash_color("zed"));
     }
 

@@ -284,7 +284,7 @@ fn own_view(conn: &Connection, people: &People, person: &str) -> CliResponse {
         Err(e) => return error("500 Internal Server Error", "store", e),
     };
     // The owner's Connect logins that ARE the `owner` person: the
-    // owner-linked accounts plus a sole Owner-role login (the UI's "your
+    // owner-linked accounts (the UI's "your
     // phone signs in as …" hint). Empty for everyone else.
     let aliases: Vec<String> = if person == OWNER { people.owner_aliases() } else { Vec::new() };
     let bell = prefs.bell(person);
@@ -618,7 +618,7 @@ fn people_color_view(people: &People, actor: &Actor) -> CliResponse {
 /// `POST /cli/people/color {"color": "#2563eb" | null, "user"?: "<login>"}`.
 ///
 /// - No `user`: the caller's own person. For the owner token, an
-///   owner-linked login or the sole Owner-role login (person key `owner`)
+///   owner-linked login (person key `owner`)
 ///   that is the `ownerColor` setting, which the linked logins show too;
 ///   for anyone else, their own `connect-users.json` row.
 /// - `user`: someone else (an admin override). Naming yourself is the
@@ -929,7 +929,7 @@ mod tests {
         add("rosson", Role::Owner);
         let v = ok(get(PREFS_PATH, &Actor::owner_token()));
         assert_eq!(v["principal"], "owner");
-        assert_eq!(v["aliases"], serde_json::json!(["rosson"]), "the sole Owner-role login maps to owner");
+        assert_eq!(v["aliases"], serde_json::json!([]), "an unlinked Owner-role login is not the owner (0.46.0)");
         assert_eq!(v["server"], serde_json::json!({ "enabled": true, "source": "fallback" }));
         assert_eq!(v["default"], true);
         assert_eq!(v["devices"], 0);
@@ -939,9 +939,14 @@ mod tests {
         assert_eq!(a["source"], "fallback");
         assert_eq!(a["name"], "alpha");
         assert!(a.get("updatedBy").is_none(), "updatedBy only for source=user");
-        // The phone login is the same person.
+        // Unlinked, the Owner-role phone login is its own person (0.46.0)…
+        let phone = ok(get(PREFS_PATH, &Actor::login("rosson")));
+        assert_eq!(phone["principal"], "rosson");
+        // …and once linked it is the same person as the owner token.
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["rosson"] }), &Actor::owner_token()));
         let phone = ok(get(PREFS_PATH, &Actor::login("rosson")));
         assert_eq!(phone["principal"], "owner");
+        assert_eq!(ok(get(PREFS_PATH, &Actor::owner_token()))["aliases"], serde_json::json!(["rosson"]));
     }
 
     #[test]
@@ -1020,6 +1025,9 @@ mod tests {
         add("gina", Role::Admin);
         add("mo", Role::Member);
         add("rosson", Role::Owner);
+        // rosson is the owner's phone: linked (0.46.0 — only linked logins
+        // fold into the owner person).
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["rosson"] }), &Actor::owner_token()));
         // Member: role_required on both admin paths.
         for r in [get(ADMIN_PATH, &Actor::login("mo")), post(ADMIN_SET_PATH, serde_json::json!({}), &Actor::login("mo"))] {
             assert_eq!(r.status, "403 Forbidden", "{}", r.body);
@@ -1063,12 +1071,13 @@ mod tests {
             serde_json::json!({ "principal": "gina", "workspace": { "projectId": f.alpha, "threadPush": false } }),
             &Actor::owner_token(),
         ));
-        // An Owner-role login is the Owner too (and maps to `owner`).
+        // An Owner-role login has the Owner's power too, but unlinked it is
+        // its own person (0.46.0), so it signs as itself.
         ok(post(ADMIN_SET_PATH, serde_json::json!({ "principal": "gina", "server": { "enabled": false } }), &Actor::login("rosson")));
         assert_eq!(drain_notify_events(&mut rx), 2);
         let g = ok(get(PREFS_PATH, &Actor::login("gina")));
         assert_eq!(ws(&g, &f.alpha)["updatedBy"], "owner", "gina sees who set it");
-        assert_eq!(g["server"]["updatedBy"], "owner");
+        assert_eq!(g["server"]["updatedBy"], "rosson");
         // gina can Reset her row herself.
         let g = ok(post(PREFS_PATH, serde_json::json!({ "workspace": { "projectId": f.alpha, "threadPush": null } }), &Actor::login("gina")));
         assert_eq!(ws(&g, &f.alpha)["source"], "fallback");
@@ -1493,6 +1502,44 @@ mod tests {
         assert_eq!(display_of(&v, "owner"), "Rosson");
         // The GET chain (no identity) refuses.
         assert_eq!(dispatch(PEOPLE_NAME_PATH, &HashMap::new()).expect("claimed").status, "403 Forbidden");
+    }
+
+    // ── Only linked accounts are the owner person (0.46.0) ────────────
+
+    /// julie is the server's only Owner-role login but is NOT linked: she
+    /// keeps her own name and colour after z3thon is linked, and z3thon
+    /// (linked) shows the owner's colour and names everywhere.
+    #[test]
+    fn an_unlinked_sole_owner_role_login_stays_itself() {
+        let _f = fixture();
+        add("julie", Role::Owner);
+        add("z3thon", Role::Admin);
+        let owner = Actor::owner_token();
+        let julie = Actor::login("julie");
+        ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Julie", "lastName": "Ray" }), &julie));
+        ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#aa3355" }), &julie));
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["z3thon"] }), &owner));
+        ok(post(PEOPLE_NAME_PATH, serde_json::json!({ "firstName": "Rosson", "lastName": "Long" }), &owner));
+        ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#12ab9f" }), &owner));
+
+        // julie: her own person, name and colour.
+        let v = ok(get(PEOPLE_NAME_PATH, &julie));
+        assert_eq!((v["person"].clone(), v["displayName"].clone()), ("julie".into(), "Julie Ray".into()));
+        let c = ok(get(PEOPLE_COLOR_PATH, &julie));
+        assert_eq!((c["person"].clone(), c["color"].clone()), ("julie".into(), "#aa3355".into()));
+        assert_eq!(c["colors"]["julie"], "#aa3355");
+        assert_eq!(v["names"]["julie"]["displayName"], "Julie Ray");
+
+        // z3thon (linked): the owner's settings.
+        assert_eq!(c["colors"]["z3thon"], "#12ab9f");
+        assert_eq!(c["colors"]["owner"], "#12ab9f");
+        assert_eq!(v["names"]["z3thon"]["displayName"], "Rosson Long");
+        assert_eq!(v["names"]["owner"]["displayName"], "Rosson Long");
+        let z = ok(get(PEOPLE_COLOR_PATH, &Actor::login("z3thon")));
+        assert_eq!((z["person"].clone(), z["color"].clone()), ("owner".into(), "#12ab9f".into()));
+
+        // The owner's aliases name only the linked login.
+        assert_eq!(ok(get(OWNER_ACCOUNTS_PATH, &owner))["aliases"], serde_json::json!(["z3thon"]));
     }
 
     // ── "Your account" setup prompt (0.46.0) ──────────────────────────

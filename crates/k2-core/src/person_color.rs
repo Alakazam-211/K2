@@ -10,7 +10,7 @@
 //!   Connect login's on its `connect-users.json` row (`color`). Both are
 //!   written only by `POST /cli/people/color`.
 //! - **Effective.** For a login whose person key is `owner` (the owner
-//!   token, an owner-linked login, the sole Owner-role login): the owner's
+//!   token or an owner-linked login): the owner's
 //!   chosen colour when set. Otherwise the login's own chosen colour, else
 //!   [`hash_color`] of the name — byte-for-byte the renderer's
 //!   `personColor`, so nothing changes until someone picks.

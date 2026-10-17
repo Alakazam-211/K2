@@ -156,6 +156,18 @@ jobs:
           # check over socket pairs, Quadlet rendering, seccomp, Seeds.
           cargo test -p k2-app-engine
 
+      # Sew on K2, 0.46.1 (S27 grant hook + S28 chat pass + K6 keyring):
+      # the chat grant, outbox and reconcile (link guests ignored, K-M6),
+      # session revokes on the outbox, the pass mint per App link (K-M4),
+      # the keyring and JWKS, and a fake Sew mgmt socket end to end.
+      - name: cargo test Sew (grant hook, chat pass)
+        env:
+          RUSTFLAGS: -D warnings
+        run: |
+          cargo test -p k2-core --lib -- tool_hook:: sew_revoke:: skin::sew_tests connect_users::
+          cargo test -p k2-daemon --lib -- chat_pass:: tool_hook_worker:: sew_mgmt::
+          cargo test -p k2-daemon --test chat_pass_integration --test chat_pass_mint_integration --test grant_hook_integration
+
       # Custom/enterprise air-gap compile (`--features airgap`). Compiles
       # the GitHub update-ping URL out of k2-daemon; baked air-gap cannot
       # be turned off with K2_AIRGAP=0. Not a GitHub Release asset. Default

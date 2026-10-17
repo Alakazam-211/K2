@@ -4,10 +4,12 @@
 // `currentColor`.
 //
 //   Home, Agents, Projects, Tickets, Wiki, Server, Admin, Run, Drawer,
-//   Clock, Mug, Help, Pin, PinOff, Palette, Smartphone, SmartphoneOff
+//   Clock, Mug, Help, Pin, PinOff, Palette, Smartphone, SmartphoneOff,
+//   Pencil, Trash
 //     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `library`,
 //     `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`,
-//     `circle-help`, `pin`, `pin-off`, `palette`, `smartphone`; SmartphoneOff is
+//     `circle-help`, `pin`, `pin-off`, `palette`, `smartphone`, `pencil`,
+//     `trash-2`; SmartphoneOff is
 //     `smartphone` plus the bell's 2,2 → 22,22 slash),
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
@@ -309,6 +311,31 @@ export function PaletteIcon(props: K2IconProps = {}): React.JSX.Element {
       <circle cx="17.5" cy="10.5" r=".5" fill="currentColor" />
       <circle cx="6.5" cy="12.5" r=".5" fill="currentColor" />
       <circle cx="8.5" cy="7.5" r=".5" fill="currentColor" />
+    </svg>
+  )
+}
+
+/** Edit (a Design note tile): Lucide `pencil`, squared (flat butt end, a
+ *  sharp tip, no rounded joins). */
+export function PencilIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('pencil', props)}>
+      <path d="M17 3l4 4L7.5 20.5 2 22l1.5-5.5Z" />
+      <path d="M15 5l4 4" />
+    </svg>
+  )
+}
+
+/** Delete (a Design note tile): Lucide `trash-2`, squared (a square can and
+ *  lid handle, no corner radius). */
+export function TrashIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('trash-2', props)}>
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+      <path d="M19 6v16H5V6" />
+      <path d="M3 6h18" />
+      <path d="M8 6V2h8v4" />
     </svg>
   )
 }

@@ -51,18 +51,20 @@ LiteLLM's `model_prices_and_context_window.json`.
 
 ## Third-party: Lucide icons (ISC)
 
-The top bar's icons, the tab Pin / Unpin, the Design tab palette and the
+The top bar's icons, the tab Pin / Unpin, the Design tab palette, the
+Design note tiles' edit and delete, and the
 Workspace drawer's phone push toggle (icon style A3) are Lucide icons,
 copied in as SVG paths.
 Home, Agents, Projects, Tickets, Wiki, Server, Admin profile, Run, Drawer,
-the stopwatch clock, the Keep awake mug, Help, Pin, Unpin, the palette and
+the stopwatch clock, the Keep awake mug, Help, Pin, Unpin, the palette, the
+pencil, the trash can and
 the smartphone (on, and off with a slash) are edited (corners squared: square caps, mitred
 joins, no corner radius). Settings is Lucide's `settings` gear, unedited. The Gardens ensō
 is K2's own (`ZenIcon`), not Lucide.
 
 | | |
 |--|--|
-| **What** | SVG paths in `src/renderer/components/icons/K2Icons.tsx`, from `lucide-static@1.58.0/icons/` (`house`, `bot`, `layout-dashboard`, `ticket`, `library`, `settings`, `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`, `circle-help`, `pin`, `pin-off`, `palette`, `smartphone`) |
+| **What** | SVG paths in `src/renderer/components/icons/K2Icons.tsx`, from `lucide-static@1.58.0/icons/` (`house`, `bot`, `layout-dashboard`, `ticket`, `library`, `settings`, `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`, `circle-help`, `pin`, `pin-off`, `palette`, `smartphone`, `pencil`, `trash-2`) |
 | **Upstream** | [Lucide](https://github.com/lucide-icons/lucide) |
 | **License** | **ISC** (Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.) — full text below |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. The ISC icons do **not** relicense the product. |

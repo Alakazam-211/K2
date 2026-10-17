@@ -17,10 +17,12 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { buildNotesBody, redeliverDesignNotes, sendDesignNotes } from './designApi'
 import type { DesignNoteDraft, NoteElement, NoteIntent } from './types'
 
-/** Most notes one Design tab holds (PRD C2). Matches the daemon's cap. */
-export const MAX_DESIGN_NOTES = 20
+/** Most notes one Design tab's tray holds: a 3 × 2 grid of tiles (Rosson
+ *  2026-10-16). The daemon takes up to 20 per Send; ⌘↩ may add one typed
+ *  note past a full tray. */
+export const MAX_DESIGN_NOTES = 6
 
-export const NOTES_FULL_REASON = `The tray holds ${MAX_DESIGN_NOTES} notes. Send them first, then add more.`
+export const NOTES_FULL_REASON = `Send these first; up to ${MAX_DESIGN_NOTES} notes`
 
 export interface DesignTray {
   notes: DesignNoteDraft[]

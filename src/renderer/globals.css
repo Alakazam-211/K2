@@ -1035,6 +1035,27 @@ html[data-style="square"] [data-nav-chip]::before {
     2.586px 1px, calc(100% - 2.586px) 1px, calc(100% - 1px) 2.586px, calc(100% - 1px) calc(100% - 2.586px), calc(100% - 2.586px) calc(100% - 1px), 2.586px calc(100% - 1px), 1px calc(100% - 2.586px), 1px 2.586px, 2.586px 1px);
 }
 
+/* Design note tiles (NoteTray, Rosson 2026-10-16) in K2's square Style:
+   chamfered like the Thread's surfaces (CHAMFER_CUT.surface = 4px), the
+   1px edge drawn by `::before` as an even-odd ring (inner cut 4 − 0.414).
+   Rounded Styles keep `--radius-field`. */
+html[data-style="square"] [data-design-tile] {
+  position: relative;
+  border-color: transparent !important;
+  border-radius: 0 !important;
+  clip-path: polygon(4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px), 0 4px);
+}
+html[data-style="square"] [data-design-tile]::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--color-border);
+  clip-path: polygon(evenodd,
+    4px 0, calc(100% - 4px) 0, 100% 4px, 100% calc(100% - 4px), calc(100% - 4px) 100%, 4px 100%, 0 calc(100% - 4px), 0 4px, 4px 0,
+    4.586px 1px, calc(100% - 4.586px) 1px, calc(100% - 1px) 4.586px, calc(100% - 1px) calc(100% - 4.586px), calc(100% - 4.586px) calc(100% - 1px), 4.586px calc(100% - 1px), 1px calc(100% - 4.586px), 1px 4.586px, 4.586px 1px);
+}
+
 /* Usage limit bars (LimitBar) in K2's square Style: a 1px chamfer on the
    6px track (`chamferCutFor(6)` = 1px), clipping the fill with it. Rounded
    Styles round the track by --radius-selector instead. */

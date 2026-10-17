@@ -1035,6 +1035,14 @@ html[data-style="square"] [data-nav-chip]::before {
     2.586px 1px, calc(100% - 2.586px) 1px, calc(100% - 1px) 2.586px, calc(100% - 1px) calc(100% - 2.586px), calc(100% - 2.586px) calc(100% - 1px), 2.586px calc(100% - 1px), 1px calc(100% - 2.586px), 1px 2.586px, 2.586px 1px);
 }
 
+/* Usage limit bars (LimitBar) in K2's square Style: a 1px chamfer on the
+   6px track (`chamferCutFor(6)` = 1px), clipping the fill with it. Rounded
+   Styles round the track by --radius-selector instead. */
+html[data-style="square"] [data-limit-track] {
+  border-radius: 0;
+  clip-path: polygon(1px 0, calc(100% - 1px) 0, 100% 1px, 100% calc(100% - 1px), calc(100% - 1px) 100%, 1px 100%, 0 calc(100% - 1px), 0 1px);
+}
+
 /* Working: a 3×3 cell grid; a lit head runs clockwise round the 8 edge
    cells (0.8s a lap, 0.1s per cell) with a fading tail; the centre stays
    dim. Reduced motion: still, the top row + right column lit. */

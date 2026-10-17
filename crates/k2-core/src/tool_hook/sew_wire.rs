@@ -104,8 +104,11 @@ pub enum ExternalId {
     K2Owner,
     Local(String),
     /// Not in sew-proto: a form this mirror does not know yet (e.g. SW2's
-    /// `k2:connect:<uuid>`). Only produced by lenient deserialization, so
-    /// a newer Sew's member list still parses; reconcile ignores it.
+    /// `k2:connect:<uuid>`, or a Meet link guest `link:<channel>:<id>`,
+    /// K-M6). Only produced by lenient deserialization, so a newer Sew's
+    /// member list still parses; reconcile ignores it. **Keep this lenient
+    /// arm when K1 swaps in the vendored sew-proto**, whose `ExternalId`
+    /// refuses unknown forms.
     Other(String),
 }
 

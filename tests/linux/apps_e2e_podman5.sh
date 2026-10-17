@@ -51,7 +51,7 @@ HOSTIP="$(ip -4 route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')"
 echo "== the distro's Podman first (it must survive) =="
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -q >/dev/null
-apt-get install -y -q --no-install-recommends podman >/dev/null
+apt-get install -y -q --no-install-recommends podman git >/dev/null
 DISTRO_VER="$(podman --version)"
 case "$DISTRO_VER" in "podman version 4."*) ;; *) fail "expected a distro Podman 4.x, got $DISTRO_VER" ;; esac
 ok "distro: $DISTRO_VER"
@@ -165,8 +165,15 @@ ok "prepare again: Podman kept, no reinstall"
 
 echo "== Quadlet: K2's for k2app, the distro's for everyone else =="
 has "5.8.8" "$(asapp /etc/systemd/user-generators/podman-user-generator -version 2>&1)" || fail "k2app's Quadlet"
-has "${DISTRO_VER#podman version }" "$(runuser -u nobody -- /etc/systemd/user-generators/podman-user-generator -version 2>&1)" || fail "nobody's Quadlet"
-ok "k2app gets Quadlet 5.8.8; other users get the distro's"
+NOBODY_Q="$(runuser -u nobody -- /etc/systemd/user-generators/podman-user-generator -version 2>&1)"
+if [ -x /usr/libexec/podman/quadlet ]; then
+	has "${DISTRO_VER#podman version }" "$NOBODY_Q" || fail "nobody's Quadlet: $NOBODY_Q"
+	ok "k2app gets Quadlet 5.8.8; other users get the distro's"
+else
+	# Debian 12's Podman 4.3 has no Quadlet (4.4+): others get none, never K2's.
+	[ -z "$NOBODY_Q" ] || fail "nobody got a Quadlet the distro doesn't have: $NOBODY_Q"
+	ok "k2app gets Quadlet 5.8.8; other users get none (the distro's Podman has no Quadlet), never K2's"
+fi
 
 echo "== engine install =="
 ED=/opt/k2-engine-it

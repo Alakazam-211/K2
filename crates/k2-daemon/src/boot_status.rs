@@ -238,6 +238,13 @@ pub fn attach_only_supported() -> bool {
 /// share a version string until the next cut.
 pub const FEATURE_TICKETS_LIST_ALL: &str = "tickets-list-all";
 
+/// `GET /cli/feedback/waiting-count` counts `waiting` + `needs_discussion`
+/// (the board's "Waiting on me" statuses) and honours `me=1`: only tickets
+/// assigned to the calling login (owner token → `owner` + the owner's
+/// display name; a Connect-user session → its username). A client without
+/// the key keeps the host-wide count and never sends `me=1`.
+pub const FEATURE_TICKETS_BADGE_ME: &str = "tickets-badge-me";
+
 /// Zen Mode v1 (prd-zen-mode-v1 Z16): this daemon serves `/cli/zen/*`
 /// for the person on this computer (owner token only).
 pub const FEATURE_ZEN_V1: &str = "zen-v1";
@@ -339,6 +346,7 @@ pub fn features() -> Vec<&'static str> {
         out.push(FEATURE_SPAWN_ATTACH_ONLY);
     }
     out.push(FEATURE_TICKETS_LIST_ALL);
+    out.push(FEATURE_TICKETS_BADGE_ME);
     out.push(FEATURE_ZEN_V1);
     out.push(FEATURE_ZEN_GARDENS);
     out.push(FEATURE_ZEN_CHROME);
@@ -385,6 +393,7 @@ mod tests {
             vec![
                 "spawn-attach-only",
                 "tickets-list-all",
+                "tickets-badge-me",
                 "zen-v1",
                 "zen-gardens-v1",
                 "zen-chrome-v1",

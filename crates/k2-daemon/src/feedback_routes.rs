@@ -57,14 +57,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
     let resp = match path {
         // ── Reads ───────────────────────────────────────────────────
         // GET /cli/feedback/waiting-count — host-wide Tickets badge.
-        // Counts only waiting tickets on a registered workspace (not an
-        // audit sentinel): the "Waiting on you" rows the page can show.
-        "/cli/feedback/waiting-count" => match feedback::count_waiting() {
-            Ok(count) => {
-                CliResponse::ok_json(serde_json::json!({ "ok": true, "count": count }).to_string())
-            }
-            Err(e) => usage_error(e),
-        },
+        // Counts waiting + needs_discussion tickets on a registered
+        // workspace (not an audit sentinel). The HTTP dispatcher claims
+        // this path first so `me=1` can be scoped to the calling login
+        // (`handle_waiting_count`); this arm is the identity-less form.
+        "/cli/feedback/waiting-count" => handle_waiting_count(None),
 
         // GET /cli/feedback/list?project=<path>[&all=1][&status=<s>]
         // ONE workspace. `all=1` = every STATUS in that workspace, never
@@ -160,6 +157,72 @@ pub fn handle_show_gated(params: &HashMap<String, String>, skin: Option<SkinPass
     match skin {
         Some(pass) => handle_skin_show(params, &pass),
         None => handle_show(params),
+    }
+}
+
+// ── Tickets badge count ───────────────────────────────────────────────
+
+/// The assignee names that mean "me" for a login, mirroring the
+/// renderer's `myAssigneeNames` (Feedback/feedback-api.ts): the owner is
+/// the wire literal `owner` plus the owner's display name (agents may
+/// assign the owner by that name); a Connect user is their username.
+/// Lower-cased and trimmed, no duplicates, no blanks.
+pub fn my_assignee_names(
+    owner: bool,
+    username: Option<&str>,
+    owner_display_name: Option<&str>,
+) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    if owner {
+        names.push("owner".to_string());
+        if let Some(display) = owner_display_name.map(str::trim).filter(|d| !d.is_empty()) {
+            names.push(display.to_string());
+        }
+    } else if let Some(user) = username.map(str::trim).filter(|u| !u.is_empty()) {
+        names.push(user.to_string());
+    }
+    let mut out: Vec<String> = Vec::new();
+    for n in names.into_iter().map(|n| n.to_lowercase()) {
+        if !out.contains(&n) {
+            out.push(n);
+        }
+    }
+    out
+}
+
+/// `GET /cli/feedback/waiting-count[?me=1]` — the Tickets badge.
+/// `me = None`: host-wide (`scope: "host"`). `me = Some(names)`: only
+/// tickets assigned to one of `names` (`scope: "me"`), the board's
+/// "Waiting on me" count. Both count `waiting` + `needs_discussion`.
+pub fn handle_waiting_count(me: Option<Vec<String>>) -> CliResponse {
+    let (counted, scope) = match me {
+        Some(names) => (feedback::count_waiting_for(&names), "me"),
+        None => (feedback::count_waiting(), "host"),
+    };
+    match counted {
+        Ok(count) => CliResponse::ok_json(
+            serde_json::json!({ "ok": true, "count": count, "scope": scope }).to_string(),
+        ),
+        Err(e) => usage_error(e),
+    }
+}
+
+#[cfg(test)]
+mod badge_me_tests {
+    use super::my_assignee_names;
+
+    /// Same cases as the renderer's `myAssigneeNames` tests.
+    #[test]
+    fn my_assignee_names_mirrors_the_renderer() {
+        assert_eq!(my_assignee_names(true, None, Some(" Rosson ")), vec!["owner", "rosson"]);
+        assert_eq!(my_assignee_names(true, None, Some("   ")), vec!["owner"]);
+        assert_eq!(my_assignee_names(true, None, None), vec!["owner"]);
+        // Display name "Owner" folds into the wire literal: one entry.
+        assert_eq!(my_assignee_names(true, None, Some("Owner")), vec!["owner"]);
+        // A Connect user is their username; the owner display name is not theirs.
+        assert_eq!(my_assignee_names(false, Some(" Julie "), Some("Rosson")), vec!["julie"]);
+        assert!(my_assignee_names(false, None, Some("Rosson")).is_empty());
+        assert!(my_assignee_names(false, Some("  "), None).is_empty());
     }
 }
 

@@ -1849,7 +1849,7 @@ pub fn budget(ctx: &Ctx, b: Option<(u64, u64)>) -> HResult<J> {
 
 /// Processes of `uid` other than its user manager and Podman's pause
 /// process (an App, a shell, anything else).
-pub(crate) fn busy_app_processes(ctx: &Ctx, uid: u32) -> usize {
+fn busy_app_processes(ctx: &Ctx, uid: u32) -> usize {
     let Ok(rd) = std::fs::read_dir(ctx.p("/proc")) else {
         return 0;
     };

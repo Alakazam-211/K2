@@ -13,24 +13,24 @@ use k2_root_proto::verbs::exit;
 use super::{box_root, ok, T};
 use crate::ctx::ExecOut;
 
-const APP_UID: u32 = 996;
+pub(super) const APP_UID: u32 = 996;
 
-fn write(t: &T, abs: &str, body: &str) {
+pub(super) fn write(t: &T, abs: &str, body: &str) {
     let p = t.p(abs);
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
     std::fs::write(p, body).unwrap();
 }
 
-fn read(t: &T, abs: &str) -> String {
+pub(super) fn read(t: &T, abs: &str) -> String {
     std::fs::read_to_string(t.p(abs)).unwrap()
 }
 
-fn json(o: &crate::Outcome) -> serde_json::Value {
+pub(super) fn json(o: &crate::Outcome) -> serde_json::Value {
     serde_json::from_slice(&o.stdout).unwrap()
 }
 
 /// /etc/passwd, group, shadow for a box with the daemon user `k2`.
-fn base_users(t: &T) {
+pub(super) fn base_users(t: &T) {
     write(
         t,
         PASSWD_FILE,
@@ -51,7 +51,7 @@ fn base_users(t: &T) {
 const APP_PW_LINE: &str = "k2app:x:996:996:K2 Apps:/var/lib/k2app:/usr/sbin/nologin\n";
 
 /// The box after `apps ensure-user`.
-fn with_app_user(t: &T) {
+pub(super) fn with_app_user(t: &T) {
     base_users(t);
     let mut pw = read(t, PASSWD_FILE);
     pw.push_str(APP_PW_LINE);
@@ -106,7 +106,7 @@ fn usermod_effect(t: &T) {
     ));
 }
 
-fn rule(t: &T, prog: &str, tok: &str, status: i32, stdout: &str) {
+pub(super) fn rule(t: &T, prog: &str, tok: &str, status: i32, stdout: &str) {
     t.exec.0.borrow_mut().rules.push((
         prog.into(),
         tok.into(),
@@ -118,7 +118,7 @@ fn rule(t: &T, prog: &str, tok: &str, status: i32, stdout: &str) {
     ));
 }
 
-fn calls_of(t: &T, prog: &str) -> Vec<String> {
+pub(super) fn calls_of(t: &T, prog: &str) -> Vec<String> {
     t.calls()
         .into_iter()
         .filter(|(p, _, _)| p == prog)
@@ -734,7 +734,7 @@ fn nft_remove_deletes_only_when_present() {
 
 // ── packages and runtime ────────────────────────────────────────────────
 
-fn bin(t: &T, abs: &str) {
+pub(super) fn bin(t: &T, abs: &str) {
     write(t, abs, "#!fake\n");
 }
 

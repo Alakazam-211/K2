@@ -36,14 +36,14 @@ use serde_json::json;
 // ── small file helpers ──────────────────────────────────────────────────
 
 /// Split a fixed absolute path into (parent, name).
-fn split(abs: &str) -> (&str, &str) {
+pub(crate) fn split(abs: &str) -> (&str, &str) {
     let i = abs.rfind('/').expect("absolute");
     (if i == 0 { "/" } else { &abs[..i] }, &abs[i + 1..])
 }
 
 /// A regular file under the root, never through a link. `None` = missing
 /// (also when a parent is missing).
-fn read_cfg(ctx: &Ctx, abs: &str, cap: usize) -> HResult<Option<Vec<u8>>> {
+pub(crate) fn read_cfg(ctx: &Ctx, abs: &str, cap: usize) -> HResult<Option<Vec<u8>>> {
     let (parent, name) = split(abs);
     let d = match ctx.dir(parent) {
         Ok(d) => d,
@@ -54,19 +54,19 @@ fn read_cfg(ctx: &Ctx, abs: &str, cap: usize) -> HResult<Option<Vec<u8>>> {
         .map_err(|e| Fail::io_err("read", e))
 }
 
-fn read_cfg_text(ctx: &Ctx, abs: &str) -> HResult<String> {
+pub(crate) fn read_cfg_text(ctx: &Ctx, abs: &str) -> HResult<String> {
     Ok(read_cfg(ctx, abs, 4 * 1024 * 1024)?
         .map(|b| String::from_utf8_lossy(&b).into_owned())
         .unwrap_or_default())
 }
 
 /// A kernel file (`/proc/…`, `/sys/…`). Follows the kernel's links.
-fn kread(ctx: &Ctx, abs: &str) -> Option<String> {
+pub(crate) fn kread(ctx: &Ctx, abs: &str) -> Option<String> {
     debug_assert!(abs.starts_with("/proc/") || abs.starts_with("/sys/"));
     std::fs::read_to_string(ctx.p(abs)).ok()
 }
 
-fn exists(ctx: &Ctx, abs: &str) -> bool {
+pub(crate) fn exists(ctx: &Ctx, abs: &str) -> bool {
     let (parent, name) = split(abs);
     ctx.dir(parent)
         .ok()
@@ -76,7 +76,7 @@ fn exists(ctx: &Ctx, abs: &str) -> bool {
 
 /// Open (creating 0755 root if missing) a directory directly under an
 /// existing fixed parent. A link or a file there is a refusal.
-fn ensure_subdir(ctx: &Ctx, parent: &str, name: &str) -> HResult<Dir> {
+pub(crate) fn ensure_subdir(ctx: &Ctx, parent: &str, name: &str) -> HResult<Dir> {
     let base = ctx
         .dir(parent)
         .map_err(|e| Fail::io_err("open parent", e))?;
@@ -99,7 +99,7 @@ fn ensure_subdir(ctx: &Ctx, parent: &str, name: &str) -> HResult<Dir> {
 
 /// Write canned bytes to `dir/name` unless they are already there.
 /// `Ok(true)` when something changed.
-fn put(ctx: &Ctx, dir: &Dir, name: &str, bytes: &[u8]) -> HResult<bool> {
+pub(crate) fn put(ctx: &Ctx, dir: &Dir, name: &str, bytes: &[u8]) -> HResult<bool> {
     let n = OsStr::new(name);
     match dir.kind(n).map_err(|e| Fail::io_err("stat", e))? {
         Kind::Missing | Kind::File => {}
@@ -122,7 +122,7 @@ fn put(ctx: &Ctx, dir: &Dir, name: &str, bytes: &[u8]) -> HResult<bool> {
 
 /// Remove `parent/dname/name` if it is there (a planted link is removed,
 /// never followed). `Ok(true)` when something was removed.
-fn unput(ctx: &Ctx, parent: &str, dname: Option<&str>, name: &str) -> HResult<bool> {
+pub(crate) fn unput(ctx: &Ctx, parent: &str, dname: Option<&str>, name: &str) -> HResult<bool> {
     let base = match ctx.dir(parent) {
         Ok(d) => d,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -254,7 +254,7 @@ fn shape_problem(ctx: &Ctx, pw: &Pw, all: &[Pw]) -> HResult<Option<&'static str>
 }
 
 /// The proven `k2app` entry: exists and has the right shape.
-fn app_user(ctx: &Ctx) -> HResult<Pw> {
+pub(crate) fn app_user(ctx: &Ctx) -> HResult<Pw> {
     let all = passwd(ctx)?;
     let pw = all
         .iter()
@@ -1295,7 +1295,7 @@ pub fn version_in(text: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn tool_version(ctx: &Ctx, abs: &str) -> Option<String> {
+pub(crate) fn tool_version(ctx: &Ctx, abs: &str) -> Option<String> {
     if !exists(ctx, abs) {
         return None;
     }
@@ -1316,8 +1316,14 @@ fn major_of(v: &str) -> Option<u32> {
 }
 
 fn engine_json(ctx: &Ctx) -> J {
-    let podman = tool_version(ctx, PODMAN);
-    let conmon = CONMON.iter().find_map(|p| tool_version(ctx, p));
+    // What k2app runs: K2's Podman bundle when installed (lane P).
+    let bundle = crate::podman::installed(ctx);
+    let podman = tool_version(ctx, crate::podman::effective_podman(ctx));
+    let conmon = if bundle {
+        tool_version(ctx, k2_root_proto::podman::CONMON)
+    } else {
+        CONMON.iter().find_map(|p| tool_version(ctx, p))
+    };
     let conf = read_cfg_text(ctx, CONTAINERS_CONF).unwrap_or_default();
     let configured = [OciRuntime::Crun, OciRuntime::Youki]
         .into_iter()
@@ -1327,8 +1333,9 @@ fn engine_json(ctx: &Ctx) -> J {
         "packageManager": package_manager(ctx).map(pm_name),
         "podman": podman,
         "podmanOk": podman.as_deref().and_then(major_of).is_some_and(|m| m >= PODMAN_MIN_MAJOR),
-        "pasta": exists(ctx, PASTA),
-        "crun": tool_version(ctx, CRUN),
+        "podmanSource": if bundle { "k2" } else { "distro" },
+        "pasta": exists(ctx, crate::podman::effective_pasta(ctx)),
+        "crun": tool_version(ctx, crate::podman::effective_crun(ctx)),
         "youki": tool_version(ctx, YOUKI),
         "conmon": conmon,
         "runtime": configured,
@@ -1423,7 +1430,11 @@ pub fn packages_install_youki(ctx: &Ctx) -> HResult<J> {
 }
 
 pub fn runtime(ctx: &Ctx, rt: OciRuntime) -> HResult<J> {
-    if !exists(ctx, rt.binary()) {
+    let bin = match rt {
+        OciRuntime::Crun => crate::podman::effective_crun(ctx),
+        OciRuntime::Youki => YOUKI,
+    };
+    if !exists(ctx, bin) {
         return Err(Fail::state(format!(
             "{}_missing: install it first (apps packages install{})",
             rt.as_str(),
@@ -1635,7 +1646,7 @@ fn lsm(ctx: &Ctx) -> Lsm {
     )
 }
 
-fn apparmor_parser(ctx: &Ctx) -> Option<&'static str> {
+pub(crate) fn apparmor_parser(ctx: &Ctx) -> Option<&'static str> {
     APPARMOR_PARSER.iter().copied().find(|p| exists(ctx, p))
 }
 
@@ -1860,7 +1871,7 @@ pub fn budget(ctx: &Ctx, b: Option<(u64, u64)>) -> HResult<J> {
 
 /// Processes of `uid` other than its user manager and Podman's pause
 /// process (an App, a shell, anything else).
-fn busy_app_processes(ctx: &Ctx, uid: u32) -> usize {
+pub(crate) fn busy_app_processes(ctx: &Ctx, uid: u32) -> usize {
     let Ok(rd) = std::fs::read_dir(ctx.p("/proc")) else {
         return 0;
     };
@@ -1973,7 +1984,7 @@ pub fn unprep(ctx: &Ctx, who: &Caller) -> HResult<J> {
 
 // ── status ──────────────────────────────────────────────────────────────
 
-fn file_state(ctx: &Ctx, abs: &str, want: &[u8]) -> &'static str {
+pub(crate) fn file_state(ctx: &Ctx, abs: &str, want: &[u8]) -> &'static str {
     match read_cfg(ctx, abs, 256 * 1024) {
         Ok(Some(b)) if b == want => "ok",
         Ok(Some(_)) => "drift",
@@ -2043,6 +2054,7 @@ pub fn status(ctx: &Ctx) -> HResult<J> {
         "coresSlice": {"present": !cores.is_empty(), "memoryMin": cores_min,
                        "daemonUnits": daemons.iter().filter(|d| d.scope == "system").map(|d| d.unit.clone()).collect::<Vec<_>>()},
         "engine": engine_json(ctx),
+        "podmanBundle": crate::podman::status_json(ctx),
         "enginePresent": exists(ctx, ENGINE_PATH),
         "engineUnit": engine_unit_state(ctx),
         "engineTmpfiles": exists(ctx, TMPFILES_FILE),

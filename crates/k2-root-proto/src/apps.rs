@@ -274,9 +274,11 @@ impl OciRuntime {
             Self::Youki => "youki",
         }
     }
+    /// The runtime binary k2app runs. crun is K2's bundled one when the
+    /// Podman bundle is installed (`crate::podman`), else the distro's.
     pub fn binary(self) -> &'static str {
         match self {
-            Self::Crun => CRUN,
+            Self::Crun => crate::podman::crun_bin(),
             Self::Youki => YOUKI,
         }
     }
@@ -1040,6 +1042,9 @@ pub fn apparmor_profile() -> &'static str {
      \x20 signal (send,receive) peer=\"crun//&k2-app\",\n\
      \x20 signal (receive) peer=unconfined,\n\
      \x20 signal (receive) peer=crun,\n\
+     \x20 # K2's Podman bundle (Ubuntu 24.04) runs its crun as k2-crun.\n\
+     \x20 signal (send,receive) peer=\"k2-crun//&k2-app\",\n\
+     \x20 signal (receive) peer=k2-crun,\n\
      \x20 ptrace (trace,read,tracedby,readby) peer=k2-app,\n\
      }\n"
 }
@@ -1438,6 +1443,9 @@ mod tests {
             // guarded e2e before these rules).
             "  signal (receive) peer=crun,\n",
             "  signal (send,receive) peer=\"crun//&k2-app\",\n",
+            // K2's Podman bundle (Ubuntu 24.04): its crun runs as k2-crun.
+            "  signal (receive) peer=k2-crun,\n",
+            "  signal (send,receive) peer=\"k2-crun//&k2-app\",\n",
         ] {
             assert!(p.contains(want), "missing {want:?}");
         }

@@ -1647,3 +1647,6 @@ mod apps_tests;
 // The `engine sew` namespace (protocol 7) lives in its own file, same fakes.
 #[path = "sew_tests.rs"]
 mod sew_tests;
+// K2's Podman bundle (protocol 8, lane P), same fakes.
+#[path = "podman_tests.rs"]
+mod podman_tests;

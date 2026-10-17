@@ -67,6 +67,24 @@ impl T {
 
 // ── enable ───────────────────────────────────────────────────────────────
 
+/// 0.46.1: switching identity on an existing install names the real
+/// verb, `k2 hostchat purge` (there is no `uninstall --purge`).
+#[test]
+fn identity_change_names_the_real_purge_verb() {
+    let t = t();
+    t.enabled();
+    store::update(1, |r| r.status = "stopped".into()).expect("update").expect("row");
+    let req = EnableRequest { provider: Some("standalone".into()), ..t.req() };
+    let f = match enable_begin(&t.env(), &req) {
+        Err(f) => f,
+        Ok(_) => panic!("identity change must refuse"),
+    };
+    assert_eq!(f.code, "provider_fixed");
+    assert!(f.hint.contains("k2 hostchat purge --confirm-hostname"), "{}", f.hint);
+    assert!(!f.hint.contains("uninstall --purge"), "{}", f.hint);
+    assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
+}
+
 #[test]
 fn enable_sequence_is_recorded_exactly_and_the_key_rides_only_install_stdin() {
     let t = t();
@@ -234,6 +252,8 @@ fn preflight_hard_stops_refuse_before_any_effect() {
         let report = f.extra.unwrap()["report"].clone();
         let hit = report.as_array().unwrap().iter().find(|c| c["id"] == id).unwrap_or_else(|| panic!("{id} missing"));
         assert_eq!(hit["status"], "fail", "{id}: {hit}");
+        // 0.46.1: hints name only things that exist (no `--with-sew`).
+        assert!(!hit["hint"].as_str().unwrap_or("").contains("--with-sew"), "{id}: {hit}");
         assert!(t.ops.effects().is_empty(), "{id}: effects {:?}", t.ops.effects());
         assert!(store::load().is_none(), "{id}: no row");
         assert!(!t.latch.load(std::sync::atomic::Ordering::SeqCst), "{id}: latch released");
@@ -750,7 +770,8 @@ fn manual_rollback_never_passes_a_data_loss_flag_and_explains_a_schema_refusal()
     t.ops.queue("engine sew rollback", Ok(json!({"sewExit": 3, "sew": {"error": {"message": "schema changed since 0.0.1"}}})));
     let f = rollback(&t.env()).unwrap_err();
     assert_eq!(f.code, "rollback_refused");
-    assert!(f.hint.contains("backup restore"));
+    assert!(f.hint.contains("k2 hostchat backups") && f.hint.contains("k2 hostchat restore <bundle-id> --confirm"), "{}", f.hint);
+    assert!(!f.hint.contains("backup list") && !f.hint.contains("backup restore"), "no invented verbs: {}", f.hint);
     assert!(t.ops.argvs().iter().all(|a| !a.contains("accept-data-loss")));
     // Success: the version Sew reports is recorded.
     t.ops.queue("engine sew rollback", Ok(json!({"sewExit": 0, "sew": {"state": "rolled_back", "to": "0.0.1"}})));

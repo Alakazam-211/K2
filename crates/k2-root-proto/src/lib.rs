@@ -22,6 +22,9 @@
 //! - [`apps`]: the App runtime's box prep (protocol 6): the `k2app` user,
 //!   its subordinate ids, slice names, port ranges, and the canned unit,
 //!   drop-in, sysctl and nftables bytes the helper renders.
+//! - [`podman`]: K2's pinned Podman 5 bundle for boxes whose distro ships
+//!   Podman < 5 (protocol 8): the sha256 table, the K2 prefix, which
+//!   `podman`/`crun` k2app runs, and the k2app-only config bytes.
 //! - [`caller`]: `daemon.toml` and the "is this the daemon's main
 //!   process" match, shared by the helper and `k2-app-engine` (AR25).
 //! - [`engine`]: `k2-app-engine`'s socket wire, paths, validators and its
@@ -38,6 +41,7 @@ pub mod keys;
 pub mod node_build;
 pub mod paths;
 pub mod sew;
+pub mod podman;
 pub mod sig;
 pub mod stalwart;
 pub mod templates;

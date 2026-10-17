@@ -1,10 +1,19 @@
 // Top bar "Admin profile" (Rosson 2026-10-16, 0.46.0 UI experiment): a
-// person icon right of the Zen toggle. A click opens a read-only modal with
-// who this window is signed in as on its server: name, role, how (the owner
-// key on this computer, or a Connect login), the "This is me (owner)"
-// links, account dates and recent sign-ins. Every value comes from an
-// existing daemon route (`admin-profile-api.ts`); the full controls live in
-// Settings → User Access.
+// person icon right of the Zen toggle. A click opens a modal with who this
+// window is signed in as on its server: name, role, how (the owner key on
+// this computer, or a Connect login), colour, account dates and recent
+// sign-ins. Values come from daemon routes (`admin-profile-api.ts`); the
+// full controls live in Settings → User Access.
+//
+// The owner key on this computer shows the owner's ACCOUNT (Rosson
+// 2026-10-17): the login picked in Settings → General → Your account, with
+// that login's username, role and created date, the owner's display name,
+// and a Change password that sets that login's password with the owner's
+// permission (`POST /cli/users/set-password`). With no account picked it
+// shows the owner profile and says where to pick one.
+//
+// Colour (0.46.0): the person swatches (`PersonColorPicker`) for whoever is
+// signed in; the owner and owner-linked logins set the owner's colour.
 //
 // A Connect login can change its own password here (Rosson 2026-10-16):
 // the SAME step as the first-password flow (`PasswordRotationStep`,
@@ -18,13 +27,15 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { windowTopBarTarget } from './top-bar-scope'
 import { useSettingsStore } from '@/stores/settings'
 import type { AuthAuditEvent } from '@/components/Settings/sections/access-audit-api'
-import { OWNER_LINK_LABEL } from '@/components/Settings/sections/OwnerAccountToggle'
+import { primaryOwnerAccount } from '@/components/Settings/sections/YourAccountRow'
+import { PersonColorPicker } from '@/components/Presence/PersonColorPicker'
+import { daemonCliPost } from '@/lib/daemon-cli'
 import { PasswordRotationStep } from '@/components/PasswordRotationStep'
 import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
 import { saveRememberedPassword, useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
 import { AdminIcon } from '@/components/icons/K2Icons'
-import { loadAdminProfile, type AdminProfile, type ProfileRole, type Read } from './admin-profile-api'
+import { loadAdminProfile, type AdminProfile, type ProfileAccount, type ProfileRole, type Read } from './admin-profile-api'
 
 const noDrag = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
@@ -109,6 +120,100 @@ export function passwordChangeHost(profile: AdminProfile, scope: ServerScope): C
   return host ? { ...host, username: profile.username } : null
 }
 
+/** The hint for the owner key when no account is picked yet. */
+export const PICK_ACCOUNT_HINT = 'Pick your account in Settings → General'
+
+/** The owner's account: the login picked in Settings → General → Your
+ *  account (the first linked login), with its record. Null for a Connect
+ *  login, before anything is picked, or when the reads failed. */
+export function ownerAccountOf(profile: AdminProfile): ProfileAccount | null {
+  if (!profile.ownerToken || profile.linked.kind !== 'ok' || profile.accounts.kind !== 'ok') return null
+  const name = primaryOwnerAccount(profile.linked.value)
+  if (!name) return null
+  return profile.accounts.value.find((a) => a.username.trim().toLowerCase() === name) ?? null
+}
+
+export function ownerPasswordChangedNotice(username: string): string {
+  return `Password changed for ${username}. Devices signed in with it must sign in again.`
+}
+
+/** The owner key sets the linked login's password (Owner floor,
+ *  `POST /cli/users/set-password`): no current password, no re-login
+ *  here — the daemon signs that login out everywhere. */
+function OwnerSetPasswordStep({
+  scope,
+  username,
+  onCancel,
+  onDone,
+}: {
+  scope: ServerScope
+  username: string
+  onCancel: () => void
+  onDone: () => void
+}): React.JSX.Element {
+  const [pw, setPw] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const mismatch = confirm !== '' && pw !== confirm
+  const input =
+    'w-full px-2 py-1 text-xs bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]'
+  return (
+    <form
+      data-testid="admin-profile-owner-password"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (busy || !pw || pw !== confirm) return
+        setBusy(true)
+        setErr(null)
+        daemonCliPost(scope, 'users/set-password', { username, password: pw }).then(
+          () => onDone(),
+          (e2: unknown) => {
+            setErr(e2 instanceof Error ? e2.message : String(e2))
+            setBusy(false)
+          },
+        )
+      }}
+      className="flex flex-col gap-2"
+    >
+      <p className="m-0 text-[12px] text-[var(--color-text-secondary)]">
+        Set a new password for <span className="text-[var(--color-text-primary)]">{username}</span>. Devices signed in
+        with it must sign in again.
+      </p>
+      <label className="flex flex-col gap-1 text-[11px] text-[var(--color-text-muted)]">
+        New password
+        <input type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} className={input} />
+      </label>
+      <label className="flex flex-col gap-1 text-[11px] text-[var(--color-text-muted)]">
+        Confirm new password
+        <input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className={input} />
+      </label>
+      {mismatch ? <p className="m-0 text-[11px] text-[var(--color-status-error-soft)]">The passwords don’t match.</p> : null}
+      {err ? (
+        <p role="alert" className="m-0 text-[11px] text-[var(--color-status-error-soft)]">
+          {err}
+        </p>
+      ) : null}
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          disabled={busy || !pw || pw !== confirm}
+          className="px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer disabled:opacity-50 disabled:cursor-default"
+        >
+          {busy ? 'Saving…' : 'Set password'}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-3 py-1 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer"
+        >
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+}
+
 export const PASSWORD_CHANGED_NOTICE =
   'Password changed. This device is signed in with the new one; other devices signed in with this login must sign in again.'
 
@@ -123,43 +228,62 @@ function ProfileBody({
 }): React.JSX.Element {
   const ownerDisplayName = useSettingsStore((s) => s.ownerDisplayName)
   const host = scope.connectHost()
-  const name = profile.ownerToken ? ownerDisplayName.trim() || 'owner' : (profile.username ?? 'unknown')
+  const ownerName = ownerDisplayName.trim() || 'owner'
+  const account = ownerAccountOf(profile)
+  const name = profile.ownerToken ? (account?.username ?? ownerName) : (profile.username ?? 'unknown')
   const me = profile.username?.trim().toLowerCase() ?? null
+  const ownerNoAccount = profile.ownerToken && profile.linked.kind === 'ok' && profile.linked.value.length === 0
 
   return (
     <>
       <Section title="You" testId="admin-profile-you">
+        {ownerNoAccount ? (
+          <p data-testid="admin-profile-pick-account" className="m-0 mb-1 text-[12px] text-[var(--color-text-secondary)]">
+            {PICK_ACCOUNT_HINT}.
+          </p>
+        ) : null}
         <Row label="Name" testId="admin-profile-name">
           {name}
-          {profile.ownerToken ? (
+          {profile.ownerToken && account ? (
+            <span className="text-[var(--color-text-muted)]"> (your Connect login, Settings → General → Your account)</span>
+          ) : profile.ownerToken ? (
             <span className="text-[var(--color-text-muted)]"> (Settings → General → Your name)</span>
           ) : (
             <span className="text-[var(--color-text-muted)]"> (your Connect username)</span>
           )}
         </Row>
-        <Row label="Role" testId="admin-profile-role">{roleLabel(profile.role)}</Row>
+        {profile.ownerToken && account ? (
+          <Row label="Display name" testId="admin-profile-display-name">
+            {ownerName}
+            <span className="text-[var(--color-text-muted)]"> (Settings → General → Your name)</span>
+          </Row>
+        ) : null}
+        <Row label="Role" testId="admin-profile-role">{roleLabel(account ? account.role : profile.role)}</Row>
         <Row label="Signed in" testId="admin-profile-how">{signedInHow(profile, scope.isRemote)}</Row>
         <Row label="Server" testId="admin-profile-server">
           {scope.label}
           {host && host.hostname !== scope.label ? <span className="text-[var(--color-text-secondary)]"> · {host.hostname}</span> : null}
           {profile.publicUrl ? <span className="text-[var(--color-text-secondary)]"> · {profile.publicUrl}</span> : null}
         </Row>
+        <Row label="Colour" testId="admin-profile-color">
+          <PersonColorPicker scope={scope} />
+        </Row>
       </Section>
 
-      <Section title={`“${OWNER_LINK_LABEL}”`} testId="admin-profile-linked">
+      <Section title="Owner’s account" testId="admin-profile-linked">
         {profile.linked.kind !== 'ok' ? (
           <Muted>{unavailable(profile.linked)}</Muted>
         ) : profile.ownerToken ? (
           profile.linked.value.length === 0 ? (
-            <Muted>No Connect login is marked as you yet. Tick “{OWNER_LINK_LABEL}” on your phone or laptop login in User Access.</Muted>
+            <Muted>No Connect login is yours yet. {PICK_ACCOUNT_HINT}.</Muted>
           ) : (
             <Row label="Your logins">{profile.linked.value.join(', ')}</Row>
           )
         ) : me && profile.linked.value.includes(me) ? (
-          <Muted>This login is marked as the owner’s own.</Muted>
+          <Muted>This login is the owner’s account.</Muted>
         ) : (
           <Muted>
-            This login isn’t marked as the owner’s.
+            This login isn’t the owner’s account.
             {profile.linked.value.length > 0 ? ` The owner’s logins: ${profile.linked.value.join(', ')}.` : ''}
           </Muted>
         )}
@@ -168,6 +292,11 @@ function ProfileBody({
       <Section title="Account" testId="admin-profile-account">
         {profile.accounts.kind !== 'ok' ? (
           <Muted>{unavailable(profile.accounts)}</Muted>
+        ) : profile.ownerToken && account ? (
+          <Row label="Created" testId="admin-profile-created">
+            {formatDate(account.createdAt)}
+            {account.disabled ? ' · disabled' : ''}
+          </Row>
         ) : profile.ownerToken ? (
           <>
             <Muted>The owner key isn’t an account, so it has no created date.</Muted>
@@ -234,6 +363,8 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
     kind: 'loading',
   })
   const [changing, setChanging] = useState<ConnectHost | null>(null)
+  // The owner key changing its linked login's password (Owner permission).
+  const [ownerChanging, setOwnerChanging] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -341,6 +472,16 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
             <p role="alert" className="m-0 text-[12px] text-[var(--color-status-error-soft)]">
               Couldn’t read who you are on {scope.label}: {state.message}
             </p>
+          ) : ownerChanging ? (
+            <OwnerSetPasswordStep
+              scope={scope}
+              username={ownerChanging}
+              onCancel={() => setOwnerChanging(null)}
+              onDone={() => {
+                setNotice(ownerPasswordChangedNotice(ownerChanging))
+                setOwnerChanging(null)
+              }}
+            />
           ) : changing ? (
             <PasswordRotationStep
               host={changing}
@@ -372,10 +513,18 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
                 scope={scope}
                 onChangePassword={(() => {
                   const host = passwordChangeHost(state.profile, scope)
-                  return host
+                  if (host) {
+                    return () => {
+                      setNotice(null)
+                      setChanging(host)
+                    }
+                  }
+                  // The owner key: the linked login, with the owner's permission.
+                  const account = ownerAccountOf(state.profile)
+                  return account
                     ? () => {
                         setNotice(null)
-                        setChanging(host)
+                        setOwnerChanging(account.username)
                       }
                     : null
                 })()}

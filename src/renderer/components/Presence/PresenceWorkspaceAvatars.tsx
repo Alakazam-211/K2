@@ -44,7 +44,7 @@ export default function PresenceWorkspaceAvatars({
 export function PresenceAvatarCluster({
   users,
 }: {
-  users: { user: string; role: RosterUser['role'] }[]
+  users: { user: string; role: RosterUser['role']; color?: string | null }[]
 }): React.JSX.Element | null {
   if (users.length === 0) return null
 
@@ -59,7 +59,7 @@ export function PresenceAvatarCluster({
     <span className="flex flex-none items-center" style={{ gap: 'var(--clu-gap)' }} title={title} data-presence-grid="">
       {visible.map((u, i) => (
         <span key={u.user} className="flex flex-none" style={i === count - 1 ? lastGap : undefined}>
-          <PresenceChip name={u.user} role={u.role} size={ROW_CHIP_PX} />
+          <PresenceChip name={u.user} role={u.role} size={ROW_CHIP_PX} color={u.color} />
         </span>
       ))}
       {overflow > 0 && (

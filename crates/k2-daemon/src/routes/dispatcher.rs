@@ -7883,7 +7883,10 @@ async fn handle_one_request(
         // route_policy floors (Member / Admin / owner-token) already ran in
         // `role_gate`; the handler re-checks. A GET to the POST-only
         // `admin/set` was answered 405 before auth (`get_refused`).
-        p if p.starts_with("/cli/notify/") || p == crate::notify_routes::OWNER_ACCOUNTS_PATH => {
+        p if p.starts_with("/cli/notify/")
+            || p == crate::notify_routes::OWNER_ACCOUNTS_PATH
+            || p == crate::notify_routes::PEOPLE_COLOR_PATH =>
+        {
             if !super::http::token_ok(&query, state.token.as_str()) {
                 let _ = stream.read(&mut buf).await;
                 super::http::send_response(

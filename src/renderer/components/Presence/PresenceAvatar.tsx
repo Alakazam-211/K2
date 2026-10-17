@@ -1,6 +1,6 @@
 // Presence — one person chip (plan-agent-status-unify-v1 §3.5, Q8:
 // chamfered square, approved 2026-10-16). The drawing is `PresenceChip`:
-// a person colour hashed from the username, white initials (or the photo
+// the person colour the daemon serves (else the username hash), white initials (or the photo
 // once K2 Connect Cloud supplies one), and the role as a corner mark
 // (filled = owner, hollow = admin, none = member). Role is never a colour,
 // and amber is gone from presence.
@@ -20,6 +20,8 @@ export interface PresenceAvatarProps {
   /** A profile photo (K2 Connect Cloud), drawn over the person colour. */
   imageUrl?: string | null
   title?: string
+  /** The daemon's effective person colour (roster `color`). */
+  color?: string | null
 }
 
 /** The wire `"owner"` row renders as "Owner" everywhere. */
@@ -33,6 +35,6 @@ export function useSelfPresenceUser(): string {
   return useConnectHostStore((s) => (s.activeHost === 'local' ? 'owner' : s.activeHost.username || 'owner'))
 }
 
-export default function PresenceAvatar({ name, role, size = 20, you, away, imageUrl, title }: PresenceAvatarProps): React.JSX.Element {
-  return <PresenceChip name={name} role={role} size={size} you={you} away={away} imageUrl={imageUrl} title={title} />
+export default function PresenceAvatar({ name, role, size = 20, you, away, imageUrl, title, color }: PresenceAvatarProps): React.JSX.Element {
+  return <PresenceChip name={name} role={role} size={size} you={you} away={away} imageUrl={imageUrl} title={title} color={color} />
 }

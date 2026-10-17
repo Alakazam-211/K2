@@ -480,6 +480,7 @@ mod tests {
             role,
             was_viewer: false,
             can_clone: true,
+            color: None,
         }
     }
 

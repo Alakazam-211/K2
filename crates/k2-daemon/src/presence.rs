@@ -102,6 +102,12 @@ pub struct RosterUser {
     /// Unix seconds of the user's EARLIEST live connection.
     #[serde(rename = "connectedAt")]
     pub connected_at: i64,
+    /// The person's effective colour (0.46.0, `k2_core::person_color`):
+    /// chosen, else the username hash. Owner-linked logins carry the
+    /// owner's. Older renderers ignore it; newer ones fall back to their
+    /// own hash when it is absent (an older daemon).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub color: String,
 }
 
 static REGISTRY: OnceLock<Mutex<HashMap<u64, PresenceEntry>>> = OnceLock::new();
@@ -302,9 +308,12 @@ pub fn roster() -> Vec<RosterUser> {
                 workspaces,
                 granted_edit: false,
                 connected_at,
+                color: String::new(),
             }
         })
         .collect();
+    drop(map);
+    paint(&mut rows, &k2_core::person_color::load_map());
     // Owner first, then usernames ascending — deterministic snapshots.
     rows.sort_by(|a, b| {
         let a_owner = a.user == "owner";
@@ -319,7 +328,26 @@ pub fn roster() -> Vec<RosterUser> {
 /// subscriber). `let _ =` swallows the zero-subscriber case per the
 /// session_events convention.
 fn broadcast_roster() {
-    let _ = session_events::emit(SessionEvent::PresenceChanged { roster: roster() });
+    let _ = session_events::emit(SessionEvent::PresenceChanged {
+        roster: roster(),
+        colors: k2_core::person_color::load_map(),
+    });
+}
+
+/// Re-emit the roster after a person colour (or anything else it paints)
+/// changed, so every connected client repaints (`POST /cli/people/color`).
+pub fn rebroadcast() {
+    broadcast_roster();
+}
+
+/// Fill each row's `color` from a name → colour map (`person_color`).
+fn paint(rows: &mut [RosterUser], colors: &std::collections::BTreeMap<String, String>) {
+    for row in rows.iter_mut() {
+        row.color = colors
+            .get(&row.user)
+            .cloned()
+            .unwrap_or_else(|| k2_core::person_color::hash_color(&row.user).to_string());
+    }
 }
 
 /// `GET /cli/presence/roster` — snapshot of the live roster, identical
@@ -328,7 +356,8 @@ fn broadcast_roster() {
 /// Auth (owner token OR live connect session) is gated in the
 /// dispatcher, mirroring `/cli/auth/whoami`.
 pub fn handle_roster() -> crate::cli_response::CliResponse {
-    match serde_json::to_string(&serde_json::json!({ "roster": roster() })) {
+    let body = serde_json::json!({ "roster": roster(), "colors": k2_core::person_color::load_map() });
+    match serde_json::to_string(&body) {
         Ok(body) => crate::cli_response::CliResponse::ok_json(body),
         Err(e) => crate::cli_response::CliResponse::internal_error(format!(
             "serialize roster: {e}"
@@ -364,6 +393,9 @@ pub struct SummaryPerson {
     pub user: String,
     pub name: String,
     pub role: String,
+    /// Effective person colour (0.46.0), copied from the roster row.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub color: String,
 }
 
 /// One workspace with at least one person on it. `workspaceId` /
@@ -400,6 +432,7 @@ pub fn summarize(
                 user.user.clone()
             },
             role: user.role.clone(),
+            color: user.color.clone(),
         };
         for sub in &user.workspaces {
             let owner_idx = crate::session_events::longest_registered_project_index(sub, &paths);
@@ -661,6 +694,7 @@ mod tests {
             workspaces: vec!["/x/foo".into()],
             granted_edit: false,
             connected_at: 1_700_000_000,
+            color: String::new(),
         };
         let json: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&row).unwrap()).unwrap();
@@ -777,6 +811,23 @@ mod tests {
         drop((g1, g2, g3));
     }
 
+    /// 0.46.0 person colours: a row takes the map's colour, else the
+    /// username hash; the wire carries `color` and the summary copies it.
+    #[test]
+    fn paint_uses_the_color_map_then_the_hash() {
+        let mut rows = vec![ru("owner", "owner", &["/w/a"]), ru("anna", "member", &["/w/a"])];
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("owner".to_string(), "#4f46e5".to_string());
+        paint(&mut rows, &map);
+        assert_eq!(rows[0].color, "#4f46e5");
+        assert_eq!(rows[1].color, k2_core::person_color::hash_color("anna"));
+        let json = serde_json::to_value(&rows[0]).expect("json");
+        assert_eq!(json["color"], "#4f46e5");
+        let out = summarize(&rows, &[wref("id-a", "A", "/w/a", "a")], "Rosson");
+        assert_eq!(out[0].people[0].color, "#4f46e5");
+        assert_eq!(out[0].people[1].color, k2_core::person_color::hash_color("anna"));
+    }
+
     fn ru(user: &str, role: &str, workspaces: &[&str]) -> RosterUser {
         RosterUser {
             user: user.into(),
@@ -785,6 +836,7 @@ mod tests {
             workspaces: workspaces.iter().map(|s| s.to_string()).collect(),
             granted_edit: false,
             connected_at: 1,
+            color: String::new(),
         }
     }
 
@@ -824,8 +876,8 @@ mod tests {
         assert_eq!(
             c.people,
             vec![
-                SummaryPerson { user: "owner".into(), name: "Rosson".into(), role: "owner".into() },
-                SummaryPerson { user: "anna".into(), name: "anna".into(), role: "member".into() },
+                SummaryPerson { user: "owner".into(), name: "Rosson".into(), role: "owner".into(), color: String::new() },
+                SummaryPerson { user: "anna".into(), name: "anna".into(), role: "member".into(), color: String::new() },
             ]
         );
 

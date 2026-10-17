@@ -58,6 +58,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { RemoteRoomsPreviewRow } from './RemoteRoomsPreviewRow'
 import { AppFontRows } from '../shared/AppFontRows'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
+import { YourAccountRow } from './YourAccountRow'
 import {
   parseSessionViewTab,
   parseSplitPaneView,
@@ -71,6 +72,7 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.font-family', section: 'general', group: 'General', label: 'Font family', description: 'The app font; same setting as Editors / Fonts → Code', keywords: ['font', 'typeface', 'family', 'text', 'monospace'] },
   { id: 'general.font-size', section: 'general', group: 'General', label: 'Font size', description: 'Text size for code, the message box, chats and tickets; same setting as Editors / Fonts → Code', keywords: ['font', 'size', 'text size', 'zoom', 'bigger', 'smaller'] },
   { id: 'general.devtools', section: 'general', group: 'General', label: 'Developer tools', description: 'Open the Chromium DevTools console for this window', keywords: ['devtools', 'developer', 'console', 'inspect', 'debug', 'chromium', 'network', 'logs'] },
+  { id: 'general.your-account', section: 'general', group: 'General', label: 'Your account', description: 'The Connect login you use on your phone or laptop counts as you (owner)', keywords: ['account', 'login', 'owner', 'you', 'me', 'this is me', 'linked', 'phone', 'laptop', 'connect', 'identity'] },
   { id: 'general.owner-display-name', section: 'general', group: 'General', label: 'Your name', description: 'The name K2 agents call you when you message them', keywords: ['name', 'display', 'owner', 'you', 'from', 'identity', 'agents', 'call', 'message', 'sender'] },
   { id: 'general.config-location', section: 'general', group: 'General', label: 'Config Location', description: '~/.k2/settings.json', keywords: ['settings', 'config', 'location', 'path'] },
   { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset All Settings', description: 'Revert every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
@@ -351,9 +353,16 @@ export function GeneralSection(): React.JSX.Element {
             with the auto-show on first launch after an update (0.38.7). */}
         <WhatsNewRow />
 
-        {/* "Your display name" — the `from` attribution agents see when
-            you message them via the composer (resolved server-side). */}
-        <OwnerDisplayNameRow />
+        {/* You (0.46.0, Rosson 2026-10-17): your Connect account (it was the
+            "This is me (owner)" checkbox on Admin Access) and your display
+            name — the `from` attribution agents see when you message them
+            (resolved server-side). Your colour is in your profile (the
+            person icon by Zen). */}
+        <div data-settings-group="you" data-testid="general-you-group">
+          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] m-0 mb-1">You</h3>
+          <YourAccountRow />
+          <OwnerDisplayNameRow />
+        </div>
 
         <div className="flex items-center justify-between py-2 border-b border-[var(--color-border)]" data-settings-id="general.config-location">
           <span className="text-xs text-[var(--color-text-secondary)]">Config Location</span>

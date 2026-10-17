@@ -40,7 +40,7 @@ export interface AdminProfile {
   /** The Connect username, or null for the owner token. */
   username: string | null
   role: ProfileRole | null
-  /** Connect logins marked "This is me (owner)". */
+  /** Connect logins linked as the owner's (Settings → General → Your account). */
   linked: Read<string[]>
   /** Account rows for the logins this profile covers (this login, or the
    *  owner's linked logins). */

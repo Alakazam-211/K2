@@ -257,6 +257,7 @@ pub mod push;
 // Thread push prefs + recipients (prd-thread-push-notifications-v1,
 // migration 0157): person keys, effective switches, recipients.
 pub mod notify_prefs;
+pub mod person_color;
 // Companion C4 (prd-companion-v2 §4) — the daemon-held mobile
 // push-device registry (`push_devices`): upsert-by-device-id
 // registration, dead-token pruning. The `push::K2Cloud` adapter

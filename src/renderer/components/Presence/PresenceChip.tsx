@@ -6,8 +6,14 @@
 //   - Shape: a square with 20% chamfered corners (CSS clip-path). It reads
 //     as a square, like the A3 icons and the status marks, but the cut
 //     corners say "person, not agent" (agent avatars are sharp squares).
-//   - Fill: the person's colour, hashed from the username into 8 hues that
-//     avoid the status amber, orange, green and red. White initials (one
+//   - Fill: the person's colour, one of 8 hues that avoid the status amber,
+//     orange, green and red. The daemon serves each person's effective
+//     colour (0.46.0, `k2_core::person_color`): the colour they picked in
+//     their profile (the owner's for owner-linked logins), else the
+//     username hash. Callers pass it as `color` (roster rows, Home summary
+//     people, the roster's `colors` map for ticket assignees); without one
+//     (an older daemon) the chip hashes the name itself with
+//     `personColor`, the same hash the daemon uses. White initials (one
 //     letter below 20px, two at 20px and up) or the photo when one exists.
 //   - Role: a small corner mark, never colour: filled = owner, hollow =
 //     admin, none = member. Amber is gone from presence.
@@ -30,6 +36,13 @@ export function personColor(name: string): string {
   let h = 0
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
   return PERSON_COLORS[h % PERSON_COLORS.length]
+}
+
+/** The colour to paint: the server-provided one when it is a palette
+ *  hue, else today's hash. */
+export function resolvePersonColor(name: string, serverColor?: string | null): string {
+  const c = serverColor?.trim().toLowerCase()
+  return c && (PERSON_COLORS as readonly string[]).includes(c) ? c : personColor(name)
 }
 
 /** The wire `"owner"` row is shown as "Owner". */
@@ -68,11 +81,13 @@ export interface PresenceChipProps {
   imageUrl?: string | null
   /** Tooltip; default "<name> · <role>". Pass '' for none (a parent titles). */
   title?: string
+  /** The daemon's effective colour for this person; absent → the hash. */
+  color?: string | null
 }
 
-export function PresenceChip({ name, role, size = 20, you = false, away = false, imageUrl, title }: PresenceChipProps): React.JSX.Element {
+export function PresenceChip({ name, role, size = 20, you = false, away = false, imageUrl, title, color: serverColor }: PresenceChipProps): React.JSX.Element {
   const display = shownName(name)
-  const color = personColor(name)
+  const color = resolvePersonColor(name, serverColor)
   const mark = role === 'owner' || role === 'admin' ? markPx(size) : 0
   const tip = title ?? `${display}${you ? ' (you)' : ''} · ${role}${away ? ' · away' : ''}`
   const fill: CSSProperties = {
@@ -98,6 +113,7 @@ export function PresenceChip({ name, role, size = 20, you = false, away = false,
     <span
       className="relative inline-flex flex-none select-none"
       data-presence-chip={role}
+      data-person-color={color}
       data-you={you ? '' : undefined}
       title={tip || undefined}
       style={{ width: size, height: size, boxSizing: 'border-box', padding: you ? 1.5 : 0 }}

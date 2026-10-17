@@ -16,6 +16,7 @@ import { formatRelativeTime } from '@/lib/format-relative-time'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { presenceDisplayName } from '@/components/Presence/PresenceAvatar'
 import { PresenceChip } from '@/components/Presence/PresenceChip'
+import { usePresenceStore } from '@/stores/presence'
 import {
   assigneeInitials,
   cardSummary,
@@ -244,6 +245,13 @@ function CardAssigneeInitials({ assignees }: { assignees: readonly string[] | nu
     )
   }
   const shown = names.slice(0, 3)
+  return <AssigneeChips names={names} shown={shown} />
+}
+
+/** The assignee chips, in the daemon's person colours (the roster's
+ *  `colors` map; a name it doesn't know hashes). */
+function AssigneeChips({ names, shown }: { names: string[]; shown: string[] }): React.JSX.Element {
+  const colors = usePresenceStore((s) => s.colors)
   return (
     <span
       data-testid="card-assignee"
@@ -254,7 +262,7 @@ function CardAssigneeInitials({ assignees }: { assignees: readonly string[] | nu
           person's colour, no overlap. */}
       {shown.map((n) => (
         <span key={n} data-testid="card-assignee-initials" className="flex">
-          <PresenceChip name={n} role="member" size={16} title="" />
+          <PresenceChip name={n} role="member" size={16} title="" color={colors[n === 'Owner' ? 'owner' : n]} />
         </span>
       ))}
       {names.length > shown.length && (

@@ -183,6 +183,8 @@ struct StoredConnectUser {
     was_viewer: bool,
     #[serde(default = "default_can_clone")]
     can_clone: bool,
+    #[serde(default)]
+    color: Option<String>,
 }
 
 /// Clone permissions (prd-clone-carries-threads-and-vault-v1 D2, Rosson
@@ -214,6 +216,7 @@ impl From<StoredConnectUser> for ConnectUser {
             was_viewer: s.was_viewer || legacy_viewer,
             legacy_viewer_unmigrated: legacy_viewer,
             can_clone: s.can_clone,
+            color: s.color,
         }
     }
 }
@@ -282,6 +285,12 @@ pub struct ConnectUser {
     /// clone door. Changed only by `POST /cli/users/set-can-clone` (Owner).
     #[serde(default = "default_can_clone")]
     pub can_clone: bool,
+    /// The person colour this login chose (0.46.0): one of
+    /// [`crate::person_color::PALETTE`], or `None` for Automatic (the
+    /// username hash). Set by `POST /cli/people/color`. Omitted on disk
+    /// when unset, so older stores load unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 /// Redacted projection of a [`ConnectUser`] safe to return over the
@@ -304,6 +313,10 @@ pub struct ConnectUserView {
     /// → `true` (today's behaviour).
     #[serde(default = "default_can_clone")]
     pub can_clone: bool,
+    /// The chosen person colour, or `None` (Automatic). Absent from an
+    /// older daemon → `None`.
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 impl From<&ConnectUser> for ConnectUserView {
@@ -315,6 +328,7 @@ impl From<&ConnectUser> for ConnectUserView {
             role: u.role,
             was_viewer: u.was_viewer,
             can_clone: u.can_clone,
+            color: u.color.clone(),
         }
     }
 }
@@ -619,6 +633,7 @@ pub fn add_user(username: &str, password: &str) -> Result<(), String> {
             legacy_viewer_unmigrated: false,
             // D2: "Can clone" starts ON; the Owner narrows per person.
             can_clone: true,
+            color: None,
         });
         Ok(())
     })?;
@@ -734,6 +749,27 @@ pub fn set_can_clone(username: &str, can_clone: bool) -> Result<(), String> {
             .find(|u| u.username == username)
             .ok_or_else(|| format!("user '{username}' not found"))?;
         user.can_clone = can_clone;
+        Ok(())
+    })
+}
+
+/// Set (or clear, with `None`) a login's chosen person colour (0.46.0).
+/// The value must be in [`crate::person_color::PALETTE`]; it is stored
+/// lowercase. Authorization is the route's job. No session revoke: a
+/// colour is cosmetic. Errors when the user doesn't exist.
+pub fn set_color(username: &str, color: Option<&str>) -> Result<(), String> {
+    let username = normalize_username(username)?;
+    let color = match color {
+        Some(raw) => Some(crate::person_color::normalize(raw)?.to_string()),
+        None => None,
+    };
+    update_store(|store| {
+        let user = store
+            .users
+            .iter_mut()
+            .find(|u| u.username == username)
+            .ok_or_else(|| format!("user '{username}' not found"))?;
+        user.color = color;
         Ok(())
     })
 }

@@ -604,7 +604,7 @@ mod tests {
             workspace_path: None,
         };
         // S1 presence — the roster is daemon-global, same routing class.
-        let presence = SessionEvent::PresenceChanged { roster: vec![] };
+        let presence = SessionEvent::PresenceChanged { roster: vec![], colors: Default::default() };
         // 0.40.34 — a URL-open request must reach every subscriber.
         let open_url = SessionEvent::OpenUrl {
             url: "https://example.com".into(),
@@ -818,7 +818,7 @@ mod tests {
                 turn_ended: None,
                 workspace: None,
             },
-            SessionEvent::PresenceChanged { roster: vec![] },
+            SessionEvent::PresenceChanged { roster: vec![], colors: Default::default() },
             SessionEvent::OpenUrl { url: "https://example.com".into(), source: "shim".into() },
             SessionEvent::ProjectGroupsChanged { reason: "groups-changed".into() },
             SessionEvent::FeedbackChanged { reason: "created".into() },

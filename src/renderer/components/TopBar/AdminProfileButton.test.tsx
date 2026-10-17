@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
   },
   login: vi.fn(),
   remember: vi.fn(),
+  posts: [] as Array<{ route: string; body: Record<string, unknown> }>,
+  postRoutes: {} as Record<string, (body: Record<string, unknown>) => unknown>,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
@@ -37,7 +39,15 @@ vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async (_scope: unknown, route: string) => {
     h.calls.push(route)
     if (!(route in h.routes)) throw new Error(`unexpected route ${route}`)
-    return h.routes[route]
+    const v = h.routes[route]
+    if (v instanceof Error) throw v
+    return v
+  }),
+  daemonCliPost: vi.fn(async (_scope: unknown, route: string, body: Record<string, unknown>) => {
+    h.posts.push({ route, body })
+    const fn = h.postRoutes[route]
+    if (!fn) throw new Error(`unexpected POST ${route}`)
+    return fn(body)
   }),
 }))
 vi.mock('@/stores/connect-host', async (orig) => {
@@ -65,7 +75,7 @@ import AdminProfileButton from './AdminProfileButton'
 import { __resetZenAvailableForTests } from '@/lib/zen/zen-platform'
 import { useSettingsStore } from '@/stores/settings'
 import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
-import { PASSWORD_CHANGED_NOTICE } from './AdminProfileButton'
+import { PASSWORD_CHANGED_NOTICE, PICK_ACCOUNT_HINT, ownerPasswordChangedNotice } from './AdminProfileButton'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -94,7 +104,14 @@ function ownerRoutes(): Record<string, unknown> {
     users: USERS,
     'users/audit': AUDIT,
     'tunnel/status': { running: true, public_url: 'https://rosson.k2.dev', frpc_installed: true },
+    'people/color': colorView('owner', null, '#db2777'),
   }
+}
+
+const PALETTE = ['#2563eb', '#7c3aed', '#0d9488', '#db2777', '#4f46e5', '#0891b2', '#64748b', '#c026d3']
+
+function colorView(person: string, chosen: string | null, color: string): Record<string, unknown> {
+  return { ok: true, palette: PALETTE, person, color, chosen, colors: { [person]: color } }
 }
 
 function dialog(): HTMLElement {
@@ -125,6 +142,8 @@ beforeEach(() => {
   h.label = 'main'
   __resetZenAvailableForTests()
   h.calls = []
+  h.posts = []
+  h.postRoutes = {}
   h.routes = ownerRoutes()
   h.scope = { label: 'This computer', isRemote: false, host: null }
   useSettingsStore.setState({ settingsOpen: false, ownerDisplayName: 'Rosson Long' })
@@ -152,6 +171,7 @@ function remoteHost(remember = true): Record<string, unknown> {
 function connectAdmin(remember = true): void {
   h.scope = { label: 'Rosson’s Mac', isRemote: true, host: remoteHost(remember) }
   h.routes['auth/whoami'] = { owner: false, username: 'rosson-phone', role: 'admin', mustChangePassword: false }
+  h.routes['people/color'] = colorView('owner', null, '#db2777')
   delete h.routes['users/audit']
 }
 
@@ -250,19 +270,24 @@ describe('the Admin profile modal: open and close', () => {
 })
 
 describe('the Admin profile modal: who you are', () => {
-  it('the owner on this computer: display name, Owner, linked logins, their dates and sign-ins', async () => {
+  it('the owner on this computer with an account picked: that login, its role and date, the display name, sign-ins', async () => {
     render(<AdminProfileButton />)
     await openLoaded()
-    expect(text('admin-profile-name')).toContain('Rosson Long')
-    expect(text('admin-profile-role')).toContain('Owner')
+    // Rosson 2026-10-17: the owner key shows the owner's ACCOUNT (Settings →
+    // General → Your account), not a generic "Owner".
+    expect(text('admin-profile-name')).toContain('rosson-phone')
+    expect(text('admin-profile-name')).toContain('Your account')
+    expect(text('admin-profile-display-name')).toContain('Rosson Long')
+    expect(text('admin-profile-role')).toContain('Admin')
     expect(text('admin-profile-how')).toContain('As the owner, on this computer')
     expect(text('admin-profile-server')).toContain('This computer')
     expect(text('admin-profile-server')).toContain('https://rosson.k2.dev')
     expect(text('admin-profile-linked')).toContain('rosson-phone')
+    expect(document.querySelector('[data-testid="admin-profile-pick-account"]')).toBeNull()
+    expect(text('admin-profile-created')).toContain('2026')
 
     const account = text('admin-profile-account')
-    expect(account).toContain('The owner key isn’t an account')
-    expect(account).toContain('rosson-phone')
+    expect(account).not.toContain('The owner key isn’t an account')
     expect(account).not.toContain('sam')
 
     // Only rosson-phone's sign-in events, newest first; not sam's, not the
@@ -273,14 +298,19 @@ describe('the Admin profile modal: who you are', () => {
     expect(rows[0]).toContain('192.168.1.7')
     expect(rows[1]).toContain('Signed in')
     expect(rows[1]).toContain('as rosson-phone')
-    expect([...h.calls].sort()).toEqual(['auth/whoami', 'owner/accounts', 'tunnel/status', 'users', 'users/audit'])
+    expect([...h.calls].sort()).toEqual(['auth/whoami', 'owner/accounts', 'people/color', 'tunnel/status', 'users', 'users/audit'])
   })
 
-  it('the owner with no linked login says how to link one', async () => {
+  it('the owner with no account picked: the owner profile plus "Pick your account in Settings → General"', async () => {
     h.routes['owner/accounts'] = { accounts: [], aliases: [] }
     render(<AdminProfileButton />)
     await openLoaded()
-    expect(text('admin-profile-linked')).toContain('No Connect login is marked as you yet')
+    expect(text('admin-profile-pick-account')).toContain(PICK_ACCOUNT_HINT)
+    expect(PICK_ACCOUNT_HINT).toBe('Pick your account in Settings → General')
+    expect(text('admin-profile-name')).toContain('Rosson Long')
+    expect(text('admin-profile-role')).toContain('Owner')
+    expect(document.querySelector('[data-testid="admin-profile-display-name"]')).toBeNull()
+    expect(text('admin-profile-account')).toContain('The owner key isn’t an account')
     expect(text('admin-profile-sign-ins')).toContain('No Connect sign-ins for your logins')
   })
 
@@ -294,7 +324,7 @@ describe('the Admin profile modal: who you are', () => {
     expect(text('admin-profile-how')).toContain('With a Connect login, from this device')
     expect(text('admin-profile-server')).toContain('Rosson’s Mac')
     expect(text('admin-profile-server')).toContain('rosson.k2.dev')
-    expect(text('admin-profile-linked')).toContain('This login is marked as the owner’s own.')
+    expect(text('admin-profile-linked')).toContain('This login is the owner’s account.')
     expect(text('admin-profile-created')).toContain('2026')
     expect(text('admin-profile-account')).not.toContain('sam')
     expect(text('admin-profile-sign-ins')).toContain('Only the owner can see this.')
@@ -306,6 +336,7 @@ describe('the Admin profile modal: who you are', () => {
     h.routes = {
       'auth/whoami': { owner: false, username: 'sam', role: 'member', mustChangePassword: false },
       'tunnel/status': { running: false, frpc_installed: true },
+      'people/color': colorView('sam', null, '#2563eb'),
     }
     render(<AdminProfileButton />)
     await openLoaded()
@@ -314,7 +345,7 @@ describe('the Admin profile modal: who you are', () => {
     expect(text('admin-profile-linked')).toContain('Only an admin can see this.')
     expect(text('admin-profile-account')).toContain('Only an admin can see this.')
     expect(text('admin-profile-sign-ins')).toContain('Only the owner can see this.')
-    expect([...h.calls].sort()).toEqual(['auth/whoami', 'tunnel/status'])
+    expect([...h.calls].sort()).toEqual(['auth/whoami', 'people/color', 'tunnel/status'])
   })
 
   it('whoami failing shows the error, not a guess', async () => {
@@ -352,10 +383,43 @@ describe('the Admin profile modal: change password (Connect logins only)', () =>
     h.remember.mockReset()
   })
 
-  it('the owner on this computer gets no Change password button', async () => {
+  it('the owner on this computer with no account picked gets no Change password button', async () => {
+    h.routes['owner/accounts'] = { accounts: [], aliases: [] }
     render(<AdminProfileButton />)
     await openLoaded()
     expect(document.querySelector('[data-testid="admin-profile-change-password"]')).toBeNull()
+  })
+
+  it('the owner on this computer sets the linked login\'s password with the owner\'s permission (users/set-password)', async () => {
+    h.postRoutes['users/set-password'] = () => ({ success: true })
+    render(<AdminProfileButton />)
+    await openLoaded()
+    act(() => void fireEvent.click(screen.getByTestId('admin-profile-change-password')))
+    const form = screen.getByTestId('admin-profile-owner-password')
+    expect(form.textContent).toContain('rosson-phone')
+    // Not the self-service step: no current password, no re-login.
+    expect(document.querySelector('[data-testid="password-rotation-step"]')).toBeNull()
+    fill('New password', 'new-pass-22')
+    fill('Confirm new password', 'new-pass-22')
+    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Set password' })))
+    await waitFor(() => expect(text('admin-profile-notice')).toBe(ownerPasswordChangedNotice('rosson-phone')))
+    expect(h.posts).toEqual([{ route: 'users/set-password', body: { username: 'rosson-phone', password: 'new-pass-22' } }])
+    expect(h.login).not.toHaveBeenCalled()
+    expect(h.remember).not.toHaveBeenCalled()
+  })
+
+  it('the owner\'s set-password refusal stays on the form with the error', async () => {
+    h.postRoutes['users/set-password'] = () => {
+      throw new Error('password too short')
+    }
+    render(<AdminProfileButton />)
+    await openLoaded()
+    act(() => void fireEvent.click(screen.getByTestId('admin-profile-change-password')))
+    fill('New password', 'x1')
+    fill('Confirm new password', 'x1')
+    act(() => void fireEvent.click(screen.getByRole('button', { name: 'Set password' })))
+    expect((await screen.findByRole('alert')).textContent).toContain('password too short')
+    expect(screen.getByTestId('admin-profile-owner-password')).toBeTruthy()
   })
 
   it('a Connect member gets it too (self-service, any role)', async () => {
@@ -443,5 +507,52 @@ describe('the Admin profile modal: change password (Connect logins only)', () =>
     expect(alert.textContent).toBe(CHANGE_PASSWORD_COPY.badCurrent)
     expect(screen.getByTestId('password-rotation-step')).toBeTruthy()
     expect(h.login).not.toHaveBeenCalled()
+  })
+})
+
+describe('the Admin profile modal: colour', () => {
+  it('shows Automatic + the 8 swatches; a pick posts people/color and marks it', async () => {
+    h.postRoutes['people/color'] = (body) => colorView('owner', body.color as string | null, (body.color as string) ?? '#db2777')
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await screen.findByTestId('person-color-picker')
+    expect(screen.getByTestId('person-color-auto').getAttribute('aria-pressed')).toBe('true')
+    for (const c of PALETTE) expect(screen.getByTestId(`person-color-${c}`)).toBeTruthy()
+    // The owner person: the linked logins share it.
+    expect(text('admin-profile-color')).toContain('Your linked logins show this colour too.')
+
+    act(() => void fireEvent.click(screen.getByTestId('person-color-#0d9488')))
+    await waitFor(() => expect(screen.getByTestId('person-color-#0d9488').getAttribute('aria-pressed')).toBe('true'))
+    expect(screen.getByTestId('person-color-auto').getAttribute('aria-pressed')).toBe('false')
+    expect(h.posts).toEqual([{ route: 'people/color', body: { color: '#0d9488' } }])
+
+    act(() => void fireEvent.click(screen.getByTestId('person-color-auto')))
+    await waitFor(() => expect(h.posts[1]).toEqual({ route: 'people/color', body: { color: null } }))
+  })
+
+  it('a Connect member picks their own colour', async () => {
+    h.scope = { label: 'Rosson’s Mac', isRemote: true, host: { ...remoteHost(), username: 'sam' } }
+    h.routes = {
+      'auth/whoami': { owner: false, username: 'sam', role: 'member', mustChangePassword: false },
+      'tunnel/status': { running: false, frpc_installed: true },
+      'people/color': colorView('sam', '#64748b', '#64748b'),
+    }
+    h.postRoutes['people/color'] = (body) => colorView('sam', body.color as string, body.color as string)
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await waitFor(() => expect(screen.getByTestId('person-color-#64748b').getAttribute('aria-pressed')).toBe('true'))
+    expect(text('admin-profile-color')).not.toContain('linked logins')
+    act(() => void fireEvent.click(screen.getByTestId('person-color-#c026d3')))
+    await waitFor(() => expect(h.posts).toEqual([{ route: 'people/color', body: { color: '#c026d3' } }]))
+  })
+
+  it('an older daemon without the route shows no swatches, and the rest still renders', async () => {
+    h.routes['people/color'] = new Error('route not found')
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await waitFor(() => expect(h.calls).toContain('people/color'))
+    await waitFor(() => expect(document.querySelector('[data-testid="person-color-picker"]')).toBeNull())
+    expect(text('admin-profile-color')).not.toContain('Loading')
+    expect(text('admin-profile-name')).toContain('rosson-phone')
   })
 })

@@ -635,6 +635,11 @@ pub enum SessionEvent {
     /// `presence::RosterUser`.
     PresenceChanged {
         roster: Vec<crate::presence::RosterUser>,
+        /// 0.46.0: name → effective person colour for everyone a client
+        /// may paint (`owner`, every Connect login, the owner's display
+        /// name), so ticket assignees and other non-roster names match.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        colors: std::collections::BTreeMap<String, String>,
     },
 
     /// 0.40.34 — a process on the daemon's machine asked to open a URL
@@ -1965,7 +1970,9 @@ mod tests {
                 workspaces: vec!["/x/foo".into()],
                 granted_edit: false,
                 connected_at: 1_700_000_000,
+                color: String::new(),
             }],
+            colors: Default::default(),
         });
         assert_eq!(json["kind"], "presence_changed");
         assert_keys(&json, &["kind", "roster"]);

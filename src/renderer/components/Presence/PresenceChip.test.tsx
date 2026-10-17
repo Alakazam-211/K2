@@ -6,7 +6,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
-import { CHAMFER_CLIP, PERSON_COLORS, PresenceChip, PresenceMoreChip, chipInitials, personColor } from './PresenceChip'
+import { CHAMFER_CLIP, PERSON_COLORS, PresenceChip, PresenceMoreChip, chipInitials, personColor, resolvePersonColor } from './PresenceChip'
 import { PresenceAvatarCluster } from './PresenceWorkspaceAvatars'
 
 afterEach(cleanup)
@@ -139,5 +139,43 @@ describe('rows never show you', () => {
     const chips = [...container.querySelectorAll('[data-presence-chip]')].map((c) => c.getAttribute('title'))
     expect(chips).toEqual(['anna · member'])
     vi.doUnmock('@/stores/presence')
+  })
+})
+
+// 0.46.0 (Rosson 2026-10-17): the daemon serves each person's effective
+// colour (chosen in their profile, else the same hash). The chip paints it
+// when present and falls back to its own hash for an older daemon.
+describe('server-provided person colour', () => {
+  function fillColor(container: HTMLElement): string {
+    const chip = container.querySelector('[data-presence-chip]') as HTMLElement
+    const spans = [...chip.querySelectorAll(':scope > span')] as HTMLElement[]
+    return spans[spans.length - 1].style.backgroundColor
+  }
+
+  it('uses the server colour when present', () => {
+    const { container } = render(<PresenceChip name="owner" role="owner" color="#0d9488" />)
+    expect(container.querySelector('[data-presence-chip]')?.getAttribute('data-person-color')).toBe('#0d9488')
+    expect(fillColor(container)).toBe('rgb(13, 148, 136)')
+  })
+
+  it('an older daemon (no colour) still renders with the hash; owner stays pink', () => {
+    const { container } = render(<PresenceChip name="owner" role="owner" />)
+    expect(container.querySelector('[data-presence-chip]')?.getAttribute('data-person-color')).toBe(personColor('owner'))
+    expect(personColor('owner')).toBe('#db2777')
+    expect(fillColor(container)).toBe('rgb(219, 39, 119)')
+  })
+
+  it('ignores a value outside the palette', () => {
+    expect(resolvePersonColor('anna', '#ff0000')).toBe(personColor('anna'))
+    expect(resolvePersonColor('anna', '#0D9488')).toBe('#0d9488')
+    expect(resolvePersonColor('anna', null)).toBe(personColor('anna'))
+  })
+
+  it('roster rows and the Home cluster pass the colour through', () => {
+    const { container } = render(
+      <PresenceAvatarCluster users={[{ user: 'anna', role: 'member', color: '#c026d3' }, { user: 'bo', role: 'member' }]} />,
+    )
+    const colors = [...container.querySelectorAll('[data-presence-chip]')].map((c) => c.getAttribute('data-person-color'))
+    expect(colors).toEqual(['#c026d3', personColor('bo')])
   })
 })

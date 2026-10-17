@@ -81,6 +81,18 @@ interface BrowserPaneProps {
    * native child-webview docking as tab panes.
    */
   standalone?: boolean
+  /**
+   * Design tab (prd-browser-design-mode-v1 D-A11): create the native view
+   * with `design: true` so the picker commands accept it. A plain Browser
+   * tab never sets this.
+   */
+  design?: boolean
+  /** DOM strip between the chrome bar and the dock (the Design toolbar and
+   *  notes tray). It never overlaps the page, so it never freezes it. */
+  aboveDock?: React.ReactNode
+  /** The dock element (where the native page sits), for callers that place
+   *  DOM beside the page (the Design note pop-up). */
+  dockRef?: React.MutableRefObject<HTMLDivElement | null>
 }
 
 interface Rect {
@@ -95,7 +107,7 @@ const STUB_ERROR_FRAGMENT = 'not enabled in this build'
 
 
 /** Stable parent window label for this renderer instance. */
-function currentParentWindow(): string {
+export function currentParentWindow(): string {
   try {
     return getCurrentWindow().label || 'main'
   } catch {
@@ -193,6 +205,9 @@ export function BrowserPane({
   url,
   navSeq,
   standalone = false,
+  design = false,
+  aboveDock,
+  dockRef,
 }: BrowserPaneProps): React.JSX.Element {
   // Home M3 — URL / page-meta stamps go to this pane's room's tabs store.
   const room = useRoom()
@@ -218,6 +233,13 @@ export function BrowserPane({
   })
   // Content area the native view docks onto (below the chrome bar).
   const contentRef = useRef<HTMLDivElement | null>(null)
+  const setDockEl = useCallback(
+    (el: HTMLDivElement | null) => {
+      contentRef.current = el
+      if (dockRef) dockRef.current = el
+    },
+    [dockRef],
+  )
   // A DOM overlay (menu, dialog, toast, drag, drawer slide) whose box
   // intersects the dock. OS focus does not cover.
   const covered = useBrowserCovered(contentRef)
@@ -315,7 +337,14 @@ export function BrowserPane({
     createInFlightRef.current = true
     const appearance = readAppearance()
     try {
-      await invoke('browser_create', { itemId, url: normalized, rect, parentWindow, appearance })
+      await invoke('browser_create', {
+        itemId,
+        url: normalized,
+        rect,
+        parentWindow,
+        appearance,
+        ...(design ? { design: true } : {}),
+      })
       appearanceRef.current = appearance
       createdRef.current = true
       setCreated(true)
@@ -333,7 +362,7 @@ export function BrowserPane({
     } finally {
       createInFlightRef.current = false
     }
-  }, [itemId, measureRect, parentWindow, readAppearance])
+  }, [itemId, measureRect, parentWindow, readAppearance, design])
 
   const scheduleBoundsPush = useCallback(() => {
     if (rafRef.current !== null) return
@@ -803,10 +832,15 @@ export function BrowserPane({
         </div>
       )}
 
+      {aboveDock}
+
       {/* Docking area — the native child webview is positioned exactly
           over this div. DOM content here only shows when the view is
           absent (not created / stub build / error). */}
-      <div ref={contentRef} className="flex-1 min-h-0 relative overflow-hidden">
+      <div
+        ref={setDockEl}
+        className="flex-1 min-h-0 relative overflow-hidden"
+      >
         {frame && (
           // Freeze-frame: the page as it was, pinned top-left at its own
           // size so a shrinking dock (drawer slide) clips it, never squashes.

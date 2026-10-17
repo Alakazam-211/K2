@@ -13,8 +13,9 @@
 //   heartbeat / API tab). Nothing moves: the tab is always sized as title +
 //   working slot (a hidden sizer copy of the title), so only the title's
 //   truncation point changes when the working slot is used.
-// - Pinned Chat: the 3×3 grid replaces its icon while working; the status
-//   (else live / reaped) is a 10px badge in its bottom-right corner.
+// - Pinned Chat: the 3×3 grid replaces its icon while working, drawn at
+//   the icon's size (PINNED_WORKING_PX) rather than the 14px slot; the
+//   status (else live / reaped) is a 10px badge in its bottom-right corner.
 
 import { StatusSlot, WorkingSlot } from '@/components/AgentStatus/AgentStatusCluster'
 import { isRankedStatus, type AgentStatusView } from '@/lib/agent-status'
@@ -23,6 +24,11 @@ import { isRankedStatus, type AgentStatusView } from '@/lib/agent-status'
 export const TAB_SLOT_PX = 14
 /** The pinned Chat's corner badge (px). */
 export const PINNED_BADGE_PX = 10
+/** The pinned Chat's working grid (px). Larger than the 14px slot: the
+ *  grid's ink is 14/24 of its box, so 20px gives ≈12px of ink, the same as
+ *  the 16px Chat icon it replaces (ink x/y 2–14 of 16). The tab is a fixed
+ *  36px wide and full height, so it does not change size. */
+export const PINNED_WORKING_PX = 20
 
 /** Does the working grid sit in its own slot left of the status (working
  *  AND a ranked status)? Otherwise that slot is free for the title. */
@@ -88,7 +94,7 @@ export function PinnedChatStatus({ view, icon }: { view: AgentStatusView; icon: 
   const badge = view.status !== 'idle'
   return (
     <>
-      {view.working ? <WorkingSlot view={view} /> : icon}
+      {view.working ? <WorkingSlot view={view} size={PINNED_WORKING_PX} /> : icon}
       {badge ? (
         <span
           data-pinned-chat-badge=""

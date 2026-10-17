@@ -227,6 +227,26 @@ describe('session tabs: one status model (S5)', () => {
     expect(restOf('b').workingSlot).toBe('used')
   })
 
+  it('session tabs keep the working grid at 14px (only the pinned Chat draws it larger)', () => {
+    setTabs([termTab('a', 'Deploy'), termTab('b', 'Build')])
+    seed([
+      row('s-a', 'tab-t-a', 'working'),
+      row('s-b', 'tab-t-b', 'waiting', { lead: { state: 'working', outcome: 'none', since: 0, promptId: null } }),
+    ])
+    render()
+    for (const id of ['a', 'b']) {
+      const slot = tabEl(id).querySelector('[data-slot="working"][data-working]') as HTMLElement
+      const grid = slot.querySelector('svg[data-agent-working]') as SVGElement
+      expect([id, slot.style.width, slot.style.height, grid.getAttribute('width'), grid.getAttribute('height')]).toEqual([
+        id,
+        '14px',
+        '14px',
+        '14',
+        '14',
+      ])
+    }
+  })
+
   it('file tabs keep only the close slot', () => {
     setTabs([fileTab('f')])
     render()
@@ -254,6 +274,15 @@ describe('the pinned Chat tab', () => {
     expect(tab.getAttribute('data-tab-working')).toBe('')
     expect(tab.querySelector(':scope > [data-slot="working"] [data-agent-working]')).toBeTruthy()
     expect(tab.querySelector(':scope > svg')).toBeNull()
+    // Drawn at the icon's size (20px box ≈ the 16px icon's 12px ink), not the 14px slot.
+    const slot = tab.querySelector(':scope > [data-slot="working"]') as HTMLElement
+    const grid = slot.querySelector('svg[data-agent-working]') as SVGElement
+    expect([slot.style.width, slot.style.height, grid.getAttribute('width'), grid.getAttribute('height')]).toEqual([
+      '20px',
+      '20px',
+      '20',
+      '20',
+    ])
     const badge = tab.querySelector('[data-pinned-chat-badge] [data-slot="status"]') as HTMLElement
     expect([badge.getAttribute('data-agent-status'), badge.style.width]).toEqual(['needs-you', '10px'])
     expect(tab.querySelector('.rounded-full')).toBeNull()

@@ -116,29 +116,32 @@ ${SCOPE} [data-zen-compose-input]:focus { outline: none; }
 // messages can be visible below and above/slightly to the side of the ear
 // as you scroll but blurred." The list runs under the whole bottom area
 // (the column pads it by the bar's height, so the newest message still
-// rests above the box). One backdrop-blur layer covers the bar's slot from
-// FOOTER_FADE_PX above whatever sits on top of the box (the activity
-// drawer's tab while it is out, else the field, or the file chips) down to
-// the bottom, full width: beside the tab and behind the field too. Its top
-// feathers in through a mask, a light tint of the window's background
-// (`--zen-canvas`) eases in with it, and the field and the tab get a
-// see-through wash of their own fill so the blurred messages show through
-// them while the text stays readable (a stronger wash in light schemes).
+// rests above the box). The glass covers the bar's slot from FOOTER_FADE_PX
+// above whatever sits on top of the box (the activity drawer's tab while
+// it is out, else the field, or the file chips) down to the bottom, full
+// width: beside the tab and behind the field too. The field and the tab get
+// a see-through wash of their own fill so the blurred messages show
+// through them while the text stays readable (stronger in light schemes).
 //
-// One layer, not Companion's four: fewer WebKit backdrop layers, less risk
-// of its stale-layer ghosting (the reason for the 2026-10-04 no-blur rule,
-// suspended for this strip on the dev branch while Rosson judges it).
-// Prefixed and standard properties both. Every stop is in px from the
-// strip's top (% stops over the whole strip left a near-solid band with a
-// hard edge, the first version). Reduced transparency, or no
+// A progressive blur (Rosson: "gentle at the top, heavy at the bottom"):
+// four stacked backdrop-blur layers, light to heavy (1/4/10/20px), each
+// masked to show from its own start down, each mask overlapping the one
+// before so there are no bands. Over the glass's height: the top ~20% is
+// barely blurred, the bottom ~40% fully heavy. A tint of the window's
+// background (`--zen-canvas`) ramps the same way, nearly clear at the top.
+// WebKit (the 2026-10-04 no-blur rule, suspended for this strip on the dev
+// branch while Rosson judges it): no will-change, no animated blur radius,
+// clicks pass through; only the glass's top moves with the tab. Prefixed
+// and standard properties both. Reduced transparency, or no
 // backdrop-filter: no blur, the field and tab opaque, and an opaque-going
-// gradient behind them.
+// gradient (px stops) behind them.
 
 /** How far (px) the fade reaches above the topmost thing on the message
  *  box: the drawer's tab when it is out, else the field (Rosson: "like 4px
  *  above the status dog ear when it's out, or above the chat area", then
- *  "start the blur like 2px higher"). The feather and tint ramps (6px)
- *  finish at that element's top edge. */
+ *  "start the blur like 2px higher"). The blur and tint ramp from there
+ *  down to the bottom (reduced transparency: its tint is near opaque by
+ *  that element's top edge). */
 export const FOOTER_FADE_PX = 6
 
 /** What the strip's top follows, topmost first found wins by position:
@@ -158,19 +161,18 @@ export const FOOTER_FADE_MOVE_MS = 200
 
 const FOOTER_FADE_SCOPE = `[${THREAD_ZEN_SCOPE_ATTR}] .thread-footer-fade`
 
-/** The frosted tint: clear at the top, easing to a light wash of the
- *  window background by the tab's / field's top edge (px stops, [px from
- *  the top, % of the background]). */
+/** The frosted tint: nearly clear at the top, stronger toward the bottom
+ *  ([% of the glass's height from its top, % of the background]). */
 export const FOOTER_TINT_STOPS: ReadonlyArray<readonly [number, number]> = [
   [0, 0],
-  [1, 10],
-  [2, 20],
-  [3, 30],
-  [4, 38],
-  [6, 45],
+  [20, 6],
+  [45, 18],
+  [70, 32],
+  [100, 46],
 ]
 
-/** Reduced transparency (no blur): the gradient goes nearly opaque. */
+/** Reduced transparency (no blur): the gradient goes nearly opaque within
+ *  6px of the glass's top ([px from the top, % of the background]). */
 export const FOOTER_TINT_STOPS_OPAQUE: ReadonlyArray<readonly [number, number]> = [
   [0, 0],
   [1, 20],
@@ -180,20 +182,27 @@ export const FOOTER_TINT_STOPS_OPAQUE: ReadonlyArray<readonly [number, number]> 
   [6, 95],
 ]
 
-/** The blur layer: [blur px, feather start px, fully on px] from the strip's top. */
-export const FOOTER_BLUR_LAYERS: ReadonlyArray<readonly [number, number, number]> = [[14, 0, 6]]
+/** The blur layers, light to heavy: [blur px, mask clear until %, fully on
+ *  at %] of the glass's height from its top. Each starts before the one
+ *  above it is fully on, so the masks overlap. */
+export const FOOTER_BLUR_LAYERS: ReadonlyArray<readonly [number, number, number]> = [
+  [1, 0, 12],
+  [4, 8, 35],
+  [10, 28, 60],
+  [20, 52, 80],
+]
 
 /** The field's and the tab's see-through wash (% of their own fill), dark
  *  and light schemes; reduced transparency keeps them opaque. */
 export const FOOTER_GLASS_WASH = { dark: 72, light: 86 } as const
 
-const tintCss = (stops: ReadonlyArray<readonly [number, number]> = FOOTER_TINT_STOPS): string =>
+const tintCss = (stops: ReadonlyArray<readonly [number, number]>, unit: '%' | 'px'): string =>
   `background: linear-gradient(to bottom, ${stops.map(
-    ([at, pct]) => `color-mix(in srgb, var(--zen-canvas) ${pct}%, transparent) ${at}px`,
+    ([at, pct]) => `color-mix(in srgb, var(--zen-canvas) ${pct}%, transparent) ${at}${unit}`,
   ).join(', ')});`
 
 const blurLayerCss = ([px, from, to]: readonly [number, number, number], n: number): string => {
-  const mask = `linear-gradient(to bottom, transparent ${from}px, #000 ${to}px)`
+  const mask = `linear-gradient(to bottom, transparent ${from}%, #000 ${to}%)`
   return (
     `${FOOTER_FADE_SCOPE} > .thread-footer-blur-${n + 1} { -webkit-backdrop-filter: blur(${px}px); backdrop-filter: blur(${px}px); ` +
     `-webkit-mask-image: ${mask}; mask-image: ${mask}; }`
@@ -218,7 +227,7 @@ export const THREAD_FOOTER_FADE_CSS = `
 ${FOOTER_FADE_SCOPE} { position: absolute; left: 0; right: 0; bottom: 0; top: -${FOOTER_FADE_PX}px; pointer-events: none; z-index: 0; transition: top ${FOOTER_FADE_MOVE_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1); }
 ${FOOTER_FADE_SCOPE} > span { position: absolute; inset: 0; pointer-events: none; }
 ${FOOTER_BLUR_LAYERS.map(blurLayerCss).join('\n')}
-${FOOTER_FADE_SCOPE} > .thread-footer-tint { ${tintCss()} }
+${FOOTER_FADE_SCOPE} > .thread-footer-tint { ${tintCss(FOOTER_TINT_STOPS, '%')} }
 ${GLASS_TARGETS} { ${glassCss(FOOTER_GLASS_WASH.dark)} }
 html[data-scheme="light"] ${GLASS_TARGETS.split(', ').join(', html[data-scheme="light"] ')} { ${glassCss(FOOTER_GLASS_WASH.light)} }
 @media (prefers-reduced-motion: reduce) {
@@ -226,12 +235,12 @@ html[data-scheme="light"] ${GLASS_TARGETS.split(', ').join(', html[data-scheme="
 }
 @media (prefers-reduced-transparency: reduce) {
   ${FOOTER_FADE_SCOPE} > [class^="thread-footer-blur-"] { display: none; }
-  ${FOOTER_FADE_SCOPE} > .thread-footer-tint { ${tintCss(FOOTER_TINT_STOPS_OPAQUE)} }
+  ${FOOTER_FADE_SCOPE} > .thread-footer-tint { ${tintCss(FOOTER_TINT_STOPS_OPAQUE, 'px')} }
   ${GLASS_TARGETS}, html[data-scheme="light"] ${GLASS_TARGETS.split(', ').join(', html[data-scheme="light"] ')} { ${glassCss(100)} }
 }
 @supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
   ${FOOTER_FADE_SCOPE} > [class^="thread-footer-blur-"] { display: none; }
-  ${FOOTER_FADE_SCOPE} > .thread-footer-tint { ${tintCss(FOOTER_TINT_STOPS_OPAQUE)} }
+  ${FOOTER_FADE_SCOPE} > .thread-footer-tint { ${tintCss(FOOTER_TINT_STOPS_OPAQUE, 'px')} }
   ${GLASS_TARGETS}, html[data-scheme="light"] ${GLASS_TARGETS.split(', ').join(', html[data-scheme="light"] ')} { ${glassCss(100)} }
 }
 `

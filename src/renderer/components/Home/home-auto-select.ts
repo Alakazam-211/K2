@@ -27,6 +27,7 @@ import { activeHomeHostKey, findWorkspaceForRow, parseHomeAddress } from '@/lib/
 import { grokBotIdFromAddress } from '@/lib/grokbots'
 import { openHomeRow } from '@/lib/home-open'
 import { homeRowOpenableNow } from './home-room'
+import { applyWorkspaceSwitchFocus } from '@/lib/workspace-switch-focus'
 
 /** How long an entry waits for the top row to become openable. */
 export const AUTO_SELECT_WAIT_MS = 15_000
@@ -82,6 +83,10 @@ export function trySelectTopHomeRow(): boolean {
 export function useSelectTopHomeRowOnEnter(): void {
   const homeId = useHomesStore((s) => selectedHome(s).id)
   useEffect(() => {
+    // Arriving on Home lands the caret per Settings → General → Workspaces
+    // ("auto-select"), Thread composer first (Rosson 2026-10-16). Opening
+    // a row below re-applies for that row. A Grok Bot chat has no room.
+    if (!useGrokBotsStore.getState().open) applyWorkspaceSwitchFocus()
     if (trySelectTopHomeRow()) return
     let done = false
     const unsubs: Array<() => void> = []

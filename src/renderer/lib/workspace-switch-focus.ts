@@ -7,9 +7,17 @@
 // 200ms "refocus terminal" poll used to win that race. Composer mode
 // must NOT fall back to the terminal until we have given the bar time
 // to appear, and the idle/click steal paths must honor the same pref.
+//
+// One rule everywhere (Agents switch, Home entry/pick/⌘N, the compose
+// bar's own mount): "Message agent" goes to the Thread's composer when the
+// Thread is open for that agent, else the agent message box. Never while
+// a dialog is open or the user is typing in some other field; `off` moves
+// nothing (Rosson 2026-10-16).
 
 import { usePageViewStore, isRoomPage } from '@/stores/page-view'
 import { useSettingsStore } from '@/stores/settings'
+import { useCommandPaletteStore } from '@/stores/command-palette'
+import { useRunningAgentsStore } from '@/stores/running-agents'
 
 let applyGen = 0
 let observer: MutationObserver | null = null
@@ -93,16 +101,63 @@ function focusVisibleTerminal(): boolean {
   return false
 }
 
+const MODAL_SELECTOR =
+  '[aria-modal="true"], [role="dialog"], [role="alertdialog"], dialog[open]'
+
+/** A dialog / popover is on screen (they mount only while open), or the
+ *  command palette / running-agents overlay is up. */
+export function isModalOpen(): boolean {
+  if (useCommandPaletteStore.getState().isOpen) return true
+  if (useRunningAgentsStore.getState().isOpen) return true
+  if (typeof document === 'undefined') return false
+  for (const el of document.querySelectorAll(MODAL_SELECTOR)) {
+    if (!isEffectivelyHidden(el)) return true
+  }
+  return false
+}
+
+/** The caret is in a visible text field that is not a compose bar or a
+ *  terminal (a search box, a rename field, a form): leave it there. A
+ *  compose bar or terminal is ours to move (a switch away from it). */
+export function isTypingElsewhere(): boolean {
+  if (typeof document === 'undefined') return false
+  const el = document.activeElement
+  if (!(el instanceof HTMLElement) || el === document.body) return false
+  const editable =
+    el.tagName === 'INPUT' ||
+    el.tagName === 'TEXTAREA' ||
+    el.tagName === 'SELECT' ||
+    el.isContentEditable
+  if (!editable) return false
+  if (el.closest('[data-compose-bar], [data-terminal-container]')) return false
+  return !isEffectivelyHidden(el)
+}
+
 function shouldApply(): boolean {
   if (useSettingsStore.getState().settingsOpen) return false
   if (!isRoomPage(usePageViewStore.getState().page)) return false
+  if (preferredWorkspaceSwitchFocus() === 'off') return false
+  if (isModalOpen() || isTypingElsewhere()) return false
   return true
 }
 
-export function preferredWorkspaceSwitchFocus(): 'terminal' | 'composer' {
-  return useSettingsStore.getState().workspaceSwitchFocus === 'composer'
-    ? 'composer'
-    : 'terminal'
+export function preferredWorkspaceSwitchFocus(): 'terminal' | 'composer' | 'off' {
+  const pref = useSettingsStore.getState().workspaceSwitchFocus
+  return pref === 'composer' || pref === 'off' ? pref : 'terminal'
+}
+
+/** Compose-bar mount (`TerminalComposeBar`): may this bar take the caret?
+ *  Only with "Message agent", only when a switch could (no dialog, not
+ *  typing elsewhere), and a PTY bar yields to a visible Thread composer in
+ *  the same room (split view mounts both; Thread first). */
+export function composeBarMayTakeFocus(textarea: HTMLTextAreaElement): boolean {
+  if (preferredWorkspaceSwitchFocus() !== 'composer') return false
+  if (isEffectivelyHidden(textarea)) return false
+  if (isModalOpen() || isTypingElsewhere()) return false
+  if (textarea.closest('[data-testid="agent-session-thread-compose-slot"]')) return true
+  const room = textarea.closest('[data-terminal-pane-wrapper]')
+  if (room && firstVisibleTextarea(room, THREAD_COMPOSE_TEXTAREA)) return false
+  return true
 }
 
 function dashPaneRoot(workspaceId: string): HTMLElement | null {
@@ -121,6 +176,7 @@ function dashPaneRoot(workspaceId: string): HTMLElement | null {
 export function tryFocusPreferredInputInDashboardPane(workspaceId: string): boolean {
   const pane = dashPaneRoot(workspaceId)
   if (!pane || isEffectivelyHidden(pane)) return false
+  // Explicit pane gestures (⌘N, Esc-to-pane): `off` lands on the terminal.
 
   if (preferredWorkspaceSwitchFocus() === 'composer') {
     const textarea = findVisibleComposeTextarea(pane)

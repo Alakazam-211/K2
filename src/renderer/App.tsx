@@ -19,6 +19,7 @@ import CommandPalette from './components/CommandPalette/CommandPalette'
 import ContextMenu from './components/ContextMenu/ContextMenu'
 import ConfirmDialog from './components/ConfirmDialog/ConfirmDialog'
 import WhatsNewModal from './components/WhatsNewModal/WhatsNewModal'
+import OwnerAccountPrompt from './components/OwnerAccountPrompt/OwnerAccountPrompt'
 import { UnsavedChangesModalHost } from './components/UnsavedChangesModal/UnsavedChangesModal'
 import MemoryWatcher from './components/MemoryWatcher/MemoryWatcher'
 import HeartbeatScheduleDialog from './components/HeartbeatScheduleDialog/HeartbeatScheduleDialog'
@@ -1120,6 +1121,8 @@ function AppRoot(): React.JSX.Element {
       {/* button-only while Settings is open so General → "Read what's new"
           still works; full modal elsewhere. */}
       <WhatsNewModal mode={settingsOpen ? 'button-only' : undefined} />
+      {/* 0.46.0: ask the local owner once which login is theirs. */}
+      <OwnerAccountPrompt />
       <MemoryWatcher />
       <UnsavedChangesModalHost />
       <HeartbeatScheduleDialog />

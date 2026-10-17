@@ -107,6 +107,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/GrokBots/GrokBotRows.tsx',
   'components/HeartbeatScheduleDialog/HeartbeatScheduleDialog.tsx',
   'components/MergeDialog/MergeDialog.tsx',
+  // 0.46.0: the "Your account" setup prompt is about the window's own server.
+  'components/OwnerAccountPrompt/OwnerAccountPrompt.tsx',
   'components/Presence/PresenceKickButton.tsx',
   'components/Projects/ProjectChatPanel.tsx',
   'components/Projects/ProjectDashboard.tsx',

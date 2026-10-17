@@ -258,6 +258,7 @@ pub mod push;
 // migration 0157): person keys, effective switches, recipients.
 pub mod notify_prefs;
 pub mod person_color;
+pub mod owner_account_prompt;
 pub mod person_name;
 // Companion C4 (prd-companion-v2 §4) — the daemon-held mobile
 // push-device registry (`push_devices`): upsert-by-device-id

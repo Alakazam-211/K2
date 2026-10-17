@@ -247,6 +247,9 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
         return forbidden("\"ownerColor\" changes only through POST /cli/people/color".to_string());
     }
     // The one-time ownerDisplayName carry-over flag is daemon-owned.
+    if partial.get("ownerAccountPrompt").is_some() {
+        return forbidden("\"ownerAccountPrompt\" changes only through POST /cli/owner/account-prompt/dismiss".to_string());
+    }
     if partial.get("ownerDisplayNameCarried").is_some() {
         return forbidden("\"ownerDisplayNameCarried\" is set by the daemon only".to_string());
     }

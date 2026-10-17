@@ -7886,7 +7886,9 @@ async fn handle_one_request(
         p if p.starts_with("/cli/notify/")
             || p == crate::notify_routes::OWNER_ACCOUNTS_PATH
             || p == crate::notify_routes::PEOPLE_COLOR_PATH
-            || p == crate::notify_routes::PEOPLE_NAME_PATH =>
+            || p == crate::notify_routes::PEOPLE_NAME_PATH
+            || p == crate::notify_routes::OWNER_ACCOUNT_PROMPT_PATH
+            || p == crate::notify_routes::OWNER_ACCOUNT_PROMPT_DISMISS_PATH =>
         {
             if !super::http::token_ok(&query, state.token.as_str()) {
                 let _ = stream.read(&mut buf).await;

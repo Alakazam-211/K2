@@ -505,6 +505,14 @@ pub struct AppSettings {
     /// only; `settings/update` refuses the key.
     #[serde(default)]
     pub owner_display_name_carried: bool,
+    /// 0.46.0 "Your account" setup prompt
+    /// (`k2_core::owner_account_prompt`): `dismissedVersion` is the
+    /// version where the owner chose "Not now"; the prompt asks again
+    /// after the version changes. Written only by
+    /// `POST /cli/owner/account-prompt/dismiss`; `settings/update` refuses
+    /// the key.
+    #[serde(default)]
+    pub owner_account_prompt: crate::owner_account_prompt::OwnerAccountPrompt,
     /// K2 Mail (prd-email-server-v1 §12 / D4) — the GLOBAL default
     /// agent-send gating mode: `off` (default) | `approval` | `on`.
     /// Per-workspace `projects.mail_agent_send` (migration 0075)
@@ -966,6 +974,7 @@ impl Default for AppSettings {
             owner_accounts: Vec::new(),
             owner_color: None,
             owner_display_name_carried: false,
+            owner_account_prompt: crate::owner_account_prompt::OwnerAccountPrompt::default(),
             mail_agent_send: default_mail_agent_send(),
             mail_address_cap: default_mail_address_cap(),
             mail_quota_bytes: default_mail_quota_bytes(),

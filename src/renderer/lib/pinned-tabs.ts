@@ -1,11 +1,15 @@
 // Pinned tabs (Rosson 2026-10-16): any tab can be pinned from the tab
-// itself. A column's strip is always [system][pinned][regular]:
+// itself. A column's strip is always [system][design][pinned][regular]:
 //
 //   - system  — the workspace's Chat / Inbox tabs (`isSystemAgent`);
+//   - design  — the workspace's pinned Design tab (`isPinnedDesign`,
+//               prd-browser-design-mode-v1 DD3 / D-A3). Fixed like the
+//               system tabs (no drag, no user unpin) but NOT an agent tab;
+//               the workspace's "Design mode" setting adds or removes it;
 //   - pinned  — tabs the user pinned, in pin order;
 //   - regular — everything else.
 //
-// The pin rides the layout flag `isPinnedFile` (#587). It began as the
+// The user pin rides the layout flag `isPinnedFile` (#587). It began as the
 // pinned-HTML-file flag and now means "pinned tab" for every tab kind. The
 // name stays because the daemon already round-trips it and keys on it: the
 // leaked-tab prune never drops a tab carrying it (`db_ops.rs`), and the
@@ -15,23 +19,35 @@
 
 export interface PinnableTab {
   isSystemAgent?: boolean
+  isPinnedDesign?: boolean
   isPinnedFile?: boolean
 }
 
-/** True when the user pinned this tab (system tabs are fixed, not pinned). */
+/** The workspace's pinned Design tab (never a system tab). */
+export function isPinnedDesignTab(tab: PinnableTab | null | undefined): boolean {
+  return !!tab && tab.isPinnedDesign === true && tab.isSystemAgent !== true
+}
+
+/** System and pinned-Design tabs sit in fixed places: no drag, no user pin. */
+export function isFixedTab(tab: PinnableTab | null | undefined): boolean {
+  return !!tab && (tab.isSystemAgent === true || isPinnedDesignTab(tab))
+}
+
+/** True when the user pinned this tab (system and Design tabs are fixed, not pinned). */
 export function isPinnedTab(tab: PinnableTab | null | undefined): boolean {
-  return !!tab && tab.isPinnedFile === true && tab.isSystemAgent !== true
+  return !!tab && tab.isPinnedFile === true && !isFixedTab(tab)
 }
 
-/** 0 system, 1 pinned, 2 regular. */
-function band(tab: PinnableTab): 0 | 1 | 2 {
+/** 0 system, 1 pinned Design, 2 user pinned, 3 regular. */
+function band(tab: PinnableTab): 0 | 1 | 2 | 3 {
   if (tab.isSystemAgent === true) return 0
-  return isPinnedTab(tab) ? 1 : 2
+  if (isPinnedDesignTab(tab)) return 1
+  return isPinnedTab(tab) ? 2 : 3
 }
 
-/** Stable sort into [system][pinned][regular]. Returns the SAME array when it
- *  is already in that order, so a no-op never churns the store (every new
- *  `tabs` array is an autosave). */
+/** Stable sort into [system][design][pinned][regular]. Returns the SAME
+ *  array when it is already in that order, so a no-op never churns the store
+ *  (every new `tabs` array is an autosave). */
 export function orderPinnedTabs<T extends PinnableTab>(tabs: T[]): T[] {
   let ordered = true
   for (let i = 1; i < tabs.length; i++) {
@@ -41,31 +57,29 @@ export function orderPinnedTabs<T extends PinnableTab>(tabs: T[]): T[] {
     }
   }
   if (ordered) return tabs
-  return [
-    ...tabs.filter((t) => band(t) === 0),
-    ...tabs.filter((t) => band(t) === 1),
-    ...tabs.filter((t) => band(t) === 2),
-  ]
+  return [0, 1, 2, 3].flatMap((b) => tabs.filter((t) => band(t) === b))
 }
 
-/** Counts of the system and pinned bands of an ordered strip. */
+/** Counts of the fixed (system + pinned Design) and user-pinned bands of an
+ *  ordered strip. `system` counts every fixed tab, so it is also the index
+ *  of the first user-pinned tab. */
 export function pinnedBands(tabs: PinnableTab[]): { system: number; pinned: number } {
   let system = 0
   let pinned = 0
   for (const t of tabs) {
     const b = band(t)
-    if (b === 0) system++
-    else if (b === 1) pinned++
+    if (b <= 1) system++
+    else if (b === 2) pinned++
   }
   return { system, pinned }
 }
 
 /** The drag drop indicator ("insert before index", 0..length) clamped to the
  *  dragged tab's own band: a pinned tab drops only among the pinned tabs, a
- *  regular one only among the regular tabs. Null for a system tab (fixed). */
+ *  regular one only among the regular tabs. Null for a fixed tab. */
 export function clampTabDropIndex(tabs: PinnableTab[], fromIndex: number, dropIndex: number): number | null {
   const moving = tabs[fromIndex]
-  if (!moving || moving.isSystemAgent === true) return null
+  if (!moving || isFixedTab(moving)) return null
   const { system, pinned } = pinnedBands(tabs)
   const [min, max] = isPinnedTab(moving)
     ? [system, system + pinned]
@@ -74,10 +88,10 @@ export function clampTabDropIndex(tabs: PinnableTab[], fromIndex: number, dropIn
 }
 
 /** `reorderTabs`' target (an index in the strip AFTER removing the moved
- *  tab) clamped to the moved tab's band. Null for a system tab (fixed). */
+ *  tab) clamped to the moved tab's band. Null for a fixed tab. */
 export function clampReorderTarget(tabs: PinnableTab[], fromIndex: number, toIndex: number): number | null {
   const moving = tabs[fromIndex]
-  if (!moving || moving.isSystemAgent === true) return null
+  if (!moving || isFixedTab(moving)) return null
   const { system, pinned } = pinnedBands(tabs)
   const [min, max] = isPinnedTab(moving)
     ? [system, system + pinned - 1]
@@ -88,7 +102,7 @@ export function clampReorderTarget(tabs: PinnableTab[], fromIndex: number, toInd
 /** Move `tabId` into the pinned band (at its end) or out of it (to the first
  *  regular slot, like a browser), setting or clearing the flag. `mark` maps
  *  the tab to its new flagged copy. Returns the same array when nothing
- *  changes (missing tab, system tab, or already in that state). */
+ *  changes (missing tab, fixed tab, or already in that state). */
 export function withTabPinned<T extends PinnableTab & { id: string }>(
   tabs: T[],
   tabId: string,
@@ -98,7 +112,7 @@ export function withTabPinned<T extends PinnableTab & { id: string }>(
   const idx = tabs.findIndex((t) => t.id === tabId)
   if (idx < 0) return tabs
   const tab = tabs[idx]
-  if (tab.isSystemAgent === true) return tabs
+  if (isFixedTab(tab)) return tabs
   if (isPinnedTab(tab) === pinned) return tabs
   const rest = orderPinnedTabs(tabs.filter((t) => t.id !== tabId))
   const { system, pinned: pinnedCount } = pinnedBands(rest)

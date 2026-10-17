@@ -12,6 +12,7 @@ import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { beginBrowserMotion } from '@/lib/browser-overlay'
 import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
+import { PaletteIcon } from '@/components/icons/K2Icons'
 
 // ── Types (from tabs store — will be available after store refactor) ──
 
@@ -43,7 +44,7 @@ interface BrowserItemData {
 
 interface Item {
   id: string
-  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes'
+  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes' | 'design'
   data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData | { workspacePath: string }
   pinned?: boolean
 }
@@ -69,6 +70,9 @@ function getTabLabel(item: Item): string {
   }
   if (item.type === 'changes') {
     return 'Changes'
+  }
+  if (item.type === 'design') {
+    return 'Design'
   }
   if (item.type === 'browser') {
     const data = item.data as BrowserItemData
@@ -100,6 +104,9 @@ function paneItemIcon(item: Item): React.JSX.Element | null {
   }
   if (item.type === 'changes') {
     return <ChangesTabIcon />
+  }
+  if (item.type === 'design') {
+    return <PaletteIcon size={14} />
   }
   return null
 }

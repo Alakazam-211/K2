@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   clampReorderTarget,
   clampTabDropIndex,
+  isFixedTab,
+  isPinnedDesignTab,
   isPinnedTab,
   orderPinnedTabs,
   pinnedBands,
@@ -11,6 +13,7 @@ import {
 interface T {
   id: string
   isSystemAgent?: boolean
+  isPinnedDesign?: boolean
   isPinnedFile?: boolean
 }
 
@@ -102,5 +105,31 @@ describe('withTabPinned', () => {
     expect(withTabPinned(tabs, 'nope', true, mark)).toBe(tabs)
     expect(withTabPinned(tabs, 'p1', true, mark)).toBe(tabs)
     expect(withTabPinned(tabs, 'r1', false, mark)).toBe(tabs)
+  })
+})
+
+describe('the pinned Design band (prd-browser-design-mode-v1 D-A3)', () => {
+  const design = (id: string): T => ({ id, isPinnedDesign: true })
+
+  it('orders [system][design][pinned][regular] and is never a user pin', () => {
+    const tabs: T[] = [reg('r'), pin('p'), design('d'), sys('s')]
+    expect(ids(orderPinnedTabs(tabs))).toEqual(['s', 'd', 'p', 'r'])
+    expect(isPinnedTab({ isPinnedDesign: true, isPinnedFile: true })).toBe(false)
+    expect(isPinnedDesignTab(design('d'))).toBe(true)
+    expect(isFixedTab(design('d'))).toBe(true)
+    expect(isPinnedDesignTab({ isSystemAgent: true, isPinnedDesign: true })).toBe(false)
+  })
+
+  it('is fixed: no drag, no reorder, no user pin; bands count it with the system tabs', () => {
+    const tabs: T[] = [sys('s'), design('d'), pin('p'), reg('r')]
+    expect(pinnedBands(tabs)).toEqual({ system: 2, pinned: 1 })
+    expect(clampTabDropIndex(tabs, 1, 3)).toBeNull()
+    expect(clampReorderTarget(tabs, 1, 3)).toBeNull()
+    // A regular tab cannot be dropped in front of it.
+    expect(clampTabDropIndex(tabs, 3, 0)).toBe(3)
+    expect(clampReorderTarget(tabs, 2, 0)).toBe(2)
+    expect(withTabPinned(tabs, 'd', true, mark)).toBe(tabs)
+    // Pinning a regular tab lands after the Design tab and the other pins.
+    expect(ids(withTabPinned(tabs, 'r', true, mark))).toEqual(['s', 'd', 'p', 'r'])
   })
 })

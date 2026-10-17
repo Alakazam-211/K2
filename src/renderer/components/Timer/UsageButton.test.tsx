@@ -362,9 +362,17 @@ describe('UsageButton', () => {
     // Only the window with a length has a pace mark; 80% used vs 57% gone reads ahead.
     expect(menu.querySelectorAll('[data-testid="limit-pace-mark"]')).toHaveLength(1)
     expect(menu.textContent).toContain('ahead of pace')
-    // The track is visible (not the menu's own background).
+    // The track is visible (the palette's control track, not the menu's own
+    // background or the near-invisible border colour), 6px tall.
     const bar = menu.querySelectorAll('[role="progressbar"]')[1]
-    expect(bar.className).toContain('bg-[var(--color-border)]')
+    expect(bar.className.split(' ')).toContain('h-1.5')
+    const track = bar.querySelector('[data-testid="limit-bar-track"]')
+    if (!track) throw new Error('limit bar has no track')
+    expect(track.className.split(' ')).toContain('bg-[var(--color-control-track-off)]')
+    expect(track.className).not.toContain('--color-border')
+    expect(track.hasAttribute('data-limit-track')).toBe(true)
+    // The pace mark sits outside the track, so rounding / chamfer never clips it.
+    expect(track.querySelector('[data-testid="limit-pace-mark"]')).toBeNull()
     expect(bar.getAttribute('aria-valuetext')).toBe('80% used, ahead of pace')
   })
 

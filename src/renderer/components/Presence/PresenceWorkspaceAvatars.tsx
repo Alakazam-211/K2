@@ -10,7 +10,8 @@
 // store's `usersForWorkspace` (the daemon's prefix rule).
 
 import { useMemo } from 'react'
-import { presenceDisplayName, useSelfPresenceUser } from './PresenceAvatar'
+import { useSelfPresenceUser } from './PresenceAvatar'
+import { personDisplayName, type PersonNames } from '@/lib/person-name'
 import { PresenceChip, PresenceMoreChip } from './PresenceChip'
 import {
   usePresenceStore,
@@ -44,14 +45,14 @@ export default function PresenceWorkspaceAvatars({
 export function PresenceAvatarCluster({
   users,
 }: {
-  users: { user: string; role: RosterUser['role']; color?: string | null }[]
+  users: ({ user: string; role: RosterUser['role']; color?: string | null } & PersonNames)[]
 }): React.JSX.Element | null {
   if (users.length === 0) return null
 
   // A `+N` chip takes the last column when there are more than fit.
   const overflow = users.length > MAX_WORKSPACE_AVATARS + 1 ? users.length - MAX_WORKSPACE_AVATARS : 0
   const visible = overflow > 0 ? users.slice(0, MAX_WORKSPACE_AVATARS) : users
-  const title = users.map((u) => presenceDisplayName(u.user)).join(', ')
+  const title = users.map((u) => personDisplayName(u.user, u)).join(', ')
   const count = visible.length + (overflow > 0 ? 1 : 0)
   const lastGap = { marginLeft: 'calc(var(--num-gap) - var(--clu-gap))' }
 
@@ -59,7 +60,7 @@ export function PresenceAvatarCluster({
     <span className="flex flex-none items-center" style={{ gap: 'var(--clu-gap)' }} title={title} data-presence-grid="">
       {visible.map((u, i) => (
         <span key={u.user} className="flex flex-none" style={i === count - 1 ? lastGap : undefined}>
-          <PresenceChip name={u.user} role={u.role} size={ROW_CHIP_PX} color={u.color} />
+          <PresenceChip name={u.user} role={u.role} size={ROW_CHIP_PX} color={u.color} names={u} />
         </span>
       ))}
       {overflow > 0 && (

@@ -11,20 +11,25 @@
 //     the role tag (and "Owner's account" on an owner-linked login), with
 //     how and where you are signed in as one muted line;
 //   - labelled rows (one label column, one control column, the Settings
-//     row and type scale): Your name (the owner key), Colour, Your account
+//     row and type scale): First name, Last name, Colour, Your account
 //     (the owner key);
 //   - Password, then a Security section (collapsed, like the nav's
 //     sections) with recent sign-ins for the owner key.
 //
-// Every control is the SAME component Settings → General uses, so both
-// stay in sync and save the same way (straight away, optimistic, rolled
-// back on a refusal): `OwnerDisplayNameInput` (the settings store),
-// `YourAccountSelect` + `useOwnerAccounts` (`POST /cli/owner/accounts`),
-// `PersonColorPicker` (`POST /cli/people/color`).
+// Names (0.46.0): optional first/last for every person (`/cli/people/name`,
+// `usePersonName`, shared with Admin Access). The owner key's names are its
+// linked account's (the one picked in Your account); with none linked the
+// owner is "Owner" and the name fields wait for a pick. The owner's old
+// separate display name is gone.
 //
-// Permissions: Your name and Your account are the owner key's alone (the
-// daemon refuses them to every login), so a Connect login never sees them.
-// A Connect login has no display name of its own; it shows its username.
+// Every control saves straight away, optimistic, rolled back on a refusal,
+// and is the same component its Settings twin uses: `YourAccountSelect` +
+// `useOwnerAccounts` (`POST /cli/owner/accounts`, Settings → General),
+// `PersonColorPicker` (`POST /cli/people/color`), `PersonNameInput`.
+//
+// Permissions: Your account is the owner key's alone (the daemon refuses
+// it to every login), so a Connect login never sees it; a Connect login
+// edits only its own names, colour and password.
 // The modal is always about the window's own server, never a followed
 // (possibly view-only) room, so nothing here edits a room you only view.
 //
@@ -39,7 +44,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, DialogScrim, Surface } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
 import { windowTopBarTarget } from './top-bar-scope'
-import { useSettingsStore } from '@/stores/settings'
 import type { AuthAuditEvent } from '@/components/Settings/sections/access-audit-api'
 import {
   primaryOwnerAccount,
@@ -47,9 +51,10 @@ import {
   type AccountChoice,
 } from '@/components/Settings/sections/YourAccountRow'
 import { OWNER_ACCOUNT_TAG, useOwnerAccounts } from '@/components/Settings/sections/OwnerAccountToggle'
-import { OwnerDisplayNameInput } from '@/components/Settings/sections/OwnerDisplayNameInput'
+import { PersonNameInput, usePersonName } from '@/components/Presence/PersonNameFields'
+import { realName } from '@/lib/person-name'
 import { SettingRow } from '@/components/Settings/controls/SettingControls'
-import { PersonColorPicker } from '@/components/Presence/PersonColorPicker'
+import { COLOR_NEEDS_NEWER_SERVER, PersonColorPicker } from '@/components/Presence/PersonColorPicker'
 import type { PersonColorView } from '@/components/Presence/person-color-api'
 import { PresenceChip, type PresenceRole } from '@/components/Presence/PresenceChip'
 import { daemonCliPost } from '@/lib/daemon-cli'
@@ -291,7 +296,6 @@ function LoadedProfile({
   scope: ServerScope
   closeButton: React.ReactNode
 }): React.JSX.Element {
-  const ownerDisplayName = useSettingsStore((s) => s.ownerDisplayName)
   const linkedRead = profile.linked
   const ownerEdits = profile.ownerToken && linkedRead.kind === 'ok'
   const owner = useOwnerAccounts(
@@ -310,7 +314,14 @@ function LoadedProfile({
   const me = profile.username?.trim().toLowerCase() ?? null
   const host = scope.connectHost()
 
-  const name = profile.ownerToken ? ownerDisplayName.trim() || account?.username || 'Owner' : (profile.username ?? 'unknown')
+  // Names: your own; for the owner key, the linked account's (re-read when
+  // a different account is picked).
+  const personName = usePersonName(scope, undefined, linked.join(','))
+  const nameView = personName.state.kind === 'ok' ? personName.state.view : null
+  const real = realName(nameView)
+  const name = real ?? (profile.ownerToken ? account?.username ?? 'Owner' : (profile.username ?? 'unknown'))
+  // The owner key has names only through a linked account.
+  const namesEditable = nameView !== null && (!profile.ownerToken || account !== null)
   const username = profile.ownerToken ? account?.username ?? null : profile.username
   const role: ProfileRole | null = account ? account.role : profile.role
   const created = profile.ownerToken
@@ -366,6 +377,7 @@ function LoadedProfile({
         role={(role ?? 'member') as PresenceRole}
         size={36}
         color={colorView?.color ?? null}
+        names={nameView}
         title=""
       />
       <div className="flex-1 min-w-0">
@@ -438,17 +450,45 @@ function LoadedProfile({
           </p>
         ) : null}
         <div data-testid="admin-profile-fields">
-          {profile.ownerToken ? (
-            <SettingRow columns label="Your name" testId="admin-profile-display-name">
-              <OwnerDisplayNameInput className="w-full max-w-[240px]" />
-            </SettingRow>
+          {personName.state.kind !== 'error' ? (
+            <>
+              <SettingRow columns label="First name" testId="admin-profile-first-name">
+                <PersonNameInput
+                  label="First name"
+                  value={nameView?.firstName ?? null}
+                  disabled={!namesEditable || personName.busy}
+                  placeholder={profile.ownerToken && account === null ? 'Pick Your account first' : undefined}
+                  onCommit={(v) => void personName.save({ firstName: v })}
+                />
+              </SettingRow>
+              <SettingRow columns label="Last name" testId="admin-profile-last-name">
+                <div className="flex flex-col gap-1 min-w-0 w-full">
+                  <PersonNameInput
+                    label="Last name"
+                    value={nameView?.lastName ?? null}
+                    disabled={!namesEditable || personName.busy}
+                    placeholder={profile.ownerToken && account === null ? 'Pick Your account first' : undefined}
+                    onCommit={(v) => void personName.save({ lastName: v })}
+                  />
+                  {personName.state.kind === 'unsupported' ? (
+                    <p className="m-0 text-[11px] text-[var(--color-text-muted)]">{COLOR_NEEDS_NEWER_SERVER}</p>
+                  ) : null}
+                  {personName.writeError ? (
+                    <p role="alert" className="m-0 text-[11px] text-[var(--color-status-error-soft)]">
+                      {personName.writeError}
+                    </p>
+                  ) : null}
+                </div>
+              </SettingRow>
+            </>
           ) : null}
           <SettingRow columns label="Colour" testId="admin-profile-color">
             <PersonColorPicker
               scope={scope}
               onView={setColorView}
-              previewName={name}
+              previewName={profile.ownerToken ? account?.username ?? 'owner' : (profile.username ?? 'owner')}
               previewRole={(role ?? 'member') as PresenceRole}
+              previewNames={nameView}
             />
           </SettingRow>
           {ownerEdits && choices ? (

@@ -67,7 +67,7 @@ export default function PresenceRoster(): React.JSX.Element | null {
             overlap); you get a ring (on the window's own server). */}
         <span className="flex items-center" style={{ gap: 3 }}>
           {visible.map((u) => (
-            <PresenceAvatar key={u.user} name={u.user} role={u.role} size={20} you={!following && u.user === windowSelf} color={u.color} />
+            <PresenceAvatar key={u.user} name={u.user} role={u.role} size={20} you={!following && u.user === windowSelf} color={u.color} names={u} />
           ))}
           {overflow > 0 && <PresenceMoreChip count={overflow} size={20} title={`${overflow} more connected`} />}
         </span>

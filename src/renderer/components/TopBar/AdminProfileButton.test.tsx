@@ -119,7 +119,13 @@ function ownerRoutes(): Record<string, unknown> {
     'users/audit': AUDIT,
     'tunnel/status': { running: true, public_url: 'https://rosson.k2.dev', frpc_installed: true },
     'people/color': colorView('owner', null, '#8c62c4'),
+    'people/name': nameView('owner', 'Rosson', 'Long'),
   }
+}
+
+function nameView(person: string, firstName: string | null, lastName: string | null): Record<string, unknown> {
+  const real = [firstName, lastName].filter(Boolean).join(' ')
+  return { ok: true, person, firstName, lastName, displayName: real || (person === 'owner' ? 'Owner' : person), names: {} }
 }
 
 const PALETTE = ['#3a9e96', '#3a87a8', '#6a6fc8', '#8c62c4', '#b25cb0', '#c45a86', '#9b7a95', '#64778f']
@@ -310,7 +316,7 @@ describe('the Admin profile modal: who you are', () => {
     render(<AdminProfileButton />)
     await openLoaded()
     // Header: the owner's name, the picked login, its role, how/where.
-    expect(text('admin-profile-name')).toBe('Rosson Long')
+    await waitFor(() => expect(text('admin-profile-name')).toBe('Rosson Long'))
     expect(text('admin-profile-username')).toBe('rosson-phone')
     expect(text('admin-profile-role')).toBe('Admin')
     expect(text('admin-profile-how')).toContain('As the owner, on this computer')
@@ -319,12 +325,13 @@ describe('the Admin profile modal: who you are', () => {
     expect(text('admin-profile-created')).toContain('2026')
     expect(screen.getByTestId('admin-profile-header').querySelector('[data-presence-chip]')).toBeTruthy()
 
-    // Rows, in order: Your name, Colour, Your account.
+    // Rows, in order: First name, Last name, Colour, Your account.
     const labels = Array.from(screen.getByTestId('admin-profile-fields').querySelectorAll('[data-testid^="admin-profile-"] > span:first-child')).map(
       (s) => s.textContent,
     )
-    expect(labels).toEqual(['Your name', 'Colour', 'Your account'])
-    expect((screen.getByLabelText('Your name') as HTMLInputElement).value).toBe('Rosson Long')
+    expect(labels).toEqual(['First name', 'Last name', 'Colour', 'Your account'])
+    expect((screen.getByLabelText('First name') as HTMLInputElement).value).toBe('Rosson')
+    expect((screen.getByLabelText('Last name') as HTMLInputElement).value).toBe('Long')
     expect((screen.getByLabelText('Your account') as HTMLButtonElement).textContent).toContain('rosson-phone')
     expect(dialog().textContent).not.toContain('sam')
 
@@ -362,26 +369,34 @@ describe('the Admin profile modal: who you are', () => {
     for (const r of grid.querySelectorAll('[data-testid="admin-profile-sign-in"]')) {
       expect(r.querySelectorAll('[role="cell"]').length).toBe(6)
     }
-    expect([...h.calls].sort()).toEqual(['auth/whoami', 'owner/accounts', 'people/color', 'tunnel/status', 'users', 'users/audit'])
+    expect([...h.calls].sort()).toEqual(['auth/whoami', 'owner/accounts', 'people/color', 'people/name', 'tunnel/status', 'users', 'users/audit'])
   })
 
   it('the owner with no account picked: the owner name and role, Your account on None, no password, no hint', async () => {
     h.routes['owner/accounts'] = { accounts: [], aliases: [] }
+    // No linked account: the owner has no names; the daemon says "Owner".
+    h.routes['people/name'] = nameView('owner', null, null)
     render(<AdminProfileButton />)
     await openLoaded()
-    expect(text('admin-profile-name')).toBe('Rosson Long')
+    expect(text('admin-profile-name')).toBe('Owner')
     expect(text('admin-profile-role')).toBe('Owner')
+    // The name fields wait for a pick.
+    for (const label of ['First name', 'Last name']) {
+      const input = screen.getByLabelText(label) as HTMLInputElement
+      expect([input.disabled, input.placeholder]).toEqual([true, 'Pick Your account first'])
+    }
     expect(document.querySelector('[data-testid="admin-profile-username"]')).toBeNull()
     expect((screen.getByLabelText('Your account') as HTMLButtonElement).textContent).toContain('None')
     expect(document.querySelector('[data-testid="admin-profile-sign-ins"]')).toBeNull()
     expect(document.querySelector('[data-testid="admin-profile-change-password"]')).toBeNull()
   })
 
-  it('a Connect admin from another device: username, Admin, the owner\'s-account tag; no owner-only fields', async () => {
+  it('a Connect admin from another device: the owner\'s names (it is the owner\'s account), username, Admin, the tag; no owner-only fields', async () => {
     connectAdmin()
     render(<AdminProfileButton />)
     await openLoaded()
-    expect(text('admin-profile-name')).toBe('rosson-phone')
+    await waitFor(() => expect(text('admin-profile-name')).toBe('Rosson Long'))
+    expect(text('admin-profile-username')).toBe('rosson-phone')
     expect(text('admin-profile-role')).toBe('Admin')
     expect(text('admin-profile-owners-account')).toBe('Owner\'s account')
     expect(text('admin-profile-how')).toContain('With a Connect login, from this device')
@@ -395,12 +410,13 @@ describe('the Admin profile modal: who you are', () => {
     expect(h.calls).not.toContain('users/audit')
   })
 
-  it('a Connect member sees only their own editable fields: Colour and Password; only whoami, tunnel and colour are read', async () => {
+  it('a Connect member sees only their own editable fields: names, Colour, Password; only whoami, tunnel, colour and names are read', async () => {
     h.scope = { label: 'Rosson’s Mac', isRemote: true, host: { ...remoteHost(), username: 'sam' } }
     h.routes = {
       'auth/whoami': { owner: false, username: 'sam', role: 'member', mustChangePassword: false },
       'tunnel/status': { running: false, frpc_installed: true },
-      'people/color': colorView('sam', null, '#2563eb'),
+      'people/color': colorView('sam', null, '#3a9e96'),
+      'people/name': nameView('sam', null, null),
     }
     render(<AdminProfileButton />)
     await openLoaded()
@@ -410,14 +426,15 @@ describe('the Admin profile modal: who you are', () => {
     const labels = Array.from(screen.getByTestId('admin-profile-fields').querySelectorAll('[data-testid^="admin-profile-"] > span:first-child')).map(
       (s) => s.textContent,
     )
-    expect(labels).toEqual(['Colour'])
+    expect(labels).toEqual(['First name', 'Last name', 'Colour'])
     expect(document.querySelector('[data-testid="admin-profile-owners-account"]')).toBeNull()
     expect(screen.queryByLabelText('Your name')).toBeNull()
+    expect((screen.getByLabelText('First name') as HTMLInputElement).disabled).toBe(false)
     expect(screen.queryByLabelText('Your account')).toBeNull()
     expect(text('admin-profile-password')).toContain('Change password')
     // No "only an admin can see this" filler.
     expect(dialog().textContent).not.toMatch(/can see this/)
-    expect([...h.calls].sort()).toEqual(['auth/whoami', 'people/color', 'tunnel/status'])
+    expect([...h.calls].sort()).toEqual(['auth/whoami', 'people/color', 'people/name', 'tunnel/status'])
   })
 
   it('whoami failing shows the error, not a guess', async () => {
@@ -447,18 +464,25 @@ describe('the Admin profile modal: editing inline (the owner)', () => {
 
   it('changes Your account: posts owner/accounts (the General route) and the header follows at once', async () => {
     withJulie()
-    h.postRoutes['owner/accounts'] = (body) => ({ ok: true, accounts: body.accounts, aliases: body.accounts })
+    h.postRoutes['owner/accounts'] = (body) => {
+      // The owner's names are the linked account's: julie has none yet.
+      h.routes['people/name'] = nameView('owner', null, null)
+      return { ok: true, accounts: body.accounts, aliases: body.accounts }
+    }
     render(<AdminProfileButton />)
     await openLoaded()
+    await waitFor(() => expect(text('admin-profile-name')).toBe('Rosson Long'))
     await pickAccount('julie')
     await waitFor(() => expect(h.posts).toEqual([{ route: 'owner/accounts', body: { accounts: ['julie'] } }]))
-    await waitFor(() => expect(text('admin-profile-username')).toBe('julie'))
+    // The names are re-read for the new account; with none, the username shows.
+    await waitFor(() => expect(text('admin-profile-name')).toBe('julie'))
     expect(text('admin-profile-role')).toBe('Owner')
     expect((screen.getByLabelText('Your account') as HTMLButtonElement).textContent).toContain('julie')
+    expect(h.calls.filter((c) => c === 'people/name').length).toBe(2)
 
     await pickAccount('None')
     await waitFor(() => expect(h.posts[1]).toEqual({ route: 'owner/accounts', body: { accounts: [] } }))
-    await waitFor(() => expect(document.querySelector('[data-testid="admin-profile-username"]')).toBeNull())
+    await waitFor(() => expect(text('admin-profile-name')).toBe('Owner'))
     expect(document.querySelector('[data-testid="admin-profile-change-password"]')).toBeNull()
   })
 
@@ -475,15 +499,60 @@ describe('the Admin profile modal: editing inline (the owner)', () => {
     expect(text('admin-profile-username')).toBe('rosson-phone')
   })
 
-  it('changes Your name: the settings store saves ownerDisplayName (settings/update) and the header follows', async () => {
+  it('changes first and last name: posts people/name for the owner (the linked account) and the header follows', async () => {
+    h.postRoutes['people/name'] = (body) => nameView('owner', (body.firstName as string) ?? 'Rosson', (body.lastName as string) ?? 'Long')
     render(<AdminProfileButton />)
     await openLoaded()
-    const input = screen.getByLabelText('Your name') as HTMLInputElement
-    act(() => void fireEvent.change(input, { target: { value: '  Ross Long  ' } }))
-    act(() => void fireEvent.blur(input))
-    await waitFor(() => expect(h.settingsUpdates).toEqual([{ ownerDisplayName: 'Ross Long' }]))
-    expect(useSettingsStore.getState().ownerDisplayName).toBe('Ross Long')
+    await waitFor(() => expect((screen.getByLabelText('First name') as HTMLInputElement).value).toBe('Rosson'))
+    const first = screen.getByLabelText('First name') as HTMLInputElement
+    act(() => void fireEvent.change(first, { target: { value: '  Ross  ' } }))
+    act(() => void fireEvent.blur(first))
+    await waitFor(() => expect(h.posts).toEqual([{ route: 'people/name', body: { firstName: 'Ross' } }]))
     await waitFor(() => expect(text('admin-profile-name')).toBe('Ross Long'))
+    // Clearing sends null; the old display-name setting is never written.
+    const last = screen.getByLabelText('Last name') as HTMLInputElement
+    act(() => void fireEvent.change(last, { target: { value: '' } }))
+    act(() => void fireEvent.blur(last))
+    await waitFor(() => expect(h.posts[1]).toEqual({ route: 'people/name', body: { lastName: null } }))
+    expect(h.settingsUpdates).toEqual([])
+    // No separate "Your name" any more.
+    expect(screen.queryByLabelText('Your name')).toBeNull()
+  })
+
+  it('a refused name rolls back with the server\'s error', async () => {
+    h.postRoutes['people/name'] = () => {
+      throw new Error('first name is longer than 64 characters')
+    }
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await waitFor(() => expect((screen.getByLabelText('First name') as HTMLInputElement).value).toBe('Rosson'))
+    const first = screen.getByLabelText('First name') as HTMLInputElement
+    act(() => void fireEvent.change(first, { target: { value: 'Robert' } }))
+    act(() => void fireEvent.blur(first))
+    expect((await screen.findByRole('alert')).textContent).toContain('longer than 64')
+    await waitFor(() => expect((screen.getByLabelText('First name') as HTMLInputElement).value).toBe('Rosson'))
+    expect(text('admin-profile-name')).toBe('Rosson Long')
+  })
+
+  it('a Connect member sets their own names (no person in the body)', async () => {
+    h.scope = { label: 'Rosson’s Mac', isRemote: true, host: { ...remoteHost(), username: 'sam' } }
+    h.routes = {
+      'auth/whoami': { owner: false, username: 'sam', role: 'member', mustChangePassword: false },
+      'tunnel/status': { running: false, frpc_installed: true },
+      'people/color': colorView('sam', null, '#3a9e96'),
+      'people/name': nameView('sam', null, null),
+    }
+    h.postRoutes['people/name'] = (body) => nameView('sam', (body.firstName as string) ?? null, null)
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await waitFor(() => expect((screen.getByLabelText('First name') as HTMLInputElement).disabled).toBe(false))
+    const first = screen.getByLabelText('First name') as HTMLInputElement
+    act(() => first.focus())
+    act(() => void fireEvent.change(first, { target: { value: 'Sam' } }))
+    act(() => void fireEvent.keyDown(first, { key: 'Enter' }))
+    await waitFor(() => expect(h.posts).toEqual([{ route: 'people/name', body: { firstName: 'Sam' } }]))
+    await waitFor(() => expect(text('admin-profile-name')).toBe('Sam'))
+    expect(text('admin-profile-username')).toBe('sam')
   })
 })
 
@@ -714,6 +783,7 @@ describe('the Admin profile modal: colour', () => {
       'auth/whoami': { owner: false, username: 'sam', role: 'member', mustChangePassword: false },
       'tunnel/status': { running: false, frpc_installed: true },
       'people/color': colorView('sam', '#64778f', '#64778f'),
+      'people/name': nameView('sam', null, null),
     }
     h.postRoutes['people/color'] = (body) => colorView('sam', body.color as string, body.color as string)
     render(<AdminProfileButton />)

@@ -294,9 +294,12 @@ export const COUNTER_GROUP_GAP_PX = 7
 /** The working grid's layout box (the 3×3 cell spinner), in em of the
  *  counter text: its width in the counter row. */
 export const COUNTER_SPINNER_EM = 0.8
-/** The working grid's ink height, in em of the counter text: the digits'
- *  height (≈ cap height), as tall as the braille it replaced. */
-export const COUNTER_SPINNER_INK_EM = 0.72
+/** The working grid's ink height, in em of the counter text: about 1px
+ *  over the digits' height (≈ 0.72em) at the 12px default (Rosson's tune:
+ *  0.72em read ~1px short), as tall as the braille it replaced. */
+export const COUNTER_SPINNER_INK_EM = 0.8
+/** Space (px) between the working grid and the running count after it. */
+export const COUNTER_SPINNER_GAP_PX = 1
 /** The grid's ink is 14 of its 24-unit box (StatusGlyphs), so the svg is
  *  drawn this many em square to make the ink COUNTER_SPINNER_INK_EM tall. */
 export const COUNTER_SPINNER_SVG_EM = Number(((COUNTER_SPINNER_INK_EM * 24) / 14).toFixed(3))
@@ -315,7 +318,7 @@ export function estimateStripTextPx(text: string, fontPx = 12): number {
 export function counterWidthPx(c: StripCounter, fontPx = 12): number {
   let w = COUNTER_ICON_PX + COUNTER_ICON_GAP_PX
   if (c.key !== 'subagents') return w + estimateStripTextPx(String(c.count), fontPx)
-  if (c.count > 0) w += Math.ceil(COUNTER_SPINNER_EM * fontPx) + estimateStripTextPx(String(c.count), fontPx)
+  if (c.count > 0) w += Math.ceil(COUNTER_SPINNER_EM * fontPx) + COUNTER_SPINNER_GAP_PX + estimateStripTextPx(String(c.count), fontPx)
   if (c.done > 0) {
     w += (c.count > 0 ? COUNTER_GROUP_GAP_PX : 0) + COUNTER_CHECK_PX + COUNTER_ICON_GAP_PX
     w += estimateStripTextPx(String(c.done), fontPx)

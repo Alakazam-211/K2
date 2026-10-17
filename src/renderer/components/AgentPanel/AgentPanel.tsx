@@ -50,8 +50,8 @@ import {
   DbAgentCreateToggle,
   DnsManageToggle,
   MailManageToggle,
-  RemoteInstructToggle,
 } from '@/components/Settings/sections/ProjectsSection'
+import { RemoteInstructToggle } from '@/components/Settings/shared/RemoteInstructToggle'
 
 type ViewerRole = 'owner' | 'admin' | 'member'
 type RouteFloor = ViewerRole

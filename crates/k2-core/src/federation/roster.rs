@@ -73,17 +73,20 @@ pub struct LocalRoster {
     pub agents: Vec<RosterAgent>,
 }
 
-/// Build the local roster projection: every registered workspace that has a
-/// CONFIGURED agent **and** is willing to accept federated contact.
+/// Build the local roster projection — the agent list a paired peer sees
+/// when it adds agents or connections over federation: every registered
+/// workspace that has a CONFIGURED agent **and** whose EFFECTIVE "Let agents
+/// on other servers message this agent" switch is on.
 ///
 /// Exposure rules (fail-closed):
 /// 1. Workspace must have a resolvable agent name (configuration opt-in).
-/// 2. Contact permission:
-///    - App master **"Let remote users message agents"** ON → all configured
-///      agents are listed; OR
-///    - Master OFF → only workspaces with **per-workspace Remote Access**
-///      (`allow_remote_instruct`) OR **Allow agents to create connections**
-///      for this workspace (`agents_can_create_connections`) ON.
+/// 2. The switch (internal name: remote-instruct) is on: the app master
+///    **"Let agents on other servers message every agent"**
+///    (`allowRemoteInstruct`) OR the per-agent flag
+///    (`projects.allow_remote_instruct`). Off → not listed (Rosson
+///    2026-10-16). "Allow agents to create connections" no longer lists an
+///    agent on its own; see [`accepts_inbound`] for what a peer that asks
+///    directly gets.
 ///
 /// Read-only (DB + name resolution); spawns nothing.
 pub fn build_local_roster() -> LocalRoster {
@@ -91,7 +94,7 @@ pub fn build_local_roster() -> LocalRoster {
     let master_remote = crate::app_settings::load().allow_remote_instruct;
     let projects = crate::projects_ops::projects_list().unwrap_or_default();
     for p in projects {
-        if let Some(agent) = visible_agent_name(&p.path, master_remote) {
+        if let Some(agent) = listed_agent_name(&p.path, master_remote) {
             // Roster `agent` is the handle (D8). Prefer projects.handle;
             // fall back to resolve_agent_name (AGENT.md `name:` after
             // migrate, or basename for unmigrated test rows).
@@ -124,11 +127,31 @@ pub fn build_local_roster() -> LocalRoster {
     LocalRoster { agents }
 }
 
-/// The roster exposure rule for one workspace (see [`build_local_roster`]):
-/// contact permission (app master, per-workspace Remote Access, or Allow
-/// agents to create connections) AND a configured agent. Returns the
-/// trimmed resolved agent name when visible.
-fn visible_agent_name(project_path: &str, master_remote: bool) -> Option<String> {
+/// The trimmed resolved agent name of a configured workspace, if any.
+fn configured_agent_name(project_path: &str) -> Option<String> {
+    crate::workspace::agent_identity::resolve_agent_name(project_path)
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty())
+}
+
+/// The LISTING rule for one workspace (see [`build_local_roster`]): the
+/// effective "Let agents on other servers message this agent" switch is on
+/// (app master OR per-agent flag) AND a configured agent. Returns the
+/// trimmed resolved agent name when listed.
+fn listed_agent_name(project_path: &str, master_remote: bool) -> Option<String> {
+    if !master_remote && !crate::workspace::settings::get_allow_remote_instruct(project_path) {
+        return None;
+    }
+    configured_agent_name(project_path)
+}
+
+/// The DIRECT-ADDRESS rule for one workspace, used by [`accepts_inbound`].
+/// Unchanged from before the 2026-10-16 listing change so a peer that
+/// addresses an agent directly gets the same answer as before: the switch
+/// on, or "Allow agents to create connections" on (that agent's live text
+/// is then declined by the consent gate; a tray package lands, as before),
+/// AND a configured agent. Anything else is the same 404 as an unknown id.
+fn addressable_agent_name(project_path: &str, master_remote: bool) -> Option<String> {
     if !master_remote {
         let ws_remote = crate::workspace::settings::get_allow_remote_instruct(project_path);
         let ws_conn =
@@ -137,29 +160,30 @@ fn visible_agent_name(project_path: &str, master_remote: bool) -> Option<String>
             return None;
         }
     }
-    crate::workspace::agent_identity::resolve_agent_name(project_path)
-        .map(|a| a.trim().to_string())
-        .filter(|a| !a.is_empty())
+    configured_agent_name(project_path)
 }
 
 /// True when the workspace at `project_path` is listed in this daemon's
 /// roster — the same rule [`build_local_roster`] applies.
 pub fn is_visible(project_path: &str) -> bool {
-    visible_agent_name(project_path, crate::app_settings::load().allow_remote_instruct).is_some()
+    listed_agent_name(project_path, crate::app_settings::load().allow_remote_instruct).is_some()
 }
 
 /// Receiver gate for a verified federated signal addressed to
 /// `(workspace_id, to_name)` (CA1). Accepts only when the workspace is
-/// visible under this daemon's roster rules AND `to_name` is one of its
+/// addressable ([`addressable_agent_name`], the pre-2026-10-16 rule, so a
+/// direct ask gets the same answer as before) AND `to_name` is one of its
 /// names (handle, alias, `projects.name`, resolved agent name) under any
 /// sender fold ([`names_loosely_match`](crate::workspace::handle::names_loosely_match)).
-/// Fail-closed: an unknown id, a hidden workspace or a foreign name → false.
+/// Live text still needs the switch on: `handle_inbound` declines it
+/// otherwise. Fail-closed: an unknown id, a hidden workspace or a foreign
+/// name → false.
 pub fn accepts_inbound(workspace_id: &str, project_path: &str, to_name: &str) -> bool {
     if to_name.trim().is_empty() {
         return false;
     }
     let master_remote = crate::app_settings::load().allow_remote_instruct;
-    let Some(agent) = visible_agent_name(project_path, master_remote) else {
+    let Some(agent) = addressable_agent_name(project_path, master_remote) else {
         return false;
     };
     let (mut names, own_addresses, retired_hit) = {
@@ -406,6 +430,93 @@ mod tests {
                 roster.agents.iter().all(|a| a.workspace_id != conf_id),
                 "workspace without remote contact permission must be hidden"
             );
+        });
+    }
+
+    /// Rosson 2026-10-16: the roster a peer sees lists an agent only while
+    /// its effective "Let agents on other servers message this agent"
+    /// switch is on. "Allow agents to create connections" alone no longer
+    /// lists it.
+    #[test]
+    fn build_local_roster_lists_only_agents_with_the_switch_on() {
+        with_temp_home(|| {
+            crate::db::init_for_tests();
+            crate::app_settings::update(serde_json::json!({ "allowRemoteInstruct": false }))
+                .expect("master off");
+            let on_path = unique_ws_path("switch-on");
+            let on_id = insert_project("roster-switch-on", &on_path, 1);
+            crate::workspace::settings::update_project_setting(&on_path, "allow_remote_instruct", "1")
+                .expect("switch on");
+            let off_path = unique_ws_path("switch-off");
+            let off_id = insert_project("roster-switch-off", &off_path, 1);
+            crate::workspace::settings::update_project_setting(&off_path, "allow_remote_instruct", "0")
+                .expect("switch off");
+            let conn_path = unique_ws_path("conn-only");
+            let conn_id = insert_project("roster-conn-only", &conn_path, 1);
+            crate::workspace::settings::update_project_setting(
+                &conn_path,
+                "agents_can_create_connections",
+                "1",
+            )
+            .expect("connections on");
+            assert!(crate::workspace::settings::agents_can_create_connections_for_path(&conn_path));
+
+            let roster = build_local_roster();
+            let listed = |id: &str| roster.agents.iter().any(|a| a.workspace_id == id);
+            assert!(listed(&on_id), "switch on must be listed: {:?}", roster.agents);
+            assert!(!listed(&off_id), "switch off must not be listed: {:?}", roster.agents);
+            assert!(!listed(&conn_id), "connections-only must not be listed: {:?}", roster.agents);
+
+            // Flip the agent's switch: it leaves the listing, then returns.
+            crate::workspace::settings::update_project_setting(&on_path, "allow_remote_instruct", "0")
+                .expect("switch off");
+            assert!(!build_local_roster().agents.iter().any(|a| a.workspace_id == on_id));
+            crate::workspace::settings::update_project_setting(&on_path, "allow_remote_instruct", "1")
+                .expect("switch on again");
+            assert!(build_local_roster().agents.iter().any(|a| a.workspace_id == on_id));
+
+            // A direct ask to the connections-only agent gets the same answer
+            // as before the listing change (addressable; live text is then
+            // declined by the consent gate in handle_inbound).
+            assert!(accepts_inbound(&conn_id, &conn_path, "roster-conn-only"));
+            assert!(!accepts_inbound(&off_id, &off_path, "roster-switch-off"));
+        });
+    }
+
+    /// The app master ("Let agents on other servers message every agent")
+    /// forces every configured agent into the listing, whatever its own
+    /// switch says — and turning it off drops them again.
+    #[test]
+    fn master_switch_forces_listing_on() {
+        with_temp_home(|| {
+            crate::db::init_for_tests();
+            let path = unique_ws_path("master-forced");
+            let id = insert_project("roster-master-forced", &path, 1);
+            crate::workspace::settings::update_project_setting(&path, "allow_remote_instruct", "0")
+                .expect("own switch off");
+            let bare_path = unique_ws_path("master-bare");
+            let bare_id = insert_project("roster-master-bare", &bare_path, 0);
+
+            crate::app_settings::update(serde_json::json!({ "allowRemoteInstruct": false }))
+                .expect("master off");
+            assert!(!build_local_roster().agents.iter().any(|a| a.workspace_id == id));
+            assert!(!is_visible(&path));
+
+            crate::app_settings::update(serde_json::json!({ "allowRemoteInstruct": true }))
+                .expect("master on");
+            let roster = build_local_roster();
+            assert!(
+                roster.agents.iter().any(|a| a.workspace_id == id),
+                "master on must list an agent whose own switch is off: {:?}",
+                roster.agents
+            );
+            assert!(is_visible(&path));
+            // Still never an unconfigured workspace.
+            assert!(!roster.agents.iter().any(|a| a.workspace_id == bare_id));
+
+            crate::app_settings::update(serde_json::json!({ "allowRemoteInstruct": false }))
+                .expect("master off again");
+            assert!(!build_local_roster().agents.iter().any(|a| a.workspace_id == id));
         });
     }
 

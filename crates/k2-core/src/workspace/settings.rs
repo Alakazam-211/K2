@@ -59,9 +59,9 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         // tier_id (Workspace States) retired — no longer writable via settings.
         // 0.34.0 Session Stream opt-in (Phase 2). Values: 'on' | 'off'.
         "use_session_stream",
-        // #67 — per-workspace remote-instruct opt-in. Values: '1' | '0'
-        // (default 0/OFF, fail-closed). Gates the composer's connect-user
-        // path for THIS workspace; see `remote_instruct_allowed_for_path`.
+        // #67 — per-agent "Let agents on other servers message this agent"
+        // (remote-instruct). Values: '1' | '0' (default 0/OFF, fail-closed).
+        // Gates federated agents only; see `remote_instruct_allowed_for_path`.
         "allow_remote_instruct",
         // DNS K1 — per-workspace DNS-manage opt-in. Values: '1' | '0'
         // (default 0/OFF, fail-closed). Gates agent DNS mutation for
@@ -700,7 +700,8 @@ pub fn get_wiki_public_chat(project_path: &str) -> bool {
     .unwrap_or(false)
 }
 
-/// #67 — the EFFECTIVE remote-instruct gate decision for `project_path`.
+/// #67 — the EFFECTIVE "Let agents on other servers message this agent"
+/// switch for `project_path` (internal name: remote-instruct).
 ///
 /// A workspace is opted in iff its per-workspace flag is set OR the
 /// app-level `allowRemoteInstruct` master is on. The app-level flag is
@@ -708,9 +709,11 @@ pub fn get_wiki_public_chat(project_path: &str) -> bool {
 /// old app-level (0.40.12) flag keep working — every workspace stays
 /// opted in — while the default (both OFF) denies, fail-closed.
 ///
-/// This gates ONLY the connect-user path; the owner token is always
-/// allowed by [`crate::routes`]'s `authorize_send_message` regardless.
-/// Fail-closed: an unknown/unregistered workspace + app-level off → false.
+/// Since 2026-10-16 (Rosson) this gates FEDERATED agents only: the roster
+/// served to peers and federated inbound delivery. People who log in here
+/// (owner, Admins, Members) are not gated by it; `authorize_send_message`
+/// decides them by role. Fail-closed: an unknown/unregistered workspace +
+/// app-level off → false.
 pub fn remote_instruct_allowed_for_path(project_path: &str) -> bool {
     // App-level master switch opts in ALL workspaces (back-compat).
     if crate::app_settings::load().allow_remote_instruct {

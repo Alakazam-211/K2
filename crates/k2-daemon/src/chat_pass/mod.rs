@@ -72,9 +72,10 @@ pub const CHAT_CAPS: &[&str] = &[CAP_CHAT_READ, "chat:post", "chat:respond", "vo
 pub const CAP_CHAT_READ: &str = "chat:read";
 
 /// The seven claims of a chat pass (S28 §6), plus the optional `caps`
-/// ceiling (K7). `caps` is omitted (not `[]`) when the caller's App role
-/// grants none, so a pass without caps is exactly the seven claims Sew S8
-/// already verifies; Sew ignores claims it doesn't know.
+/// ceiling (K7) and the optional `app` (spec v1.3). `caps` is omitted (not
+/// `[]`) when the caller's App role grants none, so a pass without caps is
+/// exactly the seven claims Sew S8 already verifies; Sew ignores claims it
+/// doesn't know.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChatPassClaims {
@@ -87,6 +88,24 @@ pub struct ChatPassClaims {
     pub jti: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caps: Option<Vec<String>>,
+    /// The App this pass is for: its published-service id (a lowercase
+    /// UUID), the same string as `app` in the mint answer. Only App
+    /// sessions carry it (never the owner, a handoff, a Connect login or a
+    /// box login), so Sew can tell Hearth's pass from Meet's for the same
+    /// person (Sew, 2026-10-17: at most 128 of `[a-z0-9_.:-]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+}
+
+/// Longest `app` claim Sew accepts.
+pub const MAX_APP_CLAIM: usize = 128;
+
+/// Sew's `app` grammar: 1–128 of `[a-z0-9_.:-]`. K2's service ids are
+/// `uuid::Uuid::new_v4().to_string()` (36 of `[0-9a-f-]`), so they fit.
+pub fn app_claim_ok(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= MAX_APP_CLAIM
+        && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'.' | b':' | b'-'))
 }
 
 fn is_install_id(s: &str) -> bool {
@@ -117,6 +136,7 @@ impl ChatPassClaims {
             exp: now + PASS_TTL_SECS,
             jti: new_jti()?,
             caps: None,
+            app: None,
         };
         c.validate()?;
         Ok(c)
@@ -179,7 +199,19 @@ impl ChatPassClaims {
                 return Err("caps, when present, must include chat:read (Sew SW3)".into());
             }
         }
+        if let Some(app) = &self.app {
+            if !app_claim_ok(app) {
+                return Err(format!("app must be 1-{MAX_APP_CLAIM} of [a-z0-9_.:-]"));
+            }
+        }
         Ok(())
+    }
+
+    /// Attach the App this pass is for (`None` → no claim).
+    pub fn with_app(mut self, app: Option<&str>) -> Result<ChatPassClaims, String> {
+        self.app = app.map(str::to_string);
+        self.validate()?;
+        Ok(self)
     }
 }
 

@@ -214,6 +214,7 @@ fn pass_gates_run_in_order_and_owner_pass_is_marked_owner_token() {
         let c = verify_with_jwks(b["pass"].as_str().expect("pass"), &jwks, AUD, T0).expect("verifies");
         assert_eq!((c.sub.as_str(), c.sid.as_str(), c.jti.as_str()), ("k2:owner", b["sid"].as_str().unwrap(), b["jti"].as_str().unwrap()));
         assert_eq!(c.exp - c.iat, 60);
+        assert_eq!(c.app, None, "the owner's pass names no App");
         assert!(verify_with_jwks(b["pass"].as_str().unwrap(), &jwks, "sew:999", T0).is_err(), "wrong aud");
         assert!(verify_with_jwks(b["pass"].as_str().unwrap(), &jwks, AUD, T0 + 60 + 31).is_err(), "expired");
     });
@@ -471,6 +472,8 @@ fn two_apps_on_one_box_each_mint_for_their_own_guests_k_m4() {
             assert_eq!(b["provenance"], "app-session");
             let c = verify_with_jwks(b["pass"].as_str().expect("pass"), &jwks, AUD, T0).expect("one Sew install: one audience");
             assert_eq!((c.sub.as_str(), c.sid.as_str()), (sub, sid));
+            // Spec v1.3: the JWS names the App, the same string as `app`.
+            assert_eq!(c.app.as_deref(), Some(app), "the pass's app claim");
         };
         let ada_sub = format!("k2:principal:{ada}");
         let bo_sub = format!("k2:principal:{bo}");
@@ -526,6 +529,43 @@ fn two_apps_on_one_box_each_mint_for_their_own_guests_k_m4() {
     assert!(!mint::link_admits(&host, meet), "a box login is no App's guest");
     let connect = identity::PassIdentity { provenance: Provenance::ConnectLogin, app: None, ..i };
     assert!(!mint::link_admits(&connect, meet));
+}
+
+/// Spec v1.3's `app` claim: App sessions only, in Sew's grammar; K2's
+/// service ids (lowercase UUIDs) always fit.
+#[test]
+fn app_claim_is_for_app_sessions_only_and_fits_sews_grammar() {
+    let app_session = identity::PassIdentity {
+        sub: "k2:principal:x".into(),
+        sid: "skn_x".into(),
+        actor: "principal:x".into(),
+        provenance: Provenance::AppSession,
+        sew_role: SewRole::Member,
+        caps: Vec::new(),
+        app: Some(MEET_SVC.into()),
+    };
+    assert_eq!(mint::app_claim(&app_session).as_deref(), Some(MEET_SVC));
+    let uuid = uuid::Uuid::new_v4().to_string();
+    let i = identity::PassIdentity { app: Some(uuid.clone()), ..app_session.clone() };
+    assert_eq!(mint::app_claim(&i), Some(uuid.clone()), "a real service id fits");
+    assert!(super::app_claim_ok(&uuid) && uuid.len() <= super::MAX_APP_CLAIM);
+    let host = identity::PassIdentity { app: Some(k2_core::skin::HOST_APP_ID.into()), ..app_session.clone() };
+    assert_eq!(mint::app_claim(&host), None, "a box login is no App");
+    let odd = identity::PassIdentity { app: Some("Svc With Spaces".into()), ..app_session.clone() };
+    assert_eq!(mint::app_claim(&odd), None, "outside Sew's grammar: left out, never refused");
+    for p in [Provenance::OwnerToken, Provenance::ConnectLogin, Provenance::OwnerHandoff] {
+        let i = identity::PassIdentity { provenance: p, ..app_session.clone() };
+        assert_eq!(mint::app_claim(&i), None, "{p:?}");
+    }
+    assert!(!super::app_claim_ok("") && !super::app_claim_ok(&"a".repeat(129)) && super::app_claim_ok(&"a".repeat(128)));
+    // Signed and verified, and refused by validate when malformed.
+    let r = ring("k7-app");
+    let c = ChatPassClaims::new(INSTALL, "k2:principal:p", "skn_1", T0).unwrap().with_app(Some(&uuid)).unwrap();
+    let got = verify_with_jwks(&r.ring.sign(&c, T0).unwrap(), &r.ring.public_jwks(T0).unwrap(), AUD, T0).unwrap();
+    assert_eq!(got.app.as_deref(), Some(uuid.as_str()));
+    assert!(ChatPassClaims::new(INSTALL, "k2:principal:p", "skn_1", T0).unwrap().with_app(Some("UPPER")).is_err());
+    let none = serde_json::to_value(ChatPassClaims::new(INSTALL, "k2:owner", "own_1", T0).unwrap()).unwrap();
+    assert!(none.get("app").is_none(), "absent, never null: {none}");
 }
 
 #[test]

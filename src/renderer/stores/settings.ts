@@ -40,6 +40,13 @@ import {
 // of that view — host switch must not change appearance.
 import { onActiveHostChange } from '@/stores/connect-host'
 import { onDaemonConnected } from '@/lib/daemon-reconnect'
+import {
+  clampCompletionSoundVolume,
+  normalizeCompletionSound,
+  DEFAULT_COMPLETION_SOUND,
+  DEFAULT_COMPLETION_SOUND_VOLUME,
+  type CompletionSoundId,
+} from '@/lib/completion-sound-options'
 
 // NOTE the naming collision: 'projects' is the LEGACY workspaces section
 // (label "Workspaces" — ProjectsSection.tsx); 'project-groups' is the
@@ -222,6 +229,11 @@ interface SettingsState {
   // finished while its pane wasn't being watched). The amber ActiveBar
   // dot always shows; this gates only the sound. DEFAULTS ON.
   completionSoundEnabled: boolean
+  // 0.46.1 — completion chime loudness 0–100 (50 = the pre-0.46.1 level)
+  // and which built-in chime plays. Daemon settings, so every client —
+  // local or remote — plays the same chime at the same level.
+  completionSoundVolume: number
+  completionSound: CompletionSoundId
 
   // When switching workspaces, which input to auto-focus. `"terminal"`
   // (default; today's behavior) | `"composer"` (the compose bar).
@@ -296,6 +308,10 @@ interface SettingsState {
   setApiEnabled: (enabled: boolean) => void
   setUseLlmHitlDetection: (enabled: boolean) => void
   setCompletionSoundEnabled: (enabled: boolean) => void
+  /** Optimistic now; the daemon write waits for the slider to rest
+   *  ({@link COMPLETION_SOUND_VOLUME_SAVE_DELAY_MS}). */
+  setCompletionSoundVolume: (volume: number) => void
+  setCompletionSound: (sound: CompletionSoundId) => void
   setWorkspaceSwitchFocus: (value: WorkspaceSwitchFocus) => void
   setNewAgentView: (pref: NewAgentViewPref) => void
   updateEditorSettings: (partial: Partial<EditorSettingsBackend>) => void
@@ -421,6 +437,27 @@ function styleFromLocalStore(): StyleSettingsBackend {
   return styleSelectionToBackend(s)
 }
 
+/** How long the volume slider must rest before the value is written to
+ *  the daemon (one write per drag, not one per step). */
+export const COMPLETION_SOUND_VOLUME_SAVE_DELAY_MS = 300
+
+let _volumeSaveTimer: ReturnType<typeof setTimeout> | null = null
+/** The slider value waiting for its write. A daemon echo that lands in
+ *  that window must not snap the slider back to the stored value. */
+let _pendingVolume: number | null = null
+
+/** The completion chime choice from a daemon settings body: unknown or
+ *  missing values (older daemons) read as the defaults. */
+function completionSoundChoice(result: {
+  completionSoundVolume?: number
+  completionSound?: string
+}): { completionSoundVolume: number; completionSound: CompletionSoundId } {
+  return {
+    completionSoundVolume: _pendingVolume ?? clampCompletionSoundVolume(result.completionSoundVolume),
+    completionSound: normalizeCompletionSound(result.completionSound),
+  }
+}
+
 async function persistAndApply(
   set: (state: Partial<SettingsState>) => void,
   updates: Record<string, any>
@@ -447,6 +484,7 @@ async function persistAndApply(
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
+      ...completionSoundChoice(result),
       // Caret target is per-install localStorage — never adopt the daemon echo.
       workspaceSwitchFocus: readWorkspaceSwitchFocus(),
       newAgentView: readNewAgentView(),
@@ -493,6 +531,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   apiEnabled: false,
   useLlmHitlDetection: false,
   completionSoundEnabled: true,
+  completionSoundVolume: DEFAULT_COMPLETION_SOUND_VOLUME,
+  completionSound: DEFAULT_COMPLETION_SOUND,
   workspaceSwitchFocus: readWorkspaceSwitchFocus(),
   newAgentView: readNewAgentView(),
   editor: { ...DEFAULT_EDITOR },
@@ -769,6 +809,33 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setCompletionSoundVolume: (volume: number) => {
+    const next = clampCompletionSoundVolume(volume)
+    _pendingVolume = next
+    set({ completionSoundVolume: next }) // optimistic
+    if (_volumeSaveTimer) clearTimeout(_volumeSaveTimer)
+    _volumeSaveTimer = setTimeout(() => {
+      _volumeSaveTimer = null
+      const value = _pendingVolume
+      _pendingVolume = null
+      if (value === null) return
+      // Partial update — the daemon clamps and deep-merges it.
+      void persistAndApply(set, { completionSoundVolume: value })
+    }, COMPLETION_SOUND_VOLUME_SAVE_DELAY_MS)
+  },
+
+  setCompletionSound: async (sound: CompletionSoundId) => {
+    const next = normalizeCompletionSound(sound)
+    const prev = get().completionSound
+    set({ completionSound: next }) // optimistic
+    try {
+      await persistAndApply(set, { completionSound: next })
+    } catch (err) {
+      console.error('[settings] Failed to persist completion-sound:', err)
+      set({ completionSound: prev })
+    }
+  },
+
   setCompletionSoundEnabled: async (enabled: boolean) => {
     const prev = get().completionSoundEnabled
     set({ completionSoundEnabled: enabled }) // optimistic
@@ -851,6 +918,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
+      ...completionSoundChoice(result),
       editor: mergeEditorDefaults(result.editor),
       // Style + workspace-switch focus stay client-local — reset-all
       // does not adopt daemon defaults for those.
@@ -916,6 +984,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       apiEnabled: result.apiEnabled ?? false,
       useLlmHitlDetection: result.useLlmHitlDetection ?? false,
       completionSoundEnabled: result.completionSoundEnabled ?? true,
+      ...completionSoundChoice(result),
       workspaceSwitchFocus: readWorkspaceSwitchFocus(),
       newAgentView: readNewAgentView(),
       editor: mergeEditorDefaults(result.editor),

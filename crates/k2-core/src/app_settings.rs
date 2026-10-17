@@ -194,6 +194,52 @@ impl AppSettings {
     }
 }
 
+/// 0.46.1 — the built-in completion chimes, synthesized in the renderer
+/// (`src/renderer/lib/completion-sound.ts`, which keeps the same list).
+/// The first is the default.
+pub const COMPLETION_SOUNDS: &[&str] = &["chime", "soft", "pop", "ding", "tick"];
+
+/// 50 = the loudness every install had before the volume setting.
+fn default_completion_sound_volume() -> u8 {
+    50
+}
+
+fn default_completion_sound() -> String {
+    COMPLETION_SOUNDS[0].to_string()
+}
+
+/// Any JSON number → rounded and clamped to 0–100. Anything else (a
+/// string, null, a hand-edited typo) → `None`.
+fn completion_sound_volume_from(v: &serde_json::Value) -> Option<u8> {
+    let n = v.as_f64()?;
+    if !n.is_finite() {
+        return None;
+    }
+    Some(n.round().clamp(0.0, 100.0) as u8)
+}
+
+/// Read path: a bad value falls back to the default, so one hand-edited
+/// typo can never fail the whole settings parse ([`update`] refuses it).
+fn de_completion_sound_volume<'de, D>(d: D) -> Result<u8, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(completion_sound_volume_from(&v).unwrap_or_else(default_completion_sound_volume))
+}
+
+/// Read path: an unknown sound name falls back to the default.
+fn de_completion_sound<'de, D>(d: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(d)?;
+    Ok(match v.as_str() {
+        Some(name) if COMPLETION_SOUNDS.contains(&name) => name.to_string(),
+        _ => default_completion_sound(),
+    })
+}
+
 fn default_true() -> bool {
     true
 }
@@ -469,6 +515,28 @@ pub struct AppSettings {
     /// the renderer AND-gates both.
     #[serde(default = "default_true")]
     pub completion_sound_enabled: bool,
+    /// 0.46.1 — loudness of the completion chime, 0–100.
+    /// **Default 50 = the pre-0.46.1 loudness** (the renderer maps 50 to
+    /// the old peak gain, 100 to 3× it, 0 to silence), so nothing
+    /// changes for existing users. Global only; per-workspace bells stay
+    /// on/off. Numbers are rounded and clamped to 0–100; anything else on
+    /// disk reads as the default ([`de_completion_sound_volume`]) and is
+    /// refused by [`update`]. Wire name `completionSoundVolume`.
+    #[serde(
+        default = "default_completion_sound_volume",
+        deserialize_with = "de_completion_sound_volume"
+    )]
+    pub completion_sound_volume: u8,
+    /// 0.46.1 — which synthesized chime plays: one of
+    /// [`COMPLETION_SOUNDS`] (default `"chime"`, the pre-0.46.1 sound).
+    /// An unknown name on disk reads as the default
+    /// ([`de_completion_sound`]); [`update`] refuses one. Wire name
+    /// `completionSound`.
+    #[serde(
+        default = "default_completion_sound",
+        deserialize_with = "de_completion_sound"
+    )]
+    pub completion_sound: String,
     /// Companion C4 (prd-companion-v2 §4) — the mobile-push relay
     /// gateway base URL (e.g. `https://push.k2.dev`). Env override:
     /// `K2_PUSH_GATEWAY_URL`. **`None`/blank = push is DORMANT**: the
@@ -969,6 +1037,8 @@ impl Default for AppSettings {
             connect_login_ingress: default_connect_login_ingress(),
             use_llm_hitl_detection: false,
             completion_sound_enabled: true,
+            completion_sound_volume: default_completion_sound_volume(),
+            completion_sound: default_completion_sound(),
             push_gateway_url: None,
             push_gateway_token: None,
             owner_accounts: Vec::new(),
@@ -1170,6 +1240,22 @@ pub fn save(settings: &AppSettings) -> Result<(), String> {
 /// `invalidate_all_sessions`, which is exactly the correct behavior.
 pub fn update(partial: serde_json::Value) -> Result<AppSettings, String> {
     let _guard = settings_lock().lock();
+    // 0.46.1: the read path forgives a bad completion-sound value (it
+    // falls back to the default); a WRITE of one is refused loudly so a
+    // caller never gets a silent "ok" for a value that was not kept.
+    if let Some(v) = partial.get("completionSoundVolume") {
+        if completion_sound_volume_from(v).is_none() {
+            return Err(format!("completionSoundVolume must be a number 0-100 (got {v})"));
+        }
+    }
+    if let Some(v) = partial.get("completionSound") {
+        if !v.as_str().is_some_and(|name| COMPLETION_SOUNDS.contains(&name)) {
+            return Err(format!(
+                "completionSound must be one of {} (got {v})",
+                COMPLETION_SOUNDS.join("|")
+            ));
+        }
+    }
     let current = load();
     let mut current_val = serde_json::to_value(&current)
         .map_err(|e| format!("serialize current settings: {e}"))?;
@@ -1557,6 +1643,64 @@ mod tests {
         let after = reset().expect("reset");
         assert!(after.completion_sound_enabled);
         assert!(load().completion_sound_enabled);
+    }
+
+    /// 0.46.1 — completion-sound volume + choice: defaults are today's
+    /// chime at today's loudness; numbers clamp to 0–100; a bad write is
+    /// refused and leaves the stored value alone; a bad value on disk
+    /// reads as the default without losing the rest of the file.
+    #[test]
+    fn completion_sound_volume_and_choice_default_clamp_and_validate() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        let fresh = load();
+        assert_eq!(fresh.completion_sound_volume, 50);
+        assert_eq!(fresh.completion_sound, "chime");
+        let wire = serde_json::to_value(&fresh).expect("serialize");
+        assert_eq!(wire["completionSoundVolume"], 50);
+        assert_eq!(wire["completionSound"], "chime");
+
+        let s = update(serde_json::json!({ "completionSoundVolume": 80, "completionSound": "pop" }))
+            .expect("set");
+        assert_eq!(s.completion_sound_volume, 80);
+        assert_eq!(s.completion_sound, "pop");
+        assert_eq!(load().completion_sound_volume, 80);
+        assert_eq!(load().completion_sound, "pop");
+
+        let high = update(serde_json::json!({ "completionSoundVolume": 250 })).expect("high");
+        assert_eq!(high.completion_sound_volume, 100);
+        let low = update(serde_json::json!({ "completionSoundVolume": -7 })).expect("low");
+        assert_eq!(low.completion_sound_volume, 0);
+        let float = update(serde_json::json!({ "completionSoundVolume": 33.6 })).expect("float");
+        assert_eq!(float.completion_sound_volume, 34);
+        assert_eq!(load().completion_sound_volume, 34);
+
+        let err = update(serde_json::json!({ "completionSoundVolume": "loud" }))
+            .expect_err("a non-number volume must be refused");
+        assert!(err.contains("completionSoundVolume"), "{err}");
+        let err = update(serde_json::json!({ "completionSound": "airhorn" }))
+            .expect_err("an unknown sound must be refused");
+        assert!(err.contains("chime|soft|pop|ding|tick"), "{err}");
+        assert_eq!(load().completion_sound_volume, 34, "refused write must not persist");
+        assert_eq!(load().completion_sound, "pop", "refused write must not persist");
+
+        for name in COMPLETION_SOUNDS {
+            let s = update(serde_json::json!({ "completionSound": name })).expect("known sound");
+            assert_eq!(s.completion_sound, *name);
+        }
+
+        // A hand-edited file with bad values reads as the defaults for
+        // those two keys and keeps everything else.
+        std::fs::write(
+            settings_file(),
+            r#"{"completionSoundVolume":"very","completionSound":"airhorn","defaultAgent":"codex"}"#,
+        )
+        .expect("write raw");
+        let raw = load();
+        assert_eq!(raw.completion_sound_volume, 50);
+        assert_eq!(raw.completion_sound, "chime");
+        assert_eq!(raw.default_agent, "codex", "one bad value must not reset the file");
     }
 
     /// DNS K1 — the dns-manage opt-in must default OFF on a fresh settings

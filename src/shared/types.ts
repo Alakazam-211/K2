@@ -156,6 +156,12 @@ export interface AppSettingsResponse {
   // Backed by typed `AppSettings.completion_sound_enabled`. Optional:
   // older snapshots omit it → readers treat absent as true (default ON).
   completionSoundEnabled?: boolean
+  // 0.46.1 — completion chime loudness 0–100 (50 = the pre-0.46.1 level)
+  // and which built-in chime plays (`chime` | `soft` | `pop` | `ding` |
+  // `tick`). Typed `AppSettings.completion_sound_{volume,}` in k2-core.
+  // Optional: older daemons omit them → readers use 50 / `chime`.
+  completionSoundVolume?: number
+  completionSound?: string
   // Style System P3 — the persisted Style selection. Backed by the typed
   // Rust `StyleSettings` struct in k2-core/app_settings.rs (a typed field
   // is REQUIRED there: AppSettings round-trips through serde and drops

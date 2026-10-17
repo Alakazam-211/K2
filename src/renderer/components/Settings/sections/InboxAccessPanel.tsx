@@ -13,6 +13,14 @@
 // (patch the parent's inbox row, revert on error); the daemon's structured
 // `{code, hint}` errors (403 not-primary, not_found) surface inline. This
 // panel NEVER shows credentials.
+//
+// EFFECTIVE SEND (Appa/Baden, macOS 0.45.4): a level of Send only works when
+// that workspace's agent-send gate allows it (`k2 mail sending`). The level
+// and the gate stay two controls — the gate is per WORKSPACE and covers
+// every inbox it uses (hosted and linked) plus hosted approval, so folding
+// it into one inbox's level would silently change the others. Instead each
+// Send row shows the daemon's effective `sendState` right under the level,
+// and when it is blocked offers "Turn on sending" for that workspace.
 
 import React, { useCallback, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
@@ -25,10 +33,97 @@ import {
   setInboxLevel,
   setInboxManage,
   setInboxPrimary,
+  setWorkspaceAgentSend,
   type Inbox,
   type InboxLevel,
   type InboxParticipant,
+  type SendState,
 } from './email-api'
+
+/** What a participant's Send level really does, in words. `null` = nothing
+ *  to say (no Send level, or an older daemon without `sendState`). */
+export function sendStateNote(
+  state: SendState | undefined,
+): { blocked: boolean; text: string } | null {
+  switch (state) {
+    case 'blocked_off':
+      return {
+        blocked: true,
+        text: "Send is blocked: this workspace's agent sending is off, so its agents get 'gated' when they send.",
+      }
+    case 'blocked_approval':
+      return {
+        blocked: true,
+        text: "Send is blocked: this workspace's agent sending is set to Approval, which only queues hosted mailboxes. A linked inbox needs On.",
+      }
+    case 'approval':
+      return { blocked: false, text: 'Sends wait for your approval (Email → Approvals).' }
+    case 'on':
+      return { blocked: false, text: 'Sending is on for this workspace.' }
+    default:
+      return null
+  }
+}
+
+/** Keep `sendState` right across an OPTIMISTIC level change (until the next
+ *  catalog read brings the daemon's value). Mirrors `send_state` in
+ *  crates/k2-daemon/src/mail/access.rs; unknown gate → leave it unset. */
+function withLevel(p: InboxParticipant, level: InboxLevel, source: Inbox['source']): InboxParticipant {
+  if (!p.agentSend) return { ...p, level, sendState: undefined }
+  let sendState: SendState = 'no_send_level'
+  if (level === 'send') {
+    if (p.agentSend === 'on') sendState = 'on'
+    else if (p.agentSend === 'approval') sendState = source === 'hosted' ? 'approval' : 'blocked_approval'
+    else sendState = 'blocked_off'
+  }
+  return { ...p, level, sendState }
+}
+
+function SendStateLine({
+  participant,
+  canMutate,
+  busy,
+  pending,
+  onTurnOn,
+}: {
+  participant: InboxParticipant
+  canMutate: boolean
+  busy: boolean
+  pending: boolean
+  onTurnOn: () => void
+}): React.JSX.Element | null {
+  if (participant.level !== 'send') return null
+  const note = sendStateNote(participant.sendState)
+  if (!note) return null
+  return (
+    <div
+      className="flex items-center gap-2"
+      data-testid={`send-state-${participant.projectId}`}
+      data-send-state={participant.sendState}
+    >
+      <span
+        className={`text-[10px] flex-1 min-w-0 ${
+          note.blocked
+            ? 'text-[var(--color-status-error-soft)]'
+            : 'text-[var(--color-text-muted)]'
+        }`}
+      >
+        {note.text}
+      </span>
+      {note.blocked && (
+        <button
+          type="button"
+          disabled={!canMutate || busy}
+          onClick={onTurnOn}
+          title="Let this workspace's agents send email (k2 mail sending <workspace> on)"
+          className="px-2 py-1 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 no-drag"
+        >
+          {pending ? '…' : 'Turn on sending'}
+        </button>
+      )}
+    </div>
+  )
+}
 
 const LEVEL_LABEL: Record<InboxLevel, string> = {
   read: 'Read-only',
@@ -135,7 +230,7 @@ export function InboxAccessPanel({
       setError(null)
       setPending(primaryId)
       const before = inbox.primary
-      patchInbox(inbox.address, (i) => ({ ...i, primary: { ...i.primary, level } }))
+      patchInbox(inbox.address, (i) => ({ ...i, primary: withLevel(i.primary, level, i.source) }))
       try {
         await setInboxLevel({ address: inbox.address, project: primaryId, level })
       } catch (e) {
@@ -156,7 +251,7 @@ export function InboxAccessPanel({
       const before = inbox.grants
       patchInbox(inbox.address, (i) => ({
         ...i,
-        grants: i.grants.map((g) => (g.projectId === projectId ? { ...g, level } : g)),
+        grants: i.grants.map((g) => (g.projectId === projectId ? withLevel(g, level, i.source) : g)),
       }))
       try {
         await setInboxLevel({ address: inbox.address, project: projectId, level })
@@ -189,6 +284,35 @@ export function InboxAccessPanel({
       }))
       try {
         await setInboxManage({ address: inbox.address, project: projectId, canManage, canDelete: nextDelete })
+      } catch (e) {
+        patchInbox(inbox.address, (i) => ({ ...i, primary: beforePrimary, grants: beforeGrants }))
+        setError(mailErrorMessage(e))
+      } finally {
+        setPending(null)
+      }
+    },
+    [inbox.address, inbox.primary, inbox.grants, patchInbox],
+  )
+
+  // Turn a workspace's agent-send gate ON (the fix for a blocked Send).
+  // Optimistic: every row of that workspace in this inbox flips to `on`.
+  const turnOnSending = useCallback(
+    async (projectId: string): Promise<void> => {
+      setError(null)
+      setPending(`sending:${projectId}`)
+      const beforePrimary = inbox.primary
+      const beforeGrants = inbox.grants
+      const apply = (p: InboxParticipant): InboxParticipant =>
+        p.projectId === projectId
+          ? { ...p, agentSend: 'on', sendState: p.level === 'send' ? 'on' : p.sendState }
+          : p
+      patchInbox(inbox.address, (i) => ({
+        ...i,
+        primary: apply(i.primary),
+        grants: i.grants.map(apply),
+      }))
+      try {
+        await setWorkspaceAgentSend({ workspace: projectId, agentSend: 'on' })
       } catch (e) {
         patchInbox(inbox.address, (i) => ({ ...i, primary: beforePrimary, grants: beforeGrants }))
         setError(mailErrorMessage(e))
@@ -299,8 +423,10 @@ export function InboxAccessPanel({
           <>
             {' '}or <strong>Read + Send</strong> — granting Send lets that workspace's agents send
             email as this account
-            {inbox.source === 'linked' ? ' (from your real external account)' : ''}. Sending is
-            immediate for now — there is no approval step yet.
+            {inbox.source === 'linked' ? ' (from your real external account)' : ''}, once that
+            workspace&rsquo;s agent sending is on (Settings → Workspaces / Agents → its Email
+            sending, or <span className="font-mono">k2 mail sending</span>). Each Send row below
+            says whether sending really works.
           </>
         )}{' '}
         Agents use the inbox via <span className="font-mono">k2 mail</span>.
@@ -328,6 +454,13 @@ export function InboxAccessPanel({
               className={`flex-shrink-0 ${disabledCls ?? ''}`}
             />
           </div>
+          <SendStateLine
+            participant={inbox.primary}
+            canMutate={canMutate}
+            busy={busy}
+            pending={pending === `sending:${primaryId}`}
+            onTurnOn={() => void turnOnSending(primaryId)}
+          />
           <ManageToggles
             participant={inbox.primary}
             disabled={!canMutate || busy}
@@ -367,6 +500,13 @@ export function InboxAccessPanel({
                 {pending === g.projectId ? '…' : 'Remove'}
               </button>
             </div>
+            <SendStateLine
+              participant={g}
+              canMutate={canMutate}
+              busy={busy}
+              pending={pending === `sending:${g.projectId}`}
+              onTurnOn={() => void turnOnSending(g.projectId)}
+            />
             <ManageToggles
               participant={g}
               disabled={!canMutate || busy}

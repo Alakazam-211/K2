@@ -21,9 +21,22 @@ const h = vi.hoisted(() => ({
   remember: vi.fn(),
   posts: [] as Array<{ route: string; body: Record<string, unknown> }>,
   postRoutes: {} as Record<string, (body: Record<string, unknown>) => unknown>,
+  settingsUpdates: [] as Array<Record<string, unknown>>,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
+// `/cli/settings/update`: where the settings store saves the owner's
+// display name (Settings → General uses the same store action).
+vi.mock('@/lib/daemon-settings', async (orig) => {
+  const real = await orig<typeof import('@/lib/daemon-settings')>()
+  return {
+    ...real,
+    settingsUpdate: vi.fn(async (updates: Record<string, unknown>) => {
+      h.settingsUpdates.push(updates)
+      return { ownerDisplayName: updates.ownerDisplayName }
+    }),
+  }
+})
 vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(async () => undefined),
   listen: vi.fn(async () => () => undefined),
@@ -69,13 +82,13 @@ vi.mock('@/kessel/server-scope', async (orig) => {
 })
 
 import { act } from 'react'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import TopBarUtilities from './TopBarUtilities'
 import AdminProfileButton from './AdminProfileButton'
 import { __resetZenAvailableForTests } from '@/lib/zen/zen-platform'
 import { useSettingsStore } from '@/stores/settings'
 import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
-import { PASSWORD_CHANGED_NOTICE, PICK_ACCOUNT_HINT, ownerPasswordChangedNotice } from './AdminProfileButton'
+import { PASSWORD_CHANGED_NOTICE, ownerPasswordChangedNotice } from './AdminProfileButton'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -144,6 +157,7 @@ beforeEach(() => {
   h.calls = []
   h.posts = []
   h.postRoutes = {}
+  h.settingsUpdates = []
   h.routes = ownerRoutes()
   h.scope = { label: 'This computer', isRemote: false, host: null }
   useSettingsStore.setState({ settingsOpen: false, ownerDisplayName: 'Rosson Long' })
@@ -247,7 +261,8 @@ describe('the Admin profile modal: open and close', () => {
     render(<AdminProfileButton />)
     await openLoaded()
     const first = screen.getByTestId('admin-profile-close')
-    const last = screen.getByTestId('admin-profile-open-settings')
+    // Password sits last (secondary actions at the bottom).
+    const last = screen.getByTestId('admin-profile-change-password')
     last.focus()
     act(() => void fireEvent.keyDown(window, { key: 'Tab' }))
     expect(document.activeElement).toBe(first)
@@ -259,36 +274,58 @@ describe('the Admin profile modal: open and close', () => {
     expect(document.activeElement).toBe(first)
   })
 
-  it('the settings button opens Settings → User Access and closes the modal', async () => {
+  it('has no "go to Settings" hint anywhere, for the owner (with and without an account) or a Connect login', async () => {
+    // Rosson 2026-10-17: edit here, don't say where things live.
+    const noHints = (): void => {
+      const t = dialog().textContent ?? ''
+      expect(t).not.toMatch(/Settings/)
+      expect(t).not.toMatch(/Pick your account/)
+      expect(t).not.toContain('→')
+      expect(document.querySelector('[data-testid="admin-profile-open-settings"]')).toBeNull()
+    }
     render(<AdminProfileButton />)
     await openLoaded()
-    act(() => void fireEvent.click(screen.getByTestId('admin-profile-open-settings')))
-    expect(document.querySelector('[data-testid="admin-profile-dialog"]')).toBeNull()
-    const s = useSettingsStore.getState()
-    expect([s.settingsOpen, s.activeSection]).toEqual([true, 'people'])
+    await screen.findByTestId('person-color-picker')
+    noHints()
+    cleanup()
+
+    h.routes['owner/accounts'] = { accounts: [], aliases: [] }
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await screen.findByTestId('person-color-picker')
+    noHints()
+    cleanup()
+
+    connectAdmin()
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await screen.findByTestId('person-color-picker')
+    noHints()
   })
 })
 
 describe('the Admin profile modal: who you are', () => {
-  it('the owner on this computer with an account picked: that login, its role and date, the display name, sign-ins', async () => {
+  it('the owner with an account picked: a header with the name, username, role and date; the editable rows; sign-ins', async () => {
     render(<AdminProfileButton />)
     await openLoaded()
-    // Rosson 2026-10-17: the owner key shows the owner's ACCOUNT (Settings →
-    // General → Your account), not a generic "Owner".
-    expect(text('admin-profile-name')).toContain('rosson-phone')
-    expect(text('admin-profile-name')).toContain('Your account')
-    expect(text('admin-profile-display-name')).toContain('Rosson Long')
-    expect(text('admin-profile-role')).toContain('Admin')
+    // Header: the owner's name, the picked login, its role, how/where.
+    expect(text('admin-profile-name')).toBe('Rosson Long')
+    expect(text('admin-profile-username')).toBe('rosson-phone')
+    expect(text('admin-profile-role')).toBe('Admin')
     expect(text('admin-profile-how')).toContain('As the owner, on this computer')
     expect(text('admin-profile-server')).toContain('This computer')
     expect(text('admin-profile-server')).toContain('https://rosson.k2.dev')
-    expect(text('admin-profile-linked')).toContain('rosson-phone')
-    expect(document.querySelector('[data-testid="admin-profile-pick-account"]')).toBeNull()
     expect(text('admin-profile-created')).toContain('2026')
+    expect(screen.getByTestId('admin-profile-header').querySelector('[data-presence-chip]')).toBeTruthy()
 
-    const account = text('admin-profile-account')
-    expect(account).not.toContain('The owner key isn’t an account')
-    expect(account).not.toContain('sam')
+    // Rows, in order: Your name, Colour, Your account.
+    const labels = Array.from(screen.getByTestId('admin-profile-fields').querySelectorAll('[data-testid^="admin-profile-"] > span:first-child')).map(
+      (s) => s.textContent,
+    )
+    expect(labels).toEqual(['Your name', 'Colour', 'Your account'])
+    expect((screen.getByLabelText('Your name') as HTMLInputElement).value).toBe('Rosson Long')
+    expect((screen.getByLabelText('Your account') as HTMLButtonElement).textContent).toContain('rosson-phone')
+    expect(dialog().textContent).not.toContain('sam')
 
     // Only rosson-phone's sign-in events, newest first; not sam's, not the
     // password change.
@@ -301,37 +338,37 @@ describe('the Admin profile modal: who you are', () => {
     expect([...h.calls].sort()).toEqual(['auth/whoami', 'owner/accounts', 'people/color', 'tunnel/status', 'users', 'users/audit'])
   })
 
-  it('the owner with no account picked: the owner profile plus "Pick your account in Settings → General"', async () => {
+  it('the owner with no account picked: the owner name and role, Your account on None, no password, no hint', async () => {
     h.routes['owner/accounts'] = { accounts: [], aliases: [] }
     render(<AdminProfileButton />)
     await openLoaded()
-    expect(text('admin-profile-pick-account')).toContain(PICK_ACCOUNT_HINT)
-    expect(PICK_ACCOUNT_HINT).toBe('Pick your account in Settings → General')
-    expect(text('admin-profile-name')).toContain('Rosson Long')
-    expect(text('admin-profile-role')).toContain('Owner')
-    expect(document.querySelector('[data-testid="admin-profile-display-name"]')).toBeNull()
-    expect(text('admin-profile-account')).toContain('The owner key isn’t an account')
-    expect(text('admin-profile-sign-ins')).toContain('No Connect sign-ins for your logins')
+    expect(text('admin-profile-name')).toBe('Rosson Long')
+    expect(text('admin-profile-role')).toBe('Owner')
+    expect(document.querySelector('[data-testid="admin-profile-username"]')).toBeNull()
+    expect((screen.getByLabelText('Your account') as HTMLButtonElement).textContent).toContain('None')
+    expect(document.querySelector('[data-testid="admin-profile-sign-ins"]')).toBeNull()
+    expect(document.querySelector('[data-testid="admin-profile-change-password"]')).toBeNull()
   })
 
-  it('a Connect admin from another device: username, Admin, created date; sign-ins are owner-only', async () => {
+  it('a Connect admin from another device: username, Admin, the owner\'s-account tag; no owner-only fields', async () => {
     connectAdmin()
     render(<AdminProfileButton />)
     await openLoaded()
-    expect(text('admin-profile-name')).toContain('rosson-phone')
-    expect(text('admin-profile-name')).toContain('your Connect username')
-    expect(text('admin-profile-role')).toContain('Admin')
+    expect(text('admin-profile-name')).toBe('rosson-phone')
+    expect(text('admin-profile-role')).toBe('Admin')
+    expect(text('admin-profile-owners-account')).toBe('Owner\'s account')
     expect(text('admin-profile-how')).toContain('With a Connect login, from this device')
     expect(text('admin-profile-server')).toContain('Rosson’s Mac')
     expect(text('admin-profile-server')).toContain('rosson.k2.dev')
-    expect(text('admin-profile-linked')).toContain('This login is the owner’s account.')
     expect(text('admin-profile-created')).toContain('2026')
-    expect(text('admin-profile-account')).not.toContain('sam')
-    expect(text('admin-profile-sign-ins')).toContain('Only the owner can see this.')
+    expect(document.querySelector('[data-testid="admin-profile-display-name"]')).toBeNull()
+    expect(document.querySelector('[data-testid="admin-profile-your-account"]')).toBeNull()
+    expect(document.querySelector('[data-testid="admin-profile-sign-ins"]')).toBeNull()
+    expect(dialog().textContent).not.toContain('sam')
     expect(h.calls).not.toContain('users/audit')
   })
 
-  it('a Connect member: only whoami and tunnel status are read; the rest says who can see it', async () => {
+  it('a Connect member sees only their own editable fields: Colour and Password; only whoami, tunnel and colour are read', async () => {
     h.scope = { label: 'Rosson’s Mac', isRemote: true, host: { ...remoteHost(), username: 'sam' } }
     h.routes = {
       'auth/whoami': { owner: false, username: 'sam', role: 'member', mustChangePassword: false },
@@ -340,11 +377,19 @@ describe('the Admin profile modal: who you are', () => {
     }
     render(<AdminProfileButton />)
     await openLoaded()
-    expect(text('admin-profile-name')).toContain('sam')
-    expect(text('admin-profile-role')).toContain('Member')
-    expect(text('admin-profile-linked')).toContain('Only an admin can see this.')
-    expect(text('admin-profile-account')).toContain('Only an admin can see this.')
-    expect(text('admin-profile-sign-ins')).toContain('Only the owner can see this.')
+    await screen.findByTestId('person-color-picker')
+    expect(text('admin-profile-name')).toBe('sam')
+    expect(text('admin-profile-role')).toBe('Member')
+    const labels = Array.from(screen.getByTestId('admin-profile-fields').querySelectorAll('[data-testid^="admin-profile-"] > span:first-child')).map(
+      (s) => s.textContent,
+    )
+    expect(labels).toEqual(['Colour'])
+    expect(document.querySelector('[data-testid="admin-profile-owners-account"]')).toBeNull()
+    expect(screen.queryByLabelText('Your name')).toBeNull()
+    expect(screen.queryByLabelText('Your account')).toBeNull()
+    expect(text('admin-profile-password')).toContain('Change password')
+    // No "only an admin can see this" filler.
+    expect(dialog().textContent).not.toMatch(/can see this/)
     expect([...h.calls].sort()).toEqual(['auth/whoami', 'people/color', 'tunnel/status'])
   })
 
@@ -354,6 +399,64 @@ describe('the Admin profile modal: who you are', () => {
     act(() => void fireEvent.click(button()))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('unexpected route auth/whoami')
+  })
+})
+
+describe('the Admin profile modal: editing inline (the owner)', () => {
+  function withJulie(): void {
+    h.routes.users = {
+      users: [
+        ...USERS.users,
+        { username: 'julie', createdAt: '2026-09-20T12:00:00Z', role: 'owner', disabled: false, wasViewer: false },
+      ],
+    }
+  }
+
+  async function pickAccount(label: string): Promise<void> {
+    act(() => void fireEvent.click(screen.getByLabelText('Your account')))
+    const menu = await screen.findByTestId('setting-dropdown-menu')
+    act(() => void fireEvent.click(within(menu).getByText(label)))
+  }
+
+  it('changes Your account: posts owner/accounts (the General route) and the header follows at once', async () => {
+    withJulie()
+    h.postRoutes['owner/accounts'] = (body) => ({ ok: true, accounts: body.accounts, aliases: body.accounts })
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await pickAccount('julie')
+    await waitFor(() => expect(h.posts).toEqual([{ route: 'owner/accounts', body: { accounts: ['julie'] } }]))
+    await waitFor(() => expect(text('admin-profile-username')).toBe('julie'))
+    expect(text('admin-profile-role')).toBe('Owner')
+    expect((screen.getByLabelText('Your account') as HTMLButtonElement).textContent).toContain('julie')
+
+    await pickAccount('None')
+    await waitFor(() => expect(h.posts[1]).toEqual({ route: 'owner/accounts', body: { accounts: [] } }))
+    await waitFor(() => expect(document.querySelector('[data-testid="admin-profile-username"]')).toBeNull())
+    expect(document.querySelector('[data-testid="admin-profile-change-password"]')).toBeNull()
+  })
+
+  it('a refused account change rolls back and says why', async () => {
+    withJulie()
+    h.postRoutes['owner/accounts'] = () => {
+      throw new Error('owner token required')
+    }
+    render(<AdminProfileButton />)
+    await openLoaded()
+    await pickAccount('julie')
+    expect((await screen.findByRole('alert')).textContent).toContain('owner token required')
+    expect((screen.getByLabelText('Your account') as HTMLButtonElement).textContent).toContain('rosson-phone')
+    expect(text('admin-profile-username')).toBe('rosson-phone')
+  })
+
+  it('changes Your name: the settings store saves ownerDisplayName (settings/update) and the header follows', async () => {
+    render(<AdminProfileButton />)
+    await openLoaded()
+    const input = screen.getByLabelText('Your name') as HTMLInputElement
+    act(() => void fireEvent.change(input, { target: { value: '  Ross Long  ' } }))
+    act(() => void fireEvent.blur(input))
+    await waitFor(() => expect(h.settingsUpdates).toEqual([{ ownerDisplayName: 'Ross Long' }]))
+    expect(useSettingsStore.getState().ownerDisplayName).toBe('Ross Long')
+    await waitFor(() => expect(text('admin-profile-name')).toBe('Ross Long'))
   })
 })
 
@@ -553,6 +656,8 @@ describe('the Admin profile modal: colour', () => {
     await waitFor(() => expect(h.calls).toContain('people/color'))
     await waitFor(() => expect(document.querySelector('[data-testid="person-color-picker"]')).toBeNull())
     expect(text('admin-profile-color')).not.toContain('Loading')
-    expect(text('admin-profile-name')).toContain('rosson-phone')
+    // The empty Colour row is hidden, not left blank.
+    await waitFor(() => expect(screen.getByTestId('admin-profile-color').parentElement?.classList.contains('hidden')).toBe(true))
+    expect(text('admin-profile-username')).toBe('rosson-phone')
   })
 })

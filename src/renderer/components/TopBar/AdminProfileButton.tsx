@@ -1,44 +1,71 @@
-// Top bar "Admin profile" (Rosson 2026-10-16, 0.46.0 UI experiment): a
-// person icon right of the Zen toggle. A click opens a modal with who this
-// window is signed in as on its server: name, role, how (the owner key on
-// this computer, or a Connect login), colour, account dates and recent
-// sign-ins. Values come from daemon routes (`admin-profile-api.ts`); the
-// full controls live in Settings → User Access.
+// Top bar "Admin profile" (Rosson 2026-10-16, 0.46.0): a person icon right
+// of the Zen toggle. A click opens a modal with who this window is signed
+// in as on its server. Values come from daemon routes
+// (`admin-profile-api.ts`).
 //
-// The owner key on this computer shows the owner's ACCOUNT (Rosson
-// 2026-10-17): the login picked in Settings → General → Your account, with
-// that login's username, role and created date, the owner's display name,
-// and a Change password that sets that login's password with the owner's
-// permission (`POST /cli/users/set-password`). With no account picked it
-// shows the owner profile and says where to pick one.
+// A place to EDIT, not a list of pointers (Rosson 2026-10-17: "just let
+// people update things from there rather than telling them where those
+// things exist"), laid out calm and simple:
 //
-// Colour (0.46.0): the person swatches (`PersonColorPicker`) for whoever is
-// signed in; the owner and owner-linked logins set the owner's colour.
+//   - a header: the chip in the person's colour, the name, the username,
+//     the role tag (and "Owner's account" on an owner-linked login), with
+//     how and where you are signed in as one muted line;
+//   - labelled rows (one label column, one control column, the Settings
+//     row and type scale): Your name (the owner key), Colour, Your account
+//     (the owner key);
+//   - recent sign-ins (the owner key) and, last, Password.
 //
-// A Connect login can change its own password here (Rosson 2026-10-16):
-// the SAME step as the first-password flow (`PasswordRotationStep`,
-// `POST /cli/auth/change-password`, then a re-login with the new password
-// because the daemon revokes every session of that user). Hidden for the
-// owner key on this computer, which has no password of its own.
+// Every control is the SAME component Settings → General uses, so both
+// stay in sync and save the same way (straight away, optimistic, rolled
+// back on a refusal): `OwnerDisplayNameInput` (the settings store),
+// `YourAccountSelect` + `useOwnerAccounts` (`POST /cli/owner/accounts`),
+// `PersonColorPicker` (`POST /cli/people/color`).
+//
+// Permissions: Your name and Your account are the owner key's alone (the
+// daemon refuses them to every login), so a Connect login never sees them.
+// A Connect login has no display name of its own; it shows its username.
+// The modal is always about the window's own server, never a followed
+// (possibly view-only) room, so nothing here edits a room you only view.
+//
+// Password, inline: the owner key sets its linked login's password with
+// the owner's permission (`POST /cli/users/set-password`); a Connect login
+// changes its own with the SAME step as the first-password flow
+// (`PasswordRotationStep`, `POST /cli/auth/change-password`, then a
+// re-login with the new password because the daemon revokes every session
+// of that user).
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { DialogScrim, Surface } from '@/components/ui'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Button, DialogScrim, Surface } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
 import { windowTopBarTarget } from './top-bar-scope'
 import { useSettingsStore } from '@/stores/settings'
 import type { AuthAuditEvent } from '@/components/Settings/sections/access-audit-api'
-import { primaryOwnerAccount } from '@/components/Settings/sections/YourAccountRow'
+import {
+  primaryOwnerAccount,
+  YourAccountSelect,
+  type AccountChoice,
+} from '@/components/Settings/sections/YourAccountRow'
+import { OWNER_ACCOUNT_TAG, useOwnerAccounts } from '@/components/Settings/sections/OwnerAccountToggle'
+import { OwnerDisplayNameInput } from '@/components/Settings/sections/OwnerDisplayNameInput'
+import { SettingRow } from '@/components/Settings/controls/SettingControls'
 import { PersonColorPicker } from '@/components/Presence/PersonColorPicker'
+import type { PersonColorView } from '@/components/Presence/person-color-api'
+import { PresenceChip, type PresenceRole } from '@/components/Presence/PresenceChip'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { PasswordRotationStep } from '@/components/PasswordRotationStep'
 import { CHANGE_PASSWORD_COPY } from '@/lib/password-rotation'
 import { saveRememberedPassword, useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useToastStore } from '@/stores/toast'
 import { AdminIcon } from '@/components/icons/K2Icons'
-import { loadAdminProfile, type AdminProfile, type ProfileAccount, type ProfileRole, type Read } from './admin-profile-api'
+import {
+  loadAdminProfile,
+  signInsFor,
+  type AdminProfile,
+  type ProfileAccount,
+  type ProfileRole,
+} from './admin-profile-api'
 
 const noDrag = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
-
 
 const ROLE_LABEL: Record<ProfileRole, string> = { owner: 'Owner', admin: 'Admin', member: 'Member' }
 
@@ -66,46 +93,36 @@ function formatTime(iso: string): string {
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
 }
 
-function unavailable(r: Exclude<Read<unknown>, { kind: 'ok' }>): string {
-  return r.kind === 'role' ? `Only ${r.needs} can see this.` : `Couldn’t load: ${r.message}`
-}
-
-function Row({ label, children, testId }: { label: string; children: React.ReactNode; testId?: string }): React.JSX.Element {
-  return (
-    <div className="flex items-baseline gap-3 py-1" data-testid={testId}>
-      <div className="w-28 flex-shrink-0 text-[11px] text-[var(--color-text-muted)]">{label}</div>
-      <div className="flex-1 min-w-0 text-[12.5px] text-[var(--color-text-primary)] break-words">{children}</div>
-    </div>
-  )
-}
-
-function Section({ title, children, testId }: { title: string; children: React.ReactNode; testId?: string }): React.JSX.Element {
-  return (
-    <section className="mb-4 last:mb-0" data-testid={testId}>
-      <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] m-0 mb-1">
-        {title}
-      </h3>
-      {children}
-    </section>
-  )
-}
-
 function Muted({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return <p className="m-0 py-1 text-[12px] text-[var(--color-text-secondary)]">{children}</p>
+  return <p className="m-0 py-1 text-xs text-[var(--color-text-secondary)]">{children}</p>
+}
+
+/** A small square tag (role, "Owner's account"). */
+function Tag({ children, testId }: { children: React.ReactNode; testId?: string }): React.JSX.Element {
+  return (
+    <span
+      data-testid={testId}
+      className="inline-flex items-center px-1.5 py-px text-[9px] font-medium uppercase tracking-wider border border-[var(--color-border)] text-[var(--color-text-secondary)] bg-[var(--color-bg-elevated)] select-none rounded-[var(--radius-field)]"
+    >
+      {children}
+    </span>
+  )
 }
 
 function SignInRow({ ev, showUser }: { ev: AuthAuditEvent; showUser: boolean }): React.JSX.Element {
   const ok = ev.outcome === 'ok'
   return (
-    <li className="flex items-baseline gap-2 py-0.5 text-[12px]" data-testid="admin-profile-sign-in">
-      <span className="w-32 flex-shrink-0 text-[var(--color-text-secondary)]">{formatTime(ev.ts)}</span>
-      <span className={ok ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-status-error-soft)]'}>
-        {ok ? 'Signed in' : `Failed (${ev.outcome})`}
-      </span>
-      {showUser ? <span className="text-[var(--color-text-secondary)]">as {ev.user}</span> : null}
-      <span className="text-[var(--color-text-muted)] truncate">
-        {ev.ip && ev.ip !== '-' ? `from ${ev.ip}` : ''}
-        {ev.ingress ? ` · ${ev.ingress}` : ''}
+    <li className="flex items-baseline gap-3 py-0.5 text-[11px]" data-testid="admin-profile-sign-in">
+      <span className="w-28 flex-shrink-0 text-[var(--color-text-muted)]">{formatTime(ev.ts)}</span>
+      <span className="min-w-0 truncate">
+        <span className={ok ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-status-error-soft)]'}>
+          {ok ? 'Signed in' : `Failed (${ev.outcome})`}
+        </span>
+        {showUser ? <span className="text-[var(--color-text-secondary)]"> as {ev.user}</span> : null}
+        <span className="text-[var(--color-text-muted)]">
+          {ev.ip && ev.ip !== '-' ? ` from ${ev.ip}` : ''}
+          {ev.ingress ? ` · ${ev.ingress}` : ''}
+        </span>
       </span>
     </li>
   )
@@ -120,17 +137,14 @@ export function passwordChangeHost(profile: AdminProfile, scope: ServerScope): C
   return host ? { ...host, username: profile.username } : null
 }
 
-/** The hint for the owner key when no account is picked yet. */
-export const PICK_ACCOUNT_HINT = 'Pick your account in Settings → General'
-
-/** The owner's account: the login picked in Settings → General → Your
- *  account (the first linked login), with its record. Null for a Connect
+/** The owner's account record: the first of `linked` (the login picked in
+ *  Your account), looked up in every account row. Null for a Connect
  *  login, before anything is picked, or when the reads failed. */
-export function ownerAccountOf(profile: AdminProfile): ProfileAccount | null {
-  if (!profile.ownerToken || profile.linked.kind !== 'ok' || profile.accounts.kind !== 'ok') return null
-  const name = primaryOwnerAccount(profile.linked.value)
+export function ownerAccountOf(profile: AdminProfile, linked: string[]): ProfileAccount | null {
+  if (!profile.ownerToken || profile.allUsers.kind !== 'ok') return null
+  const name = primaryOwnerAccount(linked)
   if (!name) return null
-  return profile.accounts.value.find((a) => a.username.trim().toLowerCase() === name) ?? null
+  return profile.allUsers.value.find((a) => a.username.trim().toLowerCase() === name) ?? null
 }
 
 export function ownerPasswordChangedNotice(username: string): string {
@@ -176,7 +190,7 @@ function OwnerSetPasswordStep({
       }}
       className="flex flex-col gap-2"
     >
-      <p className="m-0 text-[12px] text-[var(--color-text-secondary)]">
+      <p className="m-0 text-xs text-[var(--color-text-secondary)]">
         Set a new password for <span className="text-[var(--color-text-primary)]">{username}</span>. Devices signed in
         with it must sign in again.
       </p>
@@ -195,20 +209,12 @@ function OwnerSetPasswordStep({
         </p>
       ) : null}
       <div className="flex gap-2">
-        <button
-          type="submit"
-          disabled={busy || !pw || pw !== confirm}
-          className="px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer disabled:opacity-50 disabled:cursor-default"
-        >
+        <Button type="submit" variant="quiet" disabled={busy || !pw || pw !== confirm}>
           {busy ? 'Saving…' : 'Set password'}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="px-3 py-1 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer"
-        >
+        </Button>
+        <Button variant="ghost" onClick={onCancel}>
           Cancel
-        </button>
+        </Button>
       </div>
     </form>
   )
@@ -217,137 +223,224 @@ function OwnerSetPasswordStep({
 export const PASSWORD_CHANGED_NOTICE =
   'Password changed. This device is signed in with the new one; other devices signed in with this login must sign in again.'
 
-function ProfileBody({
+function accountChoicesOf(rows: ProfileAccount[]): AccountChoice[] {
+  return rows.filter((r) => !r.disabled).map((r) => ({ username: r.username, role: r.role ?? 'member' }))
+}
+
+/** The loaded profile: header, rows, sign-ins and Password, plus the two
+ *  inline password steps. Mounted once the profile has loaded, so the
+ *  shared owner-accounts hook can start from what was read. */
+function LoadedProfile({
   profile,
   scope,
-  onChangePassword,
+  closeButton,
 }: {
   profile: AdminProfile
   scope: ServerScope
-  onChangePassword: (() => void) | null
+  closeButton: React.ReactNode
 }): React.JSX.Element {
   const ownerDisplayName = useSettingsStore((s) => s.ownerDisplayName)
-  const host = scope.connectHost()
-  const ownerName = ownerDisplayName.trim() || 'owner'
-  const account = ownerAccountOf(profile)
-  const name = profile.ownerToken ? (account?.username ?? ownerName) : (profile.username ?? 'unknown')
+  const linkedRead = profile.linked
+  const ownerEdits = profile.ownerToken && linkedRead.kind === 'ok'
+  const owner = useOwnerAccounts(
+    ownerEdits,
+    ownerEdits && linkedRead.kind === 'ok' ? { accounts: linkedRead.value, aliases: linkedRead.value } : undefined,
+  )
+  const [colorView, setColorView] = useState<PersonColorView | null | undefined>(undefined)
+  const [changing, setChanging] = useState<ConnectHost | null>(null)
+  const [ownerChanging, setOwnerChanging] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  // The owner's linked logins follow the dropdown at once.
+  const linked = ownerEdits ? owner.accounts : linkedRead.kind === 'ok' ? linkedRead.value : []
+  const account = ownerAccountOf(profile, linked)
   const me = profile.username?.trim().toLowerCase() ?? null
-  const ownerNoAccount = profile.ownerToken && profile.linked.kind === 'ok' && profile.linked.value.length === 0
+  const host = scope.connectHost()
+
+  const name = profile.ownerToken ? ownerDisplayName.trim() || account?.username || 'Owner' : (profile.username ?? 'unknown')
+  const username = profile.ownerToken ? account?.username ?? null : profile.username
+  const role: ProfileRole | null = account ? account.role : profile.role
+  const created = profile.ownerToken
+    ? account?.createdAt ?? null
+    : profile.accounts.kind === 'ok'
+      ? profile.accounts.value[0]?.createdAt ?? null
+      : null
+  const isOwnersAccount = !profile.ownerToken && me !== null && linkedRead.kind === 'ok' && linkedRead.value.includes(me)
+
+  const signIns = useMemo((): AuthAuditEvent[] => {
+    if (profile.ownerToken) return profile.audit.kind === 'ok' ? signInsFor(profile.audit.value, linked) : []
+    return profile.signIns.kind === 'ok' ? profile.signIns.value : []
+  }, [profile, linked])
+  const showSignIns = profile.ownerToken || profile.role === 'owner'
+
+  const choices = useMemo(
+    () => (profile.allUsers.kind === 'ok' ? accountChoicesOf(profile.allUsers.value) : null),
+    [profile.allUsers],
+  )
+
+  const onChangePassword = ((): (() => void) | null => {
+    const h = passwordChangeHost(profile, scope)
+    if (h) {
+      return () => {
+        setNotice(null)
+        setChanging(h)
+      }
+    }
+    return account
+      ? () => {
+          setNotice(null)
+          setOwnerChanging(account.username)
+        }
+      : null
+  })()
+
+  const server = [
+    scope.label,
+    host && host.hostname !== scope.label ? host.hostname : null,
+    profile.publicUrl,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  const header = (
+    <div
+      className="flex items-start gap-3 flex-shrink-0"
+      style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)' }}
+      data-testid="admin-profile-header"
+    >
+      <PresenceChip
+        name={name}
+        role={(role ?? 'member') as PresenceRole}
+        size={36}
+        color={colorView?.color ?? null}
+        title=""
+      />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h2
+            id="admin-profile-title"
+            data-testid="admin-profile-name"
+            className="m-0 text-[14px] font-semibold text-[var(--color-text-primary)] truncate"
+          >
+            {name}
+          </h2>
+          <Tag testId="admin-profile-role">{roleLabel(role)}</Tag>
+          {isOwnersAccount ? <Tag testId="admin-profile-owners-account">{OWNER_ACCOUNT_TAG}</Tag> : null}
+        </div>
+        {username && username !== name ? (
+          <div className="text-xs text-[var(--color-text-secondary)] truncate" data-testid="admin-profile-username">
+            {username}
+          </div>
+        ) : null}
+        <div className="mt-0.5 text-[11px] text-[var(--color-text-muted)]" data-testid="admin-profile-how">
+          {signedInHow(profile, scope.isRemote)}
+          <span data-testid="admin-profile-server"> · {server}</span>
+          {created ? <span data-testid="admin-profile-created"> · Created {formatDate(created)}</span> : null}
+        </div>
+      </div>
+      {closeButton}
+    </div>
+  )
+
+  let body: React.ReactNode
+  if (ownerChanging) {
+    body = (
+      <OwnerSetPasswordStep
+        scope={scope}
+        username={ownerChanging}
+        onCancel={() => setOwnerChanging(null)}
+        onDone={() => {
+          setNotice(ownerPasswordChangedNotice(ownerChanging))
+          setOwnerChanging(null)
+        }}
+      />
+    )
+  } else if (changing) {
+    body = (
+      <PasswordRotationStep
+        host={changing}
+        variant="inline"
+        copy={CHANGE_PASSWORD_COPY}
+        onCancel={() => setChanging(null)}
+        onDone={async ({ newPassword }) => {
+          // The step already re-logged in and stored the new session
+          // token, so this window keeps working. A remembered password
+          // must follow, or the next silent sign-in would use the old one.
+          const saved = useConnectHostStore.getState().hosts.find((x) => x.id === changing.id)
+          if (saved?.remember ?? changing.remember) {
+            const failure = await saveRememberedPassword(changing.id, newPassword)
+            if (failure) useToastStore.getState().addToast(failure, 'error', 12000)
+          }
+          setChanging(null)
+          setNotice(PASSWORD_CHANGED_NOTICE)
+        }}
+      />
+    )
+  } else {
+    body = (
+      <>
+        {notice ? (
+          <p role="status" data-testid="admin-profile-notice" className="m-0 mb-2 text-xs text-[var(--color-text-primary)]">
+            {notice}
+          </p>
+        ) : null}
+        <div data-testid="admin-profile-fields">
+          {profile.ownerToken ? (
+            <SettingRow columns label="Your name" testId="admin-profile-display-name">
+              <OwnerDisplayNameInput className="w-full max-w-[240px]" />
+            </SettingRow>
+          ) : null}
+          <div className={colorView === null ? 'hidden' : undefined}>
+            <SettingRow columns label="Colour" testId="admin-profile-color">
+              <PersonColorPicker scope={scope} onView={setColorView} />
+            </SettingRow>
+          </div>
+          {ownerEdits && choices ? (
+            <SettingRow columns label="Your account" testId="admin-profile-your-account">
+              <div className="flex flex-col gap-1 min-w-0">
+                <YourAccountSelect users={choices} owner={owner} readOnly={false} />
+                {owner.error ? (
+                  <p role="alert" className="m-0 text-[11px] text-[var(--color-status-error-soft)]">
+                    {owner.error}
+                  </p>
+                ) : null}
+              </div>
+            </SettingRow>
+          ) : null}
+        </div>
+
+        {showSignIns && signIns.length > 0 ? (
+          <section className="mt-4" data-testid="admin-profile-sign-ins">
+            <h3 className="m-0 mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+              Recent sign-ins
+            </h3>
+            <ul className="m-0 p-0 list-none">
+              {signIns.map((ev, i) => (
+                <SignInRow key={`${ev.ts}-${i}`} ev={ev} showUser={profile.ownerToken} />
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {onChangePassword ? (
+          <div className="mt-4" data-testid="admin-profile-account">
+            <SettingRow columns label="Password" testId="admin-profile-password">
+              <Button variant="quiet" data-testid="admin-profile-change-password" onClick={onChangePassword}>
+                Change password
+              </Button>
+            </SettingRow>
+          </div>
+        ) : null}
+      </>
+    )
+  }
 
   return (
     <>
-      <Section title="You" testId="admin-profile-you">
-        {ownerNoAccount ? (
-          <p data-testid="admin-profile-pick-account" className="m-0 mb-1 text-[12px] text-[var(--color-text-secondary)]">
-            {PICK_ACCOUNT_HINT}.
-          </p>
-        ) : null}
-        <Row label="Name" testId="admin-profile-name">
-          {name}
-          {profile.ownerToken && account ? (
-            <span className="text-[var(--color-text-muted)]"> (your Connect login, Settings → General → Your account)</span>
-          ) : profile.ownerToken ? (
-            <span className="text-[var(--color-text-muted)]"> (Settings → General → Your name)</span>
-          ) : (
-            <span className="text-[var(--color-text-muted)]"> (your Connect username)</span>
-          )}
-        </Row>
-        {profile.ownerToken && account ? (
-          <Row label="Display name" testId="admin-profile-display-name">
-            {ownerName}
-            <span className="text-[var(--color-text-muted)]"> (Settings → General → Your name)</span>
-          </Row>
-        ) : null}
-        <Row label="Role" testId="admin-profile-role">{roleLabel(account ? account.role : profile.role)}</Row>
-        <Row label="Signed in" testId="admin-profile-how">{signedInHow(profile, scope.isRemote)}</Row>
-        <Row label="Server" testId="admin-profile-server">
-          {scope.label}
-          {host && host.hostname !== scope.label ? <span className="text-[var(--color-text-secondary)]"> · {host.hostname}</span> : null}
-          {profile.publicUrl ? <span className="text-[var(--color-text-secondary)]"> · {profile.publicUrl}</span> : null}
-        </Row>
-        <Row label="Colour" testId="admin-profile-color">
-          <PersonColorPicker scope={scope} />
-        </Row>
-      </Section>
-
-      <Section title="Owner’s account" testId="admin-profile-linked">
-        {profile.linked.kind !== 'ok' ? (
-          <Muted>{unavailable(profile.linked)}</Muted>
-        ) : profile.ownerToken ? (
-          profile.linked.value.length === 0 ? (
-            <Muted>No Connect login is yours yet. {PICK_ACCOUNT_HINT}.</Muted>
-          ) : (
-            <Row label="Your logins">{profile.linked.value.join(', ')}</Row>
-          )
-        ) : me && profile.linked.value.includes(me) ? (
-          <Muted>This login is the owner’s account.</Muted>
-        ) : (
-          <Muted>
-            This login isn’t the owner’s account.
-            {profile.linked.value.length > 0 ? ` The owner’s logins: ${profile.linked.value.join(', ')}.` : ''}
-          </Muted>
-        )}
-      </Section>
-
-      <Section title="Account" testId="admin-profile-account">
-        {profile.accounts.kind !== 'ok' ? (
-          <Muted>{unavailable(profile.accounts)}</Muted>
-        ) : profile.ownerToken && account ? (
-          <Row label="Created" testId="admin-profile-created">
-            {formatDate(account.createdAt)}
-            {account.disabled ? ' · disabled' : ''}
-          </Row>
-        ) : profile.ownerToken ? (
-          <>
-            <Muted>The owner key isn’t an account, so it has no created date.</Muted>
-            {profile.accounts.value.map((a) => (
-              <Row key={a.username} label={a.username}>
-                Created {formatDate(a.createdAt)} · {roleLabel(a.role)}
-                {a.disabled ? ' · disabled' : ''}
-              </Row>
-            ))}
-          </>
-        ) : profile.accounts.value.length === 0 ? (
-          <Muted>No account record found for this login.</Muted>
-        ) : (
-          profile.accounts.value.map((a) => (
-            <Row key={a.username} label="Created" testId="admin-profile-created">
-              {formatDate(a.createdAt)}
-              {a.disabled ? ' · disabled' : ''}
-            </Row>
-          ))
-        )}
-        {onChangePassword ? (
-          <div className="mt-1.5">
-            <button
-              type="button"
-              data-testid="admin-profile-change-password"
-              onClick={onChangePassword}
-              className="px-3 py-1 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer"
-            >
-              Change password
-            </button>
-          </div>
-        ) : null}
-      </Section>
-
-      <Section title="Recent sign-ins" testId="admin-profile-sign-ins">
-        {profile.signIns.kind !== 'ok' ? (
-          <Muted>{unavailable(profile.signIns)}</Muted>
-        ) : profile.signIns.value.length === 0 ? (
-          <Muted>
-            {profile.ownerToken
-              ? 'No Connect sign-ins for your logins. The app on this computer doesn’t sign in.'
-              : 'No sign-ins on record.'}
-          </Muted>
-        ) : (
-          <ul className="m-0 p-0 list-none">
-            {profile.signIns.value.map((ev, i) => (
-              <SignInRow key={`${ev.ts}-${i}`} ev={ev} showUser={profile.ownerToken} />
-            ))}
-          </ul>
-        )}
-      </Section>
+      {header}
+      <div className="overflow-y-auto min-h-0" style={{ padding: '6px 18px 16px' }}>
+        {body}
+      </div>
     </>
   )
 }
@@ -358,14 +451,9 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
   // The window's own server (like the timer): a focused remote room
   // doesn't change who you are signed in as here.
   const scope = windowTopBarTarget().scope
-  const openSettings = useSettingsStore((s) => s.openSettings)
   const [state, setState] = useState<{ kind: 'loading' } | { kind: 'ok'; profile: AdminProfile } | { kind: 'error'; message: string }>({
     kind: 'loading',
   })
-  const [changing, setChanging] = useState<ConnectHost | null>(null)
-  // The owner key changing its linked login's password (Owner permission).
-  const [ownerChanging, setOwnerChanging] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const closeRef = useRef<HTMLButtonElement>(null)
 
@@ -386,6 +474,9 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
 
   useEffect(() => {
     closeRef.current?.focus()
+  }, [state.kind])
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -414,6 +505,20 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
+  const closeButton = (
+    <button
+      ref={closeRef}
+      type="button"
+      onClick={onClose}
+      aria-label="Close"
+      title="Close (Esc)"
+      data-testid="admin-profile-close"
+      className="flex h-6 w-6 flex-shrink-0 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] cursor-pointer"
+    >
+      ×
+    </button>
+  )
+
   return (
     <>
       <DialogScrim
@@ -438,7 +543,7 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
           left: '50%',
           transform: 'translate(-50%, -50%)',
           zIndex: 99999,
-          width: 'min(520px, 90vw)',
+          width: 'min(480px, 90vw)',
           maxHeight: '78vh',
           display: 'flex',
           flexDirection: 'column',
@@ -446,108 +551,30 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
         }}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div
-          className="flex items-center justify-between gap-3 flex-shrink-0"
-          style={{ padding: '12px 18px', borderBottom: '1px solid var(--color-border)' }}
-        >
-          <h2 id="admin-profile-title" className="text-[14px] font-semibold text-[var(--color-text-primary)] m-0">
-            Admin profile
-          </h2>
-          <button
-            ref={closeRef}
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            title="Close (Esc)"
-            data-testid="admin-profile-close"
-            className="flex h-6 w-6 items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] cursor-pointer"
-          >
-            ×
-          </button>
-        </div>
-        <div className="overflow-y-auto min-h-0" style={{ padding: '14px 18px 16px' }}>
-          {state.kind === 'loading' ? (
-            <Muted>Loading…</Muted>
-          ) : state.kind === 'error' ? (
-            <p role="alert" className="m-0 text-[12px] text-[var(--color-status-error-soft)]">
-              Couldn’t read who you are on {scope.label}: {state.message}
-            </p>
-          ) : ownerChanging ? (
-            <OwnerSetPasswordStep
-              scope={scope}
-              username={ownerChanging}
-              onCancel={() => setOwnerChanging(null)}
-              onDone={() => {
-                setNotice(ownerPasswordChangedNotice(ownerChanging))
-                setOwnerChanging(null)
-              }}
-            />
-          ) : changing ? (
-            <PasswordRotationStep
-              host={changing}
-              variant="inline"
-              copy={CHANGE_PASSWORD_COPY}
-              onCancel={() => setChanging(null)}
-              onDone={async ({ newPassword }) => {
-                // The step already re-logged in and stored the new session
-                // token, so this window keeps working. A remembered password
-                // must follow, or the next silent sign-in would use the old one.
-                const saved = useConnectHostStore.getState().hosts.find((h) => h.id === changing.id)
-                if (saved?.remember ?? changing.remember) {
-                  const failure = await saveRememberedPassword(changing.id, newPassword)
-                  if (failure) useToastStore.getState().addToast(failure, 'error', 12000)
-                }
-                setChanging(null)
-                setNotice(PASSWORD_CHANGED_NOTICE)
-              }}
-            />
-          ) : (
-            <>
-              {notice ? (
-                <p role="status" data-testid="admin-profile-notice" className="m-0 mb-3 text-[12px] text-[var(--color-text-primary)]">
-                  {notice}
+        {state.kind === 'ok' ? (
+          <LoadedProfile profile={state.profile} scope={scope} closeButton={closeButton} />
+        ) : (
+          <>
+            <div
+              className="flex items-center justify-between gap-3 flex-shrink-0"
+              style={{ padding: '14px 18px', borderBottom: '1px solid var(--color-border)' }}
+            >
+              <h2 id="admin-profile-title" className="m-0 text-[14px] font-semibold text-[var(--color-text-primary)]">
+                Profile
+              </h2>
+              {closeButton}
+            </div>
+            <div className="overflow-y-auto min-h-0" style={{ padding: '14px 18px 16px' }}>
+              {state.kind === 'loading' ? (
+                <Muted>Loading…</Muted>
+              ) : (
+                <p role="alert" className="m-0 text-xs text-[var(--color-status-error-soft)]">
+                  Couldn’t read who you are on {scope.label}: {state.message}
                 </p>
-              ) : null}
-              <ProfileBody
-                profile={state.profile}
-                scope={scope}
-                onChangePassword={(() => {
-                  const host = passwordChangeHost(state.profile, scope)
-                  if (host) {
-                    return () => {
-                      setNotice(null)
-                      setChanging(host)
-                    }
-                  }
-                  // The owner key: the linked login, with the owner's permission.
-                  const account = ownerAccountOf(state.profile)
-                  return account
-                    ? () => {
-                        setNotice(null)
-                        setOwnerChanging(account.username)
-                      }
-                    : null
-                })()}
-              />
-            </>
-          )}
-        </div>
-        <div
-          className="flex items-center justify-end gap-2 flex-shrink-0"
-          style={{ padding: '10px 18px', borderTop: '1px solid var(--color-border)' }}
-        >
-          <button
-            type="button"
-            data-testid="admin-profile-open-settings"
-            onClick={() => {
-              onClose()
-              openSettings('people')
-            }}
-            className="px-3 py-1.5 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] cursor-pointer"
-          >
-            Open Settings → User Access
-          </button>
-        </div>
+              )}
+            </div>
+          </>
+        )}
       </Surface>
     </>
   )

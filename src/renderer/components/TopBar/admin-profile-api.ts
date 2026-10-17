@@ -49,6 +49,12 @@ export interface AdminProfile {
   signIns: Read<AuthAuditEvent[]>
   /** The server's public Connect address, when its tunnel has one. */
   publicUrl: string | null
+  /** Every account row (Admin+), unfiltered: the owner's Your account
+   *  dropdown offers them, and a new pick shows its record at once. */
+  allUsers: Read<ProfileAccount[]>
+  /** The raw sign-in audit (owner tier), so a new pick's sign-ins show
+   *  without a reload. */
+  audit: Read<AuthAuditEvent[]>
 }
 
 export const SIGN_IN_TAIL = 200
@@ -151,5 +157,5 @@ export async function loadAdminProfile(scope: ServerScope): Promise<AdminProfile
       ? tunnel.value.public_url
       : null
 
-  return { ownerToken, username, role, linked, accounts, signIns, publicUrl }
+  return { ownerToken, username, role, linked, accounts, signIns, publicUrl, allUsers: users, audit }
 }

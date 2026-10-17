@@ -50,21 +50,25 @@ export interface OwnerAccountsState {
 }
 
 /** The linked list, loaded when `enabled` (Admin+ on a server with
- *  `thread-push-v1`). */
-export function useOwnerAccounts(enabled: boolean): OwnerAccountsState {
-  const [data, setData] = useState<OwnerAccounts>({ accounts: [], aliases: [] })
-  const [loaded, setLoaded] = useState(false)
+ *  `thread-push-v1`). `initial` seeds it when the caller already read
+ *  `owner/accounts` (the profile modal), so it isn't read twice. */
+export function useOwnerAccounts(enabled: boolean, initial?: OwnerAccounts): OwnerAccountsState {
+  const [data, setData] = useState<OwnerAccounts>(initial ?? { accounts: [], aliases: [] })
+  const [loaded, setLoaded] = useState(initial !== undefined)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const latest = useRef(data)
   latest.current = data
+  const seeded = useRef(initial !== undefined)
 
   useEffect(() => {
     if (!enabled) {
       setData({ accounts: [], aliases: [] })
       setLoaded(false)
+      seeded.current = false
       return
     }
+    if (seeded.current) return
     let cancelled = false
     fetchOwnerAccounts().then(
       (d) => {
@@ -100,12 +104,17 @@ export function useOwnerAccounts(enabled: boolean): OwnerAccountsState {
     }
   }, [])
 
+  // Optimistic, like the other General settings: show the pick at once,
+  // take the server's answer, roll back on a refusal.
   const setAccounts = useCallback(async (accounts: string[]) => {
+    const prev = latest.current
     setBusy(accounts[0] ?? '')
     setError(null)
+    setData({ accounts, aliases: accounts })
     try {
       setData(await setOwnerAccounts(accounts))
     } catch (e) {
+      setData(prev)
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(null)

@@ -7,6 +7,8 @@ export function SettingRow({
   label,
   children,
   settingId,
+  columns = false,
+  testId,
 }: {
   label: React.ReactNode
   children: React.ReactNode
@@ -16,11 +18,28 @@ export function SettingRow({
    * a `SettingEntry.id` — e.g. `"terminal.font-family"`.
    */
   settingId?: string
+  /** One fixed label column and one control column (the profile modal),
+   *  instead of label left / control right. */
+  columns?: boolean
+  testId?: string
 }): React.JSX.Element {
+  if (columns) {
+    return (
+      <div
+        className="flex items-center gap-3 py-2 border-b border-[var(--color-border)]"
+        data-settings-id={settingId}
+        data-testid={testId}
+      >
+        <span className="w-28 flex-shrink-0 text-xs text-[var(--color-text-secondary)]">{label}</span>
+        <div className="flex-1 min-w-0 flex items-center">{children}</div>
+      </div>
+    )
+  }
   return (
     <div
       className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
       data-settings-id={settingId}
+      data-testid={testId}
     >
       <span className="text-xs text-[var(--color-text-secondary)]">{label}</span>
       {children}

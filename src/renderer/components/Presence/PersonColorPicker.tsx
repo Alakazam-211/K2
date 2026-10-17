@@ -33,10 +33,24 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-export function PersonColorPicker({ scope }: { scope: ServerScope }): React.JSX.Element | null {
+export function PersonColorPicker({
+  scope,
+  onView,
+}: {
+  scope: ServerScope
+  /** The current view (null: an older daemon without the route), so a
+   *  parent can paint its own chip in the picked colour. */
+  onView?: (view: PersonColorView | null) => void
+}): React.JSX.Element | null {
   const [state, setState] = useState<State>({ kind: 'loading' })
   const [busy, setBusy] = useState(false)
   const [writeError, setWriteError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!onView) return
+    if (state.kind === 'ok') onView(state.view)
+    else if (state.kind === 'unsupported') onView(null)
+  }, [state, onView])
 
   useEffect(() => {
     let cancelled = false
@@ -64,9 +78,12 @@ export function PersonColorPicker({ scope }: { scope: ServerScope }): React.JSX.
     if (busy || color === view.chosen) return
     setBusy(true)
     setWriteError(null)
+    // Optimistic: mark the pick at once; roll back on a refusal.
+    setState({ kind: 'ok', view: { ...view, chosen: color, color: color ?? view.color } })
     try {
       setState({ kind: 'ok', view: await setPersonColor(scope, color) })
     } catch (e) {
+      setState({ kind: 'ok', view })
       setWriteError(message(e))
     } finally {
       setBusy(false)

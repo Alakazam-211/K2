@@ -11401,9 +11401,10 @@ async fn handle_one_request(
         // GET /cli/feedback/waiting-count[?me=1] — the Tickets badge.
         // Same door as the catchall it used to ride (`token_ok`: owner
         // token or a Connect-user session; app passes never). Claimed here
-        // because `me=1` needs the caller: owner token → `owner` + the
-        // owner's display name, a session → its username
-        // (`my_assignee_names`), like `/cli/auth/whoami`. The scope comes
+        // because `me=1` needs the caller: owner token (or an owner-linked
+        // Connect login) → `owner` + display name + every owner-linked
+        // account, any other session → its username (`my_assignee_names`,
+        // the same list whoami returns as `ticketMe`). The scope comes
         // from the token, never from a client-sent name. Feature key
         // `tickets-badge-me` says this daemon honours `me=1`.
         p if p == "/cli/feedback/waiting-count" => {
@@ -11429,16 +11430,7 @@ async fn handle_one_request(
             };
             let resp = tokio::task::spawn_blocking(move || {
                 let names = me.map(|(owner, username)| {
-                    let display = if owner {
-                        k2_core::app_settings::load().owner_display_name
-                    } else {
-                        None
-                    };
-                    crate::feedback_routes::my_assignee_names(
-                        owner,
-                        username.as_deref(),
-                        display.as_deref(),
-                    )
+                    crate::feedback_routes::my_assignee_names_now(owner, username.as_deref())
                 });
                 crate::feedback_routes::handle_waiting_count(names)
             })

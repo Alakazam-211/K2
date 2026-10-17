@@ -911,7 +911,8 @@ pub fn handle_logout_with_user(token: &str) -> (CliResponse, Option<String>) {
 /// gate the Users/Access management UI + the role selector.
 /// `mustChangePassword` (K2 Cloud S1, always-present boolean) lets the
 /// client render the forced-rotation prompt — whoami stays reachable
-/// while the session is otherwise restricted.
+/// while the session is otherwise restricted. `ticketMe` is the Tickets
+/// board's "me" (`feedback_routes::my_assignee_names`).
 pub fn handle_whoami(
     username: Option<String>,
     owner: bool,
@@ -930,6 +931,9 @@ pub fn handle_whoami(
     let personal = owner
         || role == connect_users::Role::Owner
         || k2_core::app_settings::load().allow_clone_personal_computers;
+    // Tickets "me" (Mine / Waiting on me): the daemon's one definition,
+    // shared with `waiting-count?me=1`, so the board and badge agree.
+    let ticket_me = crate::feedback_routes::my_assignee_names_now(owner, username.as_deref());
     CliResponse::ok_json(
         serde_json::json!({
             "username": username,
@@ -938,6 +942,7 @@ pub fn handle_whoami(
             "mustChangePassword": must_change,
             "canClone": can_clone,
             "clonePersonalComputers": personal,
+            "ticketMe": ticket_me,
         })
         .to_string(),
     )

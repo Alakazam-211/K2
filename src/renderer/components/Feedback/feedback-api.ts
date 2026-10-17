@@ -337,15 +337,25 @@ export const TICKET_SCOPES: ReadonlyArray<{ value: TicketScope; label: string }>
  *  person can change it in Settings → Tickets (`lib/ticket-open-pref.ts`). */
 export const DEFAULT_TICKET_SCOPE: TicketScope = 'waiting'
 
-/** The assignee names that mean "me" for the current login. The owner is
- *  `owner` (the wire literal) or the owner's display name; a Connect user
- *  is their username. Lower-cased (assignee matching is case-insensitive,
- *  like the daemon's people check). */
+/** The assignee names that mean "me" for the current login. The daemon's
+ *  list wins when whoami carries it (`ticketMe` — the same names
+ *  `waiting-count?me=1` counts: `owner`, the display name, and every
+ *  owner-linked Connect account for the owner). An older daemon without
+ *  it: the owner is `owner` (the wire literal) or the owner's display
+ *  name; a Connect user is their username. Lower-cased and trimmed
+ *  (assignee matching is case-insensitive, like the daemon's). */
 export function myAssigneeNames(
-  whoami: { owner?: boolean; username?: string | null } | null,
+  whoami: { owner?: boolean; username?: string | null; ticketMe?: unknown } | null,
   ownerDisplayName: string,
 ): string[] {
   if (!whoami) return []
+  if (Array.isArray(whoami.ticketMe)) {
+    const fromDaemon = whoami.ticketMe
+      .filter((n): n is string => typeof n === 'string')
+      .map((n) => n.trim().toLowerCase())
+      .filter((n) => n.length > 0)
+    return [...new Set(fromDaemon)]
+  }
   const names: string[] = []
   if (whoami.owner) {
     names.push('owner')

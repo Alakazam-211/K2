@@ -100,6 +100,25 @@ describe('scopes', () => {
     expect(filterByScope(rows, 'mine', []).map((r) => r.id)).toEqual([])
   })
 
+  it("the daemon's ticketMe wins: an owner-linked account (z3thon) is Waiting on me", () => {
+    const linked = [
+      ...rows,
+      { id: 'z', status: 'waiting' as const, assignees: ['z3thon'] },
+      { id: 'y', status: 'needs_discussion' as const, assignees: [' Z3THON '] },
+    ]
+    const me = myAssigneeNames(
+      { owner: true, username: null, ticketMe: ['owner', 'rosson', ' Z3thon ', '', 'owner'] },
+      'Ignored',
+    )
+    expect(me).toEqual(['owner', 'rosson', 'z3thon'])
+    expect(filterByScope(linked, 'waiting', me).map((r) => r.id)).toEqual(['a', 'e', 'z', 'y'])
+    // Without the link (older daemon / unlinked): z3thon's tickets are not mine.
+    const unlinked = myAssigneeNames({ owner: true, username: null }, 'Rosson')
+    expect(filterByScope(linked, 'waiting', unlinked).map((r) => r.id)).toEqual(['a', 'e'])
+    // An empty daemon list is respected (no fallback guessing).
+    expect(myAssigneeNames({ owner: false, username: 'julie', ticketMe: [] }, '')).toEqual([])
+  })
+
   it('Waiting on me statuses: waiting and needs_discussion only', () => {
     expect(isWaitingOnSomeone('waiting')).toBe(true)
     expect(isWaitingOnSomeone('needs_discussion')).toBe(true)

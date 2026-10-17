@@ -4091,8 +4091,12 @@ pub(crate) fn with_test_issued_cert(sans: &[&str]) -> TestTlsCertGuard {
     ca.distinguished_name = dn;
     let ca_cert = ca.self_signed(&ca_key).expect("ca sign");
     let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
-    let params = CertificateParams::new(sans.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    let mut params = CertificateParams::new(sans.iter().map(|s| s.to_string()).collect::<Vec<_>>())
         .expect("SAN params");
+    // rcgen's default subject is "rcgen self signed cert": name the leaf.
+    let mut ldn = DistinguishedName::new();
+    ldn.push(DnType::CommonName, sans.first().copied().unwrap_or("leaf"));
+    params.distinguished_name = ldn;
     let der = params.signed_by(&key, &ca_cert, &ca_key).expect("sign").der().to_vec();
     with_test_tls_cert(TlsProbe::Handshake { leaf_der: der })
 }

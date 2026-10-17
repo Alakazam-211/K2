@@ -286,8 +286,11 @@ async fn pass_route_belts_method_bearer_browser_tunnel_csrf_and_skin_host() {
         assert_eq!((r.status, err_code(&r).as_str()), (403, "browser_not_allowed"), "{h:?}");
     }
     // Node's fetch (a BFF on @k2/server) adds only `Sec-Fetch-Mode: cors`:
-    // a server, so it mints.
-    let r = http_with(d.port, "POST", "/cli/sew/pass", &[("Authorization", &auth), ("Sec-Fetch-Mode", "cors")], Some("{}"));
+    // a server, so it mints. (Its own guest: ada's sid keeps its whole
+    // rate-limit budget for the check below.)
+    let (_bff_pid, bff_raw, _bff_tid) = guest("bff", true);
+    let bff_auth = format!("Bearer {bff_raw}");
+    let r = http_with(d.port, "POST", "/cli/sew/pass", &[("Authorization", &bff_auth), ("Sec-Fetch-Mode", "cors")], Some("{}"));
     assert_eq!(r.status, 200, "{}", r.raw_body);
     // Tunnel ingress → 403 loopback_only (owner token included).
     for b in [raw.as_str(), OWNER_TOKEN] {

@@ -19,6 +19,8 @@ export type AuthAuditEvent = {
   outcome: string
   ingress: string
   ip: string
+  /** `web` | `api` | `daemon` (absent from older lines). */
+  client?: string
 }
 
 export type ViewerRole = 'owner' | 'admin' | 'member'
@@ -56,6 +58,7 @@ export function parseAuditEvents(body: unknown): AuthAuditEvent[] {
       outcome: strField(r, 'outcome'),
       ingress: strField(r, 'ingress'),
       ip: strField(r, 'ip', '-'),
+      ...(typeof r.client === 'string' ? { client: r.client } : {}),
     })
   }
   return out

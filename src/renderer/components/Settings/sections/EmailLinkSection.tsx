@@ -1302,24 +1302,26 @@ function AddInboxForm({
   )
 }
 
-// ── Add calendar (MCS3) ──────────────────────────────────────────────────
+// ── Add calendar (MCS3 Microsoft, MCS4 Google) ───────────────────────────
 //
-// A Microsoft link consented for mail only can't do `k2 calendar`; its
-// capabilities name `scope_not_granted` on the calendar caps. "Add calendar"
-// re-consents the SAME link for calendars (the device-code upgrade path,
-// `k2 mail link upgrade <address> --features calendar`) — grants, levels
-// and ids stay. Google calendars aren't built yet, so Google rows get no
-// button.
+// A Microsoft or Google link consented for mail only can't do `k2 calendar`;
+// its capabilities name `scope_not_granted` on the calendar caps. "Add
+// calendar" re-consents the SAME link for calendars (`k2 mail link upgrade
+// <address> --features calendar`) — grants, levels and ids stay. Microsoft
+// signs in with a device code; Google with its consent page (client-capture
+// loopback, incremental consent), opened in the system browser.
 
-/** True when this inbox is a Microsoft link whose calendar caps are off
- *  only because the consent didn't include calendars. */
+/** True when this inbox is a Microsoft or Google link whose calendar caps
+ *  are off only because the consent didn't include calendars. */
 export function needsCalendarConsent(inbox: Pick<Inbox, 'capabilities'>): boolean {
   const c = inbox.capabilities
-  if (!c || c.source !== 'microsoft') return false
+  if (!c || (c.source !== 'microsoft' && c.source !== 'google')) return false
   return (c.missing ?? []).some((m) => m.cap.startsWith('calendar.') && m.reason === 'scope_not_granted')
 }
 
-type UpgradeFlow = { linkId: string; userCode: string; verificationUrl: string; deadlineMs: number }
+type UpgradeFlow =
+  | { kind: 'device'; linkId: string; userCode: string; verificationUrl: string; deadlineMs: number }
+  | { kind: 'browser'; linkId: string; authorizationUrl: string; deadlineMs: number }
 
 export function AddCalendarAccess({
   inbox,
@@ -1338,15 +1340,79 @@ export function AddCalendarAccess({
   const [failure, setFailure] = useState<{ text: string; adminConsentUrl?: string } | null>(null)
   const onUpgradedRef = useRef(onUpgraded)
   onUpgradedRef.current = onUpgraded
+  // Google: the loopback capture waiting for the consent redirect.
+  const captureRef = useRef<string | null>(null)
+  const isGoogle = inbox.capabilities?.source === 'google'
+
+  const cancelCapture = useCallback((): void => {
+    const cap = captureRef.current
+    captureRef.current = null
+    if (cap) void invoke('oauth_loopback_cancel', { captureId: cap }).catch(() => undefined)
+  }, [])
+  useEffect(() => cancelCapture, [cancelCapture])
+
+  const startGoogle = useCallback(async (): Promise<void> => {
+    const bind = await invoke<{ captureId: string; redirectUri: string; port: number }>('oauth_loopback_bind')
+    captureRef.current = bind.captureId
+    try {
+      const res = await linkOauthUpgrade({
+        inbox: inbox.address,
+        features: 'calendar',
+        clientCapture: true,
+        redirectUri: bind.redirectUri,
+      })
+      if (res.flow !== 'loopback') {
+        throw new Error('The daemon did not start a Google consent page.')
+      }
+      if (!res.authorizationUrl || !res.state) {
+        throw new Error(res.hint ?? 'The daemon did not start a Google consent page.')
+      }
+      const { linkId, authorizationUrl } = res
+      const oauthState = res.state
+      setFlow({ kind: 'browser', linkId, authorizationUrl, deadlineMs: Date.now() + OAUTH_MAX_MS })
+      void openUrl(authorizationUrl).catch(() => undefined)
+      // Relay the redirect's code in the background; the status poll
+      // drives the UI.
+      void (async () => {
+        try {
+          const capture = await invoke<{ code?: string | null; state?: string | null; error?: string | null }>(
+            'oauth_loopback_wait',
+            { captureId: bind.captureId, expectedState: oauthState, timeoutSecs: 300 },
+          )
+          if (captureRef.current !== bind.captureId) return
+          await linkOauthComplete({
+            linkId,
+            code: capture.code ?? undefined,
+            state: capture.state ?? oauthState,
+            error: capture.error ?? undefined,
+          })
+        } catch (e) {
+          if (captureRef.current !== bind.captureId) return
+          setFailure({ text: mailErrorMessage(e) })
+          setFlow(null)
+        } finally {
+          if (captureRef.current === bind.captureId) captureRef.current = null
+        }
+      })()
+    } catch (e) {
+      cancelCapture()
+      throw e
+    }
+  }, [inbox.address, cancelCapture])
 
   const start = useCallback(async (): Promise<void> => {
     setBusy(true)
     setFailure(null)
     try {
+      if (isGoogle) {
+        await startGoogle()
+        return
+      }
       const res = await linkOauthUpgrade({ inbox: inbox.address, features: 'calendar' })
       if (res.flow === 'device') {
         const bound = Number.isFinite(res.expiresIn) && res.expiresIn > 0 ? res.expiresIn * 1000 : OAUTH_MAX_MS
         setFlow({
+          kind: 'device',
           linkId: res.linkId,
           userCode: res.userCode,
           verificationUrl: res.verificationUrl,
@@ -1360,7 +1426,7 @@ export function AddCalendarAccess({
     } finally {
       setBusy(false)
     }
-  }, [inbox.address])
+  }, [inbox.address, isGoogle, startGoogle])
 
   useEffect(() => {
     if (!flow) return
@@ -1389,9 +1455,12 @@ export function AddCalendarAccess({
                   ? 'A different account signed in.'
                   : st.code === 'admin_consent_required'
                     ? 'Your Microsoft 365 admin needs to approve calendar access first.'
-                    : 'Something went wrong adding calendar access.'
+                    : st.code === 'scope_not_granted'
+                      ? 'Calendar access was not allowed on the consent page.'
+                      : 'Something went wrong adding calendar access.'
           setFailure({ text: st.hint ? `${lead} ${st.hint}` : lead, adminConsentUrl: st.adminConsentUrl })
           setFlow(null)
+          cancelCapture()
         }
       } catch (e) {
         if (cancelled) return
@@ -1405,7 +1474,7 @@ export function AddCalendarAccess({
       cancelled = true
       window.clearInterval(id)
     }
-  }, [flow, inbox.address, pollMs])
+  }, [flow, inbox.address, pollMs, cancelCapture])
 
   if (!needsCalendarConsent(inbox)) return null
   return (
@@ -1418,6 +1487,7 @@ export function AddCalendarAccess({
             <p className="text-[10px] text-[var(--color-text-muted)]">
               This account was linked for mail only. Add calendar access so agents with a grant can
               use <span className="font-mono">k2 calendar</span> — same inbox, same access.
+              {isGoogle && ' Google asks you to allow calendar access in your browser.'}
             </p>
           </div>
           <button
@@ -1425,13 +1495,40 @@ export function AddCalendarAccess({
             data-testid="add-calendar-button"
             disabled={!canMutate || busy || flow !== null}
             onClick={() => void start()}
-            title={canMutate ? 'Sign in again with a device code to add calendar access' : 'Not available in viewer mode'}
+            title={
+              !canMutate
+                ? 'Not available in viewer mode'
+                : isGoogle
+                  ? 'Open Google consent to add calendar access'
+                  : 'Sign in again with a device code to add calendar access'
+            }
             className="px-2.5 py-1 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
           >
             {busy ? 'Starting…' : 'Add calendar'}
           </button>
         </div>
-        {flow && (
+        {flow?.kind === 'browser' && (
+          <div className="space-y-2" data-testid="add-calendar-browser">
+            <p className="text-[11px] text-[var(--color-text-secondary)]">
+              Allow calendar access for <span className="font-mono">{inbox.address}</span> on
+              Google&rsquo;s consent page (it opened in your browser).
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void openUrl(flow.authorizationUrl)}
+                className="px-2 py-1 text-[10px] text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+              >
+                Open Google consent again
+              </button>
+              <CopyButton text={flow.authorizationUrl} title="Copy consent URL" />
+            </div>
+            <p className="text-[10px] text-[var(--color-text-muted)]">
+              Waiting for approval… this updates automatically.
+            </p>
+          </div>
+        )}
+        {flow?.kind === 'device' && (
           <div className="space-y-2" data-testid="add-calendar-device">
             <p className="text-[11px] text-[var(--color-text-secondary)]">
               Go to{' '}

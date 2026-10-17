@@ -273,12 +273,13 @@ pub fn verify_with_jwks(token: &str, jwks: &serde_json::Value, expected_aud: &st
     v.set_required_spec_claims(&["iss", "aud", "sub", "exp", "iat"]);
     let data = jsonwebtoken::decode::<serde_json::Map<String, serde_json::Value>>(token, &key, &v)
         .map_err(|e| format!("rejected: {:?}", e.kind()))?;
-    let mut claim_names: Vec<&str> = data.claims.keys().map(String::as_str).collect();
+    // Exactly the seven, plus the optional `caps` and `app` (spec v1.3).
+    let optional = ["caps", "app"];
+    let mut claim_names: Vec<&str> =
+        data.claims.keys().map(String::as_str).filter(|k| !optional.contains(k)).collect();
     claim_names.sort_unstable();
-    if claim_names != ["aud", "exp", "iat", "iss", "jti", "sid", "sub"]
-        && claim_names != ["aud", "caps", "exp", "iat", "iss", "jti", "sid", "sub"]
-    {
-        return Err(format!("claims must be exactly the seven, plus optional caps (got {claim_names:?})"));
+    if claim_names != ["aud", "exp", "iat", "iss", "jti", "sid", "sub"] {
+        return Err(format!("claims must be exactly the seven, plus optional caps and app (got {claim_names:?})"));
     }
     let c: ChatPassClaims =
         serde_json::from_value(serde_json::Value::Object(data.claims)).map_err(|e| format!("claim types: {e}"))?;

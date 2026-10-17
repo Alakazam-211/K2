@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import { NAV_SECTION_HOVER_CLASS, NavCountTag, NavSectionChevron, NavSectionLabel } from './NavSection'
 import { useProjectsStore } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useSettingsStore } from '@/stores/settings'
@@ -994,25 +995,15 @@ export default function Sidebar(): React.JSX.Element {
           <button
             type="button"
             onClick={() => setAgentsPinnedCollapsed((v) => !v)}
-            className="no-drag w-full flex items-center gap-1.5 px-4 pt-3 pb-2 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+            className={`no-drag w-full flex items-center gap-1.5 px-4 pt-3 pb-2 text-left cursor-pointer ${NAV_SECTION_HOVER_CLASS}`}
             aria-expanded={!agentsPinnedCollapsed}
             aria-controls="sidebar-agents-pinned-content"
           >
-            <span className="text-[10px] font-semibold tracking-wider text-[var(--color-text-muted)] uppercase">
-              Pinned
-            </span>
-            <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono">
-              {totalCount}
-            </span>
+            <NavSectionLabel>Pinned</NavSectionLabel>
+            <NavCountTag count={totalCount} />
             <ShortcutRangeHint combo={useTerminalSettingsStore.getState().shortcutLayout === 'cmd-active-cmdshift-pinned' ? '⌥⌘ 1-9' : '⌘ 1-9'} />
             <span className="flex-1" />
-            <svg
-              className="w-2.5 h-2.5 text-[var(--color-text-muted)] flex-shrink-0"
-              style={{ transition: 'transform 0.2s ease', transform: agentsPinnedCollapsed ? 'rotate(0deg)' : 'rotate(90deg)' }}
-              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-            </svg>
+            <NavSectionChevron collapsed={agentsPinnedCollapsed} />
           </button>
           <div
             id="sidebar-agents-pinned-content"

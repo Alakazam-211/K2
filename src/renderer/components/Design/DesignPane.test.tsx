@@ -275,7 +275,7 @@ describe('the palette is the Select toggle', () => {
 })
 
 describe('pick → note → tray → Send', () => {
-  it('⌘↩ in the pop-up sends the typed note plus the tray in one post', async () => {
+  it('⌘↩ in the New Note editor sends only that note; the tray stays', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
     const res = useDesignNotesStore.getState().add('i-design', { comment: 'pinned earlier', url: 'http://localhost:5173/pricing', title: 'Pricing' })
     if (!res.ok) throw new Error(res.reason)
@@ -284,7 +284,9 @@ describe('pick → note → tray → Send', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(450)
     })
-    const field = screen.getByRole('dialog', { name: 'Note for the agent' }).querySelector('textarea') as HTMLTextAreaElement
+    const dialog = screen.getByRole('dialog', { name: 'Note for the agent' })
+    expect(screen.getByTestId('design-new-note-header').textContent).toContain('New Note')
+    const field = dialog.querySelector('textarea') as HTMLTextAreaElement
     act(() => {
       fireEvent.change(field, { target: { value: 'bigger' } })
     })
@@ -295,8 +297,33 @@ describe('pick → note → tray → Send', () => {
     expect(screen.queryByRole('dialog', { name: 'Note for the agent' })).toBeNull()
     const posts = vi.mocked(daemonCliPost).mock.calls.filter((c) => c[1] === 'browser/notes')
     expect(posts).toHaveLength(1)
-    expect((posts[0][2] as { notes: { comment: string }[] }).notes.map((n) => n.comment)).toEqual(['pinned earlier', 'bigger'])
-    expect(useDesignNotesStore.getState().trays['i-design'].notes).toEqual([])
+    expect((posts[0][2] as { notes: { comment: string }[] }).notes.map((n) => n.comment)).toEqual(['bigger'])
+    expect(useDesignNotesStore.getState().trays['i-design'].notes.map((n) => n.comment)).toEqual(['pinned earlier'])
+  })
+
+  it('a 10th Add says the limit in the editor and adds nothing', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    for (let i = 0; i < 9; i++) {
+      const res = useDesignNotesStore.getState().add('i-design', { comment: `n${i}`, url: 'http://localhost:5173/pricing', title: 'Pricing' })
+      if (!res.ok) throw new Error(res.reason)
+    }
+    renderDesign(fakeIpc([{ events: [PICK], navSeq: 1 }]))
+    await flush()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(450)
+    })
+    const field = screen.getByRole('dialog', { name: 'Note for the agent' }).querySelector('textarea') as HTMLTextAreaElement
+    act(() => {
+      fireEvent.change(field, { target: { value: 'one more' } })
+    })
+    const add = screen.getByRole('button', { name: 'Add' }) as HTMLButtonElement
+    expect(add.disabled).toBe(false)
+    act(() => {
+      fireEvent.click(add)
+    })
+    expect(screen.getByTestId('design-popover-notice').textContent).toBe("You've hit the limit of 9 notes. Send some first.")
+    expect(screen.getByRole('dialog', { name: 'Note for the agent' })).toBeTruthy()
+    expect(useDesignNotesStore.getState().trays['i-design'].notes).toHaveLength(9)
   })
 
 

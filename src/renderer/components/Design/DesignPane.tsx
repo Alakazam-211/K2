@@ -19,8 +19,9 @@
 //    the Browser pane's, and `AnimatedDrawer` calls `beginBrowserMotion`).
 //  - Select is on when the tab opens; the palette in the chrome bar (after
 //    Back / Forward) toggles it, accent-coloured while on. No S hotkey.
-//    Pick → note pop-up beside the element (its overlay claim freezes the
-//    page) → Add to the tray, or ⌘↩ to send now → one Send.
+//    Pick → the New Note editor beside the element (its overlay claim
+//    freezes the page) → Add to the tray, or Send now (⌘↩: just this
+//    note). Send all in the notes header sends the tray.
 //  - Notes are per viewer; they leave when the tab is closed.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -35,12 +36,12 @@ import type { AgentItemData, DesignItemData, Tab } from '@/stores/tabs'
 import { DesignPaletteButton } from './DesignToolbar'
 import { DesignThreadColumn } from './DesignThreadColumn'
 import { DesignWebStub } from './DesignWebStub'
-import { NotePopover, sendNowChord } from './NotePopover'
+import { NotePopover } from './NotePopover'
 import { NoteTray } from './NoteTray'
 import { designItemStillOpen } from './design-lifecycle'
 import { readDesignSplit, writeDesignSplit } from './design-split-sizes'
 import { scaleGuestRect } from './placement'
-import { MAX_DESIGN_NOTES, NOTES_FULL_REASON, badgesFor, useDesignNotesStore, useDesignTray } from './useDesignNotes'
+import { badgesFor, useDesignNotesStore, useDesignTray } from './useDesignNotes'
 import { useDesignPicker } from './useDesignPicker'
 import type { DesignPickerIpc, NoteRect, PickResult } from './types'
 
@@ -190,9 +191,14 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
     setPopoverBox(null)
     setArmed(true)
   }, [setArmed])
-  const sendNow = useCallback(
-    (comment: string, intent: 'change' | 'question') => {
-      const typed = pick && comment
+  // A brief notice in the editor (the tray is full after an Add).
+  const [notice, setNotice] = useState<string | null>(null)
+  useEffect(() => {
+    setNotice(null)
+  }, [pick])
+  const noteFromPick = useCallback(
+    (comment: string, intent: 'change' | 'question') =>
+      pick
         ? {
             comment,
             intent,
@@ -201,30 +207,31 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
             title: pick.title,
             viewport: { width: pick.viewport.width, height: pick.viewport.height },
           }
-        : undefined
+        : null,
+    [pick],
+  )
+  const sendNow = useCallback(
+    (comment: string, intent: 'change' | 'question') => {
+      const typed = noteFromPick(comment, intent)
+      if (!typed) return
       closePopover()
       void useDesignNotesStore.getState().sendNow(itemId, target, typed)
     },
-    [itemId, pick, target, closePopover],
+    [itemId, target, closePopover, noteFromPick],
   )
   const addNote = useCallback(
     (comment: string, intent: 'change' | 'question') => {
-      if (!pick) return
-      const res = useDesignNotesStore.getState().add(itemId, {
-        comment,
-        intent,
-        element: pick.element,
-        url: pick.url,
-        title: pick.title,
-        viewport: { width: pick.viewport.width, height: pick.viewport.height },
-      })
+      const note = noteFromPick(comment, intent)
+      if (!note) return
+      const res = useDesignNotesStore.getState().add(itemId, note)
       if (!res.ok) {
-        console.warn('[design] note not added:', res.reason)
+        // The 10th Add: say so in the editor and keep the note there.
+        setNotice(res.reason)
         return
       }
       closePopover()
     },
-    [itemId, pick, closePopover],
+    [itemId, closePopover, noteFromPick],
   )
 
   // Numbered badges in the page follow the tray (visual only).
@@ -249,7 +256,6 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
         onSend={send}
         onSendOne={(noteId) => void store().sendOne(itemId, noteId, target)}
         onRetry={retry}
-        sendAllHint={sendNowChord()}
       />
     </>
   )
@@ -302,8 +308,7 @@ function DesignDesk({ itemId, tabId, paneGroupId, data, ipc = tauriDesignPickerI
           container={popoverBox.container}
           onAdd={addNote}
           onSendNow={sendNow}
-          trayCount={tray.notes.length}
-          addDisabledReason={tray.notes.length >= MAX_DESIGN_NOTES ? NOTES_FULL_REASON : null}
+          notice={notice}
           onCancel={closePopover}
         />
       ) : null}

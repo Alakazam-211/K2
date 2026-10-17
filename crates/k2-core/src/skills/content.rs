@@ -421,6 +421,7 @@ Your server can host real email (Linux daemons; your human enables it in Setting
 ```
 k2 hostmail create <local>[@<domain>] [--id <key>]  # mint an address (--id = idempotency key: retrying the same --id returns the existing address)
 k2 mail addresses                               # your ACTIVE addresses + cap usage (incoming mail is `messages`)
+k2 mail capabilities [<address>]                # what each inbox can do (mail/calendar) + the fix for anything off
 k2 mail domains                                 # verified domains you can mint on (workspace default marked)
 k2 mail messages [<address>] [--unread]         # newest-first summaries
 k2 mail read <message-id>                       # one full message (marks it read)
@@ -581,6 +582,7 @@ Your server can host real email (Linux daemons; your human enables it in Setting
 ```
 k2 hostmail create <local>[@<domain>] [--id <key>]  # mint an address (--id = idempotency key: retrying the same --id returns the existing address)
 k2 mail addresses                               # your ACTIVE addresses + cap usage (incoming mail is `messages`)
+k2 mail capabilities [<address>]                # what each inbox can do (mail/calendar) + the fix for anything off
 k2 mail domains                                 # verified domains you can mint on (workspace default marked)
 k2 mail messages [<address>] [--unread]         # newest-first summaries
 k2 mail read <message-id>                       # one full message (marks it read)
@@ -797,6 +799,7 @@ Your server can host real email (Linux daemons; your human enables it in Setting
 ```
 k2 hostmail create <local>[@<domain>] [--id <key>]  # mint an address (--id = idempotency key: retrying the same --id returns the existing address)
 k2 mail addresses                               # your ACTIVE addresses + cap usage (incoming mail is `messages`)
+k2 mail capabilities [<address>]                # what each inbox can do (mail/calendar) + the fix for anything off
 k2 mail domains                                 # verified domains you can mint on (workspace default marked)
 k2 mail messages [<address>] [--unread]         # newest-first summaries
 k2 mail read <message-id>                       # one full message (marks it read)

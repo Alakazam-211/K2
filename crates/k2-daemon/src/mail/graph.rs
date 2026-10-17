@@ -53,18 +53,22 @@ use std::time::Duration;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use base64::Engine as _;
 
-use crate::mail::external::{persist_token_expiry, read_oauth_fields};
+use crate::mail::external::read_oauth_fields;
 use crate::mail::jmap::{AttachmentMeta, EmailFull, EmailSummary, MailAddr};
 use crate::mail::messages::{
     iso_to_unix, ListError, ListFilter, MailFolder, ManageBackend, ManageOutcome, ReadBackend,
 };
-use crate::mail::oauth::{self, form_encode, OauthProvider, ReqwestHttp};
+use crate::mail::oauth::{form_encode, OauthProvider, ReqwestHttp};
 use crate::mail::secrets::FileSecretStore;
 use k2_core::db::schema::MailExternalInbox;
 
 /// The Graph v1.0 base. Microsoft mail is HTTPS to graph.microsoft.com —
-/// the row's `host`/`tls` (IMAP-shaped) are UNUSED for graph rows.
-pub const GRAPH_BASE: &str = "https://graph.microsoft.com/v1.0";
+/// the row's `host`/`tls` (IMAP-shaped) are UNUSED for graph rows. A
+/// `provider-fakes` test build may point it at the provider fakes
+/// ([`crate::mail::oauth::graph_base`]); release builds can't.
+fn graph_base() -> String {
+    crate::mail::oauth::graph_base()
+}
 
 /// The opaque-token discriminator for a Graph message id: the backend
 /// `email_id` inside the seam's `m_<b64url(address\n<email_id>)>` token
@@ -185,21 +189,17 @@ impl RealGraphHttp {
         let secrets = FileSecretStore::default();
         let http = ReqwestHttp::default();
         let now = chrono::Utc::now().timestamp();
-        let fresh = oauth::access_token_for(
-            &secrets,
+        // MCS1: minted by the client that linked the row (never a swapped
+        // BYO app); the refreshed expiry + granted scopes persist inside.
+        crate::mail::external::fresh_access_token(
             &self.inbox_id,
             provider,
             auth.token_expires_at,
-            now,
-            None,
-            None,
+            &secrets,
             &http,
+            now,
         )
-        .map_err(|e| format!("oauth token for graph inbox {}: {e}", self.inbox_id))?;
-        if fresh.refreshed {
-            persist_token_expiry(&self.inbox_id, fresh.token_expires_at);
-        }
-        Ok(fresh.access_token)
+        .map_err(|e| format!("graph inbox {}: {e}", self.inbox_id))
     }
 
     fn client() -> Result<reqwest::blocking::Client, String> {
@@ -657,7 +657,7 @@ impl GraphBackend {
     }
 
     fn url(path: &str) -> String {
-        format!("{GRAPH_BASE}{path}")
+        format!("{}{path}", graph_base())
     }
 
     /// GET a full message + (when present) its attachment metadata.

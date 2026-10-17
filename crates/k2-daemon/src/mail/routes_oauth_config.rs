@@ -64,6 +64,19 @@ struct SetBody {
     provider: String,
     client_id: String,
     client_secret: Option<String>,
+    /// MCS1, Microsoft only: the authority (`common` | `organizations` |
+    /// `consumers` | a tenant id or domain). May be set alone.
+    tenant: Option<String>,
+}
+
+/// One-key `app_settings` partial for the Microsoft authority.
+fn tenant_partial(value: &str) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    map.insert(
+        oauth_config::MICROSOFT_TENANT_SETTINGS_KEY.to_string(),
+        serde_json::Value::String(value.to_string()),
+    );
+    serde_json::Value::Object(map)
 }
 
 /// POST `/cli/mail/oauth-config/set` `{provider, clientId, clientSecret?}` —
@@ -88,11 +101,25 @@ pub fn handle_oauth_config_set(body: &[u8]) -> CliResponse {
         }
     };
     let client_id = b.client_id.trim();
-    if client_id.is_empty() {
+    let tenant_raw = b.tenant.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if tenant_raw.is_some() && provider != OauthProvider::Microsoft {
         return error_response(
             "400 Bad Request",
             "usage",
-            "missing 'clientId' — your OAuth client id for this provider",
+            "'tenant' is for Microsoft only (the identity-platform authority)",
+        );
+    }
+    let tenant = match tenant_raw.map(crate::mail::oauth::validate_tenant) {
+        None => None,
+        Some(Ok(t)) => Some(t),
+        Some(Err(h)) => return error_response("400 Bad Request", "usage", &h),
+    };
+    if client_id.is_empty() && tenant.is_none() {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "missing 'clientId' — your OAuth client id for this provider (Microsoft may set \
+             just 'tenant')",
         );
     }
     let secret = b.client_secret.as_deref().map(str::trim).filter(|s| !s.is_empty());
@@ -103,14 +130,33 @@ pub fn handle_oauth_config_set(body: &[u8]) -> CliResponse {
             "Microsoft is a PUBLIC client — it has no client secret; omit 'clientSecret'",
         );
     }
+    if secret.is_some() && client_id.is_empty() {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "a client secret needs its 'clientId'",
+        );
+    }
 
     // 1) Store the (non-secret) client id in daemon config.
-    if let Err(e) = k2_core::app_settings::update(client_id_partial(provider, client_id)) {
-        return error_response(
-            "500 Internal Server Error",
-            "engine",
-            &format!("could not persist client id: {e}"),
-        );
+    if !client_id.is_empty() {
+        if let Err(e) = k2_core::app_settings::update(client_id_partial(provider, client_id)) {
+            return error_response(
+                "500 Internal Server Error",
+                "engine",
+                &format!("could not persist client id: {e}"),
+            );
+        }
+    }
+    // 1b) MCS1: the Microsoft authority (validated above).
+    if let Some(t) = tenant.as_deref() {
+        if let Err(e) = k2_core::app_settings::update(tenant_partial(t)) {
+            return error_response(
+                "500 Internal Server Error",
+                "engine",
+                &format!("could not persist the tenant: {e}"),
+            );
+        }
     }
 
     // 2) Gmail only: vault the client secret (atomic 0600), exactly like the
@@ -133,13 +179,10 @@ pub fn handle_oauth_config_set(body: &[u8]) -> CliResponse {
     }
 
     let store = FileSecretStore::default();
-    ok_json(serde_json::json!({
-        "ok": true,
-        "provider": provider.as_str(),
-        "source": "custom",
-        // Whether a BYO secret is now vaulted — never the value.
-        "secretSet": oauth_config::client_secret_is_set(&store, provider),
-    }))
+    let mut v = provider_status(&store, provider);
+    v["ok"] = serde_json::json!(true);
+    v["provider"] = serde_json::json!(provider.as_str());
+    ok_json(v)
 }
 
 // ── POST /cli/mail/oauth-config/clear ───────────────────────────────────
@@ -180,6 +223,16 @@ pub fn handle_oauth_config_clear(body: &[u8]) -> CliResponse {
             &format!("could not clear client id: {e}"),
         );
     }
+    // MCS1: Microsoft also reverts its authority to `common`.
+    if provider == OauthProvider::Microsoft {
+        if let Err(e) = k2_core::app_settings::update(tenant_partial("")) {
+            return error_response(
+                "500 Internal Server Error",
+                "engine",
+                &format!("could not clear the tenant: {e}"),
+            );
+        }
+    }
 
     // Gmail only: wipe the vaulted secret (a no-op if none was set).
     if provider == OauthProvider::Gmail {
@@ -193,12 +246,11 @@ pub fn handle_oauth_config_clear(body: &[u8]) -> CliResponse {
         }
     }
 
-    ok_json(serde_json::json!({
-        "ok": true,
-        "provider": provider.as_str(),
-        "source": "default",
-        "secretSet": false,
-    }))
+    let store = FileSecretStore::default();
+    let mut v = provider_status(&store, provider);
+    v["ok"] = serde_json::json!(true);
+    v["provider"] = serde_json::json!(provider.as_str());
+    ok_json(v)
 }
 
 // ── GET /cli/mail/oauth-config ──────────────────────────────────────────
@@ -212,11 +264,21 @@ fn provider_status(secrets: &dyn SecretStore, provider: OauthProvider) -> serde_
     let source = if stored.is_some() { "custom" } else { "default" };
     let client_id = stored
         .unwrap_or_else(|| provider.config().client_id_placeholder.to_string());
-    serde_json::json!({
+    // MCS2: `configured` = a real client id is in effect (a build without
+    // one baked in still carries the REPLACE_ME placeholder). Settings
+    // enables "Connect" on it; the link start refuses `not_configured`
+    // without it.
+    let configured = !crate::mail::oauth::is_placeholder_client_id(&client_id);
+    let mut v = serde_json::json!({
         "source": source,
         "clientId": client_id,
         "secretSet": oauth_config::client_secret_is_set(secrets, provider),
-    })
+        "configured": configured,
+    });
+    if provider == OauthProvider::Microsoft {
+        v["tenant"] = serde_json::json!(oauth_config::stored_microsoft_tenant());
+    }
+    v
 }
 
 /// GET `/cli/mail/oauth-config` → per-provider
@@ -393,6 +455,70 @@ mod tests {
             .status,
             "400 Bad Request"
         );
+    }
+
+    /// MCS1: the Microsoft authority — set alone or with the id, validated,
+    /// Gmail refuses it, GET shows it, clear reverts it to `common`; and
+    /// MCS2's `configured` flag follows the effective client id.
+    #[test]
+    fn microsoft_tenant_set_get_clear_and_configured_flag() {
+        with_temp_home(|| {
+            let get = body_json(&handle_oauth_config_get(&HashMap::new()));
+            assert_eq!(get["providers"]["microsoft"]["tenant"], "common");
+            // `configured` follows the baked id (a test build normally bakes
+            // none; a build run with K2_MICROSOFT_CLIENT_ID set does).
+            let baked = !crate::mail::oauth::is_placeholder_client_id(
+                OauthProvider::Microsoft.config().client_id_placeholder,
+            );
+            assert_eq!(get["providers"]["microsoft"]["configured"], baked);
+            assert!(get["providers"]["gmail"].get("tenant").is_none());
+
+            let bad = handle_oauth_config_set(
+                serde_json::json!({ "provider": "microsoft", "tenant": "not a tenant" })
+                    .to_string()
+                    .as_bytes(),
+            );
+            assert_eq!(bad.status, "400 Bad Request", "{}", bad.body);
+            let gmail = handle_oauth_config_set(
+                serde_json::json!({ "provider": "gmail", "clientId": "x", "tenant": "common" })
+                    .to_string()
+                    .as_bytes(),
+            );
+            assert_eq!(gmail.status, "400 Bad Request", "{}", gmail.body);
+            assert_eq!(oauth_config::stored_client_id(OauthProvider::Gmail), None);
+
+            let only_tenant = handle_oauth_config_set(
+                serde_json::json!({ "provider": "microsoft", "tenant": "Contoso.onmicrosoft.com" })
+                    .to_string()
+                    .as_bytes(),
+            );
+            assert_eq!(only_tenant.status, "200 OK", "{}", only_tenant.body);
+            assert_eq!(body_json(&only_tenant)["tenant"], "contoso.onmicrosoft.com");
+            assert_eq!(body_json(&only_tenant)["configured"], baked, "the id is unchanged");
+
+            let both = handle_oauth_config_set(
+                serde_json::json!({
+                    "provider": "microsoft",
+                    "clientId": "6731de76-14a6-49ae-97bc-6eba6914391e",
+                    "tenant": "organizations",
+                })
+                .to_string()
+                .as_bytes(),
+            );
+            assert_eq!(both.status, "200 OK", "{}", both.body);
+            let g = body_json(&handle_oauth_config_get(&HashMap::new()));
+            assert_eq!(g["providers"]["microsoft"]["tenant"], "organizations");
+            assert_eq!(g["providers"]["microsoft"]["configured"], true);
+            assert_eq!(oauth_config::stored_microsoft_tenant(), "organizations");
+
+            let clear = handle_oauth_config_clear(
+                serde_json::json!({ "provider": "microsoft" }).to_string().as_bytes(),
+            );
+            assert_eq!(clear.status, "200 OK", "{}", clear.body);
+            let g = body_json(&handle_oauth_config_get(&HashMap::new()));
+            assert_eq!(g["providers"]["microsoft"]["tenant"], "common");
+            assert_eq!(g["providers"]["microsoft"]["configured"], baked);
+        });
     }
 
     /// The secret VALUE must never appear in the serialization of ANY

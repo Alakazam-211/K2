@@ -2680,6 +2680,7 @@ mod tests {
             scope: Some("https://mail.google.com/".to_string()),
             token_type: "Bearer".to_string(),
             expires_in: 3600,
+            id_token: None,
         };
         crate::mail::oauth::store_tokens(&secrets, &id, &tokens, 1_000)
             .expect("vault oauth tokens");

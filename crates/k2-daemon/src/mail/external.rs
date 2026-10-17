@@ -243,6 +243,129 @@ pub fn read_oauth_fields(row_id: &str) -> Result<OauthFields, String> {
     }
 }
 
+/// MCS1 (migration 0188): the non-secret OAuth v2 columns of one row.
+/// `None` fields are rows linked before 0188 (or password rows).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OauthMeta {
+    pub features: String,
+    pub granted_scopes: Option<String>,
+    pub oauth_client: Option<String>,
+    pub oauth_client_hash: Option<String>,
+    pub account_tenant: Option<String>,
+    pub account_kind: Option<String>,
+    pub account_checked_at: Option<i64>,
+}
+
+/// Read the 0188 columns for a row (`None` = no such row).
+pub fn read_oauth_meta(row_id: &str) -> Option<OauthMeta> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    read_oauth_meta_conn(&conn, row_id)
+}
+
+/// [`read_oauth_meta`] on an already-held connection (the inbox catalog
+/// holds the DB lock while it shapes every row).
+pub fn read_oauth_meta_conn(conn: &rusqlite::Connection, row_id: &str) -> Option<OauthMeta> {
+    conn.query_row(
+        "SELECT features, granted_scopes, oauth_client, oauth_client_hash, account_tenant, \
+         account_kind, account_checked_at FROM mail_external_inboxes WHERE id = ?1",
+        rusqlite::params![row_id],
+        |r| {
+            Ok(OauthMeta {
+                features: r.get(0)?,
+                granted_scopes: r.get(1)?,
+                oauth_client: r.get(2)?,
+                oauth_client_hash: r.get(3)?,
+                account_tenant: r.get(4)?,
+                account_kind: r.get(5)?,
+                account_checked_at: r.get(6)?,
+            })
+        },
+    )
+    .ok()
+}
+
+/// A fresh access token for an OAuth row, minted by the client that LINKED
+/// the row (PRD §3.2: refresh never moves a row to another app), with the
+/// refreshed expiry and the granted scopes written back (the 0188
+/// backfill for rows linked earlier). Every OAuth transport (IMAP and SMTP
+/// XOAUTH2, Graph) calls this one function. The token is returned to the
+/// single caller that puts it on the wire and is never logged.
+pub fn fresh_access_token(
+    inbox_id: &str,
+    provider: crate::mail::oauth::OauthProvider,
+    token_expires_at: Option<i64>,
+    secrets: &dyn SecretStore,
+    http: &dyn crate::mail::oauth::HttpClient,
+    now: i64,
+) -> Result<String, String> {
+    let meta = read_oauth_meta(inbox_id).unwrap_or_default();
+    let client = crate::mail::oauth::issuing_client(
+        provider,
+        meta.oauth_client.as_deref(),
+        meta.oauth_client_hash.as_deref(),
+    )
+    .map_err(|e| format!("oauth client for inbox {inbox_id}: {e}"))?;
+    let fresh = crate::mail::oauth::access_token_for(
+        secrets,
+        inbox_id,
+        provider,
+        token_expires_at,
+        now,
+        Some(&client.id),
+        client.secret.as_deref(),
+        http,
+    )
+    .map_err(|e| format!("oauth token for inbox {inbox_id}: {e}"))?;
+    if fresh.refreshed {
+        persist_refresh(inbox_id, fresh.token_expires_at, fresh.scope.as_deref());
+    } else if meta.granted_scopes.is_none() {
+        if let Some(scope) = fresh.scope.as_deref() {
+            persist_granted_scopes(inbox_id, scope);
+        }
+    }
+    Ok(fresh.access_token)
+}
+
+/// Persist a refresh: the new absolute expiry and (when the provider
+/// reported one) the granted scopes. Best-effort, like
+/// [`persist_token_expiry`].
+pub fn persist_refresh(row_id: &str, token_expires_at: i64, scope: Option<&str>) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let _ = conn.execute(
+        "UPDATE mail_external_inboxes SET token_expires_at = ?2, \
+         granted_scopes = COALESCE(?3, granted_scopes) WHERE id = ?1",
+        rusqlite::params![row_id, token_expires_at, scope],
+    );
+}
+
+fn persist_granted_scopes(row_id: &str, scope: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let _ = conn.execute(
+        "UPDATE mail_external_inboxes SET granted_scopes = ?2 WHERE id = ?1",
+        rusqlite::params![row_id, scope],
+    );
+}
+
+/// A linked inbox row by its id or its address (`k2 mail link upgrade`
+/// takes either).
+pub fn inbox_for_id_or_address(raw: &str) -> Option<MailExternalInbox> {
+    let raw = raw.trim();
+    if raw.contains('@') {
+        return inbox_for_address(raw);
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        &format!("SELECT {EXT_COLS} FROM mail_external_inboxes WHERE id = ?1"),
+        rusqlite::params![raw],
+        map_row,
+    )
+    .ok()
+}
+
 /// Persist a REFRESHED absolute `token_expires_at` back to the row (O2:
 /// after [`crate::mail::oauth::access_token_for`] refreshed, so the next
 /// login reuses the token instead of re-refreshing). Best-effort: a
@@ -1248,6 +1371,7 @@ pub fn add_oauth_inbox(
     provider: crate::mail::oauth::OauthProvider,
     raw_address: &str,
     tokens: &crate::mail::oauth::Tokens,
+    meta: &OauthMeta,
     now: i64,
 ) -> Result<serde_json::Value, ExtError> {
     let email_address = addresses::normalize_address(raw_address).map_err(|e| match e {
@@ -1297,9 +1421,10 @@ pub fn add_oauth_inbox(
         conn.execute(
             "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, \
              kind, host, port, tls, username, status, last_checked_at, created_at, \
-             auth_kind, provider, token_expires_at) \
+             auth_kind, provider, token_expires_at, features, granted_scopes, oauth_client, \
+             oauth_client_hash, account_tenant, account_kind, account_checked_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'implicit-tls', ?3, 'connected', ?7, ?7, \
-             ?8, ?9, ?10)",
+             ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             rusqlite::params![
                 id,
                 owner_project_id,
@@ -1311,6 +1436,13 @@ pub fn add_oauth_inbox(
                 AUTH_OAUTH,
                 provider.as_str(),
                 token_expires_at,
+                if meta.features.is_empty() { "mail" } else { meta.features.as_str() },
+                meta.granted_scopes,
+                meta.oauth_client,
+                meta.oauth_client_hash,
+                meta.account_tenant,
+                meta.account_kind,
+                meta.account_checked_at,
             ],
         )
     };
@@ -1333,18 +1465,83 @@ pub fn add_oauth_inbox(
         "workspace": owner_project_id,
         "provider": provider.as_str(),
         "kind": kind,
+        "features": if meta.features.is_empty() { "mail" } else { meta.features.as_str() },
         "hint": format!(
             "connected — agents in the bound workspace can read '{email_address}' and save \
-             reply drafts. {}",
-            if provider == crate::mail::oauth::OauthProvider::Gmail {
-                "Drafting is always on; raise it to 'send' with 'k2 mail access set-level' to \
-                 let agents also send via SMTP (XOAUTH2)."
-            } else {
-                "Drafting is always on; sending from Microsoft inboxes is not yet available \
-                 (draft-only until Graph send lands)."
-            }
+             drafts. {}",
+            oauth_send_hint(provider)
         ),
     }))
+}
+
+/// What the owner does next to let agents SEND from an OAuth inbox.
+pub fn oauth_send_hint(provider: crate::mail::oauth::OauthProvider) -> &'static str {
+    if provider == crate::mail::oauth::OauthProvider::Gmail {
+        "Drafting is always on; raise it to 'send' with 'k2 mail access set-level' to let \
+         agents also send via SMTP (XOAUTH2), governed by the workspace's Email sending mode."
+    } else {
+        "Drafting is always on; raise it to 'send' with 'k2 mail access set-level' to let \
+         agents also send over Microsoft Graph, governed by the workspace's Email sending \
+         mode (off / approval / on)."
+    }
+}
+
+/// MCS1 incremental re-consent: replace a linked OAuth row's token bundle
+/// IN PLACE after a successful re-consent + account check. The row id,
+/// its grants, levels and every message/event id keep working. The vault
+/// write happens only here — after the check passed — so a failed upgrade
+/// leaves the old bundle untouched. A provider that answered no new
+/// refresh token (an incremental grant may omit it) keeps the old one.
+pub fn upgrade_oauth_inbox(
+    secrets: &dyn SecretStore,
+    row_id: &str,
+    tokens: &crate::mail::oauth::Tokens,
+    meta: &OauthMeta,
+    now: i64,
+) -> Result<serde_json::Value, ExtError> {
+    let row = inbox_for_id_or_address(row_id)
+        .ok_or_else(|| ExtError::NotFound(format!("no linked inbox '{row_id}'")))?;
+    let mut tokens = tokens.clone();
+    if tokens.refresh_token.is_none() {
+        let old = crate::mail::oauth::load_tokens(secrets, &row.id)
+            .map_err(|e| ExtError::Engine(format!("read the current oauth bundle: {e}")))?;
+        tokens.refresh_token = old.refresh_token;
+    }
+    let token_expires_at = crate::mail::oauth::store_tokens(secrets, &row.id, &tokens, now)
+        .map_err(|e| ExtError::Engine(format!("vault oauth tokens: {e}")))?;
+    let updated = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "UPDATE mail_external_inboxes SET token_expires_at = ?2, features = ?3, \
+             granted_scopes = ?4, oauth_client = ?5, oauth_client_hash = ?6, \
+             account_tenant = ?7, account_kind = ?8, account_checked_at = ?9, \
+             status = 'connected', last_error = NULL, last_checked_at = ?10 WHERE id = ?1",
+            rusqlite::params![
+                row.id,
+                token_expires_at,
+                if meta.features.is_empty() { "mail" } else { meta.features.as_str() },
+                meta.granted_scopes,
+                meta.oauth_client,
+                meta.oauth_client_hash,
+                meta.account_tenant,
+                meta.account_kind,
+                meta.account_checked_at,
+                now,
+            ],
+        )
+    };
+    match updated {
+        Ok(1) => Ok(serde_json::json!({
+            "ok": true,
+            "id": row.id,
+            "address": row.email_address,
+            "features": meta.features,
+            "upgraded": true,
+        })),
+        Ok(_) => Err(ExtError::NotFound(format!("no linked inbox '{row_id}'"))),
+        Err(e) => Err(ExtError::Engine(format!("update linked inbox: {e}"))),
+    }
 }
 
 /// The owner remove flow: delete the row AND its vault entry. Owner
@@ -1353,6 +1550,21 @@ pub fn remove_inbox(
     secrets: &dyn SecretStore,
     raw_address: &str,
 ) -> Result<serde_json::Value, ExtError> {
+    remove_inbox_with(secrets, &crate::mail::oauth::ReqwestHttp::default(), raw_address)
+}
+
+/// [`remove_inbox`] with an injected HTTP client for the Google revoke
+/// (MCS1 / MCS-A11). Google: the refresh token (else the access token) is
+/// revoked at Google BEFORE the vault wipe, best-effort — a failed revoke
+/// is reported in the answer and logged, and never blocks the unlink.
+/// Microsoft has no single-token revoke: the answer tells the person
+/// where to remove the app's consent.
+pub fn remove_inbox_with(
+    secrets: &dyn SecretStore,
+    http: &dyn crate::mail::oauth::HttpClient,
+    raw_address: &str,
+) -> Result<serde_json::Value, ExtError> {
+    use crate::mail::oauth::{OauthProvider, RevokeOutcome};
     let address = addresses::normalize_address(raw_address).map_err(|e| match e {
         AddrError::Usage(hint) => ExtError::Usage(hint),
         _ => ExtError::Usage(format!("'{raw_address}' is not a valid address")),
@@ -1362,6 +1574,57 @@ pub fn remove_inbox(
             "no external inbox '{address}' — 'k2 mail external list' shows what's connected"
         ))
     })?;
+    // Revoke at the provider first (needs the vaulted bundle), never fatal.
+    let fields = read_oauth_fields(&row.id).map_err(ExtError::Engine)?;
+    let provider = if fields.auth_kind == AUTH_OAUTH {
+        fields.provider.as_deref().and_then(OauthProvider::from_str)
+    } else {
+        None
+    };
+    let (revoked, revoke_hint): (Option<bool>, Option<String>) = match provider {
+        Some(OauthProvider::Gmail) => match crate::mail::oauth::load_tokens(secrets, &row.id) {
+            Ok(t) => {
+                let token = t.refresh_token.clone().unwrap_or(t.access_token.clone());
+                match crate::mail::oauth::revoke_report(OauthProvider::Gmail, &token, http) {
+                    RevokeOutcome::Revoked => (
+                        Some(true),
+                        Some("K2's access was revoked at Google".to_string()),
+                    ),
+                    RevokeOutcome::Unsupported => (Some(false), None),
+                    RevokeOutcome::Failed(why) => {
+                        k2_core::log_debug!(
+                            "[mail/external] google revoke for {} failed: {why}",
+                            row.email_address
+                        );
+                        (
+                            Some(false),
+                            Some(format!(
+                                "Google did not confirm the revoke ({why}) — remove K2 at \
+                                 https://myaccount.google.com/permissions to be sure"
+                            )),
+                        )
+                    }
+                }
+            }
+            Err(e) => (
+                Some(false),
+                Some(format!(
+                    "the stored Google token could not be read ({e}) — remove K2 at \
+                     https://myaccount.google.com/permissions"
+                )),
+            ),
+        },
+        Some(OauthProvider::Microsoft) => (
+            Some(false),
+            Some(
+                "Microsoft has no per-token revoke — remove K2's consent at \
+                 https://myaccount.microsoft.com (personal accounts: https://account.live.com/consent/Manage) \
+                 or https://myapps.microsoft.com"
+                    .to_string(),
+            ),
+        ),
+        None => (None, None),
+    };
     // Vault first: if the secret can't be purged the row must stay
     // visible (an invisible credential is the worse failure). Wipe BOTH
     // possible keys — the app-password (`ext-inbox-<id>`) AND the O4 OAuth
@@ -1381,11 +1644,18 @@ pub fn remove_inbox(
         rusqlite::params![row.id],
     )
     .map_err(|e| ExtError::Engine(format!("delete external inbox: {e}")))?;
-    Ok(serde_json::json!({
+    let mut out = serde_json::json!({
         "ok": true,
         "address": row.email_address,
         "removed": true,
-    }))
+    });
+    if let Some(r) = revoked {
+        out["revoked"] = serde_json::json!(r);
+    }
+    if let Some(h) = revoke_hint {
+        out["revokeHint"] = serde_json::json!(h);
+    }
+    Ok(out)
 }
 
 // (S11: GRANT / REVOKE / SET-PRIMARY / SET-LEVEL and the unified inbox
@@ -2268,6 +2538,149 @@ a,b\r\n1,2\r\n\
         assert_eq!(f.auth_kind, "password");
         assert!(f.provider.is_none());
         assert!(f.token_expires_at.is_none());
+    }
+
+    /// A revoke endpoint double: records each POST, answers `status`.
+    struct RevokeHttp {
+        status: u16,
+        seen: std::sync::Mutex<Vec<(String, Vec<(String, String)>)>>,
+    }
+    impl crate::mail::oauth::HttpClient for RevokeHttp {
+        fn post_form(
+            &self,
+            url: &str,
+            form: &[(&str, &str)],
+        ) -> Result<crate::mail::oauth::HttpResponse, crate::mail::oauth::OauthError> {
+            self.seen.lock().unwrap().push((
+                url.to_string(),
+                form.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            ));
+            Ok(crate::mail::oauth::HttpResponse { status: self.status, body: String::new() })
+        }
+    }
+
+    fn seed_oauth_row(project: &str, provider: crate::mail::oauth::OauthProvider) -> (String, String, FakeVault) {
+        let addr = unique_addr("oauth");
+        let vault = FakeVault::default();
+        let tokens = crate::mail::oauth::Tokens {
+            access_token: "AT-unlink".into(),
+            refresh_token: Some("RT-unlink".into()),
+            scope: Some(crate::mail::oauth::scope_for(provider, crate::mail::oauth::Features::MAIL)),
+            token_type: "Bearer".into(),
+            expires_in: 3600,
+            id_token: None,
+        };
+        let meta = OauthMeta {
+            features: "mail".into(),
+            granted_scopes: tokens.scope.clone(),
+            oauth_client: Some("baked".into()),
+            oauth_client_hash: Some("abcd".into()),
+            account_kind: Some("consumer".into()),
+            account_checked_at: Some(10),
+            ..Default::default()
+        };
+        let v = add_oauth_inbox(&vault, project, provider, &addr, &tokens, &meta, 10).expect("add");
+        (v["id"].as_str().unwrap().to_string(), addr, vault)
+    }
+
+    #[test]
+    fn oauth_add_stamps_meta_and_unlink_revokes_at_google_first() {
+        use crate::mail::oauth::OauthProvider;
+        let project = unique_project();
+        let (id, addr, vault) = seed_oauth_row(&project, OauthProvider::Gmail);
+        let meta = read_oauth_meta(&id).expect("meta");
+        assert_eq!(meta.oauth_client.as_deref(), Some("baked"));
+        assert_eq!(meta.account_checked_at, Some(10));
+        assert!(meta.granted_scopes.unwrap().contains("mail.google.com"));
+
+        let http = RevokeHttp { status: 200, seen: Default::default() };
+        let v = remove_inbox_with(&vault, &http, &addr).expect("removes");
+        assert_eq!(v["revoked"], true);
+        let seen = http.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "one revoke call");
+        assert!(seen[0].0.ends_with("/revoke"), "{}", seen[0].0);
+        assert_eq!(seen[0].1, vec![("token".to_string(), "RT-unlink".to_string())]);
+        assert!(inbox_for_address(&addr).is_none());
+        assert!(vault.map.lock().unwrap().is_empty(), "bundle wiped after the revoke");
+        // The answer never carries a token.
+        assert!(!v.to_string().contains("RT-unlink"));
+        cleanup_project(&project);
+    }
+
+    #[test]
+    fn a_failed_google_revoke_is_reported_and_never_blocks_the_unlink() {
+        use crate::mail::oauth::OauthProvider;
+        let project = unique_project();
+        let (_id, addr, vault) = seed_oauth_row(&project, OauthProvider::Gmail);
+        let http = RevokeHttp { status: 503, seen: Default::default() };
+        let v = remove_inbox_with(&vault, &http, &addr).expect("unlink still succeeds");
+        assert_eq!(v["removed"], true);
+        assert_eq!(v["revoked"], false);
+        assert!(v["revokeHint"].as_str().unwrap().contains("myaccount.google.com/permissions"));
+        assert!(inbox_for_address(&addr).is_none());
+        cleanup_project(&project);
+    }
+
+    #[test]
+    fn microsoft_unlink_tells_where_to_remove_consent_and_dials_nothing() {
+        use crate::mail::oauth::OauthProvider;
+        let project = unique_project();
+        let (_id, addr, vault) = seed_oauth_row(&project, OauthProvider::Microsoft);
+        let http = RevokeHttp { status: 200, seen: Default::default() };
+        let v = remove_inbox_with(&vault, &http, &addr).expect("removes");
+        assert_eq!(v["revoked"], false);
+        assert!(v["revokeHint"].as_str().unwrap().contains("myapps.microsoft.com"));
+        assert!(http.seen.lock().unwrap().is_empty(), "Microsoft has no revoke endpoint");
+        cleanup_project(&project);
+    }
+
+    #[test]
+    fn fresh_access_token_backfills_granted_scopes_on_a_pre_0188_row() {
+        use crate::mail::oauth::OauthProvider;
+        let project = unique_project();
+        let (id, _addr, vault) = seed_oauth_row(&project, OauthProvider::Gmail);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE mail_external_inboxes SET granted_scopes = NULL, oauth_client = NULL, \
+                 oauth_client_hash = NULL WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .unwrap();
+        }
+        // Still fresh (expires at 10 + 3600): no network, the vaulted scope
+        // is mirrored into the column.
+        let http = RevokeHttp { status: 500, seen: Default::default() };
+        let token =
+            fresh_access_token(&id, OauthProvider::Gmail, Some(3_610), &vault, &http, 100).unwrap();
+        assert_eq!(token, "AT-unlink");
+        assert!(http.seen.lock().unwrap().is_empty());
+        assert!(read_oauth_meta(&id).unwrap().granted_scopes.unwrap().contains("mail.google.com"));
+        cleanup_project(&project);
+    }
+
+    #[test]
+    fn fresh_access_token_refuses_a_row_whose_byo_app_is_gone() {
+        use crate::mail::oauth::OauthProvider;
+        crate::mail::oauth::test_byo::clear();
+        let project = unique_project();
+        let (id, _addr, vault) = seed_oauth_row(&project, OauthProvider::Microsoft);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE mail_external_inboxes SET oauth_client = 'byo' WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .unwrap();
+        }
+        let http = RevokeHttp { status: 200, seen: Default::default() };
+        let err = fresh_access_token(&id, OauthProvider::Microsoft, Some(0), &vault, &http, 100)
+            .unwrap_err();
+        assert!(err.contains("no longer configured"), "{err}");
+        assert!(http.seen.lock().unwrap().is_empty(), "no refresh against another app");
+        cleanup_project(&project);
     }
 
     #[test]

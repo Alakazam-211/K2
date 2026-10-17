@@ -705,6 +705,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/calendar/unshare", Admin),
     post("/cli/mail/calendar/update", Member),
     get("/cli/mail/calendar/wait", Member),
+    // MCS1: per-inbox capabilities (agent view = own grants; owner view =
+    // all inboxes, owner-or-admin in the dispatcher, like inboxes).
+    get("/cli/mail/capabilities", Member),
     both("/cli/mail/catchall", Admin),
     both("/cli/mail/cert/names", Admin),
     both("/cli/mail/cert/owner", Admin),

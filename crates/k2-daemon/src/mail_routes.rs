@@ -204,6 +204,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // or residual project=; owner view — no identity — is
         // owner-or-admin-gated in the dispatcher's dual-auth arm).
         "/cli/mail/inboxes" => routes_access::handle_inboxes(params),
+        // MCS1: what each inbox can do (same identity + owner rule as
+        // inboxes; shares its dispatcher clause).
+        "/cli/mail/capabilities" => routes_access::handle_capabilities(params),
         // 0081: list an inbox's folders (can_manage; workspace token).
         "/cli/mail/folder/list" => routes_messages::handle_folder_list(params),
         // O4: the OAuth-link long-poll target (owner-gated in the

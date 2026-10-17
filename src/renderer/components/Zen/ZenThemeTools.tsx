@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DesktopOs } from '@/lib/desktop-chrome'
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
+import { ZEN_GLASS_PILL_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { useSettingsStore } from '@/stores/settings'
 import { pageShortcutsSummary } from '@/lib/page-shortcuts'
@@ -120,6 +121,7 @@ export function ZenThemePicker({
           role="listbox"
           aria-label="Zen themes"
           data-zen-theme-list=""
+          {...ZEN_TILE_RAISED_PROPS}
           data-zen-menu-placement={menu.placement}
           style={{
             ...menu.style,
@@ -184,6 +186,7 @@ export function ZenThemePicker({
         data-zen-theme-button=""
         data-zen-soft-button=""
         {...ZEN_GLASS_PROPS}
+        {...ZEN_GLASS_PILL_PROPS}
         onClick={() => useZenOverlayStore.setState({ picker: !open, sheet: false })}
         style={{
           display: 'flex',

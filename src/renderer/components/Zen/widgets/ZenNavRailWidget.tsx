@@ -42,6 +42,7 @@ import { AgentsIcon, HomeIcon, ProjectsIcon, TicketsIcon, type K2IconProps } fro
 import { badgeText, PAGE_TAB_LABELS } from '@/components/TopBar/PageTabs'
 import type { ZenAppBadges, ZenAppPage } from '@/lib/zen/zen-app-nav'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
+import { ZEN_GLASS_PILL_PROPS } from '@/lib/zen/zen-materials'
 import { REDUCED_MOTION_QUERY, zenMediaMatches } from '@/lib/zen/zen-theme'
 import { zenRailOrientation } from '@/lib/zen/zen-rail-views'
 import type { ZenWidgetProps } from '../zen-registry'
@@ -207,6 +208,7 @@ export function ZenNavRailWidget({ bridge, decl }: ZenWidgetProps): React.JSX.El
         data-zen-widget-id={decl.id}
         data-zen-nav-orientation={orientation}
         {...ZEN_GLASS_PROPS}
+        {...ZEN_GLASS_PILL_PROPS}
         className={`flex flex-shrink-0 items-center ${row ? 'flex-row' : 'flex-col'}`}
         style={
           row

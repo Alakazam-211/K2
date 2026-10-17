@@ -306,6 +306,21 @@ describe('theme on the Zen root', () => {
     await waitFor(() => expect(root().style.getPropertyValue('--zen-accent')).toBe('rgb(17, 34, 51)'))
     expect(document.querySelector('[data-zen-background]')).toBeNull()
   })
+
+  it('0.46.0: the Glass theme turns on K2 Companion’s materials on the root; other themes don’t', async () => {
+    await enterZen()
+    await waitFor(() => expect(root().style.getPropertyValue('--zen-accent')).toBe('rgb(17, 34, 51)'))
+    expect(root().hasAttribute('data-zen-materials')).toBe(false)
+    expect(root().hasAttribute('data-zen-reduced-transparency')).toBe(false)
+    // The stylesheet is always there; every rule needs the root's attribute.
+    expect(document.querySelector('[data-zen-materials-styles]')?.textContent).toContain('[data-zen-root][data-zen-materials="mobile"]')
+    cleanup()
+    h.page = zenPage({ theme: { name: 'glass' } })
+    mediaMatches['(prefers-reduced-transparency: reduce)'] = true
+    await enterZen()
+    await waitFor(() => expect(root().getAttribute('data-zen-materials')).toBe('mobile'))
+    expect(root().hasAttribute('data-zen-reduced-transparency')).toBe(true)
+  })
 })
 
 describe('native chrome: held while Zen is shown, restored on leave (macOS)', () => {

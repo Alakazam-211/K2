@@ -23,6 +23,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ThreadTurn } from '@/components/SessionView/overlayThread'
 import { CHAMFER_CUT, THREAD_ZEN_SCOPE_ATTR, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
 import { WorkingGrid } from '@/components/AgentStatus/StatusGlyphs'
+import { ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
 import {
   COUNTER_CHECK_PX,
   COUNTER_GAP_PX,
@@ -449,6 +450,10 @@ export function ZenActivityDrawer({
           ref={tileRef}
           type="button"
           data-zen-drawer-tile=""
+          // Companion's `k2-tile k2-tile-sheet`: a tile; on the box, a sheet
+          // with no bottom rim (Glass, `zen-materials.ts`).
+          {...ZEN_TILE_RAISED_PROPS}
+          data-zen-tile-sheet={attached ? '' : undefined}
           // K2's square Style (desktop Thread): chamfered, top corners only
           // when it sits on the message box.
           data-chamfer=""

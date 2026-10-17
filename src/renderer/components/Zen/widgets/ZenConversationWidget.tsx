@@ -21,24 +21,29 @@
 // in Garden 1) the live Thread turn shows in `ZenActivityDrawer`, pulled
 // out of the message box's top edge, instead of the typing dots.
 
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { isOwnThreadPost, type ThreadViewer } from '@/lib/thread-viewer'
 import type { OverlayThreadItem, ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
 import {
+  FOOTER_FADE_PX,
+  FOOTER_FADE_TARGETS,
   THREAD_CARD_TOKENS,
   ThreadBubble,
   ThreadLoadOlder,
   ThreadTypingIndicator,
+  threadFadeTop,
   zenEmptyThreadText,
 } from '@/components/Thread/ThreadZenKit'
+import { useZenMaterials } from '@/lib/zen/zen-materials'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import type { ZenWidgetProps } from '../zen-registry'
 import { ZenCompose } from './ZenCompose'
 import { ZenActivityDrawer, zenDrawerShows } from './ZenActivityDrawer'
 import { ZenStatusDot } from './ZenAgentsWidget'
+import { ZenProgressiveBlur } from './ZenProgressiveBlur'
 import { ZenAgentAvatar, ZenWidgetStyles, initials, useNowSec, useZenRows, useZenThread } from './zen-widget-kit'
 
 // The bubbles, cards, dots and "Earlier messages" are the shared Thread
@@ -100,6 +105,63 @@ export interface ZenConversationOptions {
 
 const ALL_ON: ZenConversationOptions = { compose: true, attachments: true, loadOlder: true }
 
+/** How far (px) the top bar's blur reaches below the bar, fading out. */
+export const ZEN_HEADER_BLUR_TAIL_PX = 16
+
+interface ZenFloatInsets {
+  /** The floating top bar's height: the list pads its top by it. */
+  top: number
+  /** The floating message box's slot height: the list pads its bottom by it. */
+  bottom: number
+  /** The footer blur's top in the slot (`threadFadeTop`), null unmeasured. */
+  fade: number | null
+}
+const NO_INSETS: ZenFloatInsets = { top: 0, bottom: 0, fade: null }
+
+/**
+ * 0.46.0, Glass (K2 Companion's materials): the top bar and the message box
+ * float over the list, each on a progressive blur, and the list runs under
+ * both (padded by their heights, so the first and newest messages still rest
+ * clear of them). Measured with one ResizeObserver on each. Other themes:
+ * nothing floats (all zero).
+ */
+function useZenFloatInsets(
+  on: boolean,
+  header: React.RefObject<HTMLDivElement | null>,
+  slot: React.RefObject<HTMLDivElement | null>,
+): ZenFloatInsets {
+  const [insets, setInsets] = useState<ZenFloatInsets>(NO_INSETS)
+  useLayoutEffect(() => {
+    if (!on) {
+      setInsets(NO_INSETS)
+      return
+    }
+    const measure = (): void => {
+      const top = Math.ceil(header.current?.getBoundingClientRect().height ?? 0)
+      const el = slot.current
+      let bottom = 0
+      let fade: number | null = null
+      if (el) {
+        const r = el.getBoundingClientRect()
+        bottom = Math.ceil(r.height)
+        const tops = FOOTER_FADE_TARGETS.flatMap((sel) => {
+          const node = el.querySelector(sel)
+          return node ? [node.getBoundingClientRect().top] : []
+        })
+        fade = threadFadeTop(r.top, tops)
+      }
+      setInsets((cur) => (cur.top === top && cur.bottom === bottom && cur.fade === fade ? cur : { top, bottom, fade }))
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    if (header.current) ro.observe(header.current)
+    if (slot.current) ro.observe(slot.current)
+    return () => ro.disconnect()
+  }, [on, header, slot])
+  return insets
+}
+
 export function ZenConversation({
   bridge,
   row,
@@ -112,6 +174,10 @@ export function ZenConversation({
   const view = useZenThread(bridge, row.address)
   const nowSec = useNowSec()
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const headerRef = useRef<HTMLDivElement | null>(null)
+  const slotRef = useRef<HTMLDivElement | null>(null)
+  const floating = useZenMaterials().materials === 'mobile'
+  const insets = useZenFloatInsets(floating, headerRef, slotRef)
   const items = view?.items ?? []
   const ready = view?.phase === 'ready'
   // TW14: the dots follow the Thread turn when the server reports turns,
@@ -160,7 +226,7 @@ export function ZenConversation({
   }, [bridge, row.address, view, items, options.loadOlder])
 
   const stick = useStickToBottom<HTMLDivElement>({
-    deps: [items, typing, ready, view?.note, view?.hasMore, view?.error],
+    deps: [items, typing, ready, view?.note, view?.hasMore, view?.error, insets.top, insets.bottom],
     extraTargets: () => [rootRef.current?.querySelector('[data-zen-compose]')],
     onNearTop: loadOlder,
   })
@@ -175,10 +241,23 @@ export function ZenConversation({
   const note = view?.note ?? null
   const showEmpty = ready && view.loaded && !view.error && items.length === 0
   return (
-    <div ref={rootRef} className="flex h-full min-h-0 w-full flex-col" data-zen-conversation={row.address} style={CARD_TOKENS}>
+    <div
+      ref={rootRef}
+      className="relative flex h-full min-h-0 w-full flex-col"
+      data-zen-conversation={row.address}
+      data-zen-floating={floating ? '' : undefined}
+      style={CARD_TOKENS}
+    >
       <div
-        className="flex flex-shrink-0 items-center gap-3"
-        style={{ padding: '12px 18px', borderBottom: '1px solid var(--zen-border)' }}
+        ref={headerRef}
+        data-zen-conversation-header=""
+        className="flex-shrink-0"
+        style={floating ? { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 2 } : undefined}
+      >
+      {floating && <ZenProgressiveBlur edge="header" style={{ top: 0, bottom: -ZEN_HEADER_BLUR_TAIL_PX }} />}
+      <div
+        className={`${floating ? 'relative ' : ''}flex flex-shrink-0 items-center gap-3`}
+        style={floating ? { zIndex: 1, padding: '12px 18px' } : { padding: '12px 18px', borderBottom: '1px solid var(--zen-border)' }}
       >
         <ZenAgentAvatar
           label={row.label}
@@ -232,9 +311,10 @@ export function ZenConversation({
         <div
           role="status"
           data-zen-permission=""
-          className="flex flex-shrink-0 items-center gap-2"
+          className={`${floating ? 'relative ' : ''}flex flex-shrink-0 items-center gap-2`}
           style={{
-            margin: '10px var(--zen-gap) 0',
+            ...(floating ? { zIndex: 1 } : {}),
+            margin: floating ? '0 var(--zen-gap) 6px' : '10px var(--zen-gap) 0',
             padding: '7px 12px',
             borderRadius: 'var(--zen-radius)',
             background: 'var(--zen-surface-raised)',
@@ -251,13 +331,20 @@ export function ZenConversation({
           <span className="min-w-0 flex-1 truncate">{zenPermissionText(row.label)}</span>
         </div>
       )}
+      </div>
 
       <div
         ref={stick.ref}
         data-zen-conversation-body=""
         className="relative flex min-h-0 flex-1 flex-col overflow-y-auto"
         // The browser's own scroll anchoring would fight the pin.
-        style={{ padding: '14px var(--zen-gap) 8px', gap: 10, overflowAnchor: 'none' }}
+        style={{
+          padding: '14px var(--zen-gap) 8px',
+          paddingTop: 14 + insets.top,
+          paddingBottom: 8 + insets.bottom,
+          gap: 10,
+          overflowAnchor: 'none',
+        }}
         onScroll={stick.onScroll}
       >
         {!ready && (
@@ -300,15 +387,25 @@ export function ZenConversation({
       </div>
 
       {options.compose && (
-        <ZenCompose
-          bridge={bridge}
-          address={row.address}
-          label={row.label}
-          disabled={!ready || note !== null}
-          attachments={options.attachments}
-          onSend={scrollToBottom}
-          drawer={drawerTurn !== undefined && ready ? <ZenActivityDrawer turn={drawerTurn} /> : undefined}
-        />
+        <div
+          ref={slotRef}
+          data-zen-compose-slot=""
+          className="flex-shrink-0"
+          style={floating ? { position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 2 } : undefined}
+        >
+          {floating && <ZenProgressiveBlur edge="footer" style={{ top: insets.fade ?? -FOOTER_FADE_PX, bottom: 0 }} />}
+          <div className={floating ? 'relative' : undefined} style={floating ? { zIndex: 1 } : undefined}>
+            <ZenCompose
+              bridge={bridge}
+              address={row.address}
+              label={row.label}
+              disabled={!ready || note !== null}
+              attachments={options.attachments}
+              onSend={scrollToBottom}
+              drawer={drawerTurn !== undefined && ready ? <ZenActivityDrawer turn={drawerTurn} /> : undefined}
+            />
+          </div>
+        </div>
       )}
     </div>
   )

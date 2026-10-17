@@ -368,6 +368,68 @@ fn notices_install_beside_the_binary_and_go_with_it() {
     assert_eq!(std::fs::read_dir(t.p("/tmp/elsewhere")).unwrap().count(), 0);
 }
 
+fn release_with_notices(tag: &str) -> Vec<u8> {
+    let lic = format!("LICENSE {tag}");
+    let notice = format!("NOTICE {tag}");
+    tarball_of(&[
+        ("LICENSE", lic.as_bytes(), false),
+        ("NOTICE", notice.as_bytes(), false),
+        ("THIRD_PARTY_NOTICES.md", b"# third parties", false),
+        ("sew", b"\x7fELF fake sew", false),
+    ])
+}
+
+fn licence_in(t: &T, dir: &str) -> Option<String> {
+    std::fs::read_to_string(t.p(&format!("{dir}/LICENSE"))).ok()
+}
+
+/// Sew keeps the old binary as `sew.prev` on an upgrade and swaps the two
+/// back on a rollback: the notices go with them (Sew, 2026-10-17).
+#[test]
+fn notices_follow_the_binary_through_upgrade_and_rollback() {
+    let t = box_root();
+    std::fs::create_dir_all(t.p("/usr/share")).unwrap();
+    crate::sew::install_notices(&t.ctx, &release_with_notices("v1"), SEW_DOC_DIR).unwrap();
+    // Upgrade: v1's notices are kept beside the rollback binary.
+    let v = crate::sew::upgrade_notices(&t.ctx, &release_with_notices("v2")).unwrap();
+    assert_eq!(v["files"], serde_json::json!(NOTICE_MEMBERS));
+    assert_eq!(v["previous"], serde_json::json!(NOTICE_MEMBERS));
+    assert_eq!(licence_in(&t, SEW_DOC_DIR).as_deref(), Some("LICENSE v2"));
+    assert_eq!(licence_in(&t, SEW_DOC_PREV_DIR).as_deref(), Some("LICENSE v1"));
+    // Rollback: swapped, like sew and sew.prev.
+    crate::sew::rollback_notices(&t.ctx).unwrap();
+    assert_eq!(licence_in(&t, SEW_DOC_DIR).as_deref(), Some("LICENSE v1"));
+    assert_eq!(licence_in(&t, SEW_DOC_PREV_DIR).as_deref(), Some("LICENSE v2"));
+    // Through the verb: Sew's rollback exits 0 → the sets swap again.
+    with_pin_installed(&t);
+    sew_answers(&t, 0, r#"{"state":"rolled_back"}"#);
+    let o = t.call(&["engine", "sew", "rollback"]);
+    ok(&o);
+    assert_eq!(json(&o)["notices"]["files"], serde_json::json!(NOTICE_MEMBERS));
+    assert_eq!(licence_in(&t, SEW_DOC_DIR).as_deref(), Some("LICENSE v2"));
+    assert_eq!(licence_in(&t, SEW_DOC_PREV_DIR).as_deref(), Some("LICENSE v1"));
+    // A failed rollback leaves them as they are.
+    sew_answers(&t, 1, r#"{"error":{"message":"no sew.prev"}}"#);
+    let o = t.call(&["engine", "sew", "rollback"]);
+    ok(&o);
+    assert!(json(&o).get("notices").is_none());
+    assert_eq!(licence_in(&t, SEW_DOC_DIR).as_deref(), Some("LICENSE v2"));
+    // Purge takes both sets.
+    let r = crate::sew::remove_all_notices(&t.ctx).unwrap();
+    assert_eq!(r["sew"], serde_json::json!(NOTICE_MEMBERS));
+    assert!(!t.p(SEW_DOC_DIR).exists());
+
+    // Upgrading from a release without notices (0.1.x), then rolling back:
+    // the old binary had none, so after the rollback there are none.
+    let t = box_root();
+    std::fs::create_dir_all(t.p("/usr/share")).unwrap();
+    let v = crate::sew::upgrade_notices(&t.ctx, &release_with_notices("v2")).unwrap();
+    assert_eq!(v["previous"], serde_json::json!([]));
+    crate::sew::rollback_notices(&t.ctx).unwrap();
+    assert_eq!(licence_in(&t, SEW_DOC_DIR), None);
+    assert_eq!(licence_in(&t, SEW_DOC_PREV_DIR).as_deref(), Some("LICENSE v2"));
+}
+
 #[test]
 fn install_bin_with_a_pre_0_2_0_pin_writes_no_notices() {
     let t = box_root();

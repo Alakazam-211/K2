@@ -83,6 +83,25 @@ pub const MAX_TARBALL: usize = 256 * 1024 * 1024;
 /// Upper bound of the extracted `sew` / `sew-media` member.
 pub const MAX_MEMBER: u64 = 256 * 1024 * 1024;
 
+// ── Licence notices (Sew SW1 B1, from 0.2.0; helper protocol 8) ─────────
+
+/// The licence files a release tarball carries beside its binary (0.2.0
+/// on; older tarballs have none). Each binary has its own `LICENSE` and
+/// `NOTICE`, so each gets its own directory.
+pub const NOTICE_MEMBERS: [&str; 3] = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"];
+/// Upper bound of one notice member (THIRD_PARTY_NOTICES.md is ~1.3 MB).
+pub const MAX_NOTICE: u64 = 8 * 1024 * 1024;
+/// The parent of the notice directories (created 0755 root if missing).
+pub const DOC_ROOT: &str = "/usr/share/doc";
+/// `sew`'s notices (dir root 0755, files root 0644), so the attribution
+/// travels with the binary the helper installs: written by `install-bin`
+/// (before the binary) and after a successful `upgrade`, from the pinned
+/// tarball; removed by a successful `purge`.
+pub const SEW_DOC_DIR: &str = "/usr/share/doc/sew";
+/// `sew-media`'s notices, from the staged, pinned media tarball after a
+/// successful `media install`; removed by a successful `media uninstall`.
+pub const SEW_MEDIA_DOC_DIR: &str = "/usr/share/doc/sew-media";
+
 // ── Pin table ───────────────────────────────────────────────────────────
 
 /// One per-arch artifact: tarball sha256 + the sha256 of the binary member.

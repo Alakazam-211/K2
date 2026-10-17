@@ -102,7 +102,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - Help reads its glossary from the server shown in the top bar.
 - A closed drawer's arrow has the same dividing line as the tabs next to it.
 - Closing a drawer or the project chat no longer flickers open for a frame.
-- The Tickets badge counts tickets that need discussion, and on a 0.46.0 server it counts only the ones waiting on you, like the board's **Waiting on me**.
+- The Tickets badge now counts only tickets waiting on you, including ones marked Needs discussion, so it matches the Waiting on me list.
 - Owners can turn agent email sending on from any computer, not only a Mac: `k2 mail sending <workspace> off|approval|on`, or **Email sending** in the workspace's settings, which shows what is in effect. `k2 mail inboxes` shows each inbox's real send state, and the hint when sending is off now names the right command.
 
 **After updating**

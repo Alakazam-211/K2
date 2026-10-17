@@ -13,6 +13,11 @@
 //!   session (agent or K2 shell tab); handlers refuse what agents can't do
 //!   with 403 `person_only`, never 404 [GV52]. `shell` follows the agent
 //!   rules.
+//! - "Manage Gardens and data sources" (`gardens_manage`, 0181): an agent
+//!   whose workspace has it may also add, pause and resume sources (and
+//!   approve, bind, pin: `sources::approve_routes`) with no person in the
+//!   loop. Each act writes a source_audit row with its session and an
+//!   Access Audit line ([`crate::gardens_manage`]).
 //!
 //! The handlers are blocking (DB); the dispatcher runs [`handle`] on a
 //! blocking thread. B1 owns this file and its source handlers; the
@@ -276,17 +281,10 @@ pub(crate) fn is_owner(who: &Who) -> bool {
     matches!(who, Who::Owner | Who::Login { role: Role::Owner, .. })
 }
 
-/// 403 `person_only` for agent and shell passports.
-pub(crate) fn person_only(who: &Who) -> R<()> {
-    if is_person(who) {
-        Ok(())
-    } else {
-        Err(SourceErr::new(
-            "person_only",
-            403,
-            "this needs a person: run it outside K2, or use Settings → Gardens → External Data",
-        ))
-    }
+/// A person, or a passport whose workspace has "Manage Gardens and data
+/// sources" (0181); else 403 `person_only`.
+pub(crate) fn person_or_manager(who: &Who) -> R<()> {
+    approve_routes::util::need_person_or_manager(who)
 }
 
 /// The `viewers` floor for reads: a Member login can't read an `admin`
@@ -640,7 +638,7 @@ fn prepare(conn: &Connection, who: &Who, body: &J, replacing: Option<&SourceRow>
 
 fn create(who: &Who, body: &[u8], add: bool) -> R<J> {
     if add {
-        person_only(who)?;
+        person_or_manager(who)?;
     }
     let body = body_json(body)?;
     let db = k2_core::db::shared();
@@ -671,11 +669,17 @@ fn create(who: &Who, body: &[u8], add: bool) -> R<J> {
             if add { "add" } else { "propose" },
             Some(&row.id),
             None,
-            &serde_json::json!({"name": row.name, "origins": row.origins, "secret": row.secret_name, "lan": row.lan}),
+            &approve_routes::util::with_session(
+                who,
+                serde_json::json!({"name": row.name, "origins": row.origins, "secret": row.secret_name, "lan": row.lan}),
+            ),
         )?;
         Ok(row)
     })?;
     changed(row.rev);
+    if add {
+        crate::gardens_manage::audit_who(who, "sources-add", &row.name, None);
+    }
     if active {
         crate::sources::engine().poll_now(&row.id)?;
     } else {
@@ -795,11 +799,16 @@ fn remove(who: &Who, body: &[u8]) -> R<J> {
 }
 
 fn pause_resume(who: &Who, body: &[u8], pause: bool) -> R<J> {
-    person_only(who)?;
+    person_or_manager(who)?;
     let b: NameBody = parse(body, "takes {name}")?;
     let db = k2_core::db::shared();
     let conn = db.lock();
     let row = find(&conn, &b.name)?;
+    // A locked Garden on this computer shows it: agents leave it alone,
+    // switch or not (prd-garden-lock-and-sync-v1).
+    if passport_project(who).is_some() && k2_core::zen::lock::locked_placement_sources().contains(&row.name) {
+        return Err(SourceErr::new("garden_locked", 423, "a locked Garden on this computer shows this source"));
+    }
     let status = match (pause, row.status) {
         (true, SourceStatus::Active) => SourceStatus::Paused,
         (false, SourceStatus::Paused) => SourceStatus::Active,
@@ -815,10 +824,21 @@ fn pause_resume(who: &Who, body: &[u8], pause: bool) -> R<J> {
     let rev = store::tx(&conn, |c| {
         let rev = store::set_status(c, &row.id, status, reason, now())?;
         let (a, k) = actor(who);
-        store::audit(c, now(), &a, k, if pause { "pause" } else { "resume" }, Some(&row.id), None, &serde_json::json!({"name": row.name}))?;
+        store::audit(
+            c,
+            now(),
+            &a,
+            k,
+            if pause { "pause" } else { "resume" },
+            Some(&row.id),
+            None,
+            &approve_routes::util::with_session(who, serde_json::json!({"name": row.name})),
+        )?;
         Ok(rev)
     })?;
     changed(rev);
+    drop(conn);
+    crate::gardens_manage::audit_who(who, if pause { "sources-pause" } else { "sources-resume" }, &row.name, None);
     if pause {
         crate::sources::engine().reload();
     } else {

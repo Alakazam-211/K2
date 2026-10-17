@@ -36,9 +36,36 @@ pub fn consumer(source_id: &str) -> Consumer {
     Consumer { kind: ConsumerKind::Daemon, id: format!("source:{source_id}") }
 }
 
-/// Sources name secrets on their own server, server scope.
-fn selector(name: &str) -> Selector {
-    Selector::user(Scope::server(), name)
+/// Sources name secrets on their own server: server scope, or (0181) the
+/// workspace scope of the agent that bound it (`sources.secret_workspace`).
+fn selector(workspace: Option<&str>, name: &str) -> Selector {
+    match workspace {
+        Some(ws) => Selector::user(Scope::workspace(ws), name),
+        None => Selector::user(Scope::server(), name),
+    }
+}
+
+/// Who authorises a bind: a person's vault confirm, or an agent whose
+/// workspace has "Manage Gardens and data sources" (0181). The agent case
+/// is only reached after the approve routes checked that the agent may
+/// use the secret under the vault rules (its own workspace's secret, or a
+/// server secret with vault_manage too). Either way the grant is narrowed
+/// to the source's one origin and must fit inside the secret's sites.
+pub enum BindAuth<'a> {
+    Person(&'a k2_vault::HumanProof),
+    Agent,
+}
+
+/// Does a `user` secret called `name` exist in this scope? Reads metadata
+/// only, never the value.
+pub fn secret_exists(workspace: Option<&str>, name: &str) -> Result<bool, SourceErr> {
+    let v = crate::vault::get().map_err(|_| unavailable())?;
+    match v.meta(&selector(workspace, name), &k2_vault::Actor::System("sources".into())) {
+        Ok(_) => Ok(true),
+        Err(e) if e.status == 404 => Ok(false),
+        Err(e) if e.status == 503 => Err(unavailable()),
+        Err(_) => Ok(false),
+    }
 }
 
 /// A vault refusal as the fixed source reason.
@@ -79,7 +106,9 @@ pub fn resolve_plan(plan: &FetchPlan) -> Result<Resolved, Reason> {
     let mut url = None;
     let mut extra = None;
     if let UrlRef::Secret { name } = &plan.url {
-        let r = v.resolve(&selector(name), Use::Fetch(&pinned), &who).map_err(|e| denial_reason(&e))?;
+        let r = v
+            .resolve(&selector(plan.secret_workspace.as_deref(), name), Use::Fetch(&pinned), &who)
+            .map_err(|e| denial_reason(&e))?;
         let raw = r.value.expose_str().ok_or(Reason::SecretDisabled)?.trim().to_string();
         let (_, o) = Origin::parse_url(&raw).map_err(|_| Reason::SecretDisabled)?;
         if o != pinned {
@@ -105,7 +134,9 @@ pub fn resolve_plan(plan: &FetchPlan) -> Result<Resolved, Reason> {
     }
     let mut injections = Vec::new();
     if let Some(name) = &plan.secret {
-        let r = v.resolve(&selector(name), Use::Fetch(&pinned), &who).map_err(|e| denial_reason(&e))?;
+        let r = v
+            .resolve(&selector(plan.secret_workspace.as_deref(), name), Use::Fetch(&pinned), &who)
+            .map_err(|e| denial_reason(&e))?;
         let (dst, fmt) = r.inject.choose(None, None).map_err(|_| Reason::SecretDisabled)?;
         let allowed = vec![OriginPattern::parse(&pinned.render(), false).map_err(|_| Reason::BlockedAddress)?];
         injections.push(Injection { name: r.meta.name.clone(), value: r.value, dst, fmt, allowed });
@@ -117,8 +148,23 @@ pub fn resolve_plan(plan: &FetchPlan) -> Result<Resolved, Reason> {
 /// (`ConsumerKind::Daemon`, consumer `source:<id>`, delivery `fetch`).
 /// Needs a person's confirm (`proof`); replaces any earlier binding.
 pub fn bind(source_id: &str, secret_name: &str, origin: &str, proof: &k2_vault::HumanProof) -> Result<(), SourceErr> {
-    if !matches!(proof, k2_vault::HumanProof::Confirmed { .. }) {
-        return Err(SourceErr::new("vault_confirm_required", 403, "binding a secret needs a person's confirm"));
+    bind_in(source_id, None, secret_name, origin, BindAuth::Person(proof))
+}
+
+/// [`bind`] for a secret in `workspace`'s scope (`None`: the server's),
+/// authorised by a person's confirm or an agent's "Manage Gardens and data
+/// sources" switch ([`BindAuth`]).
+pub fn bind_in(
+    source_id: &str,
+    workspace: Option<&str>,
+    secret_name: &str,
+    origin: &str,
+    auth: BindAuth<'_>,
+) -> Result<(), SourceErr> {
+    if let BindAuth::Person(proof) = auth {
+        if !matches!(proof, k2_vault::HumanProof::Confirmed { .. }) {
+            return Err(SourceErr::new("vault_confirm_required", 403, "binding a secret needs a person's confirm"));
+        }
     }
     let v = crate::vault::get().map_err(|_| unavailable())?;
     if v.status().rollback {
@@ -126,7 +172,7 @@ pub fn bind(source_id: &str, secret_name: &str, origin: &str, proof: &k2_vault::
     }
     unbind(source_id)?;
     let req = GrantRequest {
-        selector: selector(secret_name),
+        selector: selector(workspace, secret_name),
         consumer: consumer(source_id),
         delivery: Delivery::Fetch,
         env_name: None,
@@ -184,9 +230,14 @@ pub fn unbind(source_id: &str) -> Result<(), SourceErr> {
 /// Reads the value inside the daemon only; returns the hint, never the
 /// value [GV17].
 pub fn root_key_hint_for(secret_name: &str) -> Result<Option<RootKeyHint>, SourceErr> {
+    root_key_hint_in(None, secret_name)
+}
+
+/// [`root_key_hint_for`] for a secret in `workspace`'s scope.
+pub fn root_key_hint_in(workspace: Option<&str>, secret_name: &str) -> Result<Option<RootKeyHint>, SourceErr> {
     let v = crate::vault::get().map_err(|_| unavailable())?;
     let r = v
-        .resolve(&selector(secret_name), Use::System, &Requester::System("sources".into()))
+        .resolve(&selector(workspace, secret_name), Use::System, &Requester::System("sources".into()))
         .map_err(|e| match denial_reason(&e) {
             Reason::SecretMissing => SourceErr::new("secret_not_found", 404, format!("no server secret named {secret_name}")),
             Reason::VaultUnavailable => unavailable(),

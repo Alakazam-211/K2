@@ -58,13 +58,16 @@ pub struct SourceRow {
     pub created_at: i64,
     pub updated_at: i64,
     pub removed_at: Option<i64>,
+    /// The vault scope of the bound secret (0181): `None` = the server's,
+    /// `Some(ws)` = that workspace's own secret, bound by its agent.
+    pub secret_workspace: Option<String>,
 }
 
 const COLUMNS: &str = "id, name, label, kind, preset, spec_json, spec_hash, origins_json, lan, secret_name, \
      url_secret_name, secret_bound, every_secs, timeout_secs, max_bytes, fail_after, on_target_error, link, \
      viewers, agent_access, keep, pinned, pinned_by, pinned_at, status, pause_reason, made_by, made_by_project, \
      approved_by, approved_at, approved_spec_hash, simulate_state, simulate_until, simulate_by, mute_until, \
-     mute_by, mute_reason, rev, created_at, updated_at, removed_at";
+     mute_by, mute_reason, rev, created_at, updated_at, removed_at, secret_workspace";
 
 fn conv_err(idx: usize, msg: String) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, msg.into())
@@ -132,6 +135,7 @@ fn row(r: &Row) -> rusqlite::Result<SourceRow> {
         created_at: r.get(38)?,
         updated_at: r.get(39)?,
         removed_at: r.get(40)?,
+        secret_workspace: r.get(41)?,
     })
 }
 
@@ -331,6 +335,7 @@ pub fn update_spec(
     conn.execute(
         "UPDATE sources SET label = ?2, preset = ?3, spec_json = ?4, spec_hash = ?5, origins_json = ?6, lan = ?7, \
          secret_name = ?8, url_secret_name = ?9, secret_bound = CASE WHEN ?10 THEN 0 ELSE secret_bound END, \
+         secret_workspace = CASE WHEN ?10 THEN NULL ELSE secret_workspace END, \
          every_secs = ?11, timeout_secs = ?12, max_bytes = ?13, fail_after = ?14, on_target_error = ?15, link = ?16, \
          viewers = ?17, agent_access = ?18, keep = ?19, status = ?20, rev = ?21, updated_at = ?22 WHERE id = ?1",
         params![

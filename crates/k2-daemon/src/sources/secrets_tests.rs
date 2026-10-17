@@ -230,3 +230,45 @@ fn a_denial_parks_the_source_until_refresh() {
     assert!(!st.vault_denied);
     assert_eq!(up.conns(), before + 1);
 }
+
+/// 0181: an agent with "Manage Gardens and data sources" binds its OWN
+/// workspace's secret (no confirm). The fetch resolves it in that scope
+/// only, and the bind never widens the secret's sites.
+#[test]
+fn a_workspace_secret_binds_for_an_agent_and_stays_on_its_sites() {
+    let _a = AirgapEnv::set(false);
+    const VAL: &str = "k2test_WSBIND_9a8b7c6d5e4f3a2b1c0d";
+    let up = echo();
+    let v = crate::vault::ensure_test_vault();
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws-src-1"), "SRC_WS_KEY", Kind::ApiKey);
+    r.hosts = vec![up.origin()];
+    v.put(r, SecretBytes::from_slice(VAL.as_bytes()), &Actor::Owner).expect("put");
+    assert!(secret_exists(Some("ws-src-1"), "SRC_WS_KEY").expect("exists"));
+    assert!(!secret_exists(None, "SRC_WS_KEY").expect("exists"), "not a server secret");
+    assert!(!secret_exists(Some("ws-other"), "SRC_WS_KEY").expect("exists"), "not another workspace's");
+    // A site outside the secret's own sites: refused, nothing granted.
+    assert_eq!(
+        bind_in("src-ws-1", Some("ws-src-1"), "SRC_WS_KEY", "https://api.example.com:443", BindAuth::Agent)
+            .unwrap_err()
+            .code,
+        "secret_origin_mismatch"
+    );
+    bind_in("src-ws-1", Some("ws-src-1"), "SRC_WS_KEY", &up.origin(), BindAuth::Agent).expect("bind");
+    let mut p = plan(&up.origin(), "/v1/ws", true);
+    p.source_id = Some("src-ws-1".into());
+    p.secret = Some("SRC_WS_KEY".into());
+    p.secret_workspace = Some("ws-src-1".into());
+    match fetch_once(&p) {
+        FetchOutcome::Ok { body, .. } => {
+            let text = body.to_string();
+            assert!(!text.contains(VAL), "value echoed back: {text}");
+            assert_eq!(body["state"], "READY");
+        }
+        other => panic!("{other:?}"),
+    }
+    // The same name in server scope doesn't exist: the scope is part of
+    // what was bound.
+    p.secret_workspace = None;
+    assert!(matches!(fetch_once(&p), FetchOutcome::Err { reason: Reason::SecretMissing, .. }));
+    unbind("src-ws-1").expect("unbind");
+}

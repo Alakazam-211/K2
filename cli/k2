@@ -14628,17 +14628,32 @@ k2 sources — data sources: HTTP JSON checks this server runs for Garden cards 
   k2 sources add …                          like propose; people only (Settings or outside K2)
   k2 sources edit <name> [flags…]           change a source (agents: only their own)
   k2 sources remove <name> --yes            the name is held for 7 days
-  k2 sources pause|resume <name>            people only
+  k2 sources pause|resume <name>            people, or agents with the switch below
   k2 sources mute <name> --for 30m [--reason "…"]   agents: up to 2 h, reason required
   k2 sources unmute <name>
   k2 sources refresh <name> [--wait]        check now (at most once per 15 s)
   k2 sources try [propose flags] | --name <saved>   fetch once, show the shape
   k2 sources simulate <name> ok|warn|crit|stale|unknown|slow|off [--for 1h]
-  k2 sources pending [--names a,b]          proposals waiting for a person
-  k2 sources approve <name>… [--secret NAME]        people only
-  k2 sources secret <name> NAME|--none      people only
-  k2 sources pin|unpin <name>               people only
+  k2 sources pending [--names a,b]          proposals waiting for approval
+  k2 sources approve <name>… [--secret NAME]        one secret for every name: ONE confirm
+  k2 sources secret <name> NAME|--none      bind (or unbind) a vault secret
+  k2 sources pin|unpin <name>               pinned: agents without the switch can't change it
   k2 sources trigger list|show|log|propose|add|edit|approve|pause|resume|remove|test …
+  k2 sources access on|off [--workspace <ws>]   owner/admin: the agent switch below
+
+AGENTS AND "MANAGE GARDENS AND DATA SOURCES"
+  A per-agent switch (Settings → Workspaces → <ws> → Agent, or
+  `k2 sources access on --workspace <ws>` outside K2). Off (the default): an
+  agent proposes; pending, approve, secret, pause/resume, pin/unpin and
+  trigger approve/add/pause/resume exit 3 (person_only). On: the agent does
+  all of those itself with no confirm (approve its own proposals and others'
+  on this server). It binds only a secret it may already use: its own
+  workspace's secret, or a server secret when it also has "Allow managing
+  server-wide secrets" (else secret_not_usable, exit 3). The bind still goes
+  only to the source's one site, inside the secret's own sites. It never sets
+  viewers / agent-access / keep or a trigger's cooldown or cap. Every act is
+  logged with the agent and its session (Settings → Logs → Access Audit).
+  Only the owner or an admin flips the switch; an agent never can.
 
 Exit codes: 0 ok, 1 failure, 2 usage, 3 needs a person, 4 not found.
 --json prints the daemon's answer as is (also on errors).
@@ -14691,8 +14706,12 @@ except Exception:
     case "$code" in
         # vault_confirm_required is the one confirm code (0.46.0);
         # confirm_required is what a 0.45.x daemon answers.
-        person_only|owner_only|vault_confirm_required|confirm_required|lan_owner_only|field_person_only)
-            echo "This needs a person. Run it outside K2, or use Settings → Gardens → External Data." >&2
+        person_only|owner_only|vault_confirm_required|confirm_required|lan_owner_only|field_person_only|secret_not_usable|forbidden)
+            if [ "$code" = "secret_not_usable" ]; then
+                echo "Bind a secret from your own workspace, or ask your human for \"Allow managing server-wide secrets\"." >&2
+            else
+                echo "This needs a person (run it outside K2, or Settings → Gardens → External Data), or the agent switch \"Manage Gardens and data sources\" (k2 sources --help)." >&2
+            fi
             exit 3 ;;
         source_not_found|trigger_not_found|removed) exit 4 ;;
         *) exit 1 ;;
@@ -14754,6 +14773,7 @@ cmd_sources() {
         unpin) cmd_sources_unpin "$@" ;;
         pending) cmd_sources_pending "$@" ;;
         trigger|triggers) cmd_sources_trigger "$@" ;;
+        access) cmd_sources_access "$@" ;;
         *)
             echo "Error: unknown k2 sources command '$sub'" >&2
             _sources_usage >&2
@@ -15570,14 +15590,63 @@ print("Approve: k2 sources approve <name>… · k2 sources trigger approve <id>"
 '
 }
 
+# Inside a K2 terminal (a session passport): no vault confirm is asked
+# for. An agent with "Manage Gardens and data sources" needs none; any other
+# passport is refused by the daemon (person_only, exit 3).
+_sources_in_k2() {
+    [ -n "${K2_HOOK_TOKEN:-}${K2SO_HOOK_TOKEN:-}" ]
+}
+
 # A vault confirm (Touch ID / vault password) for ACTION bound to ID.
+# Inside K2 it prints nothing (see _sources_in_k2).
 _sources_b2_confirm() {
     local action="$1" id="$2" label="$3"
-    if [ -n "${K2_HOOK_TOKEN:-}${K2SO_HOOK_TOKEN:-}" ]; then
-        echo "This needs a person. Run it outside K2, or use Settings → Gardens → External Data." >&2
-        exit 3
+    if _sources_in_k2; then
+        return 0
     fi
     _vault_confirm_token "$action" "$id" "$label"
+}
+
+# k2 sources access on|off [--workspace <ws>]: the per-agent "Manage Gardens
+# and data sources" switch (0181). Owner/admin only: inside a K2 terminal
+# this sends the session passport, which the daemon refuses (an agent never
+# turns it on for itself).
+cmd_sources_access() {
+    local state="" workspace="" as_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            on|off)
+                [ -z "$state" ] || { echo "usage: k2 sources access on|off [--workspace <ws>]" >&2; exit 2; }
+                state="$1"; shift ;;
+            --workspace)
+                [ -n "${2:-}" ] || { echo "usage: --workspace <workspace name or path>" >&2; exit 2; }
+                workspace="$2"; shift 2 ;;
+            --json) as_json=1; shift ;;
+            *) echo "usage: k2 sources access on|off [--workspace <ws>] [--json]" >&2; exit 2 ;;
+        esac
+    done
+    [ -n "$state" ] || { echo "usage: k2 sources access on|off [--workspace <ws>] [--json]" >&2; exit 2; }
+    [ -n "$workspace" ] || workspace="$(pwd)"
+    local raw
+    raw="$(_compute_send POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$workspace" K2_CJ_toggle=gardens_manage K2_CJ_value_b="$([ "$state" = on ] && echo 1 || echo 0)")" tcp)"
+    _SRC_STATUS="${raw##*$'\n'}"
+    _SRC_BODY="${raw%$'\n'*}"
+    [ "$_SRC_STATUS" = "$raw" ] && _SRC_BODY=""
+    if [ "$_SRC_STATUS" != "200" ]; then
+        if [ "$_SRC_STATUS" = "403" ]; then
+            echo "Error: forbidden: only the owner or an admin turns this on or off (outside K2, or Settings → Workspaces → <ws> → Agent). An agent never can." >&2
+            exit 3
+        fi
+        _sources_fail "$_SRC_STATUS" "$_SRC_BODY"
+    fi
+    if [ "$as_json" = "1" ]; then _sources_print_json "$_SRC_BODY"; return 0; fi
+    printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("agentsCanManageGardens"):
+    print("Manage Gardens and data sources is ON for %s: its agent approves sources, binds secrets it may use, pauses, pins, enables triggers and edits Gardens with no confirm (each act is logged)." % v.get("workspace"))
+else:
+    print("Manage Gardens and data sources is OFF for %s: its agent proposes; a person approves." % v.get("workspace"))'
 }
 
 cmd_sources_approve() {
@@ -15689,6 +15758,14 @@ cmd_sources_secret() {
     local body
     if [ "$secret" = "--none" ]; then
         body="$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "secret": None}))' "$name")"
+    elif _sources_in_k2; then
+        # An agent with "Manage Gardens and data sources" binds with no
+        # confirm; any other passport gets person_only (exit 3).
+        body="$(python3 -c '
+import json, sys
+b = {"name": sys.argv[1], "secret": sys.argv[2]}
+if sys.argv[3]: b["useAnyway"] = True
+print(json.dumps(b))' "$name" "$secret" "$use_anyway")"
     else
         # The confirm is bound to the source id (persons see it in show).
         _sources_call GET /cli/sources/show "$(_sources_b2_query "name=$name")"
@@ -15799,7 +15876,10 @@ k2 sources trigger — wake an agent on this server when a source changes
 
 KIND: went_crit · went_warn · recovered · item_went_crit · stale_for:30m
 Agents propose (waking only themselves) and may remove their own proposal;
-a person approves. A proposed trigger never fires.
+a person approves. A proposed trigger never fires. An agent with "Manage
+Gardens and data sources" also approves, adds (waking itself), pauses and
+resumes triggers, always with the default cooldown and daily cap (only a
+person sets those; edit and test stay a person's).
 EOF
             return 0 ;;
     esac

@@ -287,8 +287,27 @@ function StepBody({ step }: { step: ThreadStripStep }): React.JSX.Element {
   )
 }
 
-/** This client's clock, re-read every second while the turn runs, and once
- *  more when a "Stopped" linger runs out. */
+/** A message sent while the agent works ends the open turn `superseded`
+ *  at once (the daemon's `Tracker::start`, thread_activity.rs), but the new
+ *  turn's first frame only comes once the message is delivered and the
+ *  agent is on it (the inject's own timed sleeps are ~0.5s). Until then the
+ *  drawer keeps showing the turn it had, so it doesn't slide out and back
+ *  in (Rosson 2026-10-16: "if the agent is still working we don't need to
+ *  collapse the activity dog ear and then re-open it"). Past this hold with
+ *  no new turn, it goes as any ended turn does. */
+export const SUPERSEDE_HOLD_MS = 2_000
+
+/** The turn the drawer draws: `turn`, or while a `superseded` end is
+ *  within its hold, the last live state of that same turn (`lastLive`). */
+export function zenDrawerHeldTurn(turn: ThreadTurn | null, lastLive: ThreadTurn | null, now: number): ThreadTurn | null {
+  if (!turn?.end || turn.end.reason !== 'superseded') return turn
+  if (!lastLive || lastLive.turnId !== turn.turnId || lastLive.end !== null) return turn
+  return now + turn.skewMs - turn.end.at < SUPERSEDE_HOLD_MS ? lastLive : turn
+}
+
+/** This client's clock, re-read every second while the turn runs (or is
+ *  held after a supersede), and once more when a "Stopped" linger or the
+ *  supersede hold runs out. */
 function useDrawerNow(turn: ThreadTurn | null): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -297,6 +316,16 @@ function useDrawerNow(turn: ThreadTurn | null): number {
     if (turn.end === null) {
       const id = setInterval(() => setNow(Date.now()), 1_000)
       return () => clearInterval(id)
+    }
+    if (turn.end.reason === 'superseded') {
+      const left = turn.end.at + SUPERSEDE_HOLD_MS - (Date.now() + turn.skewMs)
+      if (left <= 0) return
+      const tick = setInterval(() => setNow(Date.now()), 1_000)
+      const done = setTimeout(() => setNow(Date.now()), left + 50)
+      return () => {
+        clearInterval(tick)
+        clearTimeout(done)
+      }
     }
     if (turn.end.reason === 'interrupted') {
       const left = turn.end.at + STOPPED_LINGER_MS - (Date.now() + turn.skewMs)
@@ -329,8 +358,12 @@ export function ZenActivityDrawer({
   attached?: boolean
 }): React.JSX.Element | null {
   const now = useDrawerNow(turn)
-  const line = turn ? threadDrawerLine(turn, now) : null
-  const stoppable = !!onStop && !!turn && threadStripView(turn, now)?.stoppable === true
+  // The last live state, for the supersede hold (a message sent mid-turn).
+  const lastLive = useRef<ThreadTurn | null>(null)
+  if (turn && turn.end === null) lastLive.current = turn
+  const drawn = zenDrawerHeldTurn(turn, lastLive.current, now)
+  const line = drawn ? threadDrawerLine(drawn, now) : null
+  const stoppable = !!onStop && !!drawn && threadStripView(drawn, now)?.stoppable === true
   const shown = line !== null
   const last = useRef<ThreadDrawerLine | null>(line)
   if (line) last.current = line
@@ -406,7 +439,7 @@ export function ZenActivityDrawer({
         data-zen-drawer=""
         data-phase={phase}
         data-tone={display.tone}
-        data-turn-phase={turn?.phase}
+        data-turn-phase={drawn?.phase}
         data-expanded={expanded ? 'true' : 'false'}
         onAnimationEnd={(e) => {
           if (e.target === e.currentTarget && phase === 'out') setPhase('hidden')

@@ -448,7 +448,7 @@ impl ZenFiles {
         self.exists() && !self.gardens().is_empty()
     }
 
-    fn require(&self) -> Result<(), ZenError> {
+    pub(crate) fn require(&self) -> Result<(), ZenError> {
         if self.is_set_up() {
             Ok(())
         } else {
@@ -1049,13 +1049,13 @@ impl ZenFiles {
         }
     }
 
-    fn write_snapshot(&self, f: &ZenFile, text: &str) -> Result<String, ZenError> {
+    pub(crate) fn write_snapshot(&self, f: &ZenFile, text: &str) -> Result<String, ZenError> {
         let path = self.snapshot_slot(f)?;
         crate::fs_atomic::atomic_write_str(&path, text).map_err(|e| io(e, &path))?;
         Ok(path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
     }
 
-    fn prune(&self, f: &ZenFile) {
+    pub(crate) fn prune(&self, f: &ZenFile) {
         let dir = self.history_dir(f);
         for s in self.snapshots(f).into_iter().skip(HISTORY_KEEP) {
             let _ = fs::remove_file(dir.join(&s.name));

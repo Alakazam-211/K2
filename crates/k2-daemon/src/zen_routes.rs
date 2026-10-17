@@ -33,6 +33,14 @@
 //! passport) still renames, rethemes, resets and deletes a locked Garden.
 //! An edit to a locked Garden's file is put back on the next refresh
 //! (`ZenFiles::enforce_locks`), audited as `zen.garden.lock_refused`.
+//!
+//! Agents run Gardens end to end (0.46.0, 0181): `garden/put`,
+//! `widget/put` and the proposal queue (`proposals*`) are
+//! [`crate::zen_agent_routes`]'s. Any local passport reaches them (an
+//! agent without "Manage Gardens and data sources" proposes; with it, it
+//! writes); a put naming a locked Garden is 423 like every agent Garden
+//! write. With the switch a local passport may also make a Garden
+//! (`garden/new`).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -50,8 +58,9 @@ use k2_core::zen::{ZenError, ZenFile, ZenFiles};
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
 
-/// Request bodies over this are refused with 413 (Z15).
-pub const MAX_BODY: usize = 64 * 1024;
+/// Request bodies over this are refused with 413 (Z15). Room for one
+/// widget code file (256 KiB, `agent_edit::MAX_PUT_BYTES`) in a JSON put.
+pub const MAX_BODY: usize = 320 * 1024;
 
 /// The POST rows (G45, UW35). A GET on any of them is 405.
 /// `/cli/zen/lib/fetch` is `zen_lib_routes`'s (B3, UWB15).
@@ -59,12 +68,15 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/garden/delete",
     "/cli/zen/garden/lock",
     "/cli/zen/garden/new",
+    "/cli/zen/garden/put",
     "/cli/zen/garden/rename",
     "/cli/zen/garden/reorder",
     "/cli/zen/garden/sync",
     "/cli/zen/garden/template",
     "/cli/zen/lib/fetch",
     "/cli/zen/news/seen",
+    "/cli/zen/proposals/approve",
+    "/cli/zen/proposals/reject",
     "/cli/zen/reload",
     "/cli/zen/reset",
     "/cli/zen/setup",
@@ -75,6 +87,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/widget/claim",
     "/cli/zen/widget/new",
     "/cli/zen/widget/pause",
+    "/cli/zen/widget/put",
     "/cli/zen/widget/resume",
     "/cli/zen/widget/run",
     "/cli/zen/widget/sign",
@@ -89,6 +102,8 @@ pub const GET_ROUTES: &[&str] = &[
     "/cli/zen/inspect",
     "/cli/zen/lib/file",
     "/cli/zen/news",
+    "/cli/zen/proposals",
+    "/cli/zen/proposals/show",
     "/cli/zen/status",
     "/cli/zen/sync",
     "/cli/zen/templates",
@@ -130,8 +145,13 @@ pub fn local_only() -> CliResponse {
 pub fn too_large() -> CliResponse {
     resp(
         "413 Payload Too Large",
-        json!({ "error": "body_too_large", "message": "Zen request bodies must be under 64 KB." }),
+        json!({ "error": "body_too_large", "message": "Zen request bodies must be under 320 KB." }),
     )
+}
+
+/// A `ZenError` as its JSON answer (shared with `zen_agent_routes`).
+pub(crate) fn error_response(e: ZenError) -> CliResponse {
+    err(e)
 }
 
 fn err(e: ZenError) -> CliResponse {
@@ -1104,11 +1124,17 @@ pub fn handle(
         // §5.3: a passport (an agent or a K2 terminal) may make the Garden
         // writes it always could, unless the Garden is locked; and it may
         // make and sign widget folders (Garden data authorship, no Lock).
-        let widget_write = is_local_passport(caller) && AGENT_WIDGET_WRITES.contains(&path);
-        if !widget_write && !(is_local_passport(caller) && AGENT_GARDEN_WRITES.contains(&path)) {
+        // 0181: the put/proposal routes (the handler decides write or
+        // propose) and, with "Manage Gardens and data sources", a new
+        // Garden.
+        let local = is_local_passport(caller);
+        let widget_write = local && AGENT_WIDGET_WRITES.contains(&path);
+        let agent_route = local && crate::zen_agent_routes::is_route(path);
+        let managed_new = local && path == "/cli/zen/garden/new" && crate::gardens_manage::caller_may(caller);
+        if !widget_write && !agent_route && !managed_new && !(local && AGENT_GARDEN_WRITES.contains(&path)) {
             return local_only();
         }
-        if widget_write {
+        if widget_write || managed_new || (agent_route && path != "/cli/zen/garden/put") {
             // Not a Garden: no lock check.
         } else if let Some(sel) = garden_named(body) {
             let f = files();
@@ -1205,12 +1231,30 @@ pub fn handle(
         "/cli/zen/status" => Ok(handle_status()),
         "/cli/zen/doctor" => Ok(handle_doctor()),
         "/cli/zen/setup" => handle_setup(body),
-        "/cli/zen/garden/new" => handle_garden_new(body),
+        "/cli/zen/garden/new" => {
+            let r = handle_garden_new(body);
+            if !owner {
+                if let Ok(v) = &r {
+                    crate::gardens_manage::audit(
+                        "zen-garden-new",
+                        &caller.audit_user(),
+                        v["garden"]["id"].as_str().or_else(|| v["id"].as_str()).unwrap_or("-"),
+                        None,
+                        None,
+                    );
+                }
+            }
+            r
+        }
         "/cli/zen/garden/rename" => handle_garden_rename(body),
         "/cli/zen/garden/delete" => handle_garden_delete(body),
         "/cli/zen/garden/reorder" => handle_garden_reorder(body),
         "/cli/zen/garden/template" => handle_garden_template(body),
         LOCK_ROUTE => handle_garden_lock(body, caller, ingress),
+        // Agents run Gardens end to end (0181): puts and the proposal queue.
+        p if crate::zen_agent_routes::is_route(p) => {
+            return crate::zen_agent_routes::handle(p, owner_token, caller, params, body);
+        }
         "/cli/zen/reload" => handle_reload(),
         "/cli/zen/reset" => handle_reset(body),
         // Garden sync (prd-zen-garden-sync-defaults-v1 GS31/GS32): a change

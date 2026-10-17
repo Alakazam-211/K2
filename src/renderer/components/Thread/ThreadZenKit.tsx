@@ -128,30 +128,31 @@ ${SCOPE} [data-zen-compose-input]:focus { outline: none; }
 // properties both (WKWebView reads the -webkit- ones). Reduced
 // transparency, or no backdrop-filter, keeps the gradient alone.
 
-/** How far (px) the fade reaches above the message box. */
-export const FOOTER_FADE_PX = 48
+/** How far (px) the fade reaches above the message box (Rosson 2026-10-16:
+ *  48px started too high). */
+export const FOOTER_FADE_PX = 24
 
 const FOOTER_FADE_SCOPE = `[${THREAD_ZEN_SCOPE_ATTR}] .thread-footer-fade`
 
-/** The tint: clear at the top, easing to 95% at the box's top edge (px
- *  stops, [px from the top, % of the background]). */
+/** The tint: clear at the top, easing to 95% just inside the box's top
+ *  padding (px stops, [px from the top, % of the background]). */
 export const FOOTER_TINT_STOPS: ReadonlyArray<readonly [number, number]> = [
   [0, 0],
-  [8, 6],
-  [16, 18],
-  [24, 36],
-  [32, 58],
-  [40, 78],
-  [48, 90],
-  [56, 95],
+  [4, 6],
+  [8, 18],
+  [12, 36],
+  [16, 58],
+  [20, 78],
+  [24, 90],
+  [28, 95],
 ]
 
 /** Blur layers: [blur px, feather start px, fully on px] from the strip's top. */
 export const FOOTER_BLUR_LAYERS: ReadonlyArray<readonly [number, number, number]> = [
-  [2, 0, 16],
-  [6, 8, 32],
-  [12, 20, 44],
-  [24, 32, 56],
+  [2, 0, 8],
+  [6, 4, 16],
+  [12, 10, 22],
+  [24, 16, 28],
 ]
 
 const tintCss = (): string =>

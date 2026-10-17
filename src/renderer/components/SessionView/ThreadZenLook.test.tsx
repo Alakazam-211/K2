@@ -623,21 +623,21 @@ describe('chamfered corners in K2\'s square Style', () => {
 // and the activity tab is see-through; messages scroll under it and fade.
 describe('footer fade behind the message box', () => {
   it('the tint eases from clear at the top to 95%, in px from the top (no % band, no hard edge)', () => {
-    expect(FOOTER_FADE_PX).toBe(48)
-    expect(THREAD_FOOTER_FADE_CSS).toContain('top: -48px; pointer-events: none;')
+    expect(FOOTER_FADE_PX).toBe(24)
+    expect(THREAD_FOOTER_FADE_CSS).toContain('top: -24px; pointer-events: none;')
     // Clear at the top, rising every step, 95% just past the box's top edge.
     expect(FOOTER_TINT_STOPS[0]).toEqual([0, 0])
-    expect(FOOTER_TINT_STOPS.at(-1)).toEqual([FOOTER_FADE_PX + 8, 95])
+    expect(FOOTER_TINT_STOPS.at(-1)).toEqual([FOOTER_FADE_PX + 4, 95])
     for (let i = 1; i < FOOTER_TINT_STOPS.length; i++) {
       const [at, pct] = FOOTER_TINT_STOPS[i]
       const [prevAt, prevPct] = FOOTER_TINT_STOPS[i - 1]
-      expect(at - prevAt, `stop ${i}`).toBeLessThanOrEqual(8)
+      expect(at - prevAt, `stop ${i}`).toBeLessThanOrEqual(4)
       expect(pct, `stop ${i}`).toBeGreaterThan(prevPct)
-      // No jump: at most +22 points per 8px step.
+      // No jump: at most +22 points per 4px step.
       expect(pct - prevPct, `stop ${i}`).toBeLessThanOrEqual(22)
     }
     expect(THREAD_FOOTER_FADE_CSS).toContain(
-      '.thread-footer-tint { background: linear-gradient(to bottom, color-mix(in srgb, var(--zen-canvas) 0%, transparent) 0px, color-mix(in srgb, var(--zen-canvas) 6%, transparent) 8px,',
+      '.thread-footer-tint { background: linear-gradient(to bottom, color-mix(in srgb, var(--zen-canvas) 0%, transparent) 0px, color-mix(in srgb, var(--zen-canvas) 6%, transparent) 4px,',
     )
     expect(THREAD_FOOTER_FADE_CSS).not.toMatch(/var\(--zen-canvas\) \d+%, transparent\) \d+%/)
     // Only in the desktop Thread box.
@@ -656,8 +656,8 @@ describe('footer fade behind the message box', () => {
       const mask = `linear-gradient(to bottom, transparent ${from}px, #000 ${to}px)`
       expect(rule).toContain(`-webkit-mask-image: ${mask};`)
       expect(rule).toContain(` mask-image: ${mask};`)
-      // A feather, not a cut: it fades in over at least 16px.
-      expect(to - from).toBeGreaterThanOrEqual(16)
+      // A feather, not a cut: it fades in over at least 8px.
+      expect(to - from).toBeGreaterThanOrEqual(8)
     })
     render(<ThreadFooterFade />)
     const strip = document.querySelector('[data-thread-footer-fade]') as HTMLElement

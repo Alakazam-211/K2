@@ -7,6 +7,8 @@
 //! | POST | `/cli/notify/prefs`     | Member | the caller's person key |
 //! | GET  | `/cli/notify/admin`     | Admin  | everyone + the workspace defaults |
 //! | POST | `/cli/notify/admin/set` | Admin  | a workspace default (Admin+), or another person's row (Owner only) |
+//! | GET  | `/cli/people/color`     | Member | the palette, the caller's colour, everyone's effective colour |
+//! | POST | `/cli/people/color`     | Member | the caller's own colour; `user` = someone else's (Admin+, see below) |
 //!
 //! Identity comes from the dispatcher arm (owner token → `owner`, a live
 //! Connect session → its username), never the body (TP20). Agent
@@ -33,6 +35,7 @@ pub const PREFS_PATH: &str = "/cli/notify/prefs";
 pub const ADMIN_PATH: &str = "/cli/notify/admin";
 pub const ADMIN_SET_PATH: &str = "/cli/notify/admin/set";
 pub const OWNER_ACCOUNTS_PATH: &str = "/cli/owner/accounts";
+pub const PEOPLE_COLOR_PATH: &str = "/cli/people/color";
 
 /// The acting login, resolved by the dispatcher from the request token.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +62,7 @@ impl Actor {
 pub fn dispatch(path: &str, _params: &HashMap<String, String>) -> Option<CliResponse> {
     match path {
         ADMIN_SET_PATH => Some(CliResponse::method_not_allowed()),
-        PREFS_PATH | ADMIN_PATH | OWNER_ACCOUNTS_PATH => Some(error(
+        PREFS_PATH | ADMIN_PATH | OWNER_ACCOUNTS_PATH | PEOPLE_COLOR_PATH => Some(error(
             "403 Forbidden",
             "forbidden",
             "notification prefs belong to a person: sign in (an agent cannot read them)",
@@ -96,6 +99,10 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor) -> CliRespo
         }
     };
     let person = if actor.owner_token { OWNER.to_string() } else { people.person_key(&actor.login) };
+    if path == PEOPLE_COLOR_PATH {
+        // Person colours need no DB: settings + connect-users.json only.
+        return if is_post { people_color_write(&people, actor, role, body) } else { people_color_view(&people, actor) };
+    }
     let db = k2_core::db::shared();
     let conn = db.lock();
     if !notify_prefs::tables_exist(&conn) {
@@ -504,6 +511,103 @@ fn owner_accounts_write(people: &People, actor: &Actor, body: &[u8]) -> CliRespo
     }
 }
 
+/// `GET /cli/people/color` (any login) →
+/// `{ok, palette, person, color, chosen, colors}`: the eight hues, the
+/// caller's person key, their effective colour, their chosen one (null =
+/// Automatic), and name → effective colour for everyone (the map the
+/// presence roster also carries).
+fn people_color_view(people: &People, actor: &Actor) -> CliResponse {
+    let settings = k2_core::app_settings::load();
+    let owner_color = settings.owner_color.as_deref();
+    let login = if actor.owner_token { OWNER } else { actor.login.as_str() };
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "palette": k2_core::person_color::PALETTE,
+            "person": people.person_key(login),
+            "color": k2_core::person_color::effective(login, people, owner_color),
+            "chosen": k2_core::person_color::chosen(login, people, owner_color),
+            "colors": k2_core::person_color::color_map(people, owner_color, settings.owner_display_name.as_deref()),
+        })
+        .to_string(),
+    )
+}
+
+/// `POST /cli/people/color {"color": "#2563eb" | null, "user"?: "<login>"}`.
+///
+/// - No `user`: the caller's own person. For the owner token, an
+///   owner-linked login or the sole Owner-role login (person key `owner`)
+///   that is the `ownerColor` setting, which the linked logins show too;
+///   for anyone else, their own `connect-users.json` row.
+/// - `user`: someone else (an admin override). Naming yourself is the
+///   no-`user` case. The owner person (`owner` or a login that keys to it)
+///   needs the Owner role; another login needs Admin+ and `can_act_on`.
+///   A Member may set only their own.
+///
+/// `color: null` (or `"auto"`) clears it back to Automatic (the hash).
+/// A value outside the palette is a 400. Re-broadcasts the presence
+/// roster so every client repaints.
+fn people_color_write(people: &People, actor: &Actor, role: Role, body: &[u8]) -> CliResponse {
+    let v = match parse_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let color: Option<&'static str> = match v.get("color") {
+        Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) if s.trim().eq_ignore_ascii_case("auto") => None,
+        Some(serde_json::Value::String(s)) => match k2_core::person_color::normalize(s) {
+            Ok(c) => Some(c),
+            Err(e) => return usage(e),
+        },
+        _ => return usage("send {\"color\": \"<palette hex>\" | null}"),
+    };
+    let me = if actor.owner_token { OWNER.to_string() } else { people.person_key(&actor.login) };
+    let target_login: String = match v.get("user") {
+        None | Some(serde_json::Value::Null) => {
+            if actor.owner_token {
+                OWNER.to_string()
+            } else {
+                actor.login.trim().to_ascii_lowercase()
+            }
+        }
+        Some(serde_json::Value::String(s)) if !s.trim().is_empty() => s.trim().to_ascii_lowercase(),
+        _ => return usage("user must be a Connect username"),
+    };
+    let target_person = people.person_key(&target_login);
+    let is_self = target_person == me;
+    if target_person == OWNER {
+        if !is_self && role < Role::Owner {
+            return error("403 Forbidden", "role_required", "only the owner can change the owner's colour");
+        }
+        if let Err(e) = k2_core::app_settings::update(serde_json::json!({ "ownerColor": color })) {
+            return error("500 Internal Server Error", "store", e);
+        }
+    } else {
+        let Some(target) = people.user(&target_login) else {
+            return usage(format!("'{target_login}' is not a Connect user on this server"));
+        };
+        if !is_self && (role < Role::Admin || !k2_core::connect_users::can_act_on(role, target.role)) {
+            return error("403 Forbidden", "role_required", "you can change only your own colour");
+        }
+        if let Err(e) = k2_core::connect_users::set_color(&target.username, color) {
+            return error("500 Internal Server Error", "store", e);
+        }
+    }
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        "people.color.set",
+        &actor.login,
+        format!("person={target_person} color={}", color.unwrap_or("auto")),
+        "-",
+        "-",
+        "cli",
+    ));
+    crate::presence::rebroadcast();
+    match People::load() {
+        Ok(p) => people_color_view(&p, actor),
+        Err(e) => error("500 Internal Server Error", "store", e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -803,5 +907,138 @@ mod tests {
         assert_eq!(r.status, "405 Method Not Allowed");
         let r = handle(true, ADMIN_PATH, b"{}", &Actor::owner_token());
         assert_eq!(r.status, "405 Method Not Allowed");
+    }
+
+    // ── Person colours (0.46.0) ──────────────────────────────────────
+
+    fn color_of(v: &serde_json::Value, name: &str) -> String {
+        v["colors"][name].as_str().unwrap_or_else(|| panic!("no colour for {name}: {v}")).to_string()
+    }
+
+    #[test]
+    fn people_color_set_and_get_round_trip() {
+        let _f = fixture();
+        add("anna", Role::Member);
+        let anna = Actor::login("anna");
+        let v = ok(get(PEOPLE_COLOR_PATH, &anna));
+        assert_eq!(v["person"], "anna");
+        assert_eq!(v["chosen"], serde_json::Value::Null);
+        assert_eq!(v["color"], k2_core::person_color::hash_color("anna"), "Automatic = the hash");
+        assert_eq!(v["palette"].as_array().expect("palette").len(), 8);
+        assert_eq!(color_of(&v, "owner"), k2_core::person_color::hash_color("owner"));
+
+        let mut rx = crate::session_events::subscribe();
+        let v = ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#0D9488" }), &anna));
+        assert_eq!(v["chosen"], "#0d9488", "stored lowercase");
+        assert_eq!(v["color"], "#0d9488");
+        assert_eq!(color_of(&v, "anna"), "#0d9488");
+        assert_eq!(
+            k2_core::connect_users::list_users().expect("users").iter().find(|u| u.username == "anna").expect("anna").color.as_deref(),
+            Some("#0d9488"),
+            "persisted on the user row"
+        );
+        let mut presence = 0;
+        while let Ok(ev) = rx.try_recv() {
+            if let crate::session_events::SessionEvent::PresenceChanged { colors, .. } = ev {
+                assert_eq!(colors.get("anna").map(String::as_str), Some("#0d9488"));
+                presence += 1;
+            }
+        }
+        assert_eq!(presence, 1, "the roster is re-broadcast so clients repaint");
+
+        // Back to Automatic.
+        let v = ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": null }), &anna));
+        assert_eq!(v["chosen"], serde_json::Value::Null);
+        assert_eq!(v["color"], k2_core::person_color::hash_color("anna"));
+    }
+
+    #[test]
+    fn people_color_refuses_values_outside_the_palette() {
+        let _f = fixture();
+        add("anna", Role::Member);
+        for bad in [serde_json::json!("#ff0000"), serde_json::json!("red"), serde_json::json!(""), serde_json::json!(3)] {
+            let r = post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": bad }), &Actor::login("anna"));
+            assert_eq!(r.status, "400 Bad Request", "{bad}: {}", r.body);
+        }
+        let r = post(PEOPLE_COLOR_PATH, serde_json::json!({}), &Actor::owner_token());
+        assert_eq!(r.status, "400 Bad Request", "color is required: {}", r.body);
+        let r = post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#ff0000" }), &Actor::owner_token());
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        assert_eq!(k2_core::app_settings::load().owner_color, None);
+        // settings/update can't write the owner's colour around the check.
+        let r = crate::settings_routes::handle_settings_update(
+            br##"{"ownerColor":"#ff0000"}"##,
+            crate::settings_routes::SettingsActor::Owner,
+        );
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert_eq!(k2_core::app_settings::load().owner_color, None);
+    }
+
+    #[test]
+    fn people_color_linked_accounts_show_the_owner_colour() {
+        let _f = fixture();
+        add("z3thon", Role::Admin);
+        add("gina", Role::Admin);
+        add("rosson", Role::Owner);
+        add("wes", Role::Owner);
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["z3thon"] }), &Actor::owner_token()));
+        // The owner token sets the owner's colour …
+        let v = ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#4f46e5" }), &Actor::owner_token()));
+        assert_eq!(v["person"], "owner");
+        assert_eq!(k2_core::app_settings::load().owner_color.as_deref(), Some("#4f46e5"));
+        assert_eq!(color_of(&v, "owner"), "#4f46e5");
+        assert_eq!(color_of(&v, "z3thon"), "#4f46e5", "the linked login shows the owner's colour");
+        assert_eq!(color_of(&v, "gina"), k2_core::person_color::hash_color("gina"));
+        // … and the linked login's own pick sets the OWNER's colour too.
+        let z = Actor::login("z3thon");
+        let v = ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#c026d3" }), &z));
+        assert_eq!(v["person"], "owner");
+        assert_eq!(v["chosen"], "#c026d3");
+        assert_eq!(k2_core::app_settings::load().owner_color.as_deref(), Some("#c026d3"));
+        assert_eq!(color_of(&v, "owner"), "#c026d3");
+        let z_row = k2_core::connect_users::list_users().expect("users").into_iter().find(|u| u.username == "z3thon").expect("z3thon");
+        assert_eq!(z_row.color, None, "the linked login's own row is untouched");
+        // The display name paints with the owner too.
+        k2_core::app_settings::update(serde_json::json!({ "ownerDisplayName": "Rosson L" })).expect("name");
+        assert_eq!(color_of(&ok(get(PEOPLE_COLOR_PATH, &Actor::login("gina"))), "Rosson L"), "#c026d3");
+    }
+
+    #[test]
+    fn people_color_permission_floors() {
+        let _f = fixture();
+        add("anna", Role::Member);
+        add("bob", Role::Member);
+        add("gina", Role::Admin);
+        add("hal", Role::Admin);
+        add("rosson", Role::Owner);
+        add("wes", Role::Owner);
+        // A Member sets only their own.
+        let r = post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#64748b", "user": "bob" }), &Actor::login("anna"));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        let r = post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#64748b", "user": "owner" }), &Actor::login("anna"));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        // Naming yourself is fine.
+        ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#64748b", "user": "anna" }), &Actor::login("anna")));
+        // An Admin may change a Member's or another Admin's, not an Owner's
+        // and not the owner person's.
+        ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#0891b2", "user": "bob" }), &Actor::login("gina")));
+        ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#0891b2", "user": "hal" }), &Actor::login("gina")));
+        let r = post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#0891b2", "user": "wes" }), &Actor::login("gina"));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        let r = post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#0891b2", "user": "owner" }), &Actor::login("gina"));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert_eq!(k2_core::app_settings::load().owner_color, None);
+        // The owner token (and an Owner-role login) may change anyone's.
+        ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#2563eb", "user": "wes" }), &Actor::owner_token()));
+        ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#7c3aed", "user": "owner" }), &Actor::login("rosson")));
+        assert_eq!(k2_core::app_settings::load().owner_color.as_deref(), Some("#7c3aed"));
+        let r = post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#7c3aed", "user": "ghost" }), &Actor::owner_token());
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        let colors = ok(get(PEOPLE_COLOR_PATH, &Actor::login("anna")));
+        assert_eq!(color_of(&colors, "anna"), "#64748b");
+        assert_eq!(color_of(&colors, "bob"), "#0891b2");
+        assert_eq!(color_of(&colors, "wes"), "#2563eb");
+        // The GET chain (no identity) refuses.
+        assert_eq!(dispatch(PEOPLE_COLOR_PATH, &HashMap::new()).expect("claimed").status, "403 Forbidden");
     }
 }

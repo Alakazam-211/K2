@@ -218,7 +218,7 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
       }
       name={row.label}
       nameAside={
-        <PresenceAvatarCluster users={status.people.map((p) => ({ user: p.user, role: asRole(p.role) }))} />
+        <PresenceAvatarCluster users={status.people.map((p) => ({ user: p.user, role: asRole(p.role), color: p.color }))} />
       }
       subline={
         <>

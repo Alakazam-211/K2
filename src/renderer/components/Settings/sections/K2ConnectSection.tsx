@@ -40,8 +40,7 @@ import {
 import { WasViewerBadge, WasViewerNotice } from './WasViewerNotice'
 import { CanCloneToggle, setCanCloneOptimistic } from './CanCloneToggle'
 import {
-  OWNER_LINK_EXPLAINER,
-  OwnerAccountToggle,
+  OwnerAccountTag,
   ownerLinkAccess,
   useOwnerAccounts,
 } from './OwnerAccountToggle'
@@ -1906,12 +1905,6 @@ export function K2ConnectSection({
               aria-label="Search users"
               className={inputCls}
             />
-            {ownerLink !== 'hidden' && (
-              <p data-testid="owner-link-explainer" className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">
-                <span className="text-[var(--color-text-secondary)]">This is me (owner):</span> {OWNER_LINK_EXPLAINER}
-                {ownerLink === 'read' ? ' Only the owner can change it.' : ''}
-              </p>
-            )}
             {ownerAccounts.error && (
               <div className="text-[10px] text-[var(--color-status-error-soft)] px-2 py-1 border border-[color-mix(in_srgb,var(--color-status-error-soft)_20%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error-soft)_5%,transparent)]">{ownerAccounts.error}</div>
             )}
@@ -2023,14 +2016,10 @@ export function K2ConnectSection({
                         )}
                       </div>
                     </div>
+                    {/* 0.46.0: the owner picks their login in Settings →
+                        General → Your account; the row only shows the tag. */}
                     {ownerLink !== 'hidden' && ownerAccounts.loaded && (
-                      <OwnerAccountToggle
-                        username={u.username}
-                        access={ownerLink}
-                        linked={ownerAccounts.isLinked(u.username)}
-                        busy={ownerAccounts.busy === u.username}
-                        onChange={(linked) => void ownerAccounts.setLinked(u.username, linked)}
-                      />
+                      <OwnerAccountTag username={u.username} linked={ownerAccounts.isLinked(u.username)} />
                     )}
                     {needsEnableAsMember(u) && (
                       <WasViewerNotice

@@ -1,8 +1,10 @@
-// Settings → Admin Access → Users / Access: "This is me (owner)" on each
-// Connect user row (prd-thread-push-notifications-v1 §3, owner-linked
-// accounts). The owner marks the logins their own phone or laptop use;
-// those logins then count as the owner PERSON for notification prefs,
-// coalescing, the push `principal` and "you" labels.
+// Owner-linked accounts (prd-thread-push-notifications-v1 §3). The owner
+// picks the Connect login their own phone or laptop uses in Settings →
+// General → Your account (0.46.0, `YourAccountRow`; it replaced the
+// per-row "This is me (owner)" checkbox on Admin Access, which now shows
+// an "Owner's account" tag on that row). Linked logins count as the owner
+// PERSON for notification prefs, coalescing, the push `principal`, "you"
+// labels and the person colour.
 //
 // Identity only, never privilege: a linked login keeps its own role and
 // gains no owner-only power. Only the owner token may change the list
@@ -17,10 +19,11 @@ import {
   type OwnerAccounts,
 } from './notify-api'
 
-export const OWNER_LINK_LABEL = 'This is me (owner)'
+/** The tag on the owner's linked row in Admin Access. */
+export const OWNER_ACCOUNT_TAG = "Owner's account"
 
 export const OWNER_LINK_EXPLAINER =
-  "Your phone or laptop logging in as this account counts as you for notifications and 'you' labels. It doesn't change what the account can do."
+  "Your phone or laptop signing in with this login counts as you: notifications, 'you' labels and your colour. It doesn't change what the login can do."
 
 /** What this viewer may do with the switch. */
 export type OwnerLinkAccess = 'edit' | 'read' | 'hidden'
@@ -42,6 +45,8 @@ export interface OwnerAccountsState {
   busy: string | null
   isLinked: (username: string) => boolean
   setLinked: (username: string, linked: boolean) => Promise<void>
+  /** Replace the whole list (Settings → General → Your account). */
+  setAccounts: (accounts: string[]) => Promise<void>
 }
 
 /** The linked list, loaded when `enabled` (Admin+ on a server with
@@ -95,55 +100,33 @@ export function useOwnerAccounts(enabled: boolean): OwnerAccountsState {
     }
   }, [])
 
-  return { accounts: data.accounts, aliases: data.aliases, loaded, error, busy, isLinked, setLinked }
+  const setAccounts = useCallback(async (accounts: string[]) => {
+    setBusy(accounts[0] ?? '')
+    setError(null)
+    try {
+      setData(await setOwnerAccounts(accounts))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }, [])
+
+  return { accounts: data.accounts, aliases: data.aliases, loaded, error, busy, isLinked, setLinked, setAccounts }
 }
 
-/** The per-row checkbox. Same peer-checked square as the row's "Enabled". */
-export function OwnerAccountToggle({
-  username,
-  access,
-  linked,
-  busy,
-  onChange,
-}: {
-  username: string
-  access: OwnerLinkAccess
-  linked: boolean
-  busy?: boolean
-  onChange: (linked: boolean) => void
-}): React.JSX.Element | null {
-  if (access === 'hidden') return null
-  const readOnly = access === 'read'
+/** Admin Access row tag for the login the owner picked as theirs in
+ *  Settings → General → Your account (0.46.0: replaces the per-row
+ *  "This is me (owner)" checkbox). Renders nothing for other rows. */
+export function OwnerAccountTag({ username, linked }: { username: string; linked: boolean }): React.JSX.Element | null {
+  if (!linked) return null
   return (
-    <label
-      data-testid={`owner-link-${username}`}
-      title={readOnly ? 'Only the owner can change this.' : OWNER_LINK_EXPLAINER}
-      className={`flex items-center gap-1.5 select-none no-drag ${readOnly ? 'cursor-default' : 'cursor-pointer'}`}
+    <span
+      data-testid={`owner-account-tag-${username}`}
+      title={OWNER_LINK_EXPLAINER}
+      className="inline-flex w-fit items-center px-1.5 py-px text-[9px] font-medium uppercase tracking-wider border border-[var(--color-border)] text-[var(--color-text-secondary)] bg-[var(--color-bg-elevated)] select-none"
     >
-      <input
-        type="checkbox"
-        aria-label={`${username}: ${OWNER_LINK_LABEL}`}
-        checked={linked}
-        disabled={readOnly || busy}
-        onChange={(e) => {
-          if (readOnly || busy) return
-          onChange(e.target.checked)
-        }}
-        className="peer sr-only"
-      />
-      <span
-        aria-hidden="true"
-        className={`w-3 h-3 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)] ${
-          readOnly || busy ? 'opacity-60' : ''
-        }`}
-      >
-        {linked && (
-          <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="var(--color-on-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-          </svg>
-        )}
-      </span>
-      <span className="text-[10px] text-[var(--color-text-secondary)]">{OWNER_LINK_LABEL}</span>
-    </label>
+      {OWNER_ACCOUNT_TAG}
+    </span>
   )
 }

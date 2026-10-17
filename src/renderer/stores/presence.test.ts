@@ -108,7 +108,7 @@ function makeRemoteHost(): ConnectHost {
 
 beforeEach(() => {
   __resetConnectHostStoreForTests()
-  usePresenceStore.setState({ roster: [], supported: true })
+  usePresenceStore.setState({ roster: [], supported: true, colors: {} })
   cli.getImpl = async () => ({ roster: [] })
   cli.getCalls = []
 })
@@ -388,5 +388,35 @@ describe('presence S6 — usersForWorkspace selector', () => {
     const { visible, overflow } = rosterDisplay(usersForWorkspace(five, '/x/foo'), MAX_WORKSPACE_AVATARS)
     expect(visible.length).toBe(3)
     expect(overflow).toBe(2)
+  })
+})
+
+// 0.46.0 person colours: the roster rows carry `color` and the payload a
+// `colors` map (name → effective colour) for chips that are not roster rows.
+describe('presence store — person colours', () => {
+  it('the snapshot ingests the colors map; rows keep their color', async () => {
+    cli.getImpl = async () => ({
+      roster: [row('owner', { color: '#4f46e5' })],
+      colors: { owner: '#4f46e5', z3thon: '#4f46e5', anna: '#0d9488', bad: 3 },
+    })
+    await usePresenceStore.getState().refreshRoster()
+    expect(usePresenceStore.getState().roster[0].color).toBe('#4f46e5')
+    expect(usePresenceStore.getState().colors).toEqual({ owner: '#4f46e5', z3thon: '#4f46e5', anna: '#0d9488' })
+  })
+
+  it('presence_changed replaces the map; an older daemon without it leaves the map as it was', () => {
+    ev.presence[0]({ kind: 'presence_changed', roster: [row('owner')], colors: { owner: '#c026d3' } })
+    expect(usePresenceStore.getState().colors).toEqual({ owner: '#c026d3' })
+    ev.presence[0]({ kind: 'presence_changed', roster: [row('owner'), row('anna')] })
+    expect(usePresenceStore.getState().roster.map((r) => r.user)).toEqual(['owner', 'anna'])
+    expect(usePresenceStore.getState().colors).toEqual({ owner: '#c026d3' })
+  })
+
+  it('an older daemon snapshot (no colors, no row color) ingests with an empty map', async () => {
+    usePresenceStore.setState({ colors: { owner: '#c026d3' } })
+    cli.getImpl = async () => ({ roster: [row('owner')] })
+    await usePresenceStore.getState().refreshRoster()
+    expect(usePresenceStore.getState().colors).toEqual({})
+    expect(usePresenceStore.getState().roster[0].color).toBeUndefined()
   })
 })

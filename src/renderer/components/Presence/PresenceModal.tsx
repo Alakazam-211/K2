@@ -124,7 +124,7 @@ function PresenceRow({ user, readOnly }: { user: RosterUser; readOnly: boolean }
 
   return (
     <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-bg-elevated)] transition-colors">
-      <PresenceAvatar name={user.user} role={user.role} size={32} you={you} />
+      <PresenceAvatar name={user.user} role={user.role} size={32} you={you} color={user.color} />
 
       {/* Identity + where they're working */}
       <div className="flex-1 min-w-0">

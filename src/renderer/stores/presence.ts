@@ -48,9 +48,13 @@ interface PresenceState {
   /** False once the active daemon proved it lacks the presence routes
    *  (roster GET 404'd). Every presence surface hides when false. */
   supported: boolean
+  /** 0.46.0: name → the daemon's effective person colour (the roster's
+   *  `colors`), for chips that are not roster rows. Empty from an older
+   *  daemon; chips then hash the name. */
+  colors: Record<string, string>
   /** Whole-set replace (an event or snapshot arrived) — also proof the
    *  daemon speaks presence. */
-  applyRoster: (roster: RosterUser[]) => void
+  applyRoster: (roster: RosterUser[], colors?: Record<string, string>) => void
   /** Fetch the `GET /cli/presence/roster` snapshot (hello reconcile /
    *  boot). A `route not found` rejection flips `supported` off; any
    *  other failure (transient network) leaves state untouched. */
@@ -60,11 +64,13 @@ interface PresenceState {
 export const usePresenceStore = create<PresenceState>((set) => ({
   roster: [],
   supported: true,
-  applyRoster: (roster) => set({ roster, supported: true }),
+  colors: {},
+  applyRoster: (roster, colors) =>
+    set(colors === undefined ? { roster, supported: true } : { roster, supported: true, colors: asColorMap(colors) }),
   refreshRoster: async () => {
     try {
-      const snap = await daemonCliGet<{ roster: RosterUser[] }>(primaryScope(), 'presence/roster')
-      set({ roster: Array.isArray(snap?.roster) ? snap.roster : [], supported: true })
+      const snap = await daemonCliGet<{ roster: RosterUser[]; colors?: unknown }>(primaryScope(), 'presence/roster')
+      set({ roster: Array.isArray(snap?.roster) ? snap.roster : [], supported: true, colors: asColorMap(snap?.colors) })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       if (msg.includes('route not found')) {
@@ -78,6 +84,16 @@ export const usePresenceStore = create<PresenceState>((set) => ({
     }
   },
 }))
+
+/** A `colors` payload as a name → colour map (anything else → empty). */
+export function asColorMap(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === 'string') out[k] = v
+  }
+  return out
+}
 
 // Home M4: the primary room's roster (a pinned room reads its own server's).
 registerPrimaryRoomPresence(usePresenceStore)
@@ -168,7 +184,7 @@ export function usersForWorkspace(roster: RosterUser[], path: string): RosterUse
 // never needs re-wiring.
 
 onPresenceChanged(primaryScope(), (e) => {
-  usePresenceStore.getState().applyRoster(Array.isArray(e.roster) ? e.roster : [])
+  usePresenceStore.getState().applyRoster(Array.isArray(e.roster) ? e.roster : [], e.colors === undefined ? undefined : asColorMap(e.colors))
 })
 
 // Snapshot on every app-level (re)connect — the same reconcile point
@@ -182,5 +198,5 @@ onAppHello(primaryScope(), () => {
 // snapshot re-establishes truth. `supported` resets optimistically so a
 // capable new host isn't hidden by the old host's 404.
 onActiveHostChange(() => {
-  usePresenceStore.setState({ roster: [], supported: true })
+  usePresenceStore.setState({ roster: [], supported: true, colors: {} })
 })

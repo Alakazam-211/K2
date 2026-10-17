@@ -431,6 +431,10 @@ export interface PresenceRosterUser {
   grantedEdit?: boolean
   /** Unix seconds of the user's EARLIEST live connection. */
   connectedAt: number
+  /** 0.46.0: the person's effective colour (chosen, else the username
+   *  hash; owner-linked logins carry the owner's). Absent from an older
+   *  daemon — the chip hashes the name itself. */
+  color?: string
 }
 
 /** APP-LEVEL — the presence roster changed (a connection registered or
@@ -440,6 +444,10 @@ export interface PresenceRosterUser {
 export interface PresenceChangedEvent {
   kind: 'presence_changed'
   roster: PresenceRosterUser[]
+  /** 0.46.0: name → effective person colour for everyone on the server
+   *  (`owner`, every Connect login, the owner's display name), for chips
+   *  that are not roster rows (ticket assignees). Absent from an older daemon. */
+  colors?: Record<string, string>
 }
 
 /** APP-LEVEL — the daemon asks the renderer to open a URL in K2's embedded

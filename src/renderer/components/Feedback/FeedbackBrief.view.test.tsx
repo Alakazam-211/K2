@@ -6,6 +6,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { FeedbackCard, cardAssigneeNames } from './FeedbackPage'
+import { usePresenceStore } from '@/stores/presence'
+import { personColor } from '@/components/Presence/PresenceChip'
 import { FeedbackItemView, briefCache } from './FeedbackItemView'
 import type { FeedbackBrief, FeedbackListRow, FeedbackShow } from './feedback-api'
 
@@ -164,6 +166,16 @@ describe('FeedbackCard — assignee on the bottom row', () => {
     card({ ...row, assignees: ['owner', 'julie', 'owner', ' '] })
     expect(screen.getAllByTestId('card-assignee-initials').map((e) => e.textContent)).toEqual(['O', 'J'])
     expect(screen.getByTestId('card-assignee').getAttribute('title')).toBe('Assigned to Owner, julie')
+  })
+
+  it('assignee chips use the daemon colour map (owner via the wire key), else the hash', () => {
+    usePresenceStore.setState({ colors: { owner: '#0d9488', julie: '#c026d3' } })
+    card({ ...row, assignees: ['owner', 'julie', 'zed'] })
+    const colors = screen
+      .getAllByTestId('card-assignee-initials')
+      .map((e) => e.querySelector('[data-presence-chip]')?.getAttribute('data-person-color'))
+    expect(colors).toEqual(['#0d9488', '#c026d3', personColor('zed')])
+    usePresenceStore.setState({ colors: {} })
   })
 
   it('shows a subtle Unassigned when nobody is assigned', () => {

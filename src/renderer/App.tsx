@@ -28,6 +28,7 @@ import TransferProgress from './components/TransferProgress/TransferProgress'
 import AssistantBar from './components/WorkspaceAssistant/AssistantBar'
 import { useProjectsStore } from './stores/projects'
 import GateChrome from './components/TopBar/GateChrome'
+import { installPageSelectionMemory } from './lib/page-selection'
 import { installRoomPageSwitchFocus, preferredWorkspaceSwitchFocus, tryFocusPreferredWorkspaceInput } from './lib/workspace-switch-focus'
 // Pinned-chat retention — per-window host that keeps exempt workspaces'
 // pinned chats mounted (attached + rendering) while hidden. Rendered as
@@ -580,6 +581,8 @@ function AppRoot(): React.JSX.Element {
   // 2026-10-16: leaving a remote room on Home for Agents left the caret in
   // the parked room).
   useEffect(() => installRoomPageSwitchFocus(), [])
+  // Home and Agents each keep their own selected agent (Rosson 2026-10-16).
+  useEffect(() => installPageSelectionMemory(), [])
 
   useEffect(() => {
     const hasLiveTextSelection = (): boolean => {

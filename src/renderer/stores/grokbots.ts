@@ -16,6 +16,7 @@ import { fetchGrokBots, GROK_BOTS_FEATURE, type GrokBotAgent, type GrokHostSnaps
 import { primaryScope, scopeForHost, type ServerScope } from '@/kessel/server-scope'
 import { onGrokbotsChanged } from '@/stores/session-events'
 import { homeRooms } from '@/stores/home-rooms'
+import { usePageViewStore } from '@/stores/page-view'
 
 /** `error`: the last fetch failed (old server, offline, refused). */
 export type GrokHostState = GrokHostSnapshot
@@ -61,8 +62,9 @@ export const useGrokBotsStore = create<GrokBotsStore>((set, get) => ({
   },
   noteChange: (hostKey) => set((s) => ({ changeSeq: { ...s.changeSeq, [hostKey]: (s.changeSeq[hostKey] ?? 0) + 1 } })),
   openChat: (target) => {
-    // A remote room on screen gives way, as for any Home row.
-    homeRooms.showPrimary()
+    // On Home, a remote room on screen gives way, as for any Home row. On
+    // Agents it stays: it is Home's selection (lib/page-selection).
+    if (usePageViewStore.getState().page === 'home') homeRooms.showPrimary()
     set({ open: { hostKey: target.hostKey, agentId: target.agentId } })
   },
   closeChat: () => {

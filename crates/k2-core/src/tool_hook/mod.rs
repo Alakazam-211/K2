@@ -72,8 +72,10 @@ pub enum Op {
     Update,
     Deprovision,
     OwnerSet,
-    /// Reserved for S28 (`POST /mgmt/v1/sessions/revoke`). S27 never
-    /// enqueues it and the S27 worker never delivers it (nor blocks it).
+    /// S28's `POST /mgmt/v1/sessions/revoke` (S27-A12, wired in 0.46.1):
+    /// queued by [`enqueue_session_revoke`] on its own subject key
+    /// (`revoke:…`), so it never waits behind (or blocks) a member's
+    /// provisioning queue.
     SewSessionRevoke,
 }
 
@@ -99,8 +101,15 @@ impl Op {
         })
     }
 
-    /// The ops the S27 worker delivers.
-    pub const DELIVERED: [Op; 4] = [Op::Provision, Op::Update, Op::Deprovision, Op::OwnerSet];
+    /// The ops the worker delivers. S28's session revoke joined in 0.46.1
+    /// (plan B7: "S28 adds its op to `Op::DELIVERED`").
+    pub const DELIVERED: [Op; 5] = [
+        Op::Provision,
+        Op::Update,
+        Op::Deprovision,
+        Op::OwnerSet,
+        Op::SewSessionRevoke,
+    ];
 
     pub fn delivered_by_s27(self) -> bool {
         Self::DELIVERED.contains(&self)
@@ -121,6 +130,8 @@ pub enum Cause {
     TargetEnable,
     InstallChanged,
     Reconcile,
+    /// A K2 login session that could hold a Sew session ended (S28 §12).
+    SessionRevoke,
 }
 
 impl Cause {
@@ -137,6 +148,7 @@ impl Cause {
             Cause::TargetEnable => "target_enable",
             Cause::InstallChanged => "install_changed",
             Cause::Reconcile => "reconcile",
+            Cause::SessionRevoke => "session_revoke",
         }
     }
 }
@@ -461,8 +473,49 @@ pub fn list_targets() -> Result<Vec<outbox::ToolTarget>, String> {
     crate::skin::with_skin_conn(outbox::list_targets)
 }
 
-fn skin_store_exists() -> bool {
+pub(crate) fn skin_store_exists() -> bool {
     crate::paths::k2_home().join("skin.db").exists()
+}
+
+// ── S28's session revokes on this outbox ─────────────────────────────
+
+/// The outbox subject of a session revoke: `revoke:k2_sid:<sid>` or
+/// `revoke:<external id>`. Never a member's own key, so a revoke is its
+/// own queue: it is not held behind a blocked provision of the same
+/// person, and it never holds their provisioning up.
+pub fn revoke_subject_key(op: &crate::sew_revoke::SewSessionRevoke) -> String {
+    use crate::sew_revoke::SewSessionRevoke as R;
+    match op {
+        R::K2Sid(sid) => format!("revoke:k2_sid:{sid}"),
+        R::ExternalId(ext) => format!("revoke:{ext}"),
+    }
+}
+
+/// Queue one `sew_session_revoke` on the chat outbox, inside the caller's
+/// open `skin.db` transaction (S28-A3: the row commits or rolls back with
+/// the revoke). `Ok(false)` when Sew was never set up on this box (no
+/// chat target row): there is no Sew session to end. A paused target
+/// (`enabled = 0`) still queues; the worker delivers once it is back on.
+pub fn enqueue_session_revoke(
+    conn: &Connection,
+    op: &crate::sew_revoke::SewSessionRevoke,
+) -> Result<bool, String> {
+    if outbox::get_target(conn, CHAT_KIND)?.is_none() {
+        return Ok(false);
+    }
+    let row = NewOp {
+        tool: CHAT_KIND,
+        op: Op::SewSessionRevoke,
+        subject_key: revoke_subject_key(op),
+        payload: op.payload(),
+        grant_id: None,
+        grant_rev: None,
+        cause: Cause::SessionRevoke,
+        after_subject: None,
+    };
+    outbox::enqueue(conn, &[row], ACTOR_SYSTEM, outbox::now_secs())?;
+    kick();
+    Ok(true)
 }
 
 /// S29 (S27-A10): delete every grant of `kind` and mark its pending /

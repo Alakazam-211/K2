@@ -80,11 +80,14 @@ pub const UPGRADE_CREATED_BY: &str = "upgrade:0.45.5";
 /// Sew S27/S28: the `chat` grant kind. A principal with an enabled
 /// `kind=chat` grant on [`CHAT_GRANT_TARGET`] may mint chat passes
 /// (`POST /cli/sew/pass`) and may log in to the box with only that grant
-/// (S28 §13, Thread dark). **S27 owns writing these grants** (`grant_kind`
-/// gains `chat` there); S28 only reads them.
-pub const CHAT_GRANT_KIND: &str = "chat";
-/// The one Sew per box (S27: `target_id` is always `sew`).
-pub const CHAT_GRANT_TARGET: &str = "sew";
+/// (S28 §13, Thread dark). **S27 owns writing these grants** (the grant
+/// hook, [`crate::tool_hook`]); S28 only reads them.
+pub const CHAT_GRANT_KIND: &str = crate::tool_hook::CHAT_KIND;
+/// The one Sew install per box (S27: `target_id` is always `sew`). Every
+/// App on the box (Hearth, Meet, …) reaches that same install, so a chat
+/// grant is per person, never per App: the App a pass is for comes from
+/// the login session (K-M4).
+pub const CHAT_GRANT_TARGET: &str = crate::tool_hook::CHAT_TARGET_ID;
 
 /// Q8 default (S24-6): switching a guest's box login off ends EVERY login
 /// session of that guest, App sessions included — it is the one "turn this
@@ -2723,8 +2726,9 @@ pub fn principal_has_chat_grant(principal_id: &str) -> Result<bool, String> {
     with_conn(|conn| principal_has_chat_grant_conn(conn, principal_id))
 }
 
-/// Test seam until S27's `grant_kind` accepts `chat`: write (or re-enable)
-/// a principal's `chat` grant directly.
+/// Test seam: write (or re-enable) a principal's `chat` grant directly,
+/// without the grant hook (no chat target, no outbox rows). Tests of the
+/// hook itself use [`create_grant`] with kind `chat`.
 #[cfg(any(test, feature = "test-util"))]
 pub fn insert_chat_grant_for_tests(principal_id: &str) -> Result<(), String> {
     with_conn(|conn| {
@@ -2782,12 +2786,13 @@ fn with_immediate<T, F: FnOnce(&Connection) -> Result<T, String>>(f: F) -> Resul
 }
 
 /// Queue `sew_session_revoke` ops that did not come from a `skin.db` write
-/// (Connect sessions live in a JSON file, S28 §12). No-op without an
-/// outbox sink, so a box without Sew never opens `skin.db` for this.
+/// (Connect sessions live in a JSON file, S28 §12). No-op when there is
+/// no `skin.db` (so no chat target), so a box without Sew never creates
+/// `skin.db` for this.
 pub fn enqueue_sew_revokes(ops: &[crate::sew_revoke::SewSessionRevoke]) -> Result<(), String> {
-    if ops.is_empty() || !crate::sew_revoke::sink_installed() {
+    if ops.is_empty() || !crate::sew_revoke::writer_available() {
         for op in ops {
-            crate::log_debug!("[skin] sew_session_revoke {} not queued: no Sew outbox (S27)", op.label());
+            crate::log_debug!("[skin] sew_session_revoke {} not queued: Sew is not set up on this box", op.label());
         }
         return Ok(());
     }

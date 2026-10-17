@@ -269,9 +269,10 @@ fn delivered_ops_sql() -> String {
 /// Due rows for one tool (§8.3): the head of each subject's queue (lowest
 /// `seq` among its `pending`/`blocked` rows of ops this worker delivers),
 /// when that head is `pending`, due, and its `after_subject` has no open
-/// row with a lower `seq`. Ops this worker does not deliver (S28's
-/// `sew_session_revoke`) are invisible here: never sent, never blocked,
-/// never in the way of the provisioning order.
+/// row with a lower `seq`. Ops this worker does not deliver (an op a newer
+/// daemon wrote) are invisible here: never sent, never blocked, never in
+/// the way of the provisioning order. S28's `sew_session_revoke` IS
+/// delivered (0.46.1), on its own `revoke:…` subject key.
 pub fn due_heads(
     conn: &Connection,
     tool: &str,

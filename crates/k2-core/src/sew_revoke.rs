@@ -11,16 +11,17 @@
 //! ```
 //!
 //! **The outbox is S27's.** S27 owns the `skin.db` table `tool_outbox`
-//! and the worker that calls Sew's `POST /mgmt/v1/sessions/revoke`. This
-//! module is the small interface between the revoke sites and that
-//! outbox: S27 installs a [`Sink`] at boot ([`set_sink`]), and every
-//! revoke site calls [`enqueue`] **inside the same Immediate `skin.db`
-//! transaction as the revoke write** (S28-A3), passing that connection,
-//! so the outbox row commits or rolls back with the revoke.
+//! and the worker that calls Sew's `POST /mgmt/v1/sessions/revoke`
+//! (`Idempotency-Key` = the row's key; `200 {revoked: n}` for any `n`, or
+//! a 404, completes the op; anything else retries with S27's backoff).
+//! Every revoke site calls [`enqueue`] **inside the same Immediate
+//! `skin.db` transaction as the revoke write** (S28-A3), passing that
+//! connection, so the outbox row commits or rolls back with the revoke.
 //!
-//! Until S27 lands there is no sink: [`enqueue`] logs the op (never a
-//! secret; a sid is a hash) and drops it. That is safe because nothing can
-//! create a Sew session without S27/S29 either.
+//! The writer is S27's outbox ([`crate::tool_hook::enqueue_session_revoke`])
+//! unless a test installs its own [`Sink`] ([`set_sink`]). On a box where
+//! Sew was never set up (no chat target row) the op is logged (never a
+//! secret; a sid is a hash) and dropped: no Sew session can exist there.
 //!
 //! Connect sessions live in a JSON file, not `skin.db`, so their ops follow
 //! the write instead of sharing its transaction
@@ -81,34 +82,41 @@ fn sink_slot() -> &'static RwLock<Option<Sink>> {
     &SLOT
 }
 
-/// Install the outbox writer (S27 at boot; tests). Replaces any previous
-/// sink.
+/// Replace the outbox writer (tests record ops this way). Replaces any
+/// previous sink; [`clear_sink`] goes back to S27's outbox.
 pub fn set_sink(sink: Sink) {
     *sink_slot().write().unwrap_or_else(|p| p.into_inner()) = Some(sink);
 }
 
-/// Remove the sink (tests).
+/// Back to the real writer, S27's outbox (tests).
 pub fn clear_sink() {
     *sink_slot().write().unwrap_or_else(|p| p.into_inner()) = None;
 }
 
-/// Whether an outbox writer is installed. Callers outside `skin.db` use it
-/// to avoid opening `skin.db` for nothing.
+/// Whether a test sink replaced S27's outbox.
 pub fn sink_installed() -> bool {
     sink_slot().read().unwrap_or_else(|p| p.into_inner()).is_some()
 }
 
+/// Whether an op could be queued at all, without opening `skin.db`: a test
+/// sink, or a `skin.db` that exists (the chat target lives there). Callers
+/// outside `skin.db` (Connect logouts) use it so a box without Sew never
+/// creates `skin.db` for this.
+pub fn writer_available() -> bool {
+    sink_installed() || crate::tool_hook::skin_store_exists()
+}
+
 /// Queue one op. `conn` must be inside the revoke's transaction. Without a
-/// sink (S27 not on this build) the op is logged and dropped.
+/// chat target (Sew never set up here) the op is logged and dropped.
 pub fn enqueue(conn: &Connection, op: &SewSessionRevoke) -> Result<(), String> {
     let sink = sink_slot().read().unwrap_or_else(|p| p.into_inner()).clone();
-    match sink {
-        Some(f) => f(conn, op),
-        None => {
-            crate::log_debug!("[sew_revoke] {OP_KIND} {} not queued: no Sew outbox (S27) on this build", op.label());
-            Ok(())
-        }
+    if let Some(f) = sink {
+        return f(conn, op);
     }
+    if !crate::tool_hook::enqueue_session_revoke(conn, op)? {
+        crate::log_debug!("[sew_revoke] {OP_KIND} {} not queued: Sew is not set up on this box", op.label());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

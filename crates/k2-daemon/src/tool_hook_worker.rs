@@ -22,6 +22,7 @@
 //! | 2xx | `done` (target healthy) |
 //! | 404 on deprovision | `done` (already gone) |
 //! | 404 on update | `done` + reconcile |
+//! | 404 on `sew_session_revoke` | `done` (no such member: nothing to end) |
 //! | 409 `username_taken`, first time | rewrite to `<base>-<hhhh>`, key `<old>_u`, now |
 //! | 409 `username_taken` again | `blocked` |
 //! | 422 `assistant_person_unknown` | `pending` + backoff, `blocked` after 1 h |
@@ -32,8 +33,9 @@
 //!
 //! There is no max attempts for transient failures: a Sew outage of any
 //! length leaves rows `pending`. A target with `enabled = 0` is paused.
-//! Rows of ops this worker does not deliver (S28's `sew_session_revoke`)
-//! are never selected, sent or blocked.
+//! S28's `sew_session_revoke` rows (`POST /mgmt/v1/sessions/revoke`) are
+//! delivered like the rest, each on its own `revoke:…` subject. Rows of an
+//! op this build doesn't know are never selected, sent or blocked.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -184,6 +186,13 @@ pub fn classify(
             body: resp.body_text(),
             reconcile: true,
         },
+        // S28 §12 / G11: an unknown external id (never provisioned, or
+        // already gone) has no session to end.
+        404 if op == Op::SewSessionRevoke => Outcome::Done {
+            status,
+            body: resp.body_text(),
+            reconcile: false,
+        },
         409 if code == codes::CONFLICT
             && matches!(op, Op::Provision | Op::Update)
             && (reason == reasons::USERNAME_TAKEN || field.ends_with("username")) =>
@@ -262,7 +271,7 @@ fn path_for(op: Op) -> &'static str {
         Op::Update => sew_wire::MGMT_UPDATE,
         Op::Deprovision => sew_wire::MGMT_DEPROVISION,
         Op::OwnerSet => sew_wire::MGMT_OWNER_SET,
-        // Never selected by `due_heads` (S27-A12); kept total for S28.
+        // S28 §12: `{k2_sid}` or `{external_id}`, as queued.
         Op::SewSessionRevoke => sew_wire::MGMT_SESSIONS_REVOKE,
     }
 }
@@ -765,6 +774,27 @@ mod tests {
             ),
             Outcome::Done {
                 reconcile: true,
+                ..
+            }
+        ));
+        // S28 §12 / G11: a session revoke for an unknown member is done;
+        // its 200 with any count too; a 5xx retries like every op.
+        let rv = row("sew_session_revoke", 0, "k");
+        assert!(matches!(
+            classify(&c, &rv, Ok(&resp(404, &err("not_found", "", ""), "")), 0),
+            Outcome::Done {
+                reconcile: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            classify(&c, &rv, Ok(&resp(200, r#"{"revoked":0}"#, "")), 0),
+            Outcome::Done { .. }
+        ));
+        assert!(matches!(
+            classify(&c, &rv, Ok(&resp(503, &err("unavailable", "", ""), "")), 0),
+            Outcome::Retry {
+                stop_target: true,
                 ..
             }
         ));

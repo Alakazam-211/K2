@@ -21,6 +21,8 @@
 //! - deprovision of an unknown id → 404; of the owner → 422 `is_owner`;
 //!   deactivating a person deactivates assistants pinned to them.
 //! - owner/set naming the current owner → 200 `changed:false` (G6).
+//! - sessions/revoke (S28 §12): `k2_sid` and/or `external_id`; an unknown
+//!   `external_id` → 404; else `200 {revoked: n}`.
 //! - provision is DECLARATIVE (A8, live Sew): absent optional profile
 //!   fields (`email`, `title`, `pronouns`) are cleared; `update` takes a
 //!   ProfilePatch (omitted = kept).
@@ -44,7 +46,7 @@ use tokio::task::JoinHandle;
 
 use k2_core::tool_hook::sew_wire::{
     self, AgentKind, DeprovisionRequest, ExternalId, MemberKind, OwnerSetRequest, Patch,
-    ProvisionRequest, UpdatePrincipalRequest,
+    ProvisionRequest, RevokeSessionsRequest, UpdatePrincipalRequest,
 };
 
 #[derive(Debug, Clone)]
@@ -102,6 +104,8 @@ struct State {
     list_profile_fields: bool,
     bad_paths: Vec<String>,
     bad_bodies: Vec<String>,
+    /// Every `sessions/revoke` body that answered 200 (S28 §12).
+    revoked: Vec<RevokeSessionsRequest>,
 }
 
 pub struct FakeSew {
@@ -262,6 +266,9 @@ impl FakeSew {
     }
     pub fn members(&self) -> Vec<Member> {
         self.with(|s| s.members.values().cloned().collect())
+    }
+    pub fn revoked(&self) -> Vec<RevokeSessionsRequest> {
+        self.with(|s| s.revoked.clone())
     }
     pub fn owner(&self) -> Option<String> {
         self.with(|s| s.owner.clone())
@@ -528,6 +535,7 @@ fn handle(
         sew_wire::MGMT_UPDATE => update(s, body),
         sew_wire::MGMT_DEPROVISION => deprovision(s, body),
         sew_wire::MGMT_OWNER_SET => owner_set(s, body),
+        sew_wire::MGMT_SESSIONS_REVOKE => sessions_revoke(s, body),
         _ => {
             s.bad_paths.push(format!("POST {path}"));
             err(
@@ -715,6 +723,28 @@ fn deprovision(s: &mut State, body: &str) -> (u16, String) {
         200,
         json!({"member_id": id.to_string(), "sessions_revoked": 0}).to_string(),
     )
+}
+
+/// `POST /mgmt/v1/sessions/revoke` (S28 §12, live Sew `revoke_sessions`):
+/// one of `k2_sid` / `external_id` (else 400); an unknown `external_id`
+/// is 404; anything else `200 {revoked: n}` (the fake holds no sessions,
+/// so `n` is how many revokes it has seen for that selector before).
+fn sessions_revoke(s: &mut State, body: &str) -> (u16, String) {
+    let req: RevokeSessionsRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "sessions/revoke", e, body),
+    };
+    if req.external_id.is_none() && req.k2_sid.is_none() {
+        return bad_body(s, "sessions/revoke", "send external_id, k2_sid, or both", body);
+    }
+    if let Some(ext) = &req.external_id {
+        if !s.members.contains_key(&ext.to_string()) {
+            return err(404, "not_found", "no such member", json!({}));
+        }
+    }
+    let n = s.revoked.iter().filter(|r| **r == req).count();
+    s.revoked.push(req);
+    (200, json!({"revoked": n}).to_string())
 }
 
 fn owner_set(s: &mut State, body: &str) -> (u16, String) {

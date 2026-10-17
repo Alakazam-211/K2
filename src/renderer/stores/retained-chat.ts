@@ -19,6 +19,13 @@
 //                    visibility here; the retainer re-parents the
 //                    retained instance's container into it (or into the
 //                    off-screen hidden host when absent).
+//                    A workspace can have MORE THAN ONE slot (the Chat tab,
+//                    plus a Design tab's Chat column — prd-browser-design-
+//                    mode-v1 D-A7). `slotRecords` keeps every one; `slots`
+//                    is the one the instance lives in (`resolveSlot`): a
+//                    visible Chat tab wins, then a visible Design slot,
+//                    then the (hidden) Chat tab. One instance, never two
+//                    AgentChatPanes.
 //
 // Module-level zustand store: it deliberately SURVIVES the
 // `<App key={hostKey}>` remount so the retainer can be unmounted/
@@ -50,10 +57,43 @@ export interface RetainedChatSlot {
   visible: boolean
 }
 
+/** Who owns a slot: the pinned Chat tab, or a Design tab's Chat column. */
+export type RetainedChatSlotKind = 'chat' | 'design'
+
+export interface RetainedChatSlotRecord extends RetainedChatSlot {
+  kind: RetainedChatSlotKind
+}
+
+/** The slot the retained instance lives in, newest registration first
+ *  within a rule: a visible Chat tab, else any visible slot (a Design
+ *  tab's column), else the Chat tab (hidden), else any slot. */
+export function resolveSlot(records: readonly RetainedChatSlotRecord[]): RetainedChatSlot | null {
+  const pick = (pred: (r: RetainedChatSlotRecord) => boolean): RetainedChatSlotRecord | null => {
+    for (let i = records.length - 1; i >= 0; i--) if (pred(records[i])) return records[i]
+    return null
+  }
+  const r =
+    pick((x) => x.kind === 'chat' && x.visible) ??
+    pick((x) => x.visible) ??
+    pick((x) => x.kind === 'chat') ??
+    pick(() => true)
+  return r ? { el: r.el, visible: r.visible } : null
+}
+
+/** True while this workspace's pinned Chat TAB is visible in this window
+ *  (a Design tab then shows the page only, D-A7). */
+export function chatTabSlotVisible(state: Pick<RetainedChatState, 'slotRecords'>, projectId: string): boolean {
+  return (state.slotRecords.get(projectId) ?? []).some((r) => r.kind === 'chat' && r.visible)
+}
+
 interface RetainedChatState {
   entries: ReadonlyMap<string, RetainedChatEntry>
   mruOrder: readonly string[]
+  /** The slot each workspace's instance lives in (`resolveSlot` over
+   *  `slotRecords`). */
   slots: ReadonlyMap<string, RetainedChatSlot>
+  /** Every registered slot per workspace, in registration order. */
+  slotRecords: ReadonlyMap<string, readonly RetainedChatSlotRecord[]>
   /** Display-only boot seeding ran for this host session (one-shot). */
   bootSeeded: boolean
 
@@ -73,17 +113,44 @@ interface RetainedChatState {
    *  backgrounded). Re-visiting re-attaches fresh. */
   evict: (projectId: string) => void
 
-  registerSlot: (projectId: string, el: HTMLElement) => void
-  setSlotVisible: (projectId: string, visible: boolean) => void
-  /** Unregisters ONLY if `el` is still the registered element — guards
-   *  the unmount(old)/mount(new) interleave across slot remounts. */
+  /** `kind` defaults to the Chat tab's slot. */
+  registerSlot: (projectId: string, el: HTMLElement, kind?: RetainedChatSlotKind) => void
+  /** `el` names the slot; without it, the workspace's Chat tab slot(s). */
+  setSlotVisible: (projectId: string, visible: boolean, el?: HTMLElement) => void
+  /** Unregisters ONLY that element's slot — guards the unmount(old)/
+   *  mount(new) interleave across slot remounts. */
   unregisterSlot: (projectId: string, el: HTMLElement) => void
+}
+
+/** `slotRecords` with `projectId`'s list replaced, and `slots` re-resolved. */
+function withSlotRecords(
+  s: Pick<RetainedChatState, 'slots' | 'slotRecords'>,
+  projectId: string,
+  records: readonly RetainedChatSlotRecord[],
+): Pick<RetainedChatState, 'slots' | 'slotRecords'> {
+  const slotRecords = new Map(s.slotRecords)
+  const slots = new Map(s.slots)
+  if (records.length === 0) {
+    slotRecords.delete(projectId)
+    slots.delete(projectId)
+  } else {
+    slotRecords.set(projectId, records)
+    const resolved = resolveSlot(records)
+    const prev = s.slots.get(projectId)
+    if (resolved && prev && prev.el === resolved.el && prev.visible === resolved.visible) {
+      // Same slot as before: keep its identity.
+    } else if (resolved) {
+      slots.set(projectId, resolved)
+    }
+  }
+  return { slotRecords, slots }
 }
 
 export const useRetainedChatStore = create<RetainedChatState>((set, get) => ({
   entries: new Map(),
   mruOrder: [],
   slots: new Map(),
+  slotRecords: new Map(),
   bootSeeded: false,
 
   recordVisit: (entry) => {
@@ -146,31 +213,36 @@ export const useRetainedChatStore = create<RetainedChatState>((set, get) => ({
     })
   },
 
-  registerSlot: (projectId, el) => {
+  registerSlot: (projectId, el, kind = 'chat') => {
     set((s) => {
-      const slots = new Map(s.slots)
-      slots.set(projectId, { el, visible: false })
-      return { slots }
+      const records = (s.slotRecords.get(projectId) ?? []).filter((r) => r.el !== el)
+      return withSlotRecords(s, projectId, [...records, { el, visible: false, kind }])
     })
   },
 
-  setSlotVisible: (projectId, visible) => {
+  setSlotVisible: (projectId, visible, el) => {
     set((s) => {
-      const slot = s.slots.get(projectId)
-      if (!slot || slot.visible === visible) return s
-      const slots = new Map(s.slots)
-      slots.set(projectId, { el: slot.el, visible })
-      return { slots }
+      const records = s.slotRecords.get(projectId)
+      if (!records) return s
+      const hit = (r: RetainedChatSlotRecord): boolean => (el ? r.el === el : r.kind === 'chat')
+      if (!records.some((r) => hit(r) && r.visible !== visible)) return s
+      return withSlotRecords(
+        s,
+        projectId,
+        records.map((r) => (hit(r) ? { ...r, visible } : r)),
+      )
     })
   },
 
   unregisterSlot: (projectId, el) => {
     set((s) => {
-      const slot = s.slots.get(projectId)
-      if (!slot || slot.el !== el) return s
-      const slots = new Map(s.slots)
-      slots.delete(projectId)
-      return { slots }
+      const records = s.slotRecords.get(projectId)
+      if (!records || !records.some((r) => r.el === el)) return s
+      return withSlotRecords(
+        s,
+        projectId,
+        records.filter((r) => r.el !== el),
+      )
     })
   },
 }))
@@ -181,6 +253,7 @@ export function resetRetainedChatStore(): void {
     entries: new Map(),
     mruOrder: [],
     slots: new Map(),
+    slotRecords: new Map(),
     bootSeeded: false,
   })
 }

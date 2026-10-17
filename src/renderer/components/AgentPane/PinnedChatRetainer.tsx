@@ -42,6 +42,7 @@ import { useServerSupports } from '@/lib/server-capabilities'
 import {
   useRetainedChatStore,
   type RetainedChatEntry,
+  type RetainedChatSlotKind,
 } from '@/stores/retained-chat'
 import { computeRetainedSet } from '@/kessel-term/retainedChat'
 
@@ -72,11 +73,13 @@ interface PinnedChatGateProps {
  * empty slot the retainer portals the retained instance into.
  * Not exempt → inline `AgentChatPane`, exactly today's path.
  */
-export function PinnedChatGate({
-  agentName,
-  projectPath,
-  restoredSessionId,
-}: PinnedChatGateProps): React.JSX.Element {
+/**
+ * The workspace's project id when its pinned Chat is retained (the
+ * exemption predicate above), else null. A Design tab uses the same answer:
+ * it shows the Chat beside its page only through a retained slot, never a
+ * second inline `AgentChatPane` (D-A7).
+ */
+export function useRetainedChatProjectId(projectPath: string): string | null {
   const room = useRoom()
   // MS3 — the room's own project list.
   const projectId = useRoomProjects(
@@ -92,8 +95,17 @@ export function PinnedChatGate({
   // room's chat renders inline.
   const exempt =
     room.isPrimary && daemonOwnsChat && projectId !== null && isActive && !retentionDisabled()
+  return exempt ? projectId : null
+}
 
-  if (!exempt || projectId === null) {
+export function PinnedChatGate({
+  agentName,
+  projectPath,
+  restoredSessionId,
+}: PinnedChatGateProps): React.JSX.Element {
+  const projectId = useRetainedChatProjectId(projectPath)
+
+  if (projectId === null) {
     return (
       <AgentChatPane
         agentName={agentName}
@@ -114,6 +126,11 @@ export function PinnedChatGate({
 
 interface PinnedChatSlotProps extends PinnedChatGateProps {
   projectId: string
+  /** The Chat tab's slot (default) or a Design tab's Chat column. */
+  kind?: RetainedChatSlotKind
+  /** Overrides the tab visibility (a Design tab hides its Chat column
+   *  while the Chat tab is visible beside it). */
+  visible?: boolean
 }
 
 /**
@@ -124,28 +141,33 @@ interface PinnedChatSlotProps extends PinnedChatGateProps {
  * Unregisters on stash; the retained instance survives, re-parented to
  * the hidden host.
  */
-function PinnedChatSlot({
+export function PinnedChatSlot({
   projectId,
   agentName,
   projectPath,
   restoredSessionId,
+  kind = 'chat',
+  visible: visibleOverride,
 }: PinnedChatSlotProps): React.JSX.Element {
-  const visible = useIsTabVisible()
+  const tabVisible = useIsTabVisible()
+  const visible = visibleOverride ?? tabVisible
   const elRef = useRef<HTMLDivElement | null>(null)
 
   useLayoutEffect(() => {
     const el = elRef.current
     if (!el) return
-    useRetainedChatStore.getState().registerSlot(projectId, el)
+    useRetainedChatStore.getState().registerSlot(projectId, el, kind)
     return () => {
       useRetainedChatStore.getState().unregisterSlot(projectId, el)
     }
-  }, [projectId])
+  }, [projectId, kind])
 
   // Declared AFTER registerSlot so the slot exists when visibility lands.
   useLayoutEffect(() => {
-    useRetainedChatStore.getState().setSlotVisible(projectId, visible)
-  }, [projectId, visible])
+    const el = elRef.current
+    if (!el) return
+    useRetainedChatStore.getState().setSlotVisible(projectId, visible, el)
+  }, [projectId, kind, visible])
 
   // Visit = this workspace's exempt pinned chat was foregrounded.
   // Re-runs on prop churn only to keep the entry's props current
@@ -165,6 +187,7 @@ function PinnedChatSlot({
       ref={elRef}
       className="h-full w-full"
       data-pinned-chat-slot={projectId}
+      data-pinned-chat-slot-kind={kind}
     />
   )
 }

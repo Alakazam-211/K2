@@ -52,6 +52,10 @@ pub struct Post {
     pub agent_name: String,
     pub seq: i64,
     pub kind: ThreadMsgKind,
+    /// The workspace's icon rev at post time (`data.avatarRev`; `""` = none).
+    pub avatar_rev: String,
+    /// The workspace's colour at post time (`data.agentColor`).
+    pub agent_color: String,
 }
 
 /// What the coalescer needs from the daemon.
@@ -199,6 +203,9 @@ impl Coalescer {
             count: w.pending,
             principal: person.clone(),
             device_usernames: w.devices.clone(),
+            // The latest post's look: a trailing push shows the current avatar.
+            avatar_rev: w.post.avatar_rev.clone(),
+            agent_color: w.post.agent_color.clone(),
         });
         w.pending = 0;
         w.last_push = Some(now);
@@ -334,6 +341,8 @@ pub fn on_agent_post(
     if crate::push_routes::airgap_blocks() || is_human_from(from) {
         return;
     }
+    // The same rev `GET /cli/projects/list` shows as this row's `iconRev`.
+    let (agent_color, avatar_rev) = k2_core::projects_ops::project_push_look(project_id);
     let post = Post {
         conversation_id: conversation_id.to_string(),
         project_id: project_id.to_string(),
@@ -341,6 +350,8 @@ pub fn on_agent_post(
         agent_name: agent_name_for(from),
         seq,
         kind,
+        avatar_rev,
+        agent_color,
     };
     ensure_ticker();
     lock().post(&DaemonEnv, post, Instant::now());
@@ -418,11 +429,35 @@ mod tests {
             agent_name: "K2".into(),
             seq,
             kind,
+            avatar_rev: "0123456789abcdef".into(),
+            agent_color: "#22c55e".into(),
         }
     }
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
+    }
+
+    /// Leading and trailing pushes carry the latest post's look, so a
+    /// trailing push after an avatar change shows the new one.
+    #[test]
+    fn pushes_carry_the_latest_posts_avatar_rev_and_color() {
+        let env = Fake::with(&[("owner", &["owner"])]);
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.post(&env, post("c-look", 1, ThreadMsgKind::Text), t0);
+        let mut changed = post("c-look", 2, ThreadMsgKind::Text);
+        changed.avatar_rev = "fedcba9876543210".into();
+        changed.agent_color = "#ef4444".into();
+        c.post(&env, changed, t0 + secs(5));
+        c.tick(&env, t0 + WINDOW);
+        let sent = env.sent();
+        assert_eq!(sent.len(), 2, "leading + trailing");
+        assert_eq!((sent[0].avatar_rev.as_str(), sent[0].agent_color.as_str()), ("0123456789abcdef", "#22c55e"));
+        assert_eq!((sent[1].avatar_rev.as_str(), sent[1].agent_color.as_str()), ("fedcba9876543210", "#ef4444"));
+        let data = PushEvent::ThreadPost(sent[1].clone()).data();
+        assert_eq!(data.get("avatarRev"), Some("fedcba9876543210"));
+        assert_eq!(data.get("agentColor"), Some("#ef4444"));
     }
 
     #[test]

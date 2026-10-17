@@ -483,6 +483,62 @@ mod tests {
         });
     }
 
+    /// Upgrade (0186): a workspace listed to peers before 2026-10-16 only
+    /// because "Allow agents to create connections" was on is still listed
+    /// after the upgrade step runs, in every master state. A workspace with
+    /// neither flag stays hidden, and an owner's later choice is kept.
+    #[test]
+    fn upgrade_0186_keeps_a_connections_only_workspace_listed() {
+        with_temp_home(|| {
+            crate::db::init_for_tests();
+            crate::app_settings::update(serde_json::json!({ "allowRemoteInstruct": false }))
+                .expect("master off");
+            let conn_path = unique_ws_path("up-conn-only");
+            let conn_id = insert_project("up-conn-only", &conn_path, 1);
+            crate::workspace::settings::update_project_setting(
+                &conn_path,
+                "agents_can_create_connections",
+                "1",
+            )
+            .expect("connections on");
+            let none_path = unique_ws_path("up-none");
+            let none_id = insert_project("up-none", &none_path, 1);
+            let listed = |id: &str| build_local_roster().agents.iter().any(|a| a.workspace_id == id);
+            // The pre-upgrade row under the new listing rule: hidden. This is
+            // exactly what the step must prevent.
+            assert!(!listed(&conn_id), "precondition: connections-only is hidden before 0186");
+
+            {
+                let db = crate::db::shared();
+                let conn = db.lock();
+                conn.execute_batch(include_str!(
+                    "../../drizzle_sql/0186_remote_switch_keeps_listing.sql"
+                ))
+                .expect("apply 0186");
+            }
+
+            assert!(crate::workspace::settings::get_allow_remote_instruct(&conn_path));
+            assert!(listed(&conn_id), "connections-only must stay listed after the upgrade");
+            assert!(accepts_inbound(&conn_id, &conn_path, "up-conn-only"));
+            assert!(!crate::workspace::settings::get_allow_remote_instruct(&none_path));
+            assert!(!listed(&none_id), "a workspace with neither flag stays hidden");
+
+            // Master flips do not change it either way (as before the change).
+            crate::app_settings::update(serde_json::json!({ "allowRemoteInstruct": true }))
+                .expect("master on");
+            assert!(listed(&conn_id));
+            crate::app_settings::update(serde_json::json!({ "allowRemoteInstruct": false }))
+                .expect("master off");
+            assert!(listed(&conn_id));
+
+            // An owner who turns the switch off afterwards keeps that choice:
+            // the step ran once and is not re-applied by the listing.
+            crate::workspace::settings::update_project_setting(&conn_path, "allow_remote_instruct", "0")
+                .expect("owner turns it off");
+            assert!(!listed(&conn_id));
+        });
+    }
+
     /// The app master ("Let agents on other servers message every agent")
     /// forces every configured agent into the listing, whatever its own
     /// switch says — and turning it off drops them again.

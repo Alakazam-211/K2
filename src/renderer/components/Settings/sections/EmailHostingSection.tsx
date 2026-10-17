@@ -147,6 +147,9 @@ function recordChip(status: string): { label: string; color: string } {
       return { label: 'Manual', color: 'var(--color-status-warn)' }
     case 'optional':
       return { label: 'Optional', color: 'var(--color-text-muted)' }
+    case 'skip':
+      // 0.46.1: an external zone can't give these names a certificate yet.
+      return { label: 'Skip for now', color: 'var(--color-text-muted)' }
     default:
       return { label: 'Pending', color: 'var(--color-text-muted)' }
   }

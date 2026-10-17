@@ -94,7 +94,7 @@ export interface DnsRecordRow {
   /** Zone-file form (long TXT keeps its quoted split). */
   expectedDisplay: string
   chunks?: string[]
-  status: 'pending' | 'valid' | 'missing' | 'wrong' | 'unknown' | 'unverifiable' | 'optional'
+  status: 'pending' | 'valid' | 'missing' | 'wrong' | 'unknown' | 'unverifiable' | 'optional' | 'skip'
   /** What DNS actually serves — populated on Wrong (the diff) and,
    *  for context, on Missing when unrelated records exist. */
   live?: string[] | null

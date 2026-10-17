@@ -42,6 +42,8 @@ import { jittered } from '@/lib/backoff'
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
 import { useSettingsStore, normalizeWorkspaceSwitchFocus } from '@/stores/settings'
 import { SettingDropdown } from '../controls/SettingControls'
+import { previewCompletionSound } from '@/lib/completion-sound'
+import { COMPLETION_SOUNDS, normalizeCompletionSound } from '@/lib/completion-sound-options'
 import { useUpdateStore } from '@/stores/update'
 import { checkForUpdate } from '@/hooks/useUpdateChecker'
 import { showContextMenu } from '@/lib/context-menu'
@@ -77,6 +79,8 @@ export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.reset-all', section: 'general', group: 'General', label: 'Reset All Settings', description: 'Revert every setting to its default', keywords: ['reset', 'defaults', 'factory'] },
   { id: 'general.active-window-hours', section: 'general', group: 'Workspaces', label: 'Active Bar window', description: 'How long workspaces stay Active after activity', keywords: ['active', 'bar', 'window', 'hours', 'tenure', 'workspace', 'recent', 'sidebar'] },
   { id: 'general.completion-sound', section: 'general', group: 'Workspaces', label: 'Completion sound', description: 'Play a sound when an agent finishes unwatched', keywords: ['sound', 'chime', 'audio', 'notification', 'agent', 'done', 'finished', 'complete', 'unseen', 'orange', 'amber', 'dot'] },
+  { id: 'general.completion-sound-choice', section: 'general', group: 'Workspaces', label: 'Completion sound choice', description: 'Which sound plays when an agent finishes, with a Preview button', keywords: ['sound', 'chime', 'ping', 'ding', 'pop', 'tick', 'audio', 'preview', 'choose', 'notification'] },
+  { id: 'general.completion-sound-volume', section: 'general', group: 'Workspaces', label: 'Completion sound volume', description: 'How loud the sound is when an agent finishes', keywords: ['sound', 'volume', 'loud', 'quiet', 'level', 'ping', 'chime', 'audio'] },
   { id: 'general.workspace-switch-focus', section: 'general', group: 'Workspaces', label: 'When moving between workspaces, auto-select', description: 'Switching workspaces or project panes (⌘1–⌘9) focuses the terminal or the agent message box so you can type immediately', keywords: ['workspace', 'switch', 'focus', 'terminal', 'composer', 'message', 'agent', 'auto-select', 'input', 'pane', 'project'] },
   { id: 'general.new-agent-view', section: 'general', group: 'Workspaces', label: 'New agents open in', description: 'The view a new agent opens in: Terminal, Chat (beta), Thread, Chatter, or Split view with the two sides you choose. Agents you already set a view for keep it.', keywords: ['new', 'agent', 'default', 'view', 'open', 'terminal', 'chat', 'thread', 'chatter', 'split', 'split view', 'left', 'right', 'side', 'layout', 'workspace'] },
   { id: 'general.daemon', section: 'general', group: 'Server', label: 'K2 Server', description: 'Background service that keeps agents running when the app is closed', keywords: ['server', 'daemon', 'background', 'launchd', 'persistent', 'lid', 'sleep', 'wake', 'agent'] },
@@ -542,30 +546,86 @@ function ActiveWindowHoursRow(): React.JSX.Element {
 // dot). Watched panes never chime. Backed by
 // `settings.completionSoundEnabled` (daemon settings.json deep-merge),
 // default ON. See .k2/notes/orange-dot-done-sound.md.
+//
+// 0.46.1: the sound and its volume (`completionSound`,
+// `completionSoundVolume` 0–100, 50 = the pre-0.46.1 level) sit under the
+// switch. Global daemon settings, so every client plays the same chime at
+// the same level; per-workspace bells stay on/off. Preview plays the
+// chosen sound at the chosen volume, even with the switch off.
 function CompletionSoundRow(): React.JSX.Element {
   const enabled = useSettingsStore((s) => s.completionSoundEnabled)
   const setCompletionSoundEnabled = useSettingsStore((s) => s.setCompletionSoundEnabled)
+  const sound = useSettingsStore((s) => s.completionSound)
+  const setCompletionSound = useSettingsStore((s) => s.setCompletionSound)
+  const volume = useSettingsStore((s) => s.completionSoundVolume)
+  const setCompletionSoundVolume = useSettingsStore((s) => s.setCompletionSoundVolume)
 
   return (
-    <div
-      className="flex items-center justify-between py-2 border-b border-[var(--color-border)]"
-      data-settings-id="general.completion-sound"
-    >
-      <div className="flex-1 min-w-0 mr-3">
-        <span className="text-xs text-[var(--color-text-secondary)]">
-          Play a sound when an agent finishes unwatched
-        </span>
-        <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-          A soft chime when an agent completes while you&apos;re looking
-          elsewhere — the audible twin of the amber dot in the Active bar.
-          Agents you&apos;re watching never chime.
-        </p>
+    <div className="border-b border-[var(--color-border)]">
+      <div
+        className="flex items-center justify-between py-2"
+        data-settings-id="general.completion-sound"
+      >
+        <div className="flex-1 min-w-0 mr-3">
+          <span className="text-xs text-[var(--color-text-secondary)]">
+            Play a sound when an agent finishes unwatched
+          </span>
+          <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+            A soft chime when an agent completes while you&apos;re looking
+            elsewhere — the audible twin of the amber dot in the Active bar.
+            Agents you&apos;re watching never chime.
+          </p>
+        </div>
+        <Toggle
+          checked={enabled}
+          onChange={(next) => void setCompletionSoundEnabled(next)}
+          aria-label="Play a sound when an agent finishes unwatched"
+        />
       </div>
-      <Toggle
-        checked={enabled}
-        onChange={(next) => void setCompletionSoundEnabled(next)}
-        aria-label="Play a sound when an agent finishes unwatched"
-      />
+      <div className="pl-3 pb-2 space-y-1">
+        <div
+          className="flex items-center justify-between py-1"
+          data-settings-id="general.completion-sound-choice"
+        >
+          <span className="text-[11px] text-[var(--color-text-muted)]">Sound</span>
+          <div className="flex items-center gap-2">
+            <SettingDropdown
+              value={sound}
+              ariaLabel="Completion sound"
+              options={COMPLETION_SOUNDS.map((s) => ({ value: s.id, label: s.label }))}
+              onChange={(v) => void setCompletionSound(normalizeCompletionSound(v))}
+            />
+            <button
+              type="button"
+              onClick={() => previewCompletionSound(sound, volume)}
+              className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] transition-colors no-drag cursor-pointer"
+            >
+              Preview
+            </button>
+          </div>
+        </div>
+        <div
+          className="flex items-center justify-between py-1"
+          data-settings-id="general.completion-sound-volume"
+        >
+          <span className="text-[11px] text-[var(--color-text-muted)]">Volume</span>
+          <div className="flex items-center gap-3">
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={volume}
+              aria-label="Completion sound volume"
+              onChange={(e) => setCompletionSoundVolume(parseInt(e.target.value, 10))}
+              className="w-40 no-drag k2so-slider"
+            />
+            <span className="w-9 text-right text-[11px] tabular-nums text-[var(--color-text-secondary)]">
+              {volume}%
+            </span>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

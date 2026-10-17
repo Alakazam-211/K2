@@ -8,9 +8,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 let completionSoundEnabled = true
+let completionSound: unknown = 'chime'
+let completionSoundVolume: unknown = 50
 vi.mock('@/stores/settings', () => ({
   useSettingsStore: {
-    getState: () => ({ completionSoundEnabled }),
+    getState: () => ({ completionSoundEnabled, completionSound, completionSoundVolume }),
   },
 }))
 
@@ -18,17 +20,36 @@ vi.mock('@/stores/settings', () => ({
 // read from a global store.
 let projects: { id: string; completionSoundEnabled?: number }[] = []
 
-import { playCompletionSound, __resetCompletionSoundThrottleForTests } from './completion-sound'
+import {
+  playCompletionSound,
+  previewCompletionSound,
+  __resetCompletionSoundThrottleForTests,
+} from './completion-sound'
+import {
+  COMPLETION_SOUNDS,
+  clampCompletionSoundVolume,
+  completionSoundGain,
+  normalizeCompletionSound,
+} from './completion-sound-options'
 
-class FakeGainParam {
+class FakeParam {
+  value = 0
   setValueAtTime = vi.fn()
   linearRampToValueAtTime = vi.fn()
   exponentialRampToValueAtTime = vi.fn()
 }
 
+interface FakeOsc {
+  type: string
+  frequency: FakeParam
+  gain: FakeParam
+}
+
 class FakeAudioContext {
   static instances: FakeAudioContext[] = []
   static oscillatorsStarted = 0
+  /** Every started note: its wave, pitch params and gain envelope. */
+  static notes: FakeOsc[] = []
   state = 'running'
   currentTime = 0
   destination = {}
@@ -37,19 +58,39 @@ class FakeAudioContext {
   }
   resume = vi.fn(async () => undefined)
   createOscillator(): Record<string, unknown> {
-    return {
+    const osc = {
       type: 'sine',
-      frequency: { value: 0 },
-      connect: vi.fn(),
+      frequency: new FakeParam(),
+      connect: vi.fn((g: { gain: FakeParam }) => {
+        note.gain = g.gain
+      }),
       start: vi.fn(() => {
         FakeAudioContext.oscillatorsStarted++
+        FakeAudioContext.notes.push(note)
       }),
       stop: vi.fn(),
     }
+    const note: FakeOsc = {
+      get type() {
+        return osc.type
+      },
+      frequency: osc.frequency,
+      gain: new FakeParam(),
+    }
+    return osc
   }
   createGain(): Record<string, unknown> {
-    return { gain: new FakeGainParam(), connect: vi.fn() }
+    return { gain: new FakeParam(), connect: vi.fn() }
   }
+}
+
+/** The peak gain each started note ramps up to. */
+function peaks(): number[] {
+  return FakeAudioContext.notes.map((n) => {
+    const call = n.gain.linearRampToValueAtTime.mock.calls[0]
+    if (!call) throw new Error('note never ramped its gain up')
+    return call[0] as number
+  })
 }
 
 describe('F4 — playCompletionSound', () => {
@@ -57,9 +98,12 @@ describe('F4 — playCompletionSound', () => {
     vi.useFakeTimers()
     vi.setSystemTime(1_000_000)
     completionSoundEnabled = true
+    completionSound = 'chime'
+    completionSoundVolume = 50
     projects = []
     FakeAudioContext.instances = []
     FakeAudioContext.oscillatorsStarted = 0
+    FakeAudioContext.notes = []
     vi.stubGlobal('AudioContext', FakeAudioContext)
     __resetCompletionSoundThrottleForTests()
   })
@@ -157,5 +201,135 @@ describe('F4 — playCompletionSound', () => {
     playCompletionSound(null, projects)
 
     expect(FakeAudioContext.oscillatorsStarted).toBe(4)
+  })
+})
+
+describe('0.46.1 — completion sound volume and choice', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_000_000)
+    completionSoundEnabled = true
+    completionSound = 'chime'
+    completionSoundVolume = 50
+    projects = []
+    FakeAudioContext.instances = []
+    FakeAudioContext.oscillatorsStarted = 0
+    FakeAudioContext.notes = []
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    __resetCompletionSoundThrottleForTests()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('the defaults play the pre-0.46.1 chime at the pre-0.46.1 loudness', () => {
+    playCompletionSound(null, projects)
+
+    expect(FakeAudioContext.notes.map((n) => n.frequency.value)).toEqual([880, 1318.5])
+    expect(FakeAudioContext.notes.map((n) => n.type)).toEqual(['sine', 'sine'])
+    expect(peaks()).toEqual([0.12, 0.12])
+    for (const n of FakeAudioContext.notes) {
+      expect(n.gain.exponentialRampToValueAtTime.mock.calls[0][0]).toBe(0.0001)
+    }
+  })
+
+  it('applies the volume: 100 is 3x, 25 is a third, 0 never touches audio', () => {
+    completionSoundVolume = 100
+    playCompletionSound(null, projects)
+    expect(peaks()[0]).toBeCloseTo(0.36, 10)
+
+    FakeAudioContext.notes = []
+    vi.setSystemTime(1_010_000)
+    completionSoundVolume = 25
+    playCompletionSound(null, projects)
+    expect(peaks()[0]).toBeCloseTo(0.04, 10)
+
+    FakeAudioContext.notes = []
+    FakeAudioContext.instances = []
+    __resetCompletionSoundThrottleForTests()
+    vi.setSystemTime(1_020_000)
+    completionSoundVolume = 0
+    playCompletionSound(null, projects)
+    expect(FakeAudioContext.instances).toHaveLength(0)
+    expect(FakeAudioContext.notes).toHaveLength(0)
+  })
+
+  it('keeps the decay target under the peak at the quietest volume', () => {
+    completionSoundVolume = 1
+    playCompletionSound(null, projects)
+    for (const n of FakeAudioContext.notes) {
+      const peak = n.gain.linearRampToValueAtTime.mock.calls[0][0] as number
+      const floor = n.gain.exponentialRampToValueAtTime.mock.calls[0][0] as number
+      expect(peak).toBeGreaterThan(0)
+      expect(floor).toBeLessThan(peak)
+      expect(floor).toBeGreaterThan(0)
+    }
+  })
+
+  it.each([
+    ['soft', [523.25, 659.25, 783.99], 'sine'],
+    ['ding', [1046.5, 2888.3], 'sine'],
+    ['tick', [2000], 'triangle'],
+  ])('plays the chosen sound: %s', (id, freqs, wave) => {
+    completionSound = id
+    playCompletionSound(null, projects)
+
+    expect(FakeAudioContext.notes.map((n) => n.frequency.value)).toEqual(freqs)
+    expect(FakeAudioContext.notes.every((n) => n.type === wave)).toBe(true)
+  })
+
+  it('the pop glides its pitch down', () => {
+    completionSound = 'pop'
+    playCompletionSound(null, projects)
+
+    expect(FakeAudioContext.notes).toHaveLength(1)
+    const f = FakeAudioContext.notes[0].frequency
+    expect(f.setValueAtTime.mock.calls[0][0]).toBe(620)
+    expect(f.exponentialRampToValueAtTime.mock.calls[0][0]).toBe(180)
+  })
+
+  it('an unknown sound or a junk volume from the daemon plays the defaults', () => {
+    completionSound = 'airhorn'
+    completionSoundVolume = 'loud'
+    playCompletionSound(null, projects)
+
+    expect(FakeAudioContext.notes.map((n) => n.frequency.value)).toEqual([880, 1318.5])
+    expect(peaks()).toEqual([0.12, 0.12])
+  })
+
+  it('Preview plays the given sound and volume even with the switch off and inside the throttle', () => {
+    playCompletionSound(null, projects)
+    expect(FakeAudioContext.notes).toHaveLength(2)
+    completionSoundEnabled = false
+
+    FakeAudioContext.notes = []
+    previewCompletionSound('tick', 100)
+    expect(FakeAudioContext.notes.map((n) => n.frequency.value)).toEqual([2000])
+    expect(peaks()[0]).toBeCloseTo(0.24, 10)
+
+    // Preview never consumes the chime throttle.
+    completionSoundEnabled = true
+    FakeAudioContext.notes = []
+    __resetCompletionSoundThrottleForTests()
+    previewCompletionSound('chime', 50)
+    playCompletionSound(null, projects)
+    expect(FakeAudioContext.notes).toHaveLength(4)
+  })
+
+  it('normalizes and clamps the settings values', () => {
+    expect(COMPLETION_SOUNDS.map((s) => s.id)).toEqual(['chime', 'soft', 'pop', 'ding', 'tick'])
+    expect(normalizeCompletionSound('ding')).toBe('ding')
+    expect(normalizeCompletionSound('nope')).toBe('chime')
+    expect(normalizeCompletionSound(undefined)).toBe('chime')
+    expect(clampCompletionSoundVolume(150)).toBe(100)
+    expect(clampCompletionSoundVolume(-3)).toBe(0)
+    expect(clampCompletionSoundVolume(33.6)).toBe(34)
+    expect(clampCompletionSoundVolume(undefined)).toBe(50)
+    expect(clampCompletionSoundVolume(Number.NaN)).toBe(50)
+    expect(completionSoundGain(0)).toBe(0)
+    expect(completionSoundGain(50)).toBe(1)
+    expect(completionSoundGain(100)).toBeCloseTo(3, 10)
   })
 })

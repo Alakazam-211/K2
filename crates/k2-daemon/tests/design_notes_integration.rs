@@ -247,6 +247,17 @@ async fn design_notes_gates_single_item_and_retry() {
         assert_eq!(doc.design.as_ref().map(|d| d.url.as_str()), Some("http://localhost:5173/pricing"));
         let text = doc.body.as_deref().expect("body");
         assert!(!text.contains("onclick") && !text.contains("token=z"), "{text}");
+        // The post is the notes plus a pointer; the details are a file in
+        // the room's own workspace, under .k2/design/.
+        let rel = text
+            .rsplit_once("Details: `")
+            .and_then(|(_, r)| r.strip_suffix('`'))
+            .unwrap_or_else(|| panic!("no Details pointer: {text}"));
+        assert!(rel.starts_with(".k2/design/") && rel.ends_with(".md"), "{rel}");
+        assert!(!text.contains("button.cta"), "no selector in the Thread: {text}");
+        let details = std::fs::read_to_string(room.path.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        assert!(details.contains("- selector: `button.cta`"), "{details}");
+        assert!(!details.contains("onclick"), "{details}");
         let hist = k2_core::workspace_compose_history::list_compose_send_history(&room.project_id).expect("history");
         assert!(hist.is_empty(), "no compose history: {hist:?}");
 

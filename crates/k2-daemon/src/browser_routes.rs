@@ -235,7 +235,25 @@ pub fn handle_notes(params: &HashMap<String, String>, body: &[u8], caller: &Note
     if let Err(e) = remote_instruct_gate(caller, &path) {
         return e;
     }
-    let text = k2_core::browser_notes::format_notes(&req);
+    // The details go to a file in the workspace; the Thread gets the
+    // person's notes and a pointer (Rosson 2026-10-16: no DOM blob in the
+    // Thread or the PTY). A file that cannot be written fails the Send:
+    // never a post pointing at nothing.
+    let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
+    let file_name = k2_core::browser_notes::details_file_name(&stamp, &req);
+    let details = k2_core::browser_notes::format_details(&req);
+    let rel = match k2_core::browser_notes::write_details(std::path::Path::new(&path), &file_name, &details) {
+        Ok(rel) => rel,
+        Err(k2_core::browser_notes::DetailsError::Escape(m)) => return CliResponse::bad_request(m),
+        Err(k2_core::browser_notes::DetailsError::Io(m)) => {
+            return CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("could not write the design details: {m}") }).to_string(),
+            }
+        }
+    };
+    let text = k2_core::browser_notes::format_message(&req, &rel);
     let origin = k2_core::overlay::DesignOrigin {
         item_id: req.item_id.clone(),
         url: req.page.url.clone(),
@@ -456,7 +474,8 @@ mod tests {
         crate::vault::ensure_test_vault();
         let handle = format!("dmnotes{tag}{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
         let id = uuid::Uuid::new_v4().to_string();
-        let path = format!("/tmp/dm-notes-{handle}");
+        let path = std::env::temp_dir().join(format!("dm-notes-{handle}")).to_string_lossy().into_owned();
+        std::fs::create_dir_all(&path).expect("workspace folder");
         let conv = uuid::Uuid::new_v4().to_string();
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -546,6 +565,9 @@ mod tests {
         let deliveries = recorded_deliveries(&handle);
         assert_eq!(deliveries.len(), 1, "exactly one wake + inject: {deliveries:?}");
         assert!(deliveries[0].starts_with(&format!("[thread:{handle}] Design notes (2) on http://localhost:5173/pricing")), "{deliveries:?}");
+        // The inject is the notes and a pointer, never the page blob.
+        assert!(deliveries[0].contains("1. make button 0 the primary colour\n2. make button 1 the primary colour\nDetails: `.k2/design/"), "{deliveries:?}");
+        assert!(!deliveries[0].contains("selector") && !deliveries[0].contains("<button"), "{deliveries:?}");
 
         let hist = k2_core::workspace_compose_history::list_compose_send_history(&project_id).expect("history");
         assert!(hist.is_empty(), "design notes never enter compose history: {hist:?}");
@@ -560,18 +582,61 @@ mod tests {
         assert!(!outcome.contains("primary colour"), "the audit line never holds the text: {line}");
     }
 
+    /// The workspace folder a seeded handle points at.
+    fn room_path(handle: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(crate::workspace_msg::resolve_workspace(handle).expect("seeded workspace"))
+    }
+
+    /// The one `.k2/design/*.md` a Send wrote, from the post's pointer.
+    fn details_from_pointer(handle: &str, body: &str) -> (String, String) {
+        let rel = body
+            .rsplit_once("Details: `")
+            .and_then(|(_, rest)| rest.strip_suffix('`'))
+            .unwrap_or_else(|| panic!("no Details pointer at the end: {body}"))
+            .to_string();
+        assert!(rel.starts_with(".k2/design/") && rel.ends_with(".md") && !rel.contains(".."), "{rel}");
+        let text = std::fs::read_to_string(room_path(handle).join(&rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
+        (rel, text)
+    }
+
     #[test]
-    fn notes_are_clamped_redacted_and_the_url_stripped_in_the_stored_post() {
-        let (handle, _id, conv) = seed_room("clamp");
+    fn the_post_is_the_notes_and_a_pointer_and_the_details_land_in_the_workspace() {
+        let (handle, _id, conv) = seed_room("file");
         let resp = handle_notes(&no_params(), &note_body(&handle, 1), &NotesCaller::Owner);
         assert_eq!(resp.status, "200 OK", "{}", resp.body);
         let body = thread(&conv)[0].doc.body.clone().expect("body");
-        assert!(!body.contains("sekrit") && !body.contains("access_token") && !body.contains("#plans"), "{body}");
-        assert!(!body.contains("onclick") && !body.contains("steal"), "{body}");
-        assert!(!body.contains("sk-live-123") && body.contains("data-api-key=\"[redacted]\""), "{body}");
-        assert!(!body.contains("evil()"), "{body}");
-        assert!(!body.contains("background-image"), "styles are allowlisted: {body}");
-        assert!(body.contains("- styles: color: rgb(0, 0, 0)"), "{body}");
+        assert!(body.starts_with("Design notes (1) on http://localhost:5173/pricing\n1. make button 0 the primary colour\nDetails: `.k2/design/"), "{body}");
+        assert!(!body.contains("selector") && !body.contains("<button") && !body.contains("rgb("), "no blob in the Thread: {body}");
+        let (rel, text) = details_from_pointer(&handle, &body);
+        assert!(rel.contains("-make-button-0-the-primary-colour"), "{rel}");
+        let files: Vec<_> = std::fs::read_dir(room_path(&handle).join(".k2/design")).expect("design dir").collect();
+        assert_eq!(files.len(), 1, "one file per send");
+        assert!(text.contains("- selector: `main > button.cta`"), "{text}");
+        assert!(text.contains("- element: tag `button`, role `button`, name \"Buy\""), "{text}");
+        assert!(text.contains("- box: 160×40 at (10, 20)"), "{text}");
+        assert!(text.contains("- styles: color: rgb(0, 0, 0)"), "the note says colour: {text}");
+        // Clamped and stripped: no query/hash, no HTML, no secrets, no
+        // un-allowlisted style.
+        assert!(!text.contains("sekrit") && !text.contains("access_token") && !text.contains("#plans"), "{text}");
+        assert!(!text.contains("onclick") && !text.contains("sk-live-123") && !text.contains("evil()"), "{text}");
+        assert!(!text.contains("<button class") && !text.contains("background-image"), "no HTML: {text}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_design_folder_linked_outside_the_workspace_is_refused_and_nothing_posts() {
+        let (handle, _id, conv) = seed_room("escape");
+        let outside = std::env::temp_dir().join(format!("dm-notes-outside-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&outside).expect("outside");
+        let ws = room_path(&handle);
+        std::fs::create_dir_all(ws.join(".k2")).expect(".k2");
+        std::os::unix::fs::symlink(&outside, ws.join(".k2/design")).expect("link");
+        let resp = handle_notes(&no_params(), &note_body(&handle, 1), &NotesCaller::Owner);
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(resp.body.contains("outside the workspace"), "{}", resp.body);
+        assert_eq!(std::fs::read_dir(&outside).expect("outside").count(), 0, "nothing written outside");
+        assert!(thread(&conv).is_empty(), "no post that points at nothing");
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[test]
@@ -664,7 +729,7 @@ mod tests {
         // The owner's notes: another login may not re-send them as theirs.
         let _home_lock = crate::test_support::lock_home();
         let _home = crate::test_support::TempHome::new();
-        k2_core::workspace::settings::update_project_setting(&format!("/tmp/dm-notes-{handle}"), "allow_remote_instruct", "1")
+        k2_core::workspace::settings::update_project_setting(&room_path(&handle).to_string_lossy(), "allow_remote_instruct", "1")
             .expect("opt in");
         let resp = handle_notes(&no_params(), &note_body(&handle, 1), &NotesCaller::Owner);
         let owner_item = json(&resp)["threadItemId"].as_str().expect("id").to_string();
@@ -719,7 +784,7 @@ mod tests {
         assert!(thread(&conv).is_empty());
         assert!(recorded_deliveries(&handle).is_empty(), "a refused call never injects");
 
-        k2_core::workspace::settings::update_project_setting(&format!("/tmp/dm-notes-{handle}"), "allow_remote_instruct", "1")
+        k2_core::workspace::settings::update_project_setting(&room_path(&handle).to_string_lossy(), "allow_remote_instruct", "1")
             .expect("opt in");
         let resp = handle_notes(&no_params(), &note_body(&handle, 1), &alice);
         assert_eq!(resp.status, "200 OK", "{}", resp.body);

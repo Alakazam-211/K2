@@ -30,6 +30,8 @@ export interface NoteElement {
   rect?: NoteRect
   nearbyText?: string[]
   source?: string
+  heading?: string
+  landmark?: string
 }
 
 export interface PickViewport {

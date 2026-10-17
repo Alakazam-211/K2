@@ -83,6 +83,32 @@ describe('design picker guest script', () => {
     expect(document.querySelector(sel(b))).toBe(b)
   })
 
+  it('captures what an agent needs: a test-id selector, the nearest heading and landmark', () => {
+    const nav = document.createElement('nav')
+    nav.setAttribute('aria-label', 'Main')
+    const h2 = document.createElement('h2')
+    h2.textContent = 'Pro plan'
+    const card = document.createElement('div')
+    card.setAttribute('data-testid', 'pro-card')
+    const buy = document.createElement('button')
+    buy.setAttribute('data-testid', 'buy-pro')
+    buy.textContent = 'Buy'
+    const other = document.createElement('span')
+    card.append(buy, other)
+    nav.append(h2, card)
+    document.body.append(nav)
+    const sel = picker().__test.selectorFor
+    expect(sel(buy)).toBe('[data-testid="buy-pro"]')
+    // A path anchors on the nearest ancestor with a unique test id.
+    expect(sel(other)).toBe('[data-testid="pro-card"] > span')
+    picker().arm(true)
+    buy.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    const [pick] = drain().events as Array<{ element: Record<string, unknown> }>
+    expect(pick.element.selector).toBe('[data-testid="buy-pro"]')
+    expect(pick.element.heading).toBe('Pro plan')
+    expect(pick.element.landmark).toBe('nav "Main"')
+  })
+
   it('no S hotkey: S reaches the page and nothing is queued', () => {
     const e = key(document.body, 's')
     expect(e.defaultPrevented).toBe(false)

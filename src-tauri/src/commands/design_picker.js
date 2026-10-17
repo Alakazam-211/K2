@@ -132,14 +132,38 @@
     return part;
   }
 
+  var TEST_ATTRS = ['data-testid', 'data-test-id', 'data-test', 'data-cy'];
+
+  // A unique test-id attribute selector for el, or null.
+  function testIdSelector(el) {
+    for (var i = 0; i < TEST_ATTRS.length; i++) {
+      var v = el.getAttribute && el.getAttribute(TEST_ATTRS[i]);
+      if (!v || v.length > 120) continue;
+      var sel = '[' + TEST_ATTRS[i] + '="' + String(v).replace(/["\\]/g, '\\$&') + '"]';
+      try {
+        if (d.querySelectorAll(sel).length === 1) return sel;
+      } catch (_) { /* odd value */ }
+    }
+    return null;
+  }
+
+  // Robust first: a unique id, then a unique test id, then a short path
+  // anchored on the nearest ancestor that has one.
   function selectorFor(el) {
     if (uniqueId(el)) return '#' + cssEscape(el.id);
+    var own = testIdSelector(el);
+    if (own) return own;
     var parts = [];
     var cur = el;
     var depth = 0;
     while (cur && cur.nodeType === 1 && depth < 6) {
       if (cur !== el && uniqueId(cur)) {
         parts.unshift('#' + cssEscape(cur.id));
+        break;
+      }
+      var anchor = cur !== el ? testIdSelector(cur) : null;
+      if (anchor) {
+        parts.unshift(anchor);
         break;
       }
       var tag = cur.tagName.toLowerCase();
@@ -249,6 +273,57 @@
     return out;
   }
 
+  var HEADING_SEL = 'h1, h2, h3, h4, h5, h6, [role="heading"]';
+
+  function isHeading(n) {
+    return !!(n && n.nodeType === 1 && n.matches && n.matches(HEADING_SEL));
+  }
+
+  // The nearest heading: el itself, else the closest one before it at
+  // each level up (a previous sibling, or the last heading inside one).
+  function nearestHeading(el) {
+    if (isHeading(el)) return null;
+    var cur = el;
+    for (var depth = 0; cur && cur.nodeType === 1 && depth < 8; depth++) {
+      var sib = cur.previousElementSibling;
+      for (var k = 0; sib && k < 12; k++) {
+        if (isHeading(sib)) return squash(sib.textContent, 120) || null;
+        var inner = sib.querySelectorAll ? sib.querySelectorAll(HEADING_SEL) : [];
+        if (inner.length) return squash(inner[inner.length - 1].textContent, 120) || null;
+        sib = sib.previousElementSibling;
+      }
+      cur = cur.parentElement;
+      if (cur && (cur.tagName === 'BODY' || cur.tagName === 'HTML')) break;
+    }
+    return null;
+  }
+
+  var LANDMARK_SEL = 'nav, main, header, footer, aside, form, dialog, section[aria-label], ' +
+    'section[aria-labelledby], [role="navigation"], [role="main"], [role="banner"], ' +
+    '[role="contentinfo"], [role="complementary"], [role="region"], [role="form"], [role="dialog"], [role="search"]';
+
+  // The nearest landmark ancestor, e.g. `nav "Main"`, `main`, `form#signup`.
+  function nearestLandmark(el) {
+    var lm = null;
+    try {
+      lm = el.parentElement && el.parentElement.closest ? el.parentElement.closest(LANDMARK_SEL) : null;
+    } catch (_) { /* old engine */ }
+    if (!lm) return null;
+    var out = lm.getAttribute('role') || lm.tagName.toLowerCase();
+    if (lm.id) out += '#' + String(lm.id).slice(0, 64);
+    var label = lm.getAttribute('aria-label');
+    if (!label) {
+      var by = lm.getAttribute('aria-labelledby');
+      var n = by ? d.getElementById(by.split(/\s+/)[0]) : null;
+      if (n) label = n.textContent;
+    }
+    label = squash(label, 80);
+    if (label) out += ' "' + label.replace(/"/g, "'") + '"';
+    return out.slice(0, 200);
+  }
+
+  // Dev builds: the nearest React component's name and its source file
+  // (`_debugSource`, React 18 dev); either may be missing.
   function reactSource(el) {
     try {
       var keys = Object.keys(el);
@@ -261,16 +336,26 @@
       }
       if (!key) return null;
       var fiber = el[key];
-      for (var n = 0; fiber && n < 15; n++) {
+      var component = null;
+      var where = null;
+      for (var n = 0; fiber && n < 25 && !(component && where); n++) {
+        var t = fiber.type;
+        if (!component && typeof t === 'function') {
+          var nm = t.displayName || t.name;
+          if (nm && /^[A-Z]/.test(nm)) component = String(nm).slice(0, 80);
+        }
         var src = fiber._debugSource;
-        if (src && src.fileName) {
+        if (!where && src && src.fileName) {
           var file = String(src.fileName);
           var at = file.lastIndexOf('/src/');
           if (at >= 0) file = file.slice(at + 1);
-          return (file + ':' + (src.lineNumber || 0)).slice(0, 256);
+          where = file + ':' + (src.lineNumber || 0);
         }
         fiber = fiber.return;
       }
+      if (component && where) return (component + ' (' + where + ')').slice(0, 256);
+      if (where) return where.slice(0, 256);
+      if (component) return component;
     } catch (_) { /* dev-only nicety */ }
     return null;
   }
@@ -314,6 +399,10 @@
     if (name) element.name = name;
     var source = reactSource(el);
     if (source) element.source = source;
+    var heading = nearestHeading(el);
+    if (heading) element.heading = heading;
+    var landmark = nearestLandmark(el);
+    if (landmark) element.landmark = landmark;
     state.counter++;
     return {
       type: 'pick',

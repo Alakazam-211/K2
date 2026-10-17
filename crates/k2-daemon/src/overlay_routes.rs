@@ -686,7 +686,7 @@ fn skin_from_stamp(pass: &SkinPass) -> String {
 }
 
 /// Human Message-the-agent on Thread: token identity, never body `from`.
-/// Owner token (`"owner"`) → `owner_display_name`. Connect-user → username.
+/// Owner token (`"owner"`) → the stamp rule (linked username, else `owner`). Connect-user → username.
 fn compose_from_for_session(session_author: &str) -> String {
     let s = session_author.trim();
     if s.is_empty() || s.eq_ignore_ascii_case("owner") {

@@ -1159,7 +1159,14 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
         let session = session_author.trim();
         let author = author_given.unwrap_or(if session.is_empty() { "owner" } else { session });
         let is_human = author_given.is_none() || author == "owner";
-        (full_id, author.to_string(), is_human)
+        // 0.46.0 stamp rule: a human comment is stored as the sender's
+        // username (the owner token → the linked username, else `owner`).
+        let author = if is_human {
+            k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::from_session_author(author))
+        } else {
+            author.to_string()
+        };
+        (full_id, author, is_human)
     };
     let author = author.as_str();
 
@@ -1260,13 +1267,9 @@ fn handle_comment_gated(body: &[u8], session_author: &str, skin: Option<&SkinPas
     }
     crate::push_routes::notify_feedback_commented(&item.id, &item.assignees);
 
-    // Shared F3 delivery. Owner token → server display name. Connect
-    // user → their username. Matches project-group/msg framing.
-    let from = if author == "owner" {
-        crate::workspace_msg::resolve_owner_from()
-    } else {
-        author.to_string()
-    };
+    // Shared F3 delivery: the stored author IS the stamp (0.46.0 rule,
+    // resolved above). Matches project-group/msg framing.
+    let from = author.to_string();
     let (delivered, delivery_reason, delivered_session) =
         deliver_to_asker(&item, &from, &comment.body);
 
@@ -1331,12 +1334,13 @@ fn handle_answer_gated(body: &[u8], session_author: &str, skin: Option<&SkinPass
         };
         let author = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty());
         let session = session_author.trim();
-        let stored = author
-            .unwrap_or(if session.is_empty() { "owner" } else { session })
-            .to_string();
-        let from = author
-            .map(String::from)
-            .unwrap_or_else(crate::workspace_msg::resolve_owner_from);
+        // 0.46.0 stamp rule: without a body author the answer is stored and
+        // delivered as the sender's username (owner token → linked username).
+        let stored = match author {
+            Some(a) => a.to_string(),
+            None => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::from_session_author(session)),
+        };
+        let from = stored.clone();
         (full_id, stored, from)
     };
     let (item, comment) = match feedback::set_answer(&full_id, &author_owned, &b.answer) {

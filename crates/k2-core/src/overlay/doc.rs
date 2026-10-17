@@ -175,8 +175,9 @@ impl PostAuthor {
         Self { kind: AUTHOR_OWNER.to_string(), login: "owner".to_string(), name: None }
     }
 
-    /// The owner, carrying `display_name` (the resolved owner display
-    /// name). The bare default `owner` (no name set) carries none.
+    /// The owner, carrying `display_name` as its stamp (0.46.0: the shared
+    /// stamp rule, `person_name::sender_identity` — the linked account's
+    /// username). The bare default `owner` (nothing linked) carries none.
     pub fn owner_named(display_name: &str) -> Self {
         let n = display_name.trim();
         let name = (!n.is_empty() && !n.eq_ignore_ascii_case("owner")).then(|| n.to_string());

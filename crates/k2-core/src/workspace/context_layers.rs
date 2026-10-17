@@ -547,10 +547,13 @@ fn title_case_slug(slug: &str) -> String {
         .join(" ")
 }
 
-/// The owner as an author: the linked account's username (0.46.0:
-/// identity = username), else `user`.
+/// The owner as an author: the shared stamp rule (the linked account's
+/// username, 0.46.0), else `user` when nothing is linked.
 fn owner_author_label() -> String {
-    crate::person_name::owner_login_now().unwrap_or_else(|| "user".to_string())
+    match crate::person_name::sender_identity_now(crate::person_name::Sender::OwnerToken) {
+        s if s == crate::notify_prefs::OWNER => "user".to_string(),
+        s => s,
+    }
 }
 
 #[derive(Debug, Deserialize)]

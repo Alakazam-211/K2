@@ -627,12 +627,12 @@ fn send(who: &Who, body: &[u8]) -> CliResponse {
 pub const FROM_NAME_MAX: usize = 64;
 
 /// Who is sending, for the `[from …]` envelope. Credential-derived: the
-/// owner token → the owner's linked account's username (0.46.0: identity
-/// = username; the old `ownerDisplayName` is not read), a Connect login →
-/// its username. Falls back to `the owner`.
+/// owner token → the shared stamp rule (the linked account's username,
+/// else `owner`; 0.46.0, the old `ownerDisplayName` is not read), a
+/// Connect login → its username. Falls back to `the owner`.
 fn sender_name(who: &Who) -> String {
     let raw = match who {
-        Who::Owner => k2_core::person_name::owner_login_now().unwrap_or_default(),
+        Who::Owner => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken),
         Who::Login { username, .. } => username.clone(),
         _ => String::new(),
     };
@@ -644,7 +644,7 @@ fn sender_name(who: &Who) -> String {
 fn post_author(who: &Who) -> k2_core::overlay::PostAuthor {
     match who {
         Who::Login { username, .. } => k2_core::overlay::PostAuthor::user(username),
-        _ => k2_core::overlay::PostAuthor::owner_named(&k2_core::person_name::owner_login_now().unwrap_or_default()),
+        _ => k2_core::overlay::PostAuthor::owner_named(&k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken)),
     }
 }
 

@@ -86,6 +86,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
     title: 'Agents & groups',
     items: [
       { noun: 'agent', blurb: 'Hire / configure / retire; AGENTS.md context.', example: 'k2 agent hire ~/ai/sales --name sales' },
+      {
+        noun: 'clone',
+        blurb: 'Clone an agent to another server or folder; agents propose, people approve.',
+        example: 'k2 clone preview sales',
+      },
       { noun: 'preset', blurb: 'Which program a workspace launches (Claude, Grok, …).', example: 'k2 preset list' },
       {
         noun: 'sidecar',
@@ -123,6 +128,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         noun: 'changes',
         blurb: "This workspace's changes, like the Changes tab: diff, stage, discard to Trash, commit.",
         example: 'k2 changes diff',
+      },
+      {
+        noun: 'browser',
+        blurb: "Send a Design note about a page to a workspace's Thread and agent.",
+        example: 'k2 browser note --url http://localhost:3000 "make the header smaller"',
       },
       { noun: 'commit', blurb: 'AI-assisted commit (`--merge` to merge too).' },
     ],
@@ -188,6 +198,12 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'settings', blurb: 'Read/update daemon and workspace settings.', example: 'k2 settings' },
       { noun: 'vault', blurb: 'Secrets: fetch by name, never paste.', example: 'k2 vault list' },
       { noun: 'update', blurb: 'Update the K2 app or this CLI.', example: 'k2 update --app' },
+      {
+        noun: 'hostchat',
+        blurb: 'Sew, the chat and voice server, on this Linux box.',
+        example: 'k2 hostchat status',
+        note: 'linux-sidecar',
+      },
       { noun: 'root-helper', blurb: "K2's one root door on Linux: status and update.", example: 'k2 root-helper status' },
       { noun: 'onboarding', blurb: 'First launch: adopt or create workspaces.' },
     ],

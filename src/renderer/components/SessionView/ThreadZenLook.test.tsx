@@ -708,34 +708,59 @@ describe('frosted glass behind the message box', () => {
     }
   })
 
-  it('one blur layer, -webkit- and standard, feathered in at the top', () => {
-    expect(FOOTER_BLUR_LAYERS).toEqual([[14, 0, 6]])
-    const rule = ruleFor(THREAD_FOOTER_FADE_CSS, '.thread-footer-blur-1 {')
-    expect(rule).toContain('-webkit-backdrop-filter: blur(14px);')
-    expect(rule).toContain(' backdrop-filter: blur(14px);')
-    const mask = 'linear-gradient(to bottom, transparent 0px, #000 6px)'
-    expect(rule).toContain(`-webkit-mask-image: ${mask};`)
-    expect(rule).toContain(` mask-image: ${mask};`)
-    expect(THREAD_FOOTER_FADE_CSS).not.toContain('.thread-footer-blur-2')
+  it('a progressive blur: four layers light to heavy, each masked from its start down, overlapping', () => {
+    const radii = FOOTER_BLUR_LAYERS.map(([px]) => px)
+    expect(radii).toEqual([1, 4, 10, 20])
+    FOOTER_BLUR_LAYERS.forEach(([px, from, to], i) => {
+      const rule = ruleFor(THREAD_FOOTER_FADE_CSS, `.thread-footer-blur-${i + 1} {`)
+      expect(rule).toContain(`-webkit-backdrop-filter: blur(${px}px);`)
+      expect(rule).toContain(` backdrop-filter: blur(${px}px);`)
+      const mask = `linear-gradient(to bottom, transparent ${from}%, #000 ${to}%)`
+      expect(rule).toContain(`-webkit-mask-image: ${mask};`)
+      expect(rule).toContain(` mask-image: ${mask};`)
+      if (i > 0) {
+        const [prevPx, prevFrom, prevTo] = FOOTER_BLUR_LAYERS[i - 1]
+        // Heavier, starting lower, and before the one above is fully on (no bands).
+        expect(px).toBeGreaterThan(prevPx)
+        expect(from).toBeGreaterThan(prevFrom)
+        expect(from).toBeLessThan(prevTo)
+      }
+    })
+    // Top ~20%: only the light layers (4px or less) have begun. Bottom ~40%:
+    // the two heavy layers are on from 60% and the heaviest is full by 80%.
+    expect(FOOTER_BLUR_LAYERS.filter(([, from]) => from < 20).every(([px]) => px <= 4)).toBe(true)
+    expect(FOOTER_BLUR_LAYERS[2][2]).toBeLessThanOrEqual(60)
+    expect(FOOTER_BLUR_LAYERS[3][2]).toBeLessThanOrEqual(80)
+    // Clicks pass through every layer; no will-change; nothing animates a blur.
+    expect(THREAD_FOOTER_FADE_CSS).toContain('.thread-footer-fade > span { position: absolute; inset: 0; pointer-events: none; }')
+    expect(THREAD_FOOTER_FADE_CSS).not.toMatch(/will-change|transition:[^;]*filter/)
     render(<ThreadFooterFade top={12} />)
     const strip = document.querySelector('[data-thread-footer-fade]') as HTMLElement
-    expect(Array.from(strip.children).map((c) => c.className)).toEqual(['thread-footer-blur-1', 'thread-footer-tint'])
+    expect(Array.from(strip.children).map((c) => c.className)).toEqual([
+      'thread-footer-blur-1',
+      'thread-footer-blur-2',
+      'thread-footer-blur-3',
+      'thread-footer-blur-4',
+      'thread-footer-tint',
+    ])
     expect(strip.style.top).toBe('12px')
   })
 
-  it('the tint eases in from clear, in px from the top (no % band, no hard edge)', () => {
-    for (const stops of [FOOTER_TINT_STOPS, FOOTER_TINT_STOPS_OPAQUE]) {
-      expect(stops[0]).toEqual([0, 0])
-      for (let i = 1; i < stops.length; i++) {
-        expect(stops[i][0] - stops[i - 1][0]).toBeLessThanOrEqual(2)
-        expect(stops[i][1]).toBeGreaterThan(stops[i - 1][1])
-        expect(stops[i][1] - stops[i - 1][1]).toBeLessThanOrEqual(24)
-      }
+  it('the tint ramps with the blur: nearly clear at the top, stronger toward the bottom', () => {
+    expect(FOOTER_TINT_STOPS[0]).toEqual([0, 0])
+    expect(FOOTER_TINT_STOPS.at(-1)).toEqual([100, 46])
+    for (let i = 1; i < FOOTER_TINT_STOPS.length; i++) {
+      expect(FOOTER_TINT_STOPS[i][0]).toBeGreaterThan(FOOTER_TINT_STOPS[i - 1][0])
+      expect(FOOTER_TINT_STOPS[i][1]).toBeGreaterThan(FOOTER_TINT_STOPS[i - 1][1])
     }
-    // Frosted: a light wash; reduced transparency: nearly opaque.
-    expect(FOOTER_TINT_STOPS.at(-1)?.[1]).toBe(45)
-    expect(FOOTER_TINT_STOPS_OPAQUE.at(-1)?.[1]).toBe(95)
-    expect(THREAD_FOOTER_FADE_CSS).not.toMatch(/var\(--zen-canvas\) \d+%, transparent\) \d+%/)
+    // The top 20% stays nearly clear.
+    expect(FOOTER_TINT_STOPS.find(([at]) => at === 20)?.[1]).toBeLessThanOrEqual(8)
+    expect(ruleFor(THREAD_FOOTER_FADE_CSS, '.thread-footer-tint {')).toContain(
+      'linear-gradient(to bottom, color-mix(in srgb, var(--zen-canvas) 0%, transparent) 0%, color-mix(in srgb, var(--zen-canvas) 6%, transparent) 20%,',
+    )
+    // Reduced transparency keeps its own px ramp to nearly opaque.
+    expect(FOOTER_TINT_STOPS_OPAQUE[0]).toEqual([0, 0])
+    expect(FOOTER_TINT_STOPS_OPAQUE.at(-1)).toEqual([6, 95])
   })
 
   it('the field and the tab on the bar are see-through (stronger in light), opaque with reduced transparency', () => {

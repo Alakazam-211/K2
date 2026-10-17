@@ -2,8 +2,9 @@
 // The Design tab's pane (prd-browser-design-mode-v1 D-A6–D-A12), fail loud:
 //  - the page is a design view (`browser_create { design: true }`); a plain
 //    Browser pane never sends the flag;
-//  - its own Chat | page split (a design slot), the "Chat is open beside"
-//    rule, and the split width saved per window per room;
+//  - its own Thread | page split (its own Thread instance, never the
+//    pinned Chat's retained pane), and the split width saved per window
+//    per room;
 //  - Select on when the tab opens; the chrome-bar palette toggles it
 //    (accent while on); pick → the note pop-up (an overlay claim, which
 //    freezes the page) → tray → badges → one Send to `browser/notes`;
@@ -13,7 +14,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 
-const h = vi.hoisted(() => ({ retainedId: { value: null as string | null } }))
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({
@@ -36,29 +36,13 @@ vi.mock('@/lib/daemon-cli', async () => {
     }),
   }
 })
-// The retained-Chat gate needs the daemon capability + the Active set; the
-// slot itself is the real store wiring's job (PinnedChatRetainer tests).
-vi.mock('@/components/AgentPane/PinnedChatRetainer', async () => {
-  const { useLayoutEffect, useRef } = await import('react')
-  const { useRetainedChatStore } = await import('@/stores/retained-chat')
-  return {
-    useRetainedChatProjectId: () => h.retainedId.value,
-    PinnedChatSlot: (props: { projectId: string; kind?: 'chat' | 'design'; visible?: boolean }) => {
-      const ref = useRef<HTMLDivElement | null>(null)
-      useLayoutEffect(() => {
-        const el = ref.current
-        if (!el) return
-        useRetainedChatStore.getState().registerSlot(props.projectId, el, props.kind)
-        return () => useRetainedChatStore.getState().unregisterSlot(props.projectId, el)
-      }, [props.projectId, props.kind])
-      useLayoutEffect(() => {
-        const el = ref.current
-        if (el) useRetainedChatStore.getState().setSlotVisible(props.projectId, props.visible ?? true, el)
-      }, [props.projectId, props.visible])
-      return <div ref={ref} data-slot-kind={props.kind} data-slot-visible={String(props.visible)} />
-    },
-  }
-})
+// The Thread column is its own component (DesignThreadColumn.test.tsx);
+// here it is a stub that says what it was bound to.
+vi.mock('./DesignThreadColumn', () => ({
+  DesignThreadColumn: (props: { projectPath: string; agentName: string; visible: boolean }) => (
+    <div data-testid="design-thread-column" data-path={props.projectPath} data-agent={props.agentName} data-visible={String(props.visible)} />
+  ),
+}))
 
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliPost } from '@/lib/daemon-cli'
@@ -151,7 +135,6 @@ beforeEach(() => {
   resetBrowserOverlaysForTest()
   resetRetainedChatStore()
   useDesignNotesStore.setState({ trays: {} })
-  h.retainedId.value = null
   localStorage.clear()
 })
 
@@ -179,8 +162,12 @@ describe('the page is a design view', () => {
     expect(plain[0][1]).not.toHaveProperty('design')
   })
 
-  it('has no status row above the page and no Chat column when the Chat is not retained', async () => {
-    renderDesign(fakeIpc([]))
+  it('has no status row above the page and no Thread column without a pinned Chat', async () => {
+    const { tab, itemId, pgId } = seedTabs()
+    useTabsStore.setState({ tabs: useTabsStore.getState().tabs.filter((t) => !t.isSystemAgent) })
+    renderInPrimaryRoom(
+      <DesignPane itemId={itemId} tabId={tab.id} paneGroupId={pgId} data={{ url: 'http://localhost:5173/pricing' }} ipc={fakeIpc([])} />,
+    )
     await flush()
     expect(screen.queryByTestId('design-toolbar')).toBeNull()
     expect(screen.queryByText(/Click an element to add a note/)).toBeNull()
@@ -190,36 +177,46 @@ describe('the page is a design view', () => {
   })
 })
 
-describe('Chat | page split (DD5, DD6, D-A7)', () => {
-  it('draws the retained Chat in a design slot beside the page', async () => {
-    h.retainedId.value = 'p-docs'
+describe('Thread | page split (DD5, DD6)', () => {
+  it('the Design column renders a Thread view of the workspace agent', async () => {
     renderDesign(fakeIpc([]))
     await flush()
     const col = document.querySelector('[data-design-chat]') as HTMLElement | null
-    if (!col) throw new Error('no Chat column')
-    expect(col.style.display).toBe('block')
-    expect(col.querySelector('[data-slot-kind="design"]')?.getAttribute('data-slot-visible')).toBe('true')
-    // The design slot holds the instance (no Chat tab slot is visible).
-    expect(useRetainedChatStore.getState().slots.get('p-docs')?.el).toBe(col.firstElementChild)
+    if (!col) throw new Error('no Thread column')
+    const thread = screen.getByTestId('design-thread-column')
+    expect(col.contains(thread)).toBe(true)
+    expect(thread.getAttribute('data-path')).toBe('/w/docs')
+    expect(thread.getAttribute('data-agent')).toBe('docs')
+    expect(thread.getAttribute('data-visible')).toBe('true')
+    // Never a slot for the pinned Chat's retained pane.
+    expect(col.querySelector('[data-pinned-chat-slot-kind]')).toBeNull()
   })
 
-  it('the Chat tab visible beside it wins: the page goes full width with a note', async () => {
-    h.retainedId.value = 'p-docs'
-    renderDesign(fakeIpc([]))
-    await flush()
+  it('opening or closing Design never changes the pinned Chat tab\'s view or slot', async () => {
     const chatEl = document.createElement('div')
     act(() => {
       useRetainedChatStore.getState().registerSlot('p-docs', chatEl, 'chat')
-      useRetainedChatStore.getState().setSlotVisible('p-docs', true, chatEl)
+      useRetainedChatStore.getState().setSlotVisible('p-docs', false, chatEl)
     })
-    const col = document.querySelector('[data-design-chat]') as HTMLElement
-    expect(col.style.display).toBe('none')
-    expect(screen.getByTestId('design-chat-beside').textContent).toBe('Chat is open beside')
-    expect(useRetainedChatStore.getState().slots.get('p-docs')?.el).toBe(chatEl)
+    const before = useRetainedChatStore.getState()
+    const recordsBefore = before.slotRecords.get('p-docs')
+    const slotBefore = before.slots.get('p-docs')
+    const viewKeys = (): string[] => Object.keys(localStorage).filter((k) => !k.startsWith(designSplitKey('main')))
+    const keysBefore = viewKeys()
+    const view = renderDesign(fakeIpc([]))
+    await flush()
+    expect(useRetainedChatStore.getState().slotRecords.get('p-docs')).toBe(recordsBefore)
+    expect(useRetainedChatStore.getState().slots.get('p-docs')).toBe(slotBefore)
+    view.unmount()
+    await flush()
+    const after = useRetainedChatStore.getState()
+    expect(after.slotRecords.get('p-docs')).toBe(recordsBefore)
+    expect(after.slots.get('p-docs')?.el).toBe(chatEl)
+    expect((after.slotRecords.get('p-docs') ?? []).map((r) => r.kind)).toEqual(['chat'])
+    expect(viewKeys()).toEqual(keysBefore)
   })
 
   it('dragging the split saves the width for this window and room', async () => {
-    h.retainedId.value = 'p-docs'
     renderDesign(fakeIpc([]))
     await flush()
     const sep = document.querySelector('[data-design-split]')

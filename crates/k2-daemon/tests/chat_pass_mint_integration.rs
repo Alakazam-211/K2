@@ -187,6 +187,7 @@ async fn app_session_owner_token_and_connect_logins_get_their_own_passes() {
     assert_eq!(c.caps, None, "today's App roles hold no chat caps (K9 adds them)");
     assert_eq!(r.body["provenance"], "app-session");
     assert_eq!(r.body["app"], "host");
+    assert_eq!(c.app, None, "spec v1.3: a box login (host) is no App: no app claim");
     assert_eq!(c.exp - c.iat, 60);
 
     // Same session, chat grant revoked → 403 no_chat_grant (read live).
@@ -212,6 +213,7 @@ async fn app_session_owner_token_and_connect_logins_get_their_own_passes() {
     assert_eq!(c.sub, "k2:owner");
     assert!(c.sid.starts_with("own_"), "{}", c.sid);
     assert_eq!(r.body["provenance"], "owner-token");
+    assert_eq!(c.app, None, "the owner's pass names no App");
 
     // Connect logins: every role is its own member (Owner included: K2
     // Connect Owner is server control, not Sew admin). sid = cu_<digest>.
@@ -225,6 +227,7 @@ async fn app_session_owner_token_and_connect_logins_get_their_own_passes() {
         assert_eq!(r.body["sewRole"], sew_role, "{name}");
         assert_eq!(r.body["provenance"], "connect-login");
         assert_ne!(c.sub, "k2:owner");
+        assert_eq!(c.app, None, "a Connect pass names no App");
         // The uuid is stable across mints.
         let again = verified(d.port, &pass(d.port, Some(&tok), "{}"));
         assert_eq!(again.sub, c.sub);

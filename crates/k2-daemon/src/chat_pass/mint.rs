@@ -31,6 +31,12 @@
 //! 9. Audit (`chat-pass` / `chat-handoff`, `ok:<jti>`). Respond with
 //!    `Cache-Control: no-store` (the dispatcher adds it).
 //!
+//! Spec v1.3 (Sew agreed 2026-10-17): the answer's `app` is the App's
+//! service-id **string** (`host` for a box login); the JWS carries the
+//! same string as an optional `app` claim for App sessions only
+//! ([`app_claim`]); a lone `Sec-Fetch-Mode: cors` is not a browser
+//! ([`has_browser_headers`]).
+//!
 //! The 401 for an unknown credential is not delayed and not audited per
 //! request (a 128-bit-plus random token, not a password).
 //!
@@ -176,6 +182,24 @@ fn rate_limited(retry_ms: i64) -> Reply {
             Some(json!({ "retry_after_ms": retry_ms })),
         ),
         retry_after_secs: Some((retry_ms + 999) / 1000),
+    }
+}
+
+/// The pass's `app` claim (spec v1.3): the App's service id, for an App
+/// session only. The owner, a handoff, a Connect login and a box login
+/// (`host`, not an App) carry none. A service id outside Sew's grammar
+/// (never one K2 mints: those are lowercase UUIDs) is left out and logged,
+/// never a refused mint.
+pub fn app_claim(ident: &PassIdentity) -> Option<String> {
+    if ident.provenance != Provenance::AppSession {
+        return None;
+    }
+    let app = ident.app.as_deref().filter(|a| *a != k2_core::skin::HOST_APP_ID)?;
+    if super::app_claim_ok(app) {
+        Some(app.to_string())
+    } else {
+        super::keyring::klog(format!("pass mint: app id {app:?} is outside Sew's app grammar; no app claim"));
+        None
     }
 }
 
@@ -329,7 +353,11 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
             return error(503, "chat_unavailable", "Sew is not enabled or not reachable", None).into();
         }
     };
-    let claims = match ChatPassClaims::new(&install_id, &ident.sub, &ident.sid, d.now).and_then(|c| c.with_caps(ident.caps.clone())) {
+    let app = app_claim(&ident);
+    let claims = match ChatPassClaims::new(&install_id, &ident.sub, &ident.sid, d.now)
+        .and_then(|c| c.with_caps(ident.caps.clone()))
+        .and_then(|c| c.with_app(app.as_deref()))
+    {
         Ok(c) => c,
         Err(e) => {
             super::keyring::klog(format!("pass mint: bad claims: {e}"));

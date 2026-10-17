@@ -67,6 +67,7 @@ import { WorkspacePhonePushToggle } from '@/components/WorkspacePanel/WorkspaceP
 import { workspaceGrantSlug } from './api-keys-api'
 import { setSqlDbAgentAccess } from './data-api'
 import { primaryScope } from '@/kessel/server-scope'
+import { RemoteInstructToggle } from '../shared/RemoteInstructToggle'
 import { SquareCheckbox } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
 import { computeErrorMessage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
@@ -1384,7 +1385,7 @@ function ProjectDetail({
               <WorkspaceLlmTokens scope={primaryScope()} projectId={project.id} />
             </SettingsGroup>
 
-            <SettingsGroup title="Remote Access">
+            <SettingsGroup title="Agents on other servers">
               <RemoteInstructToggle project={project} fetchProjects={fetchProjects} />
             </SettingsGroup>
             <SettingsGroup title="DNS">
@@ -1746,98 +1747,6 @@ function permissionRowClass(compact: boolean): string {
 
 function permissionDescClass(compact: boolean): string {
   return compact ? 'hidden' : 'text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed'
-}
-
-// ── #67 Per-workspace remote-instruct opt-in ───────────────────────
-// Lets CONNECT-USERS (role >= Member, signed into this host over K2
-// Connect) message THIS workspace's agent via the composer. The OWNER is
-// always allowed regardless. DEFAULTS OFF / fail-closed: the composer
-// instructs an agent running --dangerously-skip-permissions (= full shell
-// + filesystem access), so a workspace must be explicitly opted in. The
-// daemon ENFORCES this server-side per-workspace; this toggle only records
-// the opt-in (and drives the composer-hide). Reads the current state from
-// the projects store (`allowRemoteInstruct`); writes via /cli/remote-instruct.
-export function RemoteInstructToggle({
-  project,
-  compact = false,
-  readOnly = false,
-  fetchProjects,
-}: {
-  project: ProjectWithWorkspaces
-  /** Drawer Agent tab: the label and switch only (no description box). */
-  compact?: boolean
-  /** Shown but not flippable: a room on another server, or a role below the route floor. */
-  readOnly?: boolean
-  fetchProjects: () => Promise<void>
-}): React.JSX.Element {
-  const [busy, setBusy] = useState(false)
-  const enabled = (project.allowRemoteInstruct ?? 0) === 1
-  // The app-level master (K2 Connect → "Let remote users message agents")
-  // OR-overrides this per-workspace flag server-side
-  // (`remote_instruct_allowed_for_path`): with the master ON, remote
-  // messages land here even while this toggle shows OFF. Surface that so
-  // an OFF toggle never reads as a deny it doesn't enforce.
-  const globalAllow = useSettingsStore((s) => s.allowRemoteInstruct)
-
-  const toggle = async (): Promise<void> => {
-    if (busy || readOnly) return
-    const next = !enabled
-    setBusy(true)
-    try {
-      // Path-scoped GET write (mirrors /cli/worktree). The daemon still
-      // enforces the gate server-side; this only records the opt-in.
-      await daemonCliPostQuery(primaryScope(), 'remote-instruct', {
-        project: project.path,
-        enable: next ? '1' : '0',
-      })
-      await fetchProjects()
-    } catch (err) {
-      console.error('[remote-instruct] write failed', err)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className={permissionRowClass(compact)}>
-      <div className="flex items-start gap-3">
-        <button
-          onClick={toggle}
-          role="switch"
-          aria-checked={enabled}
-          disabled={busy || readOnly}
-          data-settings-id="projects.allow-remote-instruct"
-          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
-            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
-          title={enabled ? 'Remote users can message this workspace\'s agent' : 'Only the owner can message this workspace\'s agent'}
-        >
-          <span
-            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
-              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
-            }`}
-          />
-        </button>
-        <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-[var(--color-text-primary)]">
-            Let remote users message this workspace
-          </div>
-          <div className={permissionDescClass(compact)}>
-            {enabled
-              ? 'People signed into this host over K2 Connect can send messages to this workspace\'s agent via the composer. You (the owner) can always message agents.'
-              : 'Off (recommended): only you can message this workspace\'s agent. Turn on to let K2 Connect users instruct the agent here — it runs with full shell and filesystem access.'}
-          </div>
-          {!enabled && globalAllow && !readOnly && (
-            <div className="text-[10px] text-[color-mix(in_srgb,var(--color-status-warn-amber-soft)_80%,transparent)] mt-1 leading-relaxed">
-              Currently allowed anyway: the global &ldquo;Let remote users message
-              agents&rdquo; switch (Settings → K2 Connect) opts in every workspace,
-              overriding this toggle.
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
 }
 
 // ── DNS K1 Per-workspace DNS-manage opt-in ─────────────────────────
@@ -4075,8 +3984,9 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
                   <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">Loading agents…</div>
                 ) : availableRosterAgents.length === 0 ? (
                   <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
-                    No connectable agents on this server. On their side: turn on &quot;Let remote users message
-                    agents&quot;, or per-workspace Remote Access / allow agents to create connections.
+                    No connectable agents on this server. On their side, turn on &quot;Let agents on other
+                    servers message this agent&quot; for an agent, or &quot;Let agents on other servers message
+                    every agent&quot; in Settings → K2 Connect.
                   </div>
                 ) : (
                   availableRosterAgents.map((a) => (

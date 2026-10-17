@@ -698,11 +698,9 @@ function NewAgentViewRow(): React.JSX.Element {
 
 // ── Composer 1c (D4) — "Allow remote instruct" ─────────────────────────
 // MOVED to Settings → K2 Connect (shared/AllowRemoteInstructRow), beneath
-// the "Enable federation" master: the toggle is the delivery consent for
-// BOTH remote audiences (K2 Connect connect-users via the composer AND
-// paired federation servers' inbound messages), so it lives with the rest
-// of the remote-access switches instead of scattered here. See
-// .k2/notes/federation-toggle-topology.md.
+// the "Enable federation" master. Since 2026-10-16 it is "Let agents on
+// other servers message every agent" and covers federated agents only;
+// people who log in can always message agents.
 
 function CLIVersionRow(): React.JSX.Element {
   const [status, setStatus] = useState<{

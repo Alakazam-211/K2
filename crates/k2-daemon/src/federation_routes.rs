@@ -595,6 +595,21 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
     }
 }
 
+/// The sender-facing hint for a peer's decline. `remote_instruction_disabled`
+/// (the wire reason, kept for old senders) means the recipient's "Let agents
+/// on other servers message this agent" switch is off.
+pub(crate) fn declined_hint(target: &str, reason: &str) -> String {
+    if reason == "remote_instruction_disabled" {
+        format!(
+            "'{target}' declined the message: that agent doesn't take messages from agents on \
+             other servers (remote_instruction_disabled). Its owner can turn on \"Let agents on \
+             other servers message this agent\" in that workspace's settings."
+        )
+    } else {
+        format!("'{target}' declined the message: {reason}")
+    }
+}
+
 /// 404 for a signed `to` that does not name an agent this server lists.
 /// `error` stays a string (the drain and older senders read it as one);
 /// `code` is the stable machine reason.
@@ -684,7 +699,7 @@ fn deliver_inbound_tray(
             serde_json::json!({
                 "success": false,
                 "reason": "remote_instruction_disabled",
-                "hint": "package landed; wake knock skipped (remote instruction off)",
+                "hint": "package landed; wake knock skipped (this agent's \"Let agents on other servers message this agent\" switch is off)",
             })
         }
     } else {
@@ -1032,7 +1047,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                         "reason": reason,
                         "msg_uuid": msg_uuid,
                         "peer": peer.fingerprint,
-                        "hint": format!("'{target}' declined the message: {reason}"),
+                        "hint": declined_hint(&target, reason),
                     })
                     .to_string(),
                 )
@@ -2354,6 +2369,96 @@ mod tests {
         });
     }
 
+    // ── 2026-10-16: the switch covers agents on other servers only ──────
+    //
+    // One agent, one switch: off → not in the roster a peer sees and live
+    // text is declined; on → listed and delivered (the LIVE path).
+    #[test]
+    fn federation_switch_off_declines_and_hides_on_delivers_and_lists() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            k2_core::app_settings::update(serde_json::json!({ "allowRemoteInstruct": false }))
+                .expect("master off");
+            // `register_project`: persona `bob`, connections on, switch off,
+            // no agent_enabled → the live path ends `no_agent_mode` (never
+            // spawns a CLI).
+            let ws_path = temp_ws_path();
+            let ws_id = register_project(&ws_path);
+            let key = pin_trusted_peer("peer");
+            let listed = |id: &str| {
+                k2_core::federation::roster::build_local_roster()
+                    .agents
+                    .iter()
+                    .any(|a| a.workspace_id == id)
+            };
+
+            // OFF: hidden from the listing, live text declined.
+            assert!(!listed(&ws_id), "switch off must not be listed");
+            let resp = handle_inbound(&seal_msg_to(&ws_id, &key, "peer", "off"));
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["delivered"], false, "{}", resp.body);
+            assert_eq!(v["mode"], "declined", "{}", resp.body);
+            assert_eq!(v["reason"], "remote_instruction_disabled", "{}", resp.body);
+
+            // ON: listed, live text takes the LIVE path (never declined).
+            k2_core::workspace::settings::update_project_setting(&ws_path, "allow_remote_instruct", "1")
+                .expect("switch on");
+            assert!(listed(&ws_id), "switch on must be listed");
+            let resp = handle_inbound(&seal_msg_to(&ws_id, &key, "peer", "on"));
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["mode"], "live", "switch on must deliver live: {}", resp.body);
+            assert!(v.get("reason").is_none(), "no decline reason when on: {}", resp.body);
+        });
+    }
+
+    /// Upgrade safety: a workspace opted in ONLY via the app master (its own
+    /// column 0) keeps the same effective switch after 2026-10-16 — same
+    /// column, same master — so it stays listed and its federated links keep
+    /// delivering exactly as before.
+    #[test]
+    fn upgrade_master_opted_in_workspace_keeps_effective_switch() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            let ws_path = temp_ws_path();
+            let ws_id = register_project(&ws_path);
+            // Neither per-workspace flag: only the master can opt it in.
+            k2_core::workspace::settings::update_project_setting(
+                &ws_path,
+                "agents_can_create_connections",
+                "0",
+            )
+            .expect("connections off");
+            // The master is ON (as on Rosson's server); the column stays 0.
+            k2_core::app_settings::update(serde_json::json!({ "allowRemoteInstruct": true }))
+                .expect("master on");
+            assert!(!k2_core::workspace::settings::get_allow_remote_instruct(&ws_path));
+            assert!(
+                k2_core::workspace::settings::remote_instruct_allowed_for_path(&ws_path),
+                "effective switch must stay ON via the master"
+            );
+            let projection = k2_core::federation::roster::build_local_roster();
+            assert!(
+                projection.agents.iter().any(|a| a.workspace_id == ws_id),
+                "master-opted-in agent must stay listed: {:?}",
+                projection.agents
+            );
+            let key = pin_trusted_peer("peer");
+            let resp = handle_inbound(&seal_msg_to(&ws_id, &key, "peer", "still works"));
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            assert_eq!(v["mode"], "live", "must not be declined: {}", resp.body);
+
+            // And the master is the only thing doing it: off → hidden (404).
+            k2_core::app_settings::update(serde_json::json!({ "allowRemoteInstruct": false }))
+                .expect("master off");
+            assert!(!k2_core::workspace::settings::remote_instruct_allowed_for_path(&ws_path));
+            let resp = handle_inbound(&seal_msg_to(&ws_id, &key, "peer", "now hidden"));
+            assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+        });
+    }
+
     fn seal_tray_to(
         ws_id: &str,
         key: &rcgen::KeyPair,
@@ -2565,8 +2670,12 @@ mod tests {
     /// route a delivered message to `deliver_live`, which may wake a session.
     /// "Connections only" lists the workspace without that path.
     enum Exposure {
-        /// Only "Allow agents to create connections" ON (listed in the
-        /// roster; live text is declined, tray lands).
+        /// "Let agents on other servers message this agent" ON — listed in
+        /// the roster; live text and trays deliver.
+        Listed,
+        /// Only "Allow agents to create connections" ON. Not listed in the
+        /// roster since 2026-10-16, but a direct ask gets the same answer as
+        /// before: live text is declined, a tray lands.
         ConnectionsOnly,
         /// Neither flag (and the app master is off under the temp HOME) →
         /// hidden from the roster.
@@ -2580,17 +2689,18 @@ mod tests {
         let path = temp_ws_path();
         std::fs::create_dir_all(&path).unwrap();
         let id = uuid::Uuid::new_v4().to_string();
-        let conns = match exposure {
-            Exposure::ConnectionsOnly => 1,
-            Exposure::Hidden => 0,
+        let (remote, conns) = match exposure {
+            Exposure::Listed => (1, 0),
+            Exposure::ConnectionsOnly => (0, 1),
+            Exposure::Hidden => (0, 0),
         };
         let db = k2_core::db::shared();
         let conn = db.lock();
         conn.execute(
             "INSERT INTO projects (id, name, path, handle, agent_enabled, \
              allow_remote_instruct, agents_can_create_connections) \
-             VALUES (?1, ?2, ?3, ?4, 1, 0, ?5)",
-            rusqlite::params![id, name, path, handle, conns],
+             VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6)",
+            rusqlite::params![id, name, path, handle, remote, conns],
         )
         .unwrap();
         (id, path)
@@ -2778,7 +2888,7 @@ mod tests {
             }
             let new_handle = format!("{old_handle}-2");
             let (new_id, new_path) =
-                register_agent_ws(&old_handle, &new_handle, Exposure::ConnectionsOnly);
+                register_agent_ws(&old_handle, &new_handle, Exposure::Listed);
             {
                 // Slip the retired name in as an alias behind the guard's
                 // back: the roster must still not publish it.
@@ -3403,6 +3513,44 @@ mod tests {
                 "the configured workspace must be exposed in the roster: {}",
                 resp.body
             );
+        });
+    }
+
+    /// 2026-10-16: the roster route a paired peer reads omits an agent whose
+    /// "Let agents on other servers message this agent" switch is off —
+    /// including one that only allows agents to create connections.
+    #[test]
+    fn roster_route_omits_agents_with_the_switch_off() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            k2_core::app_settings::update(serde_json::json!({ "allowRemoteInstruct": false }))
+                .expect("master off");
+            let u = uniq();
+            let (on_id, _) = register_agent_ws("On", &format!("on-{u}"), Exposure::Listed);
+            let (conn_id, _) =
+                register_agent_ws("ConnOnly", &format!("conn-{u}"), Exposure::ConnectionsOnly);
+            let (off_id, _) = register_agent_ws("Off", &format!("off-{u}"), Exposure::Hidden);
+
+            let key = peer_key();
+            let mut store = PeerStore::default();
+            let fp = store.upsert(FederationPeer::pin("peer", "peer", key.public_key_pem()).unwrap());
+            store.set_trust(&fp, PeerTrust::Trusted);
+            store.grant(&fp, k2_core::federation::CAP_ROSTER);
+            store.save().unwrap();
+            let ts = chrono::Utc::now().timestamp();
+            let (signed_fp, sig) = roster::sign_roster_request(&key, ts).unwrap();
+            let resp = handle_roster(Some(&signed_fp), Some(&ts.to_string()), Some(&sig));
+            assert_eq!(resp.status, "200 OK", "{}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+            let ids: Vec<&str> = v["agents"]
+                .as_array()
+                .expect("agents array")
+                .iter()
+                .map(|a| a["workspace_id"].as_str().expect("workspace_id"))
+                .collect();
+            assert!(ids.contains(&on_id.as_str()), "switch on must be served: {}", resp.body);
+            assert!(!ids.contains(&conn_id.as_str()), "connections-only must be omitted: {}", resp.body);
+            assert!(!ids.contains(&off_id.as_str()), "switch off must be omitted: {}", resp.body);
         });
     }
 

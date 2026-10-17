@@ -64,6 +64,13 @@ describe('SingleProjectItem reserved two-row template', () => {
     expect(agentRowButton).toContain('truncate flex-1 leading-4')
   })
 
+  it('line 2 (tag + cluster + number) sits 2px below line 1 (name + presence)', () => {
+    // Rosson 2026-10-16: the whole second line moves down, not just the
+    // number. mt-0.5 = 2px; 16 + 2 + 14 = 32 = the avatar, so height holds.
+    expect(agentRowButton).toContain('data-agent-row-line2="" className="mt-0.5 h-3.5 min-h-3.5 leading-none')
+    expect(agentRowButton).not.toMatch(/flex flex-col[^"]*gap-/)
+  })
+
   it('the right edge is the 12px inset: no -mr pull on line 1 (presence lines up with the number column)', () => {
     expect(agentRowButton).not.toContain('-mr-1')
   })

@@ -168,7 +168,9 @@ pub const PODMAN_MIN_MAJOR: u32 = 5;
 /// from the distro by default; youki is opt-in).
 /// skopeo: the daemon (not k2app, which has no network) fetches the pinned
 /// base image by digest into an OCI archive (slice 3).
-pub const APT_PACKAGES: &[&str] = &["podman", "crun", "passt", "uidmap", "dbus-user-session", "skopeo", "catatonit"];
+/// nftables: `apps nft apply` needs /usr/sbin/nft; Debian 12 cloud images
+/// don't ship it (lane P VM e2e).
+pub const APT_PACKAGES: &[&str] = &["podman", "crun", "passt", "uidmap", "dbus-user-session", "skopeo", "catatonit", "nftables"];
 pub const DNF_PACKAGES: &[&str] = &["podman", "crun", "passt", "shadow-utils", "skopeo", "catatonit"];
 pub const PACMAN_PACKAGES: &[&str] = &["podman", "crun", "passt", "skopeo", "catatonit"];
 pub const YOUKI_PACKAGE: &str = "youki";

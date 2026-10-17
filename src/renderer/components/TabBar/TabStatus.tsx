@@ -13,6 +13,8 @@
 //   heartbeat / API tab). Nothing moves: the tab is always sized as title +
 //   working slot (a hidden sizer copy of the title), so only the title's
 //   truncation point changes when the working slot is used.
+// - Tabs are not all one width: each is its own title's natural width plus
+//   the fixed slots, between TAB_MIN_PX and TAB_MAX_PX (Rosson 2026-10-16).
 // - Pinned Chat: the 3×3 grid replaces its icon while working, drawn at
 //   the icon's size (PINNED_WORKING_PX) rather than the 14px slot; the
 //   status (else live / reaped) is a 10px badge in its bottom-right corner.
@@ -22,6 +24,14 @@ import { isRankedStatus, type AgentStatusView } from '@/lib/agent-status'
 
 /** The status slot (px): the cluster's 14px slot. */
 export const TAB_SLOT_PX = 14
+/** A regular tab's default (max) width (px). A tab is as wide as its
+ *  content (padding + icon + title + working slot + status slot) up to this,
+ *  where the title truncates with an ellipsis (Rosson 2026-10-16). */
+export const TAB_MAX_PX = 200
+/** A regular tab's floor (px). Content is never squeezed (tabs don't
+ *  shrink; the strip scrolls), so the status slot / × stay reachable; this
+ *  only keeps an empty-titled tab a grabbable size. */
+export const TAB_MIN_PX = 56
 /** The pinned Chat's corner badge (px). */
 export const PINNED_BADGE_PX = 10
 /** The pinned Chat's working grid (px). Larger than the 14px slot: the

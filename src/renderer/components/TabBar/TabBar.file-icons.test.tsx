@@ -95,8 +95,8 @@ function globeIn(root: ParentNode): SVGElement | null {
   return root.querySelector('circle[r="6.5"]')?.closest('svg') ?? null
 }
 
-/** The pinned tab's pin (its close slot), not the hover pin every unpinned
- *  tab carries. */
+/** The pinned tab's static pin (its status slot at rest). Unpinned tabs
+ *  carry no pin at all. */
 function pinIn(root: ParentNode): SVGElement | null {
   return root.querySelector('[data-tab-pinned-glyph] svg[data-k2-icon="pin"]')
 }
@@ -199,7 +199,7 @@ describe('tab file and browser icons', () => {
     cleanup()
   })
 
-  it('a pinned HTML tab keeps its file icon and shows the pin in its close slot', () => {
+  it('a pinned HTML tab keeps its file icon and shows the pin in its status slot', () => {
     const root = showTab(
       makeTab('pin', 'page.html', [fileItem('/work/page.html', true)], { isPinnedFile: true }),
     )

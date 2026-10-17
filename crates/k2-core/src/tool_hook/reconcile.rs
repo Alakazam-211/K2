@@ -193,6 +193,7 @@ fn username_ok(want: &str, have: &str, ext: &ExternalId) -> bool {
 /// | active `k2:principal`/`k2:workspace`, not desired | deprovision |
 /// | `k2:owner` | never deprovision, never owner_set |
 /// | `local:` | ignored, counted |
+/// | any other form (`k2:connect:*`, Meet's `link:<channel>:<id>` guests, K-M6) | ignored, counted `ignored_other` |
 /// | busy (open outbox row) | skipped, counted |
 /// | held (HC2) under the same grant rev | skipped, counted |
 ///

@@ -1116,6 +1116,63 @@ fn reconcile_plan_table() {
     assert_eq!((s.provisioned, s.updated, s.deprovisioned), (5, 1, 2));
 }
 
+/// K-M6 (Meet): reconcile deprovisions only the members K2 owns
+/// (`k2:principal:*`, `k2:workspace:*`). A Meet link guest
+/// (`link:<channel>:<base32>`, install role `link_guest`, Sew CC2) is
+/// never K2's: Sew hides it from the list by default (CC7), and if a list
+/// carries one anyway (`?include=link_guests`, a newer Sew), it parses
+/// leniently and is ignored, never deprovisioned. Same for `k2:connect:*`
+/// (rev 147). The lenient parse must survive the K1 swap to the vendored
+/// sew-proto (its `ExternalId` has no `link:` form).
+#[test]
+fn reconcile_never_deprovisions_meet_link_guests_k_m6() {
+    let raw = r#"{"items":[
+        {"member_id":"501","external_id":"link:4242:AB3DEFGHIJKLMNOP","kind":"person",
+         "install_role":"link_guest","username":"g-ab3defgh","display_name":"Guest Ana",
+         "deactivated":false,"created_at":"2026-10-17T00:00:00Z","meeting_id":"77"},
+        {"member_id":"502","external_id":"k2:connect:2b0c8f1e-9a43-4d55-8f7e-1c2d3e4f5a6b","kind":"person",
+         "install_role":"member","username":"rosson","display_name":"Rosson",
+         "deactivated":false,"created_at":"2026-10-17T00:00:00Z"},
+        {"member_id":"503","external_id":"k2:principal:0f6a3c1d-5b2e-4c7a-9d8e-112233445566","kind":"person",
+         "install_role":"member","username":"left","display_name":"Left",
+         "deactivated":false,"created_at":"2026-10-17T00:00:00Z"}
+    ],"has_more":false}"#;
+    let page: sew_wire::MgmtPrincipalPage =
+        serde_json::from_str(raw).expect("a list with link guests still parses");
+    let link = &page.items[0];
+    assert_eq!(
+        link.external_id,
+        ExternalId::Other("link:4242:AB3DEFGHIJKLMNOP".into())
+    );
+    assert!(!link.external_id.is_known());
+    assert_eq!(link.install_role, InstallRole::Unknown);
+    assert!(matches!(page.items[1].external_id, ExternalId::Other(_)));
+    let left = ExternalId::K2Principal("0f6a3c1d-5b2e-4c7a-9d8e-112233445566".into());
+    assert_eq!(page.items[2].external_id, left);
+
+    // Nothing is desired: the K2 principal goes; the link guest and the
+    // Connect user are counted and left alone.
+    let (planned, s) = reconcile::plan(&[], &page.items, &HashSet::new(), &HashMap::new());
+    assert_eq!(ops_for(&planned, &left), [Op::Deprovision]);
+    assert_eq!(
+        planned
+            .iter()
+            .filter(|p| p.subject.to_string().starts_with("link:")
+                || p.payload.to_string().contains("link:"))
+            .count(),
+        0,
+        "never an op for a link guest: {planned:?}"
+    );
+    assert_eq!(planned.len(), 1, "{planned:?}");
+    assert_eq!((s.deprovisioned, s.ignored_other), (1, 2));
+
+    // Busy or not, a link guest is never K2's to remove.
+    let busy: HashSet<String> = ["link:4242:AB3DEFGHIJKLMNOP".to_string()].into();
+    let (planned, s) = reconcile::plan(&[], &page.items, &busy, &HashMap::new());
+    assert_eq!(planned.len(), 1);
+    assert_eq!((s.skipped_busy, s.ignored_other), (0, 2));
+}
+
 #[test]
 fn reconcile_accepts_suffixed_username_and_admin_role_is_not_drift() {
     let a = uuid();

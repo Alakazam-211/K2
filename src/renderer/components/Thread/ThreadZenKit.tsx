@@ -120,9 +120,11 @@ ${SCOPE} [data-zen-compose-input]:focus { outline: none; }
 // rests above the box). The glass covers the bar's slot from FOOTER_FADE_PX
 // above whatever sits on top of the box (the activity drawer's tab while
 // it is out, else the field, or the file chips) down to the bottom, full
-// width: beside the tab and behind the field too. The field and the tab get
-// a see-through wash of their own fill so the blurred messages show
-// through them while the text stays readable (stronger in light schemes).
+// width: beside the tab and behind the field too. The field gets a
+// see-through wash of its own fill so the blurred messages show through it
+// while the text stays readable (stronger in light schemes). The tab keeps
+// its own solid, darker fill (ZenActivityDrawer's ZEN_DRAWER_EAR_FILL;
+// Rosson 2026-10-16), the same in every state of the box.
 //
 // A progressive blur (Rosson: "gentle at the top, heavy at the bottom"):
 // four stacked backdrop-blur layers, light to heavy (1/4/10/20px), each
@@ -134,7 +136,7 @@ ${SCOPE} [data-zen-compose-input]:focus { outline: none; }
 // branch while Rosson judges it): no will-change, no animated blur radius,
 // clicks pass through; only the glass's top moves with the tab. Prefixed
 // and standard properties both. Reduced transparency, or no
-// backdrop-filter: no blur, the field and tab opaque, and an opaque-going
+// backdrop-filter: no blur, the field opaque, and an opaque-going
 // gradient (px stops) behind them.
 
 /** How far (px) the fade reaches above the topmost thing on the message
@@ -193,8 +195,8 @@ export const FOOTER_BLUR_LAYERS: ReadonlyArray<readonly [number, number, number]
   [20, 52, 80],
 ]
 
-/** The field's and the tab's see-through wash (% of their own fill), dark
- *  and light schemes; reduced transparency keeps them opaque. */
+/** The field's see-through wash (% of its own fill), dark and light
+ *  schemes; reduced transparency keeps it opaque. */
 export const FOOTER_GLASS_WASH = { dark: 72, light: 86 } as const
 
 const tintCss = (stops: ReadonlyArray<readonly [number, number]>, unit: '%' | 'px'): string =>
@@ -210,12 +212,9 @@ const blurLayerCss = ([px, from, to]: readonly [number, number, number], n: numb
   )
 }
 
-/** The desktop bar's field and the drawer's tab on it (not Zen, not a
- *  drawer under a list with no box). */
-const GLASS_TARGETS = [
-  `[${THREAD_ZEN_SCOPE_ATTR}] [data-zen-compose] [data-zen-compose-box]`,
-  `[${THREAD_ZEN_SCOPE_ATTR}] [data-zen-compose] [data-zen-drawer-tile]`,
-].join(', ')
+/** The desktop bar's field (not Zen). Not the drawer's tab: it keeps its
+ *  own fill, whatever the box does. */
+const GLASS_TARGETS = [`[${THREAD_ZEN_SCOPE_ATTR}] [data-zen-compose] [data-zen-compose-box]`].join(', ')
 
 /** A wash of the element's own fill at `pct`% (the square Style's chamfer
  *  layers read `--ch-fill`, the round ones `background`). */

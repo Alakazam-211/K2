@@ -292,11 +292,9 @@ export const COUNTER_CHECK_PX = 11
 /** Space between the subagents' running and done groups. */
 export const COUNTER_GROUP_GAP_PX = 7
 /** The working grid's ink height, in em of the counter text: 0.8em − 2px
- *  at the 12px default (7.6px), a little under the digits, raised
- *  COUNTER_SPINNER_RAISE_PX (Rosson's tune; em so it follows the text). */
+ *  at the 12px default (7.6px), a little under the digits and centred on
+ *  them (Rosson's tune; em so it follows the text). */
 export const COUNTER_SPINNER_INK_EM = 0.633
-/** How far (px) the working grid sits above centre on the digits. */
-export const COUNTER_SPINNER_RAISE_PX = 1
 /** The counter row uses the narrow 2×3 grid (Rosson: narrow spots get
  *  2×3): its ink is 9 units wide by 14 tall. */
 export const COUNTER_SPINNER_COLS = 2
@@ -305,6 +303,9 @@ export const COUNTER_SPINNER_COLS = 2
 export const COUNTER_SPINNER_EM = Math.ceil(((COUNTER_SPINNER_INK_EM * 9) / 14) * 100) / 100
 /** Space (px) between the working grid and the running count after it. */
 export const COUNTER_SPINNER_GAP_PX = 2
+/** Extra space (px) between the agent icon and the working grid, on top of
+ *  the icon's COUNTER_ICON_GAP_PX (Rosson's tune: 1px more there). */
+export const COUNTER_SPINNER_LEAD_PX = 1
 /** The grid's ink is 14 of its 24-unit height (StatusGlyphs), so the svg is
  *  drawn this many em tall to make the ink COUNTER_SPINNER_INK_EM tall. */
 export const COUNTER_SPINNER_SVG_EM = Number(((COUNTER_SPINNER_INK_EM * 24) / 14).toFixed(3))
@@ -323,7 +324,7 @@ export function estimateStripTextPx(text: string, fontPx = 12): number {
 export function counterWidthPx(c: StripCounter, fontPx = 12): number {
   let w = COUNTER_ICON_PX + COUNTER_ICON_GAP_PX
   if (c.key !== 'subagents') return w + estimateStripTextPx(String(c.count), fontPx)
-  if (c.count > 0) w += Math.ceil(COUNTER_SPINNER_EM * fontPx) + COUNTER_SPINNER_GAP_PX + estimateStripTextPx(String(c.count), fontPx)
+  if (c.count > 0) w += COUNTER_SPINNER_LEAD_PX + Math.ceil(COUNTER_SPINNER_EM * fontPx) + COUNTER_SPINNER_GAP_PX + estimateStripTextPx(String(c.count), fontPx)
   if (c.done > 0) {
     w += (c.count > 0 ? COUNTER_GROUP_GAP_PX : 0) + COUNTER_CHECK_PX + COUNTER_ICON_GAP_PX
     w += estimateStripTextPx(String(c.done), fontPx)

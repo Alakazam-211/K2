@@ -572,6 +572,12 @@ pub enum Verb {
     AppsUnprep,
     // engine sew (protocol 7, Sew S29 K11; see `crate::sew`)
     Sew(SewVerb),
+    /// `apps podman install` (protocol 8, lane P): stdin is the pinned
+    /// podman-static tarball for this arch (`crate::podman`); sha-gated.
+    AppsPodmanInstall,
+    /// `apps podman uninstall` (protocol 8): remove the bundle and its
+    /// k2app-only config; refused while Apps run.
+    AppsPodmanUninstall,
 }
 
 use crate::apps::{bounded, AppId, IoMax, OciRuntime, PortRange, BUDGET_MEM_MIB, BUDGET_TASKS, CORES_MIN_MIB};
@@ -848,6 +854,8 @@ impl Verb {
             ))),
             ["apps", "unprep"] => Verb::AppsUnprep,
             ["engine", "sew", rest @ ..] => Verb::Sew(SewVerb::parse(rest).ok_or(REFUSED)?),
+            ["apps", "podman", "install"] => Verb::AppsPodmanInstall,
+            ["apps", "podman", "uninstall"] => Verb::AppsPodmanUninstall,
             _ => return Err(REFUSED),
         };
         Ok(v)
@@ -1001,6 +1009,8 @@ impl Verb {
                 a.extend(v.tail());
                 a
             }
+            Verb::AppsPodmanInstall => s(&["apps", "podman", "install"]),
+            Verb::AppsPodmanUninstall => s(&["apps", "podman", "uninstall"]),
         }
     }
 
@@ -1090,7 +1100,12 @@ impl Verb {
             | Verb::AppsProcessPurge(_)
             | Verb::AppsCoresSlice(_)
             | Verb::AppsBudget(_)
-            | Verb::AppsUnprep => Daemon,
+            | Verb::AppsUnprep
+            // Which Podman runs as k2app, like which engine: the daemon's
+            // call (the owner opted in at box prep), sha-pinned as well.
+            | Verb::AppsPodmanInstall
+            // Takes Apps' container stack away.
+            | Verb::AppsPodmanUninstall => Daemon,
             Verb::Sew(v) => v.class(),
             // Re-applying the canonical ranges is a tightening anyone may
             // ask for (boot, drift). Other ranges could open more loopback
@@ -1115,6 +1130,7 @@ impl Verb {
             Verb::MailRenderUnit => Some(CAP_TEMPLATE),
             Verb::MailInstallBin => Some(CAP_INSTALL_BIN),
             Verb::AppsInstallEngine => Some(CAP_ENGINE),
+            Verb::AppsPodmanInstall => Some(crate::podman::CAP_BUNDLE),
             Verb::PgPsql { .. } => Some(CAP_SQL),
             Verb::Sew(v) => v.stdin_cap(),
             _ => None,
@@ -1285,6 +1301,8 @@ pub fn catalog() -> Vec<Verb> {
         Verb::AppsBudget(Some((4096, 4096))),
         Verb::AppsBudget(None),
         Verb::AppsUnprep,
+        Verb::AppsPodmanInstall,
+        Verb::AppsPodmanUninstall,
     ];
     v.extend(SewVerb::catalog().into_iter().map(Verb::Sew));
     for on in [true, false] {
@@ -1572,6 +1590,8 @@ mod tests {
             &["apps", "nft", "app-remove", "jobs"],
             &["apps", "install-engine"],
             &["apps", "logs", "jobs", "d-0123456789ab", "200"],
+            &["apps", "podman", "install"],
+            &["apps", "podman", "uninstall"],
             // Non-canonical ranges could widen what Apps reach.
             &["apps", "nft", "apply", "1024-2047", "38900-38999", "5432"],
             &["apps", "nft", "apply", "38600-38899", "6379", "5432"],
@@ -1589,6 +1609,11 @@ mod tests {
         for v in catalog().into_iter().filter(|v| v.namespace() == "apps") {
             if v == Verb::AppsInstallEngine {
                 assert_eq!(v.stdin_cap(), Some(CAP_ENGINE));
+                continue;
+            }
+            if v == Verb::AppsPodmanInstall {
+                assert_eq!(v.stdin_cap(), Some(crate::podman::CAP_BUNDLE));
+                assert!(v.takes_lock());
                 continue;
             }
             assert_eq!(v.stdin_cap(), None, "{v:?}: apps verbs read no stdin");
@@ -1783,6 +1808,7 @@ mod tests {
                     assert_eq!(cap, Some(CAP_SEW_JSON))
                 }
                 Verb::Sew(SewVerb::RotateMaster) => assert_eq!(cap, Some(CAP_SEW_KEY)),
+                Verb::AppsPodmanInstall => assert_eq!(cap, Some(crate::podman::CAP_BUNDLE)),
                 _ => assert_eq!(cap, None, "{v:?} reads no stdin"),
             }
             if v.class() == Class::Daemon && !matches!(v, Verb::PgPsql { .. } | Verb::KeepKekGet | Verb::AppsLogs { .. }) {

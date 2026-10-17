@@ -66,6 +66,9 @@ pub const APPS_MIN_PROTOCOL: u32 = 6;
 /// `namespaces.sew` flag in `helper version` (protocol numbers on other
 /// branches have collided before; the flag keeps them apart).
 pub const SEW_MIN_PROTOCOL: u32 = 7;
+/// `apps podman install|uninstall` (K2's Podman 5 bundle, 0.46.1 lane P).
+/// Rides 0.46.1's one helper bump, 8 (7 shipped in 0.46.0 for Sew).
+pub const PODMAN_INSTALL_MIN_PROTOCOL: u32 = 8;
 
 pub const HELPER_NAME: &str = "k2-root-helper";
 
@@ -245,6 +248,22 @@ mod tests {
         ] {
             let v = crate::verbs::Verb::parse(needed).expect("apps verb parses");
             assert!(apps.contains(&v), "{needed:?} missing from the catalog");
+        }
+    }
+
+    /// Lane P's verbs need 8: a 7 helper (0.46.0, Sew) or older refuses
+    /// them (unknown argv), so the daemon must not ask one.
+    #[test]
+    fn podman_verbs_ride_protocol_8() {
+        assert_eq!(PODMAN_INSTALL_MIN_PROTOCOL, 8);
+        assert!(PODMAN_INSTALL_MIN_PROTOCOL <= PROTOCOL);
+        assert!(PODMAN_INSTALL_MIN_PROTOCOL > SEW_MIN_PROTOCOL);
+        assert!(PODMAN_INSTALL_MIN_PROTOCOL > APPS_MIN_PROTOCOL);
+        let cat = crate::verbs::catalog();
+        for argv in [&["apps", "podman", "install"][..], &["apps", "podman", "uninstall"]] {
+            let v = crate::verbs::Verb::parse(argv).expect("parses");
+            assert!(cat.contains(&v), "{argv:?}");
+            assert_eq!(v.class(), crate::verbs::Class::Daemon, "{argv:?}");
         }
     }
 

@@ -33,6 +33,14 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Remote switch
 - **People who log in can always message any agent.** The owner, Admins and Members can message every agent from its Thread or the terminal composer, whatever its remote switch says. The switch is now **Let agents on other servers message this agent** (and, for all agents at once, **Let agents on other servers message every agent** in Settings → K2 Connect): off means connected servers don't see the agent and their agents can't message it.
 - Fixed: an agent was shown to other servers whenever 'Allow agents to create connections' was on. Now only 'Let agents on other servers message this agent' (or the master in Settings → K2 Connect) makes it visible. If a connected server's link to one of your agents stops working after updating, turn that switch on.
+## 0.46.1 — Straight answers from mail and chat
+
+- **`k2 hostmail status` shows the certificate mail apps really get.** It now checks ports 443, 465 and 993 with the mail hostname and reports the worst one, so a self-signed fallback on 465 or 993 no longer reads as `issued`. A certificate for the wrong name or an expired one says so. The ACME task state is read fresh, and a task older than the certificate now served reads `unknown` instead of a stale `Pending`.
+- **A passing `k2 hostmail doctor <domain>` unlocks direct sending for that domain.** It runs every server check too, so you no longer need a separate bare `k2 hostmail doctor` first. When direct is still locked, the message names the exact command to run.
+- **Agent refusals name the workspace.** When an agent can't manage hosted mail, the refusal says which workspace's "Allow agents to manage hosted mail on this host" switch K2 checked, so you can turn it on for the right one. The help now lists what agents may do with it on.
+- **`k2 hostmail domain show` stops recommending records that can't work yet.** On a domain whose DNS isn't on K2's nameservers, the MTA-STS and mail-client autoconfig records now say "skip for now" and are left out of the zone file, because those names can't get a certificate there yet. The DMARC record it lists always includes `rua=mailto:postmaster@<domain>`.
+- **Chat hints point at real commands.** Switching sign-in type points at `k2 hostchat purge`, rollback and restore hints point at `k2 hostchat backups` and `k2 hostchat restore`, and the PostgreSQL hint no longer names a setup flag that doesn't exist.
+- **Voice options are refused where they don't apply, instead of ignored.** `--voice`, `--voice-url` and `--node-ip` only apply to `k2 hostchat enable`, and `--media-tarball` to enable, upgrade and rollback; elsewhere K2 now stops and points you at `k2 hostchat media install --tarball`.
 
 ## 0.46.0 — Runtime for Apps
 

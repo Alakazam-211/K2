@@ -29,7 +29,11 @@ vi.mock('@/stores/home-rooms', async () => {
 import { useSelectTopHomeRowOnEnter } from './home-auto-select'
 import { useWorkspaceIndexShortcuts } from '@/hooks/useWorkspaceIndexShortcuts'
 import { openHomeRow } from '@/lib/home-open'
-import { __resetWorkspaceSwitchFocusForTests } from '@/lib/workspace-switch-focus'
+import {
+  COMPOSE_WATCH_MS,
+  __resetWorkspaceSwitchFocusForTests,
+  installRoomPageSwitchFocus,
+} from '@/lib/workspace-switch-focus'
 import { useSettingsStore, type WorkspaceSwitchFocus } from '@/stores/settings'
 import { usePageViewStore } from '@/stores/page-view'
 import { useHomesStore, type HomeRow } from '@/stores/homes'
@@ -43,12 +47,13 @@ let setActiveProject: ReturnType<typeof vi.fn>
 
 /** One room as TerminalPane mounts it: the grid, the PTY "Message the
  *  agent" bar, and (Thread open) the Thread column's composer. */
-function mountRoom(opts: { thread?: boolean } = {}): {
+function mountRoom(opts: { thread?: boolean; parent?: HTMLElement; keep?: boolean } = {}): {
+  room: HTMLElement
   terminal: HTMLElement
   pty: HTMLTextAreaElement
   thread: HTMLTextAreaElement | null
 } {
-  document.body.innerHTML = ''
+  if (!opts.keep) document.body.innerHTML = ''
   const room = document.createElement('div')
   room.setAttribute('data-terminal-pane-wrapper', '')
   const terminal = document.createElement('div')
@@ -72,8 +77,13 @@ function mountRoom(opts: { thread?: boolean } = {}): {
     slot.appendChild(bar)
     room.appendChild(slot)
   }
-  document.body.appendChild(room)
-  return { terminal, pty, thread }
+  ;(opts.parent ?? document.body).appendChild(room)
+  return { room, terminal, pty, thread }
+}
+
+/** Two frames: the page change's frame, then the apply's first retry. */
+async function frames(): Promise<void> {
+  for (let i = 0; i < 2; i++) await new Promise<void>((r) => requestAnimationFrame(() => r()))
 }
 
 function setPref(pref: WorkspaceSwitchFocus): void {
@@ -182,5 +192,101 @@ describe('Home applies the workspace-switch focus setting', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: '1', code: 'Digit1', metaKey: true }))
     expect(setActiveProject).toHaveBeenCalledWith('pl')
     expect(document.activeElement).toBe(pty)
+  })
+})
+
+describe('Home → Agents applies the setting in the room Agents shows', () => {
+  let uninstall: (() => void) | null = null
+  beforeEach(() => {
+    uninstall = installRoomPageSwitchFocus()
+  })
+  afterEach(() => {
+    uninstall?.()
+    uninstall = null
+  })
+
+  it('a local agent: the Thread composer on Agents gets the caret', async () => {
+    const local = mountRoom({ thread: true })
+    setPref('composer')
+    usePageViewStore.getState().setPage('home')
+    await frames()
+    // The user clicks around on Home (focus leaves the composer).
+    local.terminal.focus()
+    usePageViewStore.getState().setPage('agents')
+    await frames()
+    expect(document.activeElement).toBe(local.thread)
+  })
+
+  it('a local agent with the Thread closed: the agent message box', async () => {
+    const local = mountRoom()
+    setPref('composer')
+    usePageViewStore.getState().setPage('home')
+    await frames()
+    usePageViewStore.getState().setPage('agents')
+    await frames()
+    expect(document.activeElement).toBe(local.pty)
+  })
+
+  it('a remote agent on Home: the caret leaves the parked room for the local Thread', async () => {
+    document.body.innerHTML = ''
+    setPref('composer')
+    // Home shows another server's room; the window's own room is hidden.
+    const primary = document.createElement('div')
+    primary.style.display = 'none'
+    document.body.appendChild(primary)
+    const local = mountRoom({ thread: true, parent: primary, keep: true })
+    const slot = document.createElement('div')
+    document.body.appendChild(slot)
+    const remote = mountRoom({ thread: true, parent: slot, keep: true })
+    usePageViewStore.getState().setPage('home')
+    await frames()
+    remote.thread!.focus()
+    expect(document.activeElement).toBe(remote.thread)
+
+    // Agents: the remote room is parked (visibility:hidden, focus stays
+    // there in WebKit) and the window's own room shows.
+    usePageViewStore.getState().setPage('agents')
+    slot.style.visibility = 'hidden'
+    primary.style.display = ''
+    await frames()
+    expect(document.activeElement).toBe(local.thread)
+  })
+
+  it('a room whose Thread composer mounts late still gets it, within the watch window', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const local = mountRoom()
+      setPref('composer')
+      usePageViewStore.getState().setPage('home')
+      await frames()
+      usePageViewStore.getState().setPage('agents')
+      await frames()
+      expect(document.activeElement).toBe(local.pty)
+      // The Thread column loads a moment later (remote room / async open).
+      const slot = document.createElement('div')
+      slot.setAttribute('data-testid', 'agent-session-thread-compose-slot')
+      const bar = document.createElement('div')
+      bar.setAttribute('data-compose-bar', '')
+      const late = document.createElement('textarea')
+      bar.appendChild(late)
+      slot.appendChild(bar)
+      local.room.appendChild(slot)
+      vi.advanceTimersByTime(450)
+      expect(document.activeElement).toBe(late)
+      vi.advanceTimersByTime(COMPOSE_WATCH_MS)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('off: Home → Agents moves nothing', async () => {
+    const local = mountRoom({ thread: true })
+    setPref('off')
+    usePageViewStore.getState().setPage('home')
+    await frames()
+    usePageViewStore.getState().setPage('agents')
+    await frames()
+    expect(document.activeElement).toBe(document.body)
+    expect(document.activeElement).not.toBe(local.thread)
   })
 })

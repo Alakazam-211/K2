@@ -28,7 +28,7 @@ import TransferProgress from './components/TransferProgress/TransferProgress'
 import AssistantBar from './components/WorkspaceAssistant/AssistantBar'
 import { useProjectsStore } from './stores/projects'
 import GateChrome from './components/TopBar/GateChrome'
-import { preferredWorkspaceSwitchFocus, tryFocusPreferredWorkspaceInput } from './lib/workspace-switch-focus'
+import { installRoomPageSwitchFocus, preferredWorkspaceSwitchFocus, tryFocusPreferredWorkspaceInput } from './lib/workspace-switch-focus'
 // Pinned-chat retention — per-window host that keeps exempt workspaces'
 // pinned chats mounted (attached + rendering) while hidden. Rendered as
 // the FIRST child of every top-level layout branch below so React's
@@ -576,6 +576,11 @@ function AppRoot(): React.JSX.Element {
   // click handler focuses a terminal on the next rAF and the 200ms poll
   // does the same — both collapse the highlight within a split second.
   // TerminalPane already guards the same way on its own focus path (0.37.11).
+  // Home ↔ Agents applies the workspace-switch focus setting (Rosson
+  // 2026-10-16: leaving a remote room on Home for Agents left the caret in
+  // the parked room).
+  useEffect(() => installRoomPageSwitchFocus(), [])
+
   useEffect(() => {
     const hasLiveTextSelection = (): boolean => {
       const sel = window.getSelection()

@@ -21,6 +21,12 @@ import { useRunningAgentsStore } from '@/stores/running-agents'
 
 let applyGen = 0
 let observer: MutationObserver | null = null
+let observerTimer: ReturnType<typeof setTimeout> | null = null
+
+/** How long one apply keeps watching for a late compose bar (a remote
+ *  room's Thread loads over the network). After that, a bar that mounts
+ *  later does not pull the caret away from whatever the user picked. */
+export const COMPOSE_WATCH_MS = 10_000
 
 /** Walk ancestors. Inactive tabs stay mounted under `display:none` /
  *  `aria-hidden` (TerminalArea). getComputedStyle on the textarea itself
@@ -222,6 +228,10 @@ function stopWatching(): void {
     observer.disconnect()
     observer = null
   }
+  if (observerTimer !== null) {
+    clearTimeout(observerTimer)
+    observerTimer = null
+  }
 }
 
 function watchForComposeBar(gen: number): void {
@@ -234,6 +244,9 @@ function watchForComposeBar(gen: number): void {
     }
   })
   observer.observe(document.body, { childList: true, subtree: true })
+  observerTimer = setTimeout(() => {
+    if (gen === applyGen) stopWatching()
+  }, COMPOSE_WATCH_MS)
 }
 
 /** Focus the configured workspace-switch input. Composer mode waits for
@@ -271,6 +284,28 @@ export function applyWorkspaceSwitchFocus(): void {
     window.setTimeout(() => run(false), 800)
     window.setTimeout(() => run(true), 2000)
   })
+}
+
+/** Moving between pages applies the setting too: Home → Agents (and back)
+ *  shows another room, and the caret left in the room we left is now in a
+ *  hidden or parked compose bar (WebKit keeps focus there, so the idle
+ *  refocus never sees an empty focus). Applied a frame after the page
+ *  change so the new page has painted; `applyWorkspaceSwitchFocus` then
+ *  retries while that room's composer mounts. Returns the unsubscribe. */
+export function installRoomPageSwitchFocus(): () => void {
+  let frame: number | null = null
+  const unsub = usePageViewStore.subscribe((state, prev) => {
+    if (state.page === prev.page || !isRoomPage(state.page)) return
+    if (frame !== null) cancelAnimationFrame(frame)
+    frame = requestAnimationFrame(() => {
+      frame = null
+      applyWorkspaceSwitchFocus()
+    })
+  })
+  return () => {
+    if (frame !== null) cancelAnimationFrame(frame)
+    unsub()
+  }
 }
 
 /** Cancel in-flight retries (jsdom tests). */

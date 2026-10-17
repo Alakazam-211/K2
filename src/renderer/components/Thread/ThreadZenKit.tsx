@@ -30,7 +30,6 @@ import {
   chamferCutFor,
   chamferVars,
 } from './chamfer'
-import { THREAD_GLASS_EXPERIMENT_CSS } from './thread-glass-experiment'
 
 // The square Style's chamfers live in ./chamfer (the cards use them too).
 export {
@@ -266,7 +265,7 @@ export function ThreadFooterFade({ top }: { top?: number | null }): JSX.Element 
 }
 
 export function ThreadZenStyles(): JSX.Element {
-  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS + THREAD_FOOTER_FADE_CSS + THREAD_GLASS_EXPERIMENT_CSS}</style>
+  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS + THREAD_FOOTER_FADE_CSS}</style>
 }
 
 /** The empty Thread's line (Zen and the desktop Thread). */

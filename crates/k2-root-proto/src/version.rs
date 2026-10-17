@@ -14,6 +14,15 @@
 //!   upgrade / rollback / uninstall / purge, units, stdin-JSON config,
 //!   master-key rotation and the media sysctl drop-in. The daemon gates it
 //!   on `protocol >= 7 && namespaces.sew == true` ([`SEW_MIN_PROTOCOL`]).
+//!   Shipped in 0.46.0.
+//! - 8 = every root-helper change 0.46.1 makes, in one bump
+//!   (plan-0461-lanes Q5, renumbered once 0.46.0 shipped 7 for Sew): lane
+//!   1's wall verbs, lane P's `apps podman install|uninstall`, and Sew's
+//!   licence notices (`engine sew install-bin`, `upgrade` and
+//!   `media-install` also put the pinned tarball's `LICENSE`, `NOTICE` and
+//!   `THIRD_PARTY_NOTICES.md` under [`crate::sew::SEW_DOC_DIR`] /
+//!   [`crate::sew::SEW_MEDIA_DOC_DIR`]). Anything after an 8 build ships
+//!   needs 9.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -22,7 +31,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 7;
+pub const PROTOCOL: u32 = 8;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -194,20 +203,21 @@ mod tests {
     use super::*;
 
     /// AR38: 5 is the hand-off drop-in, 6 is the App runtime's namespace,
-    /// 7 is Sew's `engine sew`. This build answers 7 because the Sew verbs
-    /// exist: every one of them is in the catalog (and so are the apps
-    /// verbs, which 7 still serves: protocols are additive).
+    /// 7 is Sew's `engine sew` (0.46.0), 8 is every 0.46.1 helper change
+    /// (wall verbs, Podman install, Sew's notices). This build answers 8;
+    /// the Sew verbs and the apps verbs are still in the catalog
+    /// (protocols are additive).
     #[test]
     fn protocol_numbers_follow_ar38() {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, SEW_MIN_PROTOCOL, "protocol 7 = Sew's engine sew namespace");
+        assert_eq!(PROTOCOL, 8, "protocol 8 = 0.46.1's helper changes; 7 is Sew's engine sew");
         let sew: Vec<_> = crate::verbs::catalog()
             .into_iter()
             .filter(|v| v.namespace() == "sew")
             .collect();
-        assert!(!sew.is_empty(), "protocol 7 without any engine sew verb");
+        assert!(!sew.is_empty(), "protocol 8 without any engine sew verb");
         let apps: Vec<_> = crate::verbs::catalog()
             .into_iter()
             .filter(|v| v.namespace() == "apps")

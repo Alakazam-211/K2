@@ -73,7 +73,7 @@ import {
   type ZenWidgetDecl,
 } from '@/lib/zen/zen-page'
 import { zenColumnMinWidthCss } from '@/lib/zen/zen-overflow'
-import { exitZen, registerZenRowSelect } from '@/lib/zen/zen-view'
+import { exitZen, registerZenRowSelect, registerZenViewSwitch } from '@/lib/zen/zen-view'
 import { ZEN_RAIL_KINDS, ZEN_TEMPLATE_CONTROL_CAPS, ZEN_UNBOXED_KINDS, zenWidgetFor } from './zen-registry'
 import { zenConversationRow } from './widgets/ZenConversationWidget'
 import { ZenWidgetStyles } from './widgets/zen-widget-kit'
@@ -202,6 +202,17 @@ export function ZenPage({
   // G52: ⌘1–9 / ⌘0 opens row N of this page's first Agents widget.
   useEffect(
     () => registerZenRowSelect((index) => selectZenRowOnPage(pageRef.current, currentZenGardenId() ?? '', index)),
+    [],
+  )
+  // 0.46.0: ⌃⌘1–4 (Ctrl+Alt+1–4) switch the rail's view, as a rail click
+  // does. A Garden without a rail has no views: the chord does nothing.
+  const gardenRef = useRef(garden)
+  gardenRef.current = garden
+  useEffect(
+    () =>
+      registerZenViewSwitch((v) => {
+        if (zenPageHasRail(gardenRef.current)) useZenWindowStore.getState().setView(v)
+      }),
     [],
   )
   const widgetBridges = useMemo(() => {

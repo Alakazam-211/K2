@@ -990,6 +990,32 @@ describe('the nav rail (Garden 1)', () => {
     expect(document.querySelector('[data-zen-page]')?.getAttribute('data-zen-view')).toBe('home')
   })
 
+  // 0.46.0 page chords (this file runs as macOS: ⌃⌘1–4).
+  function pageChord(n: number): void {
+    fireEvent.keyDown(window, { key: String(n), code: `Digit${n}`, ctrlKey: true, metaKey: true })
+  }
+
+  it('⌃⌘1–4 switch the rail view in Zen and never move the page under it', async () => {
+    await mountZen()
+    for (const [n, view] of [[4, 'tickets'], [2, 'agents'], [3, 'projects'], [1, 'home']] as const) {
+      await act(async () => pageChord(n))
+      await waitFor(() => expect(document.querySelector('[data-zen-page]')?.getAttribute('data-zen-view')).toBe(view))
+      expect(useZenWindowStore.getState().view).toBe(view)
+      expect(currentNav()).toEqual([view])
+      expect(useZenWindowStore.getState().on).toBe(true)
+      expect(usePageViewStore.getState().page).toBe('home')
+    }
+  })
+
+  it('a page chord on a Garden without a rail does nothing', async () => {
+    useZenWindowStore.setState({ garden: 'g-notes', view: 'home' })
+    await mountGarden('k2.blank@1')
+    await act(async () => pageChord(4))
+    expect(useZenWindowStore.getState().view).toBe('home')
+    expect(usePageViewStore.getState().page).toBe('home')
+    expect(useZenWindowStore.getState().on).toBe(true)
+  })
+
   it('app.open needs app:navigate and a known page; app.current reads the view', async () => {
     await mountZen()
     const hostStub = {

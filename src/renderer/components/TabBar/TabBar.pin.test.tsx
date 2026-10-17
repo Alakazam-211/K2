@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// Pinned tabs from the tab itself (Rosson 2026-10-16): the hover pin, the
-// pinned tab's pin slot (no × — a click unpins), right-click Pin Tab /
+// Pinned tabs (Rosson 2026-10-16): no pin or Unpin on hover (hover shows
+// only ×; a pinned tab rests with a static pin), right-click Pin Tab /
 // Unpin Tab, Close Other / Close All keeping pinned tabs, the system tabs
 // untouched, and the file viewer's pin toggling the same flag.
 
@@ -93,37 +93,54 @@ afterEach(() => {
   setTabs([])
 })
 
-describe('the tab pin', () => {
-  it('an unpinned tab has a hover pin that pins it to the left', () => {
+describe('the tab pin (no pin on hover — Rosson 2026-10-16)', () => {
+  it('an unpinned tab has no pin control at all; hover shows only ×', () => {
     setTabs([systemTab('chat', 'chat'), systemTab('inbox', 'inbox'), fileTab('a'), fileTab('b')])
     render()
-    const pin = tabEl('b').querySelector('[data-tab-pin]')
-    if (!(pin instanceof HTMLElement)) throw new Error('unpinned tab has no hover pin')
-    expect(pin.className).toContain('opacity-0')
-    expect(pin.className).toContain('group-hover:opacity-100')
-    expect(tabEl('b').querySelector('[data-tab-close-slot="close"]')).toBeTruthy()
-
-    fireEvent.click(pin)
-    expect(pinnedIds()).toEqual(['b'])
-    expect(order()).toEqual(['chat', 'inbox', 'b', 'a'])
+    const root = tabEl('b')
+    expect(root.querySelector('[data-tab-pin]')).toBeNull()
+    expect(root.querySelector('[data-k2-icon="pin"]')).toBeNull()
+    expect(root.querySelector('[data-k2-icon="pin-off"]')).toBeNull()
+    expect(root.querySelector('[aria-label="Pin tab"]')).toBeNull()
+    const slot = root.querySelector('[data-tab-close-slot="close"]')
+    if (!(slot instanceof HTMLElement)) throw new Error('unpinned tab has no close slot')
+    expect(slot.querySelector('svg line')).toBeTruthy()
+    expect(pinnedIds()).toEqual([])
   })
 
-  it('a pinned tab shows the pin instead of ×; clicking it unpins (never closes)', () => {
+  it('hovering a pinned tab shows no pin or Unpin: the static pin rests, hover swaps in ×', () => {
     setTabs([fileTab('p', { isPinnedFile: true }), fileTab('a')])
     render()
     const root = tabEl('p')
     expect(root.dataset.tabPinned).toBe('true')
     expect(root.querySelector('[data-tab-pin]')).toBeNull()
-    expect(root.querySelector('[data-tab-close-slot="close"]')).toBeNull()
-    const slot = root.querySelector('[data-tab-close-slot="unpin"]')
-    if (!(slot instanceof HTMLElement)) throw new Error('pinned tab has no pin slot')
-    expect(slot.getAttribute('title')).toBe('Unpin tab')
-    expect(slot.querySelector('[data-tab-pinned-glyph] [data-k2-icon="pin"]')).toBeTruthy()
-    expect(slot.querySelector('[data-tab-unpin-glyph] [data-k2-icon="pin-off"]')).toBeTruthy()
+    expect(root.querySelector('[data-tab-unpin-glyph]')).toBeNull()
+    expect(root.querySelector('[data-k2-icon="pin-off"]')).toBeNull()
+    expect(root.querySelector('[data-tab-close-slot="unpin"]')).toBeNull()
+    const slot = root.querySelector('[data-tab-close-slot="close"]')
+    if (!(slot instanceof HTMLElement)) throw new Error('pinned tab has no close slot')
+    expect(slot.getAttribute('title')).toBe('Close tab')
+    // At rest: the static pin, hidden while the tab is hovered.
+    const rest = slot.querySelector('[data-tab-slot-rest]')
+    if (!(rest instanceof HTMLElement)) throw new Error('pinned tab has no resting mark')
+    expect(rest.className).toContain('group-hover:hidden')
+    expect(rest.querySelector('[data-tab-pinned-glyph] [data-k2-icon="pin"]')).toBeTruthy()
+    // On hover: only the × (no K2 icon, no pin).
+    const hover = slot.querySelector('[data-tab-slot-hover]')
+    if (!(hover instanceof HTMLElement)) throw new Error('pinned tab has no hover glyph')
+    expect(hover.className).toContain('group-hover:flex')
+    expect(hover.querySelector('[data-k2-icon]')).toBeNull()
+    expect(hover.querySelector('svg line')).toBeTruthy()
+    // The pin mark itself is not a control.
+    expect(root.querySelector('[data-tab-pinned-glyph]')?.closest('[data-tab-slot-hover]')).toBeNull()
+  })
 
+  it('the hover × closes a pinned tab (unpinning stays in the menu)', () => {
+    setTabs([fileTab('p', { isPinnedFile: true }), fileTab('a')])
+    render()
+    const slot = tabEl('p').querySelector('[data-tab-close-slot="close"]') as HTMLElement
     fireEvent.click(slot)
-    expect(order()).toEqual(['p', 'a'])
-    expect(pinnedIds()).toEqual([])
+    expect(order()).toEqual(['a'])
   })
 
   it('a pinned tab keeps its own kind icon (no pin in the icon slot)', () => {
@@ -134,7 +151,7 @@ describe('the tab pin', () => {
     expect(iconSlot.querySelector('[data-k2-icon]')).toBeNull()
   })
 
-  it('system tabs get no pin and no Pin Tab row', async () => {
+  it('system tabs get no pin and no close slot', async () => {
     setTabs([systemTab('chat', 'chat'), fileTab('a')])
     render()
     expect(tabEl('chat').querySelector('[data-tab-pin]')).toBeNull()
@@ -143,6 +160,17 @@ describe('the tab pin', () => {
 })
 
 describe('right-click Pin Tab / Unpin Tab', () => {
+  it('offers Pin Tab on an unpinned tab', async () => {
+    setTabs([fileTab('a'), fileTab('b')])
+    render()
+    await act(async () => {
+      fireEvent.contextMenu(tabEl('b'))
+    })
+    await waitFor(() => expect(useContextMenuStore.getState().isOpen).toBe(true))
+    expect(menuLabels()).toContain('Pin Tab')
+    expect(menuLabels()).not.toContain('Unpin Tab')
+  })
+
   it('pins and unpins from the menu', async () => {
     setTabs([fileTab('a'), fileTab('b')])
     render()

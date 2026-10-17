@@ -26,7 +26,14 @@ use serde_json::{json, Value};
 use crate::quadlet::{self, SecretMount};
 use crate::sys::{self, Out};
 
+/// The distro's Podman (what k2app runs unless K2's bundle is installed).
 pub const PODMAN: &str = "/usr/bin/podman";
+
+/// The `podman` k2app runs: K2's Podman 5 bundle (`/opt/k2/podman`, lane
+/// P) when its marker is present, else the distro's [`PODMAN`].
+pub fn podman_bin() -> &'static str {
+    k2_root_proto::podman::podman_bin()
+}
 pub const SYSTEMCTL: &str = "/usr/bin/systemctl";
 
 type R<T> = Result<T, (&'static str, String)>;
@@ -160,7 +167,7 @@ impl Engine {
     }
 
     fn podman(&self, args: &[&str], stdin: Option<Vec<u8>>, secs: u64) -> R<Out> {
-        let o = self.run(PODMAN, args, stdin, secs)?;
+        let o = self.run(podman_bin(), args, stdin, secs)?;
         if !o.ok() {
             return Err((codes::PODMAN, format!("podman {}: {}", args.first().unwrap_or(&""), o.why())));
         }
@@ -247,7 +254,7 @@ impl Engine {
                 if !image_ok(&image) {
                     return Err(bad("image"));
                 }
-                let o = self.run(PODMAN, &["image", "exists", &image], None, 60)?;
+                let o = self.run(podman_bin(), &["image", "exists", &image], None, 60)?;
                 Ok(json!({ "present": o.ok() }))
             }
             Request::ImageLoad { image, len } => self.image_load(&image, len, body),
@@ -273,7 +280,7 @@ impl Engine {
     }
 
     fn version(&self) -> R<Value> {
-        let podman = self.run(PODMAN, &["--version"], None, 30).ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        let podman = self.run(podman_bin(), &["--version"], None, 30).ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
         Ok(json!({
             "name": "k2-app-engine",
             "version": env!("K2_PRODUCT_VERSION"),
@@ -367,7 +374,7 @@ impl Engine {
         if !self.seeds().join(seed).is_dir() {
             return Err((codes::NOT_FOUND, "Seed not on the engine (seed-put first)".into()));
         }
-        if !self.run(PODMAN, &["image", "exists", image], None, 60)?.ok() {
+        if !self.run(podman_bin(), &["image", "exists", image], None, 60)?.ok() {
             return Err((codes::NOT_FOUND, "image not on the engine (image-load first)".into()));
         }
         let slot = {
@@ -403,13 +410,13 @@ impl Engine {
         // Pay the first start of this id mapping now, before any switch
         // (W §5.5: 13–20 s per new mapping on the first start).
         let warm = format!("k2warm-{}", app.as_str());
-        let _ = self.run(PODMAN, &["rm", "-f", "-i", &warm], None, 60);
+        let _ = self.run(podman_bin(), &["rm", "-f", "-i", &warm], None, 60);
         let map = format!("0:{base}:{}", wire::SLOT_SIZE);
         let rt = format!("--runtime={}", self.runtime_arg());
         let t0 = std::time::Instant::now();
         self.podman(&[&rt, "create", "--pull=never", "--name", &warm, "--uidmap", &map, "--gidmap", &map, image, "true"], None, 900)?;
         let warm_ms = t0.elapsed().as_millis() as u64;
-        let _ = self.run(PODMAN, &["rm", "-f", "-i", &warm], None, 60);
+        let _ = self.run(podman_bin(), &["rm", "-f", "-i", &warm], None, 60);
         Ok(json!({ "slot": slot, "gwPort": gw, "pxPort": px, "base": base, "warmMs": warm_ms }))
     }
 
@@ -459,7 +466,7 @@ impl Engine {
         let mut made = Vec::new();
         let cleanup = |made: &[String]| {
             for n in made {
-                let _ = self.run(PODMAN, &["secret", "rm", n], None, 30);
+                let _ = self.run(podman_bin(), &["secret", "rm", n], None, 30);
             }
         };
         let mut files = false;
@@ -598,7 +605,7 @@ impl Engine {
         let st_path = self.run_dir(&a).join(format!("{dep}.json"));
         let secrets = std::fs::read(&st_path).ok().and_then(|b| serde_json::from_slice::<RunState>(&b).ok()).map(|s| s.secrets).unwrap_or_default();
         for n in &secrets {
-            let _ = self.run(PODMAN, &["secret", "rm", n], None, 30);
+            let _ = self.run(podman_bin(), &["secret", "rm", n], None, 30);
         }
         let _ = std::fs::remove_file(self.quadlets().join(format!("{}.container", unit_stem(&a, dep))));
         let _ = std::fs::remove_file(self.run_dir(&a).join(format!("{dep}.env")));
@@ -652,7 +659,7 @@ impl Engine {
         let mut args: Vec<&str> = vec!["exec", "--interactive=false", &ctr];
         args.extend(argv.iter().map(String::as_str));
         let t0 = std::time::Instant::now();
-        let o = self.run(PODMAN, &args, None, timeout_secs)?;
+        let o = self.run(podman_bin(), &args, None, timeout_secs)?;
         let mut out = o.stdout.clone();
         out.extend_from_slice(&o.stderr);
         let bytes = out.len();
@@ -673,7 +680,7 @@ impl Engine {
             return Err(bad("argv"));
         }
         let ctr = unit_stem(&a, dep);
-        let mut c = self.cmd(PODMAN);
+        let mut c = self.cmd(podman_bin());
         // No detach keys: every byte goes to the command.
         c.args(["exec", "--interactive", "--tty", "--detach-keys=", &ctr]);
         c.args(argv);

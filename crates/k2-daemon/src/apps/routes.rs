@@ -32,6 +32,7 @@ pub const MAX_BODY: usize = 256 * 1024;
 /// Every runtime route.
 pub const ROUTES: &[&str] = &[
     "/cli/app/box",
+    "/cli/app/box/podman/uninstall",
     "/cli/app/box/prepare",
     "/cli/app/build",
     "/cli/app/config",
@@ -59,6 +60,7 @@ pub const ROUTES: &[&str] = &[
 
 /// POST-only rows (`require_post` → 405 on GET).
 pub const POST_ROUTES: &[&str] = &[
+    "/cli/app/box/podman/uninstall",
     "/cli/app/box/prepare",
     "/cli/app/build",
     "/cli/app/config",
@@ -345,6 +347,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         // for the owner only.
         "/cli/app/box" => super::box_prep::box_route(&who),
         "/cli/app/box/prepare" => json_body(body).and_then(|v| super::box_prep::prepare_route(&who, &v)),
+        // Lane P: the owner removes K2's Podman bundle.
+        "/cli/app/box/podman/uninstall" => json_body(body).and_then(|v| super::podman_install::uninstall_route(&who, &v)),
         // The guarded engine (S11): the owner installs or updates it.
         "/cli/app/engine/install" => json_body(body).and_then(|v| super::engine_install::install_route(&who, &v)),
         "/cli/app/build" => build(&who, body),

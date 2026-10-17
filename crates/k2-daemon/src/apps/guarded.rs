@@ -336,8 +336,13 @@ pub fn ensure_image() -> Result<String> {
         let tmp = dir.join(format!(".fetch-{}.oci.tar", std::process::id()));
         let _ = std::fs::remove_file(&tmp);
         let dest = format!("oci-archive:{}:{image}", tmp.display());
+        // Anonymous: the base image is public and pinned by digest. Without
+        // --src-no-creds skopeo reads /run/containers/<uid>/auth.json (no
+        // XDG_RUNTIME_DIR here), and where root has run the distro's Podman
+        // that folder is root's 0700: "permission denied", deploy failed
+        // (Ubuntu 24.04 e2e, lane P).
         let out = std::process::Command::new(SKOPEO)
-            .args(["copy", "--quiet", "--retry-times", "3", &base.remote(), &dest])
+            .args(["copy", "--quiet", "--retry-times", "3", "--src-no-creds", &base.remote(), &dest])
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
             .env("HOME", k2_core::paths::k2_home())

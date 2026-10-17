@@ -44,14 +44,14 @@ use ctx::{Ctx, Fail, HResult};
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=7 arch=x86_64;"
+    " proto=8 arch=x86_64;"
 );
 #[cfg(target_arch = "aarch64")]
 #[used]
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=7 arch=aarch64;"
+    " proto=8 arch=aarch64;"
 );
 
 /// Present only in a `test-keys` build; release signing refuses it.

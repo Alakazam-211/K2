@@ -27,7 +27,8 @@ eval "$(sed -n '/^# BEGIN_CLI_TOOL_POLICY/,/^# END_CLI_TOOL_POLICY/p' "$K2")"
 help="$("$K2" calendar --help)"
 for want in 'k2 calendar list' 'events' 'freebusy' 'wait' 'create' 'update' 'delete' \
             'existing read' 'draft mail grants now also cover' 'NEVER any email' \
-            "'send' level" 'hosted_only' 'k2 hostmail calendar enable' \
+            "'send' level" 'capability_missing' 'k2 hostmail calendar enable' \
+            'LINKED INBOXES' 'Microsoft 365' 'k2 mail link calendars on' 'scope_not_granted' \
             '/cli/mail/calendar/' 'BEGIN/END CALENDAR NOTES' 'SHARED CALENDARS' \
             '<owner>/<id>' 'share_rights' 'editor share'; do
   printf '%s' "$help" | grep -qF -- "$want" || fail "calendar --help must mention '$want'"
@@ -226,6 +227,18 @@ out="$(k2 calendar list)"
 printf '%s' "$out" | grep -q '^c1 · Main · default · read/write/delete$' || fail "own list row: $out"
 printf '%s' "$out" | grep -q '^boss@example.com/c9 · Team · shared by boss@example.com · read/write$' \
   || fail "shared list row: $out"
+# MCS3: capability_missing exits 3 and keeps {cap, reason, fix} on stderr.
+set_reply /cli/mail/calendar/events 409 '{"ok":false,"error":{"code":"capability_missing","hint":"linked for mail only","cap":"calendar.read","reason":"scope_not_granted","fix":"k2 mail link upgrade me@example.com --features calendar (owner)"}}'
+set +e; k2 calendar events me@example.com >/dev/null 2>"$WORK/err"; rc=$?; set -e
+[ "$rc" -eq 3 ] || fail "capability_missing must exit 3, got $rc"
+python3 - "$WORK/err" <<'PY' || fail "capability_missing stderr: $(cat "$WORK/err")"
+import json, sys
+e = json.loads(open(sys.argv[1]).read())["error"]
+assert e["code"] == "capability_missing", e
+assert e["cap"] == "calendar.read", e
+assert e["reason"] == "scope_not_granted", e
+assert e["fix"] == "k2 mail link upgrade me@example.com --features calendar (owner)", e
+PY
 set_reply /cli/mail/calendar/list 400 '{"ok":false,"error":{"code":"hosted_only","hint":"linked"}}'
 set +e; k2 calendar list me@example.com >/dev/null 2>&1; rc=$?; set -e
 [ "$rc" -eq 2 ] || fail "hosted_only must exit 2, got $rc"

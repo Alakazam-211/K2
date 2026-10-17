@@ -3025,6 +3025,131 @@ mod tests {
         cleanup(&[&owner, &other]);
     }
 
+    /// An OAuth linked row (`kind` graph for Microsoft, imap for Gmail).
+    fn seed_oauth_link(owner: &str, address: &str, provider: &str, calendar: bool) -> String {
+        use crate::mail::oauth::{scope_for, Features, OauthProvider};
+        let (kind, host, p) = match provider {
+            "microsoft" => ("graph", "graph.microsoft.com", OauthProvider::Microsoft),
+            _ => ("imap", "imap.gmail.com", OauthProvider::Gmail),
+        };
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO mail_external_inboxes (id, owner_project_id, email_address, kind, host, \
+             port, username, created_at, primary_level, auth_kind, provider, features, \
+             granted_scopes) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 443, ?3, 100, 'draft', 'oauth', ?6, ?7, ?8)",
+            rusqlite::params![
+                id,
+                owner,
+                address,
+                kind,
+                host,
+                provider,
+                if calendar { "mail,calendar" } else { "mail" },
+                scope_for(p, Features { mail: true, calendar }),
+            ],
+        )
+        .expect("seed oauth link");
+        id
+    }
+
+    fn reason_of(resp: &CliResponse) -> String {
+        body_of(resp)["error"]["reason"].as_str().expect("error.reason").to_string()
+    }
+
+    #[test]
+    /// MCS3: a Microsoft link routes to Graph only with the calendar grant
+    /// and the owner's switch on; otherwise `capability_missing` with the
+    /// reason and the fix — always AFTER the access gate (a stranger gets
+    /// the masked not_found, never the reason).
+    fn microsoft_link_routes_to_graph_or_names_the_missing_capability() {
+        let _home = k2_core::test_env::TempHome::new();
+        let (owner, _) = insert_project("ms-own");
+        let (other, _) = insert_project("ms-oth");
+        let mail_only = addr("ms-mail");
+        let with_cal = addr("ms-cal");
+        seed_oauth_link(&owner, &mail_only, "microsoft", false);
+        seed_oauth_link(&owner, &with_cal, "microsoft", true);
+
+        let r = resolve_target(&owner, Some(&mail_only), Level::Read).err().expect("mail only");
+        assert!(r.status.starts_with("409"), "{} {}", r.status, r.body);
+        assert_eq!(code_of(&r), "capability_missing");
+        assert_eq!(reason_of(&r), "scope_not_granted");
+        assert_eq!(body_of(&r)["error"]["cap"], "calendar.read");
+        assert_eq!(
+            body_of(&r)["error"]["fix"],
+            format!("k2 mail link upgrade {mail_only} --features calendar (owner)")
+        );
+        let r = resolve_target(&owner, Some(&mail_only), Level::Draft).err().expect("mail only");
+        assert_eq!(body_of(&r)["error"]["cap"], "calendar.write");
+
+        match resolve_target(&owner, Some(&with_cal), Level::Draft) {
+            Ok(CalTarget::Graph(g)) => {
+                assert_eq!(g.address, with_cal);
+                assert_eq!(g.level, Level::Draft, "the owner's primary level");
+            }
+            Ok(CalTarget::Hosted(_)) => panic!("a Microsoft link is never hosted"),
+            Err(r) => panic!("routable: {} {}", r.status, r.body),
+        }
+        // The hosted-only callers (S4 sharing) still refuse it.
+        let r = resolve_inbox(&owner, Some(&with_cal), Level::Read).expect_err("hosted only");
+        assert_eq!(code_of(&r), "hosted_only");
+
+        // Its event ids resolve to Graph; the shared-event form never does.
+        let tok = encode_event_id(&with_cal, "AAMkAGI2-long-graph-id==");
+        match resolve_event_target(&owner, &tok, Level::Read) {
+            Ok(EventTarget::Graph(g, id)) => {
+                assert_eq!(g.address, with_cal);
+                assert_eq!(id, "AAMkAGI2-long-graph-id==");
+            }
+            _ => panic!("graph event"),
+        }
+        let shared = encode_shared_event_id(&with_cal, "AAMk", "boss@contoso.com");
+        let r = resolve_event_target(&owner, &shared, Level::Read).err().expect("no shared form");
+        assert_eq!(code_of(&r), "not_found");
+        // An oversized token never decodes (MCS-A23).
+        let huge = encode_event_id(&with_cal, &"x".repeat(1100));
+        let r = resolve_event_target(&owner, &huge, Level::Read).err().expect("too long");
+        assert_eq!(code_of(&r), "usage");
+
+        // The owner's switch off → owner_disabled, still after the gate.
+        k2_core::app_settings::update(json!({ "linkedCalendars": false })).expect("switch off");
+        let r = resolve_target(&owner, Some(&with_cal), Level::Read).err().expect("switched off");
+        assert_eq!(code_of(&r), "capability_missing");
+        assert_eq!(reason_of(&r), "owner_disabled");
+        assert_eq!(body_of(&r)["error"]["fix"], "k2 mail link calendars on (owner)");
+        k2_core::app_settings::update(json!({ "linkedCalendars": true })).expect("switch on");
+        assert!(matches!(resolve_target(&owner, Some(&with_cal), Level::Read), Ok(CalTarget::Graph(_))));
+
+        // A stranger learns nothing.
+        for a in [&mail_only, &with_cal] {
+            let r = resolve_target(&other, Some(a), Level::Read).err().expect("masked");
+            assert!(r.status.starts_with("404"), "{}", r.body);
+            assert_eq!(code_of(&r), "not_found");
+            assert!(!r.body.contains("capability_missing"));
+        }
+        cleanup(&[&owner, &other]);
+    }
+
+    #[test]
+    /// MCS3: Google calendars aren't built (MCS4): with the consent →
+    /// `not_built`, without → `scope_not_granted`.
+    fn google_link_calendar_is_not_built_or_scope_not_granted() {
+        let (owner, _) = insert_project("g-own");
+        let consented = addr("g-cal");
+        let mail_only = addr("g-mail");
+        seed_oauth_link(&owner, &consented, "gmail", true);
+        seed_oauth_link(&owner, &mail_only, "gmail", false);
+        let r = resolve_target(&owner, Some(&consented), Level::Read).err().expect("google");
+        assert_eq!(code_of(&r), "capability_missing");
+        assert_eq!(reason_of(&r), "not_built");
+        let r = resolve_target(&owner, Some(&mail_only), Level::Read).err().expect("google");
+        assert_eq!(reason_of(&r), "scope_not_granted");
+        cleanup(&[&owner]);
+    }
+
     #[test]
     fn read_grant_reads_but_cannot_draft_and_no_grant_is_masked() {
         let (owner, _) = insert_project("g-own");

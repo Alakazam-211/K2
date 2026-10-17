@@ -53,6 +53,9 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     // 0.44.4 (noun-tiers A3): the global agent mail-send default is an
     // agent permission switch like DNS/connections above — Admin floor.
     "mailAgentSend",
+    // MCS3: calendars on linked inboxes, the same switch as
+    // `k2 mail link calendars on|off` (Admin floor there too).
+    "linkedCalendars",
     // prd-daemon-activity-and-thread-working-v1 Q2 — keep K2's hooks in
     // the daemon user's agent CLI configs. Same floor as
     // `POST /cli/hooks/install` (Admin): it rewrites those files.

@@ -1500,9 +1500,17 @@ mod tests {
         );
         let overlay = &files.iter().find(|(p, _)| p.ends_with("/overlay_routes.rs")).expect("overlay_routes").1;
         let prod = overlay.split("\n#[cfg(test)]\nmod tests").next().expect("prod");
-        for arm in ["fn handle_ask(", "fn handle_secret("] {
+        let fn_body = |arm: &str| -> &str {
             let body = &prod[prod.find(arm).expect(arm)..];
-            let body = &body[..body[1..].find("\nfn ").map_or(body.len(), |i| i + 1)];
+            &body[..body[1..].find("\nfn ").map_or(body.len(), |i| i + 1)]
+        };
+        // `handle_secret` posts through `create_secret_card` (shared with the
+        // clone's "Leave blank" card), so the reply is recorded there.
+        let secret = fn_body("fn handle_secret(");
+        assert!(secret.contains("create_secret_card("), "fn handle_secret( posts through create_secret_card");
+        assert!(!secret.contains("deliver_thread_to_pty("), "fn handle_secret( never delivers a turn");
+        for arm in ["fn handle_ask(", "fn create_secret_card("] {
+            let body = fn_body(arm);
             assert!(body.contains("thread_activity::note_reply("), "{arm} records a reply");
             assert!(!body.contains("deliver_thread_to_pty("), "{arm} never delivers a turn");
         }

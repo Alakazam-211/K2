@@ -345,8 +345,23 @@ describe('the Admin profile modal: who you are', () => {
     expect(rows.length).toBe(2)
     expect(rows[0]).toContain('Failed (bad_password)')
     expect(rows[0]).toContain('192.168.1.7')
+    expect(rows[0]).toContain('Local network')
     expect(rows[1]).toContain('Signed in')
-    expect(rows[1]).toContain('as rosson-phone')
+    expect(rows[1]).toContain('rosson-phone')
+    expect(rows[1]).toContain('K2 Connect')
+    // A grid: one header row with these columns; each row has one cell per column.
+    const grid = screen.getByTestId('admin-profile-sign-in-grid')
+    expect(Array.from(grid.querySelectorAll('[role="columnheader"]')).map((c) => c.textContent)).toEqual([
+      'Time',
+      'Login',
+      'Client',
+      'IP',
+      'Via',
+      'Result',
+    ])
+    for (const r of grid.querySelectorAll('[data-testid="admin-profile-sign-in"]')) {
+      expect(r.querySelectorAll('[role="cell"]').length).toBe(6)
+    }
     expect([...h.calls].sort()).toEqual(['auth/whoami', 'owner/accounts', 'people/color', 'tunnel/status', 'users', 'users/audit'])
   })
 

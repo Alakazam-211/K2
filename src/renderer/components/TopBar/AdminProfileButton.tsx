@@ -111,22 +111,72 @@ function Tag({ children, testId }: { children: React.ReactNode; testId?: string 
   )
 }
 
-function SignInRow({ ev, showUser }: { ev: AuthAuditEvent; showUser: boolean }): React.JSX.Element {
-  const ok = ev.outcome === 'ok'
+/** How a sign-in reached the server, in plain words. */
+export function ingressLabel(ingress: string): string {
+  if (ingress === 'loopback') return 'This computer'
+  if (ingress === 'lan') return 'Local network'
+  if (ingress === 'tunnel') return 'K2 Connect'
+  if (ingress.startsWith('edge:')) return 'K2 Connect (edge)'
+  return ingress || '—'
+}
+
+function clientLabel(client: string | undefined): string {
+  if (client === 'web') return 'App / web'
+  if (client === 'api') return 'API'
+  return client || '—'
+}
+
+/** Recent sign-ins as a grid: Time, (Login,) Client, IP, Via, Result.
+ *  Every cell wraps (long IPs and clients break, nothing is cut off);
+ *  rows align to the top so wrapped cells keep one row height per row. */
+function SignInGrid({ events, showUser }: { events: AuthAuditEvent[]; showUser: boolean }): React.JSX.Element {
+  const headers = ['Time', ...(showUser ? ['Login'] : []), 'Client', 'IP', 'Via', 'Result']
+  const columns = showUser
+    ? 'minmax(84px,1.1fr) minmax(64px,1fr) minmax(56px,0.8fr) minmax(72px,1.1fr) minmax(64px,1fr) minmax(64px,1fr)'
+    : 'minmax(84px,1.1fr) minmax(56px,0.8fr) minmax(72px,1.2fr) minmax(64px,1fr) minmax(64px,1fr)'
+  const cell = 'min-w-0 py-1 pr-2 [overflow-wrap:anywhere] [word-break:break-word] border-b border-[var(--color-border)]'
   return (
-    <li className="flex items-baseline gap-3 py-0.5 text-[11px]" data-testid="admin-profile-sign-in">
-      <span className="w-28 flex-shrink-0 text-[var(--color-text-muted)]">{formatTime(ev.ts)}</span>
-      <span className="min-w-0 truncate">
-        <span className={ok ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-status-error-soft)]'}>
-          {ok ? 'Signed in' : `Failed (${ev.outcome})`}
-        </span>
-        {showUser ? <span className="text-[var(--color-text-secondary)]"> as {ev.user}</span> : null}
-        <span className="text-[var(--color-text-muted)]">
-          {ev.ip && ev.ip !== '-' ? ` from ${ev.ip}` : ''}
-          {ev.ingress ? ` · ${ev.ingress}` : ''}
-        </span>
-      </span>
-    </li>
+    <div role="table" aria-label="Recent sign-ins" data-testid="admin-profile-sign-in-grid" className="text-[11px]">
+      <div role="row" className="grid items-start" style={{ gridTemplateColumns: columns }}>
+        {headers.map((hd) => (
+          <div
+            key={hd}
+            role="columnheader"
+            className={`${cell} text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]`}
+          >
+            {hd}
+          </div>
+        ))}
+      </div>
+      {events.map((ev, i) => {
+        const ok = ev.outcome === 'ok'
+        return (
+          <div
+            key={`${ev.ts}-${i}`}
+            role="row"
+            data-testid="admin-profile-sign-in"
+            className="grid items-start"
+            style={{ gridTemplateColumns: columns }}
+          >
+            <div role="cell" className={`${cell} text-[var(--color-text-secondary)]`}>{formatTime(ev.ts)}</div>
+            {showUser ? (
+              <div role="cell" className={`${cell} text-[var(--color-text-primary)]`}>{ev.user}</div>
+            ) : null}
+            <div role="cell" className={`${cell} text-[var(--color-text-secondary)]`}>{clientLabel(ev.client)}</div>
+            <div role="cell" className={`${cell} font-mono text-[var(--color-text-secondary)]`}>
+              {ev.ip && ev.ip !== '-' ? ev.ip : '—'}
+            </div>
+            <div role="cell" className={`${cell} text-[var(--color-text-secondary)]`}>{ingressLabel(ev.ingress)}</div>
+            <div
+              role="cell"
+              className={`${cell} ${ok ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-status-error-soft)]'}`}
+            >
+              {ok ? 'Signed in' : `Failed (${ev.outcome})`}
+            </div>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -441,11 +491,7 @@ function LoadedProfile({
                 {signIns.length === 0 ? (
                   <Muted>No sign-ins on record.</Muted>
                 ) : (
-                  <ul className="m-0 p-0 list-none">
-                    {signIns.map((ev, i) => (
-                      <SignInRow key={`${ev.ts}-${i}`} ev={ev} showUser={profile.ownerToken} />
-                    ))}
-                  </ul>
+                  <SignInGrid events={signIns} showUser={profile.ownerToken} />
                 )}
               </div>
             ) : null}
@@ -563,7 +609,8 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
           left: '50%',
           transform: 'translate(-50%, -50%)',
           zIndex: 99999,
-          width: 'min(480px, 90vw)',
+          // Wide enough for the sign-ins grid; shrinks with small windows.
+          width: 'min(680px, calc(100vw - 32px))',
           maxHeight: '78vh',
           display: 'flex',
           flexDirection: 'column',

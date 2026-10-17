@@ -85,7 +85,7 @@ beforeEach(() => {
 })
 
 describe('parse / display helpers', () => {
-  it('parseAuditEvents reads events[] and drops client/path', () => {
+  it('parseAuditEvents reads events[], keeps client (the profile sign-ins grid shows it), drops path', () => {
     const parsed = parseAuditEvents({
       events: [
         { ...NEWEST, client: 'web', extra: 1 },
@@ -95,8 +95,8 @@ describe('parse / display helpers', () => {
       path: '/home/rosson/.k2/auth-audit.jsonl',
       tail: 200,
     })
-    expect(parsed).toEqual([expect.objectContaining({ user: 'alice', outcome: 'ok' })])
-    expect(JSON.stringify(parsed)).not.toContain('web')
+    expect(parsed).toEqual([expect.objectContaining({ user: 'alice', outcome: 'ok', client: 'web' })])
+    expect(JSON.stringify(parsed)).not.toContain('extra')
     expect(JSON.stringify(parsed)).not.toContain('auth-audit.jsonl')
   })
 

@@ -209,26 +209,55 @@ describe('NoteTray', () => {
     expect(screen.queryByTestId('design-tray')).toBeNull()
   })
 
-  it('numbers notes, deletes, clears, sends, and collapses', () => {
+  it('tiles: number and text on one row, edit pencil and trash icons, in a 3-wide grid', () => {
+    tray()
+    const grid = screen.getByTestId('design-tile-grid')
+    expect(grid.className).toContain('grid-cols-3')
+    const tiles = grid.querySelectorAll('[data-design-tile]')
+    expect(tiles).toHaveLength(2)
+    const first = tiles[0] as HTMLElement
+    expect(first.querySelector('[data-testid="design-tile-n"]')?.textContent).toBe('1')
+    expect(first.querySelector('[data-testid="design-tile-text"]')?.textContent).toBe('first')
+    // One row: number, text and the two buttons are siblings in a flex row.
+    expect(first.className).toContain('flex')
+    expect(first.className).toContain('items-center')
+    expect(first.querySelector('[data-k2-icon="pencil"]')).toBeTruthy()
+    expect(first.querySelector('[data-k2-icon="trash-2"]')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Notes \(2\/6\)/ })).toBeTruthy()
+  })
+
+  it('deletes, clears, sends, and collapses', () => {
     const props = tray()
-    expect(screen.getAllByRole('listitem')).toHaveLength(2)
     fireEvent.click(screen.getByRole('button', { name: 'Delete note 2' }))
     expect(props.onRemove).toHaveBeenCalledWith('b')
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
     expect(props.onClear).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     expect(props.onSend).toHaveBeenCalledTimes(1)
-    fireEvent.click(screen.getByRole('button', { name: /Notes \(2\)/ }))
-    expect(screen.queryAllByRole('listitem')).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: /Notes \(2/ }))
+    expect(screen.queryByTestId('design-tile-grid')).toBeNull()
   })
 
-  it('edits a note with ⌘Enter', () => {
+  it('edits inline: Enter saves, Esc cancels', () => {
     const props = tray()
     fireEvent.click(screen.getByRole('button', { name: 'Edit note 1' }))
     const box = screen.getByRole('textbox', { name: 'Edit note 1' })
     fireEvent.change(box, { target: { value: 'first, bigger' } })
-    fireEvent.keyDown(box, { key: 'Enter', metaKey: true })
+    fireEvent.keyDown(box, { key: 'Enter' })
     expect(props.onEdit).toHaveBeenCalledWith('a', 'first, bigger')
+    expect(screen.queryByRole('textbox', { name: 'Edit note 1' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit note 2' }))
+    const box2 = screen.getByRole('textbox', { name: 'Edit note 2' })
+    fireEvent.change(box2, { target: { value: 'never saved' } })
+    fireEvent.keyDown(box2, { key: 'Escape' })
+    expect(props.onEdit).toHaveBeenCalledTimes(1)
+  })
+
+  it('six tiles fill the 3 × 2 grid and say the tray is full', () => {
+    const six: DesignNoteDraft[] = Array.from({ length: 6 }, (_, i) => ({ id: `n${i}`, comment: `note ${i}`, intent: 'change', url: 'http://x/', title: '' }))
+    tray({ notes: six })
+    expect(screen.getByTestId('design-tile-grid').querySelectorAll('[data-design-tile]')).toHaveLength(6)
+    expect(screen.getByTestId('design-tray-full').textContent).toBe('Send these first; up to 6 notes')
   })
 
   it('locked notes cannot be edited; the error line and Retry show', () => {

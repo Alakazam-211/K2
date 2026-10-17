@@ -1407,6 +1407,12 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // conversation; pending pin settle) + `clone_proposals` (agent
         // proposals held for a person). New tables only.
         ("0180_clone_imports", include_str!("../../drizzle_sql/0180_clone_imports.sql")),
+        // 0181 — agents run Gardens end to end (0.46.0): the per-agent
+        // "Manage Gardens and data sources" switch
+        // (projects.agents_can_manage_gardens, DEFAULT 0), the vault scope
+        // of a source's bound secret (sources.secret_workspace) and the
+        // Garden/widget proposal queue (zen_proposals). Additive only.
+        ("0181_gardens_manage", include_str!("../../drizzle_sql/0181_gardens_manage.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2070,7 +2076,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0180_clone_imports",
+            last_name, "0181_gardens_manage",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2113,6 +2119,7 @@ mod tests {
                 "0178_git_review_notes",
                 "0179_workspace_design_mode",
                 "0180_clone_imports",
+                "0181_gardens_manage",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2156,6 +2163,7 @@ mod tests {
                 "0178_git_review_notes",
                 "0179_workspace_design_mode",
                 "0180_clone_imports",
+                "0181_gardens_manage",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2388,7 +2396,12 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0180 (clone imports) is the newest; its tables go first.
+            // 0181 (Gardens manage) is the newest; roll it back first. Its
+            // projects column stays (re-adding it is skipped as a duplicate
+            // column), its sources column went with the table.
+            conn.execute_batch("DROP TABLE zen_proposals;").unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0181_gardens_manage'", []).unwrap();
+            // 0180 (clone imports) came before it; its tables go next.
             conn.execute_batch("DROP TABLE clone_proposals; DROP TABLE overlay_imports;").unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0180_clone_imports'", []).unwrap();
             // The 0.46.0 App runtime migrations came after 0164; roll them

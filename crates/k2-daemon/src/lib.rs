@@ -215,6 +215,7 @@ pub mod wall_jump;
 // widget keyspaces, grants, the widget door `/cli/zen/call` and the agent
 // door `/cli/zen/data/*`.
 pub mod garden_data;
+pub mod gardens_manage;
 pub mod zen_data_routes;
 pub mod llm_accounts_routes;
 pub mod llm_accounts_runtime;

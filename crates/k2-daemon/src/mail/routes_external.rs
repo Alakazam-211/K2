@@ -420,6 +420,11 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
         },
     };
 
+    // MCS4: a link consented for its calendar only saves no mail drafts.
+    if let Err(resp) = crate::mail::capabilities::mail_scope_gate(&inbox, "mail.draft") {
+        return resp;
+    }
+
     // MCS2 (MCS-A4): Microsoft 365 (Graph) inboxes take compose drafts and
     // draft attachments too (inline, ≤ 3 MB each — larger answers
     // `attachment_too_large` until upload sessions exist).

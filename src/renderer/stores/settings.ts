@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { getDefaultKeybindings } from '@shared/hotkeys'
+import { effectiveKeybinding } from '@shared/hotkeys'
+import { isMacPlatform } from '@/lib/desktop-chrome'
 import type { ConnectLoginIngress, EditorSettingsBackend, StyleSettingsBackend } from '@shared/types'
 
 /** S1: coerce the daemon echo to a known mode; absent/unknown → 'edge'
@@ -933,11 +934,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
  */
 export function getEffectiveKeybinding(
   keybindings: Record<string, string>,
-  id: string
+  id: string,
+  isMac: boolean = isMacPlatform()
 ): string {
-  if (keybindings[id]) return keybindings[id]
-  const defaults = getDefaultKeybindings()
-  return defaults[id] ?? ''
+  return effectiveKeybinding(keybindings, id, isMac)
 }
 
 export function isMigratingSettingsError(e: unknown): boolean {

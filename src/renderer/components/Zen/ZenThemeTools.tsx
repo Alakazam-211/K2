@@ -20,6 +20,8 @@ import type { DesktopOs } from '@/lib/desktop-chrome'
 import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
 import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
+import { useSettingsStore } from '@/stores/settings'
+import { pageShortcutsSummary } from '@/lib/page-shortcuts'
 import type { ZenChromePlace } from './ZenTemplateControls'
 
 /** The theme control's default place: the top band's end group. */
@@ -218,7 +220,9 @@ export function ZenShortcutSheet({ os }: { os: DesktopOs }): React.JSX.Element |
   const open = useZenOverlayStore((s) => s.sheet)
   const overlayRef = useK2Overlay()
   useEscCloses(open)
-  const [groups] = useState(() => zenShortcutGroups(os))
+  const [groups] = useState(() =>
+    zenShortcutGroups(os, pageShortcutsSummary(useSettingsStore.getState().keybindings, os === 'mac')),
+  )
   if (!open) return null
   return (
     <div

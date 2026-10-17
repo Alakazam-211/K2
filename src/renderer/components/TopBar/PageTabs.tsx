@@ -26,6 +26,8 @@ import {
   WikiIcon,
 } from '@/components/icons/K2Icons'
 import { openWikiForView } from '@/lib/wiki-open'
+import { pageShortcutLabel } from '@/lib/page-shortcuts'
+import { isMacPlatform } from '@/lib/desktop-chrome'
 
 /** The Tickets tab's badge from the feedback store (prd-tickets-badge-
  *  orphans TB8/TB15/TB17 + Appa A3): a fresh count; the last count dimmed
@@ -50,7 +52,7 @@ export function ticketsBadgeProps(s: {
 export const PAGE_TAB_LABELS = {
   home: { name: 'My Home', title: 'My Home — your own page on this computer: your agents from any server. Other people on the server don\'t see it.' },
   agents: { name: 'Agents', title: 'Agents — the workspace view' },
-  projects: { name: 'Projects', title: 'Projects — grouped agents, shared dashboards (⌘P)' },
+  projects: { name: 'Projects', title: 'Projects — grouped agents, shared dashboards' },
   feedback: { name: 'Tickets', title: 'Tickets — agents waiting on a human' },
   wiki: { name: 'Wiki', title: 'Wiki' },
 } as const
@@ -71,6 +73,16 @@ export const PAGE_TAB_ITEMS = [
   { page: 'feedback', Icon: TicketsIcon },
   { page: 'wiki', Icon: WikiIcon },
 ] as const satisfies readonly { page: keyof typeof PAGE_TAB_LABELS; Icon: typeof HomeIcon }[]
+
+/** A page tab's tooltip with its chords: the page shortcut (⌃⌘1–4,
+ *  Ctrl+Alt+1–4 off macOS, or the rebound one) and ⌘P for Projects. */
+export function pageTabTitle(page: keyof typeof PAGE_TAB_LABELS, keybindings: Record<string, string>, isMac: boolean): string {
+  const chords = [pageShortcutLabel(page, keybindings, isMac), page === 'projects' ? '⌘P' : null].filter(
+    (c): c is string => !!c,
+  )
+  const title = PAGE_TAB_LABELS[page].title
+  return chords.length > 0 ? `${title} (${chords.join(', ')})` : title
+}
 
 /** What a tab badge shows: nothing, a number, or `?` (unknown). */
 export function badgeText(badge: number | '?' | undefined): string | null {
@@ -140,6 +152,7 @@ export default function PageTabs(): React.JSX.Element {
   const page = usePageViewStore((s) => s.page)
   const setPage = usePageViewStore((s) => s.setPage)
   const settingsOpen = useSettingsStore((s) => s.settingsOpen)
+  const keybindings = useSettingsStore((s) => s.keybindings)
   const waitingCount = useFeedbackStore((s) => s.waitingCount)
   const waitingStale = useFeedbackStore((s) => s.waitingStale)
   const waitingUnsupported = useFeedbackStore((s) => s.waitingUnsupported)
@@ -217,7 +230,7 @@ export default function PageTabs(): React.JSX.Element {
             key={p}
             selected={!settingsOpen && page === p}
             onSelect={() => select(p)}
-            title={PAGE_TAB_LABELS[p].title}
+            title={pageTabTitle(p, keybindings, isMacPlatform())}
             ariaLabel={PAGE_TAB_LABELS[p].name}
             {...badge}
           >

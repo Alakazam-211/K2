@@ -16,6 +16,7 @@ const h = vi.hoisted(() => {
     closeSettings: vi.fn(() => {
       settings.settingsOpen = false
     }),
+    keybindings: {} as Record<string, string>,
   }
   const feedback = {
     waitingCount: 0,

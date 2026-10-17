@@ -33,6 +33,7 @@ import {
 } from './zen-custom-scope'
 import { parseZenCustomWidget, parseZenWidgetPause } from './zen-custom-payload'
 import { parseZenGet } from './zen-page'
+import { zenCustomSourcesFor } from './zen-custom-sources'
 import { zenAgentRows, zenCustomViewFor } from './zen-data'
 
 const WORK: Home = {
@@ -202,6 +203,39 @@ describe('UW38: parsing a custom widget', () => {
       expect(c.origin, String(origin)).toBe('other')
     }
     expect(parseZenCustomWidget({ ...raw, state: 'weird' }, { id: 'a', column: 0, props: {} }).state).toBe('broken')
+  })
+
+  it("Garden v3: the daemon's sourceAddresses reach the bridge's bound() (else every sources.* is not_bound)", () => {
+    const page = parseZenGet({
+      ok: true,
+      page: {
+        template: 'k2.blank@1',
+        layout: { split: [100] },
+        controls: [],
+        widgets: [
+          {
+            ...raw,
+            id: 'alerts',
+            widget: 'fleet-ops-alerts',
+            props: { config: { source: 'k2-ops-watch', sources: 'k2-ops-billing' } },
+            caps: ['sources:read'],
+            requested: ['sources:read'],
+            sources: 'config',
+            sourceAddresses: ['k2-ops-watch', 'k2-ops-billing', 7, ' ', 'k2-ops-watch'],
+          },
+        ],
+      },
+    })
+    const custom = page.widgets[0].custom!
+    expect(custom.sources).toBe('config')
+    expect(custom.sourceAddresses).toEqual(['k2-ops-watch', 'k2-ops-billing'])
+    expect(zenCustomSourcesFor('g-1', () => custom).bound()).toEqual(['k2-ops-watch', 'k2-ops-billing'])
+
+    // Fixed names in the manifest; an older daemon (no fields) binds nothing.
+    expect(parseZenCustomWidget({ ...raw, sources: ['fleet', 3] }, { id: 'a', column: 0, props: {} }).sources).toEqual(['fleet'])
+    const old = parseZenCustomWidget(raw, { id: 'a', column: 0, props: {} })
+    expect(old.sources).toBeNull()
+    expect(old.sourceAddresses).toEqual([])
   })
 
   it('the runaway pause: {at, reason: runaway} or null', () => {

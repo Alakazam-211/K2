@@ -144,6 +144,29 @@ fn placements_carry_source_addresses_and_bad_ones_are_findings() {
     assert!(v.to_string().contains("isn't a source address"), "{v}");
 }
 
+/// The binding follows the folder's current manifest whenever it is clean:
+/// a brand-new widget binds its placement config before it has ever run
+/// (no last good yet), and a new version with a changed source list binds
+/// the new list, not the last good one's.
+#[test]
+fn bound_addresses_follow_the_current_manifest_not_last_good() {
+    let (_t, f) = set_up("current");
+    source_widget(&f, "alerts", "[\"sources:read\"]", "\"config\"");
+    let g = gid(&f, "Garden 2");
+    write_garden(&f, &g, &source_page("alerts", "source = \"k2-ops-watch\"\nsources = \"k2-ops-billing\""));
+    assert!(f.widget_status("alerts").last_good_at.is_none(), "never validated or run: no last good");
+    let page = f.resolve(Some(&g)).expect("resolve");
+    assert_eq!(page["page"]["widgets"][0]["sourceAddresses"], json!(["k2-ops-watch", "k2-ops-billing"]), "{page}");
+
+    // Fixed names, kept as last good; then the folder names others.
+    source_widget(&f, "alerts", "[\"sources:read\"]", "[\"money\"]");
+    f.refresh_widget("alerts").expect("refresh");
+    assert!(f.widget_status("alerts").last_good_at.is_some(), "refresh kept a last good");
+    source_widget(&f, "alerts", "[\"sources:read\"]", "[\"fleet\", \"deploys\"]");
+    let page = f.resolve(Some(&g)).expect("resolve");
+    assert_eq!(page["page"]["widgets"][0]["sourceAddresses"], json!(["fleet", "deploys"]), "{page}");
+}
+
 /// GV16: `locked_placement_sources` lists the bare and this-host names
 /// that locked Gardens read, from their frozen copies.
 #[test]

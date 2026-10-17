@@ -97,6 +97,7 @@ import { computeRowStatus } from '@/components/Home/home-room'
 import { grokBotIdFromAddress } from '@/lib/grokbots'
 import { useGrokBotsStore } from '@/stores/grokbots'
 import { openHomeRow } from '@/lib/home-open'
+import { openOnAgentsPage } from '@/lib/page-selection'
 import { cachedProjectIcon, loadProjectIcon } from '@/components/Sidebar/ProjectAvatar'
 import { homeRowAvatarFrom, useHomeAvatarStore } from '@/lib/home-avatars'
 import { agentLookColor, agentLookImage } from '@/lib/agent-look'
@@ -1305,10 +1306,11 @@ async function openInAgents(row: HomeRow): Promise<void> {
   const hostKey = parseHomeAddress(row.address)?.host ?? ''
   exitZen()
   if (isConnectedHost(hostKey)) {
+    // Agents' own selection (lib/page-selection): Home's selection, and a
+    // remote room open on Home, stay Home's.
     const ws = findWorkspaceForRow(useProjectsStore.getState().projects, row)
-    if (ws) useProjectsStore.getState().setActiveProject(ws.id)
-    homeRooms.showPrimary()
-    usePageViewStore.getState().setPage('agents')
+    if (ws) openOnAgentsPage(ws.id)
+    else usePageViewStore.getState().setPage('agents')
     return
   }
   usePageViewStore.getState().setPage('home')

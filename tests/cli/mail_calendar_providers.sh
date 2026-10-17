@@ -31,6 +31,8 @@
 # Build first (the daemon MUST carry the test-only provider override):
 #   cargo build -p k2-provider-fakes
 #   cargo build -p k2-daemon --bin k2-daemon --features provider-fakes
+# (A `cargo test -p k2-daemon --test …` build can relink target/debug/
+# k2-daemon WITHOUT the feature; rebuild with it before running this.)
 
 set -euo pipefail
 
@@ -161,10 +163,11 @@ case "$reg" in *"$REPO"*) ok "workspace registered" ;; *) fail "register: $reg" 
 resp="$(curl -s -X POST "$BASE/cli/workspace/ensure-pinned-chat?token=$DTOKEN" \
     -H 'Content-Type: application/json' --data-raw "$(python3 -c 'import json,sys; print(json.dumps({"project": sys.argv[1]}))' "$REPO")")"
 case "$resp" in *'"sessionId"'*) ;; *) fail "pinned chat: $resp" ;; esac
-for _ in $(seq 1 100); do [ -s "$SB/claude.env" ] && break; sleep 0.05; done
+# The shim writes its env when the PTY execs it; give a loaded box 20 s.
+for _ in $(seq 1 200); do grep -q '^K2_HOOK_TOKEN=' "$SB/claude.env" 2>/dev/null && break; sleep 0.1; done
 PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SB/claude.env" | head -1)"
 SOCK="$(sed -n 's/^K2_HOOK_SOCK=//p' "$SB/claude.env" | head -1)"
-[ -n "$PASSPORT" ] || fail "the pinned chat got no passport"
+[ -n "$PASSPORT" ] || fail "the pinned chat got no passport (shim env: $( [ -e "$SB/claude.env" ] && grep -c '^K2' "$SB/claude.env" || echo 'never written') K2 lines; pinned: $resp)"
 [ -S "$SOCK" ] || fail "the pinned chat's cell socket is missing: '$SOCK'"
 ok "agent passport + cell socket"
 

@@ -105,6 +105,13 @@ function writeZenDrawerExpanded(on: boolean): void {
 /** A Zen root, or the desktop Thread's box (it draws this drawer too). */
 const DRAWER_SCOPE = `:is([data-zen-root], [${THREAD_ZEN_SCOPE_ATTR}])`
 
+// The ear on a message box has no hover fill (Rosson 2026-10-16: "as soon
+// as I go to a second line, the dog ear's background changes to match the
+// text area"). The box grows upward and pushes the ear up, so a pointer
+// resting on the ear ends up on the field after a line or two, or when the
+// box stacks: the hover fill came and went with the typing. Only the free
+// tile (no box under it, nothing moves it) keeps one.
+//
 // Tags tint by kind: the fill is the hue at ~16%, the ink the hue mixed
 // toward the text colour. Zen tokens, so every theme keeps its look.
 export const ZEN_DRAWER_CSS = `
@@ -116,7 +123,7 @@ export const ZEN_DRAWER_CSS = `
 ${DRAWER_SCOPE} [data-zen-drawer][data-phase="in"] { animation: zen-drawer-in ${ZEN_DRAWER_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1.12) both; }
 ${DRAWER_SCOPE} [data-zen-drawer][data-phase="out"] { animation: zen-drawer-out ${ZEN_DRAWER_MS}ms cubic-bezier(0.4, 0, 0.8, 0.4) both; }
 ${DRAWER_SCOPE} [data-zen-drawer-tile] { transition: background-color 140ms ease; }
-${DRAWER_SCOPE} [data-zen-drawer-tile]:hover { background: var(--zen-surface); }
+${DRAWER_SCOPE} [data-zen-drawer-attached="false"] [data-zen-drawer-tile]:hover { background: var(--zen-surface); }
 ${DRAWER_SCOPE} .zen-drawer-shimmer { animation: zen-drawer-shimmer 1.6s ease-in-out infinite; }
 ${DRAWER_SCOPE} .zen-drawer-tag { border-radius: 9999px; background: color-mix(in srgb, var(--zen-tag-hue) 16%, transparent); color: color-mix(in srgb, var(--zen-tag-hue) 70%, var(--zen-text)); }
 ${DRAWER_SCOPE} .zen-drawer-count { display: inline-flex; align-items: center; flex: none; white-space: nowrap; line-height: 18px; }

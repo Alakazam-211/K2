@@ -66,7 +66,7 @@ if [ -f "$_ROOT/.env" ]; then
     . "$_ROOT/.env"
     set +a
 fi
-# Gmail + Microsoft required (MCS2) unless K2_REQUIRE_MICROSOFT_OAUTH=0.
+# Gmail required OOTB; Microsoft only warns loudly unless K2_REQUIRE_MICROSOFT_OAUTH=1.
 require_mail_oauth_build_env
 
 echo "package-daemon-deb: building k2-daemon v$VERSION ($ARCH, release)"

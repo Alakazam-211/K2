@@ -28,7 +28,8 @@ fi
 source "$PROJECT_DIR/scripts/require-mail-oauth-build-env.sh"
 # shellcheck source=scripts/macos-daemon-helper-app.sh
 source "$PROJECT_DIR/scripts/macos-daemon-helper-app.sh"
-# Gmail + Microsoft required (MCS2); K2_REQUIRE_MICROSOFT_OAUTH=0 opts out.
+# Gmail required OOTB; Microsoft only warns loudly unless K2_REQUIRE_MICROSOFT_OAUTH=1
+# (see the MCS-A3 TODO in require-mail-oauth-build-env.sh).
 require_mail_oauth_build_env
 
 SIGNING_IDENTITY="Developer ID Application: LZTEK, LLC (36B8R93HXV)"

@@ -3,13 +3,10 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { homeHostKey } from '@/lib/host-key'
 import type { ServerScope } from '@/kessel/server-scope'
 import {
-  DEFAULT_SPLIT_SIDES,
-  SESSION_VIEW_TAB_DEFAULT,
   type SessionSplitSides,
   type SessionViewTab,
   type SplitPaneView,
-  readSessionSplitSides,
-  readSessionViewTab,
+  resolveSessionView,
   sessionViewSplitStorageKey,
   sessionViewTabStorageKey,
   writeSessionSplitSides,
@@ -48,21 +45,26 @@ export function useSessionViewTab(
   const hostKey = sessionViewHostKey(scope, windowHostKey)
   const storageKey = sessionKey ? sessionViewTabStorageKey(hostKey, sessionKey) : null
   const splitKey = sessionKey ? sessionViewSplitStorageKey(hostKey, sessionKey) : null
-  const [viewTab, setViewTabState] = useState<SessionViewTab>(() =>
-    storageKey ? readSessionViewTab(storageKey) : SESSION_VIEW_TAB_DEFAULT,
+  // A conversation this client has never shown opens in the
+  // "New agents open in" choice (Settings → General → Workspaces); one with
+  // a remembered view keeps it.
+  const [viewTab, setViewTabState] = useState<SessionViewTab>(
+    () => resolveSessionView(storageKey, splitKey).tab,
   )
-  const [sides, setSides] = useState<SessionSplitSides>(() =>
-    splitKey ? readSessionSplitSides(splitKey) : DEFAULT_SPLIT_SIDES,
+  const [sides, setSides] = useState<SessionSplitSides>(
+    () => resolveSessionView(storageKey, splitKey).sides,
   )
 
   useEffect(() => {
-    if (!storageKey || !splitKey) {
-      setViewTabState(SESSION_VIEW_TAB_DEFAULT)
-      setSides(DEFAULT_SPLIT_SIDES)
-      return
+    const resolved = resolveSessionView(storageKey, splitKey)
+    setViewTabState(resolved.tab)
+    setSides(resolved.sides)
+    // Remember the first view so a later change to the setting does not
+    // move a conversation the user has already seen.
+    if (resolved.fresh && storageKey && splitKey) {
+      writeSessionViewTab(storageKey, resolved.tab)
+      writeSessionSplitSides(splitKey, resolved.sides)
     }
-    setViewTabState(readSessionViewTab(storageKey))
-    setSides(readSessionSplitSides(splitKey))
   }, [storageKey, splitKey])
 
   const setViewTab = useCallback(

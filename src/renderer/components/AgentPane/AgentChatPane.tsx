@@ -26,7 +26,7 @@ import { agentIdentityDisplayName, agentIdentityMatchesPath } from '@/lib/agent-
 import { chatDisplayName, resolvePinnedChatCopyableAddress } from '@/lib/chat-session-tab'
 import { SessionViewMenu } from '@/components/SessionView/SessionViewMenu'
 import { chatHarnessName } from '@/components/SessionView/chatHarness'
-import { DEFAULT_SPLIT_LEFT, DEFAULT_SPLIT_RIGHT, type SplitPaneView } from '@/components/SessionView/sessionViewTab'
+import { chatFallbackSide, type SplitPaneView } from '@/components/SessionView/sessionViewTab'
 import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
@@ -237,8 +237,8 @@ function ChatHeader({
   useEffect(() => {
     if (!harnessReady || chatProvider) return
     if (viewTab === 'chat') onViewTabChange('terminal')
-    if (splitLeft === 'chat') onSplitLeft(DEFAULT_SPLIT_LEFT)
-    if (splitRight === 'chat') onSplitRight(DEFAULT_SPLIT_RIGHT)
+    if (splitLeft === 'chat') onSplitLeft(chatFallbackSide(splitRight))
+    if (splitRight === 'chat') onSplitRight(chatFallbackSide(splitLeft === 'chat' ? chatFallbackSide(splitRight) : splitLeft))
   }, [
     harnessReady,
     viewTab,

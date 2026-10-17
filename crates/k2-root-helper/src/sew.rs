@@ -41,6 +41,11 @@ use serde_json::json;
 const STDERR_TAIL: usize = 1200;
 
 pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> {
+    // A release without a published Sew pin installs nothing: refuse the
+    // install verbs before any effect (the daemon refuses first).
+    if !ctx.sew_pinned && installs(verb) {
+        return Err(Fail::state(format!("{SEW_NOT_RELEASED}: {SEW_NOT_RELEASED_MESSAGE}")));
+    }
     match verb {
         SewVerb::Status => Ok(status(ctx)),
         SewVerb::Stage => stage(ctx, stdin, false),
@@ -111,6 +116,14 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
 }
 
 // ── small helpers ───────────────────────────────────────────────────────
+
+/// The verbs that put Sew bytes on the box or run Sew's installer.
+fn installs(verb: &SewVerb) -> bool {
+    matches!(
+        verb,
+        SewVerb::Stage | SewVerb::StageMedia | SewVerb::InstallBin | SewVerb::Install | SewVerb::Upgrade | SewVerb::MediaInstall
+    )
+}
 
 fn split(abs: &str) -> (&str, &str) {
     let i = abs.rfind('/').expect("absolute");

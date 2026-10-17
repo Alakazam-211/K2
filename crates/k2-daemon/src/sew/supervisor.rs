@@ -103,6 +103,22 @@ pub fn begin<'a>(env: &Env<'a>) -> R<Latch<'a>> {
         })
 }
 
+/// `sew_not_released` (409): this K2 release pins no published Sew
+/// release yet (placeholder pins), so nothing installs.
+pub fn not_released() -> Fail {
+    no(pin::SEW_NOT_RELEASED, 409, pin::SEW_NOT_RELEASED_MESSAGE)
+}
+
+/// Refuse every install path (enable, preflight, upgrade, voice install)
+/// before any effect while this build has no Sew release pinned.
+pub fn need_released(env: &Env) -> R<()> {
+    if env.ops.sew_released() {
+        Ok(())
+    } else {
+        Err(not_released())
+    }
+}
+
 fn unsupported() -> Fail {
     no("unsupported", 409, "Sew runs on Linux boxes only (Ubuntu 24.04 / Debian 12+, systemd 250 or newer)")
 }
@@ -508,6 +524,7 @@ fn save_enable(env: &Env, f: impl FnOnce(&mut Row)) {
 /// no-op, latch, preflight, row. `Ok(Err(body))` = answered without a
 /// machine (already enabled).
 pub fn enable_begin<'a>(env: &Env<'a>, req: &EnableRequest) -> R<Result<Latch<'a>, Value>> {
+    need_released(env)?;
     if !env.ops.linux() {
         return Err(unsupported());
     }
@@ -979,7 +996,20 @@ pub fn purge_hostname(env: &Env, row: &Row) -> String {
 }
 
 /// `GET /cli/sew/status[?health=1]`. `ok` is the envelope.
+/// `GET /cli/sew/status`. `released: false` (with `notice`) while this
+/// build pins no published Sew release: `k2 hostchat status` says so
+/// plainly instead of an error.
 pub fn status(env: &Env, with_health: bool) -> Value {
+    let mut body = status_body(env, with_health);
+    let released = env.ops.sew_released();
+    body["released"] = json!(released);
+    if !released {
+        body["notice"] = json!(pin::SEW_NOT_RELEASED_MESSAGE);
+    }
+    body
+}
+
+fn status_body(env: &Env, with_health: bool) -> Value {
     if !env.ops.linux() {
         return json!({"ok": true, "supported": false, "state": "not-installed", "pinnedVersion": pinned().version});
     }
@@ -1312,6 +1342,7 @@ pub struct UpgradeRequest {
 /// Preconditions + latch. `Ok(Err(body))` = answered without a machine
 /// (already current, dry run).
 pub fn upgrade_begin<'a>(env: &Env<'a>, req: &UpgradeRequest) -> R<Result<(Latch<'a>, String), Value>> {
+    need_released(env)?;
     if !env.ops.linux() {
         return Err(unsupported());
     }

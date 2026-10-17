@@ -287,6 +287,7 @@ fn box_root() -> T {
         arch: "x86_64",
         self_exe: under(&root, HELPER_PATH),
         test_keys: true,
+        sew_pinned: k2_root_proto::sew::sew_release_pinned(),
         exec: Box::new(exec.clone()),
         procs: Box::new(procs.clone()),
         rand: Box::new(CountRandom(RefCell::new(0))),

@@ -445,6 +445,7 @@ pub fn check_request(env: &Env, req: &InstallRequest) -> R<()> {
 /// The synchronous part of `POST /cli/sew/media/install`: refusals, the
 /// latch, preflight. Returns the latch; the machine runs next.
 pub fn install_begin<'a>(env: &Env<'a>, req: &InstallRequest) -> R<sup::Latch<'a>> {
+    sup::need_released(env)?;
     if !env.ops.linux() {
         return Err(no("unsupported", 409, "Sew voice runs on Linux boxes only"));
     }

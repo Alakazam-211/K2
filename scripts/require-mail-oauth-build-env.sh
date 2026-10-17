@@ -29,10 +29,15 @@ _k2_oauth_is_placeholder() {
 
 # Require Gmail client id + secret for any shipping daemon build.
 # This is the customer-facing path (Google invalid_client when REPLACE_ME ships).
-# Microsoft is REQUIRED by default since MCS2 turned the Settings "Connect
-# Microsoft" button on (prd-app-mail-calendar-surfaces-v1 §3.2): set
-# K2_REQUIRE_MICROSOFT_OAUTH=0 to build without it (dev-build.sh and
-# build-local.sh do; a shipping build must not).
+# Microsoft: a LOUD warning, not a refusal, while Alakazam's Entra app isn't
+# registered yet — owners link Microsoft through their own app at runtime
+# (`k2 mail oauth-config set --provider microsoft --client-id <id>`), and
+# Settings shows "Needs an app" until one is set. K2_REQUIRE_MICROSOFT_OAUTH=1
+# makes it fatal.
+# TODO(prd-app-mail-calendar-surfaces-v1 MCS-A3 / §3.2 "Release builds"):
+# default K2_REQUIRE_MICROSOFT_OAUTH back to 1 (a hard error) once
+# K2_MICROSOFT_CLIENT_ID is in the release Mac's .env and the GitHub
+# Actions secrets.
 require_mail_oauth_build_env() {
     local missing=0
     if _k2_oauth_is_placeholder "${K2_GMAIL_CLIENT_ID:-}"; then
@@ -46,11 +51,21 @@ require_mail_oauth_build_env() {
         missing=1
     fi
     if _k2_oauth_is_placeholder "${K2_MICROSOFT_CLIENT_ID:-}"; then
-        if [ "${K2_REQUIRE_MICROSOFT_OAUTH:-1}" = "1" ]; then
+        if [ "${K2_REQUIRE_MICROSOFT_OAUTH:-0}" = "1" ]; then
             echo "FATAL: K2_MICROSOFT_CLIENT_ID unset or REPLACE_ME (K2_REQUIRE_MICROSOFT_OAUTH=1)." >&2
             missing=1
         else
-            echo "WARN: K2_MICROSOFT_CLIENT_ID unset or REPLACE_ME — Microsoft email-link will need BYO (Gmail is the required OOTB path)." >&2
+            echo "" >&2
+            echo "################################################################################" >&2
+            echo "WARNING: K2_MICROSOFT_CLIENT_ID is unset or REPLACE_ME — this build ships NO" >&2
+            echo "  built-in Microsoft 365 / Outlook app. Settings → Email Link shows 'Connect" >&2
+            echo "  Microsoft' as 'Needs an app' and 'k2 mail link add --provider microsoft'" >&2
+            echo "  answers not_configured until the owner sets their own app at runtime:" >&2
+            echo "    k2 mail oauth-config set --provider microsoft --client-id <id> [--tenant <t>]" >&2
+            echo "  (that runtime path still works). Set K2_MICROSOFT_CLIENT_ID in .env / the" >&2
+            echo "  GitHub Actions secrets to ship one; K2_REQUIRE_MICROSOFT_OAUTH=1 makes this fatal." >&2
+            echo "################################################################################" >&2
+            echo "" >&2
         fi
     fi
     if [ "$missing" -ne 0 ]; then
@@ -99,7 +114,7 @@ assert_daemon_oauth_not_placeholder() {
         echo "  option_env! did not bake the Gmail secret — token exchange would fail." >&2
         exit 1
     fi
-    if [ "${K2_REQUIRE_MICROSOFT_OAUTH:-1}" = "1" ]; then
+    if [ "${K2_REQUIRE_MICROSOFT_OAUTH:-0}" = "1" ]; then
         if _k2_oauth_is_placeholder "${K2_MICROSOFT_CLIENT_ID:-}"; then
             echo "FATAL: K2_MICROSOFT_CLIENT_ID required but unset/placeholder" >&2
             exit 1

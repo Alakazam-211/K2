@@ -2467,6 +2467,15 @@ mod tests {
                 .err()
                 .unwrap_or_else(|| panic!("toggle off must refuse {p}"));
             assert!(refused.body.contains("owner_only"), "{p}: {}", refused.body);
+            // 0.46.1: the refusal names the workspace whose toggle is off.
+            let plain_path = format!("/tmp/mail-backup-gate-{}-{}", std::process::id(), &plain_id[..12]);
+            let v: serde_json::Value = serde_json::from_str(&refused.body).expect("json");
+            assert_eq!(v["error"]["workspace"]["path"], plain_path.as_str(), "{p}: {v}");
+            assert_eq!(v["error"]["workspace"]["id"], plain_id.as_str(), "{p}: {v}");
+            assert!(
+                v["error"]["hint"].as_str().expect("hint").contains("K2 checked workspace 'mail-backup-gate-"),
+                "{p}: {v}"
+            );
             assert!(crate::mail_routes::mail_manage_authorized(p, false, None).is_err(), "no principal, no admin: {p}");
         }
         let db = k2_core::db::shared();

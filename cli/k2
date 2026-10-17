@@ -13186,7 +13186,7 @@ if missing:
 items, pairs = [], []
 for n in want:
     s = rows[n]
-    sec = s.get("urlSecret") or (picked if (picked and len(want) == 1) else None) or s.get("secret")
+    sec = s.get("urlSecret") or picked or s.get("secret")
     it = {"name": n, "specHash": s["specHash"]}
     if sec:
         it["secret"] = sec
@@ -13219,8 +13219,10 @@ print(json.dumps(it))
 ' "$tok" "$viewers" "$access" "$keep" "$use_anyway")"
         _sources_call POST /cli/sources/approve "$body"
     else
-        if [ -n "$secret$viewers$access$keep" ]; then
-            echo "usage: --secret/--viewers/--agent-access/--keep apply to one source at a time" >&2
+        # One --secret for every name: one batch confirm covers them all
+        # (0.46.0); viewers/agent-access/keep are still one at a time.
+        if [ -n "$viewers$access$keep" ]; then
+            echo "usage: --viewers/--agent-access/--keep apply to one source at a time" >&2
             exit 2
         fi
         if [ -n "$needs" ]; then

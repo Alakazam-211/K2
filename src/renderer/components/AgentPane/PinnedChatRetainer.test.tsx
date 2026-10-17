@@ -493,3 +493,58 @@ describe('PinnedChatGate — exemption fallback', () => {
     expect(paneFor('a')).not.toBeNull()
   })
 })
+
+describe('more than one slot per workspace (Design tab, D-A7)', () => {
+  function chatAndDesignSlots(): { chat: HTMLDivElement; design: HTMLDivElement } {
+    const chat = document.createElement('div')
+    const design = document.createElement('div')
+    document.body.append(chat, design)
+    act(() => {
+      useRetainedChatStore.getState().registerSlot('a', chat, 'chat')
+      useRetainedChatStore.getState().registerSlot('a', design, 'design')
+    })
+    return { chat, design }
+  }
+
+  it('Chat tab visible + Design visible: the instance stays in the Chat tab (one pane)', () => {
+    setActive('a')
+    renderInRoom(room, <PinnedChatRetainer />)
+    act(() => visit('a'))
+    const { chat, design } = chatAndDesignSlots()
+    act(() => {
+      useRetainedChatStore.getState().setSlotVisible('a', true, design)
+      useRetainedChatStore.getState().setSlotVisible('a', true, chat)
+    })
+    const pane = paneFor('a')
+    expect(chat.contains(pane)).toBe(true)
+    expect(design.contains(pane)).toBe(false)
+    expect(document.querySelectorAll('[data-agent-chat="/ws/a"]')).toHaveLength(1)
+    expect(h.mounts.value).toBe(1)
+  })
+
+  it('Design visible alone: the same instance moves into the Design column and back', () => {
+    setActive('a')
+    renderInRoom(room, <PinnedChatRetainer />)
+    act(() => visit('a'))
+    const { chat, design } = chatAndDesignSlots()
+    act(() => useRetainedChatStore.getState().setSlotVisible('a', true, design))
+    let pane = paneFor('a')
+    expect(design.contains(pane)).toBe(true)
+    expect(pane!.getAttribute('data-visible')).toBe('true')
+
+    // Back to the Chat tab: Design hides, Chat shows → the instance follows.
+    act(() => {
+      useRetainedChatStore.getState().setSlotVisible('a', false, design)
+      useRetainedChatStore.getState().setSlotVisible('a', true, chat)
+    })
+    pane = paneFor('a')
+    expect(chat.contains(pane)).toBe(true)
+    expect(pane!.getAttribute('data-instance')).toBe('1')
+    expect(h.mounts.value).toBe(1)
+    expect(h.unmounts.value).toBe(0)
+
+    // Closing the Design tab drops only its slot.
+    act(() => useRetainedChatStore.getState().unregisterSlot('a', design))
+    expect(chat.contains(paneFor('a'))).toBe(true)
+  })
+})

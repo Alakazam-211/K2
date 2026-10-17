@@ -6,7 +6,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  chatTabSlotVisible,
   resetRetainedChatStore,
+  resolveSlot,
   useRetainedChatStore,
   type RetainedChatEntry,
 } from './retained-chat'
@@ -146,6 +148,42 @@ describe('slot registry', () => {
   it('setSlotVisible for an unregistered slot is a no-op', () => {
     useRetainedChatStore.getState().setSlotVisible('ghost', true)
     expect(useRetainedChatStore.getState().slots.has('ghost')).toBe(false)
+  })
+
+  it('a Design slot and the Chat tab slot: a visible Chat tab wins, then a visible Design slot (D-A7)', () => {
+    const chat = div()
+    const design = div()
+    const s = useRetainedChatStore.getState()
+    s.registerSlot('a', chat)
+    s.registerSlot('a', design, 'design')
+    // Neither visible: the (hidden) Chat tab keeps it.
+    expect(useRetainedChatStore.getState().slots.get('a')).toEqual({ el: chat, visible: false })
+    s.setSlotVisible('a', true, design)
+    expect(useRetainedChatStore.getState().slots.get('a')).toEqual({ el: design, visible: true })
+    expect(chatTabSlotVisible(useRetainedChatStore.getState(), 'a')).toBe(false)
+    s.setSlotVisible('a', true, chat)
+    expect(useRetainedChatStore.getState().slots.get('a')).toEqual({ el: chat, visible: true })
+    expect(chatTabSlotVisible(useRetainedChatStore.getState(), 'a')).toBe(true)
+    // Without an element, visibility applies to the Chat tab slot only.
+    s.setSlotVisible('a', false)
+    expect(useRetainedChatStore.getState().slots.get('a')).toEqual({ el: design, visible: true })
+    s.unregisterSlot('a', design)
+    expect(useRetainedChatStore.getState().slots.get('a')).toEqual({ el: chat, visible: false })
+    s.unregisterSlot('a', chat)
+    expect(useRetainedChatStore.getState().slots.has('a')).toBe(false)
+    expect(useRetainedChatStore.getState().slotRecords.has('a')).toBe(false)
+  })
+
+  it('resolveSlot picks the newest slot within a rule', () => {
+    const a = div()
+    const b = div()
+    expect(resolveSlot([])).toBeNull()
+    expect(
+      resolveSlot([
+        { el: a, visible: true, kind: 'design' },
+        { el: b, visible: true, kind: 'design' },
+      ]),
+    ).toEqual({ el: b, visible: true })
   })
 })
 

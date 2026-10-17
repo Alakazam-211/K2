@@ -98,6 +98,11 @@ pub const DOC_ROOT: &str = "/usr/share/doc";
 /// (before the binary) and after a successful `upgrade`, from the pinned
 /// tarball; removed by a successful `purge`.
 pub const SEW_DOC_DIR: &str = "/usr/share/doc/sew";
+/// The notices of the binary Sew keeps for rollback
+/// (`/usr/local/lib/sew/sew.prev`): a successful `upgrade` moves the old
+/// notices here; a successful `rollback` swaps the two sets, exactly as
+/// Sew swaps `sew` and `sew.prev`; a purge removes both.
+pub const SEW_DOC_PREV_DIR: &str = "/usr/share/doc/sew/previous";
 /// `sew-media`'s notices, from the staged, pinned media tarball after a
 /// successful `media install`; removed by a successful `media uninstall`.
 pub const SEW_MEDIA_DOC_DIR: &str = "/usr/share/doc/sew-media";

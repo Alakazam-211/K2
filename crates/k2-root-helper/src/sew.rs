@@ -10,8 +10,10 @@
 //!   the helper puts them under `/usr/share/doc/sew` (`install-bin`, before
 //!   the binary; a successful `upgrade`) and `/usr/share/doc/sew-media` (a
 //!   successful `media install`), root 0644, and removes them on a
-//!   successful `purge` / `media uninstall`. The binary member is still
-//!   the only thing ever executed.
+//!   successful `purge` / `media uninstall`. They follow the binary on a
+//!   rollback: an upgrade keeps the old set in `/usr/share/doc/sew/previous`
+//!   (beside Sew's `sew.prev`), a rollback swaps the two sets as Sew swaps
+//!   the binaries. The binary member is still the only thing ever executed.
 //! - **Known binary.** Before any root exec of `/usr/local/bin/sew` the file
 //!   must be a regular, root-owned, not group/other-writable file whose
 //!   sha256 is a release this build knows (S29 §7.3).
@@ -65,7 +67,12 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
         SewVerb::Upgrade => upgrade(ctx),
         SewVerb::Rollback => {
             require_known(ctx)?;
-            run_sew(ctx, &["upgrade", "--rollback"], None)
+            let mut out = run_sew(ctx, &["upgrade", "--rollback"], None)?;
+            // Sew swapped sew and sew.prev: the notices follow the binary.
+            if out["sewExit"] == 0 {
+                out["notices"] = notices_or_error(rollback_notices(ctx));
+            }
+            Ok(out)
         }
         SewVerb::Uninstall => {
             require_known(ctx)?;
@@ -311,18 +318,96 @@ pub(crate) fn install_notices(ctx: &Ctx, archive: &[u8], doc_dir: &str) -> HResu
     if notices.is_empty() {
         return Ok(json!({"dir": J::Null, "files": []}));
     }
+    let d = open_doc_dir(ctx, doc_dir)?;
+    let files = write_notice_set(ctx, &d, &notices)?;
+    Ok(json!({"dir": doc_dir, "files": files}))
+}
+
+type Notices = Vec<(&'static str, Vec<u8>)>;
+
+/// `/usr/share/doc/<leaf>`, created root 0755 when missing (and
+/// `/usr/share/doc` only when missing, never re-moded).
+fn open_doc_dir(ctx: &Ctx, doc_dir: &str) -> HResult<Dir> {
     let (parent, leaf) = split(doc_dir);
     let (grand, doc) = split(parent);
     let share = ctx.dir(grand).map_err(|e| Fail::io_err("open /usr/share", e))?;
     let doc_root = ensure_dir(ctx, &share, doc, 0o755)?;
-    let d = sub_dir(ctx, &doc_root, leaf, 0o755)?;
+    sub_dir(ctx, &doc_root, leaf, 0o755)
+}
+
+/// Make `d` hold exactly `set` of the notice files: each written
+/// atomically (root 0644), any other notice file removed. Answers the
+/// names written.
+fn write_notice_set(ctx: &Ctx, d: &Dir, set: &Notices) -> HResult<Vec<&'static str>> {
     let mut files = Vec::new();
-    for (name, bytes) in &notices {
-        d.write_atomic(OsStr::new(name), bytes, 0o644, ctx.root_owner())
-            .map_err(|e| Fail::io_err("write notice", e))?;
-        files.push(*name);
+    for name in NOTICE_MEMBERS {
+        let n = OsStr::new(name);
+        match set.iter().find(|(m, _)| *m == name) {
+            Some((_, bytes)) => {
+                d.write_atomic(n, bytes, 0o644, ctx.root_owner()).map_err(|e| Fail::io_err("write notice", e))?;
+                files.push(name);
+            }
+            None => match d.kind(n).map_err(|e| Fail::io_err("stat", e))? {
+                Kind::Missing => {}
+                Kind::File => d.unlink(n).map_err(|e| Fail::io_err("remove notice", e))?,
+                _ => return Err(Fail::state("refused: a notice path is not a regular file")),
+            },
+        }
     }
-    Ok(json!({"dir": doc_dir, "files": files}))
+    Ok(files)
+}
+
+/// The notice files in `abs_dir` (none when it is missing).
+fn read_notice_dir(ctx: &Ctx, abs_dir: &str) -> HResult<Notices> {
+    let mut out = Vec::new();
+    for name in NOTICE_MEMBERS {
+        let Some((d, n)) = open_parent(ctx, &format!("{abs_dir}/{name}"))? else { continue };
+        let n = OsStr::new(&n);
+        match d.kind(n).map_err(|e| Fail::io_err("stat", e))? {
+            Kind::Missing => {}
+            Kind::File => {
+                let b = d
+                    .read_file(n, MAX_NOTICE as usize)
+                    .map_err(|e| Fail::io_err("read notice", e))?
+                    .unwrap_or_default();
+                out.push((name, b));
+            }
+            _ => return Err(Fail::state("refused: a notice path is not a regular file")),
+        }
+    }
+    Ok(out)
+}
+
+/// A successful upgrade: the notices of the binary Sew kept for rollback
+/// (`/usr/local/lib/sew/sew.prev`) go to [`SEW_DOC_PREV_DIR`], the new
+/// pin's into [`SEW_DOC_DIR`]. So a rollback can swap them back with the
+/// binary.
+pub(crate) fn upgrade_notices(ctx: &Ctx, archive: &[u8]) -> HResult<J> {
+    let new = extract_notices(archive)?;
+    let current = read_notice_dir(ctx, SEW_DOC_DIR)?;
+    if new.is_empty() && current.is_empty() {
+        return Ok(json!({"dir": J::Null, "files": [], "previous": []}));
+    }
+    let d = open_doc_dir(ctx, SEW_DOC_DIR)?;
+    let prev = sub_dir(ctx, &d, split(SEW_DOC_PREV_DIR).1, 0o755)?;
+    let kept = write_notice_set(ctx, &prev, &current)?;
+    let files = write_notice_set(ctx, &d, &new)?;
+    Ok(json!({"dir": SEW_DOC_DIR, "files": files, "previous": kept}))
+}
+
+/// A successful rollback: Sew swapped `sew` and `sew.prev`; the notices
+/// swap with them (current ↔ previous).
+pub(crate) fn rollback_notices(ctx: &Ctx) -> HResult<J> {
+    let current = read_notice_dir(ctx, SEW_DOC_DIR)?;
+    let previous = read_notice_dir(ctx, SEW_DOC_PREV_DIR)?;
+    if current.is_empty() && previous.is_empty() {
+        return Ok(json!({"dir": J::Null, "files": [], "previous": []}));
+    }
+    let d = open_doc_dir(ctx, SEW_DOC_DIR)?;
+    let prev = sub_dir(ctx, &d, split(SEW_DOC_PREV_DIR).1, 0o755)?;
+    let files = write_notice_set(ctx, &d, &previous)?;
+    let kept = write_notice_set(ctx, &prev, &current)?;
+    Ok(json!({"dir": SEW_DOC_DIR, "files": files, "previous": kept}))
 }
 
 /// Remove `doc_dir`'s licence files and the directory when that leaves it
@@ -347,7 +432,8 @@ pub(crate) fn remove_notices(ctx: &Ctx, doc_dir: &str) -> HResult<Vec<&'static s
 }
 
 /// After a purge: both notice directories go.
-fn remove_all_notices(ctx: &Ctx) -> HResult<J> {
+pub(crate) fn remove_all_notices(ctx: &Ctx) -> HResult<J> {
+    remove_notices(ctx, SEW_DOC_PREV_DIR)?;
     let sew = remove_notices(ctx, SEW_DOC_DIR)?;
     let media = remove_notices(ctx, SEW_MEDIA_DOC_DIR)?;
     Ok(json!({"sew": sew, "sewMedia": media}))
@@ -695,7 +781,7 @@ fn upgrade(ctx: &Ctx) -> HResult<J> {
     // The new binary is in place: its notices follow it. Sew's upgrade
     // already happened, so a notice failure is reported, not an exit.
     if out["sewExit"] == 0 {
-        out["notices"] = notices_or_error(install_notices(ctx, &bytes, SEW_DOC_DIR));
+        out["notices"] = notices_or_error(upgrade_notices(ctx, &bytes));
     }
     Ok(out)
 }
@@ -780,6 +866,11 @@ fn media_install(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
     let mut out = media_run(ctx, &req, Some(&tarball), false, false)?;
     // `sew media install` put sew-media in place from the pinned tarball;
     // its licence files follow it (Sew SW1 B1).
+    // TODO(K-M11): when `k2 hostchat recording enable` installs
+    // sew-recorder and sew-transcriber (pinned since 0.2.0, not installed
+    // yet), put each one's notices from its own pinned tarball under
+    // /usr/share/doc/sew-recorder and /usr/share/doc/sew-transcriber, the
+    // same way, and remove them with the binaries.
     if out["sewExit"] == 0 {
         out["notices"] = notices_or_error(install_notices(ctx, &bytes, SEW_MEDIA_DOC_DIR));
     }

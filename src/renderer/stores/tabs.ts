@@ -54,7 +54,13 @@ import {
   type UnsubscribeFn,
 } from '@/stores/session-events'
 import { paintableBrowserIcon } from '@/lib/browser-tab-icon'
-import { clampReorderTarget, orderPinnedTabs, withTabPinned } from '@/lib/pinned-tabs'
+import { clampReorderTarget, isPinnedDesignTab, orderPinnedTabs, withTabPinned } from '@/lib/pinned-tabs'
+import {
+  designDataFromSerializedBrowser,
+  serializeDesignItem,
+  type DesignItemData,
+  type SerializedDesignItem,
+} from '@/components/Design/design-serialize'
 import { takeSessionRemoved } from '@/lib/sidecar-refresh-tab'
 import {
   EMPTY_SERIALIZED_LAYOUT,
@@ -75,6 +81,9 @@ export type ProjectPathEntry = {
   primaryWorkspaceId: string | null
   /** When true, do not auto-adopt API host-session / sandbox tabs. */
   hideApiSessions?: boolean
+  /** The workspace's "Design mode" setting (`projects.design_mode_enabled`,
+   *  late decision Q-F2). Missing (an older daemon) → on. */
+  designMode?: boolean
 }
 function normalizeFsPath(p: string): string {
   if (!p) return ''
@@ -581,10 +590,15 @@ export interface ChangesItemData {
   listLayout?: ChangesListLayout
 }
 
+/** Design tab (prd-browser-design-mode-v1 DD1, D-A2): a Browser page with
+ *  the element picker, notes tray and the pinned Chat beside it. Same data
+ *  as a Browser item; the notes draft is per viewer and never in here. */
+export type { DesignItemData, SerializedDesignItem }
+
 export interface Item {
   id: string
-  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes'
-  data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData | ChangesItemData
+  type: 'terminal' | 'file-viewer' | 'agent' | 'browser' | 'changes' | 'design'
+  data: TerminalItemData | FileViewerItemData | AgentItemData | BrowserItemData | ChangesItemData | DesignItemData
   pinned?: boolean
 }
 
@@ -778,6 +792,9 @@ export interface SerializedTab {
    *  name stays — see `lib/pinned-tabs.ts`). Sits right after the system
    *  (Chat/Inbox) tabs, before regular tabs, in pin order. */
   isPinnedFile?: boolean
+  /** The workspace's pinned Design tab (D-A3). Mirrors `Tab.isPinnedDesign`.
+   *  An older client drops the flag and shows a Browser tab (Q-F3). */
+  isPinnedDesign?: boolean
   /** Tab-rename stickiness — persists a USER rename across relaunch so a
    *  locked tab stays locked (PTY/session titles still can't clobber it
    *  after restore). Mirrors `Tab.locked`. */
@@ -826,6 +843,13 @@ export interface Tab {
    *  inside the pinned group. The name is the #587 pinned-HTML flag's
    *  (see `lib/pinned-tabs.ts`). */
   isPinnedFile?: boolean
+  /** The workspace's pinned Design tab (prd-browser-design-mode-v1 DD3,
+   *  D-A3): one per room, right after Chat and Inbox, before the user's
+   *  pinned tabs. Fixed like the system tabs (no close, drag or user pin)
+   *  but NOT `isSystemAgent` — it holds a `design` item, not an agent.
+   *  Present only while the workspace's "Design mode" setting is on
+   *  (`ensurePinnedDesignTab`). */
+  isPinnedDesign?: boolean
   /** Tab-rename stickiness — a USER rename sets this true (daemon-canonical
    *  `tab_titles.locked`). Once locked, program-generated PTY/OSC/session
    *  titles (the auto-sync paths in `setTabTitle`) must NOT overwrite the
@@ -937,6 +961,17 @@ export interface TabsState {
    *  `groupIndex` (0 / omitted = primary). One per workspace: when one is
    *  already open (any column) it is focused instead. Returns its tab id. */
   openChangesTab: (cwd: string, groupIndex?: number) => string
+  /** Design tab (prd-browser-design-mode-v1 DD3, + menu → Design): always a
+   *  NEW Design tab in column `groupIndex` (0 / omitted = primary); many
+   *  are allowed. Returns its tab id. */
+  openDesignTab: (groupIndex?: number, url?: string) => string
+  /** Keep the room's pinned Design tab in line with the workspace's
+   *  "Design mode" setting (late decision Q-F2): on → exactly one
+   *  `isPinnedDesign` tab after Chat and Inbox (created when missing); off →
+   *  none. Idempotent; a no-op change writes nothing. `enabled` defaults to
+   *  the room's project list (`ProjectPathEntry.designMode`, missing = on);
+   *  a path that list does not know changes nothing. */
+  ensurePinnedDesignTab: (projectPath: string, enabled?: boolean) => void
   /** Stamp the Changes item's view state (selection, diff mode, base,
    *  view, list layout). A same-value stamp changes nothing (no save). */
   setChangesItemState: (
@@ -1202,6 +1237,10 @@ function serializeTab(tab: Tab): SerializedTab {
           title: d.title,
           icon: d.icon,
         }
+      } else if (item.type === 'design') {
+        // D-A4 mixed-version guard: a Browser item plus a `design` marker,
+        // so an older client shows a Browser tab at the same URL (Q-F3).
+        return serializeDesignItem(item.id, item.data as DesignItemData)
       } else if (item.type === 'changes') {
         const d = item.data as ChangesItemData
         const out: SerializedChangesItem = {
@@ -1243,6 +1282,7 @@ function serializeTab(tab: Tab): SerializedTab {
     paneGroups: paneGroupsObj,
     ...(tab.isSystemAgent ? { isSystemAgent: true } : {}),
     ...(tab.isPinnedFile ? { isPinnedFile: true } : {}),
+    ...(tab.isPinnedDesign ? { isPinnedDesign: true } : {}),
     // T15 — emit locked: false when unlocked so overlay can tell omit vs false.
     locked: tab.locked === true,
   }
@@ -1458,7 +1498,12 @@ function restoreSerializedItem(
     // layouts) is the globe. An empty url = address bar only. `navSeq` (this
     // window's own navigate requests, V21) is never saved and survives.
     const liveNav =
-      live?.type === 'browser' ? (live.data as BrowserItemData).navSeq : undefined
+      live?.type === 'browser' || live?.type === 'design'
+        ? (live.data as BrowserItemData | DesignItemData).navSeq
+        : undefined
+    // A Browser item carrying the `design` marker is a Design tab (D-A4).
+    const design = designDataFromSerializedBrowser(si, liveNav)
+    if (design) return { id, type: 'design' as const, data: design }
     return {
       id,
       type: 'browser' as const,
@@ -1656,6 +1701,75 @@ function makeBrowserPaneGroup(paneGroupId: string, url: string): PaneGroup {
   }
 }
 
+/** Create a PaneGroup with a single Design item (DD1). */
+function makeDesignPaneGroup(paneGroupId: string, url: string): PaneGroup {
+  return {
+    id: paneGroupId,
+    items: [
+      {
+        id: crypto.randomUUID(),
+        type: 'design',
+        data: { url },
+      },
+    ],
+    activeItemIndex: 0,
+  }
+}
+
+/** A new Design tab (title "Design", one Design item). */
+function makeDesignTab(url: string, extra: Partial<Tab> = {}): Tab {
+  const paneGroupId = crypto.randomUUID()
+  return {
+    id: crypto.randomUUID(),
+    title: 'Design',
+    mosaicTree: paneGroupId,
+    paneGroups: new Map([[paneGroupId, makeDesignPaneGroup(paneGroupId, url)]]),
+    ...extra,
+  }
+}
+
+/** Drop the pinned-Design flag (the tab stays as an ordinary Design tab). */
+function withoutPinnedDesign(tab: Tab): Tab {
+  const { isPinnedDesign: _was, ...rest } = tab
+  return rest
+}
+
+/**
+ * The strip with the pinned Design tab made right (`ensurePinnedDesignTab`).
+ *
+ *  - enabled: exactly one `isPinnedDesign` tab, placed after the system tabs
+ *    (`orderPinnedTabs`). A second one (two windows each made one before
+ *    their saves met) loses the flag and stays as an ordinary Design tab.
+ *    `allowCreate` makes one when the strip has none.
+ *  - disabled: the pinned Design tab leaves the strip; a + menu Design tab
+ *    (not pinned) is untouched.
+ *
+ * Returns the SAME array when nothing changes (no save).
+ */
+export function withPinnedDesignTab(tabs: Tab[], enabled: boolean, allowCreate: boolean): Tab[] {
+  if (!enabled) {
+    return tabs.some((t) => isPinnedDesignTab(t)) ? tabs.filter((t) => !isPinnedDesignTab(t)) : tabs
+  }
+  let seen = false
+  let changed = false
+  let next = tabs.map((t) => {
+    if (!isPinnedDesignTab(t)) return t
+    if (!seen) {
+      seen = true
+      return t
+    }
+    changed = true
+    return withoutPinnedDesign(t)
+  })
+  if (!seen && allowCreate) {
+    next = [...next, makeDesignTab('', { isPinnedDesign: true })]
+    changed = true
+  }
+  const ordered = orderPinnedTabs(next)
+  if (!changed && ordered === next) return tabs
+  return ordered
+}
+
 /** Create a PaneGroup with a single Changes item (C2). */
 function makeChangesPaneGroup(paneGroupId: string, workspacePath: string): PaneGroup {
   return {
@@ -1715,7 +1829,8 @@ function withBrowserPageMeta(
   const nextIcon = hasIcon ? paintableBrowserIcon(meta.icon) : null
   let itemsChanged = false
   const items = pg.items.map((item) => {
-    if (item.id !== itemId || item.type !== 'browser') return item
+    // A Design item is a Browser page too (same title / favicon fields).
+    if (item.id !== itemId || (item.type !== 'browser' && item.type !== 'design')) return item
     const prev = item.data as BrowserItemData
     let data: BrowserItemData = prev
     if (hasTitle && prev.title !== trimmed) {
@@ -3034,6 +3149,9 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       // Bail if the active workspace changed since we were scheduled.
       if (store.getState().activeWorkspaceKey !== expectedWorkspaceKey) return
       tabsStore.ensureSystemAgentTabs(agentName, projectPath, title)
+      // The pinned Design tab follows Chat and Inbox (D-A3), gated on the
+      // workspace's Design mode (Q-F2). Never in a Work Board room.
+      if (agentName !== '__workspace__') store.getState().ensurePinnedDesignTab(projectPath)
     }
     return new Promise<void>((resolve, reject) => {
       setTimeout(() => {
@@ -3272,6 +3390,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       paneGroups,
       ...(serializedTab.isSystemAgent ? { isSystemAgent: true } : {}),
       ...(serializedTab.isPinnedFile ? { isPinnedFile: true } : {}),
+      ...(serializedTab.isPinnedDesign ? { isPinnedDesign: true } : {}),
       // Tab-rename stickiness — restore the locked flag so a user-renamed tab
       // stays sticky after relaunch.
       ...(serializedTab.locked ? { locked: true } : {}),
@@ -3388,6 +3507,9 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       // Never close the pinned system agent tab
       const tab = get().tabs.find((t) => t.id === tabId)
       if (tab?.isSystemAgent) return
+      // Nor the pinned Design tab: the workspace's Design mode setting owns
+      // it (Q-F2). A + menu Design tab closes like any tab.
+      if (isPinnedDesignTab(tab)) return
 
       // A pinned tab closes like any other tab (its pin goes with it).
 
@@ -4208,7 +4330,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     unpinTab: (tabId: string) => setTabPinned(tabId, false),
     togglePinTab: (tabId: string) => {
       const tab = collectStoreTabs(get()).find((t) => t.id === tabId)
-      if (!tab || tab.isSystemAgent) return
+      if (!tab || tab.isSystemAgent || isPinnedDesignTab(tab)) return
       setTabPinned(tabId, !tab.isPinnedFile)
     },
 
@@ -4580,7 +4702,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
           if (!pg) return tab
           let pgChanged = false
           const newItems = pg.items.map((item) => {
-            if (item.id !== itemId || item.type !== 'browser') return item
+            if (item.id !== itemId || (item.type !== 'browser' && item.type !== 'design')) return item
             const prevData = item.data as BrowserItemData
             const same =
               (browserState.url === undefined || browserState.url === prevData.url) &&
@@ -4630,6 +4752,53 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       }
       set((state) => placedTab(state, groupIndex ?? 0, tab))
       return tabId
+    },
+
+    openDesignTab: (groupIndex?: number, url = '') => {
+      const tab = makeDesignTab(url)
+      set((state) => placedTab(state, groupIndex ?? 0, tab))
+      return tab.id
+    },
+
+    ensurePinnedDesignTab: (projectPath: string, enabled?: boolean) => {
+      // Without an answer from the caller, the room's own project list
+      // decides. A workspace the list does not know (yet) is left as it is:
+      // nothing is created or removed on a guess.
+      let resolved = enabled
+      if (resolved === undefined) {
+        const entry = findProjectForPathIn(binding.deps.projectsPathIndex(), projectPath)
+        if (!entry) return
+        resolved = entry.designMode ?? true
+      }
+      const on: boolean = resolved
+      set((state) => {
+        // The pinned Design tab lives in the primary strip, next to Chat and
+        // Inbox. Only an off switch reaches into the extra columns (a tab a
+        // user dragged there before the flag existed elsewhere).
+        const tabs = withPinnedDesignTab(state.tabs, on, true)
+        const extraGroups = on
+          ? state.extraGroups
+          : state.extraGroups.some((g) => g.tabs.some((t) => isPinnedDesignTab(t)))
+            ? state.extraGroups.map((g) => {
+                const next = withPinnedDesignTab(g.tabs, false, false)
+                if (next === g.tabs) return g
+                const activeTabId = next.some((t) => t.id === g.activeTabId) ? g.activeTabId : (next[0]?.id ?? null)
+                return { tabs: next, activeTabId }
+              })
+            : state.extraGroups
+        if (tabs === state.tabs && extraGroups === state.extraGroups) return {}
+        const out: Partial<TabsState> = {}
+        if (tabs !== state.tabs) {
+          out.tabs = tabs
+          // Turning Design mode off while looking at the pinned Design tab
+          // lands on the first tab left (Chat), like closing it would.
+          if (state.activeTabId !== null && !tabs.some((t) => t.id === state.activeTabId)) {
+            out.activeTabId = tabs[0]?.id ?? null
+          }
+        }
+        if (extraGroups !== state.extraGroups) out.extraGroups = extraGroups
+        return out
+      })
     },
 
     setChangesItemState: (tabId, paneGroupId, itemId, patch) => {
@@ -5086,8 +5255,9 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       const current = source.tabs.find((t) => t.id === source.activeTabId) ?? null
       const pinned = pinnedTabOf(source.tabs)
 
-      if (current?.isSystemAgent) {
-        // Case 1 — on the pinned tab: the new column starts empty (its
+      if (current?.isSystemAgent || isPinnedDesignTab(current)) {
+        // Case 1 — on the pinned tab (or the fixed pinned Design tab, which
+        // stays next to Chat and Inbox): the new column starts empty (its
         // empty state tells the user to drag a tab there).
         set({
           splitCount: state.splitCount + 1,

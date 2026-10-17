@@ -35,6 +35,7 @@ import { applyWorkspaceSwitchFocus } from '@/lib/workspace-switch-focus'
 import { takeHostSelect } from '@/lib/home-pending-select'
 import { primaryScope } from '@/kessel/server-scope'
 import { setAgentDisplayName } from '@/lib/workspace-agent'
+import { isDesignModeEnabled } from '@/components/Design/design-mode-setting'
 
 // #657 — hand tabs.ts a lazy reader for `activeProjectId` so the
 // dismiss-reap path can honor "never reap the foreground workspace"
@@ -68,6 +69,7 @@ registerProjectsPathIndex(() =>
       path: p.path,
       primaryWorkspaceId: sorted[0]?.id ?? null,
       hideApiSessions: (p.hideApiSessions ?? 0) === 1,
+      designMode: isDesignModeEnabled(p),
     }
   }),
 )

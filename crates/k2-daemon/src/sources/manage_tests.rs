@@ -231,7 +231,7 @@ fn a_person_binds_one_secret_to_many_sources_with_one_confirm() {
     let ids: Vec<String> = ["a-src", "b-src"].iter().map(|n| insert_source(n, "proposed", None, false, "member")).collect();
     let items = json!([{"name": "a-src", "specHash": hash(), "secret": "VERCEL_RO"}, {"name": "b-src", "specHash": hash(), "secret": "VERCEL_RO"}]);
     let e = call("/cli/sources/batch-approve", &admin(), json!({"items": items})).unwrap_err();
-    assert_eq!(e.code, "confirm_required");
+    assert_eq!(e.code, "vault_confirm_required");
     let want = approve_routes::batch_hash(&[(ids[0].clone(), "VERCEL_RO".into()), (ids[1].clone(), "VERCEL_RO".into())]);
     assert_eq!(e.extra["batchHash"], want.as_str());
     let v = crate::compute_admin::test_seams::vault_handle();

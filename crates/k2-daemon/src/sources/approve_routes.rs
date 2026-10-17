@@ -844,7 +844,7 @@ mod sec {
         if let Some(f) = super::test_seams::secrets() {
             if let secrets::BindAuth::Person(p) = &auth {
                 if !matches!(p, k2_vault::HumanProof::Confirmed { .. }) {
-                    return Err(SourceErr::new("confirm_required", 403, "binding a secret needs a person's confirm"));
+                    return Err(SourceErr::new("vault_confirm_required", 403, "binding a secret needs a person's confirm"));
                 }
             }
             return (f.bind)(source_id, secret, origin);

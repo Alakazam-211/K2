@@ -12,7 +12,7 @@ import {
 } from '@/lib/chat-session-tab'
 import { SessionViewMenu } from './SessionViewMenu'
 import { chatHarnessName, harnessFieldsKnown } from './chatHarness'
-import { DEFAULT_SPLIT_LEFT, DEFAULT_SPLIT_RIGHT } from './sessionViewTab'
+import { chatFallbackSide } from './sessionViewTab'
 import { SessionViewChromeContext } from './sessionViewChrome'
 import { useSessionViewTab } from './useSessionViewTab'
 import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
@@ -82,8 +82,8 @@ export function AgentSessionChrome({
   useEffect(() => {
     if (!harnessKnown || chatProvider) return
     if (viewTab === 'chat') setViewTab('terminal')
-    if (splitLeft === 'chat') setSplitLeft(DEFAULT_SPLIT_LEFT)
-    if (splitRight === 'chat') setSplitRight(DEFAULT_SPLIT_RIGHT)
+    if (splitLeft === 'chat') setSplitLeft(chatFallbackSide(splitRight))
+    if (splitRight === 'chat') setSplitRight(chatFallbackSide(splitLeft === 'chat' ? chatFallbackSide(splitRight) : splitLeft))
   }, [
     viewTab,
     splitLeft,

@@ -315,3 +315,69 @@ async fn a_viewing_frame_marks_the_person_viewing_until_the_socket_closes() {
         wait_for(false);
     });
 }
+
+/// 0.46.1 push previews, through the real dispatcher: `register-device`
+/// takes `previews` (absent keeps it) and answers `previews` +
+/// `previewsAllowed`; `GET /cli/push/device` reads it back for the
+/// device's own login (another Member: 404, no token or an agent
+/// passport: 403); GET on `register-device` is 405; a Member can't flip
+/// `pushMessagePreviews`, an Admin can, and the phone sees it as
+/// `previewsAllowed:false`; `/boot-status` reports `push-previews-v1`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn push_previews_register_read_back_and_owner_switch() {
+    let _g = lock();
+    with_temp_home(|| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let phone = login(d.port, "pvphone", "member");
+        let other = login(d.port, "pvother", "member");
+        let admin = login(d.port, "pvadmin", "admin");
+        let ws = seed_ws(&format!("pvws{}", &uuid::Uuid::new_v4().to_string()[..6]));
+        let agent = passport(&ws);
+        let device = format!("pv-dev-{}", uuid::Uuid::new_v4());
+
+        let r = req(d.port, "GET", &format!("/cli/push/register-device?token={phone}"), None);
+        assert_eq!(r.status, 405, "GET on the POST-only route: {}", r.body);
+
+        let register = |body: String| {
+            let r = req(d.port, "POST", &format!("/cli/push/register-device?token={phone}"), Some(&body));
+            assert_eq!(r.status, 200, "{}", r.body);
+            r.json()
+        };
+        let v = register(format!(r#"{{"deviceId":"{device}","platform":"apns","token":"t1"}}"#));
+        assert_eq!((v["previews"].clone(), v["previewsAllowed"].clone()), (serde_json::json!(true), serde_json::json!(true)));
+        assert_eq!(v["username"], "pvphone");
+        let v = register(format!(r#"{{"deviceId":"{device}","platform":"apns","token":"t2","previews":false}}"#));
+        assert_eq!(v["previews"], false);
+        let v = register(format!(r#"{{"deviceId":"{device}","platform":"apns","token":"t3"}}"#));
+        assert_eq!(v["previews"], false, "absent keeps the stored value");
+
+        let read = |tok: &str| req(d.port, "GET", &format!("/cli/push/device?deviceId={device}&token={tok}"), None);
+        let r = read(&phone);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!((r.json()["previews"].clone(), r.json()["previewsAllowed"].clone()), (serde_json::json!(false), serde_json::json!(true)));
+        assert_eq!(read(&other).status, 404, "another Member learns nothing");
+        assert_eq!(read(OWNER_TOKEN).status, 200, "the owner token can read it");
+        assert_eq!(read(&agent).status, 403, "an agent passport is refused");
+        let r = req(d.port, "GET", &format!("/cli/push/device?deviceId={device}"), None);
+        assert_eq!(r.status, 403, "no token: {}", r.body);
+        let r = req(d.port, "POST", &format!("/cli/push/device?token={phone}"), Some("{}"));
+        assert_eq!(r.status, 405, "POST on the GET-only route: {}", r.body);
+
+        let r = req(d.port, "POST", &format!("/cli/settings/update?token={other}"), Some(r#"{"pushMessagePreviews":false}"#));
+        assert_eq!(r.status, 403, "a Member can't turn previews off for everyone: {}", r.body);
+        let r = req(d.port, "POST", &format!("/cli/settings/update?token={admin}"), Some(r#"{"pushMessagePreviews":false}"#));
+        assert_eq!(r.status, 200, "{}", r.body);
+        let r = read(&phone);
+        assert_eq!(r.json()["previewsAllowed"], false, "the phone greys out its toggle: {}", r.body);
+        assert_eq!(r.json()["previews"], false, "its own choice is kept");
+
+        let r = req(d.port, "GET", "/boot-status", None);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let features = r.json()["features"].clone();
+        assert!(
+            features.as_array().expect("features").iter().any(|f| f == "push-previews-v1"),
+            "push-previews-v1 missing: {features}"
+        );
+        k2_core::push_devices::remove_device(&device).expect("cleanup");
+    });
+}

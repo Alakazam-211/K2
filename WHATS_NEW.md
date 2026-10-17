@@ -22,6 +22,14 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A disk speed limit per App.** Each App gets its own ceiling (writes 40 MB/s and 2,000 operations a second by default, reads unlimited), so one busy App can't slow Postgres and mail to a crawl. Change it with `k2 app config <app> --io-write 80M` (and `--io-read`, `--io-read-iops`, `--io-write-iops`, `--io default|none`). An agent may lower its App's ceiling; raising it waits for you. It applies at the App's next deploy or restart.
 - **`k2 app exec` and `k2 app shell`.** Run one command inside a guarded App (`k2 app exec jobs -- ls /data`) or open a terminal in it (`k2 app shell jobs`), as the App itself with no extra rights. Output is shown as App text, never instructions. Agents can do it for their own workspace's Apps with "Allow this agent to manage Apps". Every exec and shell is in the App's history and the Access Audit; an idle shell is hung up after 15 minutes.
 - **The process exception, for devices a container can't reach.** The server's owner can move one App out of its container to reach a GPU: `k2 app exception <app> on --device dri-render128` (asks for an owner confirm). The App then runs as a locked-down system process under its own user, with only the devices you granted, labelled **Open (process)**, and still reaches K2 through its own door. Agents can't turn it on, and no other setting does. `k2 app exception <app> off` puts it back in the container.
+- **Box services: a walled App can reach one service on this box, by name.** Some Apps need a service running on the server itself, like Sew's chat API or its voice signalling for Hearth. `k2 app box-service request <app> sew-api` asks for one; the owner approves it with a vault confirm (`k2 app approve`), and only then does the App see that one port, at its own address inside the wall. `k2 app box-service <app>` lists what is approved or waiting, and `k2 app box-service revoke <app> <name>` shuts it at once. Ports K2, Postgres, Caddy and the box router use are never allowed.
+
+**Sew on your server (Hearth)**
+- **`k2 hostchat` runs Sew, the chat and voice server, on your Linux box.** `k2 hostchat enable` installs Sew next to K2 (people sign in with their K2 login, or `--identity standalone` for Sew's own password logins), and `status`, `doctor`, `backup`, `backups`, `restore`, `upgrade`, `rollback`, `uninstall` and `purge` look after it. Backups are Sew's own: a restore always keeps Sew's safety copy, works on a stopped server, and says plainly when the data was or wasn't replaced. Status shows the last backup and restore drill, and a missing off-box key copy is a setup warning, not a fault.
+- **Voice calls.** `k2 hostchat enable --voice` (or `k2 hostchat media install`) adds Sew's media server: K2 gets a TURN host and certificate for your box from K2 Connect, renews it on its own, and moves the record when the box's IP changes. `k2 hostchat media url` points voice at an App (Hearth) or at `voice.<your box>`. K2 opens no firewall ports; preflight tells you which ones voice needs.
+- **People and settings.** On standalone installs, `k2 hostchat users owner|invite|reset|revoke|role` manages Sew's logins, with setup links printed only to you. `k2 hostchat config --public-url` sets the address people use.
+- **Owners decide.** An owner or admin can let a workspace's agent run `k2 hostchat` with `k2 agent access set <ws> chat_manage on` ("Manage Sew", off by default). Purge, the recovery key and dropping an old master key always need you, from a terminal outside K2, with Touch ID or the vault password.
+- **Safer install.** Enable refuses to let Sew take over an existing login user named `sew` (one with a shell, a password or SSH keys), and lists every check that failed.
 
 **Cloning agents**
 - **Who may clone, in two new switches.** Settings → General → **Allow cloning agents to people's personal computers** (the owner's switch) and a **Can clone** toggle per person in Settings → Admin Access (or `k2 users set-can-clone <user> on|off`). Both are on, so nothing changes until you turn one off. Until now anyone who could sign in to a server could clone its agents; turning **Can clone** off for a person now stops that, and turning the first switch off stops Admins and Members from pulling agents to their own computers. Owners can always clone. The server checks both on every way to clone (the app, `k2 clone`, headless), and each decision goes in the Access Audit.
@@ -31,15 +39,41 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Secrets, one by one.** A **Secrets** step lists the agent's vault secrets by name: **Copy**, **Leave blank** or **Skip** each one (API keys copy, sign-ins skip by default). Copying asks for Touch ID or your password, and the values travel encrypted to the other server's vault, never in the clone itself. **Leave blank** puts a card on the clone's Thread asking for the secret.
 - **`.env` files ask first.** "Include secrets" in the Clone dialog is now **Send .env files as files**. It sends them as plain files inside the clone, so it now asks for Touch ID or your password first (an owner or admin), and offers to move them into the vault instead (`k2 vault import .env`). Members with **Can clone** can clone, but can't send `.env` files or copy secrets. A `.env.k2` that holds only `k2v://` references now travels with the clone.
 - **`k2 vault carry` is stricter.** It never carries K2 logins, App passes or engine credentials, and `k2 vault carry import` now puts secrets into the workspace with the right id instead of any workspace with the same name.
+- **Every carried secret is on the record.** Agents allowed to manage server-wide secrets can still carry them without you, but each carry now writes who did it, which secret names, from which workspaces and to which vault, in the vault audit and in Settings → Access. Values are never written.
 
 **Grok Bots**
 - **K2 keeps every Grok Bot message it sees in your Threads**, so history builds up even for bots whose live chat runs elsewhere. A bot's chat in K2 starts the day K2 starts collecting, with a line that says so, and grows from there: new messages from the bot and everything you send from K2, the same on every computer you use. When K2 can only see a bot's latest message at each check and it wrote several in a row, K2 marks where earlier ones may be missing; open Grok Bot to read them all. People who can see Grok Bots can also read a bot's chat with `k2 thread gb:<name>`. Agents and App guests still can't.
+
+**Gardens**
+- **Garden 1 looks like K2 Companion.** A new built-in **Glass** theme (black canvas, glassy cards, iMessage blue) is Garden 1's default, nine pinned agents fill three rows of three, and the Agents list starts with the most recent. Garden settings now let you pick this Garden's theme, how many pins the grid holds, and whether it starts recent-first. A Garden whose theme you picked, or your own copy, keeps its theme.
+- **Agents can run Gardens end to end, if you let them.** A new per-agent switch, **Manage Gardens and data sources** (Settings → Workspaces → the workspace → Agent, off by default), lets the agent approve, pause and pin data sources, bind secrets it can already use, enable triggers, and edit Gardens and widgets (`k2 zen garden put`, `k2 zen widget put`), with every act in Access Audit. Without the switch, an agent's Garden or widget change becomes a proposal you approve or reject (`k2 zen proposals`). K2's built-in widgets are never written.
+- **One confirm for many sources.** `k2 sources approve a b c --secret NAME` binds one secret to every source in one go, with a single confirm. It binds all or none.
+- **Custom widgets read their data sources again.** A widget bound to `sources.*` was always refused as "not bound"; it now reads and subscribes to the sources its placement names.
+- **Rail icons.** Garden 1's rail and settings cog use K2's new icons.
 
 **Security**
 - **Wiki: public chat is off, the local wiki site is locked down.** Public chat let anyone who could reach a served or published wiki start your workspace's agent in your real folder, with no sandbox and with auto-approve on. It is now off on every workspace and comes back once rebuilt on the K2 runtime. On start, K2 turns chat off wherever it was on, undoes the skip-permissions setting that chat added, removes the hidden chat keys, and records each change in `k2 users audit`. The local wiki site only answers requests addressed to itself or its own published subdomain, sends no CORS headers, and no longer shows your folder path or dot-folder notes. Serve and Public chat are hidden in the app for now; agents can still use `k2 wiki serve|publish|unpublish`, and `k2 wiki chat on` stops with exit 3.
 
 **Changes tab**
 - **See and ship your git changes without leaving K2.** The tab bar's **+** menu offers **Changes** when the workspace is a git repo. It lists staged, unstaged, untracked and conflicted files with +/- counts (as a list or a tree), updates live as files change, and lets you stage, unstage, discard and commit (Cmd/Ctrl+Enter), or compare against another branch. Discarding never deletes: anything that would be lost goes to the Trash first. The diff viewer shows changes inline or side by side, with syntax colours, collapsed unchanged lines, **View all**, and next/previous change (F7 / Shift+F7). Agents get the same with `k2 changes` (`diff`, `stage`, `unstage`, `discard`, `commit`), on their own workspace only.
+- **Review notes.** Select changed lines in the diff and leave a note on them; **Send** passes all your open notes to the workspace's agent as one message, and the agent marks each one resolved when it's fixed (`k2 changes notes`). Notes follow their lines as the file changes and say when those lines have changed. **Open in editor** opens the file, `k2 changes open` brings up the tab, and a folder that isn't a git repo yet gets **Initialize repository** (`k2 changes init`), with the first commit working too. Untracked folders stage in one click.
+
+**Design mode**
+- **Point at a page and tell your agent what to change.** Each workspace gets a pinned **Design** tab next to Inbox (more from the **+** menu). Open a page in it, press **Select** (or S), click the elements you mean and write a note on each. **Send** posts your notes to the workspace's Thread, marked "via Design", and hands them to the agent's Chat once. The page's address loses its query string, and the HTML that goes along is cleaned of scripts and anything that looks like a secret. Turn the Design tab off per workspace in Workspace settings → **Design mode** (or `k2 workspace design-mode set <ws> off`). Agents and scripts can file the same note with `k2 browser note`.
+
+**Status marks**
+- **One status language everywhere.** The Agents list, the Active drawer, Home, Grok Bot rows, room tabs, the pinned Chat and Running agents all draw the same marks: a 3x3 grid while an agent works (in the theme's accent), then needs you (orange), failed, done, monitoring or no update, else a live (green) or reaped (grey) square. Orange now only ever means it needs you. Tabs never change width when a mark appears, and hovering a tab shows its close button in the mark's place.
+- **People are chips.** Everyone connected shows as a small square in their own colour, with a corner mark for owner or admin, on the top bar, in agent rows and on ticket assignees.
+- **Gardens use the same states.** Zen keeps its circles, but ranks them like the app, and shows an unseen done or failed as a ring.
+
+**Thread**
+- **The Thread beside an agent wears the Garden's look.** Bubbles (yours on the right), "author · time" under each, cards inside the bubble, and a round message box with **+** and Send. The working strip is now the activity drawer on the box's top edge, with Stop, and running subagents spin the same 3x3 grid. The "/" menu, send history, drafts and every key that reaches the agent still work.
+- **A roomier message box.** Past three lines, the text gets its own full-width line with **+** and Send under it, in the Thread and in Gardens.
+- **Messages scroll under the box,** behind frosted glass that blurs gently at the top and more at the bottom. With reduced transparency it's a plain fade.
+- **Square corners, cut.** In K2's square Style, bubbles, the box, Send, chips and cards get chamfered corners.
+
+**Tabs**
+- **Pin any tab.** Right-click a tab and choose **Pin Tab**, or click the pin that shows on hover. Pinned tabs sit right after Chat and Inbox, keep their place across restarts, and Close Others / Close All leave them open.
 
 **Usage**
 - **One Usage page.** Settings → Language Models → **Usage** is headed with the server it shows (**Usage on** and its name): a strip with each tool's limits, token totals for Today, 7, 30 or 90 days or All (uncached input, cache read and write, output, requests, and an estimated cost that is not your bill), a day chart per tool, and breakdowns by workspace, model, login and tool. Click a row to filter the whole page. **Activity** lists each request, newest first, with a link to its chat. Days follow your own time zone.
@@ -55,11 +89,18 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **The page sits exactly on its pane.** No more one-pixel seams or overlaps on Retina and scaled Windows screens, the page follows a live resize, and on Linux it holds its place in the window.
 
 **A new look**
-- **Settings → Language Models.** The LLMs group is now **Language Models**, with **Models**, **Subs / Tokens** and **Usage**. Old links and search still land on the same pages.
+- **Settings → Language Models.** The LLMs group is now **Language Models**, with **Subs / Tokens**, **Providers / Models** and **Usage**, in that order. Old links and search still land on the same pages. The Subs / Tokens actions (Use this token, Sign in again, Rename, Remove, Add) are proper buttons.
 - **Top bar.** Page tabs are icons, with a new **Wiki** tab. The server switcher is a compact chip whose server icon shows the connection light. A profile button next to the Gardens toggle opens your profile, where a Connect login can change its own password. **Help** (it was the cheat sheet) opens an explorer of every `k2` and `k2-node` command and `k2 study` page, with search (Cmd/Ctrl+K). When Home shows an agent on another server, the title reads server / agent / branch.
 - **Drawers.** Drawers slide open and closed, and their » / « toggles moved from the top bar into the tab bars and panel headers. The right drawer's **Agent** tab (it replaces Changes there; Changes is now a tab of its own) shows the agent's picture, colour, name, handle and permissions.
 - **Wiki.** The Wiki opens on the whole server's map, with a workspace picker in its header and three views: a reading view (notes on the left, the note and its links on the right), 2D, and a new 3D map that falls back to 2D on machines that can't draw it. Esc goes Home, then closes back to the page you came from.
 - **Smaller things.** Drag to reorder agents in the Agents list, like on Home. Home no longer shows the beta notice and opens the top agent when none is selected. Tickets' "Waiting on me" includes tickets that need discussion. Settings → General shows the app font under the CLI version. Your own Thread message reads "just now" as soon as you send it.
+
+**Fixes**
+- `k2 tunnel status` no longer stops with a Python SyntaxError (broken in 0.45.7).
+- `k2 workspace create` makes missing parent folders instead of failing.
+- External Data answers with one confirm code: anything that needs your Touch ID or password says `vault_confirm_required` (a 0.45.x server's `confirm_required` is still understood).
+- Help reads its glossary from the server shown in the top bar.
+- A closed drawer's arrow has the same dividing line as the tabs next to it.
 
 **After updating**
 - The inherited environment now ends in 0.46.1, not 0.46.0. Run `k2 app warnings` to see what each of your Apps still needs.
@@ -69,6 +110,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - K2 rebuilds its token usage history once after the update (it reads your tools' logs again), so Usage may look empty for a few minutes.
 - For live Claude limits, K2 adds a small status line script (`~/.k2/hooks/statusline.sh`) to `~/.claude/settings.json`, only when you have no status line set. Yours is never replaced.
 - Wiki public chat is off on every workspace (see Security).
+- Gardens that follow K2's default themes pick up the new working colour (the theme's accent; Haunted's is bone). Garden 1 moves to the Glass theme unless you picked a theme for it. Your own copies keep theirs.
+- Scripts that checked External Data for `confirm_required` should also accept `vault_confirm_required`.
 
 ## 0.45.7 — Grok Bots at home
 

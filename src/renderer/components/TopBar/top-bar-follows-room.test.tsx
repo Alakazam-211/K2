@@ -598,7 +598,11 @@ describe('presence roster follows the room (Z15, Z34)', () => {
     expect(screen.queryAllByText('B', { exact: true })).toHaveLength(0)
     const rosterOnB = screen.getByTestId('presence-roster')
     const usage = screen.getByTestId('subscription-usage')
-    expect(rosterOnB.nextElementSibling).toBe(usage.parentElement)
+    // Rosson 2026-10-17: only the top-bar divider sits between them.
+    const between = rosterOnB.nextElementSibling
+    if (!between) throw new Error('nothing after the roster')
+    expect(between.hasAttribute('data-top-bar-pipe')).toBe(true)
+    expect(between.nextElementSibling).toBe(usage.parentElement)
     fireEvent.click(screen.getByTestId('presence-roster'))
     expect(await screen.findByText('Connected to B')).toBeTruthy()
     expect(screen.queryByText('Kick')).toBe(null)

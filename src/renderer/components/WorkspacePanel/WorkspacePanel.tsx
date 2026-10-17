@@ -17,6 +17,7 @@ import { UrlsPortsSection } from './UrlsPortsSection'
 import { WorkspaceApiSection } from './WorkspaceApiSection'
 import { ConnectedAgentsSection } from './ConnectedAgentsSection'
 import { WorkspaceCompletionSoundBell } from './WorkspaceCompletionSoundToggle'
+import { WorkspacePhonePushBell } from './WorkspacePhonePushToggle'
 import { scopedKey } from '@/kessel/server-scope'
 
 // Phase 2.1c Item 2 — `WorkItem` interface removed. The badge fetch
@@ -122,7 +123,8 @@ export default function WorkspacePanel(): React.JSX.Element {
     <div className="h-full min-h-0 flex flex-col overflow-hidden">
       {/* ── Status ── The agent's name, handle, picture and color live on
           the Agent drawer tab (0.46.0). Here: View Wiki on the left, the
-          completion bell on the right (Rosson 2026-10-16). */}
+          phone push toggle and the completion bell on the right (Rosson
+          2026-10-16). */}
       <div className="flex-shrink-0 px-3 py-2 border-b border-[var(--color-border)]">
         <div className="flex items-center gap-1.5" data-testid="workspace-panel-header">
           {/* Workspace knowledge base / brain map (prd-workspace-kb). The Wiki
@@ -144,7 +146,8 @@ export default function WorkspacePanel(): React.JSX.Element {
               <span className="text-[11px] text-[var(--color-text-primary)]">View Wiki</span>
             </button>
           )}
-          <div className="ml-auto flex items-center" data-testid="workspace-panel-bell">
+          <div className="ml-auto flex items-center gap-1" data-testid="workspace-panel-bell">
+            <WorkspacePhonePushBell project={activeProject} />
             <WorkspaceCompletionSoundBell project={activeProject} />
           </div>
         </div>

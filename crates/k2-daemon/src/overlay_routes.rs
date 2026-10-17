@@ -5652,6 +5652,47 @@ mod tests {
         assert!(s[0].preview.is_empty(), "a secret card carries no preview");
     }
 
+    /// Push titles name the agent by its DISPLAY name (`projects.name`, as
+    /// `/cli/projects/list` shows it), not its handle — in both the alert
+    /// title and `data.agentName`; a sidecar reads "<Display> · <sidecar>";
+    /// a blank name falls back to the handle; an unknown `from` is as is.
+    #[test]
+    fn push_titles_use_the_display_name_not_the_handle() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        k2_core::push_devices::upsert_device("ovlpush-dev-name", "apns", "ovlpush-tok-name", "owner").expect("phone");
+        let tag = &uuid::Uuid::new_v4().to_string()[..6];
+        let handle = format!("k2-companion-{tag}");
+        let bare = format!("bare-{tag}");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            for (h, name) in [(handle.as_str(), "K2 Companion"), (bare.as_str(), "")] {
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?4)",
+                    params![uuid::Uuid::new_v4().to_string(), name, format!("/tmp/ovl-name-{h}"), h],
+                )
+                .expect("seed");
+            }
+        }
+        let title_for = |from: &str| {
+            let (ws, conv) = push_ws("name");
+            let mark = crate::push_routes::test_push_capture::mark();
+            let r = post_json("/cli/thread/post", &HashMap::new(), serde_json::json!({ "addr": ws, "text": "Done.", "from": from }));
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let t = thread_pushes(mark, &conv);
+            assert_eq!(t.len(), 1, "from {from}: one push");
+            let ev = k2_core::push::PushEvent::ThreadPost(t[0].clone());
+            assert_eq!(ev.data().get("agentName"), Some(ev.title().as_str()), "title and agentName agree");
+            ev.title()
+        };
+        assert_eq!(title_for(&handle), "K2 Companion");
+        assert_eq!(title_for(&format!("{handle}/reviewer")), "K2 Companion · reviewer");
+        assert_eq!(title_for(&bare), bare, "no display name: the handle");
+        assert_eq!(title_for(&format!("{bare}/qa")), format!("{bare} · qa"));
+        assert_eq!(title_for("nobody-here-x9"), "nobody-here-x9", "not a workspace: as is");
+    }
+
     #[test]
     fn human_compose_guest_and_human_from_posts_never_push() {
         let _home = crate::test_support::TempHome::new();

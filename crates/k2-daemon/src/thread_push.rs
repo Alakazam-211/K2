@@ -362,24 +362,45 @@ pub fn note_view(conversation_id: &str, person: &str) {
     lock().note_view(conversation_id, person);
 }
 
-/// The posting agent's display name: a workspace handle resolves to that
-/// workspace's agent display name; anything else (a sidecar address, a
-/// custom `from`) is shown as is.
+/// The push title (`data.agentName` too): the posting workspace's DISPLAY
+/// name — `projects.name`, the `name` field `GET /cli/projects/list` gives
+/// clients (a display rename writes it) — never its handle, unless the row
+/// has no name. A sidecar address `ws/sidecar` reads `"<Display> ·
+/// <sidecar>"`. A `from` that is no workspace here (a custom `from`, a
+/// federated address) is shown as is.
 fn agent_name_for(from: &str) -> String {
-    let path: Option<String> = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        conn.query_row(
-            "SELECT path FROM projects WHERE handle = ?1 COLLATE NOCASE LIMIT 1",
-            rusqlite::params![from.trim()],
-            |r| r.get(0),
-        )
-        .ok()
+    let from = from.trim();
+    let (ws, sidecar) = match from.split_once('/') {
+        Some((w, s)) if !w.trim().is_empty() && !s.trim().is_empty() => (w.trim(), Some(s.trim())),
+        _ => (from, None),
     };
-    match path {
-        Some(p) => k2_core::workspace::display::agent_display_name(&p),
-        None => from.trim().to_string(),
+    match (workspace_display_name(ws), sidecar) {
+        (Some(name), Some(s)) => format!("{name} · {s}"),
+        (Some(name), None) => name,
+        (None, _) => from.to_string(),
     }
+}
+
+/// A workspace token (handle, old handle, name, path or id) → its display
+/// name (`projects.name`), or its handle when the name is blank. `None`
+/// when the token is no single workspace on this server.
+fn workspace_display_name(token: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let path = match k2_core::workspace::handle::resolve_workspace_token(&conn, token) {
+        k2_core::workspace::handle::WorkspaceTokenResolve::Found { path } => path,
+        _ => return None,
+    };
+    let (name, handle): (String, String) = conn
+        .query_row(
+            "SELECT name, handle FROM projects WHERE path = ?1",
+            rusqlite::params![path],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .ok()?;
+    let pick = if name.trim().is_empty() { handle } else { name };
+    let pick = pick.trim().to_string();
+    (!pick.is_empty()).then_some(pick)
 }
 
 /// A post's preview: never for a secret card.

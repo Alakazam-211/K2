@@ -4435,6 +4435,7 @@ mod tests {
         const ALLOW: &[(&str, &str)] = &[
             ("k2-core/src/app_settings.rs", "the settings struct (kept on disk for downgrades)"),
             ("k2-core/src/person_name.rs", "the one-time carry-over onto the linked account"),
+            ("k2-core/src/owner_account_prompt.rs", "Your account prompt pre-select MATCHING (never a stamp)"),
             ("k2-daemon/src/settings_routes.rs", "settings routes"),
             ("k2-daemon/src/feedback_routes.rs", "legacy ticket-assignee MATCHING for ticketMe (never a stamp)"),
         ];

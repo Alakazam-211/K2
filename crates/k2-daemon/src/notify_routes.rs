@@ -39,6 +39,9 @@ pub const ADMIN_SET_PATH: &str = "/cli/notify/admin/set";
 pub const OWNER_ACCOUNTS_PATH: &str = "/cli/owner/accounts";
 pub const PEOPLE_COLOR_PATH: &str = "/cli/people/color";
 pub const PEOPLE_NAME_PATH: &str = "/cli/people/name";
+/// 0.46.0 "Your account" setup prompt (`k2_core::owner_account_prompt`).
+pub const OWNER_ACCOUNT_PROMPT_PATH: &str = "/cli/owner/account-prompt";
+pub const OWNER_ACCOUNT_PROMPT_DISMISS_PATH: &str = "/cli/owner/account-prompt/dismiss";
 
 /// The acting login, resolved by the dispatcher from the request token.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,8 +67,9 @@ impl Actor {
 /// takes the dispatcher arm, which resolves the caller first.
 pub fn dispatch(path: &str, _params: &HashMap<String, String>) -> Option<CliResponse> {
     match path {
-        ADMIN_SET_PATH => Some(CliResponse::method_not_allowed()),
-        PREFS_PATH | ADMIN_PATH | OWNER_ACCOUNTS_PATH | PEOPLE_COLOR_PATH | PEOPLE_NAME_PATH => Some(error(
+        ADMIN_SET_PATH | OWNER_ACCOUNT_PROMPT_DISMISS_PATH => Some(CliResponse::method_not_allowed()),
+        PREFS_PATH | ADMIN_PATH | OWNER_ACCOUNTS_PATH | PEOPLE_COLOR_PATH | PEOPLE_NAME_PATH
+        | OWNER_ACCOUNT_PROMPT_PATH => Some(error(
             "403 Forbidden",
             "forbidden",
             "notification prefs belong to a person: sign in (an agent cannot read them)",
@@ -101,6 +105,9 @@ pub fn handle_with_params(
     actor: &Actor,
     params: &HashMap<String, String>,
 ) -> CliResponse {
+    if path == OWNER_ACCOUNT_PROMPT_PATH || path == OWNER_ACCOUNT_PROMPT_DISMISS_PATH {
+        return owner_account_prompt(is_post, path, actor);
+    }
     let people = match People::load() {
         Ok(p) => p,
         Err(e) => return error("500 Internal Server Error", "store", e),
@@ -163,6 +170,40 @@ pub fn handle_with_params(
         (false, ADMIN_SET_PATH) => CliResponse::method_not_allowed(),
         (true, ADMIN_PATH) => CliResponse::method_not_allowed(),
         _ => CliResponse::not_found(),
+    }
+}
+
+/// The "Your account" setup prompt (0.46.0). The owner daemon token only:
+/// the prompt is about who the owner is. `GET account-prompt` answers
+/// whether to show it (and what to offer); `POST account-prompt/dismiss`
+/// ("Not now") remembers this version and answers the new view. Linking
+/// is the existing `POST /cli/owner/accounts`.
+fn owner_account_prompt(is_post: bool, path: &str, actor: &Actor) -> CliResponse {
+    match (is_post, path) {
+        (false, OWNER_ACCOUNT_PROMPT_DISMISS_PATH) | (true, OWNER_ACCOUNT_PROMPT_PATH) => {
+            return CliResponse::method_not_allowed();
+        }
+        _ => {}
+    }
+    if !actor.owner_token {
+        return error(
+            "403 Forbidden",
+            "owner_token_required",
+            "the Your account prompt is for the owner on the server's own computer",
+        );
+    }
+    let version = env!("CARGO_PKG_VERSION");
+    if is_post {
+        if let Err(e) = k2_core::owner_account_prompt::dismiss(version) {
+            return error("500 Internal Server Error", "store", e);
+        }
+    }
+    match k2_core::owner_account_prompt::load_view(version) {
+        Ok(v) => match serde_json::to_string(&v) {
+            Ok(body) => CliResponse::ok_json(body),
+            Err(e) => error("500 Internal Server Error", "serialize", e),
+        },
+        Err(e) => error("500 Internal Server Error", "store", e),
     }
 }
 
@@ -1452,5 +1493,73 @@ mod tests {
         assert_eq!(display_of(&v, "owner"), "Rosson");
         // The GET chain (no identity) refuses.
         assert_eq!(dispatch(PEOPLE_NAME_PATH, &HashMap::new()).expect("claimed").status, "403 Forbidden");
+    }
+
+    // ── "Your account" setup prompt (0.46.0) ──────────────────────────
+
+    #[test]
+    fn account_prompt_pick_then_not_now_then_link() {
+        let _f = fixture();
+        add("z3thon", Role::Admin);
+        add("julie", Role::Owner);
+        add("anna", Role::Member);
+        let owner = Actor::owner_token();
+        let v = ok(get(OWNER_ACCOUNT_PROMPT_PATH, &owner));
+        assert_eq!((v["show"].clone(), v["mode"].clone(), v["reason"].clone()), (true.into(), "pick".into(), "pick_account".into()));
+        let names: Vec<&str> = v["candidates"].as_array().expect("candidates").iter().map(|c| c["username"].as_str().expect("u")).collect();
+        assert_eq!(names, vec!["julie", "z3thon"], "Owner/Admin only, sorted");
+        assert_eq!(v["preselect"], serde_json::Value::Null, "two candidates, no name match");
+        assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+
+        // Not now: hidden for this version, stored on the daemon.
+        let v = ok(post(OWNER_ACCOUNT_PROMPT_DISMISS_PATH, serde_json::json!({}), &owner));
+        assert_eq!((v["show"].clone(), v["reason"].clone()), (false.into(), "dismissed".into()));
+        assert_eq!(
+            k2_core::app_settings::load().owner_account_prompt.dismissed_version.as_deref(),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        assert_eq!(ok(get(OWNER_ACCOUNT_PROMPT_PATH, &owner))["show"], false);
+
+        // A link (the existing route) stops it for good.
+        ok(post(OWNER_ACCOUNTS_PATH, serde_json::json!({ "accounts": ["z3thon"] }), &owner));
+        let v = ok(get(OWNER_ACCOUNT_PROMPT_PATH, &owner));
+        assert_eq!((v["show"].clone(), v["reason"].clone(), v["linked"].clone()), (false.into(), "linked".into(), "z3thon".into()));
+    }
+
+    #[test]
+    fn account_prompt_with_no_admins_is_create_and_ignores_not_now() {
+        let _f = fixture();
+        add("anna", Role::Member);
+        let owner = Actor::owner_token();
+        ok(post(OWNER_ACCOUNT_PROMPT_DISMISS_PATH, serde_json::json!({}), &owner));
+        let v = ok(get(OWNER_ACCOUNT_PROMPT_PATH, &owner));
+        assert_eq!((v["show"].clone(), v["mode"].clone(), v["reason"].clone()), (true.into(), "create".into(), "create_account".into()));
+        assert_eq!(v["candidates"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn account_prompt_is_the_owner_tokens_only_and_dismiss_is_post_only() {
+        let _f = fixture();
+        add("z3thon", Role::Owner);
+        let login = Actor::login("z3thon");
+        for (is_post, path) in [(false, OWNER_ACCOUNT_PROMPT_PATH), (true, OWNER_ACCOUNT_PROMPT_DISMISS_PATH)] {
+            let r = handle(is_post, path, b"{}", &login);
+            assert_eq!(r.status, "403 Forbidden", "{path}: {}", r.body);
+            assert!(r.body.contains("owner_token_required"), "{}", r.body);
+        }
+        let owner = Actor::owner_token();
+        assert_eq!(get(OWNER_ACCOUNT_PROMPT_DISMISS_PATH, &owner).status, "405 Method Not Allowed");
+        assert_eq!(post(OWNER_ACCOUNT_PROMPT_PATH, serde_json::json!({}), &owner).status, "405 Method Not Allowed");
+        assert_eq!(k2_core::app_settings::load().owner_account_prompt.dismissed_version, None, "nothing written");
+        // settings/update can't write it either (the dismiss route owns it).
+        let r = crate::settings_routes::handle_settings_update(
+            br#"{"ownerAccountPrompt":{"dismissedVersion":"9.9.9"}}"#,
+            crate::settings_routes::SettingsActor::Owner,
+        );
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert_eq!(k2_core::app_settings::load().owner_account_prompt.dismissed_version, None);
+        // The GET chain (no identity): the read refuses, the dismiss is 405.
+        assert_eq!(dispatch(OWNER_ACCOUNT_PROMPT_PATH, &HashMap::new()).expect("claimed").status, "403 Forbidden");
+        assert_eq!(dispatch(OWNER_ACCOUNT_PROMPT_DISMISS_PATH, &HashMap::new()).expect("claimed").status, "405 Method Not Allowed");
     }
 }

@@ -764,6 +764,10 @@ pub const ROUTES: &[Route] = &[
     get("/cli/ops/overview", Member),
     get("/cli/ops/stream", Member),
     get("/cli/overlay/events", Member),
+    // "Your account" setup prompt (0.46.0): about who the owner is, so the
+    // owner daemon token only. Dismiss is POST-only (a GET is 405).
+    get("/cli/owner/account-prompt", NoLogin),
+    post("/cli/owner/account-prompt/dismiss", NoLogin),
     // Owner-linked accounts: Admins see the links; only the owner daemon
     // token may change them (identity, never privilege).
     split("/cli/owner/accounts", Admin, NoLogin),

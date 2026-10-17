@@ -67,9 +67,11 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A roomier message box.** Past three lines, the text gets its own full-width line with **+** and Send under it, in the Thread and in Gardens.
 - **Messages scroll under the box,** behind frosted glass that blurs gently at the top and more at the bottom. With reduced transparency it's a plain fade.
 - **Square corners, cut.** In K2's square Style, bubbles, the box, Send, chips and cards get chamfered corners.
+- **Thread pushes, from the Workspace tab.** A phone button next to the completion bell turns your own Thread push notifications for that workspace on or off.
 
 **Tabs**
-- **Pin any tab.** Right-click a tab and choose **Pin Tab**, or click the pin that shows on hover. Pinned tabs sit right after Chat and Inbox, keep their place across restarts, and Close Others / Close All leave them open.
+- **Pin any tab.** Right-click a tab and choose **Pin Tab**. Pinned tabs sit right after Chat and Inbox, keep their place across restarts, and Close Others / Close All leave them open.
+- **Tabs fit their titles.** A tab is as wide as its name (within limits) instead of a fixed width.
 - **New agents open in the view you choose.** Settings → General → Workspaces → **New agents open in**: Terminal, Chat, Thread, Chatter, or Split view with the two sides you pick. Agents you already set a view for keep theirs.
 - **Switch pages from the keyboard:** ⌃⌘1 My Home, ⌃⌘2 Agents, ⌃⌘3 Projects, ⌃⌘4 Tickets (Ctrl+Alt+1–4 on Windows and Linux). You can change them in Settings → Key Bindings.
 

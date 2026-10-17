@@ -18,11 +18,11 @@ import { buildNotesBody, redeliverDesignNotes, sendDesignNotes } from './designA
 import type { DesignNoteDraft, NoteElement, NoteIntent } from './types'
 
 /** Most notes one Design tab's tray holds: a 3 × 3 grid of tiles (Rosson
- *  2026-10-16). The daemon takes up to 20 per Send; ⌘↩ may add one typed
- *  note past a full tray. */
+ *  2026-10-16). The limit is not shown; an Add past it is refused with
+ *  NOTES_FULL_REASON. The daemon takes up to 20 per Send. */
 export const MAX_DESIGN_NOTES = 9
 
-export const NOTES_FULL_REASON = `Send these first; up to ${MAX_DESIGN_NOTES} notes`
+export const NOTES_FULL_REASON = `You've hit the limit of ${MAX_DESIGN_NOTES} notes. Send some first.`
 
 export interface DesignTray {
   notes: DesignNoteDraft[]
@@ -67,9 +67,10 @@ interface DesignNotesState {
   /** Close the tab: forget its tray. */
   drop(itemId: string): void
   send(itemId: string, target: SendTarget): Promise<void>
-  /** ⌘↩ in the note pop-up: pin what is typed (if anything) and Send the
-   *  whole tray at once. A full tray still takes this one note. */
-  sendNow(itemId: string, target: SendTarget, typed?: NewNote): Promise<void>
+  /** Send now (⌘↩) in the note editor: just the typed note, straight
+   *  away, as its own Send (its own details file). It sits in the tray
+   *  while it sends (even a full one), so a failed Send keeps it. */
+  sendNow(itemId: string, target: SendTarget, typed: NewNote): Promise<void>
   /** A tile's own Send: just this note (its own Thread item and details
    *  file); the tile leaves the tray once delivered. */
   sendOne(itemId: string, noteId: string, target: SendTarget): Promise<void>
@@ -150,16 +151,13 @@ export const useDesignNotesStore = create<DesignNotesState>((set, get) => {
     },
 
     async sendNow(itemId, target, typed) {
-      if (typed && typed.comment.trim()) {
-        if (tray(itemId).sending) return
-        // One past the tray's cap: the typed note goes out with this Send.
-        const res = addNote(itemId, typed, MAX_DESIGN_NOTES + 1)
-        if (!res.ok) {
-          patch(itemId, { error: res.reason })
-          return
-        }
+      if (!typed.comment.trim() || tray(itemId).sending) return
+      const res = addNote(itemId, typed, MAX_DESIGN_NOTES + 1)
+      if (!res.ok) {
+        patch(itemId, { error: res.reason })
+        return
       }
-      return get().send(itemId, target)
+      return get().sendOne(itemId, res.id, target)
     },
 
     edit(itemId, noteId, p) {

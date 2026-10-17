@@ -23,6 +23,7 @@ import { onActiveHostChange } from '@/stores/connect-host'
 import { showContextMenu } from '@/lib/context-menu'
 import ProjectAvatar from './ProjectAvatar'
 import { KeyCombo } from '@/components/KeySymbol'
+import { NAV_SECTION_HOVER_CLASS, NavCountTag, NavSectionChevron, NavSectionLabel } from './NavSection'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { primaryScope } from '@/kessel/server-scope'
 
@@ -489,26 +490,16 @@ export default function ActiveBar(): React.JSX.Element | null {
   return (
     <div className="border-t border-[var(--color-border)] flex flex-col flex-shrink-0 min-h-0 max-h-[min(320px,45%)]">
       <button
-        className="no-drag w-full flex items-center gap-1.5 px-3 pt-2 pb-1 text-left cursor-pointer hover:bg-white/[0.02] transition-colors flex-shrink-0"
+        className={`no-drag w-full flex items-center gap-1.5 px-3 pt-2 pb-1 text-left cursor-pointer ${NAV_SECTION_HOVER_CLASS} flex-shrink-0`}
         onClick={() => setCollapsed((prev) => !prev)}
       >
-        <span className="text-[10px] font-semibold tracking-wider text-[var(--color-text-muted)] uppercase">
-          Active
-        </span>
-        <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums px-1.5 py-0.5 bg-white/[0.06] font-mono">
-          {items.length}
-        </span>
+        <NavSectionLabel>Active</NavSectionLabel>
+        <NavCountTag count={items.length} />
         <span className="text-[9px] font-mono text-[var(--color-text-muted)] opacity-50">
           <KeyCombo combo={shortcutLayout === 'cmd-active-cmdshift-pinned' ? '⌘ 1-9' : '⌥⌘ 1-9'} />
         </span>
         <span className="flex-1" />
-        <svg
-          className="w-2.5 h-2.5 text-[var(--color-text-muted)] flex-shrink-0"
-          style={{ transition: 'transform 0.2s ease', transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)' }}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-        </svg>
+        <NavSectionChevron collapsed={collapsed} />
       </button>
       <div
         className="min-h-0 flex-1"

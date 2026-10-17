@@ -21,7 +21,7 @@ import { daemonCliPost } from '@/lib/daemon-cli'
 import { useProjectsStore } from '@/stores/projects'
 import { overlayClaims, resetBrowserOverlaysForTest } from '@/lib/browser-overlay'
 import { DesignPaletteButton } from './DesignToolbar'
-import { NotePopover } from './NotePopover'
+import { NotePopover, sendNowChord } from './NotePopover'
 import { NoteTray } from './NoteTray'
 import { DesignWebStub } from './DesignWebStub'
 import { DesignModeSettingRow } from './DesignModeSettingRow'
@@ -91,41 +91,61 @@ describe('NotePopover', () => {
     expect(overlayClaims()).toHaveLength(0)
   })
 
-  it('⌘↩ sends now with the chosen intent; plain Return does not', () => {
+  it('is a New Note tile with Change | Question tabs', () => {
+    render(<NotePopover open element={element} anchor={anchor} container={container} onAdd={vi.fn()} onSendNow={vi.fn()} onCancel={vi.fn()} />)
+    expect(screen.getByTestId('design-new-note-header').textContent).toContain('New Note')
+    const tabs = screen.getAllByRole('tab')
+    expect(tabs.map((t) => t.textContent)).toEqual(['Change', 'Question'])
+    expect(screen.getByRole('tablist', { name: 'Kind of note' })).toBeTruthy()
+    expect(tabs[0].getAttribute('aria-selected')).toBe('true')
+    fireEvent.keyDown(tabs[0], { key: 'ArrowRight' })
+    expect(screen.getByRole('tab', { name: 'Question' }).getAttribute('aria-selected')).toBe('true')
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Question' }), { key: 'ArrowRight' })
+    expect(screen.getByRole('tab', { name: 'Change' }).getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('⌘↩ is Send now: only this note, with the chosen kind; plain Return does not', () => {
     const onAdd = vi.fn()
     const onSendNow = vi.fn()
     render(<NotePopover open element={element} anchor={anchor} container={container} onAdd={onAdd} onSendNow={onSendNow} onCancel={vi.fn()} />)
     const box = screen.getByRole('textbox')
-    // Nothing typed and an empty tray: nothing to send.
     fireEvent.keyDown(box, { key: 'Enter', metaKey: true })
     expect(onSendNow).not.toHaveBeenCalled()
     fireEvent.change(box, { target: { value: '  make it primary  ' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Question' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Question' }))
     fireEvent.keyDown(box, { key: 'Enter' })
     expect(onSendNow).not.toHaveBeenCalled()
     fireEvent.keyDown(box, { key: 'Enter', metaKey: true })
     expect(onSendNow).toHaveBeenCalledWith('make it primary', 'question')
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true })
+    expect(onSendNow).toHaveBeenCalledTimes(2)
+    fireEvent.click(screen.getByRole('button', { name: 'Send now' }))
+    expect(onSendNow).toHaveBeenCalledTimes(3)
     expect(onAdd).not.toHaveBeenCalled()
   })
 
-  it('Ctrl+Enter sends now too; with nothing typed it sends the tray', () => {
-    const onSendNow = vi.fn()
-    render(<NotePopover open element={element} anchor={anchor} container={container} onAdd={vi.fn()} onSendNow={onSendNow} trayCount={2} onCancel={vi.fn()} />)
-    expect(screen.getByTestId('design-popover-hint').textContent).toContain('the 2 notes')
-    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', ctrlKey: true })
-    expect(onSendNow).toHaveBeenCalledWith('', 'change')
+  it('Send now shows the chord in the system font: ⌘↩ on macOS, Ctrl+Enter elsewhere', () => {
+    expect(sendNowChord(true)).toBe('⌘↩')
+    expect(sendNowChord(false)).toBe('Ctrl+Enter')
+    render(<NotePopover open element={element} anchor={anchor} container={container} onAdd={vi.fn()} onSendNow={vi.fn()} onCancel={vi.fn()} />)
+    const kbd = screen.getByRole('button', { name: 'Send now' }).querySelector('[data-testid="design-shortcut"]') as HTMLElement
+    expect(kbd.tagName).toBe('KBD')
+    expect(kbd.style.fontFamily).toContain('-apple-system')
+    expect(kbd.className).not.toContain('font-mono')
+    expect(['⌘↩', 'Ctrl+Enter']).toContain(kbd.textContent)
   })
 
-  it('the Add button adds; a full tray turns Add off with the hint', () => {
+  it('Add pins the note; a refused Add shows the notice and keeps the editor', () => {
     const onAdd = vi.fn()
     const { rerender } = render(<NotePopover open element={element} anchor={anchor} container={container} onAdd={onAdd} onCancel={vi.fn()} />)
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'x' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
-    expect(onAdd.mock.calls).toEqual([['x', 'change']])
-    rerender(<NotePopover open element={element} anchor={anchor} container={container} onAdd={onAdd} addDisabledReason="Send these first; up to 9 notes" onCancel={vi.fn()} />)
     const add = screen.getByRole('button', { name: 'Add' }) as HTMLButtonElement
-    expect(add.disabled).toBe(true)
-    expect(screen.getByTestId('design-popover-hint').textContent).toContain('Send these first; up to 9 notes')
+    expect(add.disabled).toBe(false)
+    fireEvent.click(add)
+    expect(onAdd.mock.calls).toEqual([['x', 'change']])
+    rerender(<NotePopover open element={element} anchor={anchor} container={container} onAdd={onAdd} notice="You've hit the limit of 9 notes. Send some first." onCancel={vi.fn()} />)
+    expect(screen.getByTestId('design-popover-notice').textContent).toBe("You've hit the limit of 9 notes. Send some first.")
+    expect((screen.getByRole('button', { name: 'Add' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('Esc cancels', () => {
@@ -182,7 +202,12 @@ describe('NoteTray', () => {
     expect(first.className).toContain('items-center')
     expect(first.querySelector('[data-k2-icon="pencil"]')).toBeTruthy()
     expect(first.querySelector('[data-k2-icon="trash-2"]')).toBeTruthy()
-    expect(screen.getByRole('button', { name: /Notes \(2\/9\)/ })).toBeTruthy()
+    // The count tag, nav style; the limit is never shown.
+    expect(screen.getByTestId('design-note-count').textContent).toBe('2')
+    expect(screen.getByTestId('design-note-count').hasAttribute('data-nav-count-tag')).toBe(true)
+    expect(screen.getByTestId('design-tray').textContent).not.toContain('9')
+    // The tile shows its kind.
+    expect(first.querySelector('[data-testid="design-tile-kind"]')?.getAttribute('data-kind')).toBe('change')
   })
 
   it('a tile has its own Send between the pencil and the trash', () => {
@@ -198,12 +223,17 @@ describe('NoteTray', () => {
     expect(onSendOne).toHaveBeenCalledWith('b')
   })
 
-  it('Send all sits in the notes section header, next to the count', () => {
-    const props = tray({ sendAllHint: '⌘↩' })
-    const header = screen.getByRole('button', { name: /Notes \(2\/9\)/ }).parentElement as HTMLElement
+  it('Send all sits in the nav-style notes header, centred, with no shortcut glyphs', () => {
+    const props = tray()
+    const header = screen.getByTestId('design-tray-header')
+    expect(header.className).toContain('items-center')
+    expect(header.className).toContain('py-1.5')
+    expect(header.querySelector('[data-nav-section-label]')?.textContent).toBe('Notes')
+    expect(header.querySelector('[data-nav-section-chevron]')).toBeTruthy()
     const sendAll = screen.getByRole('button', { name: 'Send all' })
     expect(header.contains(sendAll)).toBe(true)
-    expect(sendAll.getAttribute('title')).toContain('⌘↩')
+    expect(sendAll.querySelector('kbd')).toBeNull()
+    expect(sendAll.textContent).toBe('Send all')
     fireEvent.click(sendAll)
     expect(props.onSend).toHaveBeenCalledTimes(1)
   })
@@ -216,8 +246,9 @@ describe('NoteTray', () => {
     expect(props.onClear).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'Send all' }))
     expect(props.onSend).toHaveBeenCalledTimes(1)
-    fireEvent.click(screen.getByRole('button', { name: /Notes \(2/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Notes, 2' }))
     expect(screen.queryByTestId('design-tile-grid')).toBeNull()
+    expect(document.querySelector('[data-nav-section-chevron="collapsed"]')).toBeTruthy()
   })
 
   it('edits inline: Enter saves, Esc cancels', () => {
@@ -235,11 +266,12 @@ describe('NoteTray', () => {
     expect(props.onEdit).toHaveBeenCalledTimes(1)
   })
 
-  it('nine tiles fill the 3 × 3 grid and say the tray is full', () => {
+  it('nine tiles fill the 3 × 3 grid with no limit text', () => {
     const nine: DesignNoteDraft[] = Array.from({ length: 9 }, (_, i) => ({ id: `n${i}`, comment: `note ${i}`, intent: 'change', url: 'http://x/', title: '' }))
     tray({ notes: nine })
     expect(screen.getByTestId('design-tile-grid').querySelectorAll('[data-design-tile]')).toHaveLength(9)
-    expect(screen.getByTestId('design-tray-full').textContent).toBe('Send these first; up to 9 notes')
+    expect(screen.queryByTestId('design-tray-full')).toBeNull()
+    expect(screen.getByTestId('design-note-count').textContent).toBe('9')
   })
 
   it('locked notes cannot be edited; the error line and Retry show', () => {

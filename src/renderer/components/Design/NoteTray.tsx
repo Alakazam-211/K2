@@ -6,12 +6,14 @@
 // number and text on one row and an edit pencil, its own Send (just this
 // note) and a trash can. Tiles sit in a 3-wide by 3-high grid: at most
 // MAX_DESIGN_NOTES (9). Edit is inline. Send all lives in this section's
-// header, next to the count (there is no separate status row).
+// header, next to the count (there is no separate status row). The header
+// speaks the left nav's collapsible-section language (NavSection: label,
+// count tag, chevron, hover).
 
 import { useState } from 'react'
 import { ArrowUpIcon, PencilIcon, TrashIcon } from '@/components/icons/K2Icons'
+import { NAV_SECTION_HOVER_CLASS, NavCountTag, NavSectionChevron, NavSectionLabel } from '@/components/Sidebar/NavSection'
 import { elementChipLabel } from './NotePopover'
-import { MAX_DESIGN_NOTES, NOTES_FULL_REASON } from './useDesignNotes'
 import type { DesignNoteDraft } from './types'
 
 export interface NoteTrayProps {
@@ -30,8 +32,6 @@ export interface NoteTrayProps {
   onSendOne?: (noteId: string) => void
   onRetry: () => void
   defaultCollapsed?: boolean
-  /** Tooltip suffix for Send all (the ⌘↩ chord). */
-  sendAllHint?: string
 }
 
 const ICON_BUTTON =
@@ -50,14 +50,12 @@ export function NoteTray({
   onSendOne,
   onRetry,
   defaultCollapsed = false,
-  sendAllHint,
 }: NoteTrayProps): React.JSX.Element | null {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
 
   if (notes.length === 0 && !error) return null
-  const full = notes.length >= MAX_DESIGN_NOTES
 
   const commit = (noteId: string): void => {
     const text = draft.trim()
@@ -67,31 +65,36 @@ export function NoteTray({
 
   return (
     <div className="border-b border-[var(--color-border)] text-xs" data-testid="design-tray">
-      <div className="flex items-center gap-2 px-2 h-6">
+      {/* Header: nav-section look; every control centred on one row with
+          the grid's 6px rhythm above, below and between. */}
+      <div className={`flex items-center gap-1.5 px-2 py-1.5 ${NAV_SECTION_HOVER_CLASS}`} data-testid="design-tray-header">
         <button
           type="button"
           aria-expanded={!collapsed}
+          aria-label={`Notes, ${notes.length}`}
           onClick={() => setCollapsed((c) => !c)}
-          className="cursor-pointer text-[var(--color-text-primary)]"
+          className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left cursor-pointer"
         >
-          {collapsed ? '▸' : '▾'} Notes ({notes.length}/{MAX_DESIGN_NOTES})
+          <NavSectionLabel>Notes</NavSectionLabel>
+          <NavCountTag count={notes.length} testId="design-note-count" />
+          <span className="flex-1" />
+          <NavSectionChevron collapsed={collapsed} />
         </button>
-        {full ? (
-          <span className="min-w-0 truncate text-[10px] text-[var(--color-text-muted)]" data-testid="design-tray-full">
-            {NOTES_FULL_REASON}
-          </span>
-        ) : null}
-        <span className="flex-1" />
         <button
           type="button"
           onClick={onClear}
           disabled={sending || notes.length === 0}
-          className="px-1 cursor-pointer disabled:opacity-50"
+          className="flex h-6 items-center px-1.5 cursor-pointer text-[var(--color-text-secondary)] hover:text-[var(--color-text)] disabled:opacity-50"
         >
           Clear
         </button>
         {canRetry ? (
-          <button type="button" onClick={onRetry} disabled={sending} className="px-2 h-5 border border-[var(--color-border)] cursor-pointer disabled:opacity-50">
+          <button
+            type="button"
+            onClick={onRetry}
+            disabled={sending}
+            className="flex h-6 items-center px-2 border border-[var(--color-border)] cursor-pointer disabled:opacity-50"
+          >
             {sending ? 'Retrying…' : 'Retry'}
           </button>
         ) : (
@@ -99,8 +102,8 @@ export function NoteTray({
             type="button"
             onClick={onSend}
             disabled={sending || notes.length === 0}
-            title={`Send every note to the agent and the Thread${sendAllHint ? ` (${sendAllHint} in a note)` : ''}`}
-            className="px-2 h-5 bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer disabled:opacity-50"
+            title="Send every note to the agent and the Thread"
+            className="flex h-6 items-center px-2 bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer disabled:opacity-50"
           >
             {sending ? 'Sending…' : 'Send all'}
           </button>
@@ -112,7 +115,7 @@ export function NoteTray({
         </div>
       ) : null}
       {!collapsed && notes.length > 0 ? (
-        <ol className="grid grid-cols-3 gap-1.5 px-2 pb-2" data-testid="design-tile-grid">
+        <ol className="grid grid-cols-3 gap-1.5 px-2 pb-1.5" data-testid="design-tile-grid">
           {notes.map((n, i) => {
             const locked = lockedNoteIds.includes(n.id)
             const label = `${n.intent === 'question' ? 'Question' : 'Change'} · ${elementChipLabel(n.element)}`
@@ -125,6 +128,14 @@ export function NoteTray({
               >
                 <span className="font-mono text-[var(--color-accent)] flex-shrink-0" data-testid="design-tile-n">
                   {i + 1}
+                </span>
+                <span
+                  className="flex-shrink-0 text-[9px] font-semibold tracking-wider uppercase text-[var(--color-text-muted)]"
+                  data-testid="design-tile-kind"
+                  data-kind={n.intent}
+                  title={n.intent === 'question' ? 'Question' : 'Change'}
+                >
+                  {n.intent === 'question' ? 'Q' : 'C'}
                 </span>
                 {editing === n.id ? (
                   <input
@@ -147,7 +158,6 @@ export function NoteTray({
                   />
                 ) : (
                   <span className="flex-1 min-w-0 truncate text-[var(--color-text-primary)]" data-testid="design-tile-text">
-                    {n.intent === 'question' ? <span className="text-[var(--color-text-muted)]">? </span> : null}
                     {n.comment}
                   </span>
                 )}

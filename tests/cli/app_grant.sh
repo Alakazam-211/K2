@@ -277,6 +277,10 @@ chat_rm_key_out="$(run_k2 app grant rm --kind chat --subject-kind principal --su
 chat_rm_key_rc=$?
 hooks_out="$(run_k2 app grant hooks 2>/dev/null)"
 hooks_rc=$?
+hooks_json_out="$(run_k2 app grant hooks --json 2>/dev/null)"
+hooks_json_rc=$?
+hooks_status_json_out="$(run_k2 app grant hooks status --json 2>/dev/null)"
+hooks_status_json_rc=$?
 hooks_log_out="$(run_k2 app grant hooks log --subject k2:owner --limit 5 2>/dev/null)"
 hooks_log_rc=$?
 hooks_retry_out="$(run_k2 app grant hooks retry ob-1 2>/dev/null)"
@@ -342,6 +346,10 @@ assert_contains "hooks status counts" "$hooks_out" "outbox: 2 pending, 1 blocked
 assert_contains "hooks status blocked row" "$hooks_out" "BLOCKED ob-1"
 assert_contains "hooks status held row" "$hooks_out" "HELD    ob-2"
 assert_contains "hooks status attribution note" "$hooks_out" "not proof a person acted"
+assert_eq "bare hooks --json exit 0 (defaults to status)" "$hooks_json_rc" "0"
+assert_eq "bare hooks --json = hooks status --json" "$hooks_json_out" "$hooks_status_json_out"
+assert_eq "hooks status --json exit 0" "$hooks_status_json_rc" "0"
+assert_contains "hooks --json is the raw body" "$hooks_json_out" '"targets"'
 assert_eq "hooks log exit 0" "$hooks_log_rc" "0"
 assert_contains "hooks log row" "$hooks_log_out" "ob-1  done"
 assert_eq "hooks retry exit 0" "$hooks_retry_rc" "0"

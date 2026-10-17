@@ -675,7 +675,7 @@ fn threads_source(root: &TempDir, name: &str) -> (PathBuf, PathBuf, String, Stri
         Some(k2_core::overlay::PostAuthor::owner()),
     )
     .unwrap();
-    k2_core::overlay::record_chatter(&conn, &sid, &p.id, None, "peer", &handle, "ct chatter never travels", "msg", "accepted")
+    k2_core::overlay::record_chatter(&conn, &sid, &p.id, None, "peer", &handle, "ct chatter never travels", "msg", "accepted", None)
         .unwrap();
     (canon, src_home, p.id, sid)
 }

@@ -850,6 +850,50 @@ pub fn deliver_live_with_via(
     wake_timeout: Duration,
     via: &str,
 ) -> MsgResponse {
+    deliver_live_inner(workspace_token, text, from, command, wake, wake_timeout, via, None)
+}
+
+/// A live send that wrote a `msg_deliveries` receipt
+/// ([`crate::hire_routes::deliver_recorded`]): `stamp_from` is what the
+/// recipient sees after `[from` (`label · m_…`); the Chatter line keeps
+/// the caller's own `from` and the receipt's `delivery_id`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn deliver_live_with_receipt(
+    workspace_token: &str,
+    text: &str,
+    stamp_from: &str,
+    from: &str,
+    delivery_id: &str,
+    command: &str,
+    wake: bool,
+    wake_timeout: Duration,
+    via: &str,
+) -> MsgResponse {
+    deliver_live_inner(
+        workspace_token,
+        text,
+        stamp_from,
+        command,
+        wake,
+        wake_timeout,
+        via,
+        Some((from, delivery_id)),
+    )
+}
+
+/// `receipt`: `(chatter from, delivery id)` when the send has a
+/// `msg_deliveries` row.
+#[allow(clippy::too_many_arguments)]
+fn deliver_live_inner(
+    workspace_token: &str,
+    text: &str,
+    from: &str,
+    command: &str,
+    wake: bool,
+    wake_timeout: Duration,
+    via: &str,
+    receipt: Option<(&str, &str)>,
+) -> MsgResponse {
     // Resolve once (D12). Unknown token is permanent; surface immediately.
     let target = match resolve_msg_target(workspace_token) {
         Some(t) => t,
@@ -943,7 +987,17 @@ pub fn deliver_live_with_via(
             // Human Thread compose / card inject already stored on the
             // Thread collection — do not also stamp Chatter (that's k2 msg).
             if via != "compose" && via != "thread" {
-                crate::overlay_routes::record_inject_chatter(workspace_token, from, text, via);
+                let (chatter_from, delivery_id) = match receipt {
+                    Some((f, id)) => (f, Some(id)),
+                    None => (from, None),
+                };
+                crate::overlay_routes::record_inject_chatter(
+                    workspace_token,
+                    chatter_from,
+                    text,
+                    via,
+                    delivery_id,
+                );
             }
             return result;
         }

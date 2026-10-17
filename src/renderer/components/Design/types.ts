@@ -24,8 +24,12 @@ export interface NoteElement {
   /** CSS px in the guest page's viewport. */
   rect?: NoteRect
   nearbyText?: string[]
-  /** `file:line` from a dev build's React source info. */
+  /** Dev builds: `Component (file:line)`, `file:line` or `Component`. */
   source?: string
+  /** Nearest heading's text. */
+  heading?: string
+  /** Nearest landmark ancestor, e.g. `nav "Main"`. */
+  landmark?: string
 }
 
 export type NoteIntent = 'change' | 'question'

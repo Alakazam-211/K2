@@ -62,6 +62,7 @@ import { FederatedConnectionRow } from './FederatedConnectionRow'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { HideApiSessionsToggle } from '@/components/WorkspacePanel/HideApiSessionsToggle'
 import { WorkspaceCompletionSoundToggle } from '@/components/WorkspacePanel/WorkspaceCompletionSoundToggle'
+import { DesignModeSettingRow } from '@/components/Design/DesignModeSettingRow'
 import { WorkspacePhonePushToggle } from '@/components/WorkspacePanel/WorkspacePhonePushToggle'
 import { workspaceGrantSlug } from './api-keys-api'
 import { setSqlDbAgentAccess } from './data-api'
@@ -1375,6 +1376,7 @@ function ProjectDetail({
               <DefaultAgentSelector projectId={project.id} currentDefaultAgent={project.defaultAgent} />
               <DefaultModelControls project={project} />
               <WorkspaceCompletionSoundToggle project={project} />
+              <DesignModeSettingRow project={project} scope={primaryScope()} />
               <WorkspacePhonePushToggle project={project} />
             </SettingsGroup>
 

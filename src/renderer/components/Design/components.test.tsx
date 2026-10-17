@@ -7,9 +7,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => {}) }))
 vi.mock('@/lib/daemon-cli', () => ({ daemonCliPost: vi.fn(async () => ({ ok: true })) }))
-vi.mock('@/kessel/server-scope', () => ({
-  primaryScope: () => ({ id: 'primary', isPrimary: true, isRemote: false }),
-}))
+const PRIMARY = { id: 'primary', isPrimary: true, isRemote: false } as unknown as import('@/kessel/server-scope').ServerScope
 vi.mock('@/stores/projects', async () => {
   const { create } = await import('zustand')
   return {
@@ -228,7 +226,7 @@ describe('DesignWebStub', () => {
 
 describe('DesignModeSettingRow', () => {
   it('turns Design mode off for the workspace and updates the projects store', async () => {
-    render(<DesignModeSettingRow project={{ id: 'p1', path: '/w/docs', designModeEnabled: 1 }} />)
+    render(<DesignModeSettingRow scope={PRIMARY} project={{ id: 'p1', path: '/w/docs', designModeEnabled: 1 }} />)
     const sw = screen.getByRole('switch', { name: 'Design mode' })
     expect(sw.getAttribute('aria-checked')).toBe('true')
     await act(async () => {
@@ -243,7 +241,7 @@ describe('DesignModeSettingRow', () => {
   })
 
   it('a missing value reads as on', () => {
-    render(<DesignModeSettingRow project={{ id: 'p2', path: '/w/x' }} />)
+    render(<DesignModeSettingRow scope={PRIMARY} project={{ id: 'p2', path: '/w/x' }} />)
     expect(screen.getByRole('switch', { name: 'Design mode' }).getAttribute('aria-checked')).toBe('true')
   })
 })

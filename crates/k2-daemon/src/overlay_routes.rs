@@ -2299,7 +2299,15 @@ fn merge_body(params: &mut HashMap<String, String>, body: &[u8]) {
 
 /// Record a successful `k2 msg` / `k2 talk` / inject sibling as chatter.
 /// Best-effort: a store error is logged and does not fail PTY delivery.
-pub fn record_inject_chatter(workspace_token: &str, from: &str, text: &str, via: &str) {
+/// `delivery_id`: the send's `msg_deliveries` receipt (`m_…`), when it
+/// wrote one; the doc carries it as `deliveryId`.
+pub fn record_inject_chatter(
+    workspace_token: &str,
+    from: &str,
+    text: &str,
+    via: &str,
+    delivery_id: Option<&str>,
+) {
     let recipient = match resolve_addr(workspace_token) {
         Ok(r) => r,
         Err(_) => return,
@@ -2320,6 +2328,7 @@ pub fn record_inject_chatter(workspace_token: &str, from: &str, text: &str, via:
         text,
         via,
         "accepted",
+        delivery_id,
     ) {
         Ok((doc, links)) => crate::overlay_ws::emit_links(&links, &doc),
         Err(e) => k2_core::log_debug!("[overlay] record chatter failed: {e}"),
@@ -2979,7 +2988,7 @@ mod tests {
         sidecar(&project_id, &reviewer, "reviewer");
         let addr = format!("{handle}/reviewer");
 
-        record_inject_chatter(&addr, &handle, "ping", "msg");
+        record_inject_chatter(&addr, &handle, "ping", "msg", None);
 
         let thread =
             dispatch("/cli/thread", &params_of(&[("addr", addr.as_str())])).expect("GET thread");
@@ -3030,7 +3039,7 @@ mod tests {
         pin(&project_id, &uuid::Uuid::new_v4().to_string());
         sidecar(&project_id, &reviewer, "reviewer");
         let addr = format!("{handle}/reviewer");
-        record_inject_chatter(&addr, &handle, "ping-talk", "talk");
+        record_inject_chatter(&addr, &handle, "ping-talk", "talk", None);
         let chatter =
             dispatch("/cli/chatter", &params_of(&[("addr", addr.as_str())])).expect("chatter");
         let c = json_body(&chatter);
@@ -3040,6 +3049,115 @@ mod tests {
             items[0]["doc"]["via"], "talk",
             "via: talk must be stamped; got {c}"
         );
+    }
+
+    /// A live `k2 msg` (the recorded path behind `/cli/workspace/msg`)
+    /// writes one `msg_deliveries` row and one Chatter doc carrying the
+    /// same `deliveryId`, and only the id.
+    #[cfg(unix)]
+    #[test]
+    fn live_msg_chatter_carries_the_delivery_id() {
+        use k2_core::session::SessionId;
+        use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession, LabelSource};
+
+        let handle = format!("ovldlv{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        let reviewer = uuid::Uuid::new_v4().to_string();
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        sidecar(&project_id, &reviewer, "reviewer");
+        let addr = format!("{handle}/reviewer");
+        let sender_handle = format!("ovldls{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (sender_project, _) = seed(&sender_handle);
+        pin(&sender_project, &uuid::Uuid::new_v4().to_string());
+
+        // A live `cat` stands in for the reviewer's agent PTY (registering
+        // it starts the activity observer, which needs a tokio reactor).
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("tokio");
+        let _enter = rt.enter();
+        let agent_name = format!("tab-pane-{reviewer}");
+        let session = DaemonPtySession::spawn(DaemonPtyConfig {
+            session_id: SessionId::new(),
+            cols: 80,
+            rows: 24,
+            cwd: Some(std::path::PathBuf::from("/tmp")),
+            program: Some("cat".to_string()),
+            args: vec![],
+            durable_args: None,
+            env: Default::default(),
+            drain_on_exit: true,
+            label: String::new(),
+            label_source: LabelSource::Pty,
+            sandbox: k2_core::terminal::SandboxSpec::Passthrough,
+            cell_uid: None,
+            overlay: None,
+        })
+        .expect("spawn cat");
+        crate::v2_session_map::register(agent_name.clone(), session.clone());
+
+        let sender = crate::hire_routes::Sender {
+            workspace_id: Some(sender_project.clone()),
+            via: "passport",
+            actor: format!("agent:{sender_handle}"),
+            on_behalf_of: None,
+        };
+        let (resp, id) = crate::hire_routes::deliver_recorded(
+            &addr,
+            "ping with receipt",
+            &sender_handle,
+            "",
+            false,
+            std::time::Duration::from_secs(5),
+            "msg",
+            &sender,
+        );
+        crate::v2_session_map::unregister(&agent_name);
+        session.kill();
+        assert!(resp.success, "live delivery: {resp:?}");
+        let id = id.expect("a msg_deliveries row was written");
+
+        let row = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::hire::deliveries::get(&conn, &id).expect("msg_deliveries row")
+        };
+        assert!(row.delivered, "{row:?}");
+        assert_eq!(row.sender_workspace_id.as_deref(), Some(sender_project.as_str()));
+
+        let chatter =
+            dispatch("/cli/chatter", &params_of(&[("addr", addr.as_str())])).expect("chatter");
+        let c = json_body(&chatter);
+        let items = c["items"].as_array().expect("items");
+        assert_eq!(items.len(), 1, "{c}");
+        let doc = &items[0]["doc"];
+        assert_eq!(doc["deliveryId"], id.as_str(), "{c}");
+        assert_eq!(doc["body"], "ping with receipt", "{c}");
+        assert_eq!(doc["from"], sender_handle.as_str(), "the id rides in deliveryId, not in from: {c}");
+        for k in ["actor", "sender", "onBehalfOf", "senderWorkspaceId"] {
+            assert!(doc.get(k).is_none(), "no receipt field {k} on the doc: {c}");
+        }
+
+        // The sender's own mailbox has the same doc (the bare from resolves).
+        let mine = dispatch("/cli/chatter", &params_of(&[("addr", sender_handle.as_str())]))
+            .expect("sender chatter");
+        let m = json_body(&mine);
+        let m_items = m["items"].as_array().expect("sender items");
+        assert_eq!(m_items.len(), 1, "{m}");
+        assert_eq!(m_items[0]["id"], items[0]["id"], "{m}");
+        assert_eq!(m_items[0]["doc"]["deliveryId"], id.as_str(), "{m}");
+
+        let log = dispatch("/cli/chatterlog", &HashMap::new()).expect("chatterlog");
+        let l = json_body(&log);
+        let entry = l["items"]
+            .as_array()
+            .expect("log items")
+            .iter()
+            .find(|i| i["id"] == items[0]["id"])
+            .cloned()
+            .expect("chatterlog has the line");
+        assert_eq!(entry["doc"]["deliveryId"], id.as_str(), "{entry}");
     }
 
     #[test]

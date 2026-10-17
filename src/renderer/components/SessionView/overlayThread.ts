@@ -123,6 +123,9 @@ export interface OverlayDoc {
    *  (`owner` / `user` / `guest`). Absent on agent posts and older docs;
    *  `isOwnThreadPost` (lib/thread-viewer) decides "You". */
   author?: ThreadAuthor | null
+  /** Chatter only: the `m_…` id of this live message's `msg_deliveries`
+   *  receipt (`k2 msg who <id>`). Absent on unrecorded sends and older docs. */
+  deliveryId?: string | null
 }
 
 export interface OverlayThreadItem {

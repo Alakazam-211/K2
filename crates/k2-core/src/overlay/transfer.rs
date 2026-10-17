@@ -414,6 +414,8 @@ pub fn export_project_threads(
 /// Belt (CL9): no `inject`, text through the vault redactor.
 fn clean_for_export(mut doc: OverlayDoc) -> OverlayDoc {
     doc.inject = None;
+    // A receipt id names a row in this server's `msg_deliveries` only.
+    doc.delivery_id = None;
     doc.body = crate::redaction::redact_opt(doc.body.as_deref());
     if let Some(c) = doc.choice.as_mut() {
         c.prompt = crate::redaction::redact(&c.prompt);
@@ -779,6 +781,7 @@ impl Rewrite<'_> {
         let mut meta = self.meta(&src.id);
         doc.id = uuid::Uuid::new_v4().to_string();
         doc.inject = None;
+        doc.delivery_id = None;
         if is_person_post(src) {
             let who = self.person(src.author.as_ref(), &src.from);
             meta.author = src.author.clone();
@@ -882,6 +885,7 @@ impl Rewrite<'_> {
             author: None,
             external: None,
             imported: Some(meta),
+            delivery_id: None,
         };
         let key = import_key(
             project_id,

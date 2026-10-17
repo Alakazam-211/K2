@@ -256,11 +256,17 @@ fn uninstall_waits_for_apps_then_removes_only_what_install_wrote() {
     // A distro file next to ours stays.
     write(&t, "/etc/containers/containers.conf", "# distro\n");
 
-    // An App process runs as k2app: refused, nothing removed.
-    write(&t, "/proc/4321/status", &format!("Name:\tnode\nUid:\t{APP_UID}\t{APP_UID}\t{APP_UID}\t{APP_UID}\n"));
+    // k2app's own D-Bus and engine never block it; another user's conmon
+    // neither.
+    let st = |name: &str, uid: u32| format!("Name:\t{name}\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n");
+    write(&t, "/proc/4000/status", &st("dbus-daemon", APP_UID));
+    write(&t, "/proc/4001/status", &st("k2-app-engine", APP_UID));
+    write(&t, "/proc/4002/status", &st("conmon", 1000));
+    // A container runs as k2app (its conmon): refused, nothing removed.
+    write(&t, "/proc/4321/status", &st("conmon", APP_UID));
     let o = t.call(&["apps", "podman", "uninstall"]);
     assert_eq!(o.code, exit::STATE);
-    assert!(o.stderr.starts_with("apps_running"), "{}", o.stderr);
+    assert!(o.stderr.starts_with("apps_running: 1 "), "{}", o.stderr);
     assert!(t.p(MARKER).exists());
 
     std::fs::remove_dir_all(t.p("/proc/4321")).unwrap();

@@ -27,7 +27,7 @@ use k2_root_proto::podman::*;
 use serde_json::{json, Value as J};
 
 use crate::apps::{
-    app_user, apparmor_parser, busy_app_processes, ensure_subdir, exists, file_state, kread, put,
+    app_user, apparmor_parser, ensure_subdir, exists, file_state, kread, put,
     read_cfg, read_cfg_text, split, tool_version, unput,
 };
 use crate::ctx::{Ctx, Fail, HResult};
@@ -287,14 +287,28 @@ pub fn install_with(ctx: &Ctx, stdin: &[u8], art: &PodmanArtifact, os: String) -
     }))
 }
 
+/// Containers running as k2app: every running container has a `conmon`
+/// (k2app's own user manager, D-Bus and the engine don't count).
+fn running_containers(ctx: &Ctx, uid: u32) -> usize {
+    let Ok(rd) = std::fs::read_dir(ctx.p("/proc")) else { return 0 };
+    rd.flatten()
+        .filter_map(|e| e.file_name().to_str().filter(|s| s.bytes().all(|b| b.is_ascii_digit())).map(str::to_string))
+        .filter_map(|pid| kread(ctx, &format!("/proc/{pid}/status")))
+        .filter(|st| {
+            let field = |k: &str| st.lines().find_map(|l| l.strip_prefix(k)).map(str::trim).unwrap_or("").to_string();
+            field("Name:") == "conmon" && field("Uid:").split_whitespace().next() == Some(&uid.to_string())
+        })
+        .count()
+}
+
 /// `apps podman uninstall` (daemon-only).
 pub fn uninstall(ctx: &Ctx) -> HResult<J> {
     let uid = app_user(ctx).ok().map(|p| p.uid);
     if let Some(u) = uid {
-        let busy = busy_app_processes(ctx, u);
+        let busy = running_containers(ctx, u);
         if busy > 0 {
             return Err(Fail::state(format!(
-                "apps_running: {busy} App process(es) still run as k2app; stop every App first (K2's Podman is their container engine)"
+                "apps_running: {busy} App container(s) still run as k2app; stop every guarded App first (K2's Podman is their container engine)"
             )));
         }
     }

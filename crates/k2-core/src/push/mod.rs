@@ -28,8 +28,10 @@
 //!   unset, [`K2Cloud::from_config`] returns `None` and the impl is
 //!   never constructed — dispatch is a startup no-op: **DORMANT**.
 //!   Payloads are deliberately dumb (§4.5 invariant): generic title +
-//!   attribution line + IDs ONLY — question/message content NEVER
-//!   rides APNs/FCM; the app pulls over the E2E tunnel on open.
+//!   attribution line + IDs ONLY for tickets and project chat. The one
+//!   exception is a Thread push's message PREVIEW (0.46.1, see
+//!   [`preview`]): opt-in per device, owner master switch, never for a
+//!   secret card. A preview passes through K2's relay and Apple/Google.
 //!
 //! ### Design constraints (ratified in the persistent-agents PRD)
 //!
@@ -44,6 +46,7 @@
 use std::fmt;
 
 pub mod budget;
+pub mod preview;
 
 /// Events the daemon emits to the user's configured push target.
 #[derive(Debug, Clone)]
@@ -88,9 +91,10 @@ pub enum PushEvent {
         group_id: String,
     },
     /// Thread push (prd-thread-push-notifications-v1 §7): an agent posted
-    /// in a Thread. NAME-ONLY: the title is the agent's name, the body is
-    /// a fixed line by message kind or count — never the message text,
-    /// the choice prompt or the secret name.
+    /// in a Thread. The title is the agent's name. The body is a preview
+    /// of the message (0.46.1, [`ThreadPush::preview`]) when there is one,
+    /// else a fixed line by message kind or count. A secret card's name
+    /// and prompt never ride a push.
     ThreadPost(ThreadPush),
 }
 
@@ -147,6 +151,27 @@ pub struct ThreadPush {
     /// `data.agentColor`: the workspace's `projects.color` (`#rrggbb`) as
     /// the projects list shows it; `""` if the row is gone.
     pub agent_color: String,
+    /// The latest post's message preview ([`preview::message_preview`]),
+    /// or `""` for the generic body. Already cleared by the daemon when
+    /// the owner's `pushMessagePreviews` switch is off; ignored for a
+    /// secret card whatever it holds. [`K2Cloud::dispatch`] sends it only
+    /// to devices with `previews` on and the generic body to the rest.
+    ///
+    /// PRIVACY: a non-empty preview is message text that leaves this
+    /// server through K2's push relay and Apple (APNs) or Google (FCM).
+    pub preview: String,
+}
+
+impl ThreadPush {
+    /// The preview this push would show (`None` for a secret card or an
+    /// empty preview).
+    pub fn shown_preview(&self) -> Option<&str> {
+        if self.msg_kind == ThreadMsgKind::Secret || self.preview.trim().is_empty() {
+            None
+        } else {
+            Some(self.preview.as_str())
+        }
+    }
 }
 
 /// A push's `data` object: string keys and **string values only** (TP7 —
@@ -246,7 +271,7 @@ impl PushEvent {
             Self::ProjectMessageCreated { project_name, .. } => {
                 format!("New message in {project_name}")
             }
-            Self::ThreadPost(t) => thread_body(t.msg_kind, t.count),
+            Self::ThreadPost(t) => thread_body(t.msg_kind, t.count, t.shown_preview()),
         }
     }
 
@@ -283,6 +308,20 @@ impl PushEvent {
     /// thread): they carry `sound` and the server stamp.
     pub fn is_mobile(&self) -> bool {
         !matches!(self, Self::AgentNeedsAttention { .. } | Self::HeartbeatFailed { .. })
+    }
+
+    /// True when this push shows message text (a Thread preview).
+    pub fn has_preview(&self) -> bool {
+        matches!(self, Self::ThreadPost(t) if t.shown_preview().is_some())
+    }
+
+    /// The same push without message text: the generic body for devices
+    /// with previews off. Other kinds are returned unchanged.
+    pub fn without_preview(&self) -> PushEvent {
+        match self {
+            Self::ThreadPost(t) => Self::ThreadPost(ThreadPush { preview: String::new(), ..t.clone() }),
+            other => other.clone(),
+        }
     }
 
     /// The local budget a send of this event draws from (TP2).
@@ -355,10 +394,38 @@ impl PushEvent {
     }
 }
 
-/// The fixed, content-free Thread body (§7).
-pub fn thread_body(kind: ThreadMsgKind, count: u32) -> String {
+/// The Thread push body (§7, previews 0.46.1).
+///
+/// - One post with a preview: the preview (a choice card's question).
+/// - Several posts: `"N new messages"`, plus `" · <preview of the latest>"`
+///   when the latest has one, the whole body within
+///   [`preview::PREVIEW_MAX_CHARS`].
+/// - No preview (previews off, empty after stripping): the fixed line by
+///   kind. A secret card NEVER shows a preview, whatever is passed.
+pub fn thread_body(kind: ThreadMsgKind, count: u32, preview: Option<&str>) -> String {
+    let preview = match kind {
+        ThreadMsgKind::Secret => None,
+        _ => preview.map(str::trim).filter(|p| !p.is_empty()),
+    };
     if count > 1 {
-        return format!("{count} new messages");
+        let head = format!("{count} new messages");
+        return match preview {
+            Some(p) => {
+                let sep = " · ";
+                let room = preview::PREVIEW_MAX_CHARS
+                    .saturating_sub(head.chars().count() + sep.chars().count());
+                let p = preview::cap_chars(p, room);
+                if p.is_empty() {
+                    head
+                } else {
+                    format!("{head}{sep}{p}")
+                }
+            }
+            None => head,
+        };
+    }
+    if let Some(p) = preview {
+        return preview::cap_chars(p, preview::PREVIEW_MAX_CHARS);
     }
     match kind {
         ThreadMsgKind::Text => "New message in Thread".to_string(),
@@ -1071,11 +1138,51 @@ impl K2Cloud {
         }
     }
 
+    /// Split one person's devices by payload variant: a push with a
+    /// message preview goes as is to devices with `previews` on, and
+    /// [`PushEvent::without_preview`] (the generic body) to the rest. A
+    /// push without a preview is one group. Empty groups are left out, so
+    /// the number of groups is the number of gateway calls (per
+    /// [`MAX_DEVICES_PER_CALL`] devices) the dispatch makes.
+    pub fn payload_groups<'a>(
+        event: &PushEvent,
+        devices: &'a [crate::push_devices::PushDevice],
+    ) -> Vec<(PushEvent, Vec<&'a crate::push_devices::PushDevice>)> {
+        if !event.has_preview() {
+            return if devices.is_empty() { Vec::new() } else { vec![(event.clone(), devices.iter().collect())] };
+        }
+        let (on, off): (Vec<_>, Vec<_>) = devices.iter().partition(|d| d.previews);
+        let mut out = Vec::new();
+        if !on.is_empty() {
+            out.push((event.clone(), on));
+        }
+        if !off.is_empty() {
+            out.push((event.without_preview(), off));
+        }
+        out
+    }
+
     /// Send `event` to ONE person's devices (`principal` = their person
     /// key, stamped into `data`, TP29). The daemon resolved them (Thread
     /// recipients, or bell-filtered ticket/project targets). One call per
+    /// payload variant ([`Self::payload_groups`]: a Thread preview to
+    /// devices with previews on, the generic body to the rest) and per
     /// [`MAX_DEVICES_PER_CALL`] devices; dead tokens are pruned.
     pub fn dispatch(
+        &self,
+        event: &PushEvent,
+        principal: &str,
+        devices: &[crate::push_devices::PushDevice],
+    ) -> Result<(), PushError> {
+        for (variant, group) in Self::payload_groups(event, devices) {
+            let group: Vec<_> = group.into_iter().cloned().collect();
+            self.dispatch_one(&variant, principal, &group)?;
+        }
+        Ok(())
+    }
+
+    /// One payload to these devices.
+    fn dispatch_one(
         &self,
         event: &PushEvent,
         principal: &str,
@@ -1476,6 +1583,7 @@ mod tests {
             device_usernames: vec!["owner".into()],
             avatar_rev: "ba7816bf8f01cfea".into(),
             agent_color: "#3b82f6".into(),
+            preview: String::new(),
         })
     }
 
@@ -1488,6 +1596,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             last_seen_at: 1,
+            previews: true,
         }
     }
 
@@ -1727,6 +1836,107 @@ mod tests {
         assert_eq!(calls[1].2["devices"].as_array().expect("devices").len(), 1);
         cloud.dispatch(&thread_event(ThreadMsgKind::Text, 1, "c-split"), "owner", &[]).expect("no devices");
         assert_eq!(s.calls().len(), 2, "no devices, no call");
+    }
+
+    // ── Thread push previews (0.46.1) ────────────────────────────────
+
+    fn previewed(kind: ThreadMsgKind, count: u32, preview: &str) -> PushEvent {
+        match thread_event(kind, count, "c-preview") {
+            PushEvent::ThreadPost(t) => PushEvent::ThreadPost(ThreadPush { preview: preview.into(), ..t }),
+            _ => unreachable!(),
+        }
+    }
+
+    fn dev_previews(token: &str, previews: bool) -> crate::push_devices::PushDevice {
+        crate::push_devices::PushDevice { previews, ..dev(token) }
+    }
+
+    /// One text post shows its preview; a choice card shows its question;
+    /// a secret card NEVER shows content, even if a preview was set; an
+    /// empty preview falls back to the generic line.
+    #[test]
+    fn thread_bodies_show_the_preview_except_for_secrets() {
+        let text = "Build is green. Ready to ship.";
+        assert_eq!(previewed(ThreadMsgKind::Text, 1, text).body(), text);
+        assert_eq!(
+            previewed(ThreadMsgKind::Choice, 1, "Ship 0.46.1 tonight?").body(),
+            "Ship 0.46.1 tonight?"
+        );
+        let secret = previewed(ThreadMsgKind::Secret, 1, "the token is hunter2");
+        assert_eq!(secret.body(), "Asks for a secret");
+        assert!(!secret.has_preview());
+        let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
+        assert!(
+            !K2Cloud::payload(&secret, &stamp, "owner").to_string().contains("hunter2"),
+            "a secret's text never rides a payload"
+        );
+        assert_eq!(previewed(ThreadMsgKind::Secret, 3, "hunter2").body(), "3 new messages");
+        assert_eq!(previewed(ThreadMsgKind::Text, 1, "   ").body(), "New message in Thread");
+        assert_eq!(previewed(ThreadMsgKind::Choice, 1, "").body(), "Asks you to choose");
+        // The data object is unchanged by a preview (no text in `data`).
+        let p = K2Cloud::payload(&previewed(ThreadMsgKind::Text, 1, text), &stamp, "owner");
+        assert_eq!(p["body"], text);
+        assert!(!p["data"].to_string().contains("Ready to ship"), "the preview rides `body` only");
+        assert_eq!(p["data"].as_object().expect("data").len(), 13);
+    }
+
+    /// Coalesced: "N new messages · <latest preview>", 140 chars at most;
+    /// no preview → today's "N new messages".
+    #[test]
+    fn coalesced_bodies_lead_with_the_count_and_fit_140() {
+        assert_eq!(
+            previewed(ThreadMsgKind::Text, 4, "All tests pass.").body(),
+            "4 new messages · All tests pass."
+        );
+        assert_eq!(previewed(ThreadMsgKind::Text, 4, "").body(), "4 new messages");
+        let long = preview::message_preview(&"lorem ipsum ".repeat(30));
+        assert!(long.chars().count() > preview::PREVIEW_MAX_CHARS - 12 && long.ends_with('…'), "{long}");
+        let body = previewed(ThreadMsgKind::Choice, 12, &long).body();
+        assert!(body.starts_with("12 new messages · lorem ipsum"), "{body}");
+        assert!(body.chars().count() <= preview::PREVIEW_MAX_CHARS, "{} chars: {body}", body.chars().count());
+        assert!(body.ends_with('…'), "{body}");
+    }
+
+    /// Per-device previews: one push with a preview splits into the
+    /// preview payload (devices with previews on) and the generic payload
+    /// (devices with previews off) — two gateway calls, each device in
+    /// exactly one. All on / all off / no preview → one call.
+    #[test]
+    fn per_device_previews_split_the_payloads() {
+        let text = "Deployed to staging. Smoke tests next.";
+        let event = previewed(ThreadMsgKind::Text, 1, text);
+        let devices = vec![
+            dev_previews("pv-on-1", true),
+            dev_previews("pv-off-1", false),
+            dev_previews("pv-on-2", true),
+        ];
+        let s = MockSender::new(serde_json::json!({ "results": [] }));
+        let cloud = K2Cloud::with_sender("https://push.k2.dev", "gw", s.clone());
+        cloud.dispatch(&event, "owner", &devices).expect("send");
+        let calls = s.calls();
+        assert_eq!(calls.len(), 2, "one call per payload variant");
+        let tokens = |c: &serde_json::Value| -> Vec<String> {
+            c["devices"].as_array().expect("devices").iter().map(|d| d["token"].as_str().expect("t").to_string()).collect()
+        };
+        assert_eq!(calls[0].2["payload"]["body"], text);
+        assert_eq!(tokens(&calls[0].2), vec!["pv-on-1", "pv-on-2"]);
+        assert_eq!(calls[1].2["payload"]["body"], "New message in Thread");
+        assert_eq!(tokens(&calls[1].2), vec!["pv-off-1"]);
+        assert!(!calls[1].2.to_string().contains("staging"), "no text reaches a previews-off device");
+        // Same collapse id, so either banner replaces the last.
+        assert_eq!(calls[0].2["payload"]["collapseId"], calls[1].2["payload"]["collapseId"]);
+
+        assert_eq!(K2Cloud::payload_groups(&event, &devices[..1]).len(), 1, "all on: one call");
+        let off = [dev_previews("x", false), dev_previews("y", false)];
+        let groups = K2Cloud::payload_groups(&event, &off);
+        assert_eq!(groups.len(), 1, "all off: one call");
+        assert_eq!(groups[0].0.body(), "New message in Thread");
+        let plain = thread_event(ThreadMsgKind::Text, 1, "c-preview");
+        assert_eq!(K2Cloud::payload_groups(&plain, &devices).len(), 1, "no preview: one call for everyone");
+        assert!(K2Cloud::payload_groups(&event, &[]).is_empty());
+        // A secret never splits: nothing to hide.
+        let secret = previewed(ThreadMsgKind::Secret, 1, "hunter2");
+        assert_eq!(K2Cloud::payload_groups(&secret, &devices).len(), 1);
     }
 
     /// TP29: one dispatch per person, each saying whose it is; nobody's

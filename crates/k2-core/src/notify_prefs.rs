@@ -486,6 +486,7 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             last_seen_at: 1,
+            previews: true,
         }
     }
 

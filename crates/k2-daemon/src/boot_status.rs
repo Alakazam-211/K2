@@ -354,6 +354,12 @@ pub const FEATURE_APP_SELF: &str = crate::apps::surfaces::FEATURE_APP_SELF;
 /// `skin/me` rooms carry `folders`, and `GET /cli/fs/stat` (`files.stat`)
 /// answers.
 pub const FEATURE_FILES_PATH_SCOPE: &str = "files-path-scope-v1";
+/// Thread push message previews (0.46.1): `POST /cli/push/register-device`
+/// takes `previews` (absent = keep the stored value), its reply and
+/// `GET /cli/push/device` carry `previews` + `previewsAllowed`, and a
+/// Thread push body may be a message preview. K2 Companion sends
+/// `previews` only to a server with this key.
+pub const FEATURE_PUSH_PREVIEWS: &str = "push-previews-v1";
 
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
@@ -394,6 +400,8 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_FILES_PATH_SCOPE);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
+        // Same DB as 0157: migration 0189 (push_devices.previews) ran with it.
+        out.push(FEATURE_PUSH_PREVIEWS);
     }
     out
 }
@@ -444,7 +452,8 @@ mod tests {
                 "room-members-v1",
                 "app-self-v1",
                 "files-path-scope-v1",
-                "thread-push-v1"
+                "thread-push-v1",
+                "push-previews-v1"
             ]
         );
     }

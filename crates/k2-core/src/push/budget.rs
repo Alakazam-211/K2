@@ -60,14 +60,23 @@ impl Budgets {
     /// sends in the trailing [`WINDOW`]. `false` = over budget (nothing
     /// recorded).
     pub fn try_take(&self, class: BudgetClass, per_hour: usize, now: Instant) -> bool {
+        self.try_take_n(class, per_hour, now, 1)
+    }
+
+    /// Take `n` sends at once, all or nothing (a Thread push whose phones
+    /// split on previews is two gateway calls). `false` = not enough room
+    /// (nothing recorded).
+    pub fn try_take_n(&self, class: BudgetClass, per_hour: usize, now: Instant, n: usize) -> bool {
         let mut q = self.slot(class).lock().unwrap_or_else(|p| p.into_inner());
         while q.front().is_some_and(|t| now.saturating_duration_since(*t) >= WINDOW) {
             q.pop_front();
         }
-        if q.len() >= per_hour {
+        if q.len() + n > per_hour {
             return false;
         }
-        q.push_back(now);
+        for _ in 0..n {
+            q.push_back(now);
+        }
         true
     }
 
@@ -124,5 +133,18 @@ mod tests {
         let t0 = Instant::now();
         assert!(!b.try_take(BudgetClass::Thread, 0, t0), "zero budget refuses");
         assert_eq!(b.used(BudgetClass::Thread, t0), 0);
+    }
+
+    /// A two-call take (a preview split) is all or nothing.
+    #[test]
+    fn a_multi_call_take_is_all_or_nothing() {
+        let b = Budgets::new();
+        let t0 = Instant::now();
+        assert!(b.try_take_n(BudgetClass::Thread, 3, t0, 2));
+        assert_eq!(b.used(BudgetClass::Thread, t0), 2);
+        assert!(!b.try_take_n(BudgetClass::Thread, 3, t0, 2), "one left: a two-call take is refused");
+        assert_eq!(b.used(BudgetClass::Thread, t0), 2, "and records nothing");
+        assert!(b.try_take_n(BudgetClass::Thread, 3, t0, 1), "the single call still fits");
+        assert_eq!(b.used(BudgetClass::Thread, t0), 3);
     }
 }

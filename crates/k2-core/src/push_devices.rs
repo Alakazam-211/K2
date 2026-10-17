@@ -43,6 +43,10 @@ pub struct PushDevice {
     /// Bumps on every (re-)register — staleness signal for a future
     /// list/revoke UI.
     pub last_seen_at: i64,
+    /// Thread push message previews on this phone's lock screen (0.46.1,
+    /// migration 0189). A NULL column (never set) reads as `true`. The
+    /// owner's `pushMessagePreviews` switch still overrides it.
+    pub previews: bool,
 }
 
 fn now_secs() -> i64 {
@@ -53,7 +57,7 @@ fn now_secs() -> i64 {
 }
 
 const DEVICE_SELECT: &str = "SELECT device_id, platform, token, username, \
-    created_at, updated_at, last_seen_at FROM push_devices";
+    created_at, updated_at, last_seen_at, previews FROM push_devices";
 
 fn row_to_device(row: &rusqlite::Row) -> rusqlite::Result<PushDevice> {
     Ok(PushDevice {
@@ -64,6 +68,7 @@ fn row_to_device(row: &rusqlite::Row) -> rusqlite::Result<PushDevice> {
         created_at: row.get(4)?,
         updated_at: row.get(5)?,
         last_seen_at: row.get(6)?,
+        previews: row.get::<_, Option<i64>>(7)?.is_none_or(|v| v != 0),
     })
 }
 
@@ -71,11 +76,25 @@ fn row_to_device(row: &rusqlite::Row) -> rusqlite::Result<PushDevice> {
 /// updates platform/token/username and bumps `updated_at` +
 /// `last_seen_at`, preserving `created_at` — the companion re-sends on
 /// every app launch, which is also how APNs/FCM token rotation lands.
+/// Keeps the stored `previews` choice ([`upsert_device_with`] sets it).
 pub fn upsert_device(
     device_id: &str,
     platform: &str,
     token: &str,
     username: &str,
+) -> Result<PushDevice, String> {
+    upsert_device_with(device_id, platform, token, username, None)
+}
+
+/// [`upsert_device`] plus the phone's Thread preview choice: `Some(b)`
+/// stores it; `None` keeps the stored value (an older phone that does not
+/// send the field), and a new row then reads as on.
+pub fn upsert_device_with(
+    device_id: &str,
+    platform: &str,
+    token: &str,
+    username: &str,
+    previews: Option<bool>,
 ) -> Result<PushDevice, String> {
     let device_id = device_id.trim();
     let token = token.trim();
@@ -100,13 +119,14 @@ pub fn upsert_device(
     let conn = db.lock();
     conn.execute(
         "INSERT INTO push_devices (device_id, platform, token, username, \
-         created_at, updated_at, last_seen_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?5) \
+         created_at, updated_at, last_seen_at, previews) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?5, ?6) \
          ON CONFLICT(device_id) DO UPDATE SET \
          platform = excluded.platform, token = excluded.token, \
          username = excluded.username, updated_at = excluded.updated_at, \
-         last_seen_at = excluded.last_seen_at",
-        params![device_id, platform, token, username, now],
+         last_seen_at = excluded.last_seen_at, \
+         previews = COALESCE(excluded.previews, push_devices.previews)",
+        params![device_id, platform, token, username, now, previews.map(i64::from)],
     )
     .map_err(|e| format!("push device upsert failed: {e}"))?;
     conn.query_row(
@@ -130,6 +150,21 @@ pub fn remove_device(device_id: &str) -> Result<bool, String> {
         )
         .map_err(|e| format!("push device delete failed: {e}"))?;
     Ok(n > 0)
+}
+
+/// One device by its id, or `None`.
+pub fn get_device(device_id: &str) -> Result<Option<PushDevice>, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    match conn.query_row(
+        &format!("{DEVICE_SELECT} WHERE device_id = ?1"),
+        params![device_id.trim()],
+        row_to_device,
+    ) {
+        Ok(d) => Ok(Some(d)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(format!("push device read failed: {e}")),
+    }
 }
 
 /// Every registered device, oldest-registered first (rowid tiebreak
@@ -222,6 +257,31 @@ mod tests {
             .collect();
         assert_eq!(mine.len(), 1, "upsert must not duplicate the device");
         assert_eq!(mine[0].token, t2);
+    }
+
+    /// 0189: a new device reads previews ON; `Some(false)` turns it off;
+    /// a re-register without the field (`None`, an older phone) keeps it;
+    /// `Some(true)` turns it back on.
+    #[test]
+    fn previews_default_on_and_absent_keeps_the_stored_value() {
+        let id = did("previews");
+        let d = upsert_device(&id, "apns", &tok("p1"), "owner").expect("insert");
+        assert!(d.previews, "a new device defaults to previews on");
+        let d = upsert_device_with(&id, "apns", &tok("p2"), "owner", Some(false)).expect("off");
+        assert!(!d.previews);
+        let d = upsert_device_with(&id, "apns", &tok("p3"), "owner", None).expect("keep");
+        assert!(!d.previews, "absent keeps the stored off");
+        let d = upsert_device(&id, "apns", &tok("p4"), "owner").expect("keep again");
+        assert!(!d.previews, "the plain upsert keeps it too");
+        assert!(!get_device(&id).expect("get").expect("row").previews);
+        let d = upsert_device_with(&id, "apns", &tok("p5"), "owner", Some(true)).expect("on");
+        assert!(d.previews);
+        // A brand-new device that says off from the start.
+        let id2 = did("previews-off");
+        assert!(!upsert_device_with(&id2, "fcm", &tok("p6"), "owner", Some(false)).expect("new off").previews);
+        assert!(get_device(&did("never")).expect("get").is_none());
+        remove_device(&id).expect("cleanup");
+        remove_device(&id2).expect("cleanup");
     }
 
     #[test]

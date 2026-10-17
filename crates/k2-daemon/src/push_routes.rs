@@ -37,14 +37,26 @@ use k2_core::push_devices;
 
 // ── Route dispatch ────────────────────────────────────────────────────
 
-/// Push-domain GET dispatch. Both routes are POST-only mutations —
-/// reached via the GET chain they answer an explicit 405. Returns
-/// `None` if the path isn't a push-domain route.
+/// `GET /cli/push/device?deviceId=<id>`: read one device's stored
+/// choices back (0.46.1 previews). The dispatcher resolves the caller
+/// from the token, like the POSTs.
+pub const DEVICE_PATH: &str = "/cli/push/device";
+
+/// Push-domain GET dispatch. The two mutations are POST-only — reached
+/// via the GET chain they answer an explicit 405. [`DEVICE_PATH`] needs
+/// the caller's login, which only the dispatcher's push arm resolves, so
+/// this chain (no caller) refuses it. Returns `None` if the path isn't a
+/// push-domain route.
 pub fn dispatch(path: &str, _params: &HashMap<String, String>) -> Option<CliResponse> {
     match path {
         "/cli/push/register-device" | "/cli/push/unregister-device" => {
             Some(CliResponse::method_not_allowed())
         }
+        DEVICE_PATH => Some(CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: serde_json::json!({ "error": "a login token is required" }).to_string(),
+        }),
         _ => None,
     }
 }
@@ -52,13 +64,34 @@ pub fn dispatch(path: &str, _params: &HashMap<String, String>) -> Option<CliResp
 /// Dispatch a `/cli/push/*` POST body to its handler. `username` is
 /// the daemon-resolved authed actor (`"owner"` | a connect-user name)
 /// — resolved by the dispatcher arm from the session token, never
-/// from the body. Unknown paths 404 (mirrors `dispatch_unit6_post`).
+/// from the body. Unknown paths 404 (mirrors `dispatch_unit6_post`);
+/// the GET-only [`DEVICE_PATH`] answers 405.
 pub fn dispatch_post(path: &str, body: &[u8], username: &str) -> CliResponse {
     match path {
         "/cli/push/register-device" => handle_register(body, username),
         "/cli/push/unregister-device" => handle_unregister(body, username),
+        DEVICE_PATH => CliResponse::method_not_allowed(),
         _ => CliResponse::not_found(),
     }
+}
+
+/// The owner's server-wide preview switch (`pushMessagePreviews`, default
+/// on). Off = no device gets message text, whatever it chose.
+pub(crate) fn previews_allowed() -> bool {
+    k2_core::app_settings::load().push_message_previews
+}
+
+/// A device row as the push routes answer it: the stored row (camelCase,
+/// `previews` = this device's own choice) plus `previewsAllowed` (the
+/// server master switch) and `ok: true`. The phone greys out its toggle
+/// ("Turned off by the server owner") when `previewsAllowed` is false.
+fn device_reply(device: &push_devices::PushDevice) -> CliResponse {
+    let mut v = serde_json::to_value(device).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(map) = v.as_object_mut() {
+        map.insert("ok".to_string(), serde_json::json!(true));
+        map.insert("previewsAllowed".to_string(), serde_json::json!(previews_allowed()));
+    }
+    CliResponse::ok_json(v.to_string())
 }
 
 /// Stable usage-error shape (code `usage` → CLI exit 2; the
@@ -82,24 +115,69 @@ struct RegisterBody {
     device_id: String,
     platform: String,
     token: String,
+    /// Thread push message previews on this phone (0.46.1). Absent =
+    /// keep the stored value (an older phone); a new device then reads
+    /// as on. Anything but a JSON bool is a usage error.
+    previews: Option<bool>,
 }
 
 /// Handler for `POST /cli/push/register-device` — upsert keyed by
-/// deviceId (re-sent every app launch; rotation lands for free).
+/// deviceId (re-sent every app launch; rotation lands for free). The
+/// reply is the stored row plus `previewsAllowed` ([`device_reply`]).
 fn handle_register(body: &[u8], username: &str) -> CliResponse {
     let b: RegisterBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
     };
-    match push_devices::upsert_device(&b.device_id, &b.platform, &b.token, username) {
-        Ok(device) => {
-            let mut v = serde_json::to_value(&device).unwrap_or_else(|_| serde_json::json!({}));
-            if let Some(map) = v.as_object_mut() {
-                map.insert("ok".to_string(), serde_json::json!(true));
-            }
-            CliResponse::ok_json(v.to_string())
-        }
+    match push_devices::upsert_device_with(&b.device_id, &b.platform, &b.token, username, b.previews) {
+        Ok(device) => device_reply(&device),
         Err(e) => usage_error(e),
+    }
+}
+
+/// Handler for `GET /cli/push/device?deviceId=<id>`: the device's stored
+/// row (`previews`) and the server's `previewsAllowed`. Same rule as
+/// unregister (TP12): only the device's own person or an Admin+ sees it;
+/// anyone else gets the same 404 as an unknown id (no oracle).
+pub fn handle_device_get(params: &HashMap<String, String>, username: &str) -> CliResponse {
+    let id = params.get("deviceId").or_else(|| params.get("device_id")).map(|s| s.trim()).unwrap_or("");
+    if id.is_empty() {
+        return usage_error("missing 'deviceId'");
+    }
+    let row = match push_devices::get_device(id) {
+        Ok(r) => r,
+        Err(e) => return usage_error(e),
+    };
+    let not_found = || CliResponse {
+        status: "404 Not Found",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "not_found", "hint": "no such device for this login" },
+        })
+        .to_string(),
+    };
+    let Some(row) = row else {
+        return not_found();
+    };
+    if !may_manage_device(&row, username) {
+        return not_found();
+    }
+    device_reply(&row)
+}
+
+/// TP12: the device's own person (its login, or a login of the same
+/// person) or an Admin+.
+fn may_manage_device(row: &push_devices::PushDevice, username: &str) -> bool {
+    let is_admin = username == k2_core::notify_prefs::OWNER
+        || k2_core::connect_users::role_for_user(username)
+            .is_some_and(|r| r >= k2_core::connect_users::Role::Admin);
+    if is_admin {
+        return true;
+    }
+    match k2_core::notify_prefs::People::load() {
+        Ok(people) => people.person_key(&row.username) == people.person_key(username),
+        Err(_) => row.username == username,
     }
 }
 
@@ -360,13 +438,14 @@ pub(crate) fn group_by_person(
     out.into_iter().collect()
 }
 
-/// Take one dispatch from the Thread bucket (§6.3): 30/h on the
-/// per-daemon relay path, 5/h on the shared token. Dormant/test: always
-/// granted (nothing leaves anyway).
-pub(crate) fn take_thread_budget(now: Instant) -> bool {
+/// Take `calls` gateway calls from the Thread bucket (§6.3), all or
+/// nothing: 30/h on the per-daemon relay path, 5/h on the shared token.
+/// A dispatch is one call, or two when one person's phones split on
+/// previews. Dormant/test: always granted (nothing leaves anyway).
+pub(crate) fn take_thread_budget(now: Instant, calls: usize) -> bool {
     #[cfg(test)]
     {
-        let _ = now;
+        let _ = (now, calls);
         true
     }
     #[cfg(not(test))]
@@ -375,12 +454,16 @@ pub(crate) fn take_thread_budget(now: Instant) -> bool {
             return true;
         };
         let per_hour = k2_core::push::RelayPath::of(cloud.config(), unix_now()).thread_per_hour();
-        budget::global().try_take(budget::BudgetClass::Thread, per_hour, now)
+        budget::global().try_take_n(budget::BudgetClass::Thread, per_hour, now, calls)
     }
 }
 
 /// Send one coalesced Thread push (one person's devices) — air-gap is
 /// checked again here, then a detached send. Test: the capture sink.
+/// `K2Cloud::dispatch` sends a preview only to devices with `previews` on
+/// and the generic body to the rest; the coalescer already took one
+/// budget call per payload variant from the same device rows (a phone
+/// that re-registers in between can at most add one call).
 pub(crate) fn deliver_thread(event: PushEvent) {
     if airgap_blocks() {
         note_airgap_drop();
@@ -551,6 +634,85 @@ mod tests {
             .filter(|d| d.device_id == id)
             .collect();
         assert_eq!(mine.len(), 1, "one row per deviceId");
+        push_devices::remove_device(&id).expect("cleanup");
+    }
+
+    /// 0.46.1 previews contract: a new device defaults to `previews:true`;
+    /// `previews:false` stores off; a register WITHOUT the field (an older
+    /// phone) keeps the stored value; every reply carries `previews` and
+    /// `previewsAllowed`; a non-bool `previews` is a usage error.
+    #[test]
+    fn register_device_previews_default_on_and_absent_keeps_the_stored_value() {
+        let _home = crate::test_support::TempHome::new();
+        let id = did("previews");
+        let reg = |body: serde_json::Value| ok_json(post_json("/cli/push/register-device", body, "owner"));
+        let v = reg(serde_json::json!({ "deviceId": id, "platform": "apns", "token": tok("pv-1") }));
+        assert_eq!(v["previews"], true, "new device: previews on by default: {v}");
+        assert_eq!(v["previewsAllowed"], true, "the owner's switch defaults on: {v}");
+        let v = reg(serde_json::json!({ "deviceId": id, "platform": "apns", "token": tok("pv-2"), "previews": false }));
+        assert_eq!(v["previews"], false);
+        let v = reg(serde_json::json!({ "deviceId": id, "platform": "apns", "token": tok("pv-3") }));
+        assert_eq!(v["previews"], false, "absent keeps the stored off");
+        assert!(!push_devices::get_device(&id).expect("get").expect("row").previews);
+        let v = reg(serde_json::json!({ "deviceId": id, "platform": "apns", "token": tok("pv-4"), "previews": true }));
+        assert_eq!(v["previews"], true);
+
+        // The owner's master switch shows up as previewsAllowed:false; the
+        // device keeps its own choice.
+        k2_core::app_settings::update(serde_json::json!({ "pushMessagePreviews": false })).expect("switch off");
+        let v = reg(serde_json::json!({ "deviceId": id, "platform": "apns", "token": tok("pv-5") }));
+        assert_eq!((v["previews"].clone(), v["previewsAllowed"].clone()), (serde_json::json!(true), serde_json::json!(false)));
+        k2_core::app_settings::update(serde_json::json!({ "pushMessagePreviews": true })).expect("switch on");
+
+        let resp = post_json(
+            "/cli/push/register-device",
+            serde_json::json!({ "deviceId": id, "platform": "apns", "token": tok("pv-6"), "previews": "no" }),
+            "owner",
+        );
+        assert_eq!(resp.status, "400 Bad Request", "previews must be a bool: {}", resp.body);
+        push_devices::remove_device(&id).expect("cleanup");
+    }
+
+    /// `GET /cli/push/device?deviceId=` reads the stored choice back: the
+    /// device's own person and an Admin see it; another Member gets the
+    /// same 404 as an unknown id. POST to it is 405; the caller-less GET
+    /// chain refuses it.
+    #[test]
+    fn device_get_reads_previews_back_for_its_person_only() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::connect_users::add_user("pvmo", "password123").expect("mo");
+        k2_core::connect_users::add_user("pvgina", "password123").expect("gina");
+        k2_core::connect_users::set_role("pvgina", k2_core::connect_users::Role::Admin).expect("admin");
+        let id = did("get");
+        ok_json(post_json(
+            "/cli/push/register-device",
+            serde_json::json!({ "deviceId": id, "platform": "fcm", "token": tok("get"), "previews": false }),
+            "pvmo",
+        ));
+        let q = |who: &str| {
+            let mut params = HashMap::new();
+            params.insert("deviceId".to_string(), id.clone());
+            handle_device_get(&params, who)
+        };
+        let v = ok_json(q("pvmo"));
+        assert_eq!((v["deviceId"].as_str(), v["previews"].clone(), v["previewsAllowed"].clone()),
+            (Some(id.as_str()), serde_json::json!(false), serde_json::json!(true)));
+        assert_eq!(ok_json(q("pvgina"))["previews"], false, "an Admin can read it");
+        assert_eq!(ok_json(q("owner"))["previews"], false, "the owner can");
+        k2_core::connect_users::add_user("pvzed", "password123").expect("zed");
+        let resp = q("pvzed");
+        assert_eq!(resp.status, "404 Not Found", "another Member: no oracle: {}", resp.body);
+        let unknown = {
+            let mut params = HashMap::new();
+            params.insert("deviceId".to_string(), did("nope"));
+            handle_device_get(&params, "owner")
+        };
+        assert_eq!(unknown.status, "404 Not Found");
+        assert_eq!(resp.body, unknown.body, "same answer as an unknown id");
+        assert_eq!(handle_device_get(&HashMap::new(), "owner").status, "400 Bad Request", "deviceId required");
+        assert_eq!(dispatch_post(DEVICE_PATH, b"{}", "owner").status, "405 Method Not Allowed");
+        let resp = dispatch(DEVICE_PATH, &HashMap::new()).expect("claimed");
+        assert_eq!(resp.status, "403 Forbidden", "no caller on the plain GET chain");
         push_devices::remove_device(&id).expect("cleanup");
     }
 

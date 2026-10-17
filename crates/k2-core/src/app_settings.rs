@@ -558,6 +558,14 @@ pub struct AppSettings {
     /// push to leave dormancy.
     #[serde(default)]
     pub push_gateway_token: Option<String>,
+    /// Thread push message previews, server-wide (0.46.1). On (default):
+    /// each phone's own `previews` choice decides whether its lock screen
+    /// shows the start of an agent's message. Off: every phone gets the
+    /// generic body ("New message in Thread"). Owner/Admin only to change
+    /// (`REMOTE_ACCESS_KEYS` in settings_routes). PRIVACY: a preview passes
+    /// through K2's push relay and Apple (APNs) or Google (FCM).
+    #[serde(default = "default_true")]
+    pub push_message_previews: bool,
     /// Owner-linked accounts (prd-thread-push-notifications-v1, Rosson
     /// 2026-10-11): Connect usernames that ARE the server owner, e.g. the
     /// login the owner's phone uses. They resolve to the person key
@@ -1065,6 +1073,7 @@ impl Default for AppSettings {
             completion_sound: default_completion_sound(),
             push_gateway_url: None,
             push_gateway_token: None,
+            push_message_previews: true,
             owner_accounts: Vec::new(),
             owner_color: None,
             owner_display_name_carried: false,

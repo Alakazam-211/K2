@@ -74,6 +74,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 **Tabs**
 - **Pin any tab.** Right-click a tab and choose **Pin Tab**, or click the pin that shows on hover. Pinned tabs sit right after Chat and Inbox, keep their place across restarts, and Close Others / Close All leave them open.
+- **New agents open in the view you choose.** Settings → General → Workspaces → **New agents open in**: Terminal, Chat, Thread, Chatter, or Split view with the two sides you pick. Agents you already set a view for keep theirs.
 
 **Usage**
 - **One Usage page.** Settings → Language Models → **Usage** is headed with the server it shows (**Usage on** and its name): a strip with each tool's limits, token totals for Today, 7, 30 or 90 days or All (uncached input, cache read and write, output, requests, and an estimated cost that is not your bill), a day chart per tool, and breakdowns by workspace, model, login and tool. Click a row to filter the whole page. **Activity** lists each request, newest first, with a link to its chat. Days follow your own time zone.
@@ -102,6 +103,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - Help reads its glossary from the server shown in the top bar.
 - A closed drawer's arrow has the same dividing line as the tabs next to it.
 - Closing a drawer or the project chat no longer flickers open for a frame.
+- Home and Agents each remember their own selected agent, and moving to Home or Agents follows your workspace-switch focus setting (the Thread's message box first).
 - The Tickets badge now counts only tickets waiting on you, including ones marked Needs discussion, so it matches the Waiting on me list.
 - Owners can turn agent email sending on from any computer, not only a Mac: `k2 mail sending <workspace> off|approval|on`, or **Email sending** in the workspace's settings, which shows what is in effect. `k2 mail inboxes` shows each inbox's real send state, and the hint when sending is off now names the right command.
 

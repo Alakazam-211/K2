@@ -11,7 +11,7 @@
 //     the role tag (and "Owner's account" on an owner-linked login), with
 //     how and where you are signed in as one muted line;
 //   - labelled rows (one label column, one control column, the Settings
-//     row and type scale): First name, Last name, Colour, Your account
+//     row and type scale): Colour, First name, Last name, Your account
 //     (the owner key);
 //   - Password, then a Security section (collapsed, like the nav's
 //     sections) with recent sign-ins for the owner key.
@@ -450,6 +450,11 @@ function LoadedProfile({
           </p>
         ) : null}
         <div data-testid="admin-profile-fields">
+          {/* Colour first (Rosson): the header chip is its preview, so the
+              row is just the picker. */}
+          <SettingRow columns label="Colour" testId="admin-profile-color">
+            <PersonColorPicker scope={scope} onView={setColorView} />
+          </SettingRow>
           {personName.state.kind !== 'error' ? (
             <>
               <SettingRow columns label="First name" testId="admin-profile-first-name">
@@ -482,15 +487,6 @@ function LoadedProfile({
               </SettingRow>
             </>
           ) : null}
-          <SettingRow columns label="Colour" testId="admin-profile-color">
-            <PersonColorPicker
-              scope={scope}
-              onView={setColorView}
-              previewName={profile.ownerToken ? account?.username ?? 'owner' : (profile.username ?? 'owner')}
-              previewRole={(role ?? 'member') as PresenceRole}
-              previewNames={nameView}
-            />
-          </SettingRow>
           {ownerEdits && choices ? (
             <SettingRow columns label="Your account" testId="admin-profile-your-account">
               <div className="flex flex-col gap-1 min-w-0">

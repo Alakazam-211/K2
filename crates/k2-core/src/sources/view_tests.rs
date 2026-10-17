@@ -47,6 +47,7 @@ pub(crate) fn row() -> SourceRow {
         created_at: 0,
         updated_at: 0,
         removed_at: None,
+        secret_workspace: None,
     }
 }
 

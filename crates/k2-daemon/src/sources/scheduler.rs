@@ -465,6 +465,7 @@ impl Sched {
             lan_exact_ip: e.row.lan,
             headers,
             secret: spec.secret.clone(),
+            secret_workspace: e.row.secret_workspace.clone(),
             timeout_secs: spec.timeout_secs,
             max_bytes: spec.max_bytes,
         };

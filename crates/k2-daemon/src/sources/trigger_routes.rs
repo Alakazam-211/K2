@@ -9,7 +9,11 @@
 //! Who may do what (PRD §6.4): people (Owner/Admin) create, enable, edit,
 //! pause, remove and test. Agents (and K2 shell tabs) only **propose**, with
 //! the default cooldown and cap, naming themselves; a proposed trigger never
-//! fires; an agent may withdraw its own proposal.
+//! fires; an agent may withdraw its own proposal. An agent whose workspace
+//! has "Manage Gardens and data sources" (0181) may also add, approve,
+//! pause and resume triggers, always within the default cooldown and daily
+//! cap (only a person sets those) and waking only itself on add; edit and
+//! test stay a person's. Each such act is audited with its session.
 
 use std::collections::HashMap;
 
@@ -32,7 +36,7 @@ pub fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, Strin
         "/cli/sources/triggers/log" => log(who, params),
         "/cli/sources/triggers/propose" => create(who, body, false),
         "/cli/sources/triggers/add" => {
-            need_person(who)?;
+            need_person_or_manager(who)?;
             create(who, body, true)
         }
         "/cli/sources/triggers/edit" => {
@@ -40,15 +44,15 @@ pub fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, Strin
             edit(who, body)
         }
         "/cli/sources/triggers/approve" => {
-            need_person(who)?;
+            need_person_or_manager(who)?;
             set_status(who, body, "approve")
         }
         "/cli/sources/triggers/pause" => {
-            need_person(who)?;
+            need_person_or_manager(who)?;
             set_status(who, body, "pause")
         }
         "/cli/sources/triggers/resume" => {
-            need_person(who)?;
+            need_person_or_manager(who)?;
             set_status(who, body, "resume")
         }
         "/cli/sources/triggers/remove" => remove(who, body),
@@ -272,6 +276,10 @@ fn create(who: &Who, body: &[u8], active: bool) -> Result<Value, SourceErr> {
         json!({"source": src.name, "on": t.on.code(), "agent": project}),
     );
     changed(&conn);
+    drop(conn);
+    if active {
+        crate::gardens_manage::audit_who(who, "sources-trigger-add", &format!("{}:{}", src.name, t.id), None);
+    }
     Ok(json!({"id": t.id, "status": t.status}))
 }
 
@@ -370,6 +378,8 @@ fn set_status(who: &Who, body: &[u8], verb: &str) -> Result<Value, SourceErr> {
     ts::set_status(&conn, &t.id, to, approved_by, now).map_err(db_err)?;
     audit(&conn, who, action, Some(&src.id), Some(&t.id), json!({"source": src.name}));
     changed(&conn);
+    drop(conn);
+    crate::gardens_manage::audit_who(who, &format!("sources-{}", action.replace('_', "-")), &format!("{}:{}", src.name, t.id), None);
     Ok(json!({"id": t.id, "status": to}))
 }
 

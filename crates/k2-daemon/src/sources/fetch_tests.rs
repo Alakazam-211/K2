@@ -75,6 +75,7 @@ pub(crate) fn plan(origin: &str, path: &str, lan: bool) -> FetchPlan {
         lan_exact_ip: lan,
         headers: vec![],
         secret: None,
+        secret_workspace: None,
         timeout_secs: 5,
         max_bytes: 1 << 20,
     }

@@ -3,8 +3,19 @@
 //!
 //! `crate::sources_routes::handle` has already classified the caller and
 //! refused app passes and invalid tokens; both transports refuse a GET to a
-//! POST-only path with 405. Every route here is person-only: an agent or a
-//! K2 shell tab gets 403 `person_only` (CLI exit 3).
+//! POST-only path with 405. Every route here is for a person, or for an
+//! agent (or K2 shell tab) whose workspace has "Manage Gardens and data
+//! sources" (`gardens_manage`, 0181, [`crate::gardens_manage`]); any other
+//! passport gets 403 `person_only` (CLI exit 3).
+//!
+//! An agent with the switch acts with no confirm: it approves (its own
+//! proposals and others' on this server), binds a secret it may already
+//! use (its own workspace's secret, or a server secret only when it also
+//! has vault_manage; `secret_not_usable` otherwise), pins and unpins. It
+//! never sets viewers / agentAccess / keep (`field_person_only`), and the
+//! bind is still narrowed to the source's one origin inside the secret's
+//! sites. Every such act writes a source_audit row (with the session) and
+//! an Access Audit line.
 //!
 //! Approvals bind to what the person reviewed: the call carries the
 //! `specHash` they saw, and a changed spec is 409 `spec_changed`. A
@@ -76,12 +87,27 @@ pub(crate) mod util {
         SourceErr::new(
             "person_only",
             403,
-            "This needs a person. Run it outside K2, or use Settings → Gardens → External Data.",
+            "This needs a person (run it outside K2, or use Settings → Gardens → External Data), or turn on \"Manage Gardens and data sources\" for this agent (Settings → Workspaces → Agent).",
         )
     }
 
     pub(crate) fn need_person(who: &Who) -> Result<(), SourceErr> {
         if is_person(who) {
+            Ok(())
+        } else {
+            Err(person_only())
+        }
+    }
+
+    /// An agent or K2 shell passport whose workspace has "Manage Gardens
+    /// and data sources" (0181).
+    pub(crate) fn is_manager(who: &Who) -> bool {
+        crate::gardens_manage::who_may(who)
+    }
+
+    /// A person, or a passport with "Manage Gardens and data sources".
+    pub(crate) fn need_person_or_manager(who: &Who) -> Result<(), SourceErr> {
+        if is_person(who) || is_manager(who) {
             Ok(())
         } else {
             Err(person_only())
@@ -159,9 +185,18 @@ pub(crate) mod util {
         detail: Value,
     ) {
         let (a, k) = actor(who);
+        let detail = with_session(who, detail);
         if let Err(e) = ts::audit(conn, now(), &a, k, action, source_id, trigger_id, &detail) {
             k2_core::log_debug!("[sources] audit {action}: {e}");
         }
+    }
+
+    /// A passport's audit detail names its session (0181).
+    pub(crate) fn with_session(who: &Who, mut detail: Value) -> Value {
+        if let (Some(s), Value::Object(m)) = (crate::gardens_manage::session_of(who), &mut detail) {
+            m.insert("session".into(), Value::String(s.to_string()));
+        }
+        detail
     }
 
     /// How a proposed source can be approved.
@@ -177,7 +212,7 @@ pub(crate) mod util {
 }
 
 pub fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, String>) -> Result<Value, SourceErr> {
-    need_person(who)?;
+    need_person_or_manager(who)?;
     match path {
         "/cli/sources/pending" => pending(who, params),
         "/cli/sources/approve" => approve(who, body),
@@ -336,9 +371,62 @@ fn secret_for(row: &SourceRow, picked: Option<&str>) -> Option<String> {
     picked.map(str::to_string).or_else(|| row.url_secret_name.clone()).or_else(|| row.secret_name.clone())
 }
 
+/// The vault scope an agent with "Manage Gardens and data sources" binds
+/// `secret` from: its own workspace's secret first (`Some(ws)`), else a
+/// server secret (`None`) only when it also has vault_manage. Anything
+/// else is refused before any grant is made: 403 `secret_not_usable` (a
+/// server secret without vault_manage), 404 `secret_not_found`. A person's
+/// bind is always the server scope (`None`, today's rule).
+fn bind_scope(who: &Who, secret: &str) -> Result<Option<String>, SourceErr> {
+    let Some(ws) = own_project(who) else { return Ok(None) };
+    if sec::exists(Some(ws), secret)? {
+        return Ok(Some(ws.to_string()));
+    }
+    if sec::exists(None, secret)? {
+        if sec::vault_manage(ws) {
+            return Ok(None);
+        }
+        return Err(SourceErr::new(
+            "secret_not_usable",
+            403,
+            format!("{secret} is a server-wide secret: binding it needs \"Allow managing server-wide secrets\" for this agent too; or keep it in your own workspace"),
+        )
+        .with("secret", secret));
+    }
+    Err(SourceErr::new("secret_not_found", 404, format!("no secret named {secret} in this workspace or on this server")).with("secret", secret))
+}
+
+/// Bind `secret` (scope `ws`) to `row` for its one origin: a person with
+/// the confirm proof, an agent with the switch with none.
+fn bind_for(who: &Who, row: &SourceRow, ws: Option<&str>, secret: &str, proof: Option<&k2_vault::HumanProof>) -> Result<(), SourceErr> {
+    let origin = bind_origin(row)?;
+    match proof {
+        Some(p) => sec::bind(&row.id, ws, secret, &origin, super::secrets::BindAuth::Person(p)),
+        None if is_manager(who) => sec::bind(&row.id, ws, secret, &origin, super::secrets::BindAuth::Agent),
+        None => Err(person_only()),
+    }
+}
+
+/// 403 `field_person_only` when an agent sets a person's choice on approve.
+fn no_agent_choices(who: &Who, viewers: Option<Viewers>, access: Option<AgentAccess>, keep: Option<Keep>) -> Result<(), SourceErr> {
+    if is_person(who) {
+        return Ok(());
+    }
+    for (f, set) in [("viewers", viewers.is_some()), ("agentAccess", access.is_some()), ("keep", keep.is_some())] {
+        if set {
+            return Err(SourceErr::new("field_person_only", 403, format!("only a person sets {f}")).with("field", f));
+        }
+    }
+    Ok(())
+}
+
 /// Root-key check: 409 `root_key` unless `useAnyway`.
 fn check_root_key(who: &Who, row: &SourceRow, secret: &str, use_anyway: bool) -> Result<(), SourceErr> {
-    if let Some(hint) = sec::root_key_hint_for(secret)? {
+    check_root_key_in(who, row, None, secret, use_anyway)
+}
+
+fn check_root_key_in(who: &Who, row: &SourceRow, ws: Option<&str>, secret: &str, use_anyway: bool) -> Result<(), SourceErr> {
+    if let Some(hint) = sec::root_key_hint_for(ws, secret)? {
         if !use_anyway {
             return Err(SourceErr::new("root_key", 409, hint.hint).with("rootKey", json!({"code": hint.code, "hint": hint.hint})));
         }
@@ -360,6 +448,7 @@ fn activate(
     b_access: Option<AgentAccess>,
     b_keep: Option<Keep>,
     secret: Option<&str>,
+    secret_ws: Option<&str>,
     bound: bool,
     now: i64,
 ) -> Result<(), SourceErr> {
@@ -377,8 +466,8 @@ fn activate(
     conn.execute(
         "UPDATE sources SET status = 'active', pause_reason = NULL, approved_by = ?2, approved_at = ?3, \
          approved_spec_hash = spec_hash, viewers = ?4, agent_access = ?5, keep = ?6, secret_name = ?7, \
-         url_secret_name = ?8, secret_bound = ?9, rev = ?10, updated_at = ?3 WHERE id = ?1",
-        params![row.id, by, now, viewers, access, keep, secret_col, url_secret_col, i64::from(bound), rev],
+         url_secret_name = ?8, secret_bound = ?9, rev = ?10, updated_at = ?3, secret_workspace = ?11 WHERE id = ?1",
+        params![row.id, by, now, viewers, access, keep, secret_col, url_secret_col, i64::from(bound), rev, if bound { secret_ws } else { None }],
     )
     .map_err(db_err)?;
     Ok(())
@@ -400,14 +489,24 @@ fn approve(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
     if b.spec_hash != row.spec_hash {
         return Err(SourceErr::new("spec_changed", 409, "the source changed since you reviewed it; review it again"));
     }
+    no_agent_choices(who, b.viewers, b.agent_access, b.keep)?;
     let secret = secret_for(&row, b.secret.as_deref());
     let mut bound = false;
+    let mut scope: Option<String> = None;
     if let Some(s) = &secret {
-        need_token(b.confirm_token.as_deref())?;
-        check_root_key(who, &row, s, b.use_anyway)?;
-        let proof = take_confirm(who, k2_core::sources::CONFIRM_ACTION_SECRET, &row.id, b.confirm_token.as_deref())?;
-        let origin = bind_origin(&row)?;
-        sec::bind(&row.id, s, &origin, &proof)?;
+        if is_person(who) {
+            need_token(b.confirm_token.as_deref())?;
+            check_root_key(who, &row, s, b.use_anyway)?;
+            let proof = take_confirm(who, k2_core::sources::CONFIRM_ACTION_SECRET, &row.id, b.confirm_token.as_deref())?;
+            bind_for(who, &row, None, s, Some(&proof))?;
+        } else {
+            // An agent with "Manage Gardens and data sources": no confirm,
+            // only a secret it may already use.
+            scope = bind_scope(who, s)?;
+            bind_origin(&row)?;
+            check_root_key_in(who, &row, scope.as_deref(), s, b.use_anyway)?;
+            bind_for(who, &row, scope.as_deref(), s, None)?;
+        }
         bound = true;
     }
     let now = now();
@@ -415,12 +514,16 @@ fn approve(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let tx = conn.unchecked_transaction().map_err(db_err)?;
-        activate(&tx, who, &row, b.viewers, b.agent_access, b.keep, secret.as_deref(), bound, now)?;
+        activate(&tx, who, &row, b.viewers, b.agent_access, b.keep, secret.as_deref(), scope.as_deref(), bound, now)?;
         audit(&tx, who, "approve", Some(&row.id), None, json!({"name": row.name, "specHash": row.spec_hash}));
         if bound {
-            audit(&tx, who, "bind", Some(&row.id), None, json!({"secret": secret}));
+            audit(&tx, who, "bind", Some(&row.id), None, json!({"secret": secret, "scope": scope_code(scope.as_deref())}));
         }
         tx.commit().map_err(db_err)?;
+    }
+    crate::gardens_manage::audit_who(who, "sources-approve", &row.name, None);
+    if bound {
+        crate::gardens_manage::audit_who(who, "sources-bind", &row.name, secret.as_deref());
     }
     let next_at = super::engine().poll_now(&row.id).ok();
     {
@@ -429,6 +532,15 @@ fn approve(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
         changed(&conn);
     }
     Ok(json!({"name": row.name, "status": "active", "secretBound": bound, "nextAt": next_at}))
+}
+
+/// `server` or `workspace` for an audit row (never the value).
+fn scope_code(ws: Option<&str>) -> &'static str {
+    if ws.is_some() {
+        "workspace"
+    } else {
+        "server"
+    }
 }
 
 fn status_code(s: SourceStatus) -> &'static str {
@@ -509,16 +621,25 @@ fn batch_approve(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
         (rows, trows)
     };
     let pairs: Vec<(String, String)> = rows.iter().filter_map(|(r, s)| s.as_ref().map(|s| (r.id.clone(), s.clone()))).collect();
-    if !pairs.is_empty() {
+    let person = is_person(who);
+    if person && !pairs.is_empty() {
         need_token(b.confirm_token.as_deref()).map_err(|e| e.with("batchHash", batch_hash(&pairs)))?;
     }
+    // Every secret's scope is settled before anything is bound: one secret
+    // an agent can't use refuses the whole batch, and nothing changes.
+    let mut scopes: Vec<Option<String>> = Vec::with_capacity(rows.len());
     for (r, s) in &rows {
+        let scope = match s {
+            Some(s) if !person => bind_scope(who, s)?,
+            _ => None,
+        };
         if let Some(s) = s {
             bind_origin(r)?;
-            check_root_key(who, r, s, b.use_anyway)?;
+            check_root_key_in(who, r, scope.as_deref(), s, b.use_anyway)?;
         }
+        scopes.push(scope);
     }
-    let proof = if pairs.is_empty() {
+    let proof = if pairs.is_empty() || !person {
         None
     } else {
         let token = b.confirm_token.as_deref().filter(|t| !t.is_empty()).ok_or_else(|| {
@@ -532,12 +653,13 @@ fn batch_approve(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
                 .map_err(|_| SourceErr::new("batch_changed", 409, "the confirm doesn't match this list; confirm the list again"))?,
         )
     };
-    // Bind secrets, then commit every status change in one transaction.
+    // Bind secrets (all or none), then commit every status change in one
+    // transaction.
     let mut bound_ids: Vec<String> = Vec::new();
-    if let Some(proof) = &proof {
-        for (r, s) in &rows {
+    if proof.is_some() || !person {
+        for ((r, s), scope) in rows.iter().zip(&scopes) {
             if let Some(s) = s {
-                if let Err(e) = sec::bind(&r.id, s, &bind_origin(r)?, proof) {
+                if let Err(e) = bind_for(who, r, scope.as_deref(), s, proof.as_ref()) {
                     for id in &bound_ids {
                         let _ = sec::unbind(id);
                     }
@@ -552,8 +674,11 @@ fn batch_approve(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let tx = conn.unchecked_transaction().map_err(db_err)?;
-        for (r, s) in &rows {
-            activate(&tx, who, r, None, None, None, s.as_deref(), s.is_some(), now)?;
+        for ((r, s), scope) in rows.iter().zip(&scopes) {
+            activate(&tx, who, r, None, None, None, s.as_deref(), scope.as_deref(), s.is_some(), now)?;
+            if let Some(s) = s {
+                audit(&tx, who, "bind", Some(&r.id), None, json!({"secret": s, "scope": scope_code(scope.as_deref())}));
+            }
         }
         let (by, _) = actor(who);
         for t in &trigger_rows {
@@ -570,8 +695,15 @@ fn batch_approve(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
         tx.commit().map_err(db_err)?;
         changed(&conn);
     }
-    for (r, _) in &rows {
+    for (r, s) in &rows {
+        crate::gardens_manage::audit_who(who, "sources-approve", &r.name, None);
+        if s.is_some() {
+            crate::gardens_manage::audit_who(who, "sources-bind", &r.name, s.as_deref());
+        }
         let _ = super::engine().poll_now(&r.id);
+    }
+    for t in &trigger_rows {
+        crate::gardens_manage::audit_who(who, "sources-trigger-approve", &t.id, None);
     }
     Ok(json!({
         "approved": rows.iter().map(|(r, _)| r.name.clone()).collect::<Vec<_>>(),
@@ -612,37 +744,46 @@ fn secret(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
             let conn = db.lock();
             let rev = store::bump_rev(&conn).map_err(db_err)?;
             conn.execute(
-                "UPDATE sources SET secret_name = NULL, secret_bound = 0, rev = ?2, updated_at = ?3 WHERE id = ?1",
+                "UPDATE sources SET secret_name = NULL, secret_bound = 0, secret_workspace = NULL, rev = ?2, updated_at = ?3 WHERE id = ?1",
                 params![row.id, rev, now],
             )
             .map_err(db_err)?;
             audit(&conn, who, "unbind", Some(&row.id), None, json!({"secret": row.secret_name}));
             changed(&conn);
+            drop(conn);
+            crate::gardens_manage::audit_who(who, "sources-unbind", &row.name, row.secret_name.as_deref());
             Ok(json!({"name": row.name, "secret": Value::Null, "secretBound": false}))
         }
         Some(s) => {
             if row.url_secret_name.is_some() {
                 return Err(bad_request("this source's URL is itself a vault secret; approve it to bind that secret"));
             }
-            need_token(b.confirm_token.as_deref())?;
-            check_root_key(who, &row, s, b.use_anyway)?;
-            let proof = take_confirm(who, k2_core::sources::CONFIRM_ACTION_SECRET, &row.id, b.confirm_token.as_deref())?;
-            let origin = bind_origin(&row)?;
+            let (scope, proof) = if is_person(who) {
+                need_token(b.confirm_token.as_deref())?;
+                check_root_key(who, &row, s, b.use_anyway)?;
+                (None, Some(take_confirm(who, k2_core::sources::CONFIRM_ACTION_SECRET, &row.id, b.confirm_token.as_deref())?))
+            } else {
+                let scope = bind_scope(who, s)?;
+                check_root_key_in(who, &row, scope.as_deref(), s, b.use_anyway)?;
+                (scope, None)
+            };
+            bind_origin(&row)?;
             if row.secret_bound {
                 sec::unbind(&row.id)?;
             }
-            sec::bind(&row.id, s, &origin, &proof)?;
+            bind_for(who, &row, scope.as_deref(), s, proof.as_ref())?;
             let db = k2_core::db::shared();
             let conn = db.lock();
             let rev = store::bump_rev(&conn).map_err(db_err)?;
             conn.execute(
-                "UPDATE sources SET secret_name = ?2, secret_bound = 1, rev = ?3, updated_at = ?4 WHERE id = ?1",
-                params![row.id, s, rev, now],
+                "UPDATE sources SET secret_name = ?2, secret_bound = 1, secret_workspace = ?5, rev = ?3, updated_at = ?4 WHERE id = ?1",
+                params![row.id, s, rev, now, scope],
             )
             .map_err(db_err)?;
-            audit(&conn, who, "bind", Some(&row.id), None, json!({"secret": s}));
+            audit(&conn, who, "bind", Some(&row.id), None, json!({"secret": s, "scope": scope_code(scope.as_deref())}));
             changed(&conn);
             drop(conn);
+            crate::gardens_manage::audit_who(who, "sources-bind", &row.name, Some(s));
             let _ = super::engine().poll_now(&row.id);
             Ok(json!({"name": row.name, "secret": s, "secretBound": true}))
         }
@@ -680,6 +821,8 @@ fn pin(who: &Who, body: &[u8], on: bool) -> Result<Value, SourceErr> {
         .map_err(db_err)?;
         audit(&conn, who, if on { "pin" } else { "unpin" }, Some(&row.id), None, json!({"name": row.name}));
         changed(&conn);
+        drop(conn);
+        crate::gardens_manage::audit_who(who, if on { "sources-pin" } else { "sources-unpin" }, &row.name, None);
     }
     Ok(json!({"name": row.name, "pinned": on}))
 }
@@ -690,12 +833,37 @@ mod sec {
     use super::super::secrets::{self, RootKeyHint};
     use super::SourceErr;
 
-    pub(super) fn bind(source_id: &str, secret: &str, origin: &str, proof: &k2_vault::HumanProof) -> Result<(), SourceErr> {
+    pub(super) fn bind(
+        source_id: &str,
+        ws: Option<&str>,
+        secret: &str,
+        origin: &str,
+        auth: secrets::BindAuth<'_>,
+    ) -> Result<(), SourceErr> {
         #[cfg(test)]
         if let Some(f) = super::test_seams::secrets() {
+            if let secrets::BindAuth::Person(p) = &auth {
+                if !matches!(p, k2_vault::HumanProof::Confirmed { .. }) {
+                    return Err(SourceErr::new("confirm_required", 403, "binding a secret needs a person's confirm"));
+                }
+            }
             return (f.bind)(source_id, secret, origin);
         }
-        secrets::bind(source_id, secret, origin, proof)
+        secrets::bind_in(source_id, ws, secret, origin, auth)
+    }
+
+    /// Does a secret called `secret` exist in scope `ws` (`None`: server)?
+    pub(super) fn exists(ws: Option<&str>, secret: &str) -> Result<bool, SourceErr> {
+        #[cfg(test)]
+        if let Some(f) = super::test_seams::secrets() {
+            return Ok((f.exists)(ws, secret));
+        }
+        secrets::secret_exists(ws, secret)
+    }
+
+    /// The workspace's vault_manage switch (0149).
+    pub(super) fn vault_manage(ws: &str) -> bool {
+        crate::vault::actor::vault_manage(ws)
     }
 
     pub(super) fn unbind(source_id: &str) -> Result<(), SourceErr> {
@@ -706,12 +874,12 @@ mod sec {
         secrets::unbind(source_id)
     }
 
-    pub(super) fn root_key_hint_for(secret: &str) -> Result<Option<RootKeyHint>, SourceErr> {
+    pub(super) fn root_key_hint_for(ws: Option<&str>, secret: &str) -> Result<Option<RootKeyHint>, SourceErr> {
         #[cfg(test)]
         if let Some(f) = super::test_seams::secrets() {
             return Ok((f.root_key)(secret));
         }
-        secrets::root_key_hint_for(secret)
+        secrets::root_key_hint_in(ws, secret)
     }
 }
 
@@ -729,6 +897,8 @@ pub mod test_seams {
         pub bind: fn(&str, &str, &str) -> Result<(), SourceErr>,
         pub unbind: fn(&str) -> Result<(), SourceErr>,
         pub root_key: fn(&str) -> Option<RootKeyHint>,
+        /// Does a secret exist in this scope (`None`: server)?
+        pub exists: fn(Option<&str>, &str) -> bool,
     }
 
     thread_local! {
@@ -815,6 +985,13 @@ pub(crate) mod tests {
             root_key: |s| {
                 (s == "STRIPE_SK")
                     .then_some(super::super::secrets::RootKeyHint { code: "stripe_secret", hint: "use a restricted key" })
+            },
+            // Workspace p1 keeps WS_KEY; the server keeps VERCEL_RO,
+            // STRIPE_RK and STRIPE_SK.
+            exists: |ws, s| match ws {
+                Some("p1") => s == "WS_KEY",
+                Some(_) => false,
+                None => matches!(s, "VERCEL_RO" | "STRIPE_RK" | "STRIPE_SK"),
             },
         }));
     }

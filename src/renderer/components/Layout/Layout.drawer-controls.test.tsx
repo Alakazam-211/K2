@@ -142,3 +142,47 @@ describe('page switches', () => {
     expect(screen.getByTestId('room')).toBe(room)
   })
 })
+
+describe('closing a drawer (Agents and Home, both sides)', () => {
+  const realMatchMedia = window.matchMedia
+  beforeEach(() => {
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia
+  })
+  afterEach(() => {
+    window.matchMedia = realMatchMedia
+  })
+
+  it.each([
+    ['agents', 'left'],
+    ['agents', 'right'],
+    ['home', 'left'],
+    ['home', 'right'],
+  ] as const)('%s %s: slides to 0, then goes without flickering back open', (page, side) => {
+    onPage(page)
+    renderShell()
+    const el = document.querySelector(`[data-drawer-side="${side}"]`)
+    if (!(el instanceof HTMLElement)) throw new Error(`no ${side} drawer`)
+    act(() => {
+      const s = usePanelsStore.getState()
+      if (side === 'left') s.toggleLeftPanel()
+      else s.toggleRightPanel()
+    })
+    expect(el.dataset.drawerAnim).toBe('closing')
+    expect(el.style.width).toBe('0px')
+    // End the slide outside act(): what is left at the end of this task is
+    // the next painted frame. The drawer must not be back at full width.
+    el.dispatchEvent(Object.assign(new Event('transitionend'), { propertyName: 'width' }))
+    if (el.isConnected) expect(el.style.width).toBe('0px')
+    expect(el.isConnected).toBe(false)
+    expect(screen.queryByTestId(`drawer-${side}`)).toBeNull()
+  })
+})

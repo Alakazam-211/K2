@@ -102,6 +102,29 @@ describe('AnimatedDrawer', () => {
     expect(drawer()).toBeNull()
   })
 
+  it('closing never shows a full-width frame: it unmounts in the transitionend task, still at 0 width', () => {
+    const { rerender } = render(ui(true))
+    rerender(ui(false))
+    const el = must(drawer())
+    // The width the box has at the end of the task that ends the slide is
+    // what the browser paints next. Dispatch outside act() so nothing
+    // flushes React for us: the drawer must be gone (or still at 0 width),
+    // never back at its natural, open width.
+    el.dispatchEvent(Object.assign(new Event('transitionend'), { propertyName: 'width' }))
+    if (el.isConnected) expect(el.style.width).toBe('0px')
+    expect(el.isConnected).toBe(false)
+  })
+
+  it('closing on the fallback timer also unmounts in the same task', () => {
+    vi.useFakeTimers()
+    const { rerender } = render(ui(true))
+    rerender(ui(false))
+    const el = must(drawer())
+    vi.advanceTimersByTime(DRAWER_ANIM_MS + 200)
+    if (el.isConnected) expect(el.style.width).toBe('0px')
+    expect(el.isConnected).toBe(false)
+  })
+
   it('opening mounts and slides open, then drops the inline width and transition', () => {
     const { rerender } = render(ui(false))
     rerender(ui(true))

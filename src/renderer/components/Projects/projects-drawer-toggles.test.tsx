@@ -174,6 +174,38 @@ describe('Projects chat drawer toggle', () => {
     expect(chatToggle()).not.toBeNull()
   })
 
+  it('Hide chat slides the chat to 0 and removes it without a full-width frame', async () => {
+    const realMatchMedia = window.matchMedia
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia
+    try {
+      useProjectGroupsStore.setState({ chatCollapsed: false })
+      await renderPage()
+      // The composer row (and its Hide chat button) settles once the member role resolves.
+      await waitFor(() => expect(screen.getByText('Send')).toBeTruthy())
+      const hide = must(screen.queryByRole('button', { name: 'Hide chat' }), 'hide toggle')
+      const el = must(hide.closest('[data-drawer-side="right"]') as HTMLElement | null, 'chat drawer')
+      fireEvent.click(hide)
+      expect(el.dataset.drawerAnim).toBe('closing')
+      expect(el.style.width).toBe('0px')
+      // End the slide outside act(): the end of this task is the next
+      // painted frame, and the chat must not be back at full width in it.
+      el.dispatchEvent(Object.assign(new Event('transitionend'), { propertyName: 'width' }))
+      if (el.isConnected) expect(el.style.width).toBe('0px')
+      expect(el.isConnected).toBe(false)
+    } finally {
+      window.matchMedia = realMatchMedia
+    }
+  })
+
   it('viewers (no composer) still get the Hide chat button at the bottom', async () => {
     viewerRole.current = null
     try {

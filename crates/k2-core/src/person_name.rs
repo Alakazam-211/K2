@@ -113,6 +113,65 @@ pub fn owner_login_now() -> Option<String> {
     }
 }
 
+// ── Sender identity (the ONE stamp rule) ────────────────────────────────
+
+/// Who sent a message / post / comment, as the daemon resolved it from
+/// the request credential (never from a body field).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sender<'a> {
+    /// The owner daemon token.
+    OwnerToken,
+    /// A Connect login (its username).
+    Login(&'a str),
+}
+
+impl<'a> Sender<'a> {
+    /// From a daemon `session_author` string: `"owner"` (or empty) is the
+    /// owner token, anything else a login.
+    pub fn from_session_author(session_author: &'a str) -> Self {
+        let s = session_author.trim();
+        if s.is_empty() || s.eq_ignore_ascii_case(OWNER) {
+            Sender::OwnerToken
+        } else {
+            Sender::Login(s)
+        }
+    }
+}
+
+/// The identity a sender is STAMPED with — `[from …]`, Thread `from`,
+/// ticket comment authors, review-note authors, delivery labels (0.46.0,
+/// Rosson 2026-10-17: identity = username everywhere it matters).
+///
+/// - the owner token → the owner's linked account's username
+///   ([`owner_login`]), else `owner`;
+/// - a Connect login (owner-linked or not) → its own username.
+///
+/// Real names are never a stamp; they are context only ([`label`]).
+pub fn sender_identity(sender: Sender<'_>, people: &People) -> String {
+    match sender {
+        Sender::OwnerToken => owner_login(people).unwrap_or_else(|| OWNER.to_string()),
+        Sender::Login(u) => {
+            let u = u.trim();
+            if u.is_empty() || u.eq_ignore_ascii_case(OWNER) {
+                return sender_identity(Sender::OwnerToken, people);
+            }
+            people.user(u).map(|row| row.username.clone()).unwrap_or_else(|| u.to_string())
+        }
+    }
+}
+
+/// [`sender_identity`] from disk. An unreadable users store stamps the
+/// owner token as `owner` and a login as itself.
+pub fn sender_identity_now(sender: Sender<'_>) -> String {
+    match People::load() {
+        Ok(p) => sender_identity(sender, &p),
+        Err(e) => {
+            crate::log_debug!("[person_name] people load failed; stamping without the linked account: {e}");
+            sender_identity(sender, &People { users: Vec::new(), linked: Vec::new() })
+        }
+    }
+}
+
 /// A login's OWN stored names (no owner substitution).
 fn own(login: &str, people: &People) -> (Option<String>, Option<String>) {
     match people.user(login) {
@@ -333,6 +392,35 @@ mod tests {
         let p = people(vec![user("zed", Role::Admin, None, None)], &["ghost", "zed"]);
         assert_eq!(owner_login(&p).as_deref(), Some("zed"), "a linked name that is not a user is skipped");
         assert_eq!(owner_login(&people(vec![user("zed", Role::Admin, None, None)], &[])), None);
+    }
+
+    /// The one stamp rule, table-driven.
+    #[test]
+    fn sender_identity_table() {
+        let linked = people(
+            vec![
+                user("z3thon", Role::Admin, Some("Rosson"), Some("Long")),
+                user("anna", Role::Member, Some("Anna"), None),
+                user("wes", Role::Owner, None, None),
+            ],
+            &["z3thon"],
+        );
+        let unlinked = people(vec![user("anna", Role::Member, None, None)], &[]);
+        let cases: &[(&str, Sender<'_>, &People, &str)] = &[
+            ("owner token + linked → the linked username", Sender::OwnerToken, &linked, "z3thon"),
+            ("owner token, none linked → owner", Sender::OwnerToken, &unlinked, "owner"),
+            ("owner-linked Connect login → its username", Sender::Login("z3thon"), &linked, "z3thon"),
+            ("other Connect user → its username", Sender::Login("anna"), &linked, "anna"),
+            ("an Owner-role login that is not linked → its username", Sender::Login("wes"), &linked, "wes"),
+            ("case-folded to the stored username", Sender::Login("ANNA"), &linked, "anna"),
+            ("session author 'owner' is the owner token", Sender::from_session_author("owner"), &linked, "z3thon"),
+            ("empty session author is the owner token", Sender::from_session_author(" "), &unlinked, "owner"),
+        ];
+        for (label, sender, p, want) in cases {
+            assert_eq!(sender_identity(*sender, p), *want, "{label}");
+        }
+        // Real names never become the stamp.
+        assert!(!sender_identity(Sender::OwnerToken, &linked).contains("Rosson"));
     }
 
     #[test]

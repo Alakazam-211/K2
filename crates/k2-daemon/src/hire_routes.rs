@@ -233,7 +233,8 @@ fn run_launches(jobs: Vec<apply::LaunchJob>, caller: HireCaller, instance: Strin
                         let from = match &caller {
                             HireCaller::ApiKey { label: Some(l), .. } => format!("app:{l}"),
                             HireCaller::ApiKey { id, .. } => format!("app:{}", &id[..id.len().min(8)]),
-                            _ => "owner".to_string(),
+                            // 0.46.0 stamp rule: the linked username, else `owner`.
+                            _ => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken),
                         };
                         let r = deliver_recorded(
                             &job.handle,

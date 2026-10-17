@@ -659,8 +659,9 @@ pub fn owner_from_or_default(configured: Option<&str>) -> String {
 
 /// D3 entrypoint for the `send-message` route: resolve the OWNER's
 /// attributed `from`. 0.46.0 (Rosson 2026-10-17, identity = username
-/// everywhere it matters): the owner's linked account's USERNAME
-/// (`k2_core::person_name::owner_login`, the primary of `ownerAccounts`),
+/// everywhere it matters): the shared stamp rule
+/// `k2_core::person_name::sender_identity(Sender::OwnerToken)` — the
+/// owner's linked account's USERNAME (the primary of `ownerAccounts`),
 /// falling back to `"owner"` when nothing is linked. The old
 /// `ownerDisplayName` setting is no longer read here; real names are
 /// display only (`/cli/people/name`).
@@ -668,7 +669,7 @@ pub fn owner_from_or_default(configured: Option<&str>) -> String {
 /// **D3 holds:** the name is read ONLY from server-side state — NEVER
 /// from the request body — so a client cannot spoof the attribution.
 pub fn resolve_owner_from() -> String {
-    owner_from_or_default(k2_core::person_name::owner_login_now().as_deref())
+    owner_from_or_default(Some(&k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken)))
 }
 
 /// Composer 1a (D2) — max time a waiting injector blocks for the
@@ -4373,5 +4374,124 @@ mod tests {
         let fj = serde_json::to_value(&fail).unwrap();
         assert!(fj.get("woke").is_none());
         assert_eq!(fj["reason"], "dormant_no_wake");
+    }
+
+    // ── 0.46.0 stamp rule ratchet ────────────────────────────────────
+
+    /// Non-test lines of a Rust source: drops `#[cfg(test)] mod x { … }`
+    /// blocks (closed by a `}` at the `mod` line's indentation) and `//`
+    /// comment lines.
+    fn non_test_lines(src: &str) -> Vec<(usize, String)> {
+        let lines: Vec<&str> = src.lines().collect();
+        let mut out = Vec::new();
+        let mut skip_until: Option<String> = None;
+        let mut i = 0;
+        while i < lines.len() {
+            let line = lines[i];
+            if let Some(end) = &skip_until {
+                if line == end {
+                    skip_until = None;
+                }
+                i += 1;
+                continue;
+            }
+            if line.trim() == "#[cfg(test)]" && i + 1 < lines.len() {
+                let next = lines[i + 1];
+                let indent: String = next.chars().take_while(|c| c.is_whitespace()).collect();
+                let rest = next.trim_start();
+                let rest = rest.strip_prefix("pub(crate) ").or_else(|| rest.strip_prefix("pub ")).unwrap_or(rest);
+                if rest.starts_with("mod ") && rest.ends_with('{') {
+                    skip_until = Some(format!("{indent}}}"));
+                    i += 2;
+                    continue;
+                }
+            }
+            if !line.trim_start().starts_with("//") {
+                out.push((i + 1, line.to_string()));
+            }
+            i += 1;
+        }
+        out
+    }
+
+    fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display())) {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().is_some_and(|x| x == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// Source scan (Rosson 2026-10-17: identity = username everywhere it
+    /// matters). The old owner display name must not reach a stamp: no
+    /// non-test code in k2-core / k2-daemon reads `owner_display_name` /
+    /// `"ownerDisplayName"` outside this allowlist. Stamps go through
+    /// `k2_core::person_name::sender_identity` (`resolve_owner_from`).
+    #[test]
+    fn owner_display_name_never_reaches_a_stamp() {
+        const ALLOW: &[(&str, &str)] = &[
+            ("k2-core/src/app_settings.rs", "the settings struct (kept on disk for downgrades)"),
+            ("k2-core/src/person_name.rs", "the one-time carry-over onto the linked account"),
+            ("k2-daemon/src/settings_routes.rs", "settings routes"),
+            ("k2-daemon/src/feedback_routes.rs", "legacy ticket-assignee MATCHING for ticketMe (never a stamp)"),
+        ];
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("crates dir").to_path_buf();
+        let mut files = Vec::new();
+        for c in ["k2-core/src", "k2-daemon/src"] {
+            rust_files(&crates.join(c), &mut files);
+        }
+        assert!(files.len() > 200, "the scan must actually see the sources: {}", files.len());
+        let mut hits = Vec::new();
+        for path in &files {
+            let rel = path.strip_prefix(&crates).expect("under crates").to_string_lossy().replace('\\', "/");
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            if name == "tests.rs" || name.ends_with("_tests.rs") || name == "test_support.rs" {
+                continue;
+            }
+            if ALLOW.iter().any(|(f, _)| *f == rel) {
+                continue;
+            }
+            let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {rel}: {e}"));
+            for (n, line) in non_test_lines(&src) {
+                let field = line.match_indices(".owner_display_name").any(|(i, m)| {
+                    !line[i + m.len()..].starts_with(|c: char| c == '_' || c.is_ascii_alphanumeric())
+                });
+                if field || line.contains("\"ownerDisplayName\"") {
+                    hits.push(format!("{rel}:{n}: {}", line.trim()));
+                }
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "the old owner display name is read outside the allowlist — stamp with \
+             k2_core::person_name::sender_identity instead:\n{}",
+            hits.join("\n")
+        );
+    }
+
+    /// The scanner itself: test modules and comments are skipped, code
+    /// after a test module is still seen.
+    #[test]
+    fn non_test_lines_skips_test_modules_only() {
+        let src = "fn a() { s.owner_display_name }\n#[cfg(test)]\nmod tests {\n    fn t() { s.owner_display_name }\n}\n// s.owner_display_name\nfn b() {}\n";
+        let lines: Vec<String> = non_test_lines(src).into_iter().map(|(_, l)| l).collect();
+        assert_eq!(lines, vec!["fn a() { s.owner_display_name }".to_string(), "fn b() {}".to_string()]);
+    }
+
+    /// `resolve_owner_from` follows the shared stamp rule: the linked
+    /// username, else `owner` — never the old display name.
+    #[test]
+    fn resolve_owner_from_is_the_linked_username() {
+        crate::test_support::with_temp_home(|| {
+            k2_core::app_settings::update(serde_json::json!({ "ownerDisplayName": "Rosson Long" })).expect("display");
+            assert_eq!(resolve_owner_from(), "owner", "nothing linked");
+            k2_core::connect_users::add_user("z3thon", "password123").expect("add");
+            k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["z3thon"] })).expect("link");
+            assert_eq!(resolve_owner_from(), "z3thon");
+            assert_eq!(format_message_user(&resolve_owner_from(), "hi"), "[from z3thon] hi");
+        });
     }
 }

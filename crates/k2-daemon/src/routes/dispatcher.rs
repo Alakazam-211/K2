@@ -8340,8 +8340,8 @@ async fn handle_one_request(
                 remote_opt_in,
             );
             // D3 — `from` is resolved server-side ONLY, NEVER from the body:
-            //   owner       → the user-set "your display name" (app_settings
-            //                 `owner_display_name`, sanitized) or "owner".
+            //   owner       → the 0.46.0 stamp rule: the linked account's
+            //                 username (`person_name::sender_identity`), or "owner".
             //   connect-user → their daemon-validated username.
             // `revalidate` carries the connect-user's token so we can
             // re-check it at inject time (M2 — a user revoked mid-flight

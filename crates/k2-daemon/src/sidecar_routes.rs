@@ -72,10 +72,11 @@ impl Caller {
         }
     }
 
-    /// Human form for `createdBy` / the pointer line.
+    /// Human form for `createdBy` / the pointer line. The owner token is
+    /// stamped by the 0.46.0 rule (linked username, else `owner`).
     fn display(&self) -> String {
         match self {
-            Caller::Owner => "owner".to_string(),
+            Caller::Owner => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken),
             Caller::Login { username } => username.clone(),
             Caller::Shell { project_id } => format!("{} (shell)", ws_handle(project_id)),
             Caller::Agent(a) => format!("{} (agent)", ws_handle(&a.project_id)),

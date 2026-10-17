@@ -408,7 +408,7 @@ async fn grokbots_routes_gate_consent_and_round_trip() {
         (
             json!(format!("k2-{nonce}")),
             json!("human"),
-            json!("[from Rosson Test] send it to the board")
+            json!("[from gbadmin] send it to the board")
         )
     );
     assert_eq!(msgs[1]["viaK2"], json!(true));

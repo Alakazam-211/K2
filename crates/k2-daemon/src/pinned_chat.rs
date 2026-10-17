@@ -712,7 +712,8 @@ pub fn handle_swap_canonical(
 ) -> crate::cli_response::CliResponse {
     use crate::sidecar_routes::Caller;
     let from = match caller {
-        Caller::Owner | Caller::Shell { .. } => "owner".to_string(),
+        // 0.46.0 stamp rule: the owner's linked username, else `owner`.
+        Caller::Owner | Caller::Shell { .. } => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken),
         Caller::Login { username } => username.clone(),
         // The passport's projects.id; the send path stamps its handle.
         Caller::Agent(agent) => agent.project_id.clone(),

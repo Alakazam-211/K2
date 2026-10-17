@@ -50,7 +50,7 @@ import type { Tab } from '@/stores/tabs'
 import { ShellTabIcon } from '@/components/TabBar/ShellTabIcon'
 import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
-import { cachedChangesAvailable, probeChangesAvailable } from '@/stores/git-changes'
+import { cachedChangesMenuState, probeChangesMenuState, type ChangesMenuState } from '@/stores/git-changes'
 import { PinnedTabMark } from '@/components/TabBar/TabPin'
 import { clampTabDropIndex, isPinnedDesignTab, isPinnedTab } from '@/lib/pinned-tabs'
 import { PaletteIcon } from '@/components/icons/K2Icons'
@@ -73,14 +73,37 @@ function presetMenuIcon(preset: AgentPreset): ReactNode {
   return <AgentIcon agent={preset.label} size={14} />
 }
 
+const CHANGES_MENU_TOOLTIP: Record<Exclude<ChangesMenuState, 'changes'>, string> = {
+  checking: 'Checking…',
+  clean: 'No changes to review',
+  'not-repo': 'Not a git repository. Click to open Changes and initialize one.',
+  'not-repo-legacy': 'Not a git repository',
+  'no-git': 'Git is not available on this server',
+  error: 'Could not check for changes',
+}
+
+/** The + menu's Changes row. Always listed, in one place, so the menu never
+ *  grows or shifts when the async `git/info` answer lands: greyed with a
+ *  tooltip until there is something to review, then active in place. */
+export function changesMenuItem(state: ChangesMenuState): ContextMenuItemDef {
+  const item: ContextMenuItemDef = { id: 'changes', label: 'Changes', icon: <ChangesTabIcon /> }
+  if (state === 'changes') return item
+  item.tooltip = CHANGES_MENU_TOOLTIP[state]
+  // Not a repo yet (C5): greyed, but a click still opens the tab, whose
+  // empty state offers Initialize repository.
+  if (state === 'not-repo') item.muted = true
+  else item.enabled = false
+  return item
+}
+
 /** Terminal, New File, Browser, Design (while the workspace's Design mode
- *  is on; D-A5, Q-F2), Changes (when the server can do git; C5), then
- *  enabled presets in store order. No separator when none are enabled. */
+ *  is on; D-A5, Q-F2), Changes (always; greyed until there are changes),
+ *  then enabled presets in store order. No separator when none are enabled. */
 export function buildPlusMenuItems(
   presets: AgentPreset[],
   defaultPresetId: string | null,
   sandboxHint: boolean,
-  isGitRepo = false,
+  changes: ChangesMenuState = 'checking',
   designMode = false,
 ): ContextMenuItemDef[] {
   const enabled = presets.filter((p) => p.enabled !== 0)
@@ -90,7 +113,7 @@ export function buildPlusMenuItems(
     { id: 'browser', label: 'Browser' },
   ]
   if (designMode) items.push({ id: 'design', label: 'Design', icon: <PaletteIcon size={14} /> })
-  if (isGitRepo) items.push({ id: 'changes', label: 'Changes', icon: <ChangesTabIcon /> })
+  items.push(changesMenuItem(changes))
   if (enabled.length === 0) return items
   items.push({ id: 'plus-presets-sep', label: '', type: 'separator' })
   for (const preset of enabled) {
@@ -368,28 +391,32 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     // that call it have to record altKey before that promise continues.
     let optionHeld = e.altKey
     let shown = optionHeld
-    // Changes shows for every workspace while the server can do git (C5;
-    // an older daemon: only in a repo). Paint from the last answer at
-    // once, then ask `git/info` on the bar's server and repaint if it moved.
-    let isGitRepo = cachedChangesAvailable(room.scope, barCwd) === true
-    let shownGit = isGitRepo
+    // Changes is always listed (no pop-in); it is greyed until the bar's
+    // folder has changes. Paint from the last answer at once ('checking'
+    // on the first open), then ask `git/info` on the room's server and
+    // repaint in place if it moved.
+    let changesState: ChangesMenuState = cachedChangesMenuState(room.scope, barCwd) ?? 'checking'
+    let shownChanges = changesState
     let stopped = false
     const paint = (): void => {
       if (stopped || !useContextMenuStore.getState().isOpen) return
-      if (shown === optionHeld && shownGit === isGitRepo) return
+      if (shown === optionHeld && shownChanges === changesState) return
       shown = optionHeld
-      shownGit = isGitRepo
+      shownChanges = changesState
       useContextMenuStore.getState().replaceItems(
-        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, isGitRepo, designMode),
+        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, designMode),
       )
     }
-    probeChangesAvailable(room.scope, barCwd).then(
-      (yes) => {
-        isGitRepo = yes
+    probeChangesMenuState(room.scope, barCwd).then(
+      (state) => {
+        changesState = state
         paint()
       },
       (err: unknown) => {
         console.warn('[tab-bar] git/info for the + menu failed', err)
+        // Keep a cached answer if there is one; else stop saying "Checking…".
+        if (changesState === 'checking') changesState = 'error'
+        paint()
       },
     )
     const onKeyDown = (ev: KeyboardEvent): void => {
@@ -431,7 +458,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       window.removeEventListener('blur', onBlur)
     }
     try {
-      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, isGitRepo, designMode)
+      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, designMode)
       const picked = await useContextMenuStore.getState().show(rect.left, rect.bottom, items)
       if (!picked) return
       if (picked === 'terminal') {

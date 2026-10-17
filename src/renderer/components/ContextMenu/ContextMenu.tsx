@@ -90,10 +90,13 @@ function RowButton({
   onClick: () => void
 }): React.JSX.Element {
   const isDisabled = item.enabled === false
+  const looksDisabled = isDisabled || item.muted === true
   const hasSub = Boolean(item.submenu)
   return (
     <button
       type="button"
+      title={item.tooltip}
+      aria-disabled={isDisabled ? true : undefined}
       aria-haspopup={hasSub ? 'menu' : undefined}
       aria-expanded={hasSub ? Boolean(open) : undefined}
       aria-pressed={item.checked !== undefined ? item.checked : undefined}
@@ -106,12 +109,12 @@ function RowButton({
         padding: '5px 12px',
         border: 'none',
         background: focused || open ? 'var(--color-overlay-soft-border)' : 'transparent',
-        color: isDisabled ? 'var(--color-text-muted)' : 'var(--color-text-secondary)',
+        color: looksDisabled ? 'var(--color-text-muted)' : 'var(--color-text-secondary)',
         fontSize: '12px',
         fontFamily: 'inherit',
         textAlign: 'left',
         cursor: isDisabled ? 'default' : 'pointer',
-        opacity: isDisabled ? 0.5 : 1,
+        opacity: looksDisabled ? 0.5 : 1,
         lineHeight: '1.4',
         whiteSpace: 'nowrap',
         overflow: 'hidden',
@@ -124,7 +127,9 @@ function RowButton({
         e.stopPropagation()
         if (!isDisabled) onClick()
       }}
-      disabled={isDisabled}
+      // A native-disabled button gets no hover in WebKit, so a row with a
+      // tooltip stays enabled in the DOM (aria-disabled + the guards above).
+      disabled={isDisabled && !item.tooltip}
     >
       {item.checked !== undefined && (
         <span

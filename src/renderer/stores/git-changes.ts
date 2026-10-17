@@ -381,23 +381,43 @@ export async function probeIsGitRepo(scope: ServerScope, path: string): Promise<
   return isRepo
 }
 
-/** Does the + menu offer Changes for `path` on `scope`'s server? Yes for
- *  every workspace while the server can do git (`git/info.gitAvailable`,
- *  C5); an older daemon without the field: only inside a repo (C2). The
- *  not-a-repo state in the tab offers Initialize repository. */
-const changesCache = new Map<string, boolean>()
+/** The + menu's Changes row state for `path` on `scope`'s server. The row
+ *  is always listed in the same place (no pop-in); only `changes` makes it
+ *  active. `not-repo` = a server that can do git (`git/info.gitAvailable`,
+ *  C5) in a folder that is not a repo yet: the row looks greyed but still
+ *  opens the tab, whose empty state offers Initialize repository.
+ *  `not-repo-legacy` = an older daemon without that field (no init). */
+export type ChangesMenuState =
+  | 'checking'
+  | 'changes'
+  | 'clean'
+  | 'not-repo'
+  | 'not-repo-legacy'
+  | 'no-git'
+  | 'error'
 
-export function cachedChangesAvailable(scope: ServerScope, path: string): boolean | undefined {
-  return changesCache.get(`${scope.id}\u0000${normPath(path)}`)
+const changesMenuCache = new Map<string, ChangesMenuState>()
+
+export function cachedChangesMenuState(scope: ServerScope, path: string): ChangesMenuState | undefined {
+  return changesMenuCache.get(`${scope.id}\u0000${normPath(path)}`)
 }
 
-export async function probeChangesAvailable(scope: ServerScope, path: string): Promise<boolean> {
+export async function probeChangesMenuState(scope: ServerScope, path: string): Promise<ChangesMenuState> {
   const key = `${scope.id}\u0000${normPath(path)}`
-  const info = await daemonCliGet<{ isRepo?: boolean; gitAvailable?: boolean }>(scope, 'git/info', { path: normPath(path) })
-  repoCache.set(key, info?.isRepo === true)
-  const yes = typeof info?.gitAvailable === 'boolean' ? info.gitAvailable : info?.isRepo === true
-  changesCache.set(key, yes)
-  return yes
+  const info = await daemonCliGet<{
+    isRepo?: boolean
+    gitAvailable?: boolean
+    changedFiles?: number
+    untrackedFiles?: number
+  }>(scope, 'git/info', { path: normPath(path) })
+  const isRepo = info?.isRepo === true
+  repoCache.set(key, isRepo)
+  let state: ChangesMenuState
+  if (info?.gitAvailable === false) state = 'no-git'
+  else if (isRepo) state = (info?.changedFiles ?? 0) + (info?.untrackedFiles ?? 0) > 0 ? 'changes' : 'clean'
+  else state = info?.gitAvailable === true ? 'not-repo' : 'not-repo-legacy'
+  changesMenuCache.set(key, state)
+  return state
 }
 
 // ── Writes (all POST, all refresh) ───────────────────────────────────────
@@ -480,7 +500,7 @@ export function __resetGitChangesForTests(): void {
   entries.clear()
   gitLiveScopes.clear()
   repoCache.clear()
-  changesCache.clear()
+  changesMenuCache.clear()
 }
 
 /** Entries with a mounted consumer (live subscriptions). */

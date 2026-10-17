@@ -21,6 +21,11 @@ export interface ContextMenuItemDef {
   shortcut?: string
   /** Plain trailing words (e.g. "open in sandbox"). Not a key combo. */
   hint?: string
+  /** Hover tooltip (native `title`). Shown on disabled rows too. */
+  tooltip?: string
+  /** Paint the row greyed like a disabled one but keep it pickable (e.g.
+   *  + menu Changes in a folder that is not a repo: the tab offers init). */
+  muted?: boolean
 }
 
 /** A row a click or Enter can pick: not a separator, heading or note, not

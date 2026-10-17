@@ -11,10 +11,10 @@ const PIN_PX = 12
 
 /** A pinned tab's resting mark in its status slot. Static: never a button,
  *  never shown on hover (hover shows the close glyph instead). */
-export function PinnedTabMark(): React.JSX.Element {
+export function PinnedTabMark({ size = PIN_PX }: { size?: number } = {}): React.JSX.Element {
   return (
     <span data-tab-pinned-glyph="" className="flex text-[var(--color-accent)]">
-      <PinIcon size={PIN_PX} />
+      <PinIcon size={size} />
     </span>
   )
 }

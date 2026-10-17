@@ -21,7 +21,7 @@ import {
   type ActivityRow,
 } from '@/stores/activity'
 import { sessionsStatus, worseUnseen, type UnseenOutcome } from '@/lib/agent-status'
-import { PinnedChatStatus, TAB_MAX_PX, TAB_MIN_PX, TabSlotRest, TabTitleGrid } from '@/components/TabBar/TabStatus'
+import { PinnedChatStatus, TAB_MAX_PX, TAB_MIN_PX, TabSlotRest } from '@/components/TabBar/TabStatus'
 import { pinOf, sessionsOf, usePinnedSizeStore } from '@/stores/pinned-size'
 import { applyPinSize, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
 import PinDimensionsModal from '@/components/PaneLayout/PinDimensionsModal'
@@ -1139,9 +1139,19 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
               // content (icon + title + status slot + padding), capped at
               // TAB_MAX_PX where the title truncates, never below
               // TAB_MIN_PX. No fixed width: a short title gives a narrow
-              // tab. The title grid's hidden sizer keeps the width the
-              // same when the working / status slot changes.
-              style={{ minWidth: TAB_MIN_PX, maxWidth: TAB_MAX_PX }}
+              // tab. Working takes the status slot's place (its status
+              // becomes a corner badge), so the width never changes when
+              // working toggles. `--tab-bg` is the tab's resting
+              // background, under that badge (TabStatus.tsx).
+              style={
+                {
+                  minWidth: TAB_MIN_PX,
+                  maxWidth: TAB_MAX_PX,
+                  '--tab-bg': isActive
+                    ? 'color-mix(in srgb, white 8%, var(--color-bg-surface))'
+                    : 'var(--color-bg-surface)',
+                } as React.CSSProperties
+              }
               className={`group relative flex h-full flex-shrink-0 items-center border-r border-[var(--color-border)] px-3 text-xs transition-colors select-none ${
                 isActive
                   ? 'bg-white/[0.08] text-[var(--color-text-primary)]'
@@ -1252,21 +1262,10 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   onBlur={() => commitRename(tab.id)}
                   className="flex-1 min-w-0 px-1 py-0 text-xs leading-tight bg-transparent border border-[var(--color-accent)] text-[var(--color-text-primary)] outline-none"
                 />
-              ) : isSessionTab ? (
-                // Session tab: title + working slot (S5). Double-click the
-                // label to rename.
-                <TabTitleGrid
-                  title={tab.title}
-                  view={tabView}
-                  className={isDirty ? 'italic' : ''}
-                  onDoubleClick={(e) => {
-                    e.stopPropagation()
-                    setEditingTabId(tab.id)
-                  }}
-                />
               ) : (
                 <span
-                  className={`truncate flex-1 ${isDirty ? 'italic' : ''}`}
+                  data-tab-title=""
+                  className={`min-w-0 flex-auto truncate ${isDirty ? 'italic' : ''}`}
                   // Double-click the label to rename (regular tabs only —
                   // system-agent tabs render in their own branch above).
                   onDoubleClick={(e) => {
@@ -1315,7 +1314,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                   }),
                 )
                 // The status slot (S5): at rest it shows the tab's status
-                // (else working with no status, else live / reaped);
+                // (else live / reaped), or the working grid with the status
+                // as a bottom-left badge (Rosson 2026-10-16, 0.46.0);
                 // hovering ANYWHERE on the tab swaps it for the close glyph:
                 // × for a regular tab, – (minimize) for a heartbeat / API
                 // tab. Nothing else moves.
@@ -1333,11 +1333,9 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     <line x1="1" y1="1" x2="7" y2="7" /><line x1="7" y1="1" x2="1" y2="7" />
                   </svg>
                 )
-                const restView =
-                  pinned && (tabView.status === 'live' || tabView.status === 'reaped' || tabView.status === 'idle') && !tabView.working
-                    ? null
-                    : tabView
-                const rest = isSessionTab && restView ? <TabSlotRest view={restView} /> : pinned ? <PinnedTabMark /> : null
+                // Working: the grid takes the slot and the status (or the
+                // pin, else live / reaped) is its bottom-left badge.
+                const rest = isSessionTab ? <TabSlotRest view={tabView} pinned={pinned} /> : pinned ? <PinnedTabMark /> : null
                 const slotStyle: React.CSSProperties = { width: 14, height: 14, marginLeft: 'var(--clu-gap)' }
                 if (room.readOnly) {
                   // A view-only room closes nothing, but still shows status.

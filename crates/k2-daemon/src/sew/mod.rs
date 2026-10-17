@@ -28,9 +28,14 @@
 //! `k2 hostchat` (K14) drives all of it; [`supervisor::changed`] fires the
 //! `sew:changed` hook, mirrored as the app-level `sew_changed` event.
 //!
-//! Not here yet (0.46.1+): the grant hook target and owner provisioning
-//! (S27 K2–K4), the chat pass link (S28 K6/K7), host / mirror / ship /
-//! app-url routes (S32).
+//! S27's grant hook (0.46.1) follows the install: enable, a finished
+//! upgrade and daemon boot point its chat target at Sew
+//! ([`supervisor::grant_hook_on`]; the worker's mgmt token comes from the
+//! helper through [`supervisor::mgmt_token`], never from Sew's token
+//! file); disable pauses it; uninstall pauses or drops it; purge drops it
+//! ([`supervisor::grant_hook_off`]).
+//!
+//! Not here yet: host / mirror / ship / app-url routes (S32).
 
 pub mod ops;
 pub mod routes;
@@ -41,6 +46,9 @@ pub mod store;
 pub mod supervisor;
 pub mod users;
 pub mod voice;
+
+#[cfg(test)]
+mod grant_hook_tests;
 
 /// Sew runs on Linux only (a runtime check, so the machines are testable
 /// on a Mac through the fakes).

@@ -235,6 +235,18 @@ fn fetch_token(env: &Env) -> Result<String, String> {
     Ok(t.to_string())
 }
 
+/// The mgmt token for other mgmt clients (S27's grant-hook worker): the
+/// cached one, or a fresh one from the helper when there is none or
+/// `refresh` (Sew answered 401). Never logged, never on disk.
+pub fn mgmt_token(env: &Env, refresh: bool) -> Result<String, String> {
+    if !refresh {
+        if let Some(t) = env.token.lock().unwrap_or_else(|p| p.into_inner()).clone() {
+            return Ok(t);
+        }
+    }
+    fetch_token(env)
+}
+
 pub fn mgmt(env: &Env, method: &str, path: &str, body: Option<&Value>) -> Result<Value, MgmtError> {
     let cached = env.token.lock().unwrap_or_else(|p| p.into_inner()).clone();
     let token = match cached {
@@ -777,11 +789,19 @@ fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {
         set_current(&mut r.enable_progress, None);
         if let Some(p) = r.enable_progress.as_mut() {
             p["result"] = json!("done");
-            // The S27 grant-hook target and owner provisioning are not on
-            // this build: recorded, never treated as a failure.
-            p["owner"] = json!("pending");
         }
     });
+    // S27: the grant hook now points at this install; `k2:owner` and the
+    // chat grants provision through its outbox. Recorded, never a failure.
+    if let Some(row) = store::load() {
+        let hook = grant_hook_on(env, &row);
+        save_enable(env, |r| {
+            if let Some(p) = r.enable_progress.as_mut() {
+                p["grantHook"] = hook.clone();
+                p["owner"] = json!(if hook["target"] == "on" { "queued" } else { "pending" });
+            }
+        });
+    }
     Ok(())
 }
 
@@ -1133,6 +1153,8 @@ pub fn spawn_background() {
     }
     let _ = std::thread::Builder::new().name("sew-health".into()).spawn(|| {
         let env = live();
+        let hook = grant_hook_boot(&env);
+        k2_core::log_debug!("[sew] grant hook at boot: {hook}");
         if let Some(r) = store::load() {
             if r.status == "upgrading" {
                 if let Ok(l) = begin(&env) {
@@ -1149,6 +1171,65 @@ pub fn spawn_background() {
             super::voice::tick(&env);
         }
     });
+}
+
+// ── the S27 grant hook's chat target ─────────────────────────────────────
+
+/// Actor on the outbox rows the Sew lifecycle itself writes (attribution).
+const HOOK_ACTOR: &str = "system:sew";
+
+/// Point S27's grant hook at this install (K2 identity mode only): Sew's
+/// mgmt socket, and Sew's own token file, which the worker never reads (it
+/// asks the root helper, [`mgmt_token`]). The first turn-on queues
+/// `k2:owner` and a reconcile. Idempotent. Never fails a lifecycle step:
+/// the answer is recorded.
+pub fn grant_hook_on(env: &Env, row: &Row) -> Value {
+    if row_provider(row) != pin::PROVIDER_K2 {
+        return json!({"target": "none", "why": "a standalone install takes no K2 grants"});
+    }
+    let socket = env.ops.mgmt_socket();
+    match env.ops.hook_set(true, Some(&socket), Some(pin::SEW_MGMT_TOKEN), HOOK_ACTOR) {
+        Ok(()) => json!({"target": "on"}),
+        Err(e) => {
+            k2_core::log_debug!("[sew] grant hook target not set: {e}");
+            json!({"target": "error", "error": e})
+        }
+    }
+}
+
+/// Pause S27's grant hook (`drop` false: disable, an uninstall that keeps
+/// grants; rows wait for the next enable) or drop it (`drop` true: an
+/// uninstall that drops grants, purge): every chat grant deleted and every
+/// open outbox row skipped, so nothing retries against a Sew that is gone.
+/// A box whose hook was never set is left alone (no `skin.db` is created).
+pub fn grant_hook_off(env: &Env, drop: bool) -> Value {
+    match env.ops.hook_targets() {
+        Ok(t) if t.iter().any(|k| k == k2_core::tool_hook::CHAT_KIND) => {}
+        Ok(_) => return json!({"target": "none"}),
+        Err(e) => return json!({"target": "error", "error": e}),
+    }
+    let dropped = if drop {
+        match env.ops.hook_drop() {
+            Ok(r) => Some(r),
+            Err(e) => return json!({"target": "error", "error": e}),
+        }
+    } else {
+        None
+    };
+    match env.ops.hook_set(false, None, None, HOOK_ACTOR) {
+        Ok(()) => json!({"target": "off", "dropped": dropped}),
+        Err(e) => json!({"target": "error", "error": e, "dropped": dropped}),
+    }
+}
+
+/// Daemon boot: the hook follows the install the last daemon left (an
+/// install from before this build, or a crash between the two writes).
+pub fn grant_hook_boot(env: &Env) -> Value {
+    match store::load() {
+        Some(r) if r.status == "removed" || r.status == "disabled" => grant_hook_off(env, false),
+        Some(r) if r.installed_version.is_some() => grant_hook_on(env, &r),
+        _ => json!({"target": "none"}),
+    }
 }
 
 // ── disable / uninstall / purge ──────────────────────────────────────────
@@ -1186,10 +1267,13 @@ pub fn disable(env: &Env) -> R<Value> {
         r.status = "disabled".into();
         r.last_error = None;
     });
+    // Grant changes wait in the outbox until Sew is back (S27).
+    let hook = grant_hook_off(env, false);
     changed("disabled");
     Ok(json!({
         "ok": true,
         "state": "disabled",
+        "grantHook": hook,
         "warning": "Chat is down for everyone on this box. Agents' k2 chat calls fail. Data, keys and backups are kept: \
                     k2 hostchat enable brings it back.",
     }))
@@ -1224,13 +1308,16 @@ pub fn uninstall(env: &Env, drop_grants: bool) -> R<Value> {
             steps.remove("install");
         }
     });
+    // S27: drop the chat grants (and skip their open rows) or keep them
+    // paused for the next enable.
+    let hook = grant_hook_off(env, drop_grants);
     changed("uninstalled");
     Ok(json!({
         "ok": true,
         "state": "removed",
         "kept": ["data", "config", "secrets", "backups", "the vault master key", "the install id"],
-        // The S27 grant hook is not on this build: nothing to drop yet.
-        "grants": if drop_grants { "no chat grants on this build (the grant hook ships with S27)" } else { "kept" },
+        "grants": if drop_grants { "dropped" } else { "kept" },
+        "grantHook": hook,
     }))
 }
 
@@ -1280,11 +1367,15 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
     // Sew's purge removed sew-media too: drop K2's voice record, TURN DNS
     // record, nested label and TURN key.
     let voice_left = super::voice::forget(env, &super::voice::load(env));
+    // S27: Sew's members are gone with it; so are the chat grants and any
+    // row that would still try to reach it.
+    let hook = grant_hook_off(env, true);
     changed("purged");
     Ok(json!({
         "ok": true,
         "state": "not-installed",
         "purged": true,
+        "grantHook": hook,
         "keptBackups": keep_backups,
         "backupsAt": backups_at,
         "voiceLeftovers": voice_left,
@@ -1448,6 +1539,10 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
                             r.installed_version = Some(to.into());
                             r.last_error = None;
                         });
+                        // An install from before S27 gets its hook here.
+                        if let Some(row) = store::load() {
+                            grant_hook_on(env, &row);
+                        }
                         "done"
                     }
                     Err(health) => {

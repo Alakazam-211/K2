@@ -12,10 +12,17 @@
 //! - Response read to EOF; body by `Content-Length`, de-chunked when
 //!   `Transfer-Encoding: chunked`, else to EOF.
 //! - Timeouts: connect 2 s, whole call 10 s.
-//! - The token is read from the token file on every call, trimmed, never
-//!   logged. An unreadable file is a transport-class failure.
+//! - **The token.** Sew's own file (`/etc/sew/mgmt.token`, `root:sew-mgmt
+//!   0640`) is never read here: for that target the token comes from the
+//!   root helper (`engine sew token`), through the S29 supervisor's
+//!   in-memory cache ([`crate::sew::supervisor::mgmt_token`]), and a 401
+//!   refreshes it once. Any other token file (a target an owner pointed
+//!   elsewhere, the fake Sew in tests) is read on every call, trimmed. The
+//!   token is never logged; an unreadable token is a transport-class
+//!   failure.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -32,6 +39,38 @@ const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 pub struct MgmtClient {
     pub socket: PathBuf,
     pub token_file: PathBuf,
+    pub source: TokenSource,
+}
+
+/// Where a client gets its bearer token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenSource {
+    /// Sew's root-only token file: ask the root helper, never read it.
+    Helper,
+    /// A file the daemon user can read.
+    File,
+}
+
+/// `refresh` = the cached token was refused (401): fetch it again.
+pub type TokenProvider = Arc<dyn Fn(bool) -> Result<String, String> + Send + Sync>;
+
+fn provider_slot() -> &'static RwLock<Option<TokenProvider>> {
+    static SLOT: RwLock<Option<TokenProvider>> = RwLock::new(None);
+    &SLOT
+}
+
+/// Replace the helper token source (tests: the supervisor over fake ops).
+/// `None` = the live supervisor (the real root helper).
+pub fn set_token_provider(p: Option<TokenProvider>) {
+    *provider_slot().write().unwrap_or_else(|e| e.into_inner()) = p;
+}
+
+fn helper_token(refresh: bool) -> Result<String, String> {
+    let p = provider_slot().read().unwrap_or_else(|e| e.into_inner()).clone();
+    match p {
+        Some(f) => f(refresh),
+        None => crate::sew::supervisor::mgmt_token(&crate::sew::supervisor::live(), refresh),
+    }
 }
 
 /// A parsed response.
@@ -105,15 +144,30 @@ impl std::fmt::Display for TransportError {
 }
 
 impl MgmtClient {
+    /// Sew's own token file ([`k2_root_proto::sew::SEW_MGMT_TOKEN`]) means
+    /// [`TokenSource::Helper`]; any other path is read as a file.
     pub fn new(socket: impl Into<PathBuf>, token_file: impl Into<PathBuf>) -> Self {
+        let token_file: PathBuf = token_file.into();
+        let source = if token_file == Path::new(k2_root_proto::sew::SEW_MGMT_TOKEN) {
+            TokenSource::Helper
+        } else {
+            TokenSource::File
+        };
         MgmtClient {
             socket: socket.into(),
-            token_file: token_file.into(),
+            token_file,
+            source,
         }
     }
 
-    fn token(&self) -> Result<String, TransportError> {
-        read_token(&self.token_file)
+    async fn token(&self, refresh: bool) -> Result<String, TransportError> {
+        match self.source {
+            TokenSource::File => read_token(&self.token_file),
+            TokenSource::Helper => tokio::task::spawn_blocking(move || helper_token(refresh))
+                .await
+                .map_err(|e| TransportError(format!("mgmt token task: {e}")))?
+                .map_err(|e| TransportError(format!("mgmt token from the root helper: {e}"))),
+        }
     }
 
     pub async fn get(&self, path: &str) -> Result<MgmtResponse, TransportError> {
@@ -139,7 +193,25 @@ impl MgmtClient {
         idem_key: Option<&str>,
         actor: Option<&str>,
     ) -> Result<MgmtResponse, TransportError> {
-        let token = self.token()?;
+        let token = self.token(false).await?;
+        let r = self.send(&token, method, path, body, idem_key, actor).await?;
+        // A helper-cached token Sew refused (rotated): fetch it once more.
+        if r.status == 401 && self.source == TokenSource::Helper {
+            let token = self.token(true).await?;
+            return self.send(&token, method, path, body, idem_key, actor).await;
+        }
+        Ok(r)
+    }
+
+    async fn send(
+        &self,
+        token: &str,
+        method: &str,
+        path: &str,
+        body: Option<&[u8]>,
+        idem_key: Option<&str>,
+        actor: Option<&str>,
+    ) -> Result<MgmtResponse, TransportError> {
         let mut head = format!(
             "{method} {path} HTTP/1.1\r\nHost: sew\r\nConnection: close\r\nAuthorization: Bearer {token}\r\nAccept: application/json\r\n"
         );

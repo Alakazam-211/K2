@@ -219,7 +219,7 @@ interface SettingsState {
   // When switching workspaces, which input to auto-focus. `"terminal"`
   // (default; today's behavior) | `"composer"` (the compose bar).
   // Thin-client view state — localStorage on THIS install, not the daemon.
-  workspaceSwitchFocus: 'terminal' | 'composer'
+  workspaceSwitchFocus: WorkspaceSwitchFocus
 
   // Editor settings
   editor: EditorSettingsBackend
@@ -284,7 +284,7 @@ interface SettingsState {
   setApiEnabled: (enabled: boolean) => void
   setUseLlmHitlDetection: (enabled: boolean) => void
   setCompletionSoundEnabled: (enabled: boolean) => void
-  setWorkspaceSwitchFocus: (value: 'terminal' | 'composer') => void
+  setWorkspaceSwitchFocus: (value: WorkspaceSwitchFocus) => void
   updateEditorSettings: (partial: Partial<EditorSettingsBackend>) => void
   updateStyleSettings: (partial: Partial<StyleSettingsBackend>) => void
   setDefaultAgent: (agent: string) => void
@@ -300,15 +300,17 @@ export function clampActiveWindowHours(h: number): number {
   return Math.max(1, Math.floor(h))
 }
 
-export type WorkspaceSwitchFocus = 'terminal' | 'composer'
+/** `off` = never move the caret on a switch (the 200ms idle refocus
+ *  still recovers the terminal, as before this setting existed). */
+export type WorkspaceSwitchFocus = 'terminal' | 'composer' | 'off'
 
 /** Per-install caret target after a workspace switch. Not daemon SSOT. */
 export const LS_WORKSPACE_SWITCH_FOCUS = 'k2.workspaceSwitchFocus'
 
-/** Coerce any stored / UI value to the two legal targets. Blank, missing,
- *  or garbage → `'terminal'` (today's default). */
+/** Coerce any stored / UI value to a legal target. Blank, missing, or
+ *  garbage → `'terminal'` (today's default). */
 export function normalizeWorkspaceSwitchFocus(value: unknown): WorkspaceSwitchFocus {
-  return value === 'composer' ? 'composer' : 'terminal'
+  return value === 'composer' || value === 'off' ? value : 'terminal'
 }
 
 export function readWorkspaceSwitchFocus(): WorkspaceSwitchFocus {
@@ -764,7 +766,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
-  setWorkspaceSwitchFocus: (value: 'terminal' | 'composer') => {
+  setWorkspaceSwitchFocus: (value: WorkspaceSwitchFocus) => {
     const next = normalizeWorkspaceSwitchFocus(value)
     writeWorkspaceSwitchFocus(next)
     set({ workspaceSwitchFocus: next })

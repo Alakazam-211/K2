@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import { agentStatus, type AgentRollupInput } from '@/lib/agent-status'
 import { AgentStatusCluster, AgentStatusSlot, NumberColumn } from './AgentStatusCluster'
+import { WorkingGrid } from './StatusGlyphs'
 
 afterEach(() => {
   cleanup()
@@ -191,5 +192,50 @@ describe('AgentStatusSlot (one mark, for tabs and badges)', () => {
     cleanup()
     const c = render(<AgentStatusSlot view={view({ live: 1 })} />).container
     expect(c.querySelector('[data-slot]')).toBeNull()
+  })
+})
+
+describe('WorkingGrid', () => {
+  function cells(svg: SVGElement): string[] {
+    return [...svg.querySelectorAll('rect')].map((r) => `${r.getAttribute('x')},${r.getAttribute('y')}`)
+  }
+
+  it('default: the 3×3, 9 cells in a square box', () => {
+    stubReducedMotion(false)
+    const { container } = render(<WorkingGrid />)
+    const svg = container.querySelector('svg[data-agent-working]') as SVGElement
+    expect([svg.getAttribute('data-cols'), svg.getAttribute('width'), svg.getAttribute('height'), svg.getAttribute('viewBox')]).toEqual([
+      '3',
+      '14',
+      '14',
+      '0 0 24 24',
+    ])
+    expect(cells(svg)).toHaveLength(9)
+  })
+
+  it('cols={2}: the narrow 2×3, 6 cells, clockwise, width 19/24 of the height', () => {
+    stubReducedMotion(false)
+    const { container } = render(<WorkingGrid cols={2} size="1.2em" />)
+    const svg = container.querySelector('svg[data-agent-working]') as SVGElement
+    expect([svg.getAttribute('data-cols'), svg.getAttribute('width'), svg.getAttribute('height'), svg.getAttribute('viewBox')]).toEqual([
+      '2',
+      '0.95em',
+      '1.2em',
+      '0 0 19 24',
+    ])
+    expect(svg.getAttribute('class')).toContain('is-narrow')
+    expect(cells(svg)).toEqual(['5,5', '10,5', '10,10', '10,15', '5,15', '5,10'])
+    // Each cell 0.1s behind the last round a 0.6s lap.
+    const delays = [...svg.querySelectorAll('rect')].map((r) => (r as SVGElement).style.animationDelay)
+    expect(delays).toEqual(['-0.6s', '-0.5s', '-0.4s', '-0.3s', '-0.2s', '-0.1s'])
+  })
+
+  it('cols={2} with reduced motion: still, the top row and right column lit', () => {
+    stubReducedMotion(true)
+    const { container } = render(<WorkingGrid cols={2} size={20} />)
+    const svg = container.querySelector('svg[data-agent-working]') as SVGElement
+    expect([svg.getAttribute('data-agent-working'), svg.getAttribute('width')]).toEqual(['still', '15.833'])
+    const lit = [...svg.querySelectorAll('rect.p')].map((r) => `${r.getAttribute('x')},${r.getAttribute('y')}`)
+    expect(lit).toEqual(['5,5', '10,5', '10,10', '10,15'])
   })
 })

@@ -1050,6 +1050,17 @@ html[data-style="square"] [data-nav-chip]::before {
 .agent-working rect.e {
   animation: agent-working-orbit 0.8s linear infinite;
 }
+/* Narrow 2×3: the same 0.1s a cell round 6 cells (0.6s a lap), the same
+   0.3s tail. */
+@keyframes agent-working-orbit-narrow {
+  0% { opacity: 1; }
+  50% { opacity: 0.3; }
+  100% { opacity: 0.3; }
+}
+.agent-working.is-narrow rect.e {
+  animation-name: agent-working-orbit-narrow;
+  animation-duration: 0.6s;
+}
 .agent-working.is-still rect.e {
   animation: none;
 }

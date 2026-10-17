@@ -417,19 +417,22 @@ describe('the activity drawer (`activity-drawer`)', () => {
       'cmd',
     ])
     expect(el('[data-zen-drawer-clock]').textContent).toBe('0:08')
-    // Running subagents spin the app's 3×3 cell grid in the working colour
-    // (plan-agent-status-unify-v1), not the braille.
+    // Running subagents spin the app's narrow 2×3 cell grid in the working
+    // colour (plan-agent-status-unify-v1; Rosson: narrow spots get 2×3),
+    // not the braille.
     const spinner = el('[data-zen-drawer-count="subagents"] [data-zen-drawer-spinner]')
     expect(spinner.style.color).toBe('var(--zen-working)')
-    expect(spinner.querySelectorAll('svg[data-agent-working] rect')).toHaveLength(9)
-    // Sized in em of the count (follows the text size): the grid's ink
-    // (14 of its 24 units) is ~1px over the digits' 0.72em at 12px, with
-    // 1px between it and the count.
     const svg = spinner.querySelector('svg[data-agent-working]') as SVGElement
+    expect([svg.getAttribute('data-cols'), svg.querySelectorAll('rect').length]).toEqual(['2', 6])
+    // Sized in em of the count (follows the text size): the grid's ink
+    // (14 of its 24 units tall, 9 wide) is ~1px over the digits' 0.72em at
+    // 12px, with 1px between it and the count.
     expect([svg.getAttribute('width'), svg.getAttribute('height')]).toEqual([
-      `${COUNTER_SPINNER_SVG_EM}em`,
+      `${Number(((COUNTER_SPINNER_SVG_EM * 19) / 24).toFixed(3))}em`,
       `${COUNTER_SPINNER_SVG_EM}em`,
     ])
+    // The layout box is the ink's width (2 columns), not the old 0.8em.
+    expect(COUNTER_SPINNER_EM).toBe(0.52)
     expect(Math.abs((COUNTER_SPINNER_SVG_EM * 14) / 24 - COUNTER_SPINNER_INK_EM)).toBeLessThan(0.001)
     expect(COUNTER_SPINNER_SVG_EM).toBe(1.371)
     expect(Math.abs(COUNTER_SPINNER_INK_EM * 12 - (0.72 * 12 + 1))).toBeLessThan(0.1)

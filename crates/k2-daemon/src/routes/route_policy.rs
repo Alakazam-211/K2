@@ -1084,6 +1084,10 @@ pub const ROUTES: &[Route] = &[
     // handler refuses every passport, login and app pass (403 owner_only).
     post("/cli/zen/garden/lock", Member),
     post("/cli/zen/garden/new", Member),
+    // Agents run Gardens end to end (0181): a person or an agent with
+    // "Manage Gardens and data sources" writes; any other local agent
+    // proposes (zen_agent_routes).
+    post("/cli/zen/garden/put", Member),
     post("/cli/zen/garden/rename", Member),
     post("/cli/zen/garden/reorder", Member),
     post("/cli/zen/garden/sync", Member),
@@ -1095,6 +1099,10 @@ pub const ROUTES: &[Route] = &[
     get("/cli/zen/lib/file", Member),
     get("/cli/zen/news", Member),
     post("/cli/zen/news/seen", Member),
+    get("/cli/zen/proposals", Member),
+    post("/cli/zen/proposals/approve", Member),
+    post("/cli/zen/proposals/reject", Member),
+    get("/cli/zen/proposals/show", Member),
     post("/cli/zen/reload", Member),
     post("/cli/zen/reset", Member),
     post("/cli/zen/setup", Member),
@@ -1114,6 +1122,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/zen/widget/errors", Member),
     post("/cli/zen/widget/new", Member),
     post("/cli/zen/widget/pause", Member),
+    post("/cli/zen/widget/put", Member),
     post("/cli/zen/widget/resume", Member),
     post("/cli/zen/widget/run", Member),
     get("/cli/zen/widget/show", Member),

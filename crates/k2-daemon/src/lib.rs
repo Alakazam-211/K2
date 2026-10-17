@@ -202,6 +202,7 @@ pub mod wall_jump;
 // door `/cli/zen/data/*`.
 pub mod garden_data;
 pub mod gardens_manage;
+pub mod zen_agent_routes;
 pub mod zen_data_routes;
 pub mod llm_accounts_routes;
 pub mod llm_accounts_runtime;

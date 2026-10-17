@@ -45989,6 +45989,7 @@ USAGE
   k2 zen garden template <garden> texting|blank [--force] [--json]
   k2 zen garden delete <garden> [--json]
   k2 zen garden lock | unlock <garden> [--json]
+  k2 zen garden put <garden> --from <file>|- [--note "…"] [--json]
   k2 zen theme list [--garden <name|id>] [--json]
   k2 zen theme next | prev [--garden <name|id>] [--json]
   k2 zen theme set <name> [--garden <name|id>] [--json]
@@ -45998,6 +45999,9 @@ USAGE
   k2 zen widget list [--json]
   k2 zen widget sign <name> [--json]      # stamp this version as made by you (or this agent)
   k2 zen widget claim <name> [--json]     # It's mine: the person only, outside K2
+  k2 zen widget put <name> <file> --from <path>|- [--note "…"] [--json]
+  k2 zen proposals [--all] [--json]       # Garden/widget changes waiting for approval
+  k2 zen proposals show|approve|reject <id> [--json]
   k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> [--no-sign] | --file <file>] [--json]
   k2 zen reload [--json]
   k2 zen reset [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--to <snapshot>] [--json]
@@ -46061,6 +46065,28 @@ COMMANDS
   guide     The user guide: short pages (gardens, files, widgets, bands,
             required, menus, themes, sync, examples, undo, safe-mode, api)
             and whole example files to pipe into a Garden. Needs no daemon.
+  put       garden put writes one Garden page (gardens/<id>.toml); widget
+            put writes one code file (.html .js .css .json) in a widget
+            folder (made if missing). Both go through the daemon: a page
+            with errors is refused and nothing is written, a locked Garden
+            is refused (exit 3), K2's built-in widgets (k2:<name>) and
+            defaults are never written, and the old page is kept in
+            .history/ (k2 zen reset --to).
+  proposals Garden and widget changes waiting for approval. show prints the
+            content; approve applies it (only if the file is unchanged since,
+            else proposal_stale); reject drops it (an agent may withdraw its
+            own).
+
+AGENTS AND "MANAGE GARDENS AND DATA SOURCES"
+  A per-agent switch (Settings → Workspaces → <ws> → Agent; owner/admin:
+  k2 sources access on|off --workspace <ws>). Inside a K2 terminal put and
+  proposals carry your session's passport.
+  Off (the default): garden put / widget put become a proposal that a person
+  approves (nothing is written until then); you can withdraw your own.
+  On: put writes right away, garden new makes a Garden, and you may approve
+  or reject proposals. Each act is logged with the agent and session
+  (Settings → Logs → Access Audit). Only the owner or an admin flips it.
+  Either way: never edit a locked Garden, and never write K2's built-ins.
 
 RULES
   New to Gardens? k2 zen guide. Moving controls? k2 zen guide bands, then
@@ -46081,7 +46107,8 @@ EXIT
   0 ok · 1 errors (validate) or a refused request · 2 a usage error (an
   unknown guide topic or example included) · 3 Zen isn't set up on this
   computer (turn it on with the Zen toggle in the K2 app's top bar), or the
-  Garden is locked / only the person may do this: stop and ask.
+  Garden is locked / only the person may do this: stop and ask · 4 no such
+  proposal, Garden or widget.
 EOF
 }
 
@@ -47859,6 +47886,10 @@ for p in pl:
 cmd_zen_widget() {
     local verb="${1:-}"
     shift || true
+    if [ "$verb" = "put" ]; then
+        cmd_zen_widget_put "$@"
+        return
+    fi
     if [ "$verb" = "errors" ]; then
         cmd_zen_widget_errors "$@"
         return
@@ -48036,6 +48067,10 @@ _zen_args() {
 cmd_zen_garden() {
     local verb="${1:-}"
     shift || true
+    if [ "$verb" = "put" ]; then
+        cmd_zen_garden_put "$@"
+        return
+    fi
     local as_json=false texting=false force=false at="" raw body
     local -a pos=()
     while [ $# -gt 0 ]; do
@@ -48371,6 +48406,163 @@ else:
     _zen_print news-seen "$as_json" "$raw"
 }
 
+# ── Agents run Gardens end to end (0.46.0, migration 0181) ─────────────
+# k2 zen garden put / widget put write a user Garden page or one widget code
+# file THROUGH the daemon (checked first; a bad page is refused, not saved;
+# K2's built-in widgets and defaults are never written). Inside a K2
+# terminal they carry the session passport: an agent with "Manage Gardens
+# and data sources" writes; any other agent's put becomes a proposal a
+# person approves (k2 zen proposals). Outside K2, the owner writes.
+
+# Print a put / proposals answer. $1 view, $2 "true" for JSON, $3 raw.
+# Exit: 0 ok · 1 refused/conflict · 3 needs a person or locked · 4 not found.
+_zen_agent_print() {
+    ZEN_VIEW="$1" ZEN_JSON="$2" ZEN_RAW="$3" python3 -c '
+import json, os, sys
+view = os.environ["ZEN_VIEW"]
+raw = os.environ.get("ZEN_RAW") or ""
+if not raw.strip():
+    print("Error: no response from the K2 daemon on this computer", file=sys.stderr); sys.exit(1)
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: the daemon answered something that is not JSON: %s" % raw[:200], file=sys.stderr); sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if os.environ.get("ZEN_JSON") == "true":
+    print(json.dumps(d, indent=2))
+if err:
+    if os.environ.get("ZEN_JSON") != "true":
+        print("Error: %s: %s" % (err, d.get("message") or ""), file=sys.stderr)
+    if err in ("person_only", "zen_local_only", "garden_locked", "owner_only", "zen_not_set_up"):
+        sys.exit(3)
+    if err in ("proposal_not_found", "unknown_garden", "unknown_widget", "not_found"):
+        sys.exit(4)
+    sys.exit(1)
+if os.environ.get("ZEN_JSON") == "true":
+    sys.exit(0)
+if view == "put":
+    if d.get("proposed"):
+        p = d.get("proposal") or {}
+        print("Proposed %s (%s %s): nothing written yet." % (p.get("id"), p.get("kind"), p.get("target")))
+        print(d.get("message") or "")
+    else:
+        print("Wrote %s%s" % (d.get("file"), "" if d.get("changed", True) else " (no change)"))
+        if d.get("snapshot"):
+            print("Previous version kept: %s (k2 zen reset --to %s)" % (d["snapshot"], d["snapshot"]))
+        v = d.get("validate") or {}
+        for e in v.get("errors") or []:
+            print("%s:%s:%s: %s" % (e.get("file"), e.get("line"), e.get("col"), e.get("message")))
+elif view == "list":
+    rows = d.get("proposals") or []
+    if not rows:
+        print("No Garden proposals waiting."); sys.exit(0)
+    for p in rows:
+        what = ("widgets/%s/%s" % (p["target"], p["file"])) if p.get("file") else ("gardens/%s.toml" % p["target"])
+        print("%s  %-9s %-36s by %s  %s B%s" % (p["id"], p["status"], what, p.get("madeBy"), p.get("bytes"), ("  — " + p["note"]) if p.get("note") else ""))
+    print()
+    print("Review: k2 zen proposals show <id> · approve <id> · reject <id>")
+elif view == "show":
+    p = d.get("proposal") or {}
+    print("%s  %s  %s  by %s%s" % (p.get("id"), p.get("status"), p.get("path"), p.get("madeBy"), "  (STALE: the file changed since)" if p.get("stale") else ""))
+    if p.get("note"): print("note: %s" % p["note"])
+    print("--- proposed content ---")
+    print(p.get("content") or "")
+elif view == "decide":
+    print("%s: %s" % (d.get("id"), d.get("status")))
+'
+}
+
+# Read a put body: --from <file> or - (stdin).
+_zen_read_text() {
+    local src="$1"
+    if [ "$src" = "-" ]; then
+        cat
+    else
+        [ -f "$src" ] || { echo "Error: no file $src" >&2; exit 2; }
+        cat "$src"
+    fi
+}
+
+cmd_zen_garden_put() {
+    local as_json=false from="" note="" garden=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --from) [ -n "${2:-}" ] || { echo "Error: --from needs a file (or - for stdin)" >&2; exit 2; }; from="$2"; shift 2 ;;
+            --note) note="${2:-}"; shift 2 ;;
+            -h|--help) cmd_help_zen; exit 0 ;;
+            -*) [ "$1" = "-" ] && { from="-"; shift; continue; }; echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
+            *) [ -z "$garden" ] || { echo "Error: k2 zen garden put <garden> --from <file>|-" >&2; exit 2; }; garden="$1"; shift ;;
+        esac
+    done
+    [ -n "$garden" ] && [ -n "$from" ] || { echo "Error: k2 zen garden put <garden> --from <file>|- [--note \"…\"]" >&2; exit 2; }
+    local body raw
+    body="$(_zen_read_text "$from" | ZG="$garden" ZN="$note" python3 -c '
+import json, os, sys
+b = {"garden": os.environ["ZG"], "text": sys.stdin.read()}
+if os.environ.get("ZN"): b["note"] = os.environ["ZN"]
+print(json.dumps(b))')"
+    raw=$(_zen_session_post "/cli/zen/garden/put" "$body")
+    _zen_agent_print put "$as_json" "$raw"
+}
+
+cmd_zen_widget_put() {
+    local as_json=false from="" note=""
+    local -a pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --from) [ -n "${2:-}" ] || { echo "Error: --from needs a file (or - for stdin)" >&2; exit 2; }; from="$2"; shift 2 ;;
+            --note) note="${2:-}"; shift 2 ;;
+            -h|--help) cmd_help_zen; exit 0 ;;
+            -*) echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    [ "${#pos[@]}" -eq 2 ] && [ -n "$from" ] || { echo "Error: k2 zen widget put <widget> <file.html|.js|.css|.json> --from <path>|- [--note \"…\"]" >&2; exit 2; }
+    local body raw
+    body="$(_zen_read_text "$from" | ZW="${pos[0]}" ZF="${pos[1]}" ZN="$note" python3 -c '
+import json, os, sys
+b = {"widget": os.environ["ZW"], "file": os.environ["ZF"], "text": sys.stdin.read()}
+if os.environ.get("ZN"): b["note"] = os.environ["ZN"]
+print(json.dumps(b))')"
+    raw=$(_zen_session_post "/cli/zen/widget/put" "$body")
+    _zen_agent_print put "$as_json" "$raw"
+}
+
+# k2 zen proposals [--all] | show <id> | approve <id> | reject <id>
+cmd_zen_proposals() {
+    local as_json=false all=false
+    local -a pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --all) all=true; shift ;;
+            -h|--help) cmd_help_zen; exit 0 ;;
+            -*) echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    local verb="${pos[0]:-list}" raw body
+    case "$verb" in
+        list)
+            if [ "$all" = true ]; then raw=$(cli_request "/cli/zen/proposals" "all=1"); else raw=$(cli_request "/cli/zen/proposals"); fi
+            _zen_agent_print list "$as_json" "$raw" ;;
+        show)
+            [ -n "${pos[1]:-}" ] || { echo "Error: k2 zen proposals show <id>" >&2; exit 2; }
+            raw=$(cli_request "/cli/zen/proposals/show" "id=$(urlencode "${pos[1]}")")
+            _zen_agent_print show "$as_json" "$raw" ;;
+        approve|reject)
+            [ -n "${pos[1]:-}" ] || { echo "Error: k2 zen proposals $verb <id>" >&2; exit 2; }
+            body=$(ZI="${pos[1]}" python3 -c 'import json, os; print(json.dumps({"id": os.environ["ZI"]}))')
+            # Inside K2: the passport (an agent with the switch approves; any
+            # agent may withdraw its own with reject). Outside: the person.
+            raw=$(_zen_session_post "/cli/zen/proposals/$verb" "$body")
+            _zen_agent_print decide "$as_json" "$raw" ;;
+        *) echo "Error: unknown 'k2 zen proposals' command '$verb' (show, approve, reject)" >&2; exit 2 ;;
+    esac
+}
+
 cmd_zen() {
     local sub="${1:-}"
     shift || true
@@ -48467,6 +48659,9 @@ print(json.dumps(b))
             ;;
         news)
             cmd_zen_news "$@"
+            ;;
+        proposals|proposal)
+            cmd_zen_proposals "$@"
             ;;
         pages)
             echo "Error: there is no 'k2 zen pages' any more: Zen pages are Gardens now. Use k2 zen garden list." >&2

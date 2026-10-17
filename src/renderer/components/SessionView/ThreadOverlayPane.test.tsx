@@ -14,6 +14,7 @@ import { renderInRoom, testRoom } from '@/test-utils/room'
 import { primaryScope as overlayPrimaryScope } from '@/kessel/server-scope'
 import { resetThreadViewersForTests, setThreadViewerForTests, type ThreadViewer } from '@/lib/thread-viewer'
 import { zenEmptyThreadText } from '@/components/Thread/ThreadZenKit'
+import { SUPERSEDE_HOLD_MS } from '@/components/Zen/widgets/ZenActivityDrawer'
 
 // Home M4: room components read their scope from their room.
 const overlayRoom = testRoom({ tabs: {}, scope: overlayPrimaryScope() })
@@ -966,6 +967,13 @@ describe('Thread activity drawer (S7, the Zen look)', () => {
       expect(drawer(), reason).not.toBeNull()
       threadHook.turn = turnOf({ state: reason === 'reply' || reason === 'done' ? 'idle' : 'stopped', rev: 9, end: { reason, detail: null, at: SERVER_NOW } })
       view.rerender(pane())
+      // A supersede (a message sent mid-turn) holds the drawer for the new
+      // turn's first frame; with none, it goes once the hold runs out.
+      if (reason === 'superseded') {
+        act(() => {
+          vi.advanceTimersByTime(SUPERSEDE_HOLD_MS + 100)
+        })
+      }
       act(() => {
         vi.advanceTimersByTime(400)
       })

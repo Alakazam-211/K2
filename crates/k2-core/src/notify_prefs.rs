@@ -481,6 +481,9 @@ mod tests {
             was_viewer: false,
             can_clone: true,
             color: None,
+            first_name: None,
+            last_name: None,
+            display_name: name.to_string(),
         }
     }
 

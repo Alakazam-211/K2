@@ -2,8 +2,10 @@
 //! paints a person the same colour.
 //!
 //! - **Palette.** The eight hues of the renderer's `PERSON_COLORS`
-//!   (`src/renderer/components/Presence/PresenceChip.tsx`), same order.
-//!   A chosen colour must be one of them.
+//!   (`src/renderer/components/Presence/PresenceChip.tsx`), same order —
+//!   the AUTOMATIC (hash) palette.
+//! - **Any colour.** A chosen colour is any `#RRGGBB` (Rosson
+//!   2026-10-17), stored lowercase; not limited to the palette.
 //! - **Chosen.** The owner's lives in the `ownerColor` app setting; a
 //!   Connect login's on its `connect-users.json` row (`color`). Both are
 //!   written only by `POST /cli/people/color`.
@@ -17,9 +19,10 @@ use std::collections::BTreeMap;
 
 use crate::notify_prefs::{People, OWNER};
 
-/// The eight person hues, in `PERSON_COLORS` order.
+/// The eight Automatic person hues, in `PERSON_COLORS` order (Rosson
+/// 2026-10-17). The renderer carries the same list so the hash matches.
 pub const PALETTE: [&str; 8] = [
-    "#2563eb", "#7c3aed", "#0d9488", "#db2777", "#4f46e5", "#0891b2", "#64748b", "#c026d3",
+    "#3a9e96", "#3a87a8", "#6a6fc8", "#8c62c4", "#b25cb0", "#c45a86", "#9b7a95", "#64778f",
 ];
 
 /// The renderer's `personColor(name)`: `h = (h * 31 + charCode) >>> 0`
@@ -32,20 +35,21 @@ pub fn hash_color(name: &str) -> &'static str {
     PALETTE[(h as usize) % PALETTE.len()]
 }
 
-/// A palette entry for `raw` (case-insensitive, trimmed), or an error
-/// naming the allowed values.
-pub fn normalize(raw: &str) -> Result<&'static str, String> {
-    let v = raw.trim().to_ascii_lowercase();
-    PALETTE
-        .iter()
-        .copied()
-        .find(|c| *c == v)
-        .ok_or_else(|| format!("color must be one of {} (got {raw:?})", PALETTE.join(", ")))
+/// `raw` as a lowercase `#rrggbb`: trimmed, case-insensitive, `#` plus
+/// exactly six hex digits. Anything else (`#abc`, `red`, no `#`, eight
+/// digits, empty) is an error.
+pub fn normalize(raw: &str) -> Result<String, String> {
+    let v = raw.trim();
+    let ok = v.len() == 7 && v.starts_with('#') && v[1..].chars().all(|c| c.is_ascii_hexdigit());
+    if !ok {
+        return Err(format!("color must be #RRGGBB: '#' and six hex digits (got {raw:?})"));
+    }
+    Ok(v.to_ascii_lowercase())
 }
 
-/// A stored value that is still a palette entry (a hand-edited file with a
-/// stray value falls back to the hash instead of painting it).
-fn valid(stored: Option<&str>) -> Option<&'static str> {
+/// A stored value that is still a valid `#rrggbb` (a hand-edited file
+/// with a stray value falls back to the hash instead of painting it).
+fn valid(stored: Option<&str>) -> Option<String> {
     stored.and_then(|c| normalize(c).ok())
 }
 
@@ -54,11 +58,11 @@ pub fn effective(login: &str, people: &People, owner_color: Option<&str>) -> Str
     let login = login.trim();
     if people.person_key(login) == OWNER {
         if let Some(c) = valid(owner_color) {
-            return c.to_string();
+            return c;
         }
     }
     if let Some(c) = people.user(login).and_then(|u| valid(u.color.as_deref())) {
-        return c.to_string();
+        return c;
     }
     hash_color(login).to_string()
 }
@@ -67,36 +71,33 @@ pub fn effective(login: &str, people: &People, owner_color: Option<&str>) -> Str
 /// the owner's for an owner-keyed login, else the login's own.
 pub fn chosen(login: &str, people: &People, owner_color: Option<&str>) -> Option<String> {
     if people.person_key(login) == OWNER {
-        return valid(owner_color).map(str::to_string);
+        return valid(owner_color);
     }
-    people.user(login).and_then(|u| valid(u.color.as_deref())).map(str::to_string)
+    people.user(login).and_then(|u| valid(u.color.as_deref()))
 }
 
-/// Name → effective colour for everyone a client may paint: `owner`,
-/// every Connect login, and the owner's display name (ticket assignees
-/// and summaries use it) unless it collides with a login.
-pub fn color_map(people: &People, owner_color: Option<&str>, owner_display: Option<&str>) -> BTreeMap<String, String> {
+/// Login → effective colour for everyone a client may paint: `owner`
+/// and every Connect login. (The old `ownerDisplayName` key is gone: the
+/// owner's assignee/identity key is the linked account's username, which
+/// is already a login here.)
+pub fn color_map(people: &People, owner_color: Option<&str>) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
-    let owner = effective(OWNER, people, owner_color);
-    out.insert(OWNER.to_string(), owner.clone());
+    out.insert(OWNER.to_string(), effective(OWNER, people, owner_color));
     for u in &people.users {
         out.insert(u.username.clone(), effective(&u.username, people, owner_color));
-    }
-    if let Some(display) = owner_display.map(str::trim).filter(|d| !d.is_empty()) {
-        out.entry(display.to_string()).or_insert(owner);
     }
     out
 }
 
 /// [`color_map`] from disk (`connect-users.json` + app settings). An
-/// unreadable users store yields the owner entries only.
+/// unreadable users store yields the owner entry only.
 pub fn load_map() -> BTreeMap<String, String> {
     let settings = crate::app_settings::load();
     let people = People {
         users: crate::connect_users::list_users().unwrap_or_default(),
         linked: settings.owner_accounts.clone(),
     };
-    color_map(&people, settings.owner_color.as_deref(), settings.owner_display_name.as_deref())
+    color_map(&people, settings.owner_color.as_deref())
 }
 
 #[cfg(test)]
@@ -113,6 +114,9 @@ mod tests {
             was_viewer: false,
             can_clone: true,
             color: color.map(str::to_string),
+            first_name: None,
+            last_name: None,
+            display_name: name.to_string(),
         }
     }
 
@@ -124,21 +128,24 @@ mod tests {
     /// pins `owner` → pink).
     #[test]
     fn hash_matches_the_renderer() {
-        assert_eq!(hash_color("owner"), "#db2777");
-        assert_eq!(hash_color(""), "#2563eb");
+        // "owner" → index 3.
+        assert_eq!(hash_color("owner"), "#8c62c4");
+        assert_eq!(hash_color(""), "#3a9e96");
         // 'a' = 97 → 97 % 8 = 1.
-        assert_eq!(hash_color("a"), "#7c3aed");
+        assert_eq!(hash_color("a"), "#3a87a8");
         // "ab" = 97*31 + 98 = 3105 → 3105 % 8 = 1.
-        assert_eq!(hash_color("ab"), "#7c3aed");
+        assert_eq!(hash_color("ab"), "#3a87a8");
     }
 
     #[test]
-    fn normalize_accepts_palette_only() {
-        assert_eq!(normalize(" #2563EB ").expect("palette"), "#2563eb");
-        let err = normalize("#ff0000").expect_err("off palette");
-        assert!(err.contains("#2563eb"), "{err}");
-        assert!(normalize("red").is_err());
-        assert!(normalize("").is_err());
+    fn normalize_accepts_any_rrggbb() {
+        assert_eq!(normalize(" #0D9488 ").expect("hex"), "#0d9488");
+        assert_eq!(normalize("#ff0000").expect("off the palette is fine"), "#ff0000");
+        assert_eq!(normalize("#123ABC").expect("hex"), "#123abc");
+        for bad in ["#abc", "red", "ff0000", "#ff00000", "#gg0000", "", "#ff00008f", "# ff0000", "#ff 000"] {
+            let err = normalize(bad).expect_err(bad);
+            assert!(err.contains("#RRGGBB"), "{bad:?}: {err}");
+        }
     }
 
     #[test]
@@ -173,24 +180,22 @@ mod tests {
 
     #[test]
     fn stray_stored_values_fall_back() {
-        let p = people(vec![user("anna", Role::Member, Some("#123456"))], &[]);
+        let p = people(vec![user("anna", Role::Member, Some("#12345"))], &[]);
         assert_eq!(effective("anna", &p, Some("nope")), hash_color("anna"));
+        assert_eq!(chosen("anna", &p, Some("#abc")), None);
         assert_eq!(effective("owner", &p, Some("nope")), hash_color("owner"));
     }
 
     #[test]
-    fn color_map_covers_owner_logins_and_display_name() {
+    fn color_map_covers_owner_and_logins() {
         let p = people(
             vec![user("z3thon", Role::Admin, None), user("anna", Role::Member, Some("#64748b"))],
             &["z3thon"],
         );
-        let m = color_map(&p, Some("#c026d3"), Some("Rosson"));
+        let m = color_map(&p, Some("#c026d3"));
         assert_eq!(m.get("owner").map(String::as_str), Some("#c026d3"));
         assert_eq!(m.get("z3thon").map(String::as_str), Some("#c026d3"));
-        assert_eq!(m.get("Rosson").map(String::as_str), Some("#c026d3"));
         assert_eq!(m.get("anna").map(String::as_str), Some("#64748b"));
-        // A display name equal to a login never overrides that login.
-        let m = color_map(&p, Some("#c026d3"), Some("anna"));
-        assert_eq!(m.get("anna").map(String::as_str), Some("#64748b"));
+        assert_eq!(m.len(), 3, "no display-name keys: {m:?}");
     }
 }

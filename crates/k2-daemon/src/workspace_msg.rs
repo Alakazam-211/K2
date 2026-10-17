@@ -658,13 +658,17 @@ pub fn owner_from_or_default(configured: Option<&str>) -> String {
 }
 
 /// D3 entrypoint for the `send-message` route: resolve the OWNER's
-/// attributed `from` from the canonical, daemon-side app_settings
-/// (`owner_display_name`), falling back to `"owner"` when unset/blank.
+/// attributed `from`. 0.46.0 (Rosson 2026-10-17, identity = username
+/// everywhere it matters): the owner's linked account's USERNAME
+/// (`k2_core::person_name::owner_login`, the primary of `ownerAccounts`),
+/// falling back to `"owner"` when nothing is linked. The old
+/// `ownerDisplayName` setting is no longer read here; real names are
+/// display only (`/cli/people/name`).
 ///
-/// **D3 holds:** the name is read ONLY from server-side settings — NEVER
+/// **D3 holds:** the name is read ONLY from server-side state — NEVER
 /// from the request body — so a client cannot spoof the attribution.
 pub fn resolve_owner_from() -> String {
-    owner_from_or_default(k2_core::app_settings::load().owner_display_name.as_deref())
+    owner_from_or_default(k2_core::person_name::owner_login_now().as_deref())
 }
 
 /// Composer 1a (D2) — max time a waiting injector blocks for the

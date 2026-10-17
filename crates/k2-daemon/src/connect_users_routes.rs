@@ -40,6 +40,12 @@ pub fn handle_list() -> CliResponse {
                         // Settings → Admin Access → "Can clone" (D2).
                         // Owner rows are always allowed (shown locked on).
                         "canClone": v.can_clone || v.role == connect_users::Role::Owner,
+                        // 0.46.0 person names: this row's own (null when
+                        // unset); displayName = "First Last", else the
+                        // username. Display only — `username` is the id.
+                        "firstName": v.first_name,
+                        "lastName": v.last_name,
+                        "displayName": v.display_name,
                     })
                 })
                 .collect();
@@ -64,9 +70,16 @@ struct AddReq {
     /// (prd-remove-viewer-role-v1.md RV4). Before, the field was ignored.
     #[serde(default)]
     role: Option<String>,
+    /// Optional first / last name (0.46.0, `k2_core::person_name`): plain
+    /// text, at most 64 characters. A bad value is a 400 and no user is
+    /// created; `null` / `""` = unset.
+    #[serde(default, rename = "firstName")]
+    first_name: Option<String>,
+    #[serde(default, rename = "lastName")]
+    last_name: Option<String>,
 }
 
-/// `POST /cli/users/add` `{username,password[,mustChangePassword][,role]}`
+/// `POST /cli/users/add` `{username,password[,mustChangePassword][,role][,firstName][,lastName]}`
 /// → `{"success":true}`. When `mustChangePassword` is true the new
 /// account is flagged: its sessions are restricted to whoami /
 /// change-password / logout until the password is rotated (K2 Cloud S1).
@@ -90,7 +103,12 @@ pub fn handle_add(body: &[u8]) -> CliResponse {
             Err(e) => return CliResponse::bad_request(e),
         }
     }
-    match connect_users::add_user(&req.username, &req.password) {
+    match connect_users::add_user_with_names(
+        &req.username,
+        &req.password,
+        req.first_name.as_deref(),
+        req.last_name.as_deref(),
+    ) {
         Ok(()) => {}
         Err(e) => return CliResponse::bad_request(e),
     }
@@ -899,7 +917,8 @@ pub fn handle_logout_with_user(token: &str) -> (CliResponse, Option<String>) {
 }
 
 /// `GET /cli/auth/whoami` (authorized — owner OR connect-user) →
-/// `{username, owner, role, mustChangePassword}`.
+/// `{username, owner, role, mustChangePassword, …, firstName, lastName,
+/// displayName}` (names effective, 0.46.0; first/last `null` when unset).
 ///
 /// - Owner token → `{"username":null,"owner":true,"role":"owner",
 ///   "mustChangePassword":false}`.
@@ -934,6 +953,13 @@ pub fn handle_whoami(
     // Tickets "me" (Mine / Waiting on me): the daemon's one definition,
     // shared with `waiting-count?me=1`, so the board and badge agree.
     let ticket_me = crate::feedback_routes::my_assignee_names_now(owner, username.as_deref());
+    // 0.46.0 person names, effective: the owner's for the owner token or
+    // an owner-linked login. Display only — `username` stays the id.
+    let names = k2_core::person_name::load_effective(if owner {
+        k2_core::notify_prefs::OWNER
+    } else {
+        username.as_deref().unwrap_or(k2_core::notify_prefs::OWNER)
+    });
     CliResponse::ok_json(
         serde_json::json!({
             "username": username,
@@ -943,6 +969,9 @@ pub fn handle_whoami(
             "canClone": can_clone,
             "clonePersonalComputers": personal,
             "ticketMe": ticket_me,
+            "firstName": names.first_name,
+            "lastName": names.last_name,
+            "displayName": names.display_name,
         })
         .to_string(),
     )
@@ -1158,6 +1187,82 @@ mod tests {
             let r = handle_whoami(None, true, connect_users::Role::Owner);
             let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
             assert_eq!(v["mustChangePassword"], serde_json::json!(false));
+        });
+    }
+
+    fn json(r: &CliResponse) -> serde_json::Value {
+        serde_json::from_str(&r.body).expect("json body")
+    }
+
+    /// 0.46.0: users/add takes optional names, validates them before
+    /// creating anything, and GET /cli/users carries them.
+    #[test]
+    fn add_with_names_and_list_carries_them() {
+        with_temp_home(|| {
+            let r = handle_add(br#"{"username":"named","password":"password1","firstName":" Anna ","lastName":"Smith"}"#);
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let r = handle_add(br#"{"username":"plain","password":"password1"}"#);
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let r = handle_add(br#"{"username":"badname","password":"password1","lastName":"<b>x</b>"}"#);
+            assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+            let long = format!(r#"{{"username":"longname","password":"password1","firstName":"{}"}}"#, "a".repeat(65));
+            let r = handle_add(long.as_bytes());
+            assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+
+            let v = json(&handle_list());
+            let users = v["users"].as_array().expect("users");
+            let names: Vec<&str> = users.iter().map(|u| u["username"].as_str().expect("username")).collect();
+            assert_eq!(names.len(), 2, "a bad name creates no user: {names:?}");
+            let row = |n: &str| users.iter().find(|u| u["username"] == n).unwrap_or_else(|| panic!("no row {n}")).clone();
+            let named = row("named");
+            assert_eq!(named["firstName"], "Anna");
+            assert_eq!(named["lastName"], "Smith");
+            assert_eq!(named["displayName"], "Anna Smith");
+            let plain = row("plain");
+            assert_eq!(plain["firstName"], serde_json::Value::Null);
+            assert_eq!(plain["lastName"], serde_json::Value::Null);
+            assert_eq!(plain["displayName"], "plain");
+        });
+    }
+
+    /// 0.46.0: whoami carries the effective names — the linked account's
+    /// for the owner token ("Owner" with none linked), the login's own
+    /// otherwise (null + username when unset).
+    #[test]
+    fn whoami_carries_effective_names() {
+        with_temp_home(|| {
+            connect_users::add_user("who_a", "password1").expect("add");
+            connect_users::add_user("who_z", "password1").expect("add");
+            connect_users::set_role("who_z", connect_users::Role::Admin).expect("admin");
+
+            let v = json(&handle_whoami(Some("who_a".into()), false, connect_users::Role::Member));
+            assert_eq!(v["firstName"], serde_json::Value::Null);
+            assert_eq!(v["lastName"], serde_json::Value::Null);
+            assert_eq!(v["displayName"], "who_a");
+            let v = json(&handle_whoami(None, true, connect_users::Role::Owner));
+            assert_eq!(v["firstName"], serde_json::Value::Null);
+
+            assert_eq!(v["lastName"], serde_json::Value::Null);
+            assert_eq!(v["displayName"], "Owner", "no linked account");
+
+            connect_users::set_names("who_a", Some("Anna"), None).expect("names");
+            k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["who_z"] })).expect("link");
+            let v = json(&handle_whoami(None, true, connect_users::Role::Owner));
+            assert_eq!(v["firstName"], serde_json::Value::Null);
+            assert_eq!(v["displayName"], "who_z", "a nameless linked account: its username");
+            connect_users::set_names("who_z", Some("Rosson"), Some("Long")).expect("owner names");
+            let v = json(&handle_whoami(Some("who_a".into()), false, connect_users::Role::Member));
+            assert_eq!(v["firstName"], "Anna");
+            assert_eq!(v["lastName"], serde_json::Value::Null);
+            assert_eq!(v["displayName"], "Anna");
+            assert_eq!(v["username"], "who_a", "the username stays the identity");
+            let v = json(&handle_whoami(None, true, connect_users::Role::Owner));
+            assert_eq!(v["firstName"], "Rosson");
+            assert_eq!(v["lastName"], "Long");
+            assert_eq!(v["displayName"], "Rosson Long");
+            let v = json(&handle_whoami(Some("who_z".into()), false, connect_users::Role::Admin));
+            assert_eq!(v["displayName"], "Rosson Long", "the linked login's own names are the owner's");
+            assert_eq!(v["username"], "who_z");
         });
     }
 }

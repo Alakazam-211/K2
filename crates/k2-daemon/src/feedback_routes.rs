@@ -187,6 +187,10 @@ pub fn my_assignee_names(
     let mut names: Vec<String> = Vec::new();
     if owner_person {
         names.push(k2_core::notify_prefs::OWNER.to_string());
+        // 0.46.0: ownerDisplayName is no longer shown anywhere, but older
+        // tickets may be assigned to it — it still MATCHES as "me" so they
+        // don't fall off "Waiting on me". New assignments use the linked
+        // username (`resolve_owner_from`).
         if let Some(display) = owner_display_name.map(str::trim).filter(|d| !d.is_empty()) {
             names.push(display.to_string());
         }
@@ -249,6 +253,9 @@ mod badge_me_tests {
             was_viewer: false,
             can_clone: true,
             color: None,
+            first_name: None,
+            last_name: None,
+            display_name: name.to_string(),
         }
     }
 

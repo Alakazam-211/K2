@@ -493,12 +493,18 @@ pub struct AppSettings {
     /// owner daemon token; `settings/update` refuses the key.
     #[serde(default)]
     pub owner_accounts: Vec<String>,
-    /// The owner's chosen person colour (0.46.0): one of
-    /// `person_color::PALETTE`, or `None` for Automatic (the hash of
+    /// The owner's chosen person colour (0.46.0): any `#rrggbb`
+    /// (`person_color::normalize`), or `None` for Automatic (the hash of
     /// `"owner"`). Owner-linked logins show it too. Written only by
     /// `POST /cli/people/color`; `settings/update` refuses the key.
     #[serde(default)]
     pub owner_color: Option<String>,
+    /// 0.46.0 (`k2_core::person_name::carry_over_owner_display_name`):
+    /// the old `ownerDisplayName` was moved onto the owner's linked
+    /// account once (or there was nothing to move). Set by the daemon
+    /// only; `settings/update` refuses the key.
+    #[serde(default)]
+    pub owner_display_name_carried: bool,
     /// K2 Mail (prd-email-server-v1 §12 / D4) — the GLOBAL default
     /// agent-send gating mode: `off` (default) | `approval` | `on`.
     /// Per-workspace `projects.mail_agent_send` (migration 0075)
@@ -959,6 +965,7 @@ impl Default for AppSettings {
             push_gateway_token: None,
             owner_accounts: Vec::new(),
             owner_color: None,
+            owner_display_name_carried: false,
             mail_agent_send: default_mail_agent_send(),
             mail_address_cap: default_mail_address_cap(),
             mail_quota_bytes: default_mail_quota_bytes(),

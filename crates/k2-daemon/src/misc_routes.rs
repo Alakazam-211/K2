@@ -41,11 +41,37 @@ fn attach_people_users(body: String) -> Result<String, String> {
         .ok_or_else(|| "connections list JSON is not an object".to_string())?;
     let owner = crate::workspace_msg::resolve_owner_from();
     let rows = k2_core::connect_users::list_people_for_agents(&owner)?;
-    obj.insert(
-        "users".to_string(),
-        serde_json::to_value(rows).map_err(|e| format!("serialize users: {e}"))?,
-    );
+    let mut users = serde_json::to_value(rows).map_err(|e| format!("serialize users: {e}"))?;
+    add_people_names(&mut users, &k2_core::person_name::load_map());
+    obj.insert("users".to_string(), users);
     serde_json::to_string(&v).map_err(|e| format!("serialize connections list: {e}"))
+}
+
+/// 0.46.0: each people row gains `firstName` / `lastName` (null when
+/// unset) and `displayName` ("First Last", else the username). The map is
+/// keyed by login plus the owner's display name — the synthesized owner
+/// row's username. Display only: `username` stays what agents address.
+fn add_people_names(
+    users: &mut serde_json::Value,
+    names: &std::collections::BTreeMap<String, k2_core::person_name::NameEntry>,
+) {
+    let Some(rows) = users.as_array_mut() else { return };
+    for row in rows.iter_mut() {
+        let Some(obj) = row.as_object_mut() else { continue };
+        let username = obj.get("username").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let key = if username.eq_ignore_ascii_case(k2_core::notify_prefs::OWNER) {
+            k2_core::notify_prefs::OWNER.to_string()
+        } else {
+            username.clone()
+        };
+        let entry = names.get(&key);
+        obj.insert("firstName".into(), serde_json::json!(entry.and_then(|e| e.first_name.clone())));
+        obj.insert("lastName".into(), serde_json::json!(entry.and_then(|e| e.last_name.clone())));
+        obj.insert(
+            "displayName".into(),
+            serde_json::json!(entry.map(|e| e.display_name.clone()).unwrap_or(username)),
+        );
+    }
 }
 
 /// `kind` + printable `handle` for `sessions live` (D10).
@@ -3225,8 +3251,8 @@ mod connections_list_users_tests {
             keys.sort_unstable();
             assert_eq!(
                 keys,
-                vec!["disabled", "role", "username"],
-                "users[] rows must be username/role/disabled only: {u}"
+                vec!["disabled", "displayName", "firstName", "lastName", "role", "username"],
+                "users[] rows must be username/role/disabled + names only: {u}"
             );
             let dumped = u.to_string();
             assert!(
@@ -3332,6 +3358,47 @@ mod connections_list_users_tests {
             assert_eq!(via_alias.status, "200 OK", "body={}", via_alias.body);
             let v2: serde_json::Value = serde_json::from_str(&via_alias.body).expect("json");
             assert!(v2.get("users").is_some());
+        });
+    }
+
+    /// 0.46.0: people rows carry the real names (display only); a
+    /// nameless row shows its username as displayName.
+    #[test]
+    fn users_rows_carry_real_names() {
+        crate::test_support::with_temp_home(|| {
+            let (_id, path) = make_project("with-names");
+            connect_users::add_user("julie", "password1").expect("add");
+            connect_users::add_user("member1", "password1").expect("add");
+            connect_users::add_user("z3thon", "password1").expect("add");
+            connect_users::set_names("julie", Some("Julie"), Some("Park")).expect("names");
+            connect_users::set_names("z3thon", Some("Rosson"), Some("Long")).expect("names");
+            k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["z3thon"] })).expect("link");
+            let resp = dispatch(
+                "/cli/connections",
+                &params(&[("project", &path), ("action", "list"), ("users", "1")]),
+            )
+            .expect("connections list+users");
+            assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+            let users = v["users"].as_array().expect("users").clone();
+            let row = |n: &str| {
+                users
+                    .iter()
+                    .find(|u| u["username"].as_str().is_some_and(|s| s.eq_ignore_ascii_case(n)))
+                    .unwrap_or_else(|| panic!("no row {n}: {users:?}"))
+                    .clone()
+            };
+            let julie = row("julie");
+            assert_eq!(julie["firstName"], "Julie");
+            assert_eq!(julie["lastName"], "Park");
+            assert_eq!(julie["displayName"], "Julie Park");
+            let m = row("member1");
+            assert_eq!(m["firstName"], serde_json::Value::Null);
+            assert_eq!(m["displayName"], "member1");
+            // The owner is its linked account's row (identity = username).
+            assert!(users.iter().all(|u| u["username"] != "owner"), "no separate owner row: {users:?}");
+            let z = row("z3thon");
+            assert_eq!(z["displayName"], "Rosson Long");
         });
     }
 }

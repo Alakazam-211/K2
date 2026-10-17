@@ -17410,6 +17410,10 @@ if as_json:
                 'username': u.get('username') or '',
                 'role': u.get('role') or '',
                 'disabled': bool(u.get('disabled')),
+                # 0.46.0: display only — address people by username.
+                'firstName': u.get('firstName'),
+                'lastName': u.get('lastName'),
+                'displayName': u.get('displayName') or u.get('username') or '',
             })
     print(json.dumps(out, ensure_ascii=False, separators=(',', ':')))
     raise SystemExit(0)
@@ -17447,8 +17451,11 @@ if include_users:
     for u in users:
         if not isinstance(u, dict):
             continue
+        # 0.46.0: the real name when set (display only; use the username).
+        named = bool(u.get('firstName') or u.get('lastName'))
         rows.append((
             str(u.get('username') or '?'),
+            (str(u.get('displayName') or '') if named else '') or '-',
             str(u.get('role') or '?'),
             'yes' if u.get('disabled') else 'no',
         ))
@@ -17456,10 +17463,11 @@ if include_users:
         print('  (none)')
     else:
         w_user = max([len(r[0]) for r in rows] + [len('USERNAME')])
-        w_role = max([len(r[1]) for r in rows] + [len('ROLE')])
-        print('%s  %s  %s' % ('USERNAME'.ljust(w_user), 'ROLE'.ljust(w_role), 'DISABLED'))
-        for un, role, dis in rows:
-            print('%s  %s  %s' % (un.ljust(w_user), role.ljust(w_role), dis))
+        w_name = max([len(r[1]) for r in rows] + [len('NAME')])
+        w_role = max([len(r[2]) for r in rows] + [len('ROLE')])
+        print('%s  %s  %s  %s' % ('USERNAME'.ljust(w_user), 'NAME'.ljust(w_name), 'ROLE'.ljust(w_role), 'DISABLED'))
+        for un, nm, role, dis in rows:
+            print('%s  %s  %s  %s' % (un.ljust(w_user), nm.ljust(w_name), role.ljust(w_role), dis))
 else:
     print('These are workspace-agents you can k2 msg. Humans on this box are not listed — k2 connections list --users (do not k2 msg those names).')
 " <<< "$raw"
@@ -20626,8 +20634,10 @@ _users_usage() {
 k2 users — local daemon connect-user accounts
 
 USAGE
-  k2 users                      List accounts (username, role, disabled)
-  k2 users list                 Same as above
+  k2 users                      List accounts (username, name, role, disabled)
+  k2 users list [--json]        Same as above; --json adds firstName,
+                                lastName, displayName (names are display
+                                only — commands take the username)
   k2 users add <username> [--role owner|admin|member]
                                 Create an account; prompts for password
                                 (hidden) + confirm. Default role is member;
@@ -20651,7 +20661,7 @@ FLAGS
   --role <r>                    owner | admin | member
   --password-stdin              Read password from stdin (automation; no echo)
   --tail <N>                    audit: how many records (1..1000, default 50)
-  --json                        unlock: daemon body; audit: raw JSON
+  --json                        list: {ok,users[]} with names; unlock: daemon body; audit: raw JSON
   --help, -h                    This help
 
 SECURITY
@@ -20712,16 +20722,18 @@ cmd_users() {
         list|"")
             # Accept bare `k2 users` and `k2 users list`.
             if [ "$sub" = "list" ]; then shift || true; fi
+            local as_json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --help|-h) _users_usage; return 0 ;;
-                    *) echo "Usage: k2 users list" >&2; return 2 ;;
+                    --json) as_json=1; shift ;;
+                    *) echo "Usage: k2 users list [--json]" >&2; return 2 ;;
                 esac
             done
             local raw
             raw=$(cli_send cli_request "/cli/users") || raw=""
-            printf '%s' "$raw" | python3 -c '
-import json, sys
+            printf '%s' "$raw" | AS_JSON="$as_json" python3 -c '
+import json, os, sys
 raw = sys.stdin.read()
 try:
     d = json.loads(raw) if raw.strip() else {}
@@ -20738,11 +20750,33 @@ if err is not None:
         sys.stderr.write("Error: %s\n" % err)
     sys.exit(1)
 users = d.get("users") or []
+if os.environ.get("AS_JSON") == "1":
+    # 0.46.0: names ride along (firstName/lastName null when unset;
+    # displayName = "First Last", else the username). The username is
+    # the identity for every other command.
+    out = []
+    for u in users:
+        if not isinstance(u, dict):
+            continue
+        username = str(u.get("username") or "")
+        out.append({
+            "username": username,
+            "role": u.get("role") or "member",
+            "disabled": bool(u.get("disabled")),
+            "wasViewer": bool(u.get("wasViewer")),
+            "canClone": u.get("canClone"),
+            "createdAt": u.get("createdAt") or u.get("created_at"),
+            "firstName": u.get("firstName"),
+            "lastName": u.get("lastName"),
+            "displayName": u.get("displayName") or username,
+        })
+    print(json.dumps({"ok": True, "users": out}, ensure_ascii=False, separators=(",", ":")))
+    sys.exit(0)
 if not users:
     print("No connect users yet.")
     print("Create the first owner: k2 users add <username> --role owner")
     sys.exit(0)
-# Table: USERNAME  ROLE  DISABLED  CREATED
+# Table: USERNAME  NAME  ROLE  DISABLED  CREATED
 rows = []
 for u in users:
     if not isinstance(u, dict):
@@ -20752,8 +20786,12 @@ for u in users:
         # Viewer role removed: disabled on the update until the owner
         # enables it as a member (Settings, or POST users/set-disabled).
         disabled += " (was viewer)"
+    # 0.46.0: the real name when one is set (display only), else "-".
+    has_name = bool(u.get("firstName") or u.get("lastName"))
+    name = str(u.get("displayName") or "") if has_name else ""
     rows.append((
         str(u.get("username") or "?"),
+        name or "-",
         str(u.get("role") or "member"),
         disabled,
         str(u.get("createdAt") or u.get("created_at") or "-"),
@@ -20762,11 +20800,12 @@ if not rows:
     print("No connect users yet.")
     sys.exit(0)
 w_user = max([len(r[0]) for r in rows] + [len("USERNAME")])
-w_role = max([len(r[1]) for r in rows] + [len("ROLE")])
-w_dis = max([len(r[2]) for r in rows] + [len("DISABLED")])
-print("%-*s  %-*s  %-*s  %s" % (w_user, "USERNAME", w_role, "ROLE", w_dis, "DISABLED", "CREATED"))
-for u, role, dis, created in rows:
-    print("%-*s  %-*s  %-*s  %s" % (w_user, u, w_role, role, w_dis, dis, created))
+w_name = max([len(r[1]) for r in rows] + [len("NAME")])
+w_role = max([len(r[2]) for r in rows] + [len("ROLE")])
+w_dis = max([len(r[3]) for r in rows] + [len("DISABLED")])
+print("%-*s  %-*s  %-*s  %-*s  %s" % (w_user, "USERNAME", w_name, "NAME", w_role, "ROLE", w_dis, "DISABLED", "CREATED"))
+for u, name, role, dis, created in rows:
+    print("%-*s  %-*s  %-*s  %-*s  %s" % (w_user, u, w_name, name, w_role, role, w_dis, dis, created))
 '
             ;;
         add)
@@ -25599,7 +25638,7 @@ cmd_schema() {
       "args": [],
       "flags": [
         {"name": "--tail", "arg": "N", "description": "audit: how many records (1..1000, default 50)."},
-        {"name": "--json", "arg": null, "description": "unlock: daemon body; audit: raw JSON {events,tail,path}."}
+        {"name": "--json", "arg": null, "description": "list: {ok,users:[{username,role,disabled,wasViewer,canClone,createdAt,firstName,lastName,displayName}]}; unlock: daemon body; audit: raw JSON {events,tail,path}."}
       ]
     },
     {
@@ -33923,7 +33962,7 @@ CONNECT (pair purchased k2.dev subdomain — headless account login)
   connect logout                                Clear ~/.k2/connect-account.json (not tunnel)
 
 USERS (local daemon connect-user accounts)
-  users | users list                            List accounts (username, role, disabled)
+  users | users list [--json]                   List accounts (username, name, role, disabled)
   users add <username> [--role owner|admin|member] [--password-stdin]
                                                 Create account (password via prompt or stdin)
 

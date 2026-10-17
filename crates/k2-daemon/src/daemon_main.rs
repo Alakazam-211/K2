@@ -500,6 +500,14 @@ async fn async_main() {
         ),
         Err(e) => log_debug!("[daemon/users] ERROR: viewer-role migration: {e}"),
     }
+    // 0.46.0 person names: move the old ownerDisplayName onto the owner's
+    // linked account once (flag `ownerDisplayNameCarried`). Nothing linked
+    // yet → retried after `POST /cli/owner/accounts`. After init_database
+    // for the same roster-refresh reason as above.
+    match k2_core::person_name::carry_over_owner_display_name() {
+        Ok(outcome) => log_debug!("[daemon/users] ownerDisplayName carry-over: {outcome:?}"),
+        Err(e) => log_debug!("[daemon/users] ERROR: ownerDisplayName carry-over: {e}"),
+    }
 
     // K2 vault (prd-k2-vault-v1 §5.1, VS14): open ~/.k2/vault/vault.db
     // here — the serve path, after the single-instance lock, before any

@@ -539,14 +539,14 @@ fn save_verb(w: &Placed, verb: &str, args: &[J]) -> Result<J, DataError> {
 
 // ── viewer.get, wire names ───────────────────────────────────────────
 
-/// `{kind: "owner", name}`: Settings' name for the person, else "You".
-/// Read per call (contract §7.5).
+/// `{kind: "owner", name}`: the owner's displayName (0.46.0: the linked
+/// account's "First Last", else its username), else "You" when nothing is
+/// linked. Read per call (contract §7.5).
 pub fn viewer() -> J {
-    let name = k2_core::app_settings::load()
-        .owner_display_name
-        .map(|n| n.trim().to_string())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| "You".to_string());
+    let name = match k2_core::person_name::owner_login_now() {
+        Some(_) => k2_core::person_name::load_effective(k2_core::notify_prefs::OWNER).display_name,
+        None => "You".to_string(),
+    };
     json!({ "kind": "owner", "name": name })
 }
 

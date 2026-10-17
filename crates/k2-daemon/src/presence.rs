@@ -108,6 +108,17 @@ pub struct RosterUser {
     /// own hash when it is absent (an older daemon).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub color: String,
+    /// The person's effective first / last name (0.46.0,
+    /// `k2_core::person_name`), `null` when unset. Owner-linked logins
+    /// carry the owner's. Display only: `user` stays the identity.
+    #[serde(rename = "firstName", default)]
+    pub first_name: Option<String>,
+    #[serde(rename = "lastName", default)]
+    pub last_name: Option<String>,
+    /// `"First Last"` when set, else the username (the owner: the names,
+    /// else `ownerDisplayName`, else `owner`). Absent from an older daemon.
+    #[serde(rename = "displayName", default, skip_serializing_if = "String::is_empty")]
+    pub display_name: String,
 }
 
 static REGISTRY: OnceLock<Mutex<HashMap<u64, PresenceEntry>>> = OnceLock::new();
@@ -309,11 +320,15 @@ pub fn roster() -> Vec<RosterUser> {
                 granted_edit: false,
                 connected_at,
                 color: String::new(),
+                first_name: None,
+                last_name: None,
+                display_name: String::new(),
             }
         })
         .collect();
     drop(map);
     paint(&mut rows, &k2_core::person_color::load_map());
+    paint_names(&mut rows, &k2_core::person_name::load_map());
     // Owner first, then usernames ascending — deterministic snapshots.
     rows.sort_by(|a, b| {
         let a_owner = a.user == "owner";
@@ -331,11 +346,13 @@ fn broadcast_roster() {
     let _ = session_events::emit(SessionEvent::PresenceChanged {
         roster: roster(),
         colors: k2_core::person_color::load_map(),
+        names: k2_core::person_name::load_map(),
     });
 }
 
-/// Re-emit the roster after a person colour (or anything else it paints)
-/// changed, so every connected client repaints (`POST /cli/people/color`).
+/// Re-emit the roster after a person colour or name (or anything else it
+/// paints) changed, so every connected client repaints
+/// (`POST /cli/people/color`, `POST /cli/people/name`).
 pub fn rebroadcast() {
     broadcast_roster();
 }
@@ -350,13 +367,36 @@ fn paint(rows: &mut [RosterUser], colors: &std::collections::BTreeMap<String, St
     }
 }
 
+/// Fill each row's names from a login → names map (`person_name`); a
+/// login missing from it shows its username.
+fn paint_names(rows: &mut [RosterUser], names: &std::collections::BTreeMap<String, k2_core::person_name::NameEntry>) {
+    for row in rows.iter_mut() {
+        match names.get(&row.user) {
+            Some(e) => {
+                row.first_name = e.first_name.clone();
+                row.last_name = e.last_name.clone();
+                row.display_name = e.display_name.clone();
+            }
+            None => {
+                row.first_name = None;
+                row.last_name = None;
+                row.display_name = row.user.clone();
+            }
+        }
+    }
+}
+
 /// `GET /cli/presence/roster` — snapshot of the live roster, identical
 /// JSON to the `presence_changed` event payload (`{ "roster": [...] }`)
 /// so clients fetched-on-`hello` reconcile against the same shape.
 /// Auth (owner token OR live connect session) is gated in the
 /// dispatcher, mirroring `/cli/auth/whoami`.
 pub fn handle_roster() -> crate::cli_response::CliResponse {
-    let body = serde_json::json!({ "roster": roster(), "colors": k2_core::person_color::load_map() });
+    let body = serde_json::json!({
+        "roster": roster(),
+        "colors": k2_core::person_color::load_map(),
+        "names": k2_core::person_name::load_map(),
+    });
     match serde_json::to_string(&body) {
         Ok(body) => crate::cli_response::CliResponse::ok_json(body),
         Err(e) => crate::cli_response::CliResponse::internal_error(format!(
@@ -396,6 +436,14 @@ pub struct SummaryPerson {
     /// Effective person colour (0.46.0), copied from the roster row.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub color: String,
+    /// Effective names (0.46.0), copied from the roster row; `name` above
+    /// keeps its meaning. `null` when unset.
+    #[serde(rename = "firstName")]
+    pub first_name: Option<String>,
+    #[serde(rename = "lastName")]
+    pub last_name: Option<String>,
+    #[serde(rename = "displayName", skip_serializing_if = "String::is_empty")]
+    pub display_name: String,
 }
 
 /// One workspace with at least one person on it. `workspaceId` /
@@ -433,6 +481,9 @@ pub fn summarize(
             },
             role: user.role.clone(),
             color: user.color.clone(),
+            first_name: user.first_name.clone(),
+            last_name: user.last_name.clone(),
+            display_name: user.display_name.clone(),
         };
         for sub in &user.workspaces {
             let owner_idx = crate::session_events::longest_registered_project_index(sub, &paths);
@@ -561,7 +612,9 @@ pub fn handle_summary() -> crate::cli_response::CliResponse {
         .into_iter()
         .filter_map(|s| displays.get(&s.session_id).map(|(d, _)| (s.workspace_path, *d)))
         .collect();
-    let owner_name = crate::workspace_msg::resolve_owner_from();
+    // 0.46.0: the owner's displayName (linked account's "First Last",
+    // else its username, else "Owner"); ownerDisplayName is not read.
+    let owner_name = k2_core::person_name::load_effective(k2_core::notify_prefs::OWNER).display_name;
     let live = roster();
     let body = serde_json::json!({
         "online": live.len(),
@@ -695,6 +748,9 @@ mod tests {
             granted_edit: false,
             connected_at: 1_700_000_000,
             color: String::new(),
+            first_name: None,
+            last_name: None,
+            display_name: String::new(),
         };
         let json: serde_json::Value =
             serde_json::from_str(&serde_json::to_string(&row).unwrap()).unwrap();
@@ -704,8 +760,12 @@ mod tests {
         assert_eq!(json["workspaces"], serde_json::json!(["/x/foo"]));
         assert_eq!(json["grantedEdit"], false);
         assert_eq!(json["connectedAt"], 1_700_000_000i64);
+        // 0.46.0: firstName / lastName are always present (null when
+        // unset); color / displayName are skipped when empty.
+        assert_eq!(json["firstName"], serde_json::Value::Null);
+        assert_eq!(json["lastName"], serde_json::Value::Null);
         let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 6, "unexpected key set: {obj:?}");
+        assert_eq!(obj.len(), 8, "unexpected key set: {obj:?}");
         // No snake_case leakage.
         assert!(json.get("window_count").is_none());
         assert!(json.get("granted_edit").is_none());
@@ -828,6 +888,43 @@ mod tests {
         assert_eq!(out[0].people[1].color, k2_core::person_color::hash_color("anna"));
     }
 
+    /// 0.46.0 person names: a row takes the map's names, else its
+    /// username; the wire carries firstName/lastName/displayName and the
+    /// summary copies them (its `name` keeps its meaning).
+    #[test]
+    fn paint_names_uses_the_name_map_then_the_username() {
+        let mut rows = vec![ru("owner", "owner", &["/w/a"]), ru("anna", "member", &["/w/a"])];
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(
+            "owner".to_string(),
+            k2_core::person_name::NameEntry {
+                first_name: Some("Rosson".into()),
+                last_name: Some("Long".into()),
+                display_name: "Rosson Long".into(),
+            },
+        );
+        paint_names(&mut rows, &map);
+        assert_eq!(rows[0].display_name, "Rosson Long");
+        assert_eq!(rows[1].display_name, "anna");
+        assert_eq!(rows[1].first_name, None);
+        let json = serde_json::to_value(&rows[0]).expect("json");
+        assert_eq!(json["firstName"], "Rosson");
+        assert_eq!(json["lastName"], "Long");
+        assert_eq!(json["displayName"], "Rosson Long");
+        assert_eq!(json["user"], "owner", "the roster key stays the identity");
+        let json = serde_json::to_value(&rows[1]).expect("json");
+        assert_eq!(json["firstName"], serde_json::Value::Null, "unset names are null on the wire");
+        assert_eq!(json["lastName"], serde_json::Value::Null);
+        let out = summarize(&rows, &[wref("id-a", "A", "/w/a", "a")], "Rosson L");
+        let owner = &out[0].people[0];
+        assert_eq!(owner.name, "Rosson L", "`name` is still the owner display name");
+        assert_eq!(owner.display_name, "Rosson Long");
+        assert_eq!(owner.first_name.as_deref(), Some("Rosson"));
+        let json = serde_json::to_value(&out[0].people[1]).expect("json");
+        assert_eq!(json["displayName"], "anna");
+        assert_eq!(json["firstName"], serde_json::Value::Null);
+    }
+
     fn ru(user: &str, role: &str, workspaces: &[&str]) -> RosterUser {
         RosterUser {
             user: user.into(),
@@ -837,6 +934,9 @@ mod tests {
             granted_edit: false,
             connected_at: 1,
             color: String::new(),
+            first_name: None,
+            last_name: None,
+            display_name: String::new(),
         }
     }
 
@@ -876,8 +976,8 @@ mod tests {
         assert_eq!(
             c.people,
             vec![
-                SummaryPerson { user: "owner".into(), name: "Rosson".into(), role: "owner".into(), color: String::new() },
-                SummaryPerson { user: "anna".into(), name: "anna".into(), role: "member".into(), color: String::new() },
+                SummaryPerson { user: "owner".into(), name: "Rosson".into(), role: "owner".into(), color: String::new(), first_name: None, last_name: None, display_name: String::new() },
+                SummaryPerson { user: "anna".into(), name: "anna".into(), role: "member".into(), color: String::new(), first_name: None, last_name: None, display_name: String::new() },
             ]
         );
 

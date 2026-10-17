@@ -905,6 +905,10 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                     "linked inbox row missing from the resolved sender (unexpected)",
                 );
             };
+            // MCS4: a link consented for its calendar only sends no mail.
+            if let Err(resp) = crate::mail::capabilities::mail_scope_gate(&inbox, "mail.send") {
+                return resp;
+            }
             // Read the attachment files from THIS workspace (caps enforced).
             let attachments = match read_workspace_attachments(&path, &attach_specs) {
                 Ok(a) => a,
@@ -1107,6 +1111,10 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                     "linked inbox row missing from the resolved sender (unexpected)",
                 );
             };
+            // MCS4: a link consented for its calendar only sends no mail.
+            if let Err(resp) = crate::mail::capabilities::mail_scope_gate(&inbox, "mail.send") {
+                return resp;
+            }
             let attachments = match read_workspace_attachments(&path, &attach_specs) {
                 Ok(a) => a,
                 Err(resp) => return resp,

@@ -317,6 +317,21 @@ fn complete_with_tokens(
         );
         return;
     }
+    // A calendar-only link whose calendar scope was unticked would store
+    // a row that can do nothing: refuse it the same way.
+    if !plan.features.mail && plan.features.calendar && !granted.calendar {
+        set_failure(
+            link_id,
+            LinkStatus::Error,
+            "scope_not_granted",
+            format!(
+                "calendar access was not granted for {address} — link again and allow K2 to \
+                 see and edit your calendar events. Nothing was stored"
+            ),
+            None,
+        );
+        return;
+    }
     let features = Features {
         mail: plan.features.mail && granted.mail,
         calendar: plan.features.calendar && granted.calendar,
@@ -341,12 +356,21 @@ fn complete_with_tokens(
                 Ok(_) => set_terminal(
                     link_id,
                     LinkStatus::Connected,
-                    Some(format!(
-                        "connected {address} ({}) — agents in the bound workspace can read it and \
-                         save drafts. {}{calendar_note}",
-                        meta.features,
-                        external::oauth_send_hint(plan.provider)
-                    )),
+                    Some(if features.mail {
+                        format!(
+                            "connected {address} ({}) — agents in the bound workspace can read it \
+                             and save drafts. {}{calendar_note}",
+                            meta.features,
+                            external::oauth_send_hint(plan.provider)
+                        )
+                    } else {
+                        format!(
+                            "connected {address} (calendar) — agents in the bound workspace can \
+                             use its calendar with 'k2 calendar' (drafts only: no attendees, \
+                             nobody is emailed). Mail was not linked; add it later with 'k2 mail \
+                             link upgrade {address} --features mail'."
+                        )
+                    }),
                 ),
                 Err(e) => set_terminal(link_id, LinkStatus::Error, Some(ext_error_hint(e))),
             }
@@ -768,14 +792,6 @@ pub fn handle_link_oauth_start(body: &[u8]) -> CliResponse {
         return start_upgrade(&b, requested);
     }
     let features = requested.unwrap_or(Features::MAIL);
-    if !features.mail {
-        return error_response(
-            "400 Bad Request",
-            "usage",
-            "a new link needs the mail feature — use --features mail or mail,calendar \
-             (calendar-only links arrive with Google calendars)",
-        );
-    }
     if b.address.trim().is_empty() {
         return error_response(
             "400 Bad Request",
@@ -810,6 +826,17 @@ pub fn handle_link_oauth_start(body: &[u8]) -> CliResponse {
             )
         }
     };
+    // MCS4 (PRD §3.2, Q3): a Google link may be calendar-only — no
+    // restricted Gmail scope, so no CASA; Google sends invites itself. A
+    // Microsoft link always carries mail (one Graph grant covers both).
+    if !features.mail && provider != OauthProvider::Gmail {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "a Microsoft link needs the mail feature — use --features mail or mail,calendar \
+             (calendar-only links are for Google accounts)",
+        );
+    }
     let (_path, project_id) = match resolve_caller(&b.workspace) {
         Ok(v) => v,
         Err(resp) => return resp,
@@ -1985,7 +2012,54 @@ mod tests {
         let r = handle_link_oauth_start(cal_only.to_string().as_bytes());
         assert_eq!(r.status, "400 Bad Request", "{}", r.body);
         assert!(r.body.contains("mail feature"), "{}", r.body);
+        assert!(r.body.contains("calendar-only links are for Google"), "{}", r.body);
         cleanup(&pid);
+    }
+
+    /// MCS4: a calendar-only Google link stores a row consented for
+    /// `calendar` (no restricted Gmail scope asked or needed); one whose
+    /// calendar scope was unticked stores nothing.
+    #[test]
+    fn calendar_only_google_link_stores_a_calendar_row_or_nothing() {
+        let project = insert_project();
+        let cal_only = Features { mail: false, calendar: true };
+        let scopes = oauth::scope_for(OauthProvider::Gmail, cal_only);
+        assert!(!scopes.contains("mail.google.com"), "{scopes}");
+        for (tag, granted, stored) in [
+            ("ok", scopes.clone(), true),
+            ("unticked", "openid https://www.googleapis.com/auth/userinfo.email".to_string(), false),
+        ] {
+            let address = format!("cal-{tag}-{}@gmail.com", &project[..8]);
+            let link_id = uuid::Uuid::new_v4().to_string();
+            insert_pending(&link_id, &address);
+            let tokens = Tokens {
+                access_token: "GAT-secret".into(),
+                refresh_token: Some("GRT-secret".into()),
+                scope: Some(granted),
+                token_type: "Bearer".into(),
+                expires_in: 3600,
+                id_token: Some(fake_id_token(serde_json::json!({ "email": address, "email_verified": true }))),
+            };
+            let http = MockHttp::new(&[]);
+            let store = MemStore::default();
+            let plan = plan_new(OauthProvider::Gmail, &project, &address, cal_only);
+            complete_with_tokens(&store, &http, &plan, &link_id, &tokens, 3_000);
+            let params: HashMap<String, String> = HashMap::from([("linkId".to_string(), link_id)]);
+            let st = body_json(&handle_link_oauth_status(&params));
+            if stored {
+                assert_eq!(st["state"], "connected", "{st}");
+                assert!(st["hint"].as_str().unwrap().contains("k2 calendar"), "{st}");
+                let row = external::inbox_for_address(&address).expect("row");
+                let meta = external::read_oauth_meta(&row.id).expect("meta");
+                assert_eq!(meta.features, "calendar");
+                assert!(meta.granted_scopes.unwrap().contains("calendar.events"));
+            } else {
+                assert_eq!(st["state"], "error", "{st}");
+                assert_eq!(st["code"], "scope_not_granted", "{st}");
+                assert!(row_oauth(&address).is_none(), "nothing stored");
+            }
+        }
+        cleanup(&project);
     }
 
     #[test]

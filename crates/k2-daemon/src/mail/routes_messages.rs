@@ -215,6 +215,7 @@ fn backend_for(address: &str) -> Result<Box<dyn ReadBackend>, CliResponse> {
                     &format!("no address '{address}' in this workspace"),
                 ));
             };
+            crate::mail::capabilities::mail_scope_gate(&row, "mail.read")?;
             let secrets = crate::mail::secrets::FileSecretStore::default();
             let password = resolve_linked_password(&secrets, &row, address)?;
             Ok(Box::new(external::ExternalImapBackend::new(
@@ -234,6 +235,7 @@ fn backend_for(address: &str) -> Result<Box<dyn ReadBackend>, CliResponse> {
                     &format!("no address '{address}' in this workspace"),
                 ));
             };
+            crate::mail::capabilities::mail_scope_gate(&row, "mail.read")?;
             let http = std::sync::Arc::new(graph::RealGraphHttp::new(row.id.clone()));
             Ok(Box::new(graph::GraphBackend::new(row, http)))
         }
@@ -279,9 +281,12 @@ fn watch_list(
         .into_iter()
         .map(|(address, account_id)| WatchAddress { address, account_id })
         .collect();
+    // MCS4: a linked inbox consented for its calendar only has no mail to
+    // sweep (an explicit address still answers capability_missing).
     watch.extend(
         crate::mail::access::readable_linked(project_id)
             .into_iter()
+            .filter(|(_, inbox_id)| crate::mail::capabilities::linked_row_has_mail(inbox_id))
             .map(|(address, inbox_id)| WatchAddress { address, account_id: inbox_id }),
     );
     Ok(watch)
@@ -948,6 +953,7 @@ fn manage_backend_for(address: &str) -> Result<Box<dyn ManageBackend>, CliRespon
                     &format!("no address '{address}' in this workspace"),
                 ));
             };
+            crate::mail::capabilities::mail_scope_gate(&row, "mail.read")?;
             let secrets = crate::mail::secrets::FileSecretStore::default();
             let password = resolve_linked_password(&secrets, &row, address)?;
             Ok(Box::new(external::ExternalImapBackend::new(
@@ -967,6 +973,7 @@ fn manage_backend_for(address: &str) -> Result<Box<dyn ManageBackend>, CliRespon
                     &format!("no address '{address}' in this workspace"),
                 ));
             };
+            crate::mail::capabilities::mail_scope_gate(&row, "mail.read")?;
             let http = std::sync::Arc::new(graph::RealGraphHttp::new(row.id.clone()));
             Ok(Box::new(graph::GraphBackend::new(row, http)))
         }

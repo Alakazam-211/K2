@@ -207,13 +207,9 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
                 "the owner turned calendars on linked inboxes off — 'k2 mail link calendars on' \
                  (owner)",
             ),
-            // MCS3: Microsoft 365 calendars run over Graph.
-            Backend::Microsoft => Verdict::on(),
-            Backend::Google => Verdict::off(
-                "not_built",
-                "Google calendars are not available in this K2 version (the consent is \
-                 already in place)",
-            ),
+            // MCS3: Microsoft 365 calendars run over Graph; MCS4: Google
+            // calendars over the Google Calendar API.
+            Backend::Microsoft | Backend::Google => Verdict::on(),
         };
         v.needs(level, want, address)
     };
@@ -234,11 +230,12 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
         v.needs(level, want, address)
     };
     let cal_read = cal_base(Level::Read);
-    // Free/busy reach: the box's own mailboxes for hosted; the mailbox
-    // itself for Microsoft (multi-attendee `tenant` reach is MCS9).
+    // Free/busy reach: the box's own mailboxes for hosted; the account
+    // itself for Microsoft and Google (multi-attendee `tenant` / `domain`
+    // reach is MCS9).
     let freebusy = match (cal_read.on, backend) {
         (true, Backend::Hosted) => "box",
-        (true, Backend::Microsoft) => "self",
+        (true, Backend::Microsoft | Backend::Google) => "self",
         _ => "none",
     };
     let calendar = [
@@ -288,6 +285,43 @@ pub fn capabilities(input: &CapInput) -> serde_json::Value {
         });
     }
     out
+}
+
+/// MCS4: does a LINKED row's grant cover mail? A calendar-only Google link
+/// doesn't. Password IMAP rows and rows without mirrored scopes (linked
+/// before 0188, always for mail) do.
+pub fn linked_row_has_mail(row_id: &str) -> bool {
+    let Ok(f) = crate::mail::external::read_oauth_fields(row_id) else { return true };
+    if f.auth_kind != crate::mail::external::AUTH_OAUTH {
+        return true;
+    }
+    let Some(p) = f.provider.as_deref().and_then(OauthProvider::from_str) else { return true };
+    match crate::mail::external::read_oauth_meta(row_id).and_then(|m| m.granted_scopes) {
+        Some(g) => oauth::features_granted(p, &g).mail,
+        None => true,
+    }
+}
+
+/// MCS4: a mail verb on a linked row consented for its calendar only →
+/// 409 `capability_missing` `{cap, reason: scope_not_granted, fix}`.
+/// Callers run it only after the access gate passed (CAL19 masking).
+pub fn mail_scope_gate(
+    row: &k2_core::db::schema::MailExternalInbox,
+    cap: &str,
+) -> Result<(), crate::cli_response::CliResponse> {
+    if linked_row_has_mail(&row.id) {
+        return Ok(());
+    }
+    let fix = upgrade_fix(&row.email_address, "mail");
+    Err(crate::mail::calendar_provider::capability_missing(
+        cap,
+        "scope_not_granted",
+        &fix,
+        &format!(
+            "'{}' was linked for its calendar only — the owner adds mail with '{fix}'",
+            row.email_address
+        ),
+    ))
 }
 
 #[cfg(test)]
@@ -447,7 +481,9 @@ mod tests {
     }
 
     #[test]
-    fn google_calendar_grant_is_recorded_but_not_built_yet() {
+    /// MCS4: a Google link with the calendar grant reads and writes its
+    /// calendar (free/busy `self`); invites stay `not_built`.
+    fn google_calendar_grant_turns_calendar_read_and_write_on() {
         let scopes = oauth::scope_for(
             OauthProvider::Gmail,
             oauth::Features {
@@ -456,6 +492,48 @@ mod tests {
             },
         );
         let m = meta(Some(&scopes));
+        let input = |level, linked_calendars_on| CapInput {
+            source: Source::Linked,
+            address: "you@gmail.com",
+            kind: Some("imap"),
+            auth_kind: Some("oauth"),
+            provider: Some("gmail"),
+            meta: Some(&m),
+            level,
+            hosted_calendars_on: true,
+            linked_calendars_on,
+        };
+        let v = capabilities(&input(Level::Send, true));
+        assert_eq!(v["source"], "google");
+        assert_eq!(v["mail"]["send"], true);
+        assert_eq!(v["calendar"]["read"], true);
+        assert_eq!(v["calendar"]["write"], true);
+        assert_eq!(v["calendar"]["freebusy"], "self");
+        assert!(missing_for(&v, "calendar.read").is_none(), "{v}");
+        assert_eq!(missing_for(&v, "calendar.invite").unwrap()["reason"], "not_built");
+        // Read level reads but doesn't write.
+        let v = capabilities(&input(Level::Read, true));
+        assert_eq!(v["calendar"]["read"], true);
+        assert_eq!(missing_for(&v, "calendar.write").unwrap()["reason"], "level");
+        // The owner's switch.
+        let v = capabilities(&input(Level::Send, false));
+        assert_eq!(missing_for(&v, "calendar.read").unwrap()["reason"], "owner_disabled");
+        assert_eq!(v["calendar"]["freebusy"], "none");
+    }
+
+    #[test]
+    /// MCS4: a calendar-only Google link (no restricted Gmail scope) has
+    /// its calendar and no mail; mail names the upgrade.
+    fn calendar_only_google_link_has_calendar_and_no_mail() {
+        let scopes = oauth::scope_for(
+            OauthProvider::Gmail,
+            oauth::Features {
+                mail: false,
+                calendar: true,
+            },
+        );
+        let mut m = meta(Some(&scopes));
+        m.features = "calendar".to_string();
         let v = capabilities(&CapInput {
             source: Source::Linked,
             address: "you@gmail.com",
@@ -463,15 +541,18 @@ mod tests {
             auth_kind: Some("oauth"),
             provider: Some("gmail"),
             meta: Some(&m),
-            level: Level::Send,
+            level: Level::Draft,
             hosted_calendars_on: true,
             linked_calendars_on: true,
         });
-        assert_eq!(v["source"], "google");
-        assert_eq!(v["mail"]["send"], true);
-        assert_eq!(
-            missing_for(&v, "calendar.read").unwrap()["reason"],
-            "not_built"
-        );
+        assert_eq!(v["calendar"]["read"], true);
+        assert_eq!(v["calendar"]["write"], true);
+        for cap in ["read", "draft", "compose", "send"] {
+            assert_eq!(v["mail"][cap], false, "mail.{cap}: {v}");
+            let miss = missing_for(&v, &format!("mail.{cap}")).expect("missing");
+            assert_eq!(miss["reason"], "scope_not_granted");
+            assert_eq!(miss["fix"], "k2 mail link upgrade you@gmail.com --features mail (owner)");
+        }
+        assert_eq!(v["account"]["features"], "calendar");
     }
 }

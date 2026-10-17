@@ -5,10 +5,13 @@
 //!      session → 200; an app/skin guest pass (`k2skn_`) → 403.
 //!   2. Method: POST → 405 (read-only route).
 //!   3. Shape: `{ online, workspaces: [{ workspaceId, handle, name, path,
-//!      count, people: [{ user, name, role }] }] }`, folded from the live
+//!      count, people: [{ user, name, role, color, firstName, lastName,
+//!      displayName }] }] }` (the person fields are 0.46.0 profiles: the
+//!      same values the roster carries, to the same callers), folded from the live
 //!      `/cli/sessions/events` registry — a nested `?path=` counts on its
 //!      registered workspace, a person counts once.
-//!   4. `/boot-status` stays public and never carries who is online.
+//!   4. `/boot-status` stays public and never carries who is online,
+//!      nor anyone's names or colour.
 //!
 //! ISOLATION: presence registry, connect-user stores, the shared DB, and
 //! `$HOME` are process-wide. One test in this binary; `$HOME` points at a
@@ -254,6 +257,11 @@ async fn presence_summary_auth_shape_and_boot_status_stays_public() {
             "a refused guest must not see workspace names: {}",
             r.body
         );
+        assert_eq!(
+            json(&r.body),
+            serde_json::json!({ "error": "invalid or missing token" }),
+            "a refused guest gets only the error, no people or profile fields"
+        );
 
         // ── Method gate ─────────────────────────────────────────────
         let r = http(
@@ -286,11 +294,30 @@ async fn presence_summary_auth_shape_and_boot_status_stays_public() {
             assert_eq!(w["name"], format!("Agent {handle}"), "{w}");
             assert_eq!(w["path"], ws_path.as_str(), "{w}");
             assert_eq!(w["count"], 2, "{w}");
+            // 0.46.0 profiles: nobody has chosen a name or colour here, so
+            // the owner (no linked account) reads `Owner` and the member
+            // their username; colours are the username hash; names null.
             assert_eq!(
                 w["people"],
                 serde_json::json!([
-                    { "user": "owner", "name": "owner", "role": "owner" },
-                    { "user": "sum_member", "name": "sum_member", "role": "member" },
+                    {
+                        "user": "owner",
+                        "name": "Owner",
+                        "role": "owner",
+                        "color": k2_core::person_color::hash_color("owner"),
+                        "firstName": null,
+                        "lastName": null,
+                        "displayName": "Owner",
+                    },
+                    {
+                        "user": "sum_member",
+                        "name": "sum_member",
+                        "role": "member",
+                        "color": k2_core::person_color::hash_color("sum_member"),
+                        "firstName": null,
+                        "lastName": null,
+                        "displayName": "sum_member",
+                    },
                 ]),
                 "{w}"
             );
@@ -310,6 +337,13 @@ async fn presence_summary_auth_shape_and_boot_status_stays_public() {
                 "boot-status must not carry who is online: {}",
                 b.body
             );
+            for field in ["displayName", "firstName", "lastName", "\"names\"", "\"colors\"", "\"color\""] {
+                assert!(
+                    !b.body.contains(field),
+                    "boot-status must not carry profile field {field}: {}",
+                    b.body
+                );
+            }
 
             drop(ws_member);
             drop(ws_owner);

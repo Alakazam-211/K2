@@ -29,6 +29,7 @@ import {
   COUNTER_GROUP_GAP_PX,
   COUNTER_ICON_GAP_PX,
   COUNTER_ICON_PX,
+  COUNTER_SPINNER_COLS,
   COUNTER_SPINNER_EM,
   COUNTER_SPINNER_GAP_PX,
   COUNTER_SPINNER_SVG_EM,
@@ -199,15 +200,17 @@ const ICON: Record<StripCounterKey | 'check', (size: number) => React.JSX.Elemen
 }
 
 /** Running subagents: the app's working glyph (plan-agent-status-unify-v1:
- *  the 3×3 cell spinner replaces the braille everywhere), in the theme's
- *  working colour. It stills itself for reduced motion.
+ *  the cell spinner replaces the braille everywhere), as the narrow 2×3
+ *  grid (a tight spot), in the theme's working colour. It stills itself for
+ *  reduced motion.
  *
  *  Sized in em of the count beside it, so it follows the text size: the
  *  grid's ink is a touch taller than the digits (COUNTER_SPINNER_INK_EM),
- *  like the braille was. The layout box keeps the braille's 0.8em × 1em (the
- *  counter width estimates use it) plus a 1px gap before the count; the
- *  svg's empty margin overflows it, centred. The box sits 0.14em below the
- *  baseline so the ink is centred on the digits. */
+ *  like the braille was. The layout box is the ink's width
+ *  (COUNTER_SPINNER_EM; the counter width estimate uses it) × 1em, plus a
+ *  1px gap before the count; the svg's empty margin overflows it, centred.
+ *  The box sits 0.14em below the baseline so the ink is centred on the
+ *  digits. */
 function WorkingMark(): React.JSX.Element {
   const svg = `${COUNTER_SPINNER_SVG_EM}em`
   return (
@@ -226,7 +229,7 @@ function WorkingMark(): React.JSX.Element {
       <span
         style={{ position: 'absolute', left: '50%', top: '50%', display: 'flex', transform: 'translate(-50%, -50%)' }}
       >
-        <WorkingGrid size={svg} />
+        <WorkingGrid size={svg} cols={COUNTER_SPINNER_COLS} />
       </span>
     </span>
   )

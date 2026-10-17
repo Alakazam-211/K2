@@ -291,17 +291,20 @@ export const COUNTER_ICON_GAP_PX = 2
 export const COUNTER_CHECK_PX = 11
 /** Space between the subagents' running and done groups. */
 export const COUNTER_GROUP_GAP_PX = 7
-/** The working grid's layout box (the 3×3 cell spinner), in em of the
- *  counter text: its width in the counter row. */
-export const COUNTER_SPINNER_EM = 0.8
 /** The working grid's ink height, in em of the counter text: about 1px
  *  over the digits' height (≈ 0.72em) at the 12px default (Rosson's tune:
  *  0.72em read ~1px short), as tall as the braille it replaced. */
 export const COUNTER_SPINNER_INK_EM = 0.8
+/** The counter row uses the narrow 2×3 grid (Rosson: narrow spots get
+ *  2×3): its ink is 9 units wide by 14 tall. */
+export const COUNTER_SPINNER_COLS = 2
+/** The working grid's layout box width, in em of the counter text: its ink
+ *  width (9/14 of its height), rounded up. The width estimate uses it. */
+export const COUNTER_SPINNER_EM = Math.ceil(((COUNTER_SPINNER_INK_EM * 9) / 14) * 100) / 100
 /** Space (px) between the working grid and the running count after it. */
 export const COUNTER_SPINNER_GAP_PX = 1
-/** The grid's ink is 14 of its 24-unit box (StatusGlyphs), so the svg is
- *  drawn this many em square to make the ink COUNTER_SPINNER_INK_EM tall. */
+/** The grid's ink is 14 of its 24-unit height (StatusGlyphs), so the svg is
+ *  drawn this many em tall to make the ink COUNTER_SPINNER_INK_EM tall. */
 export const COUNTER_SPINNER_SVG_EM = Number(((COUNTER_SPINNER_INK_EM * 24) / 14).toFixed(3))
 
 /** A conservative width estimate (px) of drawer text at `fontPx`, digits

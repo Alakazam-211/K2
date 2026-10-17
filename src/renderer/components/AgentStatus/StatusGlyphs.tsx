@@ -43,34 +43,65 @@ const EDGE: ReadonlyArray<readonly [number, number]> = [
   [0, 2],
   [0, 1],
 ]
+/** The narrow 2×3 grid's cells (all edge), clockwise from the top-left. */
+const EDGE_NARROW: ReadonlyArray<readonly [number, number]> = [
+  [0, 0],
+  [1, 0],
+  [1, 1],
+  [1, 2],
+  [0, 2],
+  [0, 1],
+]
+
+/** The narrow grid's viewBox width: 2 cells + gap (9 units) with the same
+ *  5-unit side margins as the 24-unit square. */
+export const WORKING_NARROW_VIEW_W = 19
+
+/** `size` scaled by `k`: px, or a simple CSS length (`1.2em`, `14px`). */
+function scaleLength(size: number | string, k: number): number | string {
+  if (typeof size === 'number') return Number((size * k).toFixed(3))
+  const m = /^(\d*\.?\d+)([a-z%]+)$/.exec(size.trim())
+  if (!m) throw new Error(`WorkingGrid: cannot scale size ${size}`)
+  return `${Number((Number(m[1]) * k).toFixed(3))}${m[2]}`
+}
 
 /** Working: a 3×3 grid of 4-unit cells with 1-unit gaps in the needs-you
  *  square's box. A lit head runs clockwise round the 8 edge cells (0.8s a
  *  lap, a 2-cell fading tail); the centre stays dim. Reduced motion: still,
  *  with the top row and right column lit (a part-filled square). `size` is
- *  px, or a CSS length (e.g. `1.2em`) to follow the surrounding text. */
-export function WorkingGrid({ size = STATUS_SLOT_PX }: { size?: number | string }): React.JSX.Element {
+ *  px, or a CSS length (e.g. `1.2em`) to follow the surrounding text.
+ *
+ *  `cols={2}`: the narrow loader for tight spots, 2 columns × 3 rows. The
+ *  head runs clockwise round its 6 cells at the same 0.1s a cell (0.6s a
+ *  lap, the same tail); reduced motion lights the top row and right column.
+ *  `size` is its height; its width is 19/24 of that. */
+export function WorkingGrid({ size = STATUS_SLOT_PX, cols = 3 }: { size?: number | string; cols?: 2 | 3 }): React.JSX.Element {
   const still = useReducedMotion()
+  const narrow = cols === 2
+  const edge = narrow ? EDGE_NARROW : EDGE
+  const lap = edge.length * 0.1
+  const lit = narrow ? 4 : 5
   return (
     <svg
-      className={`agent-working${still ? ' is-still' : ''}`}
+      className={`agent-working${narrow ? ' is-narrow' : ''}${still ? ' is-still' : ''}`}
       data-agent-working={still ? 'still' : 'moving'}
-      width={size}
+      data-cols={cols}
+      width={narrow ? scaleLength(size, WORKING_NARROW_VIEW_W / 24) : size}
       height={size}
-      viewBox="0 0 24 24"
+      viewBox={narrow ? `0 0 ${WORKING_NARROW_VIEW_W} 24` : '0 0 24 24'}
       aria-hidden
       shapeRendering="crispEdges"
     >
-      <rect x="10" y="10" width="4" height="4" />
-      {EDGE.map(([cx, cy], i) => (
+      {narrow ? null : <rect x="10" y="10" width="4" height="4" />}
+      {edge.map(([cx, cy], i) => (
         <rect
           key={i}
-          className={i < 5 ? 'e p' : 'e'}
+          className={i < lit ? 'e p' : 'e'}
           x={5 + cx * 5}
           y={5 + cy * 5}
           width="4"
           height="4"
-          style={{ animationDelay: `${(i * 0.1 - 0.8).toFixed(1)}s` }}
+          style={{ animationDelay: `${(i * 0.1 - lap).toFixed(1)}s` }}
         />
       ))}
     </svg>

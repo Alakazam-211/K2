@@ -23292,7 +23292,7 @@ ARGUMENTS
 OPTIONS
   --from <name>  Sender identity rendered as [from <name>] prefix in
                  the recipient's session. Defaults to the sender's
-                 workspace name (auto-derived from K2SO_PROJECT_PATH
+                 workspace name (auto-derived from K2_PROJECT_PATH
                  or CWD). Falls back to `external` if neither resolves.
   --command "<text>"
                  Prepend <text> at the VERY FRONT of the delivered
@@ -25348,7 +25348,7 @@ cmd_schema() {
     {
       "name": "domain list",
       "usage": "k2 domain list [--json]",
-      "description": "List custom domains attached to this server. Not k2 hostmail domain. Locked dns tool.",
+      "description": "List custom domains attached to this server. Agents need dns_manage. Not k2 hostmail domain. Locked dns tool.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON inventory."}]
     },
@@ -27430,10 +27430,11 @@ classic footgun. `k2 msg` talks to connected workspace AGENTS only.
    Unconnected live/tray/read → exit 3 `not_connected`.
 
 2. CONNECT USERS
-   `k2 users` / `k2 users list`
+   `k2 connections list --users` (agents) · `k2 users list` (owner/admin)
    Local daemon accounts (owner / admin / member) who log into
    this server. Humans. Not agents. Never `k2 msg` those names.
-   Mutations are owner-tier.
+   `k2 users` is people only (an agent passport exits 3); mutations
+   are owner-tier.
 
 3. APP GUESTS
    `k2 app user list` (leftover: `k2 skin user list`)
@@ -48493,8 +48494,9 @@ k2 domain — attach custom domains to THIS server
 
 This is box inventory: apex + hostnames this machine may terminate.
 It is NOT `k2 hostmail domain` (mail MX recipe) and NOT a nameserver
-cutover. Apex add/remove is owner (exit 3). Hostname add/remove is
-dns_manage (same grant as k2 dns / k2 cert).
+cutover. Apex add/remove is owner (exit 3). Hostname add/remove and
+list are dns_manage (same grant as k2 dns / k2 cert); without it an
+agent's `k2 domain list` exits 3.
 
 USAGE
   k2 domain list [--json]
@@ -48522,7 +48524,7 @@ cmd_help_domain_list() {
     cat <<'EOF'
 List custom domains attached to this server. A pending row prints
 "Pending: point nameservers to …" and whether k2.dev auto-added the
-zone to your account.
+zone to your account. Agents need dns_manage (exit 3 without it).
 
 USAGE
   k2 domain list [--json]

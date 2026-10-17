@@ -10,6 +10,9 @@ import { homeRowOpenableNow } from '@/components/Home/home-room'
 import { homeSwitchDigit } from '@/lib/home-shortcuts'
 import { zenSelectRow, zenShownNow } from '@/lib/zen/zen-view'
 import { switchZenGardenByIndex } from '@/lib/zen/zen-gardens'
+import { pageShortcutForEvent, runPageShortcut } from '@/lib/page-shortcuts'
+import { useSettingsStore } from '@/stores/settings'
+import { isMacPlatform } from '@/lib/desktop-chrome'
 
 /**
  * Cmd+1–9 / Cmd+0 and Cmd+Option+1–9 — pick a workspace (or a Home row) by
@@ -31,10 +34,21 @@ import { switchZenGardenByIndex } from '@/lib/zen/zen-gardens'
  *   the window shows Zen, Cmd+Option+1–9 switches to Garden N and never
  *   reaches the Home switch or the Agents workspace switch; Cmd+1–9 / Cmd+0
  *   open row N of the Garden's first Agents widget (nothing without one).
+ * - Page switch (0.46.0, `lib/page-shortcuts.ts`): checked before all of
+ *   the above. ⌃⌘1–4 (Ctrl+Alt+1–4 off macOS; rebindable) show My Home,
+ *   Agents, Projects, Tickets, or in Zen that rail view. The ⌘ row chords
+ *   below ignore any keydown with Control held.
  */
 export function useWorkspaceIndexShortcuts(): void {
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
+      const pageShortcut = pageShortcutForEvent(e, useSettingsStore.getState().keybindings, isMacPlatform())
+      if (pageShortcut) {
+        e.preventDefault()
+        if (!e.repeat) runPageShortcut(pageShortcut)
+        return
+      }
+
       const homeN = homeSwitchDigit(e)
       if (homeN !== null && zenShownNow()) {
         e.preventDefault()
@@ -71,7 +85,7 @@ export function useWorkspaceIndexShortcuts(): void {
         return
       }
 
-      if (!e.metaKey || e.shiftKey || e.altKey) return
+      if (!e.metaKey || e.shiftKey || e.altKey || e.ctrlKey) return
       const num = parseInt(e.key, 10)
       if (isNaN(num) || e.key.length !== 1) return
       e.preventDefault()

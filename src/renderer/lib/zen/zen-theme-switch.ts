@@ -150,8 +150,10 @@ export interface ZenShortcutGroup {
   rows: ZenShortcutRow[]
 }
 
-/** Every Zen shortcut, for the cheat sheet (Omarchy 4). */
-export function zenShortcutGroups(os: DesktopOs): ZenShortcutGroup[] {
+/** Every Zen shortcut, for the cheat sheet (Omarchy 4). `pageKeys`: the
+ *  page chords as painted (`pageShortcutsSummary`, lib/page-shortcuts.ts;
+ *  the defaults when omitted). */
+export function zenShortcutGroups(os: DesktopOs, pageKeys?: string): ZenShortcutGroup[] {
   const mac = os === 'mac'
   // The window's own chords are `metaKey` on every platform and paint as ⌘
   // glyphs everywhere (lib/home-shortcuts.ts); only the Zen chords differ.
@@ -175,6 +177,8 @@ export function zenShortcutGroups(os: DesktopOs): ZenShortcutGroup[] {
       rows: [
         { keys: `${cmd}1–9`, what: 'Open conversation 1–9' },
         { keys: `${alt}1–9`, what: 'Switch to Garden 1–9' },
+        // 0.46.0: the page chords switch the nav rail's view (a Garden with a rail).
+        { keys: pageKeys ?? `${chord}1–4`, what: 'My Home / Agents / Projects / Tickets view' },
         { keys: `${cmd}↑ / ${cmd}↓`, what: 'Previous / next conversation' },
       ],
     },

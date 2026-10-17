@@ -21,7 +21,7 @@
 
 import { create } from 'zustand'
 import { useSettingsStore } from '@/stores/settings'
-import { useZenWindowStore } from './zen-window'
+import { useZenWindowStore, type ZenRailView } from './zen-window'
 import { zenAvailable } from './zen-platform'
 import type { ZenControlKind } from './zen-page'
 
@@ -177,4 +177,24 @@ export function registerZenRowSelect(fn: (index: number) => void): () => void {
 /** ⌘1–9 / ⌘0 while Zen is shown (`index` is 0-based). */
 export function zenSelectRow(index: number): void {
   zenRowSelect?.(index)
+}
+
+// Page chords (0.46.0, `lib/page-shortcuts.ts`): while Zen is shown, ⌃⌘1–4
+// (Ctrl+Alt+1–4) switch the nav rail's view (My Home, Agents, Projects,
+// Tickets), the same as clicking the rail. The mounted Zen page registers
+// the switcher; it does nothing on a Garden without a rail and never
+// touches the page under Zen.
+let zenViewSwitch: ((view: ZenRailView) => void) | null = null
+
+/** Plug-in point: what a page chord does in Zen. Returns the unregister. */
+export function registerZenViewSwitch(fn: (view: ZenRailView) => void): () => void {
+  zenViewSwitch = fn
+  return () => {
+    if (zenViewSwitch === fn) zenViewSwitch = null
+  }
+}
+
+/** A page chord while Zen is shown. */
+export function zenSwitchView(view: ZenRailView): void {
+  zenViewSwitch?.(view)
 }

@@ -4,6 +4,9 @@ export interface HotkeyDefinition {
   id: string
   label: string
   defaultKey: string
+  /** Default off macOS when it differs from `defaultKey` (a Control+Command
+   *  chord on macOS is Ctrl+Alt on Linux and Windows). */
+  defaultKeyOther?: string
   category: 'Terminal' | 'Tabs' | 'Navigation' | 'App'
 }
 
@@ -66,6 +69,14 @@ export const HOTKEYS: HotkeyDefinition[] = [
     defaultKey: 'Meta+Shift+.',
     category: 'Navigation'
   },
+  // Page switch (0.46.0, Rosson 2026-10-16): the top bar's page tabs in
+  // order. ⌃⌘1–4 on macOS, Ctrl+Alt+1–4 on Linux / Windows. Handled by
+  // `useWorkspaceIndexShortcuts` (lib/page-shortcuts.ts); no native menu
+  // accelerator, so a rebind here is the only owner of the chord.
+  { id: 'goToHome', label: 'Go to My Home', defaultKey: 'Ctrl+Meta+1', defaultKeyOther: 'Ctrl+Alt+1', category: 'Navigation' },
+  { id: 'goToAgents', label: 'Go to Agents', defaultKey: 'Ctrl+Meta+2', defaultKeyOther: 'Ctrl+Alt+2', category: 'Navigation' },
+  { id: 'goToProjects', label: 'Go to Projects', defaultKey: 'Ctrl+Meta+3', defaultKeyOther: 'Ctrl+Alt+3', category: 'Navigation' },
+  { id: 'goToTickets', label: 'Go to Tickets', defaultKey: 'Ctrl+Meta+4', defaultKeyOther: 'Ctrl+Alt+4', category: 'Navigation' },
 
   // ── App ──────────────────────────────────────────────────────────────
   { id: 'openSettings', label: 'Open Settings', defaultKey: 'Meta+,', category: 'App' },
@@ -78,13 +89,21 @@ export const HOTKEYS: HotkeyDefinition[] = [
   { id: 'openProjects', label: 'Open Projects', defaultKey: 'Meta+P', category: 'App' }
 ]
 
-/** Build a map of id -> defaultKey for quick lookup */
-export function getDefaultKeybindings(): Record<string, string> {
+/** Build a map of id -> default combo for quick lookup. `isMac` false
+ *  picks `defaultKeyOther` where a hotkey has one. */
+export function getDefaultKeybindings(isMac = true): Record<string, string> {
   const map: Record<string, string> = {}
   for (const h of HOTKEYS) {
-    map[h.id] = h.defaultKey
+    map[h.id] = !isMac && h.defaultKeyOther ? h.defaultKeyOther : h.defaultKey
   }
   return map
+}
+
+/** The combo in force for `id`: the user's override, else the platform's
+ *  default ('' for an unknown id). */
+export function effectiveKeybinding(keybindings: Record<string, string>, id: string, isMac: boolean): string {
+  if (keybindings[id]) return keybindings[id]
+  return getDefaultKeybindings(isMac)[id] ?? ''
 }
 
 /**

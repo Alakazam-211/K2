@@ -1065,10 +1065,63 @@ fn grants_for(conn: &rusqlite::Connection, source: Source, inbox_id: &str) -> Ve
 /// The unified inbox catalog. `viewer` = `Some(project_id)` for the
 /// agent view (only inboxes that workspace can access, with `yourLevel`);
 /// `None` for the owner/admin view (ALL inboxes, full primary + grants).
+/// A workspace's agent-send mode read on an already-held connection
+/// (same fail-closed rule as
+/// `k2_core::workspace::settings::mail_agent_send_for_path`, which takes
+/// the DB lock itself): override when valid, else the default, else off.
+fn workspace_agent_send_conn(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    default_mode: &str,
+) -> String {
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT mail_agent_send FROM projects WHERE id = ?1",
+            rusqlite::params![project_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten();
+    let eff = stored.unwrap_or_else(|| default_mode.to_string());
+    if k2_core::workspace::settings::MAIL_AGENT_SEND_MODES.contains(&eff.as_str()) {
+        eff
+    } else {
+        "off".to_string()
+    }
+}
+
+/// What a workspace's inbox level really allows for SENDING, given the
+/// workspace's agent-send gate:
+/// - `no_send_level` — the level is read or draft;
+/// - `on` — level send and the gate is on: sends go out;
+/// - `approval` — level send, gate approval, hosted inbox: sends queue;
+/// - `blocked_off` — level send but the gate is off: every send is gated;
+/// - `blocked_approval` — level send, gate approval, LINKED inbox: linked
+///   has no approval queue, so sends are gated until the gate is on.
+pub fn send_state(level: &str, mode: &str, source: Source) -> &'static str {
+    if level != "send" {
+        return "no_send_level";
+    }
+    match (mode, source) {
+        ("on", _) => "on",
+        ("approval", Source::Hosted) => "approval",
+        ("approval", Source::Linked) => "blocked_approval",
+        _ => "blocked_off",
+    }
+}
+
 pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
+    // The global agent-send default, read BEFORE the DB lock (a file read).
+    let default_mode = k2_core::app_settings::load().mail_agent_send;
     let db = k2_core::db::shared();
     let conn = db.lock();
     let rows = load_catalog_rows(&conn);
+    // A level of `send` only works when the workspace's agent-send gate
+    // lets it (Appa/Baden, macOS 0.45.4: Settings showed "Send" while
+    // every send was gated). Every workspace entry carries the gate mode
+    // (`agentSend`) and the EFFECTIVE result (`sendState`) so Settings and
+    // `k2 mail inboxes` show one truth.
+    let gate = |project_id: &str| workspace_agent_send_conn(&conn, project_id, &default_mode);
     let mut out: Vec<serde_json::Value> = Vec::new();
     for row in &rows {
         let grants = grants_for(&conn, row.source, &row.inbox_id);
@@ -1092,15 +1145,24 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
         let grants_json: Vec<serde_json::Value> = grants
             .iter()
             .map(|g| {
+                let mode = gate(&g.project_id);
                 serde_json::json!({
                     "projectId": g.project_id,
                     "workspace": workspace_name(&conn, &g.project_id),
                     "level": g.level,
                     "canManage": g.can_manage,
                     "canDelete": g.can_delete,
+                    "agentSend": mode,
+                    "sendState": send_state(&g.level, &mode, row.source),
                 })
             })
             .collect();
+        let primary_mode = gate(&row.owner_project_id);
+        let your_mode = viewer.map(|p| gate(p));
+        let your_state = match (your, your_mode.as_deref()) {
+            (Some(l), Some(m)) => Some(send_state(l.as_str(), m, row.source)),
+            _ => None,
+        };
         let mut entry = serde_json::json!({
             "address": row.address,
             "source": row.source.as_str(),
@@ -1112,9 +1174,13 @@ pub fn catalog_json(viewer: Option<&str>) -> serde_json::Value {
                 "level": primary_level.as_str(),
                 "canManage": row.primary_can_manage,
                 "canDelete": row.primary_can_delete,
+                "agentSend": primary_mode,
+                "sendState": send_state(primary_level.as_str(), &primary_mode, row.source),
             },
             "grants": grants_json,
             "yourLevel": your.map(|l| l.as_str()),
+            "yourAgentSend": your_mode,
+            "yourSendState": your_state,
             "maxLevel": row.source.max_level().as_str(),
         });
         // Source-specific fields.
@@ -1464,6 +1530,87 @@ mod tests {
 
         cleanup(&owner);
         cleanup(&grantee);
+    }
+
+    /// Appa/Baden (macOS 0.45.4): Settings showed level "Send" on a
+    /// linked inbox while every send was gated by the workspace's
+    /// agent-send gate. The catalog now carries the gate (`agentSend`)
+    /// and the EFFECTIVE result (`sendState`) for the primary, every
+    /// grant and the viewer, so no surface shows a permission that fails.
+    #[test]
+    fn catalog_send_state_reflects_the_workspace_gate() {
+        let owner = unique_project();
+        let appa = unique_project();
+        let linked = unique_addr("lgate");
+        let hosted = unique_addr("hgate");
+        seed_linked(&owner, &linked); // primary level 'draft'
+        seed_hosted(&owner, &hosted); // primary level 'send'
+        grant_access(&linked, &appa, "send").expect("grant linked send");
+        grant_access(&hosted, &appa, "send").expect("grant hosted send");
+        let set_gate = |project: &str, mode: &str| {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE projects SET mail_agent_send = ?2 WHERE id = ?1",
+                rusqlite::params![project, mode],
+            )
+            .expect("set gate");
+        };
+        let row = |view: &serde_json::Value, addr: &str| {
+            view["inboxes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|i| i["address"] == addr)
+                .cloned()
+                .expect("listed")
+        };
+        let grant = |r: &serde_json::Value, project: &str| {
+            r["grants"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|g| g["projectId"] == project)
+                .cloned()
+                .expect("grant listed")
+        };
+
+        // Gate off: level send is BLOCKED, in both views.
+        set_gate(&appa, "off");
+        set_gate(&owner, "on");
+        let all = catalog_json(None);
+        let g = grant(&row(&all, &linked), &appa);
+        assert_eq!(g["level"], "send");
+        assert_eq!(g["agentSend"], "off");
+        assert_eq!(g["sendState"], "blocked_off");
+        // The owner's linked primary is at 'draft': no send level at all.
+        assert_eq!(row(&all, &linked)["primary"]["sendState"], "no_send_level");
+        assert_eq!(row(&all, &hosted)["primary"]["sendState"], "on");
+        let mine = catalog_json(Some(&appa));
+        assert_eq!(row(&mine, &linked)["yourLevel"], "send");
+        assert_eq!(row(&mine, &linked)["yourAgentSend"], "off");
+        assert_eq!(row(&mine, &linked)["yourSendState"], "blocked_off");
+
+        // Approval: hosted queues; linked has no queue → still blocked.
+        set_gate(&appa, "approval");
+        let mine = catalog_json(Some(&appa));
+        assert_eq!(row(&mine, &hosted)["yourSendState"], "approval");
+        assert_eq!(row(&mine, &linked)["yourSendState"], "blocked_approval");
+
+        // On: send really works.
+        set_gate(&appa, "on");
+        let mine = catalog_json(Some(&appa));
+        assert_eq!(row(&mine, &linked)["yourSendState"], "on");
+        assert_eq!(grant(&row(&catalog_json(None), &linked), &appa)["sendState"], "on");
+
+        // A corrupt stored mode fails closed.
+        set_gate(&appa, "always");
+        let mine = catalog_json(Some(&appa));
+        assert_eq!(row(&mine, &linked)["yourAgentSend"], "off");
+        assert_eq!(row(&mine, &linked)["yourSendState"], "blocked_off");
+
+        cleanup(&owner);
+        cleanup(&appa);
     }
 
     #[test]

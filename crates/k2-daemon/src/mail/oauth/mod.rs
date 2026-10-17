@@ -1444,6 +1444,15 @@ pub fn graph_base() -> String {
     }
 }
 
+/// The Google Calendar API v3 base (MCS4 calendars on linked Google
+/// inboxes). A `provider-fakes` build may point it at the fakes.
+pub fn google_calendar_base() -> String {
+    match fake_base() {
+        Some(b) => format!("{b}/google/calendar/v3"),
+        None => "https://www.googleapis.com/calendar/v3".to_string(),
+    }
+}
+
 /// The Gmail profile endpoint (account check fallback; the
 /// `https://mail.google.com/` scope covers it, MCS-A10).
 pub fn gmail_profile_url() -> String {
@@ -1519,8 +1528,14 @@ impl Features {
 
 const GOOGLE_IDENTITY: &[&str] = &["openid", "email"];
 const GOOGLE_MAIL: &[&str] = &["https://mail.google.com/"];
-/// Sensitive (not restricted) Calendar API scopes. Re-checked against
-/// Google's scope list when Google calendars are built (MCS-A9).
+/// Sensitive (not restricted) Calendar API scopes, checked against
+/// Google's scope list for MCS4 (MCS-A9, 2026-10-17): `calendar.events`
+/// (events list/get/insert/patch/delete + `syncToken`),
+/// `calendar.calendarlist.readonly` (`calendarList.list`) and
+/// `calendar.freebusy` (`freeBusy.query`). Only `calendar.events` is
+/// required: a person who unticks the other two still gets a working
+/// calendar (list falls back to the primary calendar, free/busy to the
+/// event list).
 const GOOGLE_CALENDAR: &[&str] = &[
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/calendar.calendarlist.readonly",

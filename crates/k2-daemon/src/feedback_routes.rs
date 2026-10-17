@@ -167,9 +167,10 @@ pub fn handle_show_gated(params: &HashMap<String, String>, skin: Option<SkinPass
 /// `GET /cli/auth/whoami`, read by `useTicketMe`) share, so they cannot
 /// drift. Uses the person-key rules of [`k2_core::notify_prefs::People`]:
 /// - the owner token, or a Connect login that is the owner person (linked
-///   via "This is me (owner)" / `ownerAccounts`, or the sole Owner-role
-///   login) → the wire literal `owner`, the owner's display name (agents
-///   may assign the owner by that name), every owner-linked account name,
+///   via Settings → General → Your account / `ownerAccounts`; 0.46.0: an
+///   unlinked Owner-role login is NOT the owner) → the wire literal `owner`,
+///   the old display name (legacy tickets assigned the owner by that name),
+///   every owner-linked account name,
 ///   every Connect login that resolves to the owner, and the caller's own
 ///   username;
 /// - any other Connect user → their username.

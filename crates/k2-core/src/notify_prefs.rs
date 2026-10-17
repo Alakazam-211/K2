@@ -7,10 +7,9 @@
 //! - a Connect user the owner LINKED as one of their accounts
 //!   (`ownerAccounts` setting, `POST /cli/owner/accounts`) → [`OWNER`],
 //!   whatever its role — identity only, never privilege;
-//! - a Connect user with role Owner → [`OWNER`] when it is the server's
-//!   ONLY Owner-role Connect user (Q6); with two or more, each keeps its
-//!   own username;
-//! - any other Connect user → their username.
+//! - any other Connect user → their username, whatever its role (0.46.0:
+//!   the old "the only Owner-role login is the owner" guess is gone; the
+//!   owner says which logins are theirs).
 //!
 //! The mapping is computed when a key is read and never stored, so a role
 //! change takes effect at once. It is what makes the owner's desktop
@@ -62,7 +61,7 @@ impl People {
     }
 
     /// Every Connect login that resolves to the `owner` person: the linked
-    /// accounts that exist, plus the sole Owner-role login. Sorted, unique.
+    /// accounts that exist. Sorted, unique.
     pub fn owner_aliases(&self) -> Vec<String> {
         let mut out: Vec<String> = self
             .users
@@ -79,24 +78,15 @@ impl People {
         self.users.iter().find(|u| u.username.eq_ignore_ascii_case(username))
     }
 
-    /// The server's only Owner-role Connect user (Q6), if exactly one.
-    pub fn sole_owner(&self) -> Option<&str> {
-        let mut owners = self.users.iter().filter(|u| u.role == Role::Owner);
-        let first = owners.next()?;
-        if owners.next().is_some() {
-            return None;
-        }
-        Some(first.username.as_str())
-    }
-
     /// The person key for a login identity (`"owner"` for the owner token,
     /// else a Connect username).
     pub fn person_key(&self, login: &str) -> String {
         let login = login.trim();
+        // 0.46.0 (Rosson 2026-10-17): only the owner token and the accounts
+        // the owner LINKED are the owner person. The old "sole Owner-role
+        // login counts as the owner" guess is gone: an unlinked Owner-role
+        // login is just itself (its own names, colour, prefs).
         if login.eq_ignore_ascii_case(OWNER) || self.is_linked(login) {
-            return OWNER.to_string();
-        }
-        if self.sole_owner().is_some_and(|o| o.eq_ignore_ascii_case(login)) {
             return OWNER.to_string();
         }
         login.to_ascii_lowercase()
@@ -140,7 +130,7 @@ impl People {
     }
 
     /// Every person, owner first, then Connect users by name — the admin
-    /// page's `people`. A sole Owner-role user folds into `owner`.
+    /// page's `people`. Linked logins fold into `owner`.
     pub fn roster(&self) -> Vec<PersonRow> {
         let mut out = vec![PersonRow {
             principal: OWNER.to_string(),
@@ -595,17 +585,21 @@ mod tests {
     }
 
     #[test]
-    fn person_key_maps_the_sole_owner_role_user_to_owner() {
+    fn person_key_maps_only_linked_logins_to_owner() {
         let one = People {
             linked: vec![],
             users: vec![user("rosson", Role::Owner, false), user("gina", Role::Admin, false)],
         };
         assert_eq!(one.person_key("owner"), OWNER, "owner token");
-        assert_eq!(one.person_key("rosson"), OWNER, "the only Owner-role user is the owner");
+        // 0.46.0: the sole Owner-role login is NOT the owner unless linked.
+        assert_eq!(one.person_key("rosson"), "rosson", "an unlinked Owner-role login is itself");
         assert_eq!(one.person_key("gina"), "gina");
-        assert_eq!(one.device_person("rosson").as_deref(), Some(OWNER));
+        assert_eq!(one.device_person("rosson").as_deref(), Some("rosson"));
+        assert!(one.owner_aliases().is_empty());
+        let linked = People { linked: vec!["rosson".into()], ..one };
+        assert_eq!(linked.person_key("rosson"), OWNER, "linked → the owner person");
 
-        // Two Owner-role users: neither maps (Q6).
+        // Two Owner-role users: neither maps.
         let two = People {
             linked: vec![],
             users: vec![user("rosson", Role::Owner, false), user("wes", Role::Owner, false)],
@@ -655,9 +649,9 @@ mod tests {
     }
 
     #[test]
-    fn roster_lists_owner_first_and_folds_the_sole_owner() {
+    fn roster_lists_owner_first_and_folds_only_linked_logins() {
         let p = People {
-            linked: vec![],
+            linked: vec!["gina".into()],
             users: vec![
                 user("zed", Role::Member, true),
                 user("rosson", Role::Owner, false),
@@ -666,8 +660,9 @@ mod tests {
         };
         let r = p.roster();
         let names: Vec<&str> = r.iter().map(|x| x.principal.as_str()).collect();
-        assert_eq!(names, vec!["owner", "gina", "zed"]);
-        assert_eq!(r[0].logins, vec!["owner".to_string(), "rosson".to_string()]);
+        // rosson (Owner role, not linked) is its own person; gina is linked.
+        assert_eq!(names, vec!["owner", "rosson", "zed"]);
+        assert_eq!(r[0].logins, vec!["owner".to_string(), "gina".to_string()]);
         assert!(r[2].disabled, "disabled people are listed and marked");
     }
 
@@ -677,7 +672,8 @@ mod tests {
         let h = g.handle();
         let conn = h.lock();
         let people = People {
-            linked: vec![],
+            // 0.46.0: the phone login is the owner because it is LINKED.
+            linked: vec!["rosson".into()],
             users: vec![
                 user("rosson", Role::Owner, false),
                 user("gina", Role::Admin, false),

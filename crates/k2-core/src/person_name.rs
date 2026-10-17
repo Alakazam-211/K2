@@ -19,7 +19,7 @@
 //!   characters (chars, not bytes); no control characters (newlines and
 //!   tabs included) and no `<` / `>`.
 //! - **Effective.** For a login whose person key is `owner` (an
-//!   owner-linked login, the sole Owner-role login): the linked account's
+//!   owner-linked login): the linked account's
 //!   names when either is set, else the login's own.
 //! - **displayName** (never empty): `"First Last"` (either alone) when
 //!   set, else the username. For `owner` itself: the linked account's

@@ -663,6 +663,10 @@ pub fn snapshot_contains_secret(items: &[OverlayItem], secret: &str) -> bool {
 /// One `docs/{id}`. Chatter pointers on the recipient mailbox and, when
 /// `sender_conversation_id` is a distinct local conversation, the sender
 /// mailbox. Always a ChatterLog pointer. Never a Thread pointer.
+///
+/// `delivery_id` is the `m_…` id of the live message's `msg_deliveries`
+/// receipt, when the send wrote one; the doc keeps only the id.
+#[allow(clippy::too_many_arguments)]
 pub fn record_chatter(
     conn: &Connection,
     recipient_conversation_id: &str,
@@ -673,6 +677,7 @@ pub fn record_chatter(
     body: &str,
     via: &str,
     inject: &str,
+    delivery_id: Option<&str>,
 ) -> Result<(OverlayDoc, Vec<OverlayLink>), String> {
     let _guard = WRITE.lock();
     let to_seq = catalog::next_chatter_seq(conn, recipient_conversation_id, recipient_project_id)?;
@@ -707,7 +712,7 @@ pub fn record_chatter(
         seq: log_seq,
         id: id.clone(),
     });
-    let doc = OverlayDoc::chatter(
+    let mut doc = OverlayDoc::chatter(
         id,
         from.trim().to_string(),
         to.trim().to_string(),
@@ -715,6 +720,7 @@ pub fn record_chatter(
         via,
         inject,
     );
+    doc.delivery_id = delivery_id.map(str::trim).filter(|d| !d.is_empty()).map(str::to_string);
     store::commit_write(&doc, None, &chatter_keys, Some(log_seq))?;
     Ok((doc, links))
 }
@@ -829,6 +835,7 @@ mod tests {
             "ping",
             "msg",
             "accepted",
+            None,
         )
         .expect("record_chatter");
 
@@ -897,6 +904,7 @@ mod tests {
             "hello via talk",
             "talk",
             "accepted",
+            None,
         )
         .expect("talk chatter");
         assert_eq!(
@@ -908,6 +916,74 @@ mod tests {
         let items = read_chatter(&conv, 0).expect("read");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].doc.via.as_deref(), Some("talk"));
+    }
+
+    #[test]
+    fn chatter_keeps_the_delivery_id_and_only_the_id() {
+        let project_id = seed_project("ovl-delivery");
+        let conv = uuid::Uuid::new_v4().to_string();
+        let dbh = conn();
+        let c = dbh.lock();
+        let (doc, _) = record_chatter(
+            &c,
+            &conv,
+            &project_id,
+            None,
+            "sales",
+            "sales/reviewer",
+            "with receipt",
+            "msg",
+            "accepted",
+            Some("m_7Qx2Ab9cDe"),
+        )
+        .expect("chatter with id");
+        assert_eq!(doc.delivery_id.as_deref(), Some("m_7Qx2Ab9cDe"));
+        let items = read_chatter(&conv, 0).expect("read");
+        assert_eq!(items.len(), 1, "{items:?}");
+        assert_eq!(items[0].doc.delivery_id.as_deref(), Some("m_7Qx2Ab9cDe"));
+        let wire = serde_json::to_value(&items[0].doc).expect("doc json");
+        assert_eq!(wire["deliveryId"], "m_7Qx2Ab9cDe", "{wire}");
+        assert_eq!(wire["from"], "sales", "the doc keeps its own from, not the receipt's: {wire}");
+        assert!(wire.get("actor").is_none() && wire.get("sender").is_none(), "no receipt fields copied: {wire}");
+
+        let (plain, _) = record_chatter(
+            &c,
+            &conv,
+            &project_id,
+            None,
+            "sales",
+            "sales/reviewer",
+            "no receipt",
+            "msg",
+            "accepted",
+            None,
+        )
+        .expect("chatter without id");
+        assert_eq!(plain.delivery_id, None);
+        let items = read_chatter(&conv, 0).expect("read");
+        assert_eq!(items.len(), 2, "{items:?}");
+        assert_eq!(items[1].doc.delivery_id, None);
+        let wire = serde_json::to_value(&items[1].doc).expect("doc json");
+        assert!(wire.get("deliveryId").is_none(), "absent, not null: {wire}");
+    }
+
+    #[test]
+    fn chatter_doc_from_before_delivery_id_still_reads() {
+        let old = serde_json::json!({
+            "id": "d1",
+            "kind": "chatter",
+            "from": "sales",
+            "to": "sales/reviewer",
+            "created_at": 1,
+            "body": "old",
+            "via": "msg",
+            "inject": "accepted",
+        });
+        let doc: OverlayDoc = serde_json::from_value(old).expect("old chatter doc parses");
+        assert_eq!(doc.delivery_id, None);
+        assert_eq!(doc.body.as_deref(), Some("old"));
+        let back = serde_json::to_value(&doc).expect("json");
+        assert!(back.get("deliveryId").is_none(), "{back}");
     }
 
     #[test]
@@ -1262,6 +1338,7 @@ mod tests {
                 &format!("c{i}"),
                 "msg",
                 "accepted",
+                None,
             )
             .expect("chatter");
         }
@@ -1304,7 +1381,7 @@ mod tests {
             .expect("first");
         let (second, _) = post_thread(&c, &pane, &project_id, "rosson", "ovl-move/1", "second", "compose")
             .expect("second");
-        record_chatter(&c, &pane, &project_id, None, "sales", "ovl-move/1", "ping", "msg", "accepted")
+        record_chatter(&c, &pane, &project_id, None, "sales", "ovl-move/1", "ping", "msg", "accepted", None)
             .expect("chatter");
         // The agent's reply raced in under the provider id (same second as
         // the pane rows: a tie keeps the pane rows first).

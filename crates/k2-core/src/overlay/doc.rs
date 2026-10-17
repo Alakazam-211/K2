@@ -245,6 +245,12 @@ pub struct OverlayDoc {
     /// from before this field. Never a secret value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imported: Option<ImportedMeta>,
+    /// Chatter only: the `m_…` id of this live message's `msg_deliveries`
+    /// receipt (`k2 msg who <id>`). Just the id: sender, via and actor stay
+    /// on the receipt. None on every other doc, on a send with no receipt
+    /// and on docs written before this field.
+    #[serde(default, rename = "deliveryId", skip_serializing_if = "Option::is_none")]
+    pub delivery_id: Option<String>,
 }
 
 /// Provenance of an imported Thread line (prd-clone-carries-threads-and-
@@ -351,6 +357,7 @@ impl OverlayDoc {
             author: None,
             external: None,
             imported: None,
+            delivery_id: None,
         }
     }
 
@@ -390,6 +397,7 @@ impl OverlayDoc {
             author: None,
             external: None,
             imported: None,
+            delivery_id: None,
         }
     }
 
@@ -429,6 +437,7 @@ impl OverlayDoc {
             author: None,
             external: None,
             imported: None,
+            delivery_id: None,
         }
     }
 
@@ -456,6 +465,7 @@ impl OverlayDoc {
             author: None,
             external: None,
             imported: None,
+            delivery_id: None,
         }
     }
 

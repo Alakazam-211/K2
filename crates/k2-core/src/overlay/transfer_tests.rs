@@ -68,7 +68,7 @@ fn seed_source(conn: &Connection) -> (String, String, String) {
         overlay::post_secret(conn, &p, &pid, &handle, to, "DB_URL", None, Default::default(), None).unwrap();
     overlay::mark_secret(&p, &set.id, "set", Some(format!("k2v://ws/{handle}/DB_URL")), "ok".into(), None).unwrap();
     // Chatter on the same conversation: never exported.
-    overlay::record_chatter(conn, &p, &pid, None, "peer", &handle, "chatter PLANTED-CHATTER-VALUE", "msg", "accepted")
+    overlay::record_chatter(conn, &p, &pid, None, "peer", &handle, "chatter PLANTED-CHATTER-VALUE", "msg", "accepted", None)
         .unwrap();
     (pid, handle, p)
 }

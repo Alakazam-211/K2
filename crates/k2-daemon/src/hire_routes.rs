@@ -337,8 +337,12 @@ pub fn deliver_recorded(
         )
         .is_ok()
     };
-    let from_with_id = if recorded { format!("{label} · {id}") } else { label };
-    let resp = crate::workspace_msg::deliver_live_with_via(target, text, &from_with_id, command, wake, wake_timeout, via);
+    let resp = if recorded {
+        let from_with_id = format!("{label} · {id}");
+        crate::workspace_msg::deliver_live_with_receipt(target, text, &from_with_id, from, &id, command, wake, wake_timeout, via)
+    } else {
+        crate::workspace_msg::deliver_live_with_via(target, text, &label, command, wake, wake_timeout, via)
+    };
     if recorded {
         let db = k2_core::db::shared();
         let conn = db.lock();

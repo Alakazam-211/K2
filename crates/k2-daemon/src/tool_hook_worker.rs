@@ -187,7 +187,10 @@ pub fn classify(
             reconcile: true,
         },
         // S28 §12 / G11: an unknown external id (never provisioned, or
-        // already gone) has no session to end.
+        // already gone) has no session to end. Confirmed by Sew
+        // 2026-10-17 (main febfe626, `provisioning::revoke_sessions`): a
+        // 404 for an unknown `external_id` means done; a `k2_sid`-only
+        // revoke always answers 200 `{revoked: N}`, N ≥ 0.
         404 if op == Op::SewSessionRevoke => Outcome::Done {
             status,
             body: resp.body_text(),

@@ -3,11 +3,13 @@
 //
 // Rosson 2026-10-16: each note is a tile (chamfered in K2's square Style,
 // rounded in the others, `[data-design-tile]` in globals.css) with its
-// number and text on one row and an edit pencil and a trash can. Tiles sit
-// in a 3-wide by 2-high grid: at most MAX_DESIGN_NOTES (6). Edit is inline.
+// number and text on one row and an edit pencil, its own Send (just this
+// note) and a trash can. Tiles sit in a 3-wide by 3-high grid: at most
+// MAX_DESIGN_NOTES (9). Edit is inline. Send all lives in this section's
+// header, next to the count (there is no separate status row).
 
 import { useState } from 'react'
-import { PencilIcon, TrashIcon } from '@/components/icons/K2Icons'
+import { ArrowUpIcon, PencilIcon, TrashIcon } from '@/components/icons/K2Icons'
 import { elementChipLabel } from './NotePopover'
 import { MAX_DESIGN_NOTES, NOTES_FULL_REASON } from './useDesignNotes'
 import type { DesignNoteDraft } from './types'
@@ -24,8 +26,12 @@ export interface NoteTrayProps {
   onRemove: (noteId: string) => void
   onClear: () => void
   onSend: () => void
+  /** A tile's own Send: just this note. */
+  onSendOne?: (noteId: string) => void
   onRetry: () => void
   defaultCollapsed?: boolean
+  /** Tooltip suffix for Send all (the ⌘↩ chord). */
+  sendAllHint?: string
 }
 
 const ICON_BUTTON =
@@ -41,8 +47,10 @@ export function NoteTray({
   onRemove,
   onClear,
   onSend,
+  onSendOne,
   onRetry,
   defaultCollapsed = false,
+  sendAllHint,
 }: NoteTrayProps): React.JSX.Element | null {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   const [editing, setEditing] = useState<string | null>(null)
@@ -84,16 +92,17 @@ export function NoteTray({
         </button>
         {canRetry ? (
           <button type="button" onClick={onRetry} disabled={sending} className="px-2 h-5 border border-[var(--color-border)] cursor-pointer disabled:opacity-50">
-            Retry
+            {sending ? 'Retrying…' : 'Retry'}
           </button>
         ) : (
           <button
             type="button"
             onClick={onSend}
             disabled={sending || notes.length === 0}
+            title={`Send every note to the agent and the Thread${sendAllHint ? ` (${sendAllHint} in a note)` : ''}`}
             className="px-2 h-5 bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer disabled:opacity-50"
           >
-            Send
+            {sending ? 'Sending…' : 'Send all'}
           </button>
         )}
       </div>
@@ -163,6 +172,18 @@ export function NoteTray({
                 >
                   <PencilIcon />
                 </button>
+                {onSendOne ? (
+                  <button
+                    type="button"
+                    aria-label={`Send note ${i + 1}`}
+                    title="Send this note"
+                    disabled={sending || canRetry || editing === n.id}
+                    onClick={() => onSendOne(n.id)}
+                    className={ICON_BUTTON}
+                  >
+                    <ArrowUpIcon />
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   aria-label={`Delete note ${i + 1}`}

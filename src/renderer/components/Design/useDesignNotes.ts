@@ -17,10 +17,10 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { buildNotesBody, redeliverDesignNotes, sendDesignNotes } from './designApi'
 import type { DesignNoteDraft, NoteElement, NoteIntent } from './types'
 
-/** Most notes one Design tab's tray holds: a 3 × 2 grid of tiles (Rosson
+/** Most notes one Design tab's tray holds: a 3 × 3 grid of tiles (Rosson
  *  2026-10-16). The daemon takes up to 20 per Send; ⌘↩ may add one typed
  *  note past a full tray. */
-export const MAX_DESIGN_NOTES = 6
+export const MAX_DESIGN_NOTES = 9
 
 export const NOTES_FULL_REASON = `Send these first; up to ${MAX_DESIGN_NOTES} notes`
 
@@ -70,6 +70,9 @@ interface DesignNotesState {
   /** ⌘↩ in the note pop-up: pin what is typed (if anything) and Send the
    *  whole tray at once. A full tray still takes this one note. */
   sendNow(itemId: string, target: SendTarget, typed?: NewNote): Promise<void>
+  /** A tile's own Send: just this note (its own Thread item and details
+   *  file); the tile leaves the tray once delivered. */
+  sendOne(itemId: string, noteId: string, target: SendTarget): Promise<void>
   retry(itemId: string, target: SendTarget): Promise<void>
 }
 
@@ -106,6 +109,17 @@ export const useDesignNotesStore = create<DesignNotesState>((set, get) => {
         pendingThreadItemId: threadItemId,
         pendingNoteIds: [...sentIds],
       })
+    }
+  }
+
+  /** One Send of these notes: one Thread item, one details file. */
+  const sendNotes = async (itemId: string, target: SendTarget, sent: readonly DesignNoteDraft[]): Promise<void> => {
+    patch(itemId, { sending: true, error: null })
+    try {
+      const r = await sendDesignNotes(target.scope, buildNotesBody(target.workspace, sent, itemId))
+      settle(itemId, sent.map((n) => n.id), r.threadItemId, r.delivered)
+    } catch (e) {
+      patch(itemId, { sending: false, error: errorText(e) })
     }
   }
 
@@ -182,14 +196,16 @@ export const useDesignNotesStore = create<DesignNotesState>((set, get) => {
       if (t.sending || t.notes.length === 0) return
       // An undelivered Thread item is still waiting: Send means Retry.
       if (t.pendingThreadItemId) return get().retry(itemId, target)
-      const sent = t.notes
-      patch(itemId, { sending: true, error: null })
-      try {
-        const r = await sendDesignNotes(target.scope, buildNotesBody(target.workspace, sent, itemId))
-        settle(itemId, sent.map((n) => n.id), r.threadItemId, r.delivered)
-      } catch (e) {
-        patch(itemId, { sending: false, error: errorText(e) })
-      }
+      return sendNotes(itemId, target, t.notes)
+    },
+
+    async sendOne(itemId, noteId, target) {
+      const t = tray(itemId)
+      if (t.sending) return
+      if (t.pendingThreadItemId) return get().retry(itemId, target)
+      const note = t.notes.find((n) => n.id === noteId)
+      if (!note) return
+      return sendNotes(itemId, target, [note])
     },
 
     async retry(itemId, target) {

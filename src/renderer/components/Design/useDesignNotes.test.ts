@@ -1,4 +1,4 @@
-// Fail loud: the tray caps at 6 (a 3 × 2 grid), ⌘↩ sends the typed note
+// Fail loud: the tray caps at 9 (a 3 × 3 grid), ⌘↩ sends the typed note
 // past a full tray, clears only delivered notes, and Retry
 // redelivers the stored Thread item instead of posting a second one.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -49,23 +49,34 @@ afterEach(() => {
 })
 
 describe('useDesignNotes', () => {
-  it('caps the tray at 6 and refuses the 7th with a reason', () => {
-    expect(MAX_DESIGN_NOTES).toBe(6)
-    expect(NOTES_FULL_REASON).toBe('Send these first; up to 6 notes')
+  it('caps the tray at 9 and refuses the 10th with a reason', () => {
+    expect(MAX_DESIGN_NOTES).toBe(9)
+    expect(NOTES_FULL_REASON).toBe('Send these first; up to 9 notes')
     for (let i = 0; i < MAX_DESIGN_NOTES; i++) addNote(`n${i}`)
     const r = useDesignNotesStore.getState().add(ITEM, { comment: 'one more', url: 'http://x/', title: '' })
     expect(r).toEqual({ ok: false, reason: NOTES_FULL_REASON })
     expect(tray().notes).toHaveLength(MAX_DESIGN_NOTES)
   })
 
-  it('sendNow on a full tray sends all 6 plus the typed note in one post', async () => {
+  it('sendNow on a full tray sends all 9 plus the typed note in one post', async () => {
     for (let i = 0; i < MAX_DESIGN_NOTES; i++) addNote(`n${i}`)
     post.mockResolvedValueOnce(ok(true))
     await useDesignNotesStore.getState().sendNow(ITEM, target, { comment: 'typed', url: 'http://localhost:5173/pricing', title: 'Pricing' })
     expect(post).toHaveBeenCalledTimes(1)
     const body = post.mock.calls[0][2] as { notes: { comment: string }[] }
-    expect(body.notes.map((n) => n.comment)).toEqual(['n0', 'n1', 'n2', 'n3', 'n4', 'n5', 'typed'])
+    expect(body.notes.map((n) => n.comment)).toEqual(['n0', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8', 'typed'])
     expect(tray().notes).toEqual([])
+  })
+
+  it('sendOne sends just that note and leaves the rest', async () => {
+    addNote('a')
+    const b = addNote('b')
+    addNote('c')
+    post.mockResolvedValueOnce(ok(true))
+    await useDesignNotesStore.getState().sendOne(ITEM, b, target)
+    expect(post).toHaveBeenCalledTimes(1)
+    expect((post.mock.calls[0][2] as { notes: { comment: string }[] }).notes.map((n) => n.comment)).toEqual(['b'])
+    expect(tray().notes.map((n) => n.comment)).toEqual(['a', 'c'])
   })
 
   it('sendNow with nothing typed sends the tray', async () => {

@@ -56,6 +56,15 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     // MCS3: calendars on linked inboxes, the same switch as
     // `k2 mail link calendars on|off` (Admin floor there too).
     "linkedCalendars",
+    // MCS4 security fix: the Email Link OAuth apps. Which client id mints
+    // every new Google / Microsoft link, and which Microsoft authority
+    // (tenant) it signs in against, are the same Admin-floor settings as
+    // `POST /cli/mail/oauth-config/set` (`k2 mail oauth-config set`). A
+    // Member login must not swap the app (or point Microsoft sign-in at
+    // another tenant) through a plain settings write.
+    "mailOauthGmailClientId",
+    "mailOauthMicrosoftClientId",
+    "mailOauthMicrosoftTenant",
     // prd-daemon-activity-and-thread-working-v1 Q2 — keep K2's hooks in
     // the daemon user's agent CLI configs. Same floor as
     // `POST /cli/hooks/install` (Admin): it rewrites those files.
@@ -526,6 +535,49 @@ mod tests {
             let s = k2_core::app_settings::load();
             assert!(!s.federation_enabled, "gated key must be unchanged");
             assert_eq!(s.default_agent, "claude", "ungated key must be unchanged too");
+        });
+    }
+
+    /// MCS4 security fix: the Email Link OAuth app keys (client ids and the
+    /// Microsoft tenant) are Admin-floor like `k2 mail oauth-config set`.
+    /// A Member login is refused for EACH key with nothing written; an
+    /// Admin login writes them.
+    #[test]
+    fn member_login_cannot_write_mail_oauth_app_keys() {
+        with_temp_home(|| {
+            let member = session_actor("memberoauth", connect_users::Role::Member);
+            assert_eq!(member, SettingsActor::Member);
+            for (key, value) in [
+                ("mailOauthMicrosoftTenant", "attacker-tenant.onmicrosoft.com"),
+                ("mailOauthMicrosoftClientId", "attacker-ms-client"),
+                ("mailOauthGmailClientId", "attacker.apps.googleusercontent.com"),
+            ] {
+                let body = serde_json::json!({ key: value }).to_string();
+                let r = handle_settings_update(body.as_bytes(), member);
+                assert_eq!(r.status, "403 Forbidden", "{key}: {}", r.body);
+                assert!(r.body.contains(key), "the refusal names {key}: {}", r.body);
+                assert!(r.body.contains("Owner or Admin"), "{key}: {}", r.body);
+                // Mixed with an ungated key: still nothing written.
+                let mixed = serde_json::json!({ key: value, "defaultAgent": "codex" }).to_string();
+                let r = handle_settings_update(mixed.as_bytes(), member);
+                assert_eq!(r.status, "403 Forbidden", "{key} mixed: {}", r.body);
+            }
+            let s = k2_core::app_settings::load();
+            assert_eq!(s.mail_oauth_microsoft_tenant, "", "tenant unchanged");
+            assert_eq!(s.mail_oauth_microsoft_client_id, "", "Microsoft client unchanged");
+            assert_eq!(s.mail_oauth_gmail_client_id, "", "Gmail client unchanged");
+            assert_eq!(s.default_agent, "claude", "the mixed payload never half-applied");
+
+            let admin = session_actor("adminoauth", connect_users::Role::Admin);
+            let r = handle_settings_update(
+                br#"{"mailOauthMicrosoftTenant":"organizations","mailOauthMicrosoftClientId":"ms-app","mailOauthGmailClientId":"g.apps.googleusercontent.com"}"#,
+                admin,
+            );
+            assert_eq!(r.status, "200 OK", "Admin writes them: {}", r.body);
+            let s = k2_core::app_settings::load();
+            assert_eq!(s.mail_oauth_microsoft_tenant, "organizations");
+            assert_eq!(s.mail_oauth_microsoft_client_id, "ms-app");
+            assert_eq!(s.mail_oauth_gmail_client_id, "g.apps.googleusercontent.com");
         });
     }
 

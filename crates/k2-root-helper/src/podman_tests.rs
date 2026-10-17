@@ -115,6 +115,23 @@ fn only_the_boxes_the_bundle_is_for() {
     }
 }
 
+/// Ubuntu and Debian ship /etc/os-release as a link to
+/// ../usr/lib/os-release (the VM e2e caught this): the link is never
+/// followed, the /usr/lib file is read instead.
+#[test]
+fn a_linked_etc_os_release_reads_usr_lib() {
+    let t = box_root();
+    write(&t, OS_RELEASE_USR, NOBLE);
+    std::os::unix::fs::symlink("../usr/lib/os-release", t.p(OS_RELEASE)).unwrap();
+    assert_eq!(hp::supported(&t.ctx).unwrap(), "ubuntu 24.04");
+    // A link to something else is never followed either.
+    let t = box_root();
+    write(&t, "/root/fake-os-release", NOBLE);
+    std::os::unix::fs::symlink("/root/fake-os-release", t.p(OS_RELEASE)).unwrap();
+    let e = hp::supported(&t.ctx).unwrap_err();
+    assert!(e.msg.starts_with("podman_os_unsupported"), "{}", e.msg);
+}
+
 #[test]
 fn an_agent_cannot_install_or_uninstall() {
     let t = noble_box();

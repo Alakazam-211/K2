@@ -109,8 +109,11 @@ pub const MAX_MEMBER: u64 = 96 * 1024 * 1024;
 
 // ── the boxes the bundle is for ─────────────────────────────────────────
 
-/// `/etc/os-release`.
+/// `/etc/os-release`, and the file os-release(5) falls back to. On Debian
+/// and Ubuntu the first is a symlink to the second; the helper never
+/// follows links, so it reads the second when the first isn't a file.
 pub const OS_RELEASE: &str = "/etc/os-release";
+pub const OS_RELEASE_USR: &str = "/usr/lib/os-release";
 
 /// (`ID`, `VERSION_ID`) pairs the bundle is tested for: the distros whose
 /// own Podman is older than 5. Everything else uses the distro's.

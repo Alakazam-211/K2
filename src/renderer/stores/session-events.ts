@@ -435,6 +435,12 @@ export interface PresenceRosterUser {
    *  hash; owner-linked logins carry the owner's). Absent from an older
    *  daemon — the chip hashes the name itself. */
   color?: string
+  /** 0.46.0: optional real name (display only; identity stays `user`).
+   *  Absent from an older daemon. */
+  firstName?: string | null
+  lastName?: string | null
+  /** "First Last", else the username. */
+  displayName?: string
 }
 
 /** APP-LEVEL — the presence roster changed (a connection registered or
@@ -448,6 +454,9 @@ export interface PresenceChangedEvent {
    *  (`owner`, every Connect login, the owner's display name), for chips
    *  that are not roster rows (ticket assignees). Absent from an older daemon. */
   colors?: Record<string, string>
+  /** 0.46.0: login → {firstName, lastName, displayName} (also the owner's
+   *  display name key), for chips that are not roster rows. */
+  names?: Record<string, unknown>
 }
 
 /** APP-LEVEL — the daemon asks the renderer to open a URL in K2's embedded

@@ -7,6 +7,7 @@
 
 import { useConnectHostStore } from '@/stores/connect-host'
 import { PresenceChip, type PresenceRole } from './PresenceChip'
+import type { PersonNames } from '@/lib/person-name'
 
 export interface PresenceAvatarProps {
   /** Username, or the wire literal `"owner"` (displayed as "Owner"). */
@@ -22,6 +23,8 @@ export interface PresenceAvatarProps {
   title?: string
   /** The daemon's effective person colour (roster `color`). */
   color?: string | null
+  /** 0.46.0: first/last name (initials, tooltip). */
+  names?: PersonNames | null
 }
 
 /** The wire `"owner"` row renders as "Owner" everywhere. */
@@ -35,6 +38,6 @@ export function useSelfPresenceUser(): string {
   return useConnectHostStore((s) => (s.activeHost === 'local' ? 'owner' : s.activeHost.username || 'owner'))
 }
 
-export default function PresenceAvatar({ name, role, size = 20, you, away, imageUrl, title, color }: PresenceAvatarProps): React.JSX.Element {
-  return <PresenceChip name={name} role={role} size={size} you={you} away={away} imageUrl={imageUrl} title={title} color={color} />
+export default function PresenceAvatar({ name, role, size = 20, you, away, imageUrl, title, color, names }: PresenceAvatarProps): React.JSX.Element {
+  return <PresenceChip name={name} role={role} size={size} you={you} away={away} imageUrl={imageUrl} title={title} color={color} names={names} />
 }

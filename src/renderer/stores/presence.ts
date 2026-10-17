@@ -36,6 +36,7 @@ import {
 import { onActiveHostChange } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
 import { registerPrimaryRoomPresence } from '@/stores/primary-room-sources'
+import { asNameMap, type PersonNames } from '@/lib/person-name'
 
 // Re-export the wire row type under the name the components use — the
 // shape is FROZEN against `presence.rs::RosterUser` (S1).
@@ -52,9 +53,12 @@ interface PresenceState {
    *  `colors`), for chips that are not roster rows. Empty from an older
    *  daemon; chips then hash the name. */
   colors: Record<string, string>
+  /** 0.46.0: login → first/last/display name (the roster's `names`), for
+   *  chips that are not roster rows. Empty from an older daemon. */
+  names: Record<string, PersonNames>
   /** Whole-set replace (an event or snapshot arrived) — also proof the
    *  daemon speaks presence. */
-  applyRoster: (roster: RosterUser[], colors?: Record<string, string>) => void
+  applyRoster: (roster: RosterUser[], colors?: Record<string, string>, names?: Record<string, PersonNames>) => void
   /** Fetch the `GET /cli/presence/roster` snapshot (hello reconcile /
    *  boot). A `route not found` rejection flips `supported` off; any
    *  other failure (transient network) leaves state untouched. */
@@ -65,12 +69,23 @@ export const usePresenceStore = create<PresenceState>((set) => ({
   roster: [],
   supported: true,
   colors: {},
-  applyRoster: (roster, colors) =>
-    set(colors === undefined ? { roster, supported: true } : { roster, supported: true, colors: asColorMap(colors) }),
+  names: {},
+  applyRoster: (roster, colors, names) =>
+    set({
+      roster,
+      supported: true,
+      ...(colors === undefined ? {} : { colors: asColorMap(colors) }),
+      ...(names === undefined ? {} : { names }),
+    }),
   refreshRoster: async () => {
     try {
-      const snap = await daemonCliGet<{ roster: RosterUser[]; colors?: unknown }>(primaryScope(), 'presence/roster')
-      set({ roster: Array.isArray(snap?.roster) ? snap.roster : [], supported: true, colors: asColorMap(snap?.colors) })
+      const snap = await daemonCliGet<{ roster: RosterUser[]; colors?: unknown; names?: unknown }>(primaryScope(), 'presence/roster')
+      set({
+        roster: Array.isArray(snap?.roster) ? snap.roster : [],
+        supported: true,
+        colors: asColorMap(snap?.colors),
+        names: asNameMap(snap?.names),
+      })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       if (msg.includes('route not found')) {
@@ -184,7 +199,13 @@ export function usersForWorkspace(roster: RosterUser[], path: string): RosterUse
 // never needs re-wiring.
 
 onPresenceChanged(primaryScope(), (e) => {
-  usePresenceStore.getState().applyRoster(Array.isArray(e.roster) ? e.roster : [], e.colors === undefined ? undefined : asColorMap(e.colors))
+  usePresenceStore
+    .getState()
+    .applyRoster(
+      Array.isArray(e.roster) ? e.roster : [],
+      e.colors === undefined ? undefined : asColorMap(e.colors),
+      e.names === undefined ? undefined : asNameMap(e.names),
+    )
 })
 
 // Snapshot on every app-level (re)connect — the same reconcile point
@@ -198,5 +219,5 @@ onAppHello(primaryScope(), () => {
 // snapshot re-establishes truth. `supported` resets optimistically so a
 // capable new host isn't hidden by the old host's 404.
 onActiveHostChange(() => {
-  usePresenceStore.setState({ roster: [], supported: true, colors: {} })
+  usePresenceStore.setState({ roster: [], supported: true, colors: {}, names: {} })
 })

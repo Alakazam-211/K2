@@ -39,9 +39,11 @@ describe('needs the person = needs-you, never the working token', () => {
     expect(s).not.toContain('var(--color-status-working)')
   })
 
-  it("token usage's cache-read series is not the accent (Input already is)", () => {
+  it('the Usage page colours its series by harness, never with a status token', () => {
+    // Usage v2 (0.46.0) replaced the Input / Output / Cache read series with
+    // per-harness series colours, so no series can collide with working.
     const s = src('Settings/sections/TokenUsageSection.tsx')
-    expect(s).toContain("input: 'var(--color-accent)'")
-    expect(s).not.toContain("cacheRead: 'var(--color-status-working)'")
+    expect(s).toContain('--usage-series-claude')
+    expect(s).not.toContain('var(--color-status-working)')
   })
 })

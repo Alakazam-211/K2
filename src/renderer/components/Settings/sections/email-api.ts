@@ -387,7 +387,20 @@ export interface InboxParticipant {
   canManage: boolean
   /** May move messages to Trash (recoverable). Requires `canManage`. */
   canDelete: boolean
+  /** This workspace's agent-send gate (`k2 mail sending`). Older daemons
+   *  omit it. */
+  agentSend?: AgentSendMode
+  /** What `level` really allows once that gate applies (daemon truth).
+   *  `send` with the gate off is `blocked_off`: every send is gated. */
+  sendState?: SendState
 }
+
+/** A workspace's agent-send gate (`projects.mail_agent_send`). */
+export type AgentSendMode = 'off' | 'approval' | 'on'
+
+/** The EFFECTIVE send permission of an inbox level under the workspace
+ *  gate (daemon `mail::access::send_state`). */
+export type SendState = 'no_send_level' | 'on' | 'approval' | 'blocked_off' | 'blocked_approval'
 
 /** One inbox in the unified catalog (GET /cli/mail/inboxes). NEVER carries
  *  credentials, secret refs, or the username. `primary` + `grants` describe
@@ -406,6 +419,9 @@ export interface Inbox {
   grants: InboxParticipant[]
   /** The calling principal's effective level, or null if none. */
   yourLevel: InboxLevel | null
+  /** The caller's workspace gate + effective send state (agent view). */
+  yourAgentSend?: AgentSendMode | null
+  yourSendState?: SendState | null
   /** Highest grantable level — `send` for hosted and (as of the linked-send
    *  contract) linked too; `draft` only where send is unavailable. */
   maxLevel: 'draft' | 'send'
@@ -459,6 +475,16 @@ export async function setInboxPrimary(body: {
 /** POST /cli/mail/access/set-level — change a workspace's level. Pass the
  *  Primary's own project to change the Primary's level. `send` is allowed on
  *  both hosted and linked inboxes (subject to the inbox's `maxLevel`). */
+/** POST /cli/mail/config/set `{workspace, agentSend}` — a workspace's
+ *  agent-send gate (same as `k2 mail sending <ws> <mode>`). Every OS; Admin
+ *  floor; the daemon refuses an agent changing its own workspace. */
+export async function setWorkspaceAgentSend(body: {
+  workspace: string
+  agentSend: AgentSendMode
+}): Promise<{ ok: boolean }> {
+  return daemonCliPost(primaryScope(), 'mail/config/set', body)
+}
+
 export async function setInboxLevel(body: {
   address: string
   project: string

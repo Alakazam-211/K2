@@ -295,6 +295,33 @@ pub fn config_json() -> serde_json::Value {
     })
 }
 
+/// One workspace's agent-send mode (`GET /cli/mail/config?workspace=`):
+/// `effective` is what the send gate applies (the fail-closed resolver),
+/// `override` the stored per-workspace value (`null` = inherit) and
+/// `default` the global default.
+pub fn workspace_agent_send_json(workspace_path: &str) -> serde_json::Value {
+    let stored: Option<String> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row(
+            "SELECT mail_agent_send FROM projects WHERE path = ?1",
+            rusqlite::params![workspace_path],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .flatten()
+    };
+    serde_json::json!({
+        "project": workspace_path,
+        "agentSend": {
+            "effective": k2_core::workspace::settings::mail_agent_send_for_path(workspace_path),
+            "override": stored,
+            "default": k2_core::app_settings::load().mail_agent_send,
+            "modes": SEND_GATE_MODES,
+        },
+    })
+}
+
 /// The D4 gating vocabulary (mirrors
 /// `k2_core::workspace::settings::MAIL_AGENT_SEND_MODES`).
 const SEND_GATE_MODES: [&str; 3] = ["off", "approval", "on"];

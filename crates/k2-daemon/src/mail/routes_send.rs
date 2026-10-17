@@ -978,11 +978,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                 Err(e) => return send_error_response(e),
             };
             if gate == Gate::Off {
-                return send_error_response(SendError::Gated(
-                    "outbound email is disabled for this workspace. Your human can enable it \
-                     in Settings → Email → Sending"
-                        .to_string(),
-                ));
+                return send_error_response(SendError::Gated(send::agent_send_off_hint()));
             }
             // The FROM domain's send mode (D1: receive-only refuses; relay
             // validates its config at use time — fail-closed).
@@ -1166,11 +1162,7 @@ pub fn handle_reply(body: &[u8]) -> CliResponse {
                 Err(e) => return send_error_response(e),
             };
             if gate == Gate::Off {
-                return send_error_response(SendError::Gated(
-                    "outbound email is disabled for this workspace. Your human can enable it \
-                     in Settings → Email → Sending"
-                        .to_string(),
-                ));
+                return send_error_response(SendError::Gated(send::agent_send_off_hint()));
             }
             // Fetch the original's reply context (sender, threading
             // headers, auth verdicts) from its backend.
@@ -1848,7 +1840,7 @@ mod tests {
         let v = body_json(&resp);
         assert_eq!(v["error"]["code"], "gated");
         assert!(
-            v["error"]["hint"].as_str().unwrap().contains("Settings → Email → Sending"),
+            v["error"]["hint"].as_str().unwrap().contains("`k2 mail sending <workspace> on`"),
             "{v}"
         );
         assert_eq!(outbound_count(&project_id), 0, "off mode never writes");
@@ -2517,8 +2509,77 @@ mod tests {
         let v = body_json(&resp);
         assert_eq!(v["error"]["code"], "gated");
         let hint = v["error"]["hint"].as_str().unwrap();
-        assert!(hint.contains("Settings → Email → Sending"), "{hint}");
+        assert!(hint.contains("`k2 mail sending <workspace> on`"), "{hint}");
+        assert!(hint.contains("Workspaces / Agents → <workspace> → Email sending"), "{hint}");
         assert_eq!(outbound_count(&project_id), 0, "off mode never audits linked");
+        cleanup_linked(&project_id);
+    }
+
+    /// Appa/Baden (macOS, 0.45.4): `k2 mail reply` from a LINKED inbox
+    /// follows the agent-send mode the owner sets through
+    /// `/cli/mail/config/set` (`k2 mail sending`) — on EVERY OS. Before
+    /// the fix the hosted-only D3 gate refused the write off-Linux, so a
+    /// Mac owner could not turn sending on at all.
+    #[test]
+    fn linked_reply_follows_agent_send_set_by_the_owner_on_any_os() {
+        let (name, path) = unique("lreply");
+        let project_id = insert_project(&name, &path);
+        let linked = format!("me-{}@linked.example", &project_id[..8]);
+        seed_linked(&project_id, &linked, "send");
+        let token = messages::encode_message_id(&linked, "uid:1:42");
+        let reply = || {
+            handle_reply(
+                &serde_json::to_vec(&serde_json::json!({
+                    "project": path, "id": token, "body": "thanks!",
+                }))
+                .unwrap(),
+            )
+        };
+        // No scoped principal = the owner.
+        let set = |mode: &str| {
+            crate::mail::routes_server::handle_config_set(
+                &serde_json::to_vec(&serde_json::json!({
+                    "workspace": path, "agentSend": mode,
+                }))
+                .unwrap(),
+            )
+        };
+
+        // NULL column → the default (off): gated, and the hint names
+        // controls that exist on this OS.
+        let resp = reply();
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "gated");
+        assert!(
+            v["error"]["hint"].as_str().unwrap().contains("`k2 mail sending <workspace> on`"),
+            "{v}"
+        );
+
+        // Owner turns it on → the reply passes the gate and reaches the
+        // SMTP stage (no vaulted credential → 503 not_ready; nothing sent).
+        let r = set("on");
+        assert_eq!(r.status, "200 OK", "agentSend must apply on every OS: {}", r.body);
+        let resp = reply();
+        assert_eq!(resp.status, "503 Service Unavailable", "on must pass the gate: {}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "not_ready");
+
+        // approval → linked refuses with the hosted-only-queue teaching.
+        let r = set("approval");
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let resp = reply();
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "gated");
+        assert!(v["error"]["hint"].as_str().unwrap().contains("approval"), "{v}");
+
+        // Back off → gated again.
+        let r = set("off");
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let resp = reply();
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "gated");
+        assert_eq!(outbound_count(&project_id), 0, "nothing was sent or queued");
         cleanup_linked(&project_id);
     }
 

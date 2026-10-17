@@ -779,8 +779,24 @@ fn doc_error_response(err: DocError) -> CliResponse {
 /// summaries — kind + host + username, NEVER secrets — and the latest
 /// server-level doctor grade). Pure read; renders on the Mac example
 /// page too (`supported` rides the reply).
-pub fn handle_config_get(_params: &HashMap<String, String>) -> CliResponse {
-    CliResponse::ok_json(config::config_json().to_string())
+///
+/// `?workspace=<name|path|uuid>` adds a `workspace` block with that
+/// workspace's agent-send mode: the effective value, the stored
+/// override (`null` = inherits the default) and the default. `k2 mail
+/// sending <ws>` and the workspace Settings control read it on every
+/// OS (agent-send gates linked sends too, which run on macOS). Unknown
+/// workspace → the shared 404.
+pub fn handle_config_get(params: &HashMap<String, String>) -> CliResponse {
+    let mut v = config::config_json();
+    let ws = crate::cli::str_param(params, "workspace");
+    let ws = ws.trim();
+    if !ws.is_empty() {
+        let Some(path) = crate::workspace_msg::resolve_workspace(ws) else {
+            return crate::workspace_routes::workspace_not_found_response(ws);
+        };
+        v["workspace"] = config::workspace_agent_send_json(&path);
+    }
+    CliResponse::ok_json(v.to_string())
 }
 
 /// POST `/cli/mail/config/set` body — the `k2 mail config` surface
@@ -969,15 +985,21 @@ pub fn handle_config_set(body: &[u8]) -> CliResponse {
     }
 
     // D3: nothing mail-shaped executes off-Linux — except a call that
-    // ONLY sets the always-BCC policy: linked/BYO sends run on every
-    // platform and the policy rides them too (a pure DB write).
-    let only_always_bcc = always_bcc.is_some()
-        && !wants_gating
+    // ONLY sets per-workspace agent mail POLICY (agentSend and/or the
+    // always-BCC list): linked/BYO sends run on every platform and both
+    // gate them (pure DB writes). Address caps, quotas, send modes,
+    // relays and global defaults stay hosted-only. Before this, a Mac
+    // owner had no way to turn agent-send on for a linked inbox: the
+    // send hint pointed at controls that refused here.
+    let only_workspace_policy = (always_bcc.is_some() || b.agent_send.is_some())
+        && b.address_cap.is_none()
+        && b.quota_bytes.is_none()
+        && b.quota_messages.is_none()
         && b.relay.is_none()
         && b.delete_relay_config.is_none()
         && !wants_send_mode
         && b.defaults.is_none();
-    if !mail_supported() && !only_always_bcc {
+    if !mail_supported() && !only_workspace_policy {
         return unsupported();
     }
 
@@ -2028,8 +2050,8 @@ mod tests {
         assert!(bcc(&other_path).is_empty());
 
         // IT agent, OTHER workspace: always-BCC lands (a DB write, every
-        // platform); agentSend passes the gate (applied on Linux; the D3
-        // off-Linux gate answers elsewhere — never a refusal).
+        // platform); agentSend lands too (it gates linked sends, which
+        // run on every platform — no D3 gate for it).
         let r = as_agent(
             &it_id,
             serde_json::json!({ "workspace": other_path, "alwaysBcc": "audit@shop.example" }),
@@ -2040,13 +2062,8 @@ mod tests {
             &it_id,
             serde_json::json!({ "workspace": other_path, "agentSend": "on" }),
         );
-        assert_ne!(r.status, "403 Forbidden", "{}", r.body);
-        if super::mail_supported() {
-            assert_eq!(r.status, "200 OK", "{}", r.body);
-            assert_eq!(stored(&other_id).as_deref(), Some("on"));
-        } else {
-            assert_eq!(r.status, "409 Conflict", "{}", r.body);
-        }
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(stored(&other_id).as_deref(), Some("on"));
 
         // Owner: any workspace, the IT agent's own included.
         let r = handle_config_set(&body(
@@ -2057,7 +2074,8 @@ mod tests {
         let r = handle_config_set(&body(
             serde_json::json!({ "workspace": it_path, "agentSend": "on" }),
         ));
-        assert_ne!(r.status, "403 Forbidden", "{}", r.body);
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(stored(&it_id).as_deref(), Some("on"));
 
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2065,6 +2083,134 @@ mod tests {
             conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id])
                 .expect("cleanup project");
         }
+    }
+
+    /// `k2 mail sending <ws> [off|approval|on]` (Appa/Baden, macOS
+    /// 0.45.4): the owner sets each mode for a workspace on EVERY OS and
+    /// reads it back from `GET /cli/mail/config?workspace=`; the
+    /// workspace's own agent is refused (with or without mail-manage);
+    /// a Member login is refused by the route floor (Admin); the hosted
+    /// knobs bundled in the same call stay Linux-only.
+    #[test]
+    fn mail_sending_owner_sets_every_mode_on_any_os_agents_and_members_refused() {
+        let _mail = crate::mail::mail_server_test_lock();
+        let id = uuid::Uuid::new_v4().to_string();
+        let path = format!("/tmp/mail-sending-{}-{}", std::process::id(), &id[..12]);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO projects (id, name, path, mail_manage_enabled) VALUES (?1, ?2, ?3, 0)",
+                rusqlite::params![id, format!("sending-{}", &id[..12]), path],
+            )
+            .expect("insert project");
+        }
+        let stored = || {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.query_row(
+                "SELECT mail_agent_send FROM projects WHERE id = ?1",
+                rusqlite::params![id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .expect("row")
+        };
+        let set_body = |mode: &str| {
+            serde_json::to_vec(&serde_json::json!({ "workspace": path, "agentSend": mode }))
+                .unwrap()
+        };
+        let show = || {
+            let mut q = HashMap::new();
+            q.insert("workspace".to_string(), path.clone());
+            let r = handle_config_get(&q);
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            serde_json::from_str::<serde_json::Value>(&r.body).unwrap()
+        };
+        let code = |r: &CliResponse| {
+            serde_json::from_str::<serde_json::Value>(&r.body).unwrap()["error"]["code"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        };
+
+        // Unset: inherits the default; the override reads null.
+        let v = show();
+        assert_eq!(v["workspace"]["project"], path.as_str());
+        assert!(v["workspace"]["agentSend"]["override"].is_null(), "{v}");
+        assert_eq!(
+            v["workspace"]["agentSend"]["effective"],
+            v["workspace"]["agentSend"]["default"],
+            "{v}"
+        );
+
+        // Owner (no scoped principal): every mode lands and reads back.
+        for mode in ["on", "approval", "off"] {
+            let r = handle_config_set(&set_body(mode));
+            assert_eq!(r.status, "200 OK", "{mode}: {}", r.body);
+            assert_eq!(stored().as_deref(), Some(mode));
+            let v = show();
+            assert_eq!(v["workspace"]["agentSend"]["override"], mode, "{v}");
+            assert_eq!(v["workspace"]["agentSend"]["effective"], mode, "{v}");
+        }
+        // A bad mode is a loud usage error, never stored.
+        let r = handle_config_set(&set_body("always"));
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        assert_eq!(stored().as_deref(), Some("off"));
+
+        // The workspace's own agent: refused, never stored.
+        let as_agent = |b: Vec<u8>| {
+            let p = crate::session_token::HookPrincipal {
+                workspace_uuid: id.clone(),
+                agent_address: "appa".to_string(),
+            };
+            crate::caller_workspace::with_request_principal(Some(p), || handle_config_set(&b))
+        };
+        let r = as_agent(set_body("on"));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert_eq!(code(&r), "agent_send_path_only", "{}", r.body);
+        // Even with mail-manage on, its OWN workspace is self-elevation.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "UPDATE projects SET mail_manage_enabled = 1 WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .expect("mail-manage on");
+        }
+        let r = as_agent(set_body("on"));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert_eq!(code(&r), "owner_only", "{}", r.body);
+        assert_eq!(stored().as_deref(), Some("off"), "agent writes never land");
+
+        // Member logins: the route floor is Admin (no member exception).
+        let row = crate::routes::route_policy::lookup("/cli/mail/config/set").expect("classified");
+        let floor = row.post.expect("POST-only mutation");
+        assert!(!floor.admits(k2_core::connect_users::Role::Member));
+        assert!(floor.admits(k2_core::connect_users::Role::Admin));
+        assert!(crate::routes::route_policy::post_allowed("/cli/mail/config/set"));
+
+        // Hosted-only knobs bundled with agentSend still stop at D3 off-Linux.
+        if !mail_supported() {
+            let r = handle_config_set(
+                &serde_json::to_vec(
+                    &serde_json::json!({ "workspace": path, "agentSend": "on", "addressCap": 3 }),
+                )
+                .unwrap(),
+            );
+            assert_eq!(r.status, "409 Conflict", "{}", r.body);
+            assert_eq!(stored().as_deref(), Some("off"), "a refused bundle applies nothing");
+        }
+
+        // Unknown workspace on the read → the shared 404.
+        let mut q = HashMap::new();
+        q.insert("workspace".to_string(), "no-such-ws-sending-xyz".to_string());
+        assert_eq!(handle_config_get(&q).status, "404 Not Found");
+
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("DELETE FROM projects WHERE id = ?1", rusqlite::params![id])
+            .expect("cleanup project");
     }
 
     /// S6 — the doctor GET serves the latest persisted run (null when

@@ -19,13 +19,21 @@
 //!              PATCH, DELETE), …/calendar/getSchedule — see calendar.rs
 //!   Google     POST /google/token, POST /google/revoke,
 //!              GET /google/gmail/v1/users/me/profile
+//!   Google Cal /google/calendar/v3/users/me/calendarList,
+//!              …/calendars/{id}/events[/{id}] (GET, POST, PATCH, DELETE;
+//!              window, full and syncToken listings), …/freeBusy — see
+//!              google_calendar.rs
 //!   Control    POST /_fake/config (merge JSON), GET /_fake/log
 //!
 //! `/_fake/config` keys: `msAccount`, `msTid`, `msTokenError` (an AADSTS
 //! description the token endpoint answers until cleared), `pendingPolls`
 //! (authorization_pending answers before a device code succeeds),
 //! `googleAccount`, `googleHd`, `getScheduleRefused` (getSchedule answers
-//! 403, like some personal accounts).
+//! 403, like some personal accounts), `googleScope` (the scope string the
+//! Google token endpoint grants — empty = the mail-only set; a test copies
+//! the consent URL's scope here, or a narrower one to model an unticked
+//! box), `googleCalendarListRefused` / `googleFreeBusyRefused` (403
+//! insufficientPermissions, like a grant without those scopes).
 //!
 //! Every Graph send is recorded under `sent` in `/_fake/log` so a test
 //! asserts who would have been emailed — calendar writes Exchange would turn
@@ -33,6 +41,7 @@
 //! header(s). Nothing here is a real credential.
 
 mod calendar;
+mod google_calendar;
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -65,6 +74,7 @@ struct State {
     messages: HashMap<String, Value>,
     revoked: Vec<String>,
     cal: calendar::Calendar,
+    gcal: google_calendar::GoogleCalendar,
 }
 
 impl State {
@@ -77,6 +87,9 @@ impl State {
             "googleAccount": "rosson@gmail.example",
             "googleHd": "",
             "getScheduleRefused": false,
+            "googleScope": "",
+            "googleCalendarListRefused": false,
+            "googleFreeBusyRefused": false,
         });
         let mut messages = HashMap::new();
         messages.insert(
@@ -105,6 +118,7 @@ impl State {
             messages,
             revoked: Vec::new(),
             cal: calendar::Calendar::seeded("rosson@contoso.example"),
+            gcal: google_calendar::GoogleCalendar::seeded("rosson@gmail.example"),
         }
     }
 
@@ -585,12 +599,58 @@ fn handle(st: &Mutex<State>, req: Req) -> (u16, String) {
         }
     }
 
+    // ── Google Calendar API ──
+    if let Some(rest) = p.strip_prefix("/google/calendar/v3") {
+        let authed = req
+            .headers
+            .get("authorization")
+            .map(|a| a.starts_with("Bearer g-at-"))
+            .unwrap_or(false);
+        if !authed {
+            return (
+                401,
+                json!({"error": {"code": 401, "message": "Invalid Credentials"}}).to_string(),
+            );
+        }
+        let decoded: Vec<String> = rest
+            .trim_start_matches('/')
+            .split('/')
+            .map(pct_decode)
+            .collect();
+        let dsegs: Vec<&str> = decoded.iter().map(String::as_str).collect();
+        let me = s.cfg_str("googleAccount");
+        let st = &mut *s;
+        if let Some(r) = google_calendar::handle(
+            &mut st.gcal,
+            &mut st.sent,
+            &me,
+            &st.cfg,
+            m,
+            &dsegs,
+            &req.query,
+            &json_body,
+        ) {
+            return r;
+        }
+        return (
+            404,
+            json!({"error": {"code": 404, "message": "fake has no such route"}}).to_string(),
+        );
+    }
+
     // ── Google ──
     match (m, p) {
         ("POST", "/google/token") => {
             let grant = form.get("grant_type").cloned().unwrap_or_default();
             let n = s.next();
             if grant == "authorization_code" {
+                let granted = match s.cfg_str("googleScope") {
+                    g if g.is_empty() => {
+                        "openid https://www.googleapis.com/auth/userinfo.email https://mail.google.com/"
+                            .to_string()
+                    }
+                    g => g,
+                };
                 let mut claims =
                     json!({"email": s.cfg_str("googleAccount"), "email_verified": true});
                 let hd = s.cfg_str("googleHd");
@@ -604,7 +664,7 @@ fn handle(st: &Mutex<State>, req: Req) -> (u16, String) {
                         "access_token": format!("g-at-{n}"),
                         "refresh_token": format!("g-rt-{n}"),
                         "expires_in": 3599,
-                        "scope": "openid https://www.googleapis.com/auth/userinfo.email https://mail.google.com/",
+                        "scope": granted,
                         "id_token": id_token(claims),
                     })
                     .to_string(),

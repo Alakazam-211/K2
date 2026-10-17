@@ -97,7 +97,7 @@ fn public(e: &Value) -> Value {
 
 /// `YYYY-MM-DDTHH:MM:SS` (any suffix) → minutes since an epoch-ish base,
 /// for window comparisons only.
-fn minutes(s: &str) -> Option<i64> {
+pub(crate) fn minutes(s: &str) -> Option<i64> {
     let s = s.get(..19)?;
     let (d, t) = s.split_once('T')?;
     let mut dp = d.split('-').map(|x| x.parse::<i64>());

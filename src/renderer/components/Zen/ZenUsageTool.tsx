@@ -59,11 +59,11 @@ ${MENU} {
   box-shadow: var(--zen-glass-sheen), 0 12px 32px color-mix(in srgb, black 16%, transparent);
   color: var(--zen-text);
 }
-${MENU} [role="progressbar"] {
+${MENU} [data-limit-track] {
   border-radius: 999px;
-  background: color-mix(in srgb, var(--zen-text) 10%, transparent);
+  clip-path: none;
+  background: color-mix(in srgb, var(--zen-text) 16%, transparent);
 }
-${MENU} [role="progressbar"] > div { border-radius: 999px; }
 @media (prefers-reduced-transparency: reduce) {
   ${CHIP}:hover,
   ${CHIP}[aria-expanded="true"],

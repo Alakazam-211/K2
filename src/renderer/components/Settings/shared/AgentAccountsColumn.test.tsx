@@ -617,6 +617,18 @@ describe('Usage v2 limit bars from /cli/usage/limits (Owner / Admin)', () => {
       'ok',
     ])
     expect(meter.querySelectorAll('[data-testid="limit-pace-mark"]')).toHaveLength(1)
+    // Rosson 2026-10-16: the Subs / Tokens bars were hair-thin (4px on the
+    // border colour). Every bar is now 6px on the visible control track.
+    const bars = [...meter.querySelectorAll('[role="progressbar"]')]
+    expect(bars).toHaveLength(3)
+    for (const bar of bars) {
+      expect(bar.className.split(' ')).toContain('h-1.5')
+      expect(bar.className.split(' ')).not.toContain('h-1')
+      const track = bar.querySelector('[data-testid="limit-bar-track"]')
+      if (!track) throw new Error('limit bar has no track')
+      expect(track.className.split(' ')).toContain('bg-[var(--color-control-track-off)]')
+      expect(track.className.split(' ')).toContain('rounded-[var(--radius-selector)]')
+    }
     expect(screen.getByTestId('llm-usage-window-acc_work-Weekly').textContent).toBe('Weekly 92% · 3d · ahead of pace')
     expect(screen.getByTestId('llm-usage-age-acc_work').textContent).toContain('Usage checked 2 min ago · live from a running session')
   })

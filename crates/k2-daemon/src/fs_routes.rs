@@ -398,6 +398,62 @@ pub fn handle_read_range_gated(
     }
 }
 
+/// `GET /cli/fs/stat` (App verb `files.stat`): one path's kind, size,
+/// times, extension and content type. Owner/Connect: an absolute `path`.
+/// An App guest: `workspace` + a room-relative `path`, under the same room,
+/// cap (`files:read`) and folder-scope rules as `read-dir`; `path` comes
+/// back room-relative.
+pub fn handle_stat_gated(params: &HashMap<String, String>, skin: Option<SkinPass>) -> CliResponse {
+    match skin {
+        Some(pass) => handle_skin_stat(params, &pass),
+        None => handle_stat(params),
+    }
+}
+
+pub fn handle_stat(params: &HashMap<String, String>) -> CliResponse {
+    let path = match params.get("path") {
+        Some(p) if !p.is_empty() => p.clone(),
+        _ => return CliResponse::bad_request("Missing 'path' parameter"),
+    };
+    match fsc::stat(&path) {
+        Ok(st) => CliResponse::ok_json(serde_json::to_string(&st).unwrap_or_else(|_| "{}".to_string())),
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+fn handle_skin_stat(params: &HashMap<String, String>, pass: &SkinPass) -> CliResponse {
+    let ws = match need_workspace(params) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+    let resolved = match resolve_skin_workspace(pass, &ws) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_READ) {
+        return crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_READ);
+    }
+    let rel = match need_rel_path(params) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    // A folder on the way to a granted one stats like it lists (List).
+    let jailed = match skin_jail_need(pass, &resolved, &rel, PathNeed::List) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    match fsc::stat(&jailed.to_string_lossy()) {
+        Ok(mut st) => {
+            let root = Path::new(&resolved.path)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(&resolved.path));
+            st.path = relative_under(&root, &st.path);
+            CliResponse::ok_json(serde_json::to_string(&st).unwrap_or_else(|_| "{}".to_string()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
 pub fn handle_upload_binary_gated(body: &[u8], skin: Option<SkinPass>) -> CliResponse {
     match skin {
         Some(pass) => handle_skin_upload_binary(body, &pass),
@@ -459,10 +515,17 @@ fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> Cl
         Ok(p) => p,
         Err(e) => return e,
     };
+    let scope = match scope_gate(pass, &resolved, &rel, PathNeed::List) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
     let jailed = match jail_rel_path(&resolved.path, &rel, false) {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
+    if let Some(r) = scope_gate_landed(&scope, &resolved, &jailed, PathNeed::List, true) {
+        return r;
+    }
     let show_hidden = matches!(
         params.get("show_hidden").map(|v| v.as_str()),
         Some("1") | Some("true") | Some("on")
@@ -475,6 +538,13 @@ fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> Cl
                 .unwrap_or_else(|_| PathBuf::from(&resolved.path));
             for e in &mut entries {
                 e.path = relative_under(&root, &e.path);
+            }
+            // R3: a scoped line lists only the granted folders and the
+            // way down to them (never a sibling).
+            if scope.is_scoped() {
+                entries.retain(|e| {
+                    k2_core::skin::paths::allows_rel(&scope, &e.path, PathNeed::List).unwrap_or(false)
+                });
             }
             CliResponse::ok_json(
                 serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string()),
@@ -500,9 +570,9 @@ fn handle_skin_read_file(params: &HashMap<String, String>, pass: &SkinPass) -> C
         Ok(p) => p,
         Err(e) => return e,
     };
-    let jailed = match jail_rel_path(&resolved.path, &rel, false) {
+    let jailed = match skin_jail_read(pass, &resolved, &rel) {
         Ok(p) => p,
-        Err(e) => return CliResponse::bad_request(e),
+        Err(r) => return r,
     };
     let abs = jailed.to_string_lossy().to_string();
     match fsc::read_file(&abs) {
@@ -555,11 +625,15 @@ fn handle_skin_write_file(body: &[u8], pass: &SkinPass) -> CliResponse {
     if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_WRITE) {
         return crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_WRITE);
     }
+    let scope = match scope_gate(pass, &resolved, &rel, PathNeed::Write) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
     let jailed = match jail_rel_path(&resolved.path, &rel, true) {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if let Some(r) = refuse_protected_write(pass, &resolved, &rel, &jailed, false) {
+    if let Some(r) = refuse_protected_write(pass, &scope, &resolved, &rel, &jailed, false) {
         return r;
     }
     let abs = jailed.to_string_lossy().to_string();
@@ -671,6 +745,107 @@ fn refuse_heartbeats_area(
     } else {
         None
     }
+}
+
+// ── Folder path scope (room-scope R3, RS-A1..A3) ───────────────────────
+//
+// A role's room line may list the folders its logins reach in that room
+// (`k2 app role paths`). Every guest file door checks the room-relative
+// path BEFORE touching the disk ([`scope_gate`]), so an unlisted path is
+// the same 403 as a missing cap whether or not it exists (RS-A3), and
+// checks the landed path again after the jail with symlinks followed
+// ([`scope_gate_landed`]), so a link inside a granted folder can't reach
+// a sibling. A scope that can't be read fails closed with that same 403.
+// The owner token, Connect users and agents' own disk reads never carry a
+// `SkinPass` and never take this path (RS-A4).
+
+pub(crate) use k2_core::skin::paths::PathNeed;
+use k2_core::skin::RoomPathScope;
+
+/// The one refusal: exactly the missing-cap 403 (no existence oracle).
+fn scope_refused(need: PathNeed) -> CliResponse {
+    crate::skin_routes::missing_cap_response(match need {
+        PathNeed::Write => crate::skin_routes::FILES_WRITE,
+        PathNeed::List | PathNeed::Read => crate::skin_routes::FILES_READ,
+    })
+}
+
+/// This login's folders on the resolved room line. `Err` = fail closed.
+pub(crate) fn room_scope(pass: &SkinPass, resolved: &SkinWorkspace, need: PathNeed) -> Result<RoomPathScope, CliResponse> {
+    pass.path_scope(&resolved.project_id).map_err(|e| {
+        k2_core::log_debug!("[fs] path scope unreadable for pass {}: {e}", pass.id);
+        scope_refused(need)
+    })
+}
+
+/// Lexical check of one room-relative path, before any disk access. A
+/// malformed path answers the jail's own 400 (the same an unscoped login
+/// gets).
+fn scope_lexical(scope: &RoomPathScope, rel: &str, need: PathNeed) -> Option<CliResponse> {
+    match k2_core::skin::paths::allows_rel(scope, rel, need) {
+        Ok(true) => None,
+        Ok(false) => Some(scope_refused(need)),
+        Err(e) => Some(CliResponse::bad_request(e)),
+    }
+}
+
+/// [`room_scope`] + [`scope_lexical`]: the gate every guest file door runs
+/// first. Returns the scope for the landed-path check.
+fn scope_gate(
+    pass: &SkinPass,
+    resolved: &SkinWorkspace,
+    rel: &str,
+    need: PathNeed,
+) -> Result<RoomPathScope, CliResponse> {
+    let scope = room_scope(pass, resolved, need)?;
+    match scope_lexical(&scope, rel, need) {
+        Some(r) => Err(r),
+        None => Ok(scope),
+    }
+}
+
+/// The room-relative form of an already resolved absolute path, or `None`
+/// when it isn't under the room.
+fn rel_in_room(room_root: &str, full: &Path) -> Option<String> {
+    let root = Path::new(room_root).canonicalize().ok()?;
+    let rest = full.strip_prefix(&root).ok()?;
+    let s = rest.to_string_lossy().replace('\\', "/");
+    Some(if s.is_empty() { ".".to_string() } else { s })
+}
+
+/// After the jail: the landed path (symlinks followed; for a new name the
+/// leaf is kept as written) must still be inside the scope. Unscoped lines
+/// pass. Anything that can't be resolved fails closed.
+fn scope_gate_landed(
+    scope: &RoomPathScope,
+    resolved: &SkinWorkspace,
+    abs: &Path,
+    need: PathNeed,
+    follow_leaf: bool,
+) -> Option<CliResponse> {
+    if !scope.is_scoped() {
+        return None;
+    }
+    let full = if follow_leaf { resolve_existing_prefix(abs) } else { resolve_parent_keep_leaf(abs) };
+    let Some(rel) = full.as_deref().and_then(|f| rel_in_room(&resolved.path, f)) else {
+        return Some(scope_refused(need));
+    };
+    match k2_core::skin::paths::allows_rel(scope, &rel, need) {
+        Ok(true) => None,
+        _ => Some(scope_refused(need)),
+    }
+}
+
+/// Both checks for one write target (`rel` as sent, `abs` jailed).
+fn scope_write_target(
+    scope: &RoomPathScope,
+    resolved: &SkinWorkspace,
+    rel: &str,
+    abs: &Path,
+    follow_leaf: bool,
+) -> Option<CliResponse> {
+    scope_lexical(scope, rel, PathNeed::Write)
+        .or_else(|| scope_gate_landed(scope, resolved, abs, PathNeed::Write, follow_leaf))
 }
 
 // ── Agent config folder (GH#72) ────────────────────────────────────────
@@ -797,12 +972,13 @@ pub fn agent_config_protected_response() -> CliResponse {
 /// ground is checked first and holds even with the opt-in.
 fn refuse_protected_write(
     pass: &SkinPass,
+    scope: &RoomPathScope,
     resolved: &SkinWorkspace,
     rel: &str,
     abs: &Path,
     ancestors: bool,
 ) -> Option<CliResponse> {
-    refuse_protected_write_at(pass, resolved, rel, abs, ancestors, true)
+    refuse_protected_write_at(pass, scope, resolved, rel, abs, ancestors, true)
 }
 
 /// [`refuse_protected_write`] for a NEW name that the door never writes
@@ -816,21 +992,28 @@ fn refuse_protected_write(
 /// also checked it on its own), and `.k2` as the name is still refused.
 fn refuse_protected_new_name(
     pass: &SkinPass,
+    scope: &RoomPathScope,
     resolved: &SkinWorkspace,
     rel: &str,
     abs: &Path,
 ) -> Option<CliResponse> {
-    refuse_protected_write_at(pass, resolved, rel, abs, false, false)
+    refuse_protected_write_at(pass, scope, resolved, rel, abs, false, false)
 }
 
 fn refuse_protected_write_at(
     pass: &SkinPass,
+    scope: &RoomPathScope,
     resolved: &SkinWorkspace,
     rel: &str,
     abs: &Path,
     ancestors: bool,
     follow_leaf: bool,
 ) -> Option<CliResponse> {
+    // R3 first: outside the line's write folders is the missing-cap 403,
+    // whatever else the path is.
+    if let Some(r) = scope_write_target(scope, resolved, rel, abs, follow_leaf) {
+        return Some(r);
+    }
     if let Some(r) = refuse_heartbeats_area(resolved, rel, abs, ancestors) {
         return Some(r);
     }
@@ -855,6 +1038,26 @@ fn refuse_protected_write_at(
         return Some(agent_config_protected_response());
     }
     None
+}
+
+/// Read doors (read-file, read-binary, read-range): the R3 gate on the
+/// path as sent, the jail, then the gate on the landed path.
+fn skin_jail_read(pass: &SkinPass, resolved: &SkinWorkspace, rel: &str) -> Result<PathBuf, CliResponse> {
+    skin_jail_need(pass, resolved, rel, PathNeed::Read)
+}
+
+pub(crate) fn skin_jail_need(
+    pass: &SkinPass,
+    resolved: &SkinWorkspace,
+    rel: &str,
+    need: PathNeed,
+) -> Result<PathBuf, CliResponse> {
+    let scope = scope_gate(pass, resolved, rel, need)?;
+    let jailed = jail_rel_path(&resolved.path, rel, false).map_err(CliResponse::bad_request)?;
+    if let Some(r) = scope_gate_landed(&scope, resolved, &jailed, need, true) {
+        return Err(r);
+    }
+    Ok(jailed)
 }
 
 fn skin_resolve_write(
@@ -900,9 +1103,9 @@ fn handle_skin_read_binary(params: &HashMap<String, String>, pass: &SkinPass) ->
         Ok(p) => p,
         Err(e) => return e,
     };
-    let jailed = match jail_rel_path(&resolved.path, &rel, false) {
+    let jailed = match skin_jail_read(pass, &resolved, &rel) {
         Ok(p) => p,
-        Err(e) => return CliResponse::bad_request(e),
+        Err(r) => return r,
     };
     let abs = jailed.to_string_lossy().to_string();
     match fsc::read_binary_file(&abs) {
@@ -930,9 +1133,9 @@ fn handle_skin_read_range(params: &HashMap<String, String>, pass: &SkinPass) -> 
         Ok(p) => p,
         Err(e) => return e,
     };
-    let jailed = match jail_rel_path(&resolved.path, &rel, false) {
+    let jailed = match skin_jail_read(pass, &resolved, &rel) {
         Ok(p) => p,
-        Err(e) => return CliResponse::bad_request(e),
+        Err(r) => return r,
     };
     let abs = jailed.to_string_lossy().to_string();
     let offset: u64 = match params.get("offset").map(|v| v.parse()) {
@@ -971,15 +1174,12 @@ fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(w) => w,
         Err(e) => return e,
     };
-    let dir = v
+    let dir_sent = v
         .get("dir")
         .and_then(|x| x.as_str())
         .unwrap_or("")
         .trim()
         .to_string();
-    if dir.is_empty() {
-        return CliResponse::bad_request("Destination directory is empty");
-    }
     let filename = v
         .get("filename")
         .and_then(|x| x.as_str())
@@ -1001,15 +1201,27 @@ fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
+    let scope = match room_scope(pass, &resolved, PathNeed::Write) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let dir = match upload_dir_or_default(dir_sent, &scope) {
+        Ok(d) => d,
+        Err(r) => return r,
+    };
+    if let Some(r) = scope_lexical(&scope, &dir, PathNeed::Write) {
+        return r;
+    }
     let jailed_dir = match jail_rel_path(&resolved.path, &dir, true) {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if let Some(r) = refuse_protected_write(pass, &resolved, &dir, &jailed_dir, false) {
+    if let Some(r) = refuse_protected_write(pass, &scope, &resolved, &dir, &jailed_dir, false) {
         return r;
     }
     if let Some(r) = refuse_protected_write(
         pass,
+        &scope,
         &resolved,
         &format!("{dir}/{filename}"),
         &jailed_dir.join(&filename),
@@ -1029,6 +1241,18 @@ fn handle_skin_upload_binary(body: &[u8], pass: &SkinPass) -> CliResponse {
             CliResponse::ok_json(serde_json::json!({ "path": rel }).to_string())
         }
         Err(e) => CliResponse::bad_request(e),
+    }
+}
+
+/// The folder an upload lands in: the one the caller sent, else the room
+/// line's `uploadDir` (R3), else the old 400.
+fn upload_dir_or_default(sent: String, scope: &RoomPathScope) -> Result<String, CliResponse> {
+    if !sent.is_empty() {
+        return Ok(sent);
+    }
+    match scope.upload_dir.as_deref() {
+        Some(d) => Ok(d.to_string()),
+        None => Err(CliResponse::bad_request("Destination directory is empty")),
     }
 }
 
@@ -1173,10 +1397,7 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
             .trim()
             .to_string()
     };
-    let dir = text("dir");
-    if dir.is_empty() {
-        return CliResponse::bad_request("Destination directory is empty");
-    }
+    let dir_sent = text("dir");
     let filename = text("filename");
     if filename.is_empty() {
         return CliResponse::bad_request("Missing 'filename' parameter");
@@ -1196,19 +1417,34 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
+    let scope = match room_scope(pass, &resolved, PathNeed::Write) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let dir = match upload_dir_or_default(dir_sent, &scope) {
+        Ok(d) => d,
+        Err(r) => return r,
+    };
+    if let Some(r) = scope_lexical(&scope, &dir, PathNeed::Write) {
+        return r;
+    }
     let jailed_dir = match jail_rel_path(&resolved.path, &dir, true) {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if let Some(r) = refuse_protected_write(pass, &resolved, &dir, &jailed_dir, false) {
+    if let Some(r) = refuse_protected_write(pass, &scope, &resolved, &dir, &jailed_dir, false) {
         return r;
     }
     let name = gu::final_name(&filename);
     // The published name never writes through an existing entry (see
     // `refuse_protected_new_name`), so the leaf is not followed here.
-    if let Some(r) =
-        refuse_protected_new_name(pass, &resolved, &format!("{dir}/{name}"), &jailed_dir.join(&name))
-    {
+    if let Some(r) = refuse_protected_new_name(
+        pass,
+        &scope,
+        &resolved,
+        &format!("{dir}/{name}"),
+        &jailed_dir.join(&name),
+    ) {
         return r;
     }
     let root = match Path::new(&resolved.path).canonicalize() {
@@ -1262,7 +1498,7 @@ fn handle_skin_upload_chunk(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(d) => d,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if let Some(r) = refuse_protected_write(pass, &resolved, &dir, &canon_dir, false) {
+    if let Some(r) = refuse_protected_write(pass, &scope, &resolved, &dir, &canon_dir, false) {
         return r;
     }
     let part = gu::guest_part_name(&principal, &resolved.project_id, &canon_dir, &name, &upload_id);
@@ -1318,11 +1554,15 @@ fn handle_skin_create(body: &[u8], pass: &SkinPass) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
+    let scope = match scope_gate(pass, &resolved, &rel, PathNeed::Write) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
     let jailed = match jail_rel_path(&resolved.path, &rel, true) {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if let Some(r) = refuse_protected_write(pass, &resolved, &rel, &jailed, false) {
+    if let Some(r) = refuse_protected_write(pass, &scope, &resolved, &rel, &jailed, false) {
         return r;
     }
     let abs = jailed.to_string_lossy().to_string();
@@ -1368,15 +1608,33 @@ fn handle_skin_copy_or_move(body: &[u8], pass: &SkinPass, is_move: bool) -> CliR
         Ok(r) => r,
         Err(e) => return e,
     };
+    // R3, before any disk access: a move takes its sources away (write
+    // folders only); a copy reads them (read or write folders). The
+    // destination is always a write folder.
+    let source_need = if is_move { PathNeed::Write } else { PathNeed::Read };
+    let scope = match room_scope(pass, &resolved, source_need) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    for rel in &sources {
+        if let Some(r) = scope_lexical(&scope, rel, source_need) {
+            return r;
+        }
+    }
+    if let Some(r) = scope_lexical(&scope, &dest, PathNeed::Write) {
+        return r;
+    }
     let mut abs_sources = Vec::with_capacity(sources.len());
     for rel in &sources {
         match jail_rel_path(&resolved.path, rel, false) {
             Ok(p) => {
                 // R2: a move carries the source away, so `.` / `.k2` count.
                 if is_move {
-                    if let Some(r) = refuse_protected_write(pass, &resolved, rel, &p, true) {
+                    if let Some(r) = refuse_protected_write(pass, &scope, &resolved, rel, &p, true) {
                         return r;
                     }
+                } else if let Some(r) = scope_gate_landed(&scope, &resolved, &p, PathNeed::Read, true) {
+                    return r;
                 }
                 abs_sources.push(p.to_string_lossy().to_string())
             }
@@ -1387,7 +1645,7 @@ fn handle_skin_copy_or_move(body: &[u8], pass: &SkinPass, is_move: bool) -> CliR
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
-    if let Some(r) = refuse_protected_write(pass, &resolved, &dest, &dest_path, false) {
+    if let Some(r) = refuse_protected_write(pass, &scope, &resolved, &dest, &dest_path, false) {
         return r;
     }
     // The landed path is `<dest>/<source name>` when dest is a folder.
@@ -1396,6 +1654,7 @@ fn handle_skin_copy_or_move(body: &[u8], pass: &SkinPass, is_move: bool) -> CliR
         let leaf_s = leaf.to_string_lossy();
         if let Some(r) = refuse_protected_write(
             pass,
+            &scope,
             &resolved,
             &format!("{dest}/{leaf_s}"),
             &dest_path.join(leaf),
@@ -1495,23 +1754,34 @@ fn handle_skin_rename(body: &[u8], pass: &SkinPass) -> CliResponse {
     if !skin_new_name_is_normal_segment(&new_name) {
         return CliResponse::bad_request("new_name must be a single path segment");
     }
+    // R3 before any disk access: the source and the new name both sit in
+    // a write folder.
+    let parent_rel = Path::new(&rel)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let new_rel = if parent_rel.is_empty() { new_name.clone() } else { format!("{parent_rel}/{new_name}") };
+    let scope = match scope_gate(pass, &resolved, &rel, PathNeed::Write) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if let Some(r) = scope_lexical(&scope, &new_rel, PathNeed::Write) {
+        return r;
+    }
     let jailed = match jail_rel_path(&resolved.path, &rel, false) {
         Ok(p) => p,
         Err(e) => return CliResponse::bad_request(e),
     };
     // R2: neither the source nor the renamed path may be heartbeat ground.
-    if let Some(r) = refuse_protected_write(pass, &resolved, &rel, &jailed, true) {
+    if let Some(r) = refuse_protected_write(pass, &scope, &resolved, &rel, &jailed, true) {
         return r;
     }
     if let Some(parent) = jailed.parent() {
-        let parent_rel = Path::new(&rel)
-            .parent()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
         if let Some(r) = refuse_protected_write(
             pass,
+            &scope,
             &resolved,
-            &format!("{parent_rel}/{new_name}"),
+            &new_rel,
             &parent.join(&new_name),
             false,
         ) {
@@ -2606,6 +2876,7 @@ mod tests {
             session: true,
             room_policy,
             app: "host".to_string(),
+            room_paths: Default::default(),
         }
     }
 

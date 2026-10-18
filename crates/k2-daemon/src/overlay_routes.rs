@@ -4017,6 +4017,7 @@ mod tests {
             session: false,
             room_policy: k2_core::skin::RoomPolicy::new(),
             app: String::new(),
+            room_paths: Default::default(),
         }
     }
 

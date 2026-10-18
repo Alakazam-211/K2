@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 10
+export const CATALOG_VERSION = 11
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -47,7 +47,7 @@ export const APP_VERBS = {
     http: { method: 'GET', route: '/cli/skin/me', params: {}, query: [] },
     socket: null,
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"catalogVersion":{"type":"integer"},"features":{"items":{"type":"string"},"type":"array"},"kind":{"enum":["guest","app","token"]},"ok":{"type":"boolean"},"principalId":{"type":["string","null"]},"rooms":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"handle":{"type":"string"},"room":{"type":"string"}},"type":"object"},"type":"array"},"username":{"type":"string"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"catalogVersion":{"type":"integer"},"features":{"items":{"type":"string"},"type":"array"},"kind":{"enum":["guest","app","token"]},"ok":{"type":"boolean"},"principalId":{"type":["string","null"]},"rooms":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"folders":{"additionalProperties":false,"properties":{"read":{"items":{"type":"string"},"type":"array"},"uploadDir":{"type":"string"},"write":{"items":{"type":"string"},"type":"array"}},"type":"object"},"handle":{"type":"string"},"room":{"type":"string"}},"type":"object"},"type":"array"},"username":{"type":"string"}},"type":"object"},
   },
   'roomAgents.list': {
     cap: null,
@@ -202,6 +202,17 @@ export const APP_VERBS = {
     socket: null,
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"base64":{"type":"string"},"eof":{"type":"boolean"},"len":{"type":"integer"},"size":{"type":"integer"}},"type":"object"},
+  },
+  'files.stat': {
+    cap: 'files:read',
+    effect: 'read',
+    kind: 'call',
+    feature: 'files-path-scope-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/fs/stat', params: { 'relPath': 'path' }, query: [] },
+    socket: null,
+    responseNames: { 'relPath': 'path' },
+    response: {"additionalProperties":false,"properties":{"ext":{"type":"string"},"kind":{"enum":["file","directory","other"]},"mime":{"type":"string"},"modifiedAt":{"type":"number"},"name":{"type":"string"},"relPath":{"type":"string"},"size":{"type":"integer"}},"type":"object"},
   },
   'files.write': {
     cap: 'files:write',
@@ -691,8 +702,19 @@ export const APP_VERBS = {
 
 export type AppVerb = keyof typeof APP_VERBS
 
+export interface AppMeFolders {
+  /** Room-relative folders it may list and read. */
+  readonly read?: string[]
+  /** Where an upload lands when it names no folder. */
+  readonly uploadDir?: string
+  /** Room-relative folders it may also write. */
+  readonly write?: string[]
+}
+
 export interface AppMeRoom {
   readonly caps: string[]
+  /** This login's folders in the room (room-scope R3). Absent: the whole room. */
+  readonly folders?: AppMeFolders
   readonly handle: string
   /** The room's project id. */
   readonly room: string
@@ -941,6 +963,21 @@ export interface AppFileRange {
   /** Bytes returned. */
   readonly len: number
   /** The file's size in bytes. */
+  readonly size: number
+}
+
+export interface AppFileStat {
+  /** Lower-case extension without the dot ('' for none or a folder). */
+  readonly ext: string
+  /** Symlinks are followed. */
+  readonly kind: 'file' | 'directory' | 'other'
+  /** A content type from the extension (application/octet-stream when unknown, inode/directory for a folder). */
+  readonly mime: string
+  /** Milliseconds since the epoch. */
+  readonly modifiedAt: number
+  readonly name: string
+  readonly relPath: string
+  /** Bytes (0 for a folder). */
   readonly size: number
 }
 
@@ -1425,6 +1462,7 @@ export interface AppVerbs {
   'files.read': { args: { relPath: string; workspace: string }; value: AppFileText }
   'files.readBinary': { args: { relPath: string; workspace: string }; value: AppFileBase64 }
   'files.readRange': { args: { len?: number; offset?: number; relPath: string; workspace: string }; value: AppFileRange }
+  'files.stat': { args: { relPath: string; workspace: string }; value: AppFileStat }
   'files.write': { args: { content: string; relPath: string; workspace: string }; value: AppFileDone }
   'files.uploadBinary': { args: { base64: string; dir: string; filename: string; workspace: string }; value: AppFileLanded }
   'files.uploadChunk': { args: { base64?: string; dir: string; filename: string; isLast?: boolean; offset?: number; status?: boolean; totalBytes?: number; uploadId: string; workspace: string }; value: AppFileChunk }
@@ -1471,7 +1509,7 @@ export interface AppVerbs {
   'agentIdentity.setHandle': { args: { handle: string; workspace: string }; value: AppAgentHandleChanged }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle'
 export type AppSubscribeVerb = 'thread.events' | 'files.events' | 'activity.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -1513,6 +1551,8 @@ export interface AppSurfaces {
     readBinary(args: { relPath: string; workspace: string }): Promise<AppFileBase64>
     /** A byte range of a file, as base64. cap files:read · GET /cli/fs/read-range. e.g. `const r = await k2.files.readRange({workspace, relPath, offset: 0})` */
     readRange(args: { len?: number; offset?: number; relPath: string; workspace: string }): Promise<AppFileRange>
+    /** One file's or folder's kind, size, modified time and content type, under the room's folder scope. cap files:read · GET /cli/fs/stat. e.g. `const {kind, size, mime} = await k2.files.stat({workspace, relPath: 'jobs/J1/plans.pdf'})` */
+    stat(args: { relPath: string; workspace: string }): Promise<AppFileStat>
     /** Write (or overwrite) a text file; its folder must exist. cap files:write · POST /cli/fs/write-file. e.g. `await k2.files.write({workspace, relPath: 'a.txt', content})` */
     write(args: { content: string; relPath: string; workspace: string }): Promise<AppFileDone>
     /** Upload a file in one request; a taken name becomes name (1).ext. cap files:write · POST /cli/fs/upload-binary. e.g. `const {relPath} = await k2.files.uploadBinary({workspace, dir: 'in', filename, base64})` */

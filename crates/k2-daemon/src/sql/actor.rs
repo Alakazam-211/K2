@@ -259,6 +259,7 @@ mod tests {
             session,
             room_policy: RoomPolicy::new(),
             app: if session { "host".to_string() } else { String::new() },
+            room_paths: Default::default(),
         }
     }
 

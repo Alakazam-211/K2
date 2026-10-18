@@ -2412,6 +2412,7 @@ mod tests {
             session: true,
             room_policy: policy,
             app: "host".to_string(),
+            room_paths: Default::default(),
         }
     }
 
@@ -2585,6 +2586,7 @@ mod tests {
                 session: false,
                 room_policy: k2_core::skin::RoomPolicy::new(),
                 app: String::new(),
+                room_paths: Default::default(),
             };
             let n = fake.recorded().len();
             let plat = routes::handle_store_get_gated(
@@ -3001,6 +3003,7 @@ mod tests {
                 session: false,
                 room_policy: k2_core::skin::RoomPolicy::new(),
                 app: String::new(),
+                room_paths: Default::default(),
             };
             let n = fake.recorded().len();
             let plat =
@@ -4175,6 +4178,7 @@ mod tests {
                 session: false,
                 room_policy: k2_core::skin::RoomPolicy::new(),
                 app: String::new(),
+                room_paths: Default::default(),
             };
             let plat = routes::handle_db_query(
                 &query_json(&handle, "SELECT 1", None),

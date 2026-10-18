@@ -155,6 +155,26 @@ describe('the wire', () => {
     expect(rows).toEqual({ ok: true, table: 'jobs', rows: [{ id: 1, path: '/kept/as/data', nested: { sessionId: 'mine' } }] })
   })
 
+  it('files.stat (room-scope R3): GET /cli/fs/stat with the room-relative path, answer projected', async () => {
+    const k2 = client()
+    answer = () => ({
+      status: 200,
+      body: { name: 'plan.pdf', path: 'jobs/J1/plan.pdf', kind: 'file', size: 81_000_000, modifiedAt: 1.7e12, ext: 'pdf', mime: 'application/pdf', hostPath: '/home/k2/ws/jobs/J1/plan.pdf' },
+    })
+    const st = await k2.asGuest(GUEST).files.stat({ workspace: 'docs', relPath: 'jobs/J1/plan.pdf' })
+    const s = gw.seen[0]
+    expect(s?.method).toBe('GET')
+    const u = new URL(s?.url ?? '', gw.url)
+    expect(u.pathname).toBe('/cli/fs/stat')
+    expect(Object.fromEntries(u.searchParams)).toEqual({ workspace: 'docs', path: 'jobs/J1/plan.pdf' })
+    expect(st).toEqual({ name: 'plan.pdf', relPath: 'jobs/J1/plan.pdf', kind: 'file', size: 81_000_000, modifiedAt: 1.7e12, ext: 'pdf', mime: 'application/pdf' })
+    // A folder outside the login's scope is the missing-cap 403.
+    answer = () => ({ status: 403, body: { error: 'missing capability files:read' } })
+    const err = (await k2.asGuest(GUEST).files.stat({ workspace: 'docs', relPath: 'jobs/J2/x.pdf' }).catch((e: unknown) => e)) as K2Error
+    expect(err).toBeInstanceOf(K2Error)
+    expect(err.code).toBe('cap_not_granted')
+  })
+
   it('a browser-only verb and an unknown verb never reach K2', async () => {
     const k2 = client()
     const g = k2.asGuest(GUEST) as unknown as { call: (v: string, a?: unknown) => Promise<unknown> }

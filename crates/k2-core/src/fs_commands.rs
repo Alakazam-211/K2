@@ -110,6 +110,105 @@ fn rename_exclusive(src: &Path, dst: &Path) -> Result<(), String> {
 
 // ── read-dir / search-tree ─────────────────────────────────────────────
 
+// ── stat ───────────────────────────────────────────────────────────────
+
+/// One path's kind, size and times (`GET /cli/fs/stat`, the App verb
+/// `files.stat`). Symlinks are followed (the jail resolved them first).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileStat {
+    pub name: String,
+    pub path: String,
+    /// `file` or `directory` (anything else, a socket or a device, is
+    /// `other`).
+    pub kind: &'static str,
+    /// Bytes for a file; 0 for a folder.
+    pub size: u64,
+    /// Milliseconds since the epoch (0 when the disk keeps none).
+    pub modified_at: f64,
+    /// Lower-case extension without the dot, `""` when none (or a folder).
+    pub ext: String,
+    /// A content type from the extension (`application/octet-stream` when
+    /// unknown, `inode/directory` for a folder).
+    pub mime: &'static str,
+}
+
+/// A content type from a file name's extension. A deliberately small
+/// table (plans, quotes, photos, office files, CAD); unknown is a blob.
+pub fn mime_for_name(name: &str) -> &'static str {
+    let ext = Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "heic" => "image/heic",
+        "tif" | "tiff" => "image/tiff",
+        "svg" => "image/svg+xml",
+        "txt" | "log" => "text/plain",
+        "md" => "text/markdown",
+        "csv" => "text/csv",
+        "html" | "htm" => "text/html",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "zip" => "application/zip",
+        "gz" | "tgz" => "application/gzip",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "dwg" => "image/vnd.dwg",
+        "dxf" => "image/vnd.dxf",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Stat one path (validated like every owner fs read).
+pub fn stat(path: &str) -> Result<FileStat, String> {
+    let p = validate_path(path)?;
+    let meta = fs::metadata(&p).map_err(map_io_err)?;
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let modified_at = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
+    let (kind, size, ext, mime) = if meta.is_dir() {
+        ("directory", 0, String::new(), "inode/directory")
+    } else if meta.is_file() {
+        let ext = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        ("file", meta.len(), ext, mime_for_name(&name))
+    } else {
+        ("other", 0, String::new(), "application/octet-stream")
+    };
+    Ok(FileStat {
+        name,
+        path: p.to_string_lossy().to_string(),
+        kind,
+        size,
+        modified_at,
+        ext,
+        mime,
+    })
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DirEntryInfo {

@@ -336,6 +336,13 @@ pub const FEATURE_GARDEN_DATA: &str = "garden-data-v1";
 /// and a guest or App pass may read `GET /cli/thread/latest` for its rooms.
 pub const FEATURE_APP_API: &str = "app-api-v1";
 
+/// Folder path scope per room line (room-scope R3, RS-A1..A3, 0.46.1):
+/// a role's room line may list read/write folders and an `uploadDir`
+/// (`k2 app role paths`), every guest file door and `fs/events` honour it,
+/// `skin/me` rooms carry `folders`, and `GET /cli/fs/stat` (`files.stat`)
+/// answers.
+pub const FEATURE_FILES_PATH_SCOPE: &str = "files-path-scope-v1";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -369,6 +376,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_GARDEN_DATA);
     out.push(FEATURE_GROKBOTS);
     out.push(FEATURE_APP_API);
+    out.push(FEATURE_FILES_PATH_SCOPE);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
     }
@@ -417,6 +425,7 @@ mod tests {
                 "garden-data-v1",
                 "grokbots-v1",
                 "app-api-v1",
+                "files-path-scope-v1",
                 "thread-push-v1"
             ]
         );

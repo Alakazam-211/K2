@@ -9163,6 +9163,40 @@ async fn handle_one_request(
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
+                // R3 (RS-A1..A3): one room line's folders on a role.
+                "/cli/skin/roles/paths" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    let actor = match owner_or_skin_manage_hook(
+                        p,
+                        &query,
+                        bearer_token.as_deref(),
+                        state.token.as_str(),
+                    ) {
+                        Ok(a) => a,
+                        Err(f) => {
+                            let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                            super::http::send_response(
+                                &mut *stream,
+                                f.status,
+                                f.content_type,
+                                &f.body,
+                            )
+                            .await;
+                            return DispatchOutcome::Done;
+                        }
+                    };
+                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    tokio::task::spawn_blocking(move || {
+                        crate::skin_routes::stamp_actor(
+                            crate::skin_routes::handle_roles_paths(&body, &actor),
+                            &actor,
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
                 "/cli/skin/grants" if is_post => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
@@ -11301,7 +11335,8 @@ async fn handle_one_request(
         p if p == "/cli/fs/read-dir"
             || p == "/cli/fs/read-file"
             || p == "/cli/fs/read-binary"
-            || p == "/cli/fs/read-range" =>
+            || p == "/cli/fs/read-range"
+            || p == "/cli/fs/stat" =>
         {
             let _ = stream.read(&mut buf).await;
             let skin_presented = super::http::extract_token(&query)
@@ -11358,6 +11393,7 @@ async fn handle_one_request(
                 "/cli/fs/read-binary" => {
                     crate::fs_routes::handle_read_binary_gated(&params, skin_pass)
                 }
+                "/cli/fs/stat" => crate::fs_routes::handle_stat_gated(&params, skin_pass),
                 _ => crate::fs_routes::handle_read_range_gated(&params, skin_pass),
             })
             .await

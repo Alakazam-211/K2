@@ -529,8 +529,22 @@ fn handle_read(
                 Err(r) => return r,
             };
             let mut v = guest_row(root, &h);
-            // AH9 / R2: the WAKEUP.md body follows file access.
-            if pass.has_cap_in_room(&room.project_id, CAP_FILES_READ) {
+            // AH9 / R2: the WAKEUP.md body follows file access, and (R3)
+            // the room line's folders: a scoped line sees it only when
+            // its read folders hold the heartbeat's WAKEUP.md.
+            let body_in_scope = pass
+                .path_scope(&room.project_id)
+                .ok()
+                .and_then(|scope| {
+                    k2_core::skin::paths::allows_rel(
+                        &scope,
+                        &format!(".k2/heartbeats/{name}/WAKEUP.md"),
+                        k2_core::skin::paths::PathNeed::Read,
+                    )
+                    .ok()
+                })
+                .unwrap_or(false);
+            if pass.has_cap_in_room(&room.project_id, CAP_FILES_READ) && body_in_scope {
                 match hb::k2so_heartbeat_instructions(root, name) {
                     Ok((body, rel)) => {
                         v["instructions"] = Value::String(body);
@@ -960,6 +974,7 @@ mod tests {
             session: true,
             room_policy: Default::default(),
             app: "host".to_string(),
+            room_paths: Default::default(),
         }
     }
 

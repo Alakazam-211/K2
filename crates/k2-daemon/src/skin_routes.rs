@@ -1264,6 +1264,82 @@ pub fn handle_roles_room(body: &[u8], actor: &str) -> CliResponse {
     }
 }
 
+/// One folder list from a body key: an array of strings (absent = empty).
+fn folder_list(v: &serde_json::Value, key: &str) -> Result<Vec<String>, CliResponse> {
+    match v.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+        Some(serde_json::Value::Array(a)) => a
+            .iter()
+            .map(|x| {
+                x.as_str()
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| CliResponse::bad_request(format!("{key} must be an array of folder strings")))
+            })
+            .collect(),
+        Some(_) => Err(CliResponse::bad_request(format!("{key} must be an array of folder strings"))),
+    }
+}
+
+/// `POST /cli/skin/roles/paths` (`k2 app role paths`, room-scope R3,
+/// RS-A1..A3): set one room line's folders on a role. Body `{name, handle,
+/// read?: [..], write?: [..], uploadDir?: ".."}` replaces the line's
+/// folders; `{name, handle, clear: true}` (or nothing listed) puts the
+/// line back to the whole room. The room must already be on the role.
+pub fn handle_roles_paths(body: &[u8], actor: &str) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(id_or_name) = str_field(&v, &["name", "role", "id"]) else {
+        return CliResponse::bad_request("missing role name");
+    };
+    let Some(handle) = str_field(&v, &["handle", "room", "workspace"]) else {
+        return CliResponse::bad_request("missing handle (the room)");
+    };
+    let clear = v.get("clear").and_then(|x| x.as_bool()).unwrap_or(false);
+    let scope = if clear {
+        skin::RoomPathScope::default()
+    } else {
+        let read = match folder_list(&v, "read") {
+            Ok(l) => l,
+            Err(r) => return r,
+        };
+        let write = match folder_list(&v, "write") {
+            Ok(l) => l,
+            Err(r) => return r,
+        };
+        let upload_dir = match v.get("uploadDir").or_else(|| v.get("upload_dir")) {
+            None | Some(serde_json::Value::Null) => None,
+            Some(serde_json::Value::String(s)) => Some(s.clone()),
+            Some(_) => return CliResponse::bad_request("uploadDir must be a folder string"),
+        };
+        if read.is_empty() && write.is_empty() && upload_dir.is_none() {
+            return CliResponse::bad_request(
+                "nothing to set: send read, write or uploadDir folders, or clear:true for the whole room",
+            );
+        }
+        skin::RoomPathScope { read, write, upload_dir }
+    };
+    let ids = match skin::resolve_room_tokens(&[handle.to_string()]) {
+        Ok(ids) if ids.len() == 1 => ids,
+        Ok(_) => return CliResponse::bad_request(format!("unknown workspace handle {handle:?}")),
+        Err(e) => return CliResponse::bad_request(e),
+    };
+    match skin::paths::set_role_room_paths(id_or_name, &ids[0], &scope) {
+        Ok(role) => {
+            k2_core::log_debug!(
+                "[skin] actor={actor} role paths {} handle={handle} clear={clear} read={:?} write={:?} uploadDir={:?}",
+                role.name,
+                scope.read,
+                scope.write,
+                scope.upload_dir
+            );
+            CliResponse::ok_json(serde_json::to_string(&role).unwrap_or_else(|_| "{}".into()))
+        }
+        Err(e) => CliResponse::bad_request(e),
+    }
+}
+
 pub fn handle_roles_remove(body: &[u8], actor: &str) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,

@@ -434,11 +434,12 @@ mod tests {
                         | HookEvent::ProjectGroupLayoutChanged
                         | HookEvent::ProjectGroupMessageCreated,
                     ) => {
-                        if reason == want_reason {
-                            // An empty payload carries no project id.
-                            assert_eq!(group_id, &None, "{hook:?}: no groupId in, none out");
-                        }
-                        reason == want_reason
+                        // An empty payload carries no project id, so ours
+                        // is the one with none. The bus is process-wide: a
+                        // parallel test's frame (with its own groupId, like
+                        // project_group_mirror_carries_the_group_id's) is
+                        // not ours and is skipped.
+                        reason == want_reason && group_id.is_none()
                     }
                     (
                         SessionEvent::FeedbackChanged { reason },

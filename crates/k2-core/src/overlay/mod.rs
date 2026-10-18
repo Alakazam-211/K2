@@ -5,6 +5,7 @@
 //! `v2_session_map`. Documents live in redb: one `docs/{id}` body,
 //! collection tables store `seq → id` pointers only.
 
+pub mod attachments;
 pub mod catalog;
 pub mod doc;
 pub mod options;
@@ -16,6 +17,7 @@ use parking_lot::Mutex;
 use rusqlite::Connection;
 
 pub use doc::{ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin, WidgetPlacementClaim};
+pub use attachments::ThreadAttachment;
 pub use options::{parse_options_value, split_options_csv};
 pub use store::{ExtTxn, OverlayPage, SeqRemap};
 pub use transfer::IMPORTED_READ_ONLY;
@@ -225,6 +227,26 @@ pub fn post_thread_with_origin(
     widget: Option<WidgetOrigin>,
     author: Option<PostAuthor>,
 ) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
+    post_thread_with_attachments(conn, conversation_id, project_id, from, to, body, via, widget, author, Vec::new())
+}
+
+/// [`post_thread_with_origin`] with file objects (0.46.1,
+/// `thread-attachments-v1`). `attachments` must come from
+/// [`attachments::snapshot_all`] (the daemon's checks); this only stores
+/// them.
+#[allow(clippy::too_many_arguments)]
+pub fn post_thread_with_attachments(
+    conn: &Connection,
+    conversation_id: &str,
+    project_id: &str,
+    from: &str,
+    to: &str,
+    body: &str,
+    via: &str,
+    widget: Option<WidgetOrigin>,
+    author: Option<PostAuthor>,
+    attachments: Vec<ThreadAttachment>,
+) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
     let _guard = WRITE.lock();
     let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -237,6 +259,7 @@ pub fn post_thread_with_origin(
     );
     doc.widget = widget;
     doc.author = author;
+    doc.attachments = attachments;
     store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
     let item = OverlayItem {
         collection: "thread".to_string(),
@@ -323,6 +346,15 @@ pub fn is_waiting_now(doc: &OverlayDoc, now: i64) -> bool {
 /// there is no such doc). Callers check it belongs where they expect.
 pub fn get_doc(id: &str) -> Result<Option<OverlayDoc>, String> {
     store::get_doc(id)
+}
+
+/// `doc_id` read only when it is on `conversation_id`'s Thread (else
+/// `None`, even when the id exists elsewhere).
+pub fn get_thread_doc(conversation_id: &str, doc_id: &str) -> Result<Option<OverlayDoc>, String> {
+    if store::thread_seq_of(conversation_id, doc_id)?.is_none() {
+        return Ok(None);
+    }
+    store::get_doc(doc_id)
 }
 
 /// One Thread item of this conversation by id (None when it is not there).

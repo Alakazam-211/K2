@@ -180,6 +180,42 @@ pub fn install_move_listener() {
     k2_core::overlay::set_move_listener(on_conversation_moved);
 }
 
+/// A guest subscriber's room (thread-attachments-v1): its pass and the
+/// room it subscribed in, for the per-attachment file-rights check.
+pub(crate) struct GuestWire {
+    pub pass: SkinPass,
+    pub project_id: String,
+    pub root: Option<std::path::PathBuf>,
+}
+
+/// [`wire_json`] for one subscriber. A doc with attachments is rewritten:
+/// each gains `state: "ok"` (frames go out at post time; clients refresh
+/// state on the next GET), and a guest sees only the files its own file
+/// rights cover (the rest are `{kind, state:"hidden"}`).
+pub(crate) fn wire_json_for(frame: &OverlayFrame, guest: Option<&GuestWire>) -> String {
+    let has_files = frame.doc.as_ref().is_some_and(|d| !d.attachments.is_empty());
+    if !has_files || frame.activity.is_some() {
+        return wire_json(frame);
+    }
+    let mut doc = serde_json::to_value(frame.doc.as_ref()).unwrap_or(serde_json::Value::Null);
+    match guest {
+        Some(g) => crate::thread_attachments::rewrite_doc(
+            &mut doc,
+            g.root.as_deref(),
+            &crate::thread_attachments::Viewer::Guest { pass: &g.pass, project_id: &g.project_id },
+            false,
+        ),
+        None => crate::thread_attachments::rewrite_doc(&mut doc, None, &crate::thread_attachments::Viewer::Full, false),
+    }
+    serde_json::json!({
+        "collection": frame.collection,
+        "seq": frame.seq,
+        "id": frame.id,
+        "doc": doc,
+    })
+    .to_string()
+}
+
 fn wire_json(frame: &OverlayFrame) -> String {
     if frame.collection == ADDRESS_COLLECTION {
         let payload = frame.activity.as_ref();
@@ -237,7 +273,7 @@ pub fn skin_may_see_frame(frame: &OverlayFrame, conversation: &str, skin: bool) 
 fn skin_overlay_gate(
     pass: &SkinPass,
     conversation: &str,
-) -> Result<(), crate::cli_response::CliResponse> {
+) -> Result<String, crate::cli_response::CliResponse> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let Ok(Some(project_id)) =
@@ -263,7 +299,7 @@ fn skin_overlay_gate(
         .filter(|s| !s.is_empty())
         .is_some_and(|pin| pin == conversation);
     if pinned {
-        Ok(())
+        Ok(project_id)
     } else {
         Err(crate::skin_routes::skin_room_response())
     }
@@ -301,18 +337,25 @@ pub async fn serve_overlay_events_connection(
         return;
     };
 
+    let mut guest_wire: Option<GuestWire> = None;
     if let Some(ref pass) = skin_pass {
-        if let Err(r) = skin_overlay_gate(pass, &conversation) {
-            let resp = format!(
-                "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{}",
-                r.status,
-                r.content_type,
-                r.body.len(),
-                k2_core::frame_policy::CONNECT_HEADER_LINES,
-                r.body
-            );
-            let _ = tokio::io::AsyncWriteExt::write_all(stream, resp.as_bytes()).await;
-            return;
+        match skin_overlay_gate(pass, &conversation) {
+            Ok(project_id) => {
+                let root = crate::thread_attachments::project_root(&project_id);
+                guest_wire = Some(GuestWire { pass: pass.clone(), project_id, root });
+            }
+            Err(r) => {
+                let resp = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{}",
+                    r.status,
+                    r.content_type,
+                    r.body.len(),
+                    k2_core::frame_policy::CONNECT_HEADER_LINES,
+                    r.body
+                );
+                let _ = tokio::io::AsyncWriteExt::write_all(stream, resp.as_bytes()).await;
+                return;
+            }
         }
     }
 
@@ -372,7 +415,7 @@ pub async fn serve_overlay_events_connection(
                             continue;
                         }
                         if write
-                            .send(Message::Text(wire_json(&frame)))
+                            .send(Message::Text(wire_json_for(&frame, guest_wire.as_ref())))
                             .await
                             .is_err()
                         {

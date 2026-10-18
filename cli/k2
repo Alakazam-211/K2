@@ -12295,6 +12295,38 @@ for r in rows:
     esac
 }
 
+# thread-attachments-v1: `--file path[:line[-end]]` values → the JSON the
+# daemon takes ([{path, line?, lineEnd?}]). A `:N` / `:N-M` suffix is a
+# line spec only when it is numeric AND `path:suffix` itself is not a file
+# (colons in names). A path that exists here is sent absolute (resolved
+# against $PWD); anything else goes as typed and the daemon resolves it
+# against the workspace root. The daemon makes every decision (inside the
+# workspace, a file, not a secret).
+_thread_attachments_json() {
+    python3 - "$PWD" "$@" <<'PY'
+import json, os, re, sys
+cwd = sys.argv[1]
+out = []
+for spec in sys.argv[2:]:
+    path, line, end = spec, None, None
+    here = lambda p: os.path.join(cwd, os.path.expanduser(p))
+    if not os.path.exists(here(spec)):
+        m = re.match(r"^(.+?):(\d+)(?:-(\d+))?$", spec)
+        if m:
+            path, line = m.group(1), int(m.group(2))
+            end = int(m.group(3)) if m.group(3) else None
+    if os.path.exists(here(path)):
+        path = os.path.abspath(here(path))
+    item = {"path": path}
+    if line is not None:
+        item["line"] = line
+    if end is not None:
+        item["lineEnd"] = end
+    out.append(item)
+print(json.dumps(out))
+PY
+}
+
 cmd_thread() {
     for arg in "$@"; do
         case "$arg" in
@@ -12309,7 +12341,7 @@ cmd_thread() {
     for arg in "$@"; do
         if [[ $skip_next -eq 1 ]]; then skip_next=0; continue; fi
         case "$arg" in
-            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq)
+            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--file)
                 skip_next=1
                 continue
                 ;;
@@ -12335,6 +12367,7 @@ cmd_thread() {
     local limit=""
     local all="false"
     local before_seq=""
+    local -a files=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --json) json="true"; shift ;;
@@ -12342,6 +12375,9 @@ cmd_thread() {
             --limit) limit="$2"; shift 2 ;;
             --all) all="true"; shift ;;
             --before-seq) before_seq="$2"; shift 2 ;;
+            --file)
+                [[ -z "${2:-}" ]] && { echo "Error: --file needs a path (path[:line[-end]])" >&2; exit 1; }
+                files+=("$2"); shift 2 ;;
             -*)
                 echo "Error: unknown flag '$1' (try 'k2 thread --help')" >&2
                 exit 1 ;;
@@ -12356,6 +12392,7 @@ cmd_thread() {
     [[ -z "$target" ]] && {
         echo "Error: address required" >&2
         echo "Usage: k2 thread <addr> \"text\"     # write overlay text" >&2
+        echo "       k2 thread <addr> [\"text\"] --file path[:line[-end]]   # attach files" >&2
         echo "       k2 thread <addr> [--json] [--limit N|--all] [--before-seq N]" >&2
         echo "       k2 thread ask <addr> \"prompt\" --options \"a,b,c\"" >&2
         echo "       k2 thread secret <addr> --name NAME" >&2
@@ -12366,11 +12403,20 @@ cmd_thread() {
     local from
     from="$(_thread_sender_from "$explicit_from")"
 
-    if [[ -n "$text" ]]; then
+    if [[ ${#files[@]} -gt 10 ]]; then
+        echo "Error: at most 10 files per message" >&2
+        exit 1
+    fi
+    if [[ -n "$text" || ${#files[@]} -gt 0 ]]; then
         local params="addr=$(urlencode "$target")"
         params="${params}&text=$(urlencode "$text")"
         params="${params}&from=$(urlencode "$from")"
         params="${params}&via=thread"
+        if [[ ${#files[@]} -gt 0 ]]; then
+            local attachments_json
+            attachments_json="$(_thread_attachments_json "${files[@]}")" || exit 1
+            params="${params}&attachments=$(urlencode "$attachments_json")"
+        fi
         local response
         response=$(cli_send cli_post_form "/cli/thread/post" "$params")
         local rc=$?
@@ -12393,6 +12439,17 @@ if d.get("ok") is not True:
         sys.stderr.write(str(err)+"\n")
     sys.exit(2)
 print("%s  seq=%s  from=%s" % (d.get("id",""), d.get("seq",""), d.get("from","")))
+def size(n):
+    n=int(n or 0)
+    for unit in ("B","KB","MB","GB"):
+        if n < 1024 or unit == "GB":
+            return ("%d %s" % (n, unit)) if unit == "B" else ("%.0f %s" % (n, unit))
+        n=n/1024.0
+for a in d.get("attachments") or []:
+    line=""
+    if a.get("line"):
+        line=":%s" % a["line"] + (("-%s" % a["lineEnd"]) if a.get("lineEnd") else "")
+    print("  [file] %s%s (%s)" % (a.get("path",""), line, size(a.get("size"))))
 '
             rc=$?
             if [[ $rc -eq 0 ]]; then
@@ -12436,12 +12493,28 @@ items=d.get("items") or []
 if not items:
     print("(empty)")
     sys.exit(0)
+def size(n):
+    n=int(n or 0)
+    for unit in ("B","KB","MB","GB"):
+        if n < 1024 or unit == "GB":
+            return ("%d %s" % (n, unit)) if unit == "B" else ("%.0f %s" % (n, unit))
+        n=n/1024.0
 for it in items:
     doc=it.get("doc") or {}
     body=doc.get("body") or ""
     frm=doc.get("from") or ""
     seq=it.get("seq")
     print("[%s] from %s: %s" % (seq, frm, body))
+    for a in doc.get("attachments") or []:
+        st=a.get("state") or "ok"
+        if st == "hidden":
+            print("  [file] (not shared with you)")
+            continue
+        line=""
+        if a.get("line"):
+            line=":%s" % a["line"] + (("-%s" % a["lineEnd"]) if a.get("lineEnd") else "")
+        tag="" if st == "ok" else " (%s)" % st
+        print("  [file] %s%s (%s)%s" % (a.get("path",""), line, size(a.get("size")), tag))
 '
 }
 
@@ -12762,6 +12835,8 @@ cmd_help_thread() {
 k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
 
   k2 thread <addr> "text"                         # overlay text (not PTY; that's k2 msg)
+  k2 thread <addr> "text" --file path[:line[-end]]  # attach a workspace file (repeatable, ≤10)
+  k2 thread <addr> --file out/shot.png            # text is optional when a file rides
   k2 thread <addr> [--limit N|--all] [--before-seq N]  # read newest 25
   k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait
       [--expires 2h|3d|90m] [--no-expiry]          # open 7 days unless you pick a time frame
@@ -12795,6 +12870,13 @@ post a new card if the options changed. An expired card says so on the Thread; a
 again if you still need it.
 
 Text (and ask prompts) render markdown: **bold**, lists, `code`, fences, links.
+
+Attach the files you mention (--file): the person taps them to open (desktop and
+phone). A file is a pointer to this workspace's copy, not a copy: it shows
+"changed" when the file changes and "not found" when it moves. Only files inside
+this workspace (copy others into it first, e.g. out/); secrets (.env, keys,
+tokens, credentials in the text) are refused: secrets go through k2 vault.
+path:12 or path:12-40 opens at that line.
 
 --json on any verb. Ask --option repeatable; --allow-custom; mix with --options is 400.
 EOF
@@ -25764,7 +25846,7 @@ cmd_schema() {
   "commands": [
     {
       "name": "thread",
-      "usage": "k2 thread <addr> [\"text\"] [--json] [--limit N|--all] [--before-seq N] | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME | k2 thread void <addr> <card-id>",
+      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME | k2 thread void <addr> <card-id>",
       "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). A card stays open while people discuss it (their prose is not the answer); void your own card only when it is obsolete (k2 thread void <addr> <card-id>). Text and ask prompts render markdown. On a 0.45.5+ server your posts may push people's phones (name-only; see k2 study notifications). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
       "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
       "flags": [
@@ -25772,6 +25854,7 @@ cmd_schema() {
         {"name": "--limit", "arg": "N", "description": "Read page size (daemon default 25, max 500)."},
         {"name": "--all", "arg": null, "description": "Read the full overlay (unbounded)."},
         {"name": "--before-seq", "arg": "N", "description": "Load older items with seq < N."},
+        {"name": "--file", "arg": "path[:line[-end]]", "description": "Attach a workspace file (repeatable, at most 10; text optional). Inside this workspace only; secrets refused."},
         {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."},
         {"name": "--options", "arg": "a,b,c", "description": "Choice labels (comma list; \\, = literal comma). Mix with --option is 400."},
         {"name": "--option", "arg": "label", "description": "Repeatable choice label. Mix with --options is 400."},
@@ -29835,6 +29918,8 @@ THREAD
                                 secret field; you never see the value
   `k2 thread void <addr> <card-id>`
                                 close your own card (obsolete question)
+  `k2 thread <addr> "…" --file docs/report.pdf --file src/a.rs:12-40`
+                                attach the files you mention (≤10)
 
   Same first-arg grammar as msg: sales / sales/reviewer / sales/1.
   Post and continue. Do not --wait. Do not emit widget JSON.
@@ -29851,6 +29936,15 @@ CARDS STAY OPEN WHILE PEOPLE TALK
   days unless you pick a time frame that fits the decision
   (`--expires 2h|3d`, or `--no-expiry`); a secret card after 7 days.
   An expired card says so on the Thread; ask again if you still need it.
+
+ATTACH THE FILES YOU MENTION
+  `--file path[:line[-end]]` (repeatable) puts a file chip under your
+  message; the person taps it to open the file (on the phone too). It
+  is a pointer to this workspace's file, not a copy: it shows "changed"
+  after an edit and "not found" when it moves. Only files inside your
+  workspace (copy others in first, e.g. out/); secrets are refused
+  (.env, keys, tokens, credentials in the text): use `k2 vault`.
+  App guests see a file only when their own file access covers it.
 
 [thread:addr]
   If a message arrives prefixed `[thread:<addr>]`, the human wrote on

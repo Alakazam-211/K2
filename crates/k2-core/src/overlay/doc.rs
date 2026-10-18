@@ -302,6 +302,12 @@ pub struct OverlayDoc {
     /// only), never the card answer route, so a passport can't take it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<HandoffCardBody>,
+    /// File objects riding the message (0.46.1, `thread-attachments-v1`):
+    /// workspace-relative pointers with a send-time snapshot, written only
+    /// by the daemon after its own checks (`super::attachments`). Never a
+    /// copy, never a grant. Empty on every other doc and on older docs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<super::attachments::ThreadAttachment>,
 }
 
 /// The body of a `handoff` card. `body` on the doc carries a plain line
@@ -452,6 +458,7 @@ impl OverlayDoc {
             imported: None,
             delivery_id: None,
             handoff: None,
+            attachments: Vec::new(),
         }
     }
 
@@ -493,6 +500,7 @@ impl OverlayDoc {
             imported: None,
             delivery_id: None,
             handoff: None,
+            attachments: Vec::new(),
         }
     }
 
@@ -534,6 +542,7 @@ impl OverlayDoc {
             imported: None,
             delivery_id: None,
             handoff: None,
+            attachments: Vec::new(),
         }
     }
 
@@ -563,6 +572,7 @@ impl OverlayDoc {
             imported: None,
             delivery_id: None,
             handoff: None,
+            attachments: Vec::new(),
         }
     }
 
@@ -586,6 +596,7 @@ impl OverlayDoc {
             imported: None,
             delivery_id: None,
             handoff: Some(card),
+            attachments: Vec::new(),
         }
     }
 

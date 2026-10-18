@@ -442,12 +442,18 @@ fn authorize_write(
 }
 
 fn snapshot_json(collection: &str, resolved: &ResolvedOverlay, page: OverlayPage) -> String {
+    let mut items = serde_json::to_value(&page.items).unwrap_or_else(|_| serde_json::json!([]));
+    if collection == "thread" {
+        // thread-attachments-v1: live state per file; a guest sees only
+        // the files their own file rights cover (the rest are `hidden`).
+        crate::thread_attachments::rewrite_items(&mut items, &resolved.project_id, request_skin().as_ref());
+    }
     let body = serde_json::json!({
         "ok": true,
         "collection": collection,
         "addr": resolved.addr,
         "conversation_id": resolved.conversation_id,
-        "items": page.items,
+        "items": items,
         "has_more": page.has_more,
         // Q5: every address this chat answered at before, so a client
         // renders old rows' `from`/`to` under the current name.
@@ -547,7 +553,13 @@ pub fn thread_preview(doc: &k2_core::overlay::OverlayDoc) -> String {
         "secret" => "Asked for a secret".to_string(),
         _ => doc.body.clone().unwrap_or_default(),
     };
-    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    // A post with only files previews as `[file]` / `[N files]`: never a name.
+    if collapsed.is_empty() {
+        if let Some(tag) = k2_core::overlay::attachments::placeholder(doc.attachments.len()) {
+            collapsed = tag;
+        }
+    }
     if collapsed.chars().count() <= THREAD_PREVIEW_CHARS {
         collapsed
     } else {
@@ -654,6 +666,8 @@ fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
                             "author": item.doc.author,
                             "kind": item.doc.kind,
                             "preview": thread_preview(&item.doc),
+                            // thread-attachments-v1: a count only.
+                            "attachmentCount": item.doc.attachments.len(),
                         }),
                         &resolved.conversation_id,
                     ),
@@ -994,7 +1008,17 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
     if addr.is_empty() {
         return usage("missing addr");
     }
-    if text.is_empty() {
+    // thread-attachments-v1: `attachments` = [{path, line?, lineEnd?}]
+    // (JSON; a form body carries it as a JSON string). Text may be empty
+    // when files ride the post.
+    let attach_reqs = match params.get("attachments").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        None => Vec::new(),
+        Some(raw) => match k2_core::overlay::attachments::parse_requests(raw) {
+            Ok(r) => r,
+            Err(e) => return error_json("400 Bad Request", e.code(), e.hint()),
+        },
+    };
+    if text.is_empty() && attach_reqs.is_empty() {
         return usage("missing text");
     }
     let via_in = opt_param(params, "via").unwrap_or_else(|| "thread".to_string());
@@ -1005,6 +1029,11 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
             "forbidden",
             "skin tokens cannot use via=compose",
         );
+    }
+    // App guests can't attach in v1: an attachment would point other
+    // viewers at room files (their uploads already arrive as text).
+    if request_skin().is_some() && !attach_reqs.is_empty() {
+        return error_json("403 Forbidden", "forbidden", "App guests can't attach files to a Thread message");
     }
     let resolved = match resolve_thread_addr(&addr) {
         Ok(r) => r,
@@ -1078,9 +1107,67 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         }
         Err(e) => return e,
     };
+    // Check and snapshot the files before anything is stored: inside the
+    // Thread's own workspace (realpath), a regular file, not a secret. Any
+    // refusal refuses the whole post.
+    let (attachments, workspace_root) = if attach_reqs.is_empty() {
+        (Vec::new(), None)
+    } else {
+        let Some(root) = crate::thread_attachments::project_root(&resolved.project_id) else {
+            return not_found("this Thread's workspace folder is not registered");
+        };
+        let home = dirs::home_dir();
+        match k2_core::overlay::attachments::snapshot_all(&root, home.as_deref(), &attach_reqs) {
+            Ok(a) => {
+                crate::thread_attachments::audit(
+                    "thread.attachment.post",
+                    &from,
+                    format!(
+                        "to={} count={} rels={:?}",
+                        resolved.addr,
+                        a.len(),
+                        a.iter().map(|x| x.path.as_str()).collect::<Vec<_>>()
+                    ),
+                );
+                (a, Some(root))
+            }
+            Err(e) => {
+                // The path for pattern/outside refusals; a content hit logs
+                // the path, never the matched text.
+                let what = match &e {
+                    k2_core::overlay::attachments::AttachError::Secret { rel, .. } => rel.clone(),
+                    k2_core::overlay::attachments::AttachError::Outside { input }
+                    | k2_core::overlay::attachments::AttachError::NotAFile { input } => input.clone(),
+                    k2_core::overlay::attachments::AttachError::Usage(_) => "-".to_string(),
+                };
+                crate::thread_attachments::audit(
+                    "thread.attachment.refused",
+                    &from,
+                    format!("to={} reason={} path={what:?}", resolved.addr, e.reason()),
+                );
+                return error_json("400 Bad Request", e.code(), e.hint());
+            }
+        }
+    };
+    let n_files = attachments.len();
+    // What the agent gets on a person's compose post with files: the
+    // absolute paths ride the injected line (the agent reads from disk).
+    let inject_text = match &workspace_root {
+        Some(root) if via == "compose" && !bound => {
+            let mut t = text.clone();
+            for a in &attachments {
+                if !t.is_empty() {
+                    t.push('\n');
+                }
+                t.push_str(&format!("Attached: {}", root.join(&a.path).display()));
+            }
+            t
+        }
+        _ => text.clone(),
+    };
     let db = k2_core::db::shared();
     let conn = db.lock();
-    match overlay::post_thread_with_origin(
+    match overlay::post_thread_with_attachments(
         &conn,
         &resolved.conversation_id,
         &resolved.project_id,
@@ -1090,6 +1177,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         &via,
         origin.clone(),
         author,
+        attachments,
     ) {
         Ok((item, links)) => {
             // thread-read-v1: a person's own post advances their own
@@ -1103,7 +1191,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 // discuss it first and answer by tapping later. Only a tap,
                 // a dismiss / `k2 thread void`, or the card's expiry close it.
                 let turn = ThreadTurn::new(&resolved, &item.id, received_at);
-                inject_thread_compose(&resolved, &from, &text, &command, turn);
+                inject_thread_compose(&resolved, &from, &inject_text, &command, turn);
                 // A widget's posts never fill the person's compose history
                 // (UWB12a: a busy widget would flood the last 50). Each
                 // one writes an audit line instead: widgets need no
@@ -1125,8 +1213,16 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 crate::thread_activity::note_reply(&resolved.conversation_id);
                 // Thread push (§6.1): an agent reply may push; a human
                 // `from` (an owner-token shell post) never does (TP14).
-                push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Text, &text);
+                push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Text, &text, n_files);
             }
+            // thread-attachments-v1: the stored snapshots, so the sender
+            // sees what landed (state `ok` at post time).
+            let attachments_json = crate::thread_attachments::view_list(
+                workspace_root.as_deref(),
+                &item.doc.attachments,
+                &crate::thread_attachments::Viewer::Full,
+                false,
+            );
             CliResponse::ok_json(with_moved_from(
                 serde_json::json!({
                     "ok": true,
@@ -1139,6 +1235,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                     "via": item.doc.via,
                     "widget": item.doc.widget,
                     "author": item.doc.author,
+                    "attachments": attachments_json,
                     // The client stamps its own post with the server's time
                     // ("You · just now"), falling back to its send time.
                     "created_at": item.doc.created_at,
@@ -1156,7 +1253,14 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
 /// three agent-reply sites. App guests are never a push source (TP13).
 /// `text` is the reply's text or a choice card's question (its push
 /// preview, 0.46.1); a secret card passes `""` and never previews.
-fn push_agent_post(resolved: &ResolvedOverlay, from: &str, seq: i64, kind: k2_core::push::ThreadMsgKind, text: &str) {
+fn push_agent_post(
+    resolved: &ResolvedOverlay,
+    from: &str,
+    seq: i64,
+    kind: k2_core::push::ThreadMsgKind,
+    text: &str,
+    files: usize,
+) {
     if request_skin().is_some() {
         return;
     }
@@ -1168,6 +1272,7 @@ fn push_agent_post(resolved: &ResolvedOverlay, from: &str, seq: i64, kind: k2_co
         seq,
         kind,
         text,
+        files,
     );
 }
 
@@ -1250,7 +1355,7 @@ fn handle_ask(params: &HashMap<String, String>) -> CliResponse {
             drop(conn);
             // TW4 (a): an agent's card is its Thread reply.
             crate::thread_activity::note_reply(&resolved.conversation_id);
-            push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Choice, prompt.trim());
+            push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Choice, prompt.trim(), 0);
             let choice = item.doc.choice.as_ref();
             let labels: Vec<String> = choice
                 .map(|c| c.options.iter().map(|o| o.label.clone()).collect())
@@ -1424,7 +1529,7 @@ fn create_secret_card(
     if !quiet {
         crate::thread_activity::note_reply(&resolved.conversation_id);
         // A secret card pushes name-only, never its name or prompt (§7).
-        push_agent_post(resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret, "");
+        push_agent_post(resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret, "", 0);
     }
     Ok(item)
 }
@@ -1447,7 +1552,7 @@ pub(crate) fn post_handoff_card(
     drop(conn);
     crate::overlay_ws::emit_links(&links, &item.doc);
     // Name-only push, like a secret card (§7): never a preview.
-    push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret, "");
+    push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret, "", 0);
     Ok(format!("{}/{}", resolved.conversation_id, item.id))
 }
 
@@ -2432,9 +2537,44 @@ pub(crate) fn design_redeliver(
     })
 }
 
+/// `GET /cli/thread/attachment` (thread-attachments-v1): the Thread's own
+/// read gate (an App guest: its room's pinned Chat and `thread:read`),
+/// then `thread_attachments::handle_get` adds the viewer's file rights.
+/// Agent passports are refused: an agent reads its workspace's files from
+/// disk.
+fn handle_get_attachment(params: &HashMap<String, String>) -> CliResponse {
+    let addr = opt_param(params, "addr")
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| opt_param(params, "conversationId"))
+        .unwrap_or_default();
+    if addr.trim().is_empty() {
+        return usage("missing addr (or conversationId)");
+    }
+    if crate::caller_workspace::principal_from_params(params).is_some() {
+        return forbidden("an agent reads attached files from disk; this door is for people");
+    }
+    let resolved = match resolve_thread_addr(&addr) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_READ) {
+        return e;
+    }
+    let pass = request_skin();
+    crate::thread_attachments::handle_get(
+        params,
+        &crate::thread_attachments::ResolvedThread {
+            conversation_id: resolved.conversation_id.clone(),
+            project_id: resolved.project_id.clone(),
+        },
+        pass.as_ref(),
+    )
+}
+
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
     let resp = match path {
         "/cli/thread" => handle_get_thread(params),
+        crate::thread_attachments::ROUTE => handle_get_attachment(params),
         "/cli/thread/latest" => handle_get_thread_latest(params),
         "/cli/thread/activity" => handle_get_thread_activity(params),
         "/cli/chatter" => handle_get_chatter(params),

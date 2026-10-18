@@ -448,12 +448,39 @@ fn workspace_display_name(token: &str) -> Option<String> {
     (!pick.is_empty()).then_some(pick)
 }
 
-/// A post's preview: never for a secret card.
-fn post_preview(kind: ThreadMsgKind, text: &str) -> String {
+/// A post's preview: never for a secret card. `files`: how many file
+/// objects ride the post (thread-attachments-v1): `[file]` / `[N files]`
+/// after the text, never a file name.
+fn post_preview(kind: ThreadMsgKind, text: &str, files: usize) -> String {
     match kind {
         ThreadMsgKind::Secret => String::new(),
-        ThreadMsgKind::Text | ThreadMsgKind::Choice => k2_core::push::preview::message_preview(text),
+        ThreadMsgKind::Text | ThreadMsgKind::Choice => {
+            k2_core::push::preview::message_preview_with_files(text, files)
+        }
     }
+}
+
+/// The last preview the trigger built per conversation (the newest 64
+/// conversations), for the headless tests: what a push for this Thread
+/// would say. Never more than the preview itself (already cut to 140
+/// characters, never a file name).
+fn last_previews() -> &'static Mutex<Vec<(String, String)>> {
+    static L: std::sync::OnceLock<Mutex<Vec<(String, String)>>> = std::sync::OnceLock::new();
+    L.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn note_last_preview(conversation_id: &str, preview: &str) {
+    let mut l = last_previews().lock().unwrap_or_else(|p| p.into_inner());
+    l.retain(|(c, _)| c != conversation_id);
+    l.push((conversation_id.to_string(), preview.to_string()));
+    let over = l.len().saturating_sub(64);
+    l.drain(..over);
+}
+
+/// What the last push trigger for `conversation_id` would preview.
+pub fn last_preview(conversation_id: &str) -> Option<String> {
+    let l = last_previews().lock().unwrap_or_else(|p| p.into_inner());
+    l.iter().find(|(c, _)| c == conversation_id).map(|(_, p)| p.clone())
 }
 
 /// True when `from` names a human on this server (TP14).
@@ -477,10 +504,13 @@ pub fn on_agent_post(
     seq: i64,
     kind: ThreadMsgKind,
     text: &str,
+    files: usize,
 ) {
     if crate::push_routes::airgap_blocks() || is_human_from(from) {
         return;
     }
+    let preview = post_preview(kind, text, files);
+    note_last_preview(conversation_id, &preview);
     // The same rev `GET /cli/projects/list` shows as this row's `iconRev`.
     let (agent_color, avatar_rev) = k2_core::projects_ops::project_push_look(project_id);
     let post = Post {
@@ -492,7 +522,7 @@ pub fn on_agent_post(
         kind,
         avatar_rev,
         agent_color,
-        preview: post_preview(kind, text),
+        preview,
     };
     ensure_ticker();
     lock().post(&DaemonEnv, post, Instant::now());
@@ -604,7 +634,7 @@ mod tests {
     }
 
     fn said(conv: &str, seq: i64, kind: ThreadMsgKind, text: &str) -> Post {
-        Post { preview: post_preview(kind, text), ..post(conv, seq, kind) }
+        Post { preview: post_preview(kind, text, 0), ..post(conv, seq, kind) }
     }
 
     fn secs(n: u64) -> Duration {
@@ -850,7 +880,10 @@ mod tests {
     /// coalesced batch; a choice card shows its question.
     #[test]
     fn secret_posts_never_preview_and_choices_show_the_question() {
-        assert_eq!(post_preview(ThreadMsgKind::Secret, "the key is hunter2"), "");
+        assert_eq!(post_preview(ThreadMsgKind::Secret, "the key is hunter2", 0), "");
+        assert_eq!(post_preview(ThreadMsgKind::Secret, "", 2), "", "files never open a secret card's preview");
+        assert_eq!(post_preview(ThreadMsgKind::Text, "", 1), "[file]");
+        assert_eq!(post_preview(ThreadMsgKind::Text, "See the plan.", 2), "See the plan. [2 files]");
         let env = Fake::with(&[("owner", &["owner"])]);
         let mut c = Coalescer::new();
         let t0 = Instant::now();

@@ -1174,6 +1174,9 @@ pub const ROUTES: &[Route] = &[
     // KV10: the handler 405s a GET; the row says so.
     post("/cli/thread/answer", Member),
     post("/cli/thread/ask", Member),
+    // thread-attachments-v1: previews and ranged downloads of a Thread
+    // message's file objects (Thread rights + the caller's file rights).
+    get("/cli/thread/attachment", Member),
     // Thread export / import outside a clone (prd-clone-carries-threads-
     // and-vault-v1 T4): Owner/Admin people + the clone gate; the list of a
     // workspace's imported Threads is a read for any login.

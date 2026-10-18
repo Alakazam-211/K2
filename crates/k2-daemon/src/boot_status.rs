@@ -406,6 +406,14 @@ pub const FEATURE_PUSH_PREVIEWS: &str = "push-previews-v1";
 /// no dots and leaves a server out of its badge without this key.
 pub const FEATURE_THREAD_READ: &str = "thread-read-v1";
 
+/// File objects on Thread messages (0.46.1, S1 + S2): `attachments` on
+/// Thread docs (`GET /cli/thread`, overlay WS frames, the
+/// `POST /cli/thread/post` reply), `attachmentCount` on
+/// `/cli/thread/latest` rows, and `GET /cli/thread/attachment`
+/// (meta / preview / range). K2 Companion shows no file chips without it.
+/// Stored in the overlay redb docs: no SQL migration.
+pub const FEATURE_THREAD_ATTACHMENTS: &str = crate::thread_attachments::FEATURE;
+
 /// True when the read-state tables exist in the daemon DB.
 fn thread_read_ready() -> bool {
     k2_core::db::try_shared()
@@ -462,6 +470,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_ROOM_MEMBERS);
     out.push(FEATURE_APP_SELF);
     out.push(FEATURE_FILES_PATH_SCOPE);
+    out.push(FEATURE_THREAD_ATTACHMENTS);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
         // Same DB as 0157: migration 0189 (push_devices.previews) ran with it.
@@ -522,6 +531,7 @@ mod tests {
                 "room-members-v1",
                 "app-self-v1",
                 "files-path-scope-v1",
+                "thread-attachments-v1",
                 "thread-push-v1",
                 "push-previews-v1",
                 "thread-read-v1",

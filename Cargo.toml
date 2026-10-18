@@ -46,9 +46,18 @@ codegen-units = 1
 # into a per-window gtk::Fixed instead of the window's gtk::Box, so their
 # position and size hold (tauri#10420); see its src/child_container.rs.
 # Paired with the vendored wry's gtk::Fixed set_bounds/bounds/reparent.
+#
+# vte 0.15.0 (alacritty_terminal's parser, so every K2 terminal) drops one
+# ASCII byte when a 2-byte UTF-8 char is split across PTY reads after its
+# lead byte and the next read continues with that ASCII byte plus another
+# non-ASCII char ("ïcø" → "ïø"). advance_partial_utf8 returned valid_up_to
+# instead of the printed char's length. One-line fix + regression test;
+# same bug on upstream master as of 2026-10-18, nothing filed yet. Diff and
+# PR text: third_party/upstream/vte-0001-*. Drop when a fixed vte ships.
 [patch.crates-io]
 pg_query = { path = "third_party/pg_query" }
 wry = { path = "third_party/wry" }
 objc2 = { path = "third_party/objc2" }
 tao = { path = "third_party/tao" }
 tauri-runtime-wry = { path = "third_party/tauri-runtime-wry" }
+vte = { path = "third_party/vte" }

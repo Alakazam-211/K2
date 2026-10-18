@@ -137,6 +137,20 @@ that pointer.
 | **License** | **Apache-2.0** (Copyright 2021-2023 Tauri Programme within The Commons Conservancy) — full text in `third_party/tao/LICENSE` and `third_party/tao/LICENSE.spdx` |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. The vendored crate does **not** relicense the product. |
 
+## Third-party: vte (Apache-2.0 OR MIT)
+
+K2 vendors a patched copy of **vte** 0.15.0 (the terminal parser inside
+alacritty_terminal) under `third_party/vte` so a UTF-8 character split
+across two PTY reads cannot drop the ASCII byte that follows it. crates.io
+0.15.0 still drops it.
+
+| | |
+|--|--|
+| **What** | `third_party/vte` (crates.io vte 0.15.0 + split-UTF-8 byte-drop fix, `third_party/upstream/vte-0001-partial-utf8-ascii-drop.patch`) |
+| **Upstream** | [vte](https://github.com/alacritty/vte) |
+| **License** | **Apache-2.0 OR MIT** (Copyright (c) 2016 Joe Wilm) — full text in `third_party/vte/LICENSE-MIT` and `third_party/vte/LICENSE-APACHE` |
+| **K2 code** | Remains **FSL-1.1-Apache-2.0**. The vendored crate does **not** relicense the product. |
+
 ## Third-party: Mermaid (MIT)
 
 The file viewer draws Mermaid diagrams with a vendored build of **Mermaid**.

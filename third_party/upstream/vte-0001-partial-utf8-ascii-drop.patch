@@ -1,0 +1,68 @@
+From: z3thon <rosson.long@lztek.io>
+Date: Sun, 18 Oct 2026 12:00:00 -0600
+Subject: [PATCH] Fix dropped byte after a split 2-byte UTF-8 character
+
+When a 2-byte codepoint is split after its lead byte and the next
+`advance` call continues with one ASCII byte and then the lead byte of
+another multi-byte codepoint, `advance_partial_utf8` copies all three
+into `partial_utf8`. `str::from_utf8` then fails with `valid_up_to`
+covering the codepoint and the ASCII byte. Only the codepoint is
+printed, but `valid_bytes - old_bytes` was returned, so the ASCII byte
+counted as consumed and was never printed ("ïcø" split after the first
+byte printed "ïø").
+
+Return `c.len_utf8() - old_bytes` instead, matching the `Ok` branch: the
+function prints exactly one character, so only that character's bytes
+are consumed and everything after it goes back through the normal parse
+path. 3- and 4-byte codepoints were not affected because the window
+cannot hold anything valid after them.
+
+Against vte 0.15.0 (crates.io, upstream commit 3b3da71c34cc). Applies
+in K2 at third_party/vte/ (`patch -p1 -d third_party/vte`).
+---
+ src/lib.rs | 26 +++++++++++++++++++++++++-
+ 1 file changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -698,7 +698,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF
+                     performer.print(c);
+ 
+                     self.partial_utf8_len = 0;
+-                    return valid_bytes - old_bytes;
++                    return c.len_utf8() - old_bytes;
+                 }
+ 
+                 match err.error_len() {
+@@ -1453,6 +1453,30 @@ mod tests {
+         assert_eq!(dispatcher.dispatched.len(), 2);
+         assert_eq!(dispatcher.dispatched[0], Sequence::Print('ĸ'));
+         assert_eq!(dispatcher.dispatched[1], Sequence::Print('🎉'));
++    }
++
++    #[test]
++    fn partial_utf8_followed_by_ascii_and_partial() {
++        // A 2-byte codepoint split after its lead byte, followed by a single
++        // ASCII byte and then the lead byte of another multi-byte codepoint.
++        // Completing the partial codepoint copies all three into the
++        // `partial_utf8` buffer, where `valid_up_to` covers the codepoint and
++        // the ASCII byte. Only the codepoint is printed, so only its bytes
++        // may be reported as consumed, or the ASCII byte is lost.
++
++        // "ïcø"
++        const INPUT: &[u8] = b"\xC3\xAFc\xC3\xB8";
++
++        let mut dispatcher = Dispatcher::default();
++        let mut parser = Parser::new();
++
++        parser.advance(&mut dispatcher, &INPUT[..1]);
++        parser.advance(&mut dispatcher, &INPUT[1..]);
++
++        assert_eq!(dispatcher.dispatched.len(), 3);
++        assert_eq!(dispatcher.dispatched[0], Sequence::Print('ï'));
++        assert_eq!(dispatcher.dispatched[1], Sequence::Print('c'));
++        assert_eq!(dispatcher.dispatched[2], Sequence::Print('ø'));
+     }
+ 
+     #[test]

@@ -2046,6 +2046,62 @@ mod tests {
         assert!(cfg.drain_on_exit);
     }
 
+    /// Feed `chunks` to a real alacritty Term through the same parser
+    /// type alacritty's `EventLoop` drives (one `advance` per PTY read)
+    /// and return the first grid row's text (wide-char spacer cells
+    /// skipped, trailing blanks trimmed).
+    fn first_row_from_reads(chunks: &[&[u8]]) -> String {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::index::{Column, Line, Point};
+        use alacritty_terminal::term::cell::Flags;
+        use alacritty_terminal::vte::ansi::Processor;
+        let size = TermSize { cols: 80, rows: 4 };
+        let mut term = Term::new(TermConfig::default(), &size, VoidListener);
+        let mut parser: Processor = Processor::new();
+        for chunk in chunks {
+            parser.advance(&mut term, chunk);
+        }
+        let grid = term.grid();
+        let mut row = String::new();
+        for c in 0..term.columns() {
+            let cell = &grid[Point::new(Line(0), Column(c))];
+            if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                row.push(cell.c);
+            }
+        }
+        row.trim_end().to_string()
+    }
+
+    /// vte 0.15.0 dropped the ASCII byte when a PTY read ended right
+    /// after the lead byte of a 2-byte char and the next read went on
+    /// with one ASCII byte plus another non-ASCII char: "ïcø" rendered
+    /// as "ïø". Fixed by the vendored `third_party/vte` (patch
+    /// `third_party/upstream/vte-0001-*`). This fails if the workspace
+    /// ever resolves alacritty's vte to an unpatched copy.
+    #[test]
+    fn split_utf8_read_keeps_the_ascii_byte() {
+        let text = "ïcø"; // C3 AF 63 C3 B8
+        let bytes = text.as_bytes();
+        assert_eq!(first_row_from_reads(&[&bytes[..1], &bytes[1..]]), text);
+    }
+
+    /// Every 2-way read split of mixed-width UTF-8 text renders the
+    /// same as one read (the class of bug above, at any position).
+    #[test]
+    fn utf8_text_renders_the_same_at_every_read_split() {
+        for text in ["ïcø", "é-ä", "héllo wörld", "naïve café", "漢字かな", "a→b→c", "🙂x🙂"] {
+            let bytes = text.as_bytes();
+            assert_eq!(first_row_from_reads(&[bytes]), text, "single read of {text:?}");
+            for at in 1..bytes.len() {
+                assert_eq!(
+                    first_row_from_reads(&[&bytes[..at], &bytes[at..]]),
+                    text,
+                    "{text:?} split at byte {at}"
+                );
+            }
+        }
+    }
+
     /// A line longer than the terminal soft-wraps: every full row but
     /// the last carries WRAPLINE, and the rows rejoin to the original.
     #[test]

@@ -718,6 +718,18 @@ mod unix_impl {
             // K2 compute nodes: the agent verbs for THIS cell's session
             // (owner verbs never pass require_hook on this socket). The two
             // node sockets are TCP-only.
+            // RS-A15 (0.46.1): this cell's passport sets its own App's guests'
+            // rooms within the owner's grant; the grant itself is the owner's.
+            p if crate::apps::guest_rooms::ROUTES.contains(&p) => {
+                if crate::apps::guest_rooms::POST_ROUTES.contains(&p) && !is_post {
+                    return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());
+                }
+                if body.len() > crate::apps::grace::MAX_BODY {
+                    return from_cli(crate::apps::grace::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::apps::guest_rooms::handle(p, &who, is_post, body, params))
+            }
             // 0.46.0 App grace (no preview flag): this cell's passport; the
             // handler scopes it to its own workspace's Apps and holds what
             // widens.

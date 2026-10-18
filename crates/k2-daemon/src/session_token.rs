@@ -787,6 +787,12 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/app/suspend",
         "/cli/app/remote-pass",
         "/cli/app/remote-pass/revoke",
+        // RS-A15 (0.46.1): an agent reads its own App's grants, revokes
+        // one (narrows), and sets that App's guests' rooms within the
+        // grant. `/cli/app/grant` is NOT here: the owner's.
+        "/cli/app/grants",
+        "/cli/app/grant/revoke",
+        "/cli/app/guest/rooms",
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",

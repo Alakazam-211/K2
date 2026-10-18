@@ -134,7 +134,12 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// (`validate --dir`, `widget preview --dir`, `widget put --dir`, a staged
 /// Garden page with `validate --garden --from`); validate signs only with
 /// `--sign` and "pending" exits 0 (`--strict` keeps 2).
-pub const SKILL_VERSION_ZEN: u32 = 21;
+/// v22 = Garden polish (0.46.1, Rosson 2026-10-17): a sources card keeps
+/// `thread:post` / `store:write` it asks for (validate notes the reach),
+/// manifest `reads` + `{from}` for a neighbour's data, a maker agent with
+/// the Gardens switch reaches its own widget's data, 10 custom widgets per
+/// page and `[[widget]] weight` (catalog version 10).
+pub const SKILL_VERSION_ZEN: u32 = 22;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

@@ -438,7 +438,17 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   (it validates); a raw `k2 store put` skips Board's schema. Widgets must tolerate bad\n\
   values (an agent may write one).\n\
 - **A locked Garden's data still changes**: Lock freezes how a Garden works, not\n\
-  what's in it. A widget that asks for `sources:read` can't write data.\n\
+  what's in it. A widget that asks for `sources:read` may write data too when it asks\n\
+  for `store:write` (0.46.1); agents granted that data can read what it saves.\n\
+- **Read another widget's data** (0.46.1): list it in the manifest's `\"reads\"`\n\
+  (`[\"fleet-ops-lists\"]`, needs `store:read`), place both on the same Garden, then\n\
+  `k2.store.get(key, {from: \"fleet-ops-lists\"})`, `k2.store.list({prefix, from})`,\n\
+  `k2.store.subscribe({prefix, from}, cb)`. Read-only; anything else is `not_bound`. An\n\
+  agent-made reader needs its maker's read grant on that widget too.\n\
+- **Your own widget's data, no grant** (0.46.1): with the person's \"Manage Gardens and\n\
+  data sources\" switch, the agent that signed a widget's newest version reads and\n\
+  writes its data with `k2 store --widget <w>` (seed it), audited. Without the switch,\n\
+  ask for a grant.\n\
 - Big changes: `k2 store batch --widget <w> < ops.json` (≤ 1,000 ops, one rev, all or\n\
   nothing). History: `k2 store export --widget <w> --at <YYYY-MM-DD>`.\n\
 - The example: `k2 zen guide example board-lite` (a sticky-note board in its data, and\n\
@@ -518,6 +528,8 @@ inlines it all into one page; `k2.asset(\"cat.png\")` gives a file as a `data:` 
 - `reasons`: one line (up to 140) per cap, in your words. K2 shows its own sentence too.\n\
 - `requires.libs`: libraries from K2's standard library (see What's available),\n\
   inlined before your scripts. `id` is optional and must equal the folder name.\n\
+- `reads` (0.46.1): up to 8 other widgets on the same Garden whose data this one reads\n\
+  (`[\"fleet-ops-lists\", \"k2:kanban\"]`; needs `store:read`; never itself). Read-only.\n\
 - `version`, `license`, `bindings` are accepted and ignored for now. `net` and `secrets`\n\
   are errors: outside data comes from **data sources** (`sources`, below).\n\n\
 ### Placing it\n\n\
@@ -531,7 +543,9 @@ column = 0\n\
 home = \"Work\"             # optional props your code reads (k2.widget, k2.config)\n\
 ```\n\n\
 `custom` is a content widget that fills its column (never a band, edge or menu). At most\n\
-6 custom widgets per page. `config` (a small table of strings, numbers and booleans)\n\
+10 custom widgets per page. Widgets stacked in one column share its height equally;\n\
+`weight = 1..12` on a `[[widget]]` gives it that share instead (`weight = 3` next to\n\
+`weight = 1` is three quarters of the column). `config` (a small table of strings, numbers and booleans)\n\
 reaches the widget as `k2.config`. A conversation widget can follow it:\n\
 `agents = \"arcade\"` on a `conversation` widget shows what it opens with\n\
 `k2.conversation.open(address)`.\n\n\
@@ -742,7 +756,7 @@ fetches and checks it, the frame never touches the network, and air-gap blocks i
 ### Limits\n\n\
 - Code (HTML + JS + CSS after inlining): 256 KB. Each asset 1 MB; all assets 2 MB; the\n\
   bundled page 3 MB. Libraries: up to {} per widget, outside those limits.\n\
-- 6 custom widgets per page. Per widget: 60 calls a second, 16 live subscriptions,\n\
+- 10 custom widgets per page. Per widget: 60 calls a second, 16 live subscriptions,\n\
   64 KB per message, 8 live servers.\n\
 - WebGL, canvas, wasm and blob workers work. No network, storage, popups or dialogs.\n\n\
 ### Examples to copy\n\n\
@@ -993,6 +1007,10 @@ mod tests {
     fn skill_documents_data_source_cards() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 16, "Garden v3 sources need a new skill version");
         let s = generate_k2_zen_skill();
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 22, "0.46.1 caps, reads and weight need a new skill version");
+        for needle in ["`\"reads\"`", "{from: \"fleet-ops-lists\"}", "weight = 1..12", "10 custom widgets per page", "Manage Gardens and"] {
+            assert!(s.contains(needle), "the k2-zen skill lost {needle}");
+        }
         for needle in ["### Cards that read data sources", "`sources:read`", "sources_needs_cap", "sources_reach_thread",
             "server_not_saved", "err.last", "serverNow - updatedAt", "k2:fleet-grid@1", "k2:money-alerts@1", "--preset k2-fleet"]
         {

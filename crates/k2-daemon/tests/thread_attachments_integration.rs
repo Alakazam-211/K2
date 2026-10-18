@@ -270,6 +270,7 @@ async fn thread_attachments_send_view_open_and_scope() {
     let blob_id = r.json()["id"].as_str().unwrap().to_string();
     let r = att_get(port, OWNER, &addr, &blob_id, 0, "mode=preview").await;
     assert_eq!((r.status, code_of(&r).as_str()), (415, "no_preview"), "{}", r.body);
+    assert_eq!(r.json()["ok"], false, "{}", r.body);
     let r = att_get(port, OWNER, &addr, &blob_id, 0, "mode=range&offset=0&len=1000000").await;
     assert_eq!((r.json()["len"].clone(), r.json()["eof"].clone()), (json!(300_000), json!(true)));
     // Gone, bad index, unknown id, an id from another Thread.
@@ -334,18 +335,35 @@ async fn thread_attachments_send_view_open_and_scope() {
     // uniform missing-cap 403, existing or not.
     let r = att_get(port, &scoped, &addr, &id, 0, "mode=preview").await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let cap_body = r#"{"error":"missing capability files:read"}"#;
+    // Coded refusals (no string matching on the phone), the same body
+    // whether the file exists (private/notes.txt) or is gone (src/session.rs).
+    let cap_body = json!({ "ok": false, "error": { "code": "cap_not_granted", "cap": "files:read", "hint": "missing capability files:read" } });
     for (who, tok, n) in [("scoped src/", &scoped, 2usize), ("scoped private/", &scoped, 3), ("no files", &no_files, 0)] {
+        for mode in ["mode=preview", "mode=range&offset=0&len=4"] {
+            let r = att_get(port, tok, &addr, &id, n, mode).await;
+            assert_eq!(r.status, 403, "{who} {mode}: {}", r.body);
+            assert_eq!(r.json(), cap_body, "{who} {mode}");
+        }
+        // meta answers what the Thread shows.
         let r = att_get(port, tok, &addr, &id, n, "mode=meta").await;
-        assert_eq!(r.status, 403, "{who}: {}", r.body);
-        assert_eq!(serde_json::from_str::<Value>(&r.body).unwrap(), serde_json::from_str::<Value>(cap_body).unwrap(), "{who}");
+        assert_eq!(r.status, 200, "{who}: {}", r.body);
+        assert_eq!(r.json(), json!({ "ok": true, "kind": "file", "state": "hidden" }), "{who}");
     }
+    // A pass with no thread:read anywhere: coded too.
+    let role3 = format!("files{tag}");
+    owner_ok(port, "/cli/skin/roles", json!({ "name": role3 })).await;
+    owner_ok(port, "/cli/skin/roles/room", json!({ "name": role3, "handle": ws.handle, "caps": ["files:read"] })).await;
+    let files_only = login_with_role(port, &format!("fil{tag}"), &role3).await;
+    let r = att_get(port, &files_only, &addr, &id, 0, "mode=meta").await;
+    assert_eq!(r.status, 403, "{}", r.body);
+    assert_eq!(r.json()["error"]["code"], "cap_not_granted", "{}", r.body);
+    assert_eq!(r.json()["error"]["cap"], "thread:read", "{}", r.body);
     // A guest can't attach.
     let r = thread_post(port, &scoped, &addr, "here", json!([{ "path": "docs/plan.md" }])).await;
     assert_eq!(r.status, 403, "{}", r.body);
     // A guest's thread rights stop at its rooms.
     let r = att_get(port, &scoped, &other.handle, &id, 0, "mode=meta").await;
-    assert_eq!(r.status, 403, "{}", r.body);
+    assert_eq!((r.status, code_of(&r).as_str()), (403, "skin_room"), "{}", r.body);
 
     // The overlay WS strips per guest.
     let url = format!("ws://127.0.0.1:{port}/cli/overlay/events?conversation={conv}&token={}", enc(&scoped));

@@ -2557,8 +2557,10 @@ fn handle_get_attachment(params: &HashMap<String, String>) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
-    if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_READ) {
-        return e;
+    // This route's refusals all carry a code (`cap_not_granted`, and the
+    // resolver's own `skin_room`), so a phone never string-matches.
+    if require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_READ).is_err() {
+        return crate::thread_attachments::cap_refused(k2_core::skin::CAP_THREAD_READ);
     }
     let pass = request_skin();
     crate::thread_attachments::handle_get(

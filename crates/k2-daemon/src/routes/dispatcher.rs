@@ -11600,9 +11600,12 @@ async fn handle_one_request(
                         (true, None)
                     }
                     Some(_) => {
-                        let r = crate::skin_routes::missing_cap_response(
-                            crate::skin_routes::THREAD_READ,
-                        );
+                        // thread-attachments-v1: that route's refusals carry a code.
+                        let r = if p == crate::thread_attachments::ROUTE {
+                            crate::thread_attachments::cap_refused(crate::skin_routes::THREAD_READ)
+                        } else {
+                            crate::skin_routes::missing_cap_response(crate::skin_routes::THREAD_READ)
+                        };
                         super::http::send_response(
                             &mut *stream,
                             r.status,

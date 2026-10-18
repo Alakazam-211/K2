@@ -453,13 +453,19 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   nothing). History: `k2 store export --widget <w> --at <YYYY-MM-DD>`.\n\
 - The example: `k2 zen guide example board-lite` (a sticky-note board in its data, and\n\
   the agent's `bin/board-lite` beside it).\n\
-- **The Kanban Garden** (`k2:kanban@1`, New Garden → Kanban) keeps its board in\n\
+- **The Kanban Garden** (`k2:kanban@2`, New Garden → Kanban) keeps its board in\n\
   `data:k2:kanban`, one board per Garden under `board/<garden id>/` (its **For agents**\n\
   button shows the exact prefix `<p>`): `<p>col/<id>` = `{name, order}`, `<p>card/<id>` =\n\
   `{title, note, col, order}` (`col` is a column's `<id>`, `note` is markdown, lower\n\
   `order` first). With a grant, `k2 store list --widget k2:kanban --prefix <p>`, then:\n\
   `k2 store put --widget k2:kanban <p>card/<new-id> --if-rev 0 --value '{\"title\":\"…\",\"col\":\"todo\",\"order\":4096}'`\n\
-  Change a card with `--if-rev <rev>`; never write `<p>meta`.\n\n",
+  Change a card with `--if-rev <rev>`; never write `<p>meta`.\n\
+  Its **Thread** button opens a panel to talk to one agent beside the board, in K2's\n\
+  Thread look (your bubbles right, the agent's left, \"author · time\" under each,\n\
+  markdown, a round Send: Enter sends, Shift+Enter is a new line; the working tab with\n\
+  counters and a clock). It wears K2 Companion's colours in light and dark; to follow\n\
+  the Garden's theme instead, set `look = \"garden\"` under `[widget.props.config]`.\n\
+  A Kanban Garden that syncs with K2's default moves to `@2`; an own copy keeps `@1`.\n\n",
     )
 }
 
@@ -1025,12 +1031,32 @@ mod tests {
         let s = generate_k2_zen_skill();
         for needle in [
             "cards (the Diary, the Kanban, start with the default, or start empty and ask you)",
-            "**The Kanban Garden** (`k2:kanban@1`, New Garden → Kanban)",
+            "**The Kanban Garden** (`k2:kanban@2`, New Garden → Kanban)",
             "`data:k2:kanban`, one board per Garden under `board/<garden id>/`",
             "`<p>card/<id>` =\n`{title, note, col, order}`",
             "k2 store put --widget k2:kanban <p>card/<new-id>",
             "never write `<p>meta`",
             "- `k2:kanban` (the Kanban): columns and cards",
+        ] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+    }
+
+    /// v26: the Kanban's Thread panel (k2:kanban@2, 0.46.1, Rosson
+    /// 2026-10-18): K2's Thread look in K2 Companion's colours, and the
+    /// `look = "garden"` switch back to the Garden theme.
+    #[test]
+    fn skill_documents_the_kanban_thread_panel() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 26, "k2:kanban@2 needs a new skill version");
+        let s = generate_k2_zen_skill();
+        assert!(!s.contains("k2:kanban@1`, New Garden"), "New Garden makes @2");
+        for needle in [
+            "Its **Thread** button opens a panel to talk to one agent beside the board",
+            "your bubbles right, the agent's left",
+            "Enter sends, Shift+Enter is a new line",
+            "K2 Companion's colours in light and dark",
+            "set `look = \"garden\"` under `[widget.props.config]`",
+            "an own copy keeps `@1`",
         ] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }

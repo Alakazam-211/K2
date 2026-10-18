@@ -351,13 +351,13 @@ fn a_kanban_garden_from_the_catalog_is_the_board_with_its_caps() {
     let (_t, f) = set_up("kanban");
     assert!(f.find_garden("Kanban").is_none(), "setup doesn't preinstall the Kanban");
     let g = f.new_garden("Kanban", Some("kanban"), None, None).expect("new from catalog");
-    assert_eq!(g.template, "k2.kanban@1");
+    assert_eq!(g.template, crate::zen::garden_catalog::KANBAN_TEMPLATE_ID);
     let page = f.resolve(Some(&g.id)).expect("resolve kanban");
     assert_eq!(page["page"]["layout"]["canvas"], "full", "{page}");
     let widgets = page["page"]["widgets"].as_array().expect("widgets");
     assert_eq!(widgets.len(), 1, "the board alone: {page}");
     let w = &widgets[0];
-    assert_eq!((w["kind"].as_str(), w["widget"].as_str()), (Some("custom"), Some("k2:kanban@1")), "{page}");
+    assert_eq!((w["kind"].as_str(), w["widget"].as_str()), (Some("custom"), Some(crate::zen::builtin_widgets::KANBAN_WIDGET_LATEST)), "{page}");
     assert_eq!(w["origin"], "local");
     assert_eq!(
         w["caps"],

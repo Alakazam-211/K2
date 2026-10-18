@@ -861,7 +861,7 @@ fn gs51_news_catalog_updates_and_seen() {
     let left: Vec<String> = f.news().expect("news")["items"].as_array().expect("items").iter().filter_map(|i| i["id"].as_str().map(str::to_string)).collect();
     assert_eq!(left, vec!["catalog:diary".to_string(), "catalog:kanban".to_string()]);
     f.news_mark_template_seen("k2.diary@1").expect("made a Diary");
-    f.news_mark_template_seen("k2.kanban@1").expect("made a Kanban");
+    f.news_mark_template_seen(zen::garden_catalog::KANBAN_TEMPLATE_ID).expect("made a Kanban");
     assert_eq!(f.news().expect("news")["items"], json!([]), "creating from the catalog marks it seen");
     assert!(f.news_seen(&["nonsense".into()], false).is_err(), "unknown id shapes are refused");
     assert!(f.news_seen(&[], false).is_err(), "ids or all");
@@ -893,23 +893,71 @@ fn gs51_the_kanban_is_new_in_the_catalog() {
     assert_eq!(k["id"], "catalog:kanban");
     assert_eq!(k["short"], "kanban");
     assert_eq!(k["label"], "Kanban");
-    assert_eq!(k["template"], "k2.kanban@1");
-    assert_eq!(k["version"], 1);
+    // The binary's newest Kanban (k2.kanban@2 since 0.46.1) is the one offered.
+    assert_eq!(k["template"], zen::garden_catalog::KANBAN_TEMPLATE_ID);
+    assert_eq!(k["version"], 2);
     assert!(k["description"].as_str().is_some_and(|d| d.contains("To do, Doing and Done")), "{k}");
     // Making a Kanban Garden marks it seen.
     let g = f.new_garden("Kanban", Some("kanban"), None, None).expect("new Kanban");
-    assert_eq!(g.template, "k2.kanban@1");
+    assert_eq!(g.template, zen::garden_catalog::KANBAN_TEMPLATE_ID);
     let after = f.news().expect("news");
     assert!(!after["items"].as_array().expect("items").iter().any(|i| i["id"] == "catalog:kanban"), "{after}");
-    assert_eq!(f.read_news().catalog_seen.get("kanban"), Some(&1));
+    assert_eq!(f.read_news().catalog_seen.get("kanban"), Some(&2));
 
     // A fresh computer: the Kanban is part of the catalog it starts with.
     let (_t2, z2) = temp_dir("news-kanban-fresh");
     let fresh = ZenFiles::new(&z2);
     fresh.setup().expect("setup");
     assert_eq!(fresh.news().expect("news")["items"], json!([]));
-    assert_eq!(fresh.read_news().catalog_seen.get("kanban"), Some(&1));
+    assert_eq!(fresh.read_news().catalog_seen.get("kanban"), Some(&2));
     assert!(fresh.find_garden("Kanban").is_none(), "never preinstalled");
+}
+
+/// 0.46.1 (Rosson 2026-10-18; GS21, GS45, never-revert): K2's default
+/// Kanban moves to `k2:kanban@2` (the Thread panel in K2's Thread look,
+/// K2 Companion's colours). A Kanban Garden that syncs with K2's default
+/// (made from `k2.kanban@1` on 0.45.7) draws @2 now; one the person keeps
+/// as their own copy keeps @1, and its file is never rewritten. New Garden
+/// makes @2. The board's data is the widget's (`k2:kanban`), not the
+/// version's, so both read the same board.
+#[test]
+fn kanban_2_reaches_synced_kanban_gardens_and_never_an_own_copy() {
+    let (_t, z) = temp_dir("kanban-2");
+    let f = ZenFiles::new(&z);
+    f.setup().expect("setup");
+    let synced = new_garden(&f, "Board", "k2.kanban@1", None);
+    let copy = new_garden(&f, "My board", "k2.kanban@1", None);
+    f.set_garden_sync(&copy, Parts::Both, false).expect("an own copy");
+    let copy_file = f.path_of(&ZenFile::Garden(copy.clone()));
+    let copy_bytes = std::fs::read(&copy_file).expect("the copy's file");
+    let board = |id: &str| -> String {
+        let v = resolve_now(&f, id);
+        let w = v["page"]["widgets"]
+            .as_array()
+            .unwrap_or_else(|| panic!("widgets: {v}"))
+            .iter()
+            .find(|w| w["kind"] == "custom")
+            .cloned()
+            .unwrap_or_else(|| panic!("a custom widget: {v}"));
+        assert_eq!(
+            w["caps"],
+            json!(["agents:read", "thread:read", "thread:post", "store:read", "store:write"]),
+            "{id}: the board still posts to its agent with zero clicks: {w}"
+        );
+        w["widget"].as_str().expect("widget").to_string()
+    };
+    assert!(!f.sync_state().garden(&synced).part(Part::Page).is_copy(), "made from the catalog: synced");
+    assert_eq!(board(&synced), "k2:kanban@2", "a synced Kanban Garden draws K2's newest board");
+    assert!(f.sync_state().garden(&copy).part(Part::Page).is_copy());
+    assert_eq!(board(&copy), "k2:kanban@1", "an own copy keeps the board it had");
+    assert_eq!(std::fs::read(&copy_file).expect("still there"), copy_bytes, "the own copy's file is never rewritten");
+    let fresh = new_garden(&f, "Kanban", "kanban", None);
+    assert_eq!(f.gardens().iter().find(|g| g.id == fresh).map(|g| g.template.clone()).as_deref(), Some(zen::garden_catalog::KANBAN_TEMPLATE_ID));
+    assert_eq!(board(&fresh), "k2:kanban@2");
+    // Both versions name the same widget data (`--widget k2:kanban`).
+    let one = zen::builtin_widgets::builtin_widget(&zen::builtin_widgets::parse_widget_ref("k2:kanban@1").expect("parses")).expect("@1");
+    let two = zen::builtin_widgets::builtin_widget(&zen::builtin_widgets::parse_widget_ref("k2:kanban@2").expect("parses")).expect("@2");
+    assert_eq!(one.name, two.name, "one widget name, one board");
 }
 
 /// Take 0.46.1's Thread read state out of a set (thread-read-v1 Zen

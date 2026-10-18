@@ -3159,6 +3159,71 @@ mod tests {
         assert_eq!(refused_code(&g.post("board", Some(g.origin("b1", "board")))), "widget_cap_missing");
     }
 
+    /// 0.46.1 (Rosson 2026-10-18): the Kanban's message flow on
+    /// `k2:kanban@2`. A Kanban Garden from New Garden places the new board;
+    /// its Thread panel's post (placement `board`, the frame's hash) reaches
+    /// the agent as the person's (`via=compose`, the widget's label kept),
+    /// and the agent's reply comes back in the same Thread the panel reads,
+    /// after it, as the agent's. An own copy still on `k2:kanban@1` posts
+    /// too (its frame hash, its own manifest caps).
+    #[test]
+    fn the_kanban_2_board_posts_to_its_agent_and_reads_the_reply() {
+        let g = WidgetGarden::new(&[]);
+        let kanban = g.f.new_garden("Kanban", Some("kanban"), None, None).expect("New Garden → Kanban");
+        assert_eq!(kanban.template, k2_core::zen::garden_catalog::KANBAN_TEMPLATE_ID);
+        let latest = k2_core::zen::builtin_widgets::KANBAN_WIDGET_LATEST;
+        let hash = g.f.garden_widget_status(&kanban.id, latest).hash().to_string();
+        assert_eq!(hash.len(), 64, "k2:kanban@2 bundles clean");
+        let origin = serde_json::json!({"widget": latest, "garden": kanban.id, "placement": "board", "hash": hash});
+        let post = g.post("Can you take the Doing column?", Some(origin));
+        assert_eq!(post.status, "200 OK", "{}", post.body);
+        let posted = json_body(&post);
+        assert_eq!(posted["via"], "compose", "the panel posts as the person: {posted}");
+        assert_eq!(posted["widget"], serde_json::json!({"widget": latest, "garden": kanban.id}), "{posted}");
+
+        // The agent answers in its Thread; the panel's subscription reads it.
+        let reply = dispatch_post(
+            "/cli/thread/post",
+            &HashMap::new(),
+            serde_json::json!({"addr": g.handle, "text": "On it: **Doing** is mine.", "from": "k2"}).to_string().as_bytes(),
+        );
+        assert_eq!(reply.status, "200 OK", "{}", reply.body);
+        let get = dispatch("/cli/thread", &params_of(&[("addr", g.handle.as_str())])).expect("GET thread");
+        let items = json_body(&get)["items"].as_array().expect("items").clone();
+        let rows: Vec<(String, String, bool)> = items
+            .iter()
+            .map(|i| {
+                (
+                    i["doc"]["body"].as_str().expect("body").to_string(),
+                    i["doc"]["from"].as_str().unwrap_or_default().to_string(),
+                    i["doc"]["via"] == "compose",
+                )
+            })
+            .collect();
+        assert_eq!(rows.len(), 2, "{items:?}");
+        assert_eq!((rows[0].0.as_str(), rows[0].2), ("Can you take the Doing column?", true), "the person's post, right side: {items:?}");
+        // The daemon stamps the agent's own address as `from` (the panel
+        // shows its name, on the left).
+        assert_eq!(
+            (rows[1].0.as_str(), rows[1].1.as_str(), rows[1].2),
+            ("On it: **Doing** is mine.", g.handle.as_str(), false),
+            "the agent's reply, left side: {items:?}"
+        );
+        assert!(items[1]["seq"].as_i64() > items[0]["seq"].as_i64(), "the reply comes after the post");
+        assert!(items.iter().all(|i| i["doc"]["created_at"].is_number()), "every message has a time for \"author · time\"");
+
+        // An own copy on @1 still posts on its own frame.
+        let old = g.f.new_garden("Old board", Some("k2.kanban@1"), None, None).expect("a @1 Kanban");
+        g.f.set_garden_sync(&old.id, k2_core::zen::sync::Parts::Both, false).expect("own copy");
+        let one = k2_core::zen::builtin_widgets::KANBAN_WIDGET;
+        let old_hash = g.f.garden_widget_status(&old.id, one).hash().to_string();
+        let post = g.post("from the old board", Some(serde_json::json!({"widget": one, "garden": old.id, "placement": "board", "hash": old_hash})));
+        assert_eq!(post.status, "200 OK", "{}", post.body);
+        // A @2 frame can't claim the @1 copy's placement.
+        let wrong = serde_json::json!({"widget": latest, "garden": old.id, "placement": "board", "hash": hash});
+        assert_eq!(refused_code(&g.post("wrong frame", Some(wrong))), "widget_not_approved");
+    }
+
     #[test]
     fn an_unmarked_post_is_unchanged_by_the_widget_check() {
         let g = WidgetGarden::new(&[]);

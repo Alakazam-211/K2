@@ -452,6 +452,26 @@ async fn widgets_work_with_zero_clicks_and_only_a_person_resumes_a_pause() {
         let mine = v["garden"]["id"].as_str().expect("id").to_string();
         let (_, g) = owner("GET", &format!("/cli/zen/get?garden={mine}"), None);
         assert_eq!(g["page"]["widgets"][0]["caps"], all, "{g}");
+        // A Kanban from New Garden (0.46.1): K2's newest board, k2:kanban@2,
+        // whose Thread panel posts to an agent with zero clicks; the
+        // daemon's own thread:post check (widget/check, the rule a post to
+        // another server's agent goes through) passes its frame.
+        let (s, v) = owner("POST", "/cli/zen/garden/new", Some(r#"{"name":"Board","template":"kanban"}"#));
+        assert_eq!(s, 200, "{v}");
+        assert_eq!(v["garden"]["template"], "k2.kanban@2", "{v}");
+        let kanban = v["garden"]["id"].as_str().expect("id").to_string();
+        let (_, g) = owner("GET", &format!("/cli/zen/get?garden={kanban}"), None);
+        let w = &g["page"]["widgets"][0];
+        assert_eq!((w["kind"].as_str(), w["widget"].as_str(), w["id"].as_str()), (Some("custom"), Some("k2:kanban@2"), Some("board")), "{g}");
+        assert_eq!(w["caps"], json!(["agents:read", "thread:read", "thread:post", "store:read", "store:write"]), "{w}");
+        let hash = w["hash"].as_str().unwrap_or_else(|| panic!("the frame's hash: {w}")).to_string();
+        let check = json!({"garden": kanban, "placement": "board", "widget": "k2:kanban@2", "hash": hash, "cap": "thread:post"}).to_string();
+        let (s, v) = owner("POST", "/cli/zen/widget/check", Some(&check));
+        assert_eq!((s, v["ok"].as_bool()), (200, Some(true)), "the Kanban's Thread panel may post: {v}");
+        let stale = check.replace(&hash, &"f".repeat(64));
+        let (s, v) = owner("POST", "/cli/zen/widget/check", Some(&stale));
+        assert_eq!((s, v["error"].as_str()), (403, Some("widget_not_approved")), "only the frame K2 bundled: {v}");
+
         // The old grant field is refused, not silently honoured.
         let (s, v) = owner("POST", "/cli/zen/garden/new", Some(r#"{"name":"D2","template":"diary","grant":{"scope":{"server":"local"}}}"#));
         assert_eq!((s, v["error"].as_str()), (400, Some("bad_request")), "{v}");

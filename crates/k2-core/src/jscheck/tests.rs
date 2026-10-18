@@ -302,14 +302,17 @@ fn a_k2_subscription_inside_a_handler_warns() {
 #[test]
 fn every_example_and_builtin_widget_script_is_clean() {
     let mut checked = 0;
-    let mut sets: Vec<(&str, Vec<(&str, &str)>)> = crate::zen::widgets::EXAMPLES
+    // Examples by name; built-ins by `k2:<name>@<n>`, since a finding is
+    // pinned to the released version that has it.
+    let mut sets: Vec<(String, Vec<(&str, &str)>)> = crate::zen::widgets::EXAMPLES
         .iter()
-        .map(|e| (e.name, e.files.iter().map(|(n, t)| (*n, *t)).collect()))
+        .map(|e| (e.name.to_string(), e.files.iter().map(|(n, t)| (*n, *t)).collect()))
         .collect();
     for w in crate::zen::builtin_widgets::BUILTIN_WIDGETS {
-        sets.push((w.name, w.files.iter().map(|(n, t)| (*n, *t)).collect()));
+        sets.push((w.id(), w.files.iter().map(|(n, t)| (*n, *t)).collect()));
     }
     for (name, files) in sets {
+        let name = name.as_str();
         for (file, text) in files {
             if !file.ends_with(".js") {
                 continue;
@@ -336,5 +339,6 @@ fn every_example_and_builtin_widget_script_is_clean() {
 
 /// Findings in released, hash-pinned built-ins: (widget, file, rule, a word
 /// the message names). kanban@1's dock keeps one label per agent address
-/// it has seen (bounded by the agent list, so not a real leak).
-const PINNED_BUILTIN_FINDINGS: &[(&str, &str, &str, &str)] = &[("kanban", "dock.js", "leak-growth", "seenLabels")];
+/// it has seen (bounded by the agent list, so not a real leak); kanban@2's
+/// rebuilds it from each agent list, so it comes out clean.
+const PINNED_BUILTIN_FINDINGS: &[(&str, &str, &str, &str)] = &[("k2:kanban@1", "dock.js", "leak-growth", "seenLabels")];

@@ -148,7 +148,10 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// v25 = Thread read state in Zen (0.46.1, thread-read-v1): the Agents
 /// widget's `unread` prop and the Conversation's `mute` prop (Garden 1 turns
 /// it on); conversations mark their Thread read while looked at.
-pub const SKILL_VERSION_ZEN: u32 = 25;
+/// v26 = the Kanban's Thread panel (k2:kanban@2, 0.46.1): K2's Thread look
+/// in K2 Companion's colours, `look = "garden"` to follow the Garden theme,
+/// a synced Kanban Garden moves to @2 and an own copy keeps @1.
+pub const SKILL_VERSION_ZEN: u32 = 26;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

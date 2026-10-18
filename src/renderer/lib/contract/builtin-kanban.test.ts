@@ -1,4 +1,5 @@
-// The built-in Kanban widget, k2:kanban@1 (the Kanban Garden, 0.45.7), run
+// The built-in Kanban widget, k2:kanban@1 (the Kanban Garden, 0.45.7) and
+// k2:kanban@2 (0.46.1: the Thread panel in K2's Thread look), each run
 // byte for byte in a fresh JSDOM per test (so no listener from one board
 // reaches the next) against a fake `k2` with the Garden data SDK shape
 // (contract-garden-data-v1 §7.2): store.list/get/put/delete/batch/tx/
@@ -17,10 +18,15 @@
 //     re-applies only this gesture's fields;
 //   - export is markdown that import reads back;
 //   - errors say what to do; the Thread panel is optional and picks nobody.
+// Both versions pass all of that. @2 also pins its Thread panel's message
+// flow: bubbles (yours right, the agent's left) with "author · time" and
+// markdown, Enter sends and Shift+Enter doesn't, the round Send, posts reach
+// the agent and its replies render, the working ear's state, counters and
+// clock, and K2 Companion's look by default (look = "garden" opts out).
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 // jsdom (vitest's own DOM) has no type package here: the little this file
 // uses, typed by hand.
@@ -28,11 +34,18 @@ const { JSDOM } = createRequire(import.meta.url)('jsdom') as {
   JSDOM: new (html: string, opts: { runScripts: 'outside-only'; pretendToBeVisual: boolean }) => { window: unknown }
 }
 
-const DIR = resolve(__dirname, '../../../../crates/k2-core/src/zen/builtin_widgets/kanban-1')
+const WIDGETS = resolve(__dirname, '../../../../crates/k2-core/src/zen/builtin_widgets')
 const LIB = resolve(__dirname, '../../zen-lib')
+// The version under test (each describe block sets it before its tests run).
+let DIR = resolve(WIDGETS, 'kanban-1')
 const read = (p: string): string => readFileSync(resolve(DIR, p), 'utf8')
-const HTML = read('index.html')
-const SCRIPTS = ['md.js', 'kanban.js', 'picker.js', 'dock.js'].map(read)
+let HTML = read('index.html')
+let SCRIPTS = ['md.js', 'kanban.js', 'picker.js', 'dock.js'].map(read)
+function useVersion(dir: 'kanban-1' | 'kanban-2'): void {
+  DIR = resolve(WIDGETS, dir)
+  HTML = read('index.html')
+  SCRIPTS = ['md.js', 'kanban.js', 'picker.js', 'dock.js'].map(read)
+}
 const MARKED = readFileSync(resolve(LIB, 'marked@18.0.14/marked.umd.js'), 'utf8')
 const PURIFY = readFileSync(resolve(LIB, 'dompurify@3.4.16/purify.min.js'), 'utf8')
 
@@ -73,7 +86,18 @@ const ALL_CAPS = [
   'canvas.setHitRegions',
 ]
 
-function fakeK2(opts: { caps?: string[]; garden?: string; prefix?: string; listError?: string; data?: Map<string, Stored>; saves?: Map<string, Json> } = {}) {
+function fakeK2(
+  opts: {
+    caps?: string[]
+    garden?: string
+    prefix?: string
+    config?: Record<string, unknown>
+    listError?: string
+    postError?: string
+    data?: Map<string, Stored>
+    saves?: Map<string, Json>
+  } = {},
+) {
   const data = opts.data ?? new Map<string, Stored>()
   let head = Math.max(0, ...[...data.values()].map((s) => s.rev))
   const subs: Array<{ prefix: string; cb: (d: Delivery) => void }> = []
@@ -84,6 +108,9 @@ function fakeK2(opts: { caps?: string[]; garden?: string; prefix?: string; listE
   const saveSets: Array<[string, Json]> = []
   const agentSubs: Array<(rows: unknown[]) => void> = []
   const posts: Array<[string, string]> = []
+  const answers: Array<[string, string, string]> = []
+  const threadSubs: Array<{ address: string; cb: (view: unknown) => void }> = []
+  let nextSeq = 100
   const hitRegions: unknown[] = []
   let ready = 0
   const push = (changes: Array<{ key: string; rev: number; value: Json | null; by: string }>): void => {
@@ -97,7 +124,7 @@ function fakeK2(opts: { caps?: string[]; garden?: string; prefix?: string; listE
   }
   const k2 = {
     connected: Promise.resolve(),
-    config: opts.prefix === undefined ? {} : { prefix: opts.prefix },
+    config: opts.config ?? (opts.prefix === undefined ? {} : { prefix: opts.prefix }),
     widget: { id: 'board', name: '', garden: opts.garden ?? 'g-test0001' },
     motion: { reduced: false },
     can: (verb: string) => (opts.caps ?? ALL_CAPS).includes(verb),
@@ -126,12 +153,20 @@ function fakeK2(opts: { caps?: string[]; garden?: string; prefix?: string; listE
       },
     },
     thread: {
-      subscribe: () => () => undefined,
+      subscribe: (address: string, cb: (view: unknown) => void) => {
+        threadSubs.push({ address, cb })
+        return () => undefined
+      },
       post: async (to: string, text: string) => {
         posts.push([to, text])
-        return { seq: 1 }
+        if (opts.postError) throw new K2Error(opts.postError)
+        nextSeq += 1
+        return { id: `p${nextSeq}`, seq: nextSeq }
       },
-      answer: async () => null,
+      answer: async (to: string, id: string, answer: string) => {
+        answers.push([to, id, answer])
+        return null
+      },
     },
     store: {
       list: async (o: { prefix: string; after?: string; limit?: number }) => {
@@ -194,6 +229,8 @@ function fakeK2(opts: { caps?: string[]; garden?: string; prefix?: string; listE
     saveSets,
     agentSubs,
     posts,
+    answers,
+    threadSubs,
     hitRegions,
     ready: () => ready,
     /** An agent (or another window) writes; the widget hears it live. */
@@ -221,7 +258,12 @@ type Fake = ReturnType<typeof fakeK2>
 
 function mount(f: Fake) {
   const dom = new JSDOM(HTML.replace(/<script[^>]*><\/script>/g, ''), { runScripts: 'outside-only', pretendToBeVisual: true })
-  const win = dom.window as unknown as Window & typeof globalThis & { eval: (s: string) => unknown; k2: unknown }
+  const win = dom.window as unknown as Window &
+    typeof globalThis & {
+      eval: (s: string) => unknown
+      k2: unknown
+      KanbanDock: { look(): string; address(): string; chosen(): string; isOpen(): boolean }
+    }
   win.k2 = f.k2
   win.eval(MARKED)
   win.eval(PURIFY)
@@ -295,7 +337,9 @@ async function started(f: Fake) {
   return m
 }
 
-describe('k2:kanban@1', () => {
+describe.each(['kanban-1', 'kanban-2'] as const)('k2:kanban (%s)', (dir) => {
+  beforeAll(() => useVersion(dir))
+
   it('is sealed-frame clean: no innerHTML, inline handlers, network or browser storage', () => {
     for (const [i, src] of SCRIPTS.entries()) {
       const code = src
@@ -699,5 +743,235 @@ describe('k2:kanban@1', () => {
     await started(f)
     expect(f.hitRegions.length).toBeGreaterThan(0)
     expect(Array.isArray(f.hitRegions[0])).toBe(true)
+  })
+})
+
+// ── k2:kanban@2: the Thread panel's message flow and look ───────────────
+
+const SCOUT = 'scout::local'
+const nowSec = (): number => Math.floor(Date.now() / 1000)
+
+interface ViewItem {
+  seq: number
+  id: string
+  doc: Record<string, unknown>
+}
+
+function textItem(seq: number, body: string, o: { mine?: boolean; from?: string; ago?: number } = {}): ViewItem {
+  return {
+    seq,
+    id: `m${seq}`,
+    doc: {
+      id: `m${seq}`,
+      kind: 'text',
+      from: o.from ?? (o.mine ? 'Rosson' : SCOUT),
+      to: null,
+      created_at: nowSec() - (o.ago ?? 0),
+      body,
+      via: o.mine ? 'compose' : null,
+      choice: null,
+    },
+  }
+}
+
+function view(items: ViewItem[], turn: { state: string; since: number } | null = null) {
+  return { address: SCOUT, phase: 'live', note: null, items, hasMore: false, turn }
+}
+
+/** A board with the Thread panel open on scout (saved per Garden). */
+async function openOnScout(o: { row?: Record<string, unknown>; postError?: string; config?: Record<string, unknown> } = {}) {
+  const saves = new Map<string, Json>([['dock/g-test0001', { open: true, agent: SCOUT }]])
+  const f = fakeK2({ data: THREE(), saves, postError: o.postError, config: o.config })
+  const m = await started(f)
+  await until('agents read', () => f.agentSubs.length === 1)
+  f.agentSubs[0]([{ address: SCOUT, label: 'scout', state: 'ok', working: false, needsYou: false, activity: 'idle', counts: null, ...o.row }])
+  await until('Thread open', () => f.threadSubs.length === 1)
+  expect(f.threadSubs[0].address).toBe(SCOUT)
+  return { f, m }
+}
+
+describe('k2:kanban@2 Thread panel (the K2 Thread look in K2 Companion colours)', () => {
+  beforeAll(() => useVersion('kanban-2'))
+
+  it('draws bubbles: yours right and the agent’s left, "author · time" under each, markdown inside, safely', async () => {
+    const { f, m } = await openOnScout()
+    f.threadSubs[0].cb(
+      view([
+        textItem(1, 'Which database should the **ledger** use?\n\n- `SQLite`: one file\n- `Postgres`: a server', { ago: 7200 }),
+        textItem(2, 'What would the migration path look like?', { mine: true, ago: 900 }),
+        textItem(3, 'A dump and load. <img src=x onerror=alert(1)> [docs](https://example.com/x)', { ago: 600 }),
+      ]),
+    )
+    const msgs = [...m.doc.querySelectorAll<HTMLElement>('#dockBody .msg')]
+    expect(msgs.map((n) => n.className)).toEqual(['msg theirs', 'msg mine', 'msg theirs'])
+    expect(msgs.map((n) => n.getAttribute('data-seq'))).toEqual(['1', '2', '3'])
+    // Each message: a bubble, then its "author · time" line.
+    for (const n of msgs) expect([...n.children].map((c) => c.className.split(' ')[0])).toEqual(['bubble', 'meta'])
+    expect(msgs[0].querySelector('.bubble')!.className).toBe('bubble bubble-agent')
+    expect(msgs[1].querySelector('.bubble')!.className).toBe('bubble bubble-me')
+    expect(msgs.map((n) => n.querySelector('.meta')!.textContent)).toEqual(['scout · 2h ago', 'You · 15m ago', 'scout · 10m ago'])
+    // Markdown, built as nodes: bold, a list, inline code.
+    const first = msgs[0].querySelector('.body')!
+    expect(first.classList.contains('md')).toBe(true)
+    expect(first.querySelector('strong')!.textContent).toBe('ledger')
+    expect([...first.querySelectorAll('li code')].map((c) => c.textContent)).toEqual(['SQLite', 'Postgres'])
+    // Raw HTML stays text; a link shows its URL, never an <a> or <img>.
+    const third = msgs[2].querySelector('.body')!
+    expect(third.querySelector('img, a, script')).toBeNull()
+    expect(third.textContent).toContain('<img src=x onerror=alert(1)>')
+    expect(third.querySelector('.md-url')!.textContent).toBe('https://example.com/x')
+    // The empty Thread says what K2's does.
+    f.threadSubs[0].cb(view([]))
+    expect(m.$('#dockBody').textContent).toBe('Message scout. It reads this like a text.')
+  })
+
+  it('Enter sends and Shift+Enter is a new line; the round Send lights up; the post reaches the agent and its reply renders', async () => {
+    const { f, m } = await openOnScout()
+    f.threadSubs[0].cb(view([textItem(1, 'Ready when you are.', { ago: 60 })]))
+    const text = m.$<HTMLTextAreaElement>('#dockText')
+    const send = m.$<HTMLButtonElement>('#dockSendBtn')
+    expect(text.placeholder).toBe('Message scout')
+    expect(send.getAttribute('aria-label')).toBe('Send')
+    expect(send.title).toBe('Send (Enter)')
+    expect(send.disabled).toBe(true)
+    expect(send.classList.contains('ready')).toBe(false)
+    m.type(text, 'Take the Doing column')
+    expect(send.disabled).toBe(false)
+    expect(send.classList.contains('ready')).toBe(true)
+
+    // Shift+Enter: a new line, no post.
+    const shift = new m.win.KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true })
+    text.dispatchEvent(shift)
+    expect(shift.defaultPrevented).toBe(false)
+    await tick()
+    expect(f.posts).toEqual([])
+
+    // Enter: one post to the picked agent; the field clears once K2 took it.
+    const enter = new m.win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    text.dispatchEvent(enter)
+    expect(enter.defaultPrevented).toBe(true)
+    await until('posted', () => f.posts.length === 1)
+    expect(f.posts[0]).toEqual([SCOUT, 'Take the Doing column'])
+    await until('cleared', () => text.value === '')
+    expect(send.disabled).toBe(true)
+    // Until the agent answers, the ear says it was sent.
+    const ear = m.$('#dockTurn')
+    expect(ear.hidden).toBe(false)
+    expect(ear.dataset.tone).toBe('pending')
+    expect(ear.querySelector('.ear-label')!.textContent).toBe('Sent · waiting…')
+
+    // The round Send posts too.
+    m.type(text, 'And the Done one')
+    send.click()
+    await until('posted twice', () => f.posts.length === 2)
+    expect(f.posts[1]).toEqual([SCOUT, 'And the Done one'])
+
+    // Your post comes back, then the agent's reply: both render, the reply
+    // on the left, and the ear goes.
+    f.threadSubs[0].cb(
+      view([
+        textItem(1, 'Ready when you are.', { ago: 60 }),
+        textItem(101, 'Take the Doing column', { mine: true }),
+        textItem(102, 'And the Done one', { mine: true }),
+      ]),
+    )
+    expect(ear.hidden).toBe(false)
+    f.threadSubs[0].cb(
+      view([
+        textItem(1, 'Ready when you are.', { ago: 60 }),
+        textItem(101, 'Take the Doing column', { mine: true }),
+        textItem(102, 'And the Done one', { mine: true }),
+        textItem(103, 'On it: **Doing** and Done are mine.'),
+      ]),
+    )
+    const last = [...m.doc.querySelectorAll<HTMLElement>('#dockBody .msg')].at(-1)!
+    expect(last.className).toBe('msg theirs')
+    expect(last.querySelector('.bubble strong')!.textContent).toBe('Doing')
+    expect(last.querySelector('.meta')!.textContent).toBe('scout · just now')
+    expect(ear.hidden).toBe(true)
+  })
+
+  it('a refused post keeps your text and says why', async () => {
+    const { f, m } = await openOnScout({ postError: 'sending_off' })
+    f.threadSubs[0].cb(view([]))
+    const text = m.$<HTMLTextAreaElement>('#dockText')
+    m.type(text, 'Hello?')
+    m.$<HTMLButtonElement>('#dockSendBtn').click()
+    await until('refused', () => m.doc.querySelector('.dock-err') !== null)
+    expect(m.$('.dock-err').textContent).toBe('post failed: posting is paused; click Resume on the widget')
+    expect(text.value).toBe('Hello?')
+    expect(m.$<HTMLButtonElement>('#dockSendBtn').disabled).toBe(false)
+    expect(m.$('#dockTurn').hidden).toBe(true)
+  })
+
+  it('the working ear: a dot, the state, the counters and the turn’s clock', async () => {
+    const counts = { subagents: 1, tools: 4, commands: 3 }
+    const { f, m } = await openOnScout({ row: { working: true, activity: 'working', counts } })
+    f.threadSubs[0].cb(view([textItem(1, 'Hi', { mine: true, ago: 80 })], { state: 'working', since: Date.now() - 74_000 }))
+    const ear = m.$('#dockTurn')
+    expect(ear.hidden).toBe(false)
+    expect(ear.dataset.tone).toBe('working')
+    expect([...ear.children].map((c) => c.className)).toEqual(['ear-dot', 'ear-label', 'ear-counts', 'ear-clock'])
+    expect(ear.querySelector('.ear-label')!.textContent).toBe('Working')
+    const tags = [...ear.querySelectorAll<HTMLElement>('.ear-tag')]
+    expect(tags.map((t) => [t.dataset.count, t.textContent, t.title])).toEqual([
+      ['subagents', '1', '1 subagent'],
+      ['tools', '4', '4 tool calls'],
+      ['commands', '3', '3 commands'],
+    ])
+    for (const t of tags) expect(t.querySelector('svg path')).not.toBeNull()
+    expect(ear.querySelector('.ear-clock')!.textContent).toMatch(/^1:1[45]$/)
+    expect(ear.getAttribute('aria-label')).toMatch(/^Working, 1:1[45], 1 subagent, 4 tool calls, 3 commands$/)
+    // Needs you.
+    f.threadSubs[0].cb(view([], { state: 'needs-you', since: Date.now() - 5_000 }))
+    expect(ear.dataset.tone).toBe('needs-you')
+    expect(ear.querySelector('.ear-label')!.textContent).toBe('Needs you')
+    expect(ear.querySelector('.ear-clock')!.textContent).toMatch(/^0:0[56]$/)
+    // Idle: no ear.
+    f.agentSubs[0]([{ address: SCOUT, label: 'scout', state: 'ok', working: false, needsYou: false, activity: 'idle', counts: null }])
+    f.threadSubs[0].cb(view([], null))
+    expect(ear.hidden).toBe(true)
+  })
+
+  it('a choice card answers inside the agent’s bubble; a secret card points to K2’s own Thread', async () => {
+    const { f, m } = await openOnScout()
+    f.threadSubs[0].cb(
+      view([
+        {
+          seq: 1,
+          id: 'c1',
+          doc: {
+            id: 'c1',
+            kind: 'choice',
+            from: SCOUT,
+            created_at: nowSec() - 120,
+            body: null,
+            via: null,
+            choice: { prompt: 'Start on **SQLite**?', options: [{ label: 'SQLite' }, { label: 'Postgres' }], allow_custom: false, status: 'pending', answer: null },
+          },
+        },
+        { seq: 2, id: 's1', doc: { id: 's1', kind: 'secret' } },
+      ]),
+    )
+    const card = m.$('.msg[data-msg-id="c1"]')
+    expect(card.className).toBe('msg theirs')
+    expect(card.querySelector('.bubble .body strong')!.textContent).toBe('SQLite')
+    const chips = [...card.querySelectorAll<HTMLButtonElement>('.bubble .choice-opts .chip')]
+    expect(chips.map((c) => c.textContent)).toEqual(['SQLite', 'Postgres'])
+    chips[1].click()
+    await until('answered', () => f.answers.length === 1)
+    expect(f.answers[0]).toEqual([SCOUT, 'c1', 'Postgres'])
+    expect(m.$('.msg[data-msg-id="s1"] .bubble .status').textContent).toContain('K2’s own Thread')
+  })
+
+  it('wears K2 Companion’s look by default; look = "garden" follows the Garden theme instead', async () => {
+    const a = await openOnScout()
+    expect(a.m.win.KanbanDock.look()).toBe('companion')
+    expect(a.m.doc.documentElement.classList.contains('look-garden')).toBe(false)
+    const b = await openOnScout({ config: { look: 'garden' } })
+    await until('garden look', () => b.m.doc.documentElement.classList.contains('look-garden'))
+    expect(b.m.win.KanbanDock.look()).toBe('garden')
+    // The look never changes what it does: still talks to scout.
+    expect(b.m.win.KanbanDock.address()).toBe(SCOUT)
   })
 })

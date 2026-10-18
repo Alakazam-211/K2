@@ -10,3 +10,7 @@ The first entry, diary-1.toml (template k2.diary@1, widget k2:diary@1),
 is written by B2 (page) and B1 (widget) during the Zen v2 build.
 kanban-1.toml (template k2.kanban@1, widget k2:kanban@1) is the Kanban
 board, new in 0.45.7: its board lives in Garden data, not in the file.
+kanban-2.toml (template k2.kanban@2, widget k2:kanban@2, 0.46.1) is the
+same page on the Kanban whose Thread panel wears K2's Thread look in K2
+Companion's colours; a synced Kanban Garden moves to it, an own copy keeps
+@1 (Garden sync never reverts or overwrites a copy).

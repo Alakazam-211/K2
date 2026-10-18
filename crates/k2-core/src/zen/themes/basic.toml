@@ -31,6 +31,8 @@ bubble-agent-text = "#1a1d23"
 working = "#2563eb"
 idle = "#a39b90"
 needs-you = "#c27c0e"
+# ok = a success mark (a finished turn's ✓), 0.46.1.
+ok = "#2f855a"
 danger = "#c53030"
 
 [colors.dark]
@@ -49,6 +51,7 @@ bubble-agent-text = "#e6e8ec"
 working = "#60a5fa"
 idle = "#7d766d"
 needs-you = "#e0a43a"
+ok = "#5cc08a"
 danger = "#f07167"
 
 [font]

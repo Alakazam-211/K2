@@ -48,6 +48,22 @@ describe('Styles shield coverage', () => {
     expect(missing).toEqual([])
   })
 
+  it('success colours (status ok, ✓ marks) map to Zen ok, not working (0.46.1)', () => {
+    for (const k of [
+      '--color-status-ok',
+      '--color-status-ok-soft',
+      '--color-status-ok-hover',
+      '--color-status-success',
+      '--color-status-success-soft',
+      '--color-success',
+      '--color-good',
+    ]) {
+      expect([k, ZEN_STYLE_SHIELD[k]]).toEqual([k, 'var(--zen-ok)'])
+    }
+    expect(ZEN_STYLE_SHIELD['--color-status-working']).toBe('var(--zen-working)')
+    expect(ZEN_THEME_VARS).toContain('--zen-ok')
+  })
+
   it('points only at Zen variables the theme engine writes', () => {
     const known = new Set([...ZEN_THEME_VARS, ...ZEN_BUNDLE_VARS])
     const values = [...Object.values(ZEN_STYLE_SHIELD), ...Object.values(zenBubbleShield('me')), ...Object.values(zenBubbleShield('agent'))]

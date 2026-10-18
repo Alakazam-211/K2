@@ -51,6 +51,26 @@ async fn agent_post(port: u16, addr: &str, text: &str) -> i64 {
     ok_post(port, "/cli/thread/post", OWNER, json!({ "addr": addr, "text": text })).await["seq"].as_i64().expect("seq")
 }
 
+/// Wake the agent with a person's compose post and wait until the address
+/// answers at one stable conversation other than the seeded one.
+async fn warm_up(port: u16, handle: &str, seeded: &str) -> String {
+    let v = ok_post(port, "/cli/thread/post", OWNER, json!({ "addr": handle, "text": "warm-up", "via": "compose" })).await;
+    assert_eq!(v["seq"].as_i64(), Some(1), "{v}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let (mut last, mut stable) = (String::new(), 0);
+    loop {
+        let v = ok_get(port, "/cli/thread", OWNER, &format!("addr={handle}&limit=1")).await;
+        let conv = v["conversation_id"].as_str().expect("conversation_id").to_string();
+        stable = if conv != seeded && conv == last { stable + 1 } else { 0 };
+        last = conv;
+        if stable >= 2 {
+            return last;
+        }
+        assert!(std::time::Instant::now() < deadline, "the pin never swapped after the warm-up: {v}");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
 fn seqs(items: &Value) -> Vec<i64> {
     items.as_array().unwrap_or_else(|| panic!("not an array: {items}")).iter().map(|i| i["seq"].as_i64().expect("seq")).collect()
 }
@@ -93,9 +113,15 @@ async fn thread_after_seq_pages_forward_and_carries_card_changes() {
     let d = k2_daemon::test_harness::start(OWNER).await;
     let port = d.port;
     let tag = &uuid::Uuid::new_v4().simple().to_string()[..8];
-    let (sales, conv) = pinned_ws(&env, &format!("tdsales{tag}"));
+    let _shim = k2_core::test_env::AgentShim::install();
+    let (sales, seeded) = pinned_ws(&env, &format!("tdsales{tag}"));
     let h = sales.handle.clone();
     let agent = passport(&sales);
+    // A card answer or void wakes the agent; its first wake spawns the
+    // Chat (the shim) and pins that new session, so the address answers
+    // at a NEW conversation from then on. Wake it first so everything
+    // below lands on one conversation (empty: seqs start at 1 there).
+    let conv = warm_up(port, &h, &seeded).await;
 
     // 4. The feature key.
     let boot = ok_get(port, "/boot-status", OWNER, "").await;
@@ -150,6 +176,7 @@ async fn thread_after_seq_pages_forward_and_carries_card_changes() {
     // Card A is answered (the asking agent's own answer: no wake).
     ok_post(port, "/cli/thread/answer", &agent, json!({ "addr": h, "id": a_id, "answer": "Ship" })).await;
     let v = ok_get(port, "/cli/thread", OWNER, &format!("addr={h}&after_seq=7")).await;
+    assert_eq!(v["conversation_id"], conv.as_str(), "still the warmed-up conversation: {v}");
     assert_eq!((seqs(&v["items"]), seqs(&v["changed"])), (vec![], vec![6]), "the answer is in changed: {v}");
     assert_eq!(v["changed"][0]["id"], a_id.as_str());
     assert_eq!(status_of(&v["changed"][0]), "answered");

@@ -327,3 +327,98 @@ fn an_agent_never_grants_itself_the_switch() {
     assert_eq!(v["agentsCanManageGardens"], true, "{v}");
     assert!(k2_core::workspace::settings::agents_can_manage_gardens(WS));
 }
+
+/// 0.46.1: `k2 sources secret a b c NAME` binds one secret to several
+/// sources, all or none, for an agent with the switch (no confirm).
+#[test]
+fn the_secret_route_binds_one_secret_to_several_sources_all_or_none() {
+    let _h = crate::test_support::TempHome::new();
+    let _e = env();
+    workspace(true, false);
+    for n in ["a-src", "b-src", "c-src"] {
+        insert_source(n, "active", None, false, "admin");
+    }
+    let names = json!(["a-src", "b-src", "c-src"]);
+    let e = call("/cli/sources/secret", &agent(), json!({"names": names, "secret": "STRIPE_RK"})).unwrap_err();
+    assert_eq!(e.code, "secret_not_usable", "a server secret without vault_manage refuses the whole list");
+    for n in ["a-src", "b-src", "c-src"] {
+        assert!(!row(n).secret_bound, "{n} changed after a refusal");
+    }
+    // One unknown name refuses the list before anything binds.
+    let e = call("/cli/sources/secret", &agent(), json!({"names": ["a-src", "nope"], "secret": "WS_KEY"})).unwrap_err();
+    assert_eq!(e.code, "source_not_found");
+    assert!(!row("a-src").secret_bound);
+    // One bind fails halfway: the earlier binds are undone.
+    {
+        let h = k2_core::db::shared();
+        let c = h.lock();
+        c.execute("UPDATE sources SET origins_json = '[\"https://bad.example.com:443\"]' WHERE name = 'c-src'", []).expect("origin");
+    }
+    test_seams::set_secrets(Some(test_seams::FakeSecrets {
+        bind: |_, _, origin| {
+            if origin.contains("bad.example.com") {
+                Err(SourceErr::new("secret_origin_mismatch", 400, "not one of the secret's sites"))
+            } else {
+                Ok(())
+            }
+        },
+        unbind: |_| Ok(()),
+        root_key: |_| None,
+        exists: |ws, s| ws == Some("p1") && s == "WS_KEY",
+    }));
+    let e = call("/cli/sources/secret", &agent(), json!({"names": names, "secret": "WS_KEY"})).unwrap_err();
+    assert_eq!(e.code, "secret_origin_mismatch");
+    for n in ["a-src", "b-src", "c-src"] {
+        assert!(!row(n).secret_bound, "{n} stays unbound after a failed list");
+    }
+    {
+        let h = k2_core::db::shared();
+        let c = h.lock();
+        c.execute("UPDATE sources SET origins_json = '[\"https://api.example.com:443\"]' WHERE name = 'c-src'", []).expect("origin");
+    }
+    // Duplicates are bound once.
+    let r = call("/cli/sources/secret", &agent(), json!({"names": ["a-src", "b-src", "c-src", "a-src"], "secret": "WS_KEY"})).expect("bind all");
+    assert_eq!((r["names"].clone(), r["secretBound"].clone()), (names.clone(), json!(true)));
+    for n in ["a-src", "b-src", "c-src"] {
+        let r = row(n);
+        assert!(r.secret_bound && r.secret_name.as_deref() == Some("WS_KEY") && r.secret_workspace.as_deref() == Some(WS), "{n}");
+        assert_eq!(access_audit("sources-bind", n).len(), 1, "{n}");
+    }
+    // --none unbinds every name.
+    let r = call("/cli/sources/secret", &agent(), json!({"names": names, "secret": null})).expect("unbind all");
+    assert_eq!(r["secretBound"], false);
+    for n in ["a-src", "b-src", "c-src"] {
+        let r = row(n);
+        assert!(!r.secret_bound && r.secret_name.is_none(), "{n}");
+    }
+}
+
+#[test]
+fn several_names_need_the_switch_or_one_person_confirm_bound_to_the_list() {
+    let _h = crate::test_support::TempHome::new();
+    let _e = env();
+    workspace(false, false);
+    let ids: Vec<String> = ["a-src", "b-src"].iter().map(|n| insert_source(n, "active", None, false, "admin")).collect();
+    let e = call("/cli/sources/secret", &agent(), json!({"names": ["a-src", "b-src"], "secret": "VERCEL_RO"})).unwrap_err();
+    assert_eq!(e.code, "person_only", "no switch: a person's");
+    let e = call("/cli/sources/secret", &admin(), json!({"names": ["a-src", "b-src"], "secret": "VERCEL_RO"})).unwrap_err();
+    assert_eq!(e.code, "vault_confirm_required");
+    let want = approve_routes::batch_hash(&[(ids[0].clone(), "VERCEL_RO".into()), (ids[1].clone(), "VERCEL_RO".into())]);
+    assert_eq!(e.extra["batchHash"], want.as_str());
+    let v = crate::compute_admin::test_seams::vault_handle();
+    // A confirm for a different list is refused and nothing binds.
+    let narrow = approve_routes::batch_hash(&[(ids[0].clone(), "VERCEL_RO".into())]);
+    let bad = v.confirm.mint("source-batch", Some(&narrow), "connect:ada", "vault-password");
+    let e = call("/cli/sources/secret", &admin(), json!({"names": ["a-src", "b-src"], "secret": "VERCEL_RO", "confirmToken": bad})).unwrap_err();
+    assert_eq!(e.code, "batch_changed");
+    assert!(!row("a-src").secret_bound && !row("b-src").secret_bound);
+    let token = v.confirm.mint("source-batch", Some(&want), "connect:ada", "vault-password");
+    call("/cli/sources/secret", &admin(), json!({"names": ["a-src", "b-src"], "secret": "VERCEL_RO", "confirmToken": token})).expect("one confirm");
+    for n in ["a-src", "b-src"] {
+        assert!(row(n).secret_bound, "{n}");
+    }
+    // The single-name form still works as before.
+    let e = call("/cli/sources/secret", &admin(), json!({"name": "a-src", "secret": "VERCEL_RO"})).unwrap_err();
+    assert_eq!(e.code, "vault_confirm_required");
+    assert_eq!(call("/cli/sources/secret", &admin(), json!({"secret": "VERCEL_RO"})).unwrap_err().code, "bad_request");
+}

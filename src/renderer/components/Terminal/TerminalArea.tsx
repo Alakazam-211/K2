@@ -4,6 +4,7 @@ import { PaneLayout } from '@/components/PaneLayout/PaneLayout'
 import { PresetsBar } from '@/components/PresetsBar/PresetsBar'
 import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
 import type { Room } from '@/stores/room'
+import type { Tab } from '@/stores/tabs'
 import { useRoomResolvedAgentCommand } from '@/hooks/useResolvedAgentCommand'
 import { useTerminalShortcuts } from '@/hooks/useTerminalShortcuts'
 import { KeyCombo } from '@/components/KeySymbol'
@@ -33,6 +34,10 @@ interface TabDragState {
 }
 
 let globalDrag: TabDragState | null = null
+// Stable fallback for a group index that's gone: a fresh `[]` from the
+// selector would loop useSyncExternalStore (React #185).
+const NO_TABS: readonly Tab[] = []
+
 const dragListeners = new Set<() => void>()
 
 function notifyDragListeners(): void {
@@ -170,7 +175,7 @@ function TabGroupColumn({
   style?: React.CSSProperties
 }): React.JSX.Element {
   const room = useRoom()
-  const tabs = useRoomTabs((s) => groupIndex === 0 ? s.tabs : s.extraGroups[groupIndex - 1]?.tabs ?? [])
+  const tabs = useRoomTabs((s) => groupIndex === 0 ? s.tabs : s.extraGroups[groupIndex - 1]?.tabs) ?? NO_TABS
   const activeTabId = useRoomTabs((s) => groupIndex === 0 ? s.activeTabId : s.extraGroups[groupIndex - 1]?.activeTabId ?? null)
   const dragState = useTabDragState()
 

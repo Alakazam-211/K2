@@ -73,6 +73,10 @@ function presetMenuIcon(preset: AgentPreset): ReactNode {
   return <AgentIcon agent={preset.label} size={14} />
 }
 
+// Stable fallback for a group index that's gone: a fresh `[]` from the
+// selector would loop useSyncExternalStore (React #185).
+const NO_TABS: readonly Tab[] = []
+
 const CHANGES_MENU_TOOLTIP: Record<Exclude<ChangesMenuState, 'changes'>, string> = {
   checking: 'Checking…',
   clean: 'No changes to review',
@@ -209,7 +213,7 @@ function defaultPresetIdForCwd(room: Room, cwd: string, presets: AgentPreset[]):
 
 export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element {
   const room = useRoom()
-  const tabs = useRoomTabs((s) => groupIndex === 0 ? s.tabs : s.extraGroups[groupIndex - 1]?.tabs ?? [])
+  const tabs = useRoomTabs((s) => groupIndex === 0 ? s.tabs : s.extraGroups[groupIndex - 1]?.tabs) ?? NO_TABS
   const activeTabId = useRoomTabs((s) => groupIndex === 0 ? s.activeTabId : s.extraGroups[groupIndex - 1]?.activeTabId ?? null)
   const splitCount = useRoomTabs((s) => s.splitCount)
   const removeTabFromGroupRaw = useRoomTabs((s) => s.removeTabFromGroup)

@@ -131,18 +131,28 @@ pub struct BadgePush {
     pub waiting_total: String,
 }
 
-/// `data.badgeKey`: a stable, opaque key per (server, person) — the relay
-/// uses it as the APNs collapse id so a queued badge push is replaced by
-/// the next one. The first 32 hex chars of
-/// `sha256("k2-badge\0" + subdomain + "\0" + principal)`; never the raw
-/// username.
-pub fn badge_key(subdomain: &str, principal: &str) -> String {
+/// `data.badgeKey`: a stable, opaque key per (server, person). Every
+/// mobile push carries it INSTEAD of the person's name (a username must
+/// never reach Apple or Google); the phone matches it to one of its
+/// logins (`badgeKey` comes back on register-device, `GET
+/// /cli/push/device` and `GET /cli/thread/unread`), and the relay uses it
+/// as a silent badge push's collapse id.
+///
+/// The first 32 hex chars of `sha256("k2-badge\0" + server_salt + "\0" +
+/// person_key)`. `server_salt` is this server's random badge salt
+/// (`read_server.badge_salt`, minted once by migration 0190, never shown):
+/// it makes the key stable across restarts, upgrades, token refreshes,
+/// re-logins and device re-registration, and keeps it from being guessed
+/// from a username. `person_key` is [`crate::notify_prefs::People::person_key`]
+/// (the owner token and every linked login are `owner`). See
+/// [`crate::read_state::badge_key_for`].
+pub fn badge_key(server_salt: &str, person_key: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(b"k2-badge\0");
-    h.update(subdomain.trim().to_ascii_lowercase().as_bytes());
+    h.update(server_salt.trim().as_bytes());
     h.update(b"\0");
-    h.update(principal.trim().as_bytes());
+    h.update(person_key.trim().as_bytes());
     let digest = h.finalize();
     digest.iter().take(16).map(|b| format!("{b:02x}")).collect()
 }
@@ -458,7 +468,6 @@ impl PushEvent {
                 ("agentName", t.agent_name.clone()),
                 ("msgKind", t.msg_kind.as_wire().to_string()),
                 ("count", t.count.to_string()),
-                ("principal", t.principal.clone()),
                 ("unreadTotal", t.unread_total.clone()),
                 ("waitingTotal", t.waiting_total.clone()),
                 // iOS Communication Notifications: the phone's Notification
@@ -1108,13 +1117,14 @@ impl K2Cloud {
     }
 
     /// The `payload` object for ONE recipient person. Mobile kinds carry
-    /// `sound`, the server stamp and `principal` (TP29); a Thread push
-    /// also carries `threadId` + `collapseId` (§7). No badge, ever (TP27).
-    pub fn payload(event: &PushEvent, stamp: &PushStamp, principal: &str) -> serde_json::Value {
+    /// `sound`, the server stamp and the person's `badgeKey` (TP29: whose
+    /// push it is, 0.46.1: never their name); a Thread push also carries
+    /// `threadId` + `collapseId` (§7). No `aps.badge`, ever (TP27).
+    pub fn payload(event: &PushEvent, stamp: &PushStamp, badge_key: &str) -> serde_json::Value {
         let mut data = event.data();
         if event.is_mobile() {
-            if !principal.is_empty() {
-                data.insert("principal", principal.to_string());
+            if !badge_key.is_empty() {
+                data.insert("badgeKey", badge_key.to_string());
             }
             if !stamp.subdomain.is_empty() {
                 data.insert("subdomain", stamp.subdomain.clone());
@@ -1123,10 +1133,9 @@ impl K2Cloud {
                 data.insert("instanceId", stamp.instance_id.clone());
             }
         }
-        if let PushEvent::Badge(b) = event {
+        if let PushEvent::Badge(_) = event {
             // Silent (thread-read-v1): no title, body or sound; the relay
             // sends it as a background push and collapses on `badgeKey`.
-            data.insert("badgeKey", badge_key(&stamp.subdomain, &b.principal));
             return serde_json::json!({ "data": data });
         }
         let mut payload = serde_json::json!({
@@ -1250,8 +1259,8 @@ impl K2Cloud {
         out
     }
 
-    /// Send `event` to ONE person's devices (`principal` = their person
-    /// key, stamped into `data`, TP29). The daemon resolved them (Thread
+    /// Send `event` to ONE person's devices (`badge_key` = that person's
+    /// [`badge_key`], stamped into `data`, TP29). The daemon resolved them (Thread
     /// recipients, or bell-filtered ticket/project targets). One call per
     /// payload variant ([`Self::payload_groups`]: a Thread preview to
     /// devices with previews on, the generic body to the rest) and per
@@ -1259,12 +1268,12 @@ impl K2Cloud {
     pub fn dispatch(
         &self,
         event: &PushEvent,
-        principal: &str,
+        badge_key: &str,
         devices: &[crate::push_devices::PushDevice],
     ) -> Result<(), PushError> {
         for (variant, group) in Self::payload_groups(event, devices) {
             let group: Vec<_> = group.into_iter().cloned().collect();
-            self.dispatch_one(&variant, principal, &group)?;
+            self.dispatch_one(&variant, badge_key, &group)?;
         }
         Ok(())
     }
@@ -1273,7 +1282,7 @@ impl K2Cloud {
     fn dispatch_one(
         &self,
         event: &PushEvent,
-        principal: &str,
+        badge_key: &str,
         devices: &[crate::push_devices::PushDevice],
     ) -> Result<(), PushError> {
         if devices.is_empty() {
@@ -1283,7 +1292,7 @@ impl K2Cloud {
             subdomain: self.config.subdomain.clone(),
             instance_id: instance_id(),
         };
-        let payload = Self::payload(event, &stamp, principal);
+        let payload = Self::payload(event, &stamp, badge_key);
         let url = format!("{}/push/dispatch", self.config.url);
         for chunk in devices.chunks(MAX_DEVICES_PER_CALL) {
             let body = Self::dispatch_body(chunk, &payload);
@@ -1326,13 +1335,14 @@ impl PushTarget for K2Cloud {
             by_login.entry(d.username.clone()).or_default().push(d);
         }
         for (login, group) in by_login {
-            let principal = match event {
+            let person = match event {
                 PushEvent::ThreadPost(t) => t.principal.clone(),
                 PushEvent::ProjectPost(p) => p.principal.clone(),
                 PushEvent::Badge(b) => b.principal.clone(),
                 _ => login,
             };
-            self.dispatch(event, &principal, &group)?;
+            let key = crate::read_state::badge_key_for_shared(&person);
+            self.dispatch(event, &key, &group)?;
         }
         Ok(())
     }
@@ -1585,9 +1595,9 @@ mod tests {
                 "kind": PUSH_KIND_TICKET,
                 "feedbackId": "fb-77",
                 "instanceId": TEST_INSTANCE,
-                "principal": "owner",
+                "badgeKey": crate::read_state::badge_key_for_shared("owner"),
             }),
-            "no tunnel subdomain on this config → no subdomain key; instanceId + principal always"
+            "no tunnel subdomain on this config → no subdomain key; instanceId + badgeKey always, never a name"
         );
         let devices = body["devices"].as_array().expect("devices array");
         let mine = devices
@@ -1659,6 +1669,8 @@ mod tests {
     // ── prd-thread-push-notifications-v1 S1 ──────────────────────────
 
     const TEST_INSTANCE: &str = "feedfacefeedface";
+    /// A person's badgeKey as the daemon would pass it.
+    const TEST_KEY: &str = "0123456789abcdef0123456789abcdef";
 
     fn thread_event(kind: ThreadMsgKind, count: u32, cid: &str) -> PushEvent {
         PushEvent::ThreadPost(ThreadPush {
@@ -1706,7 +1718,7 @@ mod tests {
         let e = project_post("gina");
         assert_eq!(e.target_usernames(), Some(&["gina".to_string()][..]));
         let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
-        let p = K2Cloud::payload(&e, &stamp, "gina");
+        let p = K2Cloud::payload(&e, &stamp, TEST_KEY);
         assert_eq!(
             p,
             serde_json::json!({
@@ -1718,7 +1730,7 @@ mod tests {
                     "groupId": "pg-9",
                     "unreadTotal": "7",
                     "waitingTotal": "2",
-                    "principal": "gina",
+                    "badgeKey": TEST_KEY,
                     "subdomain": "rosson",
                     "instanceId": TEST_INSTANCE,
                 },
@@ -1735,8 +1747,7 @@ mod tests {
     fn badge_push_is_silent_with_totals_and_an_opaque_key() {
         let e = badge_push("gina");
         let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
-        let p = K2Cloud::payload(&e, &stamp, "gina");
-        let key = badge_key("rosson", "gina");
+        let p = K2Cloud::payload(&e, &stamp, TEST_KEY);
         assert_eq!(
             p,
             serde_json::json!({
@@ -1744,22 +1755,23 @@ mod tests {
                     "kind": "badge",
                     "unreadTotal": "3",
                     "waitingTotal": "1",
-                    "principal": "gina",
                     "subdomain": "rosson",
                     "instanceId": TEST_INSTANCE,
-                    "badgeKey": key,
+                    "badgeKey": TEST_KEY,
                 },
-            })
+            }),
+            "exactly these keys: no principal, no name"
         );
+        let key = badge_key("server-salt", "gina");
         for absent in ["title", "body", "sound", "threadId", "collapseId", "badge", "aps"] {
             assert!(p.get(absent).is_none(), "badge push carries {absent}: {p}");
         }
         assert_eq!(key.len(), 32);
         assert!(key.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "{key}");
         assert!(!key.contains("gina"), "never the raw username");
-        assert_eq!(key, badge_key(" Rosson ", "gina"), "stable per (server, person)");
-        assert_ne!(key, badge_key("rosson", "owner"), "per person");
-        assert_ne!(key, badge_key("other", "gina"), "per server");
+        assert_eq!(key, badge_key("server-salt", " gina "), "stable per (server, person)");
+        assert_ne!(key, badge_key("server-salt", "owner"), "per person");
+        assert_ne!(key, badge_key("other-salt", "gina"), "per server");
         assert_eq!(e.budget_class(), budget::BudgetClass::Badge);
         assert_eq!(e.target_usernames(), Some(&["gina".to_string()][..]));
         assert!(!e.has_preview());
@@ -1775,6 +1787,42 @@ mod tests {
             updated_at: 1,
             last_seen_at: 1,
             previews: true,
+        }
+    }
+
+    /// 0.46.1 privacy: no push `data`, of any kind, carries a person's name
+    /// (the owner, a Connect username, an email-like username): pushes pass
+    /// through K2's relay and Apple / Google. Whose push it is rides as the
+    /// opaque `badgeKey`; there is no `principal` key at all.
+    #[test]
+    fn no_push_data_of_any_kind_carries_a_username() {
+        for name in ["owner", "gina", "rosson.long@lztek.io"] {
+            let key = badge_key("server-salt", name);
+            let thread = match thread_event(ThreadMsgKind::Text, 1, "c-privacy") {
+                PushEvent::ThreadPost(t) => PushEvent::ThreadPost(ThreadPush {
+                    principal: name.into(),
+                    device_usernames: vec![name.into()],
+                    ..t
+                }),
+                _ => unreachable!(),
+            };
+            let events = vec![
+                PushEvent::FeedbackCreated { agent_name: "cortana".into(), feedback_id: "f".into(), assignees: vec![name.into()] },
+                PushEvent::FeedbackCommented { feedback_id: "f".into(), assignees: vec![name.into()] },
+                PushEvent::ProjectMessageCreated { project_name: "Apollo".into(), group_id: "g".into() },
+                project_post(name),
+                badge_push(name),
+                thread,
+            ];
+            let stamp = PushStamp { subdomain: "k2box".into(), instance_id: TEST_INSTANCE.into() };
+            for e in &events {
+                let p = K2Cloud::payload(e, &stamp, &key);
+                let data = p["data"].as_object().expect("data");
+                assert!(!data.contains_key("principal"), "{e:?}: principal in {p}");
+                assert_eq!(data.get("badgeKey").and_then(|v| v.as_str()), Some(key.as_str()), "{e:?}: {p}");
+                let wire = p.to_string();
+                assert!(!wire.contains(name), "{e:?}: '{name}' rides the push: {wire}");
+            }
         }
     }
 
@@ -1795,7 +1843,7 @@ mod tests {
         ];
         let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
         for e in &events {
-            let payload = K2Cloud::payload(e, &stamp, "gina");
+            let payload = K2Cloud::payload(e, &stamp, TEST_KEY);
             let data = payload["data"].as_object().expect("data object");
             for (k, v) in data {
                 assert!(v.is_string(), "{e:?}: data.{k} = {v} is not a string");
@@ -1808,7 +1856,7 @@ mod tests {
         let cid = "0f8fad5b-d9cb-469f-a165-70867728950e";
         let e = thread_event(ThreadMsgKind::Text, 1, cid);
         let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
-        let p = K2Cloud::payload(&e, &stamp, "owner");
+        let p = K2Cloud::payload(&e, &stamp, TEST_KEY);
         assert_eq!(
             p,
             serde_json::json!({
@@ -1828,7 +1876,7 @@ mod tests {
                     "agentName": "Cortana",
                     "msgKind": "text",
                     "count": "1",
-                    "principal": "owner",
+                    "badgeKey": TEST_KEY,
                     "unreadTotal": "4",
                     "waitingTotal": "1",
                     "avatarRev": "ba7816bf8f01cfea",
@@ -1841,7 +1889,7 @@ mod tests {
         assert_eq!(thread_event(ThreadMsgKind::Choice, 1, cid).body(), "Asks you to choose");
         assert_eq!(thread_event(ThreadMsgKind::Secret, 1, cid).body(), "Asks for a secret");
         assert_eq!(thread_event(ThreadMsgKind::Secret, 3, cid).body(), "3 new messages");
-        let secret = K2Cloud::payload(&thread_event(ThreadMsgKind::Secret, 1, cid), &stamp, "owner");
+        let secret = K2Cloud::payload(&thread_event(ThreadMsgKind::Secret, 1, cid), &stamp, TEST_KEY);
         assert_eq!(secret["data"]["msgKind"], "secret");
         assert_eq!(secret["data"].as_object().expect("data").len(), 15, "no extra secret fields");
         // A Thread push is always targeted, never "every device".
@@ -1876,7 +1924,7 @@ mod tests {
             }
         });
         let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
-        let p = K2Cloud::payload(&bare, &stamp, "owner");
+        let p = K2Cloud::payload(&bare, &stamp, TEST_KEY);
         assert_eq!(p["data"]["avatarRev"], serde_json::json!(""), "no avatar = empty string, key kept");
         assert_eq!(p["data"]["agentColor"], serde_json::json!("#3b82f6"));
         let ticket = PushEvent::FeedbackCommented { feedback_id: "f".into(), assignees: vec![] }.data();
@@ -2049,14 +2097,14 @@ mod tests {
         assert!(!secret.has_preview());
         let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
         assert!(
-            !K2Cloud::payload(&secret, &stamp, "owner").to_string().contains("hunter2"),
+            !K2Cloud::payload(&secret, &stamp, TEST_KEY).to_string().contains("hunter2"),
             "a secret's text never rides a payload"
         );
         assert_eq!(previewed(ThreadMsgKind::Secret, 3, "hunter2").body(), "3 new messages");
         assert_eq!(previewed(ThreadMsgKind::Text, 1, "   ").body(), "New message in Thread");
         assert_eq!(previewed(ThreadMsgKind::Choice, 1, "").body(), "Asks you to choose");
         // The data object is unchanged by a preview (no text in `data`).
-        let p = K2Cloud::payload(&previewed(ThreadMsgKind::Text, 1, text), &stamp, "owner");
+        let p = K2Cloud::payload(&previewed(ThreadMsgKind::Text, 1, text), &stamp, TEST_KEY);
         assert_eq!(p["body"], text);
         assert!(!p["data"].to_string().contains("Ready to ship"), "the preview rides `body` only");
         // 13 keys + thread-read-v1's unreadTotal / waitingTotal (numbers, never text).
@@ -2136,8 +2184,13 @@ mod tests {
             .expect("send");
         let calls = s.calls();
         assert_eq!(calls.len(), 2, "one call per person");
+        let owner_key = crate::read_state::badge_key_for_shared("owner");
+        let gina_key = crate::read_state::badge_key_for_shared("gina");
+        assert_ne!(owner_key, gina_key);
         for (_, _, body) in &calls {
-            let principal = body["payload"]["data"]["principal"].as_str().expect("principal").to_string();
+            assert!(body["payload"]["data"].get("principal").is_none(), "never a name: {body}");
+            let key = body["payload"]["data"]["badgeKey"].as_str().expect("badgeKey");
+            let principal = if key == owner_key { "owner" } else { assert_eq!(key, gina_key); "gina" };
             let tokens: Vec<&str> = body["devices"]
                 .as_array()
                 .expect("devices")

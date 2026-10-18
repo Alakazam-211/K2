@@ -765,8 +765,10 @@ mod tests {
         assert_eq!(by["gina"].device_usernames, vec!["gina".to_string()]);
         let stamp = k2_core::push::PushStamp { subdomain: "rosson".into(), instance_id: "i".into() };
         for t in &sent {
-            let payload = k2_core::push::K2Cloud::payload(&PushEvent::ThreadPost(t.clone()), &stamp, &t.principal);
-            assert_eq!(payload["data"]["principal"], t.principal.as_str());
+            let key = k2_core::push::badge_key("salt", &t.principal);
+            let payload = k2_core::push::K2Cloud::payload(&PushEvent::ThreadPost(t.clone()), &stamp, &key);
+            assert_eq!(payload["data"]["badgeKey"], key.as_str());
+            assert!(payload["data"].get("principal").is_none(), "never a name");
             let other = if t.principal == "owner" { "gina" } else { "z3thon" };
             assert!(!payload.to_string().contains(other), "{other} leaked into {}'s payload", t.principal);
         }

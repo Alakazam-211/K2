@@ -1558,6 +1558,8 @@ async fn async_main() {
     // Hydra sidecar is independent (H2: Caddy apply is not Hydra start).
     let _ = tokio::task::spawn_blocking(move || {
         k2_core::skin_door::maybe_apply_on_boot(port);
+        // front443: Caddy's routes now come from the Caddy this daemon runs.
+        crate::front443::skin_settled();
     });
     let _ = tokio::task::spawn_blocking(skin_hydra::maybe_apply_on_boot);
 
@@ -1605,6 +1607,10 @@ async fn async_main() {
 /// The tunnel-ingress listener and the E2E TLS listener (with the routing
 /// map persisted by the last refresh, so nested Apps route at once).
 async fn bring_up_tunnel_listeners(state: &DaemonState, port: u16) {
+    // front443: the box :443 socket (systemd's LISTEN_FDS, or the previous
+    // daemon's on a hand-off) — taken before `drop_untaken` closes it.
+    // No socket = no front; never fails boot.
+    crate::front443::start().await;
     // Before the TLS listener accepts: nested App hosts route from the
     // first connection (runtime stage H).
     if let Ok(cfg) = k2_core::tunnel::config::load() {

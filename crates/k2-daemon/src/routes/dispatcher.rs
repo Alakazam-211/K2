@@ -3211,6 +3211,76 @@ async fn handle_one_request(
                 .unwrap_or_else(|e| serde_json::json!({"error": format!("worker join: {e}")}));
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body.to_string()).await;
         }
+        // front443 — GET /cli/front/status: the box :443 SNI router (socket,
+        // routes, cap, per-outcome counters).
+        "/cli/front/status" => {
+            if !super::http::require_owner_or_admin(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let _ = super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query).await;
+            let body = tokio::task::spawn_blocking(crate::front443::status_json)
+                .await
+                .unwrap_or_else(|e| serde_json::json!({"error": format!("worker join: {e}")}));
+            super::http::send_response(&mut *stream, "200 OK", "application/json", &body.to_string()).await;
+        }
+        // POST /cli/front/enable `{"mail": bool}` — install the root
+        // helper's :443 socket for this daemon (protocol 8), move Skin
+        // Direct's Caddy (and, opt-in, Stalwart) behind it, then restart
+        // once to take the socket (same restart path as /cli/daemon/restart).
+        // POST /cli/front/disable — the reverse; no restart.
+        "/cli/front/enable" | "/cli/front/disable" => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            if !super::http::require_owner_or_admin(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+                return DispatchOutcome::Done;
+            }
+            let raw = super::http::read_post_body(&mut *stream, &mut buf).await;
+            let enable = path == "/cli/front/enable";
+            let mail = serde_json::from_slice::<serde_json::Value>(&raw)
+                .ok()
+                .and_then(|v| v.get("mail").and_then(serde_json::Value::as_bool))
+                .unwrap_or(false);
+            let port = state.port;
+            let r = tokio::task::spawn_blocking(move || {
+                if enable {
+                    crate::front443::enable(mail, port)
+                } else {
+                    crate::front443::disable(port)
+                }
+            })
+            .await
+            .unwrap_or_else(|e| Err((500, "worker_join", e.to_string())));
+            let (status, body, restart) = match r {
+                Ok(v) => {
+                    let restart = v["restarting"] == true;
+                    ("200 OK", v, restart)
+                }
+                Err((code, err, msg)) => {
+                    let status = match code {
+                        400 => "400 Bad Request",
+                        409 => "409 Conflict",
+                        _ => "500 Internal Server Error",
+                    };
+                    (status, serde_json::json!({"ok": false, "error": err, "message": msg}), false)
+                }
+            };
+            super::http::send_response(&mut *stream, status, "application/json", &body.to_string()).await;
+            let _ = stream.flush().await;
+            // The daemon takes the socket at its next start: a plain
+            // supervisor restart (systemd Restart=always passes LISTEN_FDS).
+            // The harness has no shutdown_tx and never restarts.
+            if restart {
+                if let Some(tx) = state.shutdown_tx.clone() {
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        k2_core::log_debug!("[front443] restarting to take the :443 socket");
+                        let _ = tx.send(());
+                    });
+                }
+            }
+            return DispatchOutcome::Done;
+        }
         // #58 Phase-1 close — POST /cli/daemon/hook-revoke-all. The global
         // scoped-hook-token KILL SWITCH: bump the daemon-wide hook epoch so
         // every already-minted scoped token (stamped with the old epoch) goes

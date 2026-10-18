@@ -102,6 +102,29 @@ pub enum Role {
     TunnelIngress,
     /// The E2E TLS listener frpc dials (`tunnel-https.port`).
     TunnelTls,
+    /// front443's box :443 socket (0.46.1). systemd passes it at a unit
+    /// start (`LISTEN_FDS`); a hand-off passes it on from daemon to daemon.
+    /// Only sent to a successor that names it in its HELLO (an older
+    /// binary can't parse it; systemd keeps its own copy of the socket, so
+    /// :443 stays bound and queues until a daemon that knows it starts).
+    Front443,
+}
+
+impl Role {
+    /// The roles every hand-off-capable daemon understands (0.46.0).
+    pub const LEGACY: [Role; 3] = [Role::Main, Role::TunnelIngress, Role::TunnelTls];
+    /// Every role this build understands.
+    pub const ALL: [Role; 4] = [Role::Main, Role::TunnelIngress, Role::TunnelTls, Role::Front443];
+}
+
+/// The roles to send a successor that announced `accepts` (`None`: a
+/// pre-0.46.1 successor, which understands only [`Role::LEGACY`]).
+pub fn roles_for_successor(held: &[Role], accepts: Option<&[Role]>) -> Vec<Role> {
+    let ok = |r: &Role| match accepts {
+        Some(a) => a.contains(r),
+        None => Role::LEGACY.contains(r),
+    };
+    held.iter().copied().filter(ok).collect()
 }
 
 // ── Successor side: what the predecessor handed over ────────────────────
@@ -248,6 +271,9 @@ pub fn capture_process_context() {
     if ns.is_some() {
         std::env::remove_var("NOTIFY_SOCKET");
     }
+    // front443: systemd's passed :443 socket (LISTEN_FDS), taken while
+    // still single-threaded; the variables leave the environment too.
+    crate::front443::systemd_fds::capture();
     let _ = NOTIFY_SOCKET.set(ns);
     let _ = BOOT_EXE.set(std::env::current_exe().ok());
     // A successor's socketpair fd: read (and drop from the env, so no child
@@ -363,7 +389,14 @@ pub fn handed_off() -> bool {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "camelCase")]
 enum Msg {
-    Hello { pid: u32, version: String },
+    Hello {
+        pid: u32,
+        version: String,
+        /// The roles this successor can take (0.46.1+). Absent from an
+        /// older successor: it gets [`Role::LEGACY`] only.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        roles: Option<Vec<Role>>,
+    },
     /// Followed in the same `sendmsg` by the fds: the singleton lock
     /// first, then one listener per role, in `roles` order.
     Take { roles: Vec<Role> },
@@ -416,6 +449,7 @@ fn successor_receive_unix(fd_str: &str) -> Result<std::fs::File, String> {
         &serde_json::to_vec(&Msg::Hello {
             pid: std::process::id(),
             version: env!("CARGO_PKG_VERSION").to_string(),
+            roles: Some(Role::ALL.to_vec()),
         })
         .expect("serialize hello"),
         &[],
@@ -570,10 +604,10 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
         return Err(abort(&mut child, format!("socket timeout: {e}")));
     }
     let hello = fdpass::recv_msg(&ours, 0).map_err(|e| format!("waiting for HELLO: {e}"));
-    let version = match hello.and_then(|(b, _)| {
+    let (version, accepts) = match hello.and_then(|(b, _)| {
         serde_json::from_slice::<Msg>(&b).map_err(|e| format!("unreadable HELLO: {e}"))
     }) {
-        Ok(Msg::Hello { pid: p, version }) if p == pid => version,
+        Ok(Msg::Hello { pid: p, version, roles }) if p == pid => (version, roles),
         Ok(other) => return Err(abort(&mut child, format!("expected HELLO from {pid}, got {other:?}"))),
         Err(e) => return Err(abort(&mut child, e)),
     };
@@ -588,6 +622,10 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
             .filter_map(|(r, w)| w.upgrade().map(|l| (*r, l)))
             .collect();
         v.sort_by_key(|(r, _)| *r as u8);
+        // An older successor can't parse a role it doesn't know: send it
+        // only what it announced (or the 0.46.0 set).
+        let send = roles_for_successor(&v.iter().map(|(r, _)| *r).collect::<Vec<_>>(), accepts.as_deref());
+        v.retain(|(r, _)| send.contains(r));
         v
     };
     if !held.iter().any(|(r, _)| *r == Role::Main) {

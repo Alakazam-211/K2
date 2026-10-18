@@ -114,3 +114,23 @@ fn inherited_listeners_are_taken_once() {
     assert_eq!(got.local_addr().expect("addr").port(), port);
     assert!(take_inherited(Role::TunnelIngress).is_none(), "taken once");
 }
+
+/// front443: a pre-0.46.1 successor (HELLO without `roles`) never gets a
+/// role it can't parse; a 0.46.1 successor gets the front socket.
+#[test]
+fn the_front_socket_goes_only_to_a_successor_that_names_it() {
+    let held = [Role::Main, Role::TunnelIngress, Role::TunnelTls, Role::Front443];
+    assert_eq!(roles_for_successor(&held, None), Role::LEGACY.to_vec());
+    assert_eq!(roles_for_successor(&held, Some(&Role::ALL)), held.to_vec());
+    assert_eq!(roles_for_successor(&[Role::Main], Some(&Role::ALL)), vec![Role::Main]);
+    // A 0.46.0 HELLO still parses, as "legacy".
+    let old = br#"{"t":"hello","pid":7,"version":"0.46.0"}"#;
+    match serde_json::from_slice::<Msg>(old).expect("old hello") {
+        Msg::Hello { roles, .. } => assert_eq!(roles, None),
+        other => panic!("{other:?}"),
+    }
+    // A 0.46.1 HELLO carries its roles, and an old parser would ignore the
+    // extra field (no deny_unknown_fields on Msg).
+    let new = serde_json::to_string(&Msg::Hello { pid: 7, version: "0.46.1".into(), roles: Some(Role::ALL.to_vec()) }).unwrap();
+    assert!(new.contains(r#""roles":["main","tunnelIngress","tunnelTls","front443"]"#), "{new}");
+}

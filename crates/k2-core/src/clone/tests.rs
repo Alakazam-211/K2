@@ -977,7 +977,7 @@ fn untar(bundle: &Path, dest: &Path) -> HashSet<String> {
 // ── direct credential-scanner unit checks ──────────────────────────
 #[test]
 fn credential_scanner_catches_expected_patterns() {
-    use super::scrub::content_has_credential_str as scan;
+    use crate::secret_paths::content_has_credential_str as scan;
     assert!(scan("x = eyJabcdefghijklmnopqrstuvwxyz0123"), "JWT");
     assert!(scan("GH=ghp_abcdefghijklmnopqrstuvwxyz12"), "ghp_ token");
     assert!(scan("key: ghs_ABCDEFGHIJKLMNOPQRSTuvwx9999"), "ghs_ token");

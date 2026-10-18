@@ -17,9 +17,10 @@
 //!   Detached HEAD / no upstream / unborn HEAD ⇒ we CANNOT prove the
 //!   work is pushed, so that counts as a refusal with a clear hint
 //!   (unpushed-unknown), not a silent pass.
-//! - **secrets**: filename-pattern sniff (v1 — no content scan):
-//!   `.env*`, ssh key material (`id_rsa`/`id_dsa`/`id_ecdsa`/
-//!   `id_ed25519`), and `*.pem|*.key|*.p12|*.pfx`. `.git/` is skipped.
+//! - **secrets**: path-pattern sniff (no content scan) against the one
+//!   shared list, `k2_core::secret_paths::is_secret_rel` (0.46.1: `.env*`,
+//!   `.auth/`, `.ssh/`, ssh keys, `*.pem|*.key|*.p12|*.pfx|*.keystore`,
+//!   login files…). `.git/` is skipped.
 //!
 //! Ahead of both (Projects V1 §4.5): the **PoC removal guard** — a
 //! workspace that is the Point of Contact of any project group refuses
@@ -166,20 +167,6 @@ fn evaluate_git_guard(path: &str) -> GitGuard {
 const SECRETS_SAMPLE_CAP: usize = 10;
 const SECRETS_WALK_CAP: usize = 20_000;
 
-fn is_secret_filename(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    if lower.starts_with(".env") {
-        return true;
-    }
-    if matches!(lower.as_str(), "id_rsa" | "id_dsa" | "id_ecdsa" | "id_ed25519") {
-        return true;
-    }
-    match lower.rsplit_once('.') {
-        Some((_, ext)) => matches!(ext, "pem" | "key" | "p12" | "pfx"),
-        None => false,
-    }
-}
-
 fn scan_secrets(root: &Path) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     let mut visited = 0usize;
@@ -200,13 +187,13 @@ fn scan_secrets(root: &Path) -> Vec<String> {
                     continue;
                 }
                 stack.push(entry.path());
-            } else if ft.is_file() && is_secret_filename(&name) {
-                if found.len() < SECRETS_SAMPLE_CAP {
-                    let rel = entry
-                        .path()
-                        .strip_prefix(root)
-                        .map(|p| p.to_string_lossy().into_owned())
-                        .unwrap_or(name);
+            } else if ft.is_file() {
+                let rel = entry
+                    .path()
+                    .strip_prefix(root)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or(name);
+                if k2_core::secret_paths::is_secret_rel(&rel) && found.len() < SECRETS_SAMPLE_CAP {
                     found.push(rel);
                 }
             }

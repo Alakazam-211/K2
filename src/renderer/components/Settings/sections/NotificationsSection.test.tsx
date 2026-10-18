@@ -77,9 +77,9 @@ vi.mock('@/stores/session-events', async (orig) => ({
   },
 }))
 
-import { NotificationsSection, NOTIFICATIONS_MANIFEST, ownerHint } from './NotificationsSection'
+import { NotificationsSection, NOTIFICATIONS_MANIFEST, ownerHint, personSummary } from './NotificationsSection'
 import { PUSH_PREVIEWS_HINT, PUSH_PREVIEWS_LABEL, pushPreviewsValue } from './PushPreviewsRow'
-import { parseNotifyPrefs, sourceLabel } from './notify-api'
+import { parseNotifyPrefs, sourceLabel, type NotifyWorkspacePref } from './notify-api'
 import { useIsYouAuthor } from './useNotifyPrefs'
 import { settingsNav } from '../Settings'
 import { SECTION_LABELS } from '../searchManifest'
@@ -187,6 +187,16 @@ function row(projectId: string): HTMLElement {
 
 function switchIn(el: HTMLElement): HTMLButtonElement {
   return within(el).getByRole('switch') as HTMLButtonElement
+}
+
+function personHeader(principal: string): HTMLButtonElement {
+  return screen.getByTestId(`notifications-person-${principal}-header`) as HTMLButtonElement
+}
+
+/** Click a person's header and require that it is now open. */
+function openPerson(principal: string): void {
+  fireEvent.click(personHeader(principal))
+  expect(personHeader(principal).getAttribute('aria-expanded')).toBe('true')
 }
 
 describe('Settings → Notifications: gating', () => {
@@ -337,7 +347,15 @@ describe('Settings → Notifications: roles', () => {
     expect(screen.getByTestId('notifications-person-sam').className).toContain('opacity-50')
     expect(screen.getByTestId('notifications-person-sam').textContent).toContain('Disabled')
     expect(screen.getByTestId('notifications-person-gina').textContent).toContain('(you)')
+    // Opened, an Admin still gets read-only values: no switch, no Reset.
+    for (const who of ['owner', 'gina', 'sam']) {
+      openPerson(who)
+      expect(within(screen.getByTestId(`notifications-person-${who}`)).queryAllByRole('switch')).toHaveLength(0)
+      expect(within(screen.getByTestId(`notifications-person-${who}`)).queryAllByText('Reset')).toHaveLength(0)
+    }
+    openPerson('gina')
     expect(screen.getByTestId('notifications-person-gina').textContent).toContain('Server: off')
+    expect(screen.getByTestId('notifications-person-gina-ws-p-k2').textContent).toContain('off')
 
     const def = screen.getByTestId('notifications-default-p-docs')
     fireEvent.click(switchIn(def))
@@ -354,8 +372,12 @@ describe('Settings → Notifications: roles', () => {
     render(<NotificationsSection />)
     await waitFor(() => expect(screen.getByTestId('notifications-person-gina')).toBeTruthy())
     expect(screen.queryByTestId('notifications-people-readonly')).toBeNull()
+    openPerson('owner')
+    expect(screen.getByTestId('notifications-person-owner-ws-p-k2')).toBeTruthy()
     expect(within(screen.getByTestId('notifications-person-owner')).queryAllByRole('switch')).toHaveLength(0)
+    expect(within(screen.getByTestId('notifications-person-owner')).queryAllByText('Reset')).toHaveLength(0)
 
+    openPerson('gina')
     const gina = screen.getByTestId('notifications-person-gina')
     const [bell] = within(gina).getAllByRole('switch')
     fireEvent.click(bell)
@@ -364,6 +386,7 @@ describe('Settings → Notifications: roles', () => {
     expect(within(k2).getByText('Set by gina')).toBeTruthy()
     fireEvent.click(within(k2).getByText('Reset'))
     await waitFor(() => expect(cli.posts).toHaveLength(2))
+    openPerson('sam')
     fireEvent.click(switchIn(screen.getByTestId('notifications-person-sam-ws-p-k2')))
     await waitFor(() => expect(cli.posts).toHaveLength(3))
     expect(cli.posts).toEqual([
@@ -381,6 +404,135 @@ describe('Settings → Notifications: roles', () => {
       for (const fn of events.handlers) fn()
     })
     await waitFor(() => expect(screen.queryByTestId('notifications-person-sam')).toBeNull())
+  })
+})
+
+describe('Settings → Notifications: People accordion (Rosson 2026-10-18)', () => {
+  function expanded(): string[] {
+    return ['owner', 'gina', 'sam'].filter((p) => personHeader(p).getAttribute('aria-expanded') === 'true')
+  }
+
+  it('everyone starts collapsed: one header row each, no person switches or workspace rows', async () => {
+    render(<NotificationsSection />)
+    await waitFor(() => expect(screen.getByTestId('notifications-person-sam')).toBeTruthy())
+    expect(expanded()).toEqual([])
+    const people = screen.getByTestId('notifications-people')
+    expect(within(people).queryAllByRole('switch')).toHaveLength(0)
+    expect(within(people).queryAllByText('Reset')).toHaveLength(0)
+    expect(screen.queryByTestId('notifications-person-gina-ws-p-k2')).toBeNull()
+    expect(document.getElementById('notifications-person-panel-gina')).toBeNull()
+    // Header: name, role chip, summary; a real button wired to its panel.
+    const header = personHeader('gina')
+    expect(header.tagName).toBe('BUTTON')
+    expect(header.getAttribute('aria-controls')).toBe('notifications-person-panel-gina')
+    expect(header.textContent).toContain('gina')
+    expect(header.textContent).toContain('Admin')
+    expect(within(header).getByTestId('notifications-summary').textContent).toBe('Muted')
+    expect(within(personHeader('owner')).getByTestId('notifications-summary').textContent).toBe(
+      'Pushes on · 1 of 1 workspace',
+    )
+    expect(personHeader('sam').textContent).toContain('Member')
+    expect(personHeader('sam').textContent).toContain('Disabled')
+  })
+
+  it('opening A shows A’s switches; opening B closes A; clicking B again closes it', async () => {
+    render(<NotificationsSection />)
+    await waitFor(() => expect(screen.getByTestId('notifications-person-sam')).toBeTruthy())
+
+    openPerson('gina')
+    expect(expanded()).toEqual(['gina'])
+    const panel = document.getElementById('notifications-person-panel-gina')
+    if (!panel) throw new Error('gina panel not rendered')
+    expect(within(panel).getAllByRole('switch')).toHaveLength(2)
+    expect(within(panel).getByRole('switch', { name: 'Pushes from this server for gina' })).toBeTruthy()
+    expect(within(panel).getByRole('switch', { name: 'Thread pushes from k2 for gina' })).toBeTruthy()
+    expect(screen.getByTestId('notifications-person-gina-ws-p-k2')).toBeTruthy()
+
+    openPerson('sam')
+    expect(expanded()).toEqual(['sam'])
+    expect(screen.queryByTestId('notifications-person-gina-ws-p-k2')).toBeNull()
+    expect(document.getElementById('notifications-person-panel-gina')).toBeNull()
+    expect(screen.getByTestId('notifications-person-sam-ws-p-k2')).toBeTruthy()
+
+    fireEvent.click(personHeader('sam'))
+    expect(expanded()).toEqual([])
+    expect(within(screen.getByTestId('notifications-people')).queryAllByRole('switch')).toHaveLength(0)
+  })
+
+  it('the owner toggles an opened person’s switch; the write names that person', async () => {
+    render(<NotificationsSection />)
+    await waitFor(() => expect(screen.getByTestId('notifications-person-sam')).toBeTruthy())
+    openPerson('sam')
+    const sw = switchIn(screen.getByTestId('notifications-person-sam-ws-p-k2'))
+    expect(sw.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(sw)
+    await waitFor(() => expect(cli.posts).toHaveLength(1))
+    expect(cli.posts).toEqual([
+      { route: 'notify/admin/set', body: { principal: 'sam', workspace: { projectId: 'p-k2', threadPush: false } } },
+    ])
+  })
+
+  it('an Admin opens a person and sees values, not switches', async () => {
+    asAdmin()
+    render(<NotificationsSection />)
+    await waitFor(() => expect(screen.getByTestId('notifications-person-sam')).toBeTruthy())
+    openPerson('sam')
+    const card = screen.getByTestId('notifications-person-sam')
+    expect(within(card).queryAllByRole('switch')).toHaveLength(0)
+    expect(card.textContent).toContain('Server: on')
+    expect(screen.getByTestId('notifications-person-sam-ws-p-k2').textContent).toContain('on')
+  })
+
+  it('a refetch (notify_prefs_changed or after a write) keeps the open person open with fresh values', async () => {
+    render(<NotificationsSection />)
+    await waitFor(() => expect(screen.getByTestId('notifications-person-sam')).toBeTruthy())
+    openPerson('gina')
+    const next = admin()
+    const people = next.people as Json[]
+    people[0] = { ...people[0], server: { enabled: true, source: 'user' } }
+    cli.admin = next
+    const adminGets = cli.gets.filter((g) => g === 'notify/admin').length
+    act(() => {
+      for (const fn of events.handlers) fn()
+    })
+    await waitFor(() => expect(cli.gets.filter((g) => g === 'notify/admin').length).toBe(adminGets + 1))
+    await waitFor(() =>
+      expect(within(personHeader('gina')).getByTestId('notifications-summary').textContent).toBe(
+        'Pushes on · 0 of 1 workspace',
+      ),
+    )
+    expect(expanded()).toEqual(['gina'])
+    expect(
+      within(screen.getByTestId('notifications-person-gina'))
+        .getByRole('switch', { name: 'Pushes from this server for gina' })
+        .getAttribute('aria-checked'),
+    ).toBe('true')
+
+    // A write's own refetch keeps it open too.
+    fireEvent.click(within(screen.getByTestId('notifications-person-gina-ws-p-k2')).getByText('Reset'))
+    await waitFor(() => expect(cli.gets.filter((g) => g === 'notify/admin').length).toBe(adminGets + 2))
+    expect(expanded()).toEqual(['gina'])
+    expect(screen.getByTestId('notifications-person-gina-ws-p-k2')).toBeTruthy()
+  })
+
+  it('personSummary: Muted, on with a count, on with no workspaces', () => {
+    const w = (projectId: string, threadPush: boolean): NotifyWorkspacePref => ({
+      projectId,
+      name: projectId,
+      handle: projectId,
+      threadPush,
+      source: 'fallback',
+      updatedBy: null,
+      updatedAt: null,
+    })
+    expect(personSummary({ server: { enabled: false, source: 'user' }, workspaces: [w('a', true)] })).toBe('Muted')
+    expect(personSummary({ server: { enabled: true, source: 'fallback' }, workspaces: [] })).toBe('Pushes on')
+    expect(
+      personSummary({
+        server: { enabled: true, source: 'fallback' },
+        workspaces: [w('a', true), w('b', false), w('c', true)],
+      }),
+    ).toBe('Pushes on · 2 of 3 workspaces')
   })
 })
 

@@ -9,7 +9,9 @@
 //      "Set by you", "Set by gina" + Reset).
 //   2. Workspace defaults (Owner/Admin): what new and unset people get.
 //   3. People (Owner/Admin): everyone's settings. Admins see them; only the
-//      owner changes other people's switches (Rosson 2026-10-11).
+//      owner changes other people's switches (Rosson 2026-10-11). Each
+//      person is one collapsed row (name, role, a summary); one opens at a
+//      time (Rosson 2026-10-18).
 //
 // Hidden entirely unless the window's server reports `thread-push-v1`.
 // Refetches on `notify_prefs_changed` (no payload).
@@ -188,6 +190,9 @@ export function NotificationsSection(): React.JSX.Element {
   const [adminError, setAdminError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // People accordion: at most one person open. Local view state only (not
+  // the daemon's); keyed by principal so a refetch keeps it open.
+  const [openPerson, setOpenPerson] = useState<string | null>(null)
 
   const isAdmin = caller?.role === 'owner' || caller?.role === 'admin'
   const canEditPeople = caller?.role === 'owner'
@@ -400,7 +405,7 @@ export function NotificationsSection(): React.JSX.Element {
 
         {isAdmin && (
           <SettingsGroup title="People">
-            <div data-testid="notifications-people" data-settings-id="notifications.people" className="space-y-3">
+            <div data-testid="notifications-people" data-settings-id="notifications.people" className="space-y-2">
               {!canEditPeople && (
                 <p data-testid="notifications-people-readonly" className="text-[10px] text-[var(--color-text-muted)] py-1">
                   Only the owner can change other people’s notifications.
@@ -411,6 +416,8 @@ export function NotificationsSection(): React.JSX.Element {
                   key={p.principal}
                   person={p}
                   me={me}
+                  open={openPerson === p.principal}
+                  onToggleOpen={() => setOpenPerson((cur) => (cur === p.principal ? null : p.principal))}
                   editable={canEditPeople && p.principal !== me}
                   busy={busy}
                   workspaceNames={workspaceNames}
@@ -434,9 +441,21 @@ export function NotificationsSection(): React.JSX.Element {
   )
 }
 
+/** The collapsed row's one-line summary: "Muted" when the person's server
+ *  bell is off, else "Pushes on · 3 of 7 workspaces". */
+export function personSummary(person: Pick<NotifyPerson, 'server' | 'workspaces'>): string {
+  if (!person.server.enabled) return 'Muted'
+  const total = person.workspaces.length
+  if (total === 0) return 'Pushes on'
+  const on = person.workspaces.filter((w) => w.threadPush).length
+  return `Pushes on · ${on} of ${total} workspace${total === 1 ? '' : 's'}`
+}
+
 function PersonCard({
   person,
   me,
+  open,
+  onToggleOpen,
   editable,
   busy,
   workspaceNames,
@@ -445,6 +464,9 @@ function PersonCard({
 }: {
   person: NotifyPerson
   me: string
+  /** Accordion state (local view state, owned by the page). */
+  open: boolean
+  onToggleOpen: () => void
   editable: boolean
   busy: boolean
   workspaceNames: Map<string, string>
@@ -453,74 +475,112 @@ function PersonCard({
 }): React.JSX.Element {
   const isMe = person.principal === me
   const roleText = person.role ? person.role.charAt(0).toUpperCase() + person.role.slice(1) : 'Unknown role'
+  const panelId = `notifications-person-panel-${person.principal}`
   return (
     <div
       data-testid={`notifications-person-${person.principal}`}
-      className={`border border-[var(--color-border)] p-2 ${person.disabled ? 'opacity-50' : ''}`}
+      className={`border border-[var(--color-border)] ${person.disabled ? 'opacity-50' : ''}`}
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-xs text-[var(--color-text-primary)] truncate">
+      <button
+        type="button"
+        data-testid={`notifications-person-${person.principal}-header`}
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={onToggleOpen}
+        className="w-full flex items-center justify-between gap-3 p-2 text-left hover:bg-[var(--color-bg-hover)] no-drag cursor-pointer"
+      >
+        <div className="min-w-0 flex items-center gap-2">
+          <span className="text-xs text-[var(--color-text-primary)] truncate">
             {person.principal}
             {isMe ? ' (you)' : ''}
-          </div>
-          <div className="text-[10px] text-[var(--color-text-muted)]">
-            {roleText}
-            {person.disabled ? ' · Disabled' : ''} · {deviceCountText(person.devices)}
-          </div>
-        </div>
-        {editable ? (
-          <Toggle
-            aria-label={`Pushes from this server for ${person.principal}`}
-            checked={person.server.enabled}
-            disabled={busy}
-            onChange={onBell}
-          />
-        ) : (
-          <span className="text-[10px] text-[var(--color-text-secondary)]">
-            Server: {person.server.enabled ? 'on' : 'off'}
           </span>
-        )}
-      </div>
-      {person.workspaces.length > 0 && (
-        <div className="mt-2 grid grid-cols-2 gap-x-4">
-          {person.workspaces.map((w: NotifyWorkspacePref) => {
-            const name = workspaceNames.get(w.projectId) ?? w.name
-            return (
-              <div
-                key={w.projectId}
-                data-testid={`notifications-person-${person.principal}-ws-${w.projectId}`}
-                className="flex items-center justify-between gap-2 py-1"
-              >
-                <div className="min-w-0">
-                  <div className="text-[11px] text-[var(--color-text-secondary)] truncate">{name}</div>
-                  <div className="text-[9px] text-[var(--color-text-muted)]">{sourceLabel(w, me)}</div>
-                </div>
-                {editable ? (
-                  <div className="flex items-center gap-1">
-                    {w.source === 'user' && (
-                      <ResetButton
-                        label={`Reset ${name} for ${person.principal}`}
-                        disabled={busy}
-                        onClick={() => onWorkspace(w.projectId, null)}
-                      />
+          <span className="flex-shrink-0 px-1 py-0.5 text-[9px] leading-none text-[var(--color-text-muted)] border border-[var(--color-border)]">
+            {roleText}
+          </span>
+          {person.disabled && (
+            <span className="flex-shrink-0 px-1 py-0.5 text-[9px] leading-none text-[var(--color-text-muted)] border border-[var(--color-border)]">
+              Disabled
+            </span>
+          )}
+        </div>
+        <div className="flex-shrink-0 flex items-center gap-2">
+          <span data-testid="notifications-summary" className="text-[10px] text-[var(--color-text-secondary)]">
+            {personSummary(person)}
+          </span>
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            className="flex-shrink-0 text-[var(--color-text-muted)]"
+          >
+            <path d={open ? 'M18 15l-6-6-6 6' : 'M6 9l6 6 6-6'} />
+          </svg>
+        </div>
+      </button>
+      {open && (
+        <div id={panelId} role="region" aria-label={`Notifications for ${person.principal}`} className="px-2 pb-2">
+          <div className="flex items-center justify-between gap-3 py-1 border-t border-[var(--color-border)]">
+            <div className="text-[10px] text-[var(--color-text-muted)]">{deviceCountText(person.devices)}</div>
+            {editable ? (
+              <Toggle
+                aria-label={`Pushes from this server for ${person.principal}`}
+                checked={person.server.enabled}
+                disabled={busy}
+                onChange={onBell}
+              />
+            ) : (
+              <span className="text-[10px] text-[var(--color-text-secondary)]">
+                Server: {person.server.enabled ? 'on' : 'off'}
+              </span>
+            )}
+          </div>
+          {person.workspaces.length > 0 && (
+            <div className="mt-1 grid grid-cols-2 gap-x-4">
+              {person.workspaces.map((w: NotifyWorkspacePref) => {
+                const name = workspaceNames.get(w.projectId) ?? w.name
+                return (
+                  <div
+                    key={w.projectId}
+                    data-testid={`notifications-person-${person.principal}-ws-${w.projectId}`}
+                    className="flex items-center justify-between gap-2 py-1"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-[11px] text-[var(--color-text-secondary)] truncate">{name}</div>
+                      <div className="text-[9px] text-[var(--color-text-muted)]">{sourceLabel(w, me)}</div>
+                    </div>
+                    {editable ? (
+                      <div className="flex items-center gap-1">
+                        {w.source === 'user' && (
+                          <ResetButton
+                            label={`Reset ${name} for ${person.principal}`}
+                            disabled={busy}
+                            onClick={() => onWorkspace(w.projectId, null)}
+                          />
+                        )}
+                        <Toggle
+                          aria-label={`Thread pushes from ${name} for ${person.principal}`}
+                          checked={w.threadPush}
+                          disabled={busy}
+                          onChange={(next) => onWorkspace(w.projectId, next)}
+                        />
+                      </div>
+                    ) : (
+                      <span className="text-[10px] text-[var(--color-text-secondary)]">{w.threadPush ? 'on' : 'off'}</span>
                     )}
-                    <Toggle
-                      aria-label={`Thread pushes from ${name} for ${person.principal}`}
-                      checked={w.threadPush}
-                      disabled={busy}
-                      onChange={(next) => onWorkspace(w.projectId, next)}
-                    />
                   </div>
-                ) : (
-                  <span className="text-[10px] text-[var(--color-text-secondary)]">{w.threadPush ? 'on' : 'off'}</span>
-                )}
-              </div>
-            )
-          })}
+                )
+              })}
+            </div>
+          )}
+          {isMe && <div className="text-[9px] text-[var(--color-text-muted)] mt-1">Change yours above.</div>}
         </div>
       )}
-      {isMe && <div className="text-[9px] text-[var(--color-text-muted)] mt-1">Change yours above.</div>}
     </div>
   )
 }

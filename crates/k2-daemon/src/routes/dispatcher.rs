@@ -10822,6 +10822,45 @@ async fn handle_one_request(
                     .await
                     .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                 }
+                "/cli/federation/vault-recipient" | "/cli/federation/vault-handoff" => {
+                    if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                        return DispatchOutcome::Done;
+                    }
+                    // Secret handoff (prd-agent-secret-handoff-v1 §5.2):
+                    // NO token gate, the signed envelope from a pinned,
+                    // Trusted peer is the credential (checked in the
+                    // handler, like /inbound). Capped body (H8).
+                    let body = match super::http::read_post_body_capped(
+                        &mut *stream,
+                        &mut buf,
+                        crate::federation_vault::MAX_BODY_BYTES,
+                    )
+                    .await
+                    {
+                        Ok(b) => b,
+                        Err(refused) => {
+                            super::http::refuse_body_too_large(
+                                &mut *stream,
+                                &refused,
+                                "413 Payload Too Large",
+                                "application/json",
+                                r#"{"error":"vault handoff body over 160 KiB","code":"too_large"}"#,
+                            )
+                            .await;
+                            return DispatchOutcome::Done;
+                        }
+                    };
+                    let recipient = p == "/cli/federation/vault-recipient";
+                    tokio::task::spawn_blocking(move || {
+                        if recipient {
+                            crate::federation_vault::handle_vault_recipient(&body)
+                        } else {
+                            crate::federation_vault::handle_vault_handoff(&body)
+                        }
+                    })
+                    .await
+                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                }
                 "/cli/federation/send" => {
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;

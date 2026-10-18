@@ -441,4 +441,7 @@ fn route_walk_policy_post_guard_and_passport_rows() {
         assert!(crate::session_token::is_agent_verb(p), "{p}: agents reach it with a passport");
     }
     assert!(!crate::session_token::is_agent_verb(DECIDE), "a passport never reaches decide");
+    for p in ["/cli/federation/vault-recipient", "/cli/federation/vault-handoff"] {
+        assert!(crate::routes::route_policy::lookup(p).is_some(), "{p} has a route_policy row");
+    }
 }

@@ -47,6 +47,7 @@ pub mod sew_mgmt;
 pub mod tool_hook_worker;
 pub mod feedback_routes;
 pub mod federation_routes;
+pub mod federation_vault;
 pub mod fs_routes;
 pub mod fs_live;
 pub mod charter_compose_watch;

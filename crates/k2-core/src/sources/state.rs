@@ -500,6 +500,8 @@ fn step(hard: Health, soft: &mut Option<Health>, count: &mut u32, r: &Reading) -
 }
 
 /// The threshold the view shows next to a waiting reading (`soft.of`).
+/// `fetch_failed` also covers a source without per-rule thresholds, whose
+/// rule readings wait `failAfter` too.
 pub fn soft_of(soft: Option<Health>, rated: Option<rules::Rated>, fetch_failed: bool, fail_after: u32) -> u32 {
     if fetch_failed {
         return fail_after;
@@ -553,10 +555,16 @@ impl Reading {
     }
 
     /// A rule reading. Unknown (no rule matched, or a value went missing)
-    /// still waits `failAfter`, as before 0.46.1; warn and crit use the
-    /// rules' own thresholds, so `failAfter` never delays them.
-    fn rated(r: rules::Rated, http_status: Option<u16>, fail_after: u32) -> Reading {
-        let (w, c) = if r.health == Health::Unknown { (fail_after, fail_after) } else { (r.warn_after, r.crit_after) };
+    /// waits `failAfter`. With per-rule thresholds on (`thresholds`), warn
+    /// and crit use the rules' own `warnAfter`/`critAfter` (default 1), so
+    /// `failAfter` never delays them; off (the pre-0.46.1 default), every
+    /// non-ok rule reading waits `failAfter`, as it always did.
+    fn rated(r: rules::Rated, http_status: Option<u16>, fail_after: u32, thresholds: bool) -> Reading {
+        let (w, c) = if r.health == Health::Unknown || !thresholds {
+            (fail_after, fail_after)
+        } else {
+            (r.warn_after, r.crit_after)
+        };
         Reading { health: r.health, reason: None, http_status, warn_after: w, crit_after: c }
     }
 }
@@ -567,8 +575,10 @@ impl Reading {
 /// - A fan-out target that fails makes its own item red (or unknown with
 ///   `onTargetError: unknown`) and leaves the source live [GV55]; the
 ///   source counts as failing only when every target fails.
-/// - Fetch failures go hard after `failAfter` (§5.5); rule readings after
-///   their rules' `warnAfter`/`critAfter` (default at once, 0.46.1). Only
+/// - Fetch failures go hard after `failAfter` (§5.5). Rule readings wait
+///   `failAfter` too, unless the source opts in to per-rule thresholds
+///   (any rule sets `warnAfter`/`critAfter`, 0.46.1): then each rule's own
+///   thresholds, default at once. Only
 ///   hard changes make health transitions, and they open/continue/close
 ///   incidents.
 /// - `keep: "states"` returns a keys-only projection and no points.
@@ -576,6 +586,7 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
     let spec = input.spec;
     let now = input.now;
     let fail_after = u32::from(spec.fail_after.max(1));
+    let thresholds = spec.uses_rule_thresholds();
     let mut st = prev.clone();
     let mut transitions = Vec::new();
     if input.outcomes.is_empty() {
@@ -630,7 +641,7 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
                             item.last_modified = last_modified.clone();
                         }
                         let h = rated.get(&t.key).copied().unwrap_or(rules::Rated::now(Health::Ok));
-                        item_readings.insert(t.key.clone(), Reading::rated(h, Some(*status), fail_after));
+                        item_readings.insert(t.key.clone(), Reading::rated(h, Some(*status), fail_after, thresholds));
                     }
                     Some(FetchOutcome::Err { reason, http_status, .. }) => {
                         item.checked_at = Some(now);
@@ -646,7 +657,7 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
             st.items.retain(|k, _| keys.contains(&k.as_str()));
             if any_success {
                 let h = rules::rate_source(spec, &p, now).unwrap_or(rules::Rated::now(Health::Ok));
-                self_reading = Some(Reading::rated(h, None, fail_after));
+                self_reading = Some(Reading::rated(h, None, fail_after, thresholds));
             }
             projection = Some(p);
         }
@@ -662,7 +673,7 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
                         extract::extract_single(&spec.extract, body, now)
                     };
                     for (k, h) in rules::rate_items(spec, &p, now) {
-                        item_readings.insert(k, Reading::rated(h, None, fail_after));
+                        item_readings.insert(k, Reading::rated(h, None, fail_after, thresholds));
                     }
                     let keys: Vec<String> = p.items.iter().map(|i| i.key.clone()).collect();
                     st.items.retain(|k, _| keys.contains(k));
@@ -672,11 +683,11 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
                         item.checked_at = Some(now);
                     }
                     let h = rules::rate_source(spec, &p, now).unwrap_or(rules::Rated::now(Health::Ok));
-                    self_reading = Some(Reading::rated(h, Some(*status), fail_after));
+                    self_reading = Some(Reading::rated(h, Some(*status), fail_after, thresholds));
                     projection = Some(p);
                 }
                 FetchOutcome::Err { reason, http_status, .. } => {
-                    self_reading = Some(Reading::failed(health_of(spec.on_target_error), *reason, *http_status, fail_after));
+                    self_reading = Some(Reading::failed(health_of(spec.on_target_error), *reason, *http_status, fail_after, thresholds));
                     projection = None;
                 }
             }

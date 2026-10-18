@@ -171,11 +171,12 @@ pub fn build(row: &SourceRow, st: &SourceState, proj: Option<&Projection>, viewe
         (Some(s), Some(p)) => super::rules::rate_source(s, p, server_now),
         _ => None,
     };
+    let legacy = spec.as_ref().is_none_or(|s| !s.uses_rule_thresholds());
     let soft_item = |key: &str, it: Option<&super::state::ItemState>| -> Soft {
         match it {
             Some(i) if i.soft_health.is_some() => Soft {
                 count: i.soft_count,
-                of: super::state::soft_of(i.soft_health, rated_items.get(key).copied(), i.reason.is_some(), fail_after),
+                of: super::state::soft_of(i.soft_health, rated_items.get(key).copied(), i.reason.is_some() || legacy, fail_after),
                 level: i.soft_health,
             },
             _ => Soft { count: 0, of: fail_after, level: None },
@@ -237,7 +238,7 @@ pub fn build(row: &SourceRow, st: &SourceState, proj: Option<&Projection>, viewe
         soft: if st.soft_health.is_some() {
             Soft {
                 count: st.soft_count,
-                of: super::state::soft_of(st.soft_health, rated_self, st.fetch_failures > 0, fail_after),
+                of: super::state::soft_of(st.soft_health, rated_self, st.fetch_failures > 0 || legacy, fail_after),
                 level: st.soft_health,
             }
         } else {

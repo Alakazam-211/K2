@@ -54,6 +54,7 @@ import type { ZenRect } from './zen-controls'
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 import { canonicalSourceAddress, ZenSourceError, type ZenSourcesReader } from './zen-sources'
 import { ZEN_STORE_VERBS, ZenStoreError, type ZenCustomStore } from './zen-custom-store'
+import { ZEN_GUEST_VERBS, ZenGuestsError, type ZenCustomGuests } from './zen-custom-guests'
 
 /** UW29 budgets. */
 export const ZEN_WIDGET_BUDGET = {
@@ -111,6 +112,10 @@ export interface ZenCustomLayerDeps {
    *  this computer (`store.*`, `save.*`, `viewer.get`, and subscribe on
    *  `store.changes`). Without it those verbs answer `verb_unavailable`. */
   store?: ZenCustomStore
+  /** RS-A15: local Apps' guests' rooms (`guests.rooms` / `guests.setRooms`)
+   *  through this computer's daemon; every write goes through K2's confirm
+   *  sheet outside the frame. Without it those verbs answer `verb_unavailable`. */
+  guests?: ZenCustomGuests
   /** Stop this widget (its frame goes; K2 draws the card). */
   stop(reason: ZenWidgetStopReason): void
   /** Is posting paused now (the runaway guard, here or in the daemon)? */
@@ -456,6 +461,20 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     }
   }
 
+  // ── RS-A15 guest rooms: the daemon checks everything; a write waits for
+  // the person on K2's sheet (the frame only hears the answer) ───────────
+
+  for (const verb of ZEN_GUEST_VERBS) {
+    calls[verb] = async (args) => {
+      if (!deps.guests) refuse('verb_unavailable', `${verb} isn’t available here.`)
+      try {
+        return await deps.guests!.call(verb, args)
+      } catch (err) {
+        throw toRefusal(err)
+      }
+    }
+  }
+
   // ── subscriptions ────────────────────────────────────────────────────────
 
   const subscribers: Record<
@@ -628,6 +647,7 @@ export function toRefusal(err: unknown): ZenCustomRefusal {
   if (err instanceof ZenStoreError) {
     return new ZenCustomRefusal(err.wire.code, err.wire.message, err.wire.last !== undefined ? { last: err.wire.last } : {})
   }
+  if (err instanceof ZenGuestsError) return new ZenCustomRefusal(err.wire.code, err.wire.message)
   if (err instanceof ZenCanvasError) return new ZenCustomRefusal(err.code, err.message)
   if (err instanceof ZenBridgeError) {
     if (err.code === 'cap_not_granted') return new ZenCustomRefusal('cap_not_granted', err.message)

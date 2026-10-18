@@ -1059,6 +1059,9 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Sew owner handoff (S32 §11.1, Rosson 2026-10-15): minting a code
     // that opens Sew as its install owner needs a person.
     "chat-owner-handoff",
+    // RS-A15 (0.46.1): a Garden widget's `guests.setRooms`, confirmed on
+    // K2's sheet outside the frame (`secretId` = the change's hash).
+    crate::garden_data::guest_rooms::CONFIRM_ACTION,
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

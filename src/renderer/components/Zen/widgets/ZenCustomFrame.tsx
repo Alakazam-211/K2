@@ -30,7 +30,10 @@ import { zenFramePrelude, type ZenFrameTheme } from '@/lib/zen/zen-custom-prelud
 import { createZenCustomLayer } from '@/lib/zen/zen-custom-bridge'
 import { zenCustomSourcesFor } from '@/lib/zen/zen-custom-sources'
 import { createZenCustomStore, zenDataSpace } from '@/lib/zen/zen-custom-store'
+import { createZenCustomGuests, type ZenGuestRoomsAsk } from '@/lib/zen/zen-custom-guests'
+import { ZenGuestRoomsSheet } from './ZenGuestRoomsSheet'
 import { gardenCall } from '@/lib/garden-data/garden-data-api'
+import type { GardenCallBody } from '@/lib/garden-data/garden-data-types'
 import { onGardenDataChanged } from '@/stores/session-events'
 import { startZenFrameHost } from '@/lib/zen/zen-custom-host'
 import {
@@ -76,7 +79,15 @@ export interface ZenCustomLoadProblem {
 
 /** The `/boot-status` features the widget rows need: this daemon served the
  *  bundle, so it has them (UW36). B1's generated table names each row's. */
-export const ZEN_FRAME_FEATURES: readonly string[] = ['zen-v1', 'zen-gardens-v1', 'zen-widgets-v1', 'sources-v1', 'garden-data-v1']
+export const ZEN_FRAME_FEATURES: readonly string[] = [
+  'zen-v1',
+  'zen-gardens-v1',
+  'zen-widgets-v1',
+  'sources-v1',
+  'garden-data-v1',
+  // RS-A15 `guests.rooms` / `guests.setRooms` (0.46.1).
+  'guests-rooms-v1',
+]
 
 /** The Garden's theme as the frame gets it: the Zen root's `--zen-*`
  *  variables and scheme (UW39), and reduced motion. */
@@ -124,6 +135,8 @@ export function ZenCustomFrame({
   onProblem(problem: ZenCustomLoadProblem): void
 }): React.JSX.Element {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
+  // RS-A15: K2's confirm sheet for a guests.setRooms write (outside the frame).
+  const [guestAsk, setGuestAsk] = useState<{ ask: ZenGuestRoomsAsk; resolve: (token: string | null) => void } | null>(null)
   const loadedRef = useRef<Loaded | null>(null)
   loadedRef.current = loaded
   const boxRef = useRef<HTMLDivElement | null>(null)
@@ -237,6 +250,20 @@ export function ZenCustomFrame({
             clearTimer: (t) => window.clearTimeout(t as number),
             now: () => Date.now(),
           }),
+          // RS-A15: local Apps' guests' rooms; a write waits for the
+          // person on ZenGuestRoomsSheet (K2's DOM over the card).
+          guests: createZenCustomGuests({
+            call: (verb, args, confirmToken) =>
+              gardenCall({
+                garden: gardenId,
+                placement: widgetRef.current.id,
+                hash: loadedRef.current?.hash ?? widgetRef.current.hash,
+                verb,
+                args: args as GardenCallBody['args'],
+                ...(confirmToken ? { confirmToken } : {}),
+              }).then((r) => r.result),
+            confirm: (ask) => new Promise((resolve) => setGuestAsk({ ask, resolve })),
+          }),
           stop: (reason) => stopZenWidget(key, reason),
           paused: () => widgetRef.current.paused !== null || isZenWidgetPostingPaused(key),
           pauseForRunaway: () => {
@@ -280,6 +307,15 @@ export function ZenCustomFrame({
           onLoad={onLoad}
           className="h-full w-full flex-1"
           style={{ border: 0, background: 'transparent', minHeight: 0 }}
+        />
+      )}
+      {guestAsk && (
+        <ZenGuestRoomsSheet
+          ask={guestAsk.ask}
+          onDone={(token) => {
+            guestAsk.resolve(token)
+            setGuestAsk(null)
+          }}
         />
       )}
     </div>

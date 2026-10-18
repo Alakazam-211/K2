@@ -266,6 +266,9 @@ export interface GardenCallBody {
   /** A `garden-local` catalog verb. */
   verb: string
   args: GardenJson[]
+  /** RS-A15: the person's vault confirm for a `guests.setRooms` write,
+   *  added by K2 after its sheet (never by the widget). */
+  confirmToken?: string
 }
 
 export interface GardenCallResponse<T = GardenJson> {

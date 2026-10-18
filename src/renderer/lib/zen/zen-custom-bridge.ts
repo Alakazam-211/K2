@@ -118,6 +118,11 @@ export interface ZenCustomLayerDeps {
    *  placement names (its config / manifest), the reader, and K2's Ask box.
    *  Without it the `sources.*` verbs answer `verb_unavailable`. */
   sources?: ZenCustomSources
+  /** 0.46.1: timers for a `not_bound` `sources.subscribe`, held for
+   *  `ZEN_SOURCES_REBIND_MS` so a placement change can bind it (see
+   *  `boundChanged`). Without them a refusal is answered at once. */
+  setTimer?(fn: () => void, ms: number): unknown
+  clearTimer?(t: unknown): void
   /** Garden data (contract-garden-data-v1 §7): the widget's own data on
    *  this computer (`store.*`, `save.*`, `viewer.get`, and subscribe on
    *  `store.changes`). Without it those verbs answer `verb_unavailable`. */
@@ -159,10 +164,22 @@ export interface ZenCustomSources {
 export interface ZenCustomLayer {
   /** One message from the frame's port; the reply to post, if any. */
   handle(msg: unknown): Promise<ZenFrameReply | null>
+  /** 0.46.1: the placement's `sourceAddresses` changed (a config edit, an
+   *  approval). Held `not_bound` source subscriptions whose address is now
+   *  bound start under their own ids; the widget never saw a refusal. */
+  boundChanged(): void
   /** Live subscriptions (tests). */
   readonly subscriptions: number
+  /** Source subscriptions held after a `not_bound` (tests). */
+  readonly held: number
   dispose(): void
 }
+
+/** How long a `not_bound` `sources.subscribe` waits for the placement to
+ *  bind its address before the refusal reaches the widget (0.46.1 S3). A
+ *  refused subscription ends in the frame (its onError), so K2 holds it
+ *  instead and starts it if `boundChanged` brings the address in time. */
+export const ZEN_SOURCES_REBIND_MS = 30_000
 
 type Row = { cap: UserWidgetCap | null; kind: 'call' | 'subscribe' | 'event' }
 
@@ -222,8 +239,35 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
   let lastSwitch = -Infinity
   let stopped = false
   const subs = new Map<number, { off: () => void; thread: boolean; budget: boolean }>()
+  /** 0.46.1: `not_bound` source subscriptions held for a rebind (their
+   *  `subs` entry stays, so they count toward the 16). */
+  const held = new Map<number, { start: () => void; address: string | null; wire: CatalogWireError; timer: unknown }>()
 
   const caps = (): ReadonlySet<string> => zenEffectiveCaps(deps.widget())
+
+  const canHold = (verb: string, wire: CatalogWireError): boolean =>
+    verb === 'sources.subscribe' && wire.code === 'not_bound' && !!deps.setTimer && !!deps.clearTimer
+
+  /** Hold a refused source subscription; its refusal is answered (through
+   *  `pushError`) only if no rebind starts it within ZEN_SOURCES_REBIND_MS. */
+  const hold = (sub: number, address: string | null, wire: CatalogWireError, start: () => void): void => {
+    const timer = deps.setTimer!(() => {
+      const h = held.get(sub)
+      if (!h || h.timer !== timer) return
+      held.delete(sub)
+      if (stopped || !subs.has(sub)) return
+      subs.delete(sub)
+      deps.pushError?.(sub, wire)
+    }, ZEN_SOURCES_REBIND_MS)
+    held.set(sub, { start, address, wire, timer })
+  }
+
+  const dropHeld = (sub: number): void => {
+    const h = held.get(sub)
+    if (!h) return
+    held.delete(sub)
+    deps.clearTimer?.(h.timer)
+  }
 
   const stop = (reason: ZenWidgetStopReason): void => {
     if (stopped) return
@@ -576,6 +620,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
   }
 
   function dispose(): void {
+    for (const sub of [...held.keys()]) dropHeld(sub)
     for (const s of subs.values()) {
       try {
         s.off()
@@ -594,6 +639,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       if (typeof m.unsub === 'number') {
         const s = subs.get(m.unsub)
         subs.delete(m.unsub)
+        dropHeld(m.unsub)
         s?.off()
         return null
       }
@@ -618,21 +664,39 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
         // Registered first: a subscriber may push its first value at once.
         const entry = { off: (): void => undefined, thread, budget }
         subs.set(sub, entry)
-        try {
+        const address = typeof args[0] === 'string' ? canonicalSourceAddress(args[0]) : null
+        const start = (): void => {
           entry.off = subscribers[verb](
             args,
             (value) => {
               if (!stopped && subs.get(sub) === entry) deps.push(sub, zenPlain(value))
             },
             (error) => {
-              // An async refusal ends the subscription (the runtime calls onError).
+              // An async refusal ends the subscription (the runtime calls
+              // onError), unless it is a `not_bound` source K2 holds for a
+              // rebind (0.46.1).
               if (stopped || subs.get(sub) !== entry) return
-              subs.delete(sub)
+              const wire = zenPlain(error) as CatalogWireError
               entry.off()
-              deps.pushError?.(sub, zenPlain(error) as CatalogWireError)
+              entry.off = (): void => undefined
+              if (canHold(verb, wire)) {
+                hold(sub, address, wire, start)
+                return
+              }
+              subs.delete(sub)
+              deps.pushError?.(sub, wire)
             },
           )
+        }
+        try {
+          start()
         } catch (err) {
+          const wire = toRefusal(err).wire
+          if (canHold(verb, wire)) {
+            // Not answered yet: a placement change may bind it (boundChanged).
+            hold(sub, address, wire, start)
+            return null
+          }
           subs.delete(sub)
           throw err
         }
@@ -651,10 +715,32 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     }
   }
 
+  /** The placement's addresses changed: start each held subscription whose
+   *  address is bound now. Another refusal is answered at once. */
+  const boundChanged = (): void => {
+    if (stopped || held.size === 0 || !deps.sources) return
+    const bound = new Set(deps.sources.bound().map((a) => canonicalSourceAddress(a)).filter((a): a is string => a !== null))
+    for (const [sub, h] of [...held.entries()]) {
+      if (h.address === null || !bound.has(h.address)) continue
+      dropHeld(sub)
+      if (!subs.has(sub)) continue
+      try {
+        h.start()
+      } catch (err) {
+        subs.delete(sub)
+        deps.pushError?.(sub, toRefusal(err).wire)
+      }
+    }
+  }
+
   return {
     handle,
+    boundChanged,
     get subscriptions() {
       return subs.size
+    },
+    get held() {
+      return held.size
     },
     dispose,
   }

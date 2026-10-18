@@ -79,7 +79,9 @@ function setup(over: Partial<ZenFrameHostOptions> = {}, label = 'arcade'): Setup
           if ((m as { sub?: number }).sub !== undefined) push((m as { sub: number }).sub, { pushed: label })
           return typeof id === 'number' ? { id, ok: true, value: label } : null
         },
+        boundChanged: () => undefined,
         subscriptions: 0,
+        held: 0,
         dispose: () => void (disposed.layer = true),
       }),
       ...over,

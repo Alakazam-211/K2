@@ -759,4 +759,84 @@ describe('Garden v3: sources.* verbs', () => {
     const over = await layer.handle({ sub: 99, verb: 'sources.subscribe', args: ['fleet'] })
     expect(over).toMatchObject({ sub: 99, error: { code: 'rate_limited' } })
   })
+
+  // 0.46.1 S3: a placement change re-subscribes a not_bound subscription.
+  describe('not_bound source subscriptions wait for a rebind', () => {
+    function timed(bound: string[]): {
+      layer: ReturnType<typeof createZenCustomLayer>
+      h: Harness
+      bound: string[]
+      errors: Array<{ sub: number; error: unknown }>
+      fire: () => void
+      timers: Map<number, () => void>
+    } {
+      const s = sourcesHarness(bound)
+      const timers = new Map<number, () => void>()
+      let next = 1
+      s.h.deps.setTimer = (fn) => {
+        const id = next++
+        timers.set(id, fn)
+        return id
+      }
+      s.h.deps.clearTimer = (t) => {
+        timers.delete(t as number)
+      }
+      const fire = (): void => {
+        const fns = [...timers.values()]
+        timers.clear()
+        for (const fn of fns) fn()
+      }
+      return { layer: createZenCustomLayer(s.h.deps), h: s.h, bound, errors: s.errors, fire, timers }
+    }
+
+    it('is held (no answer), then starts under its own id when the placement binds the address', async () => {
+      const t = timed(['fleet'])
+      t.h.widget.current = payload({ caps: ['sources:read'] as never, requested: ['sources:read'] as never, sourceAddresses: ['fleet'] })
+      expect(await t.layer.handle({ sub: 7, verb: 'sources.subscribe', args: ['deploys::akzm.k2.dev'] })).toBeNull()
+      expect(t.layer.held).toBe(1)
+      expect(t.layer.subscriptions).toBe(1)
+      expect(t.timers.size).toBe(1)
+      // An unrelated change: still held.
+      t.layer.boundChanged()
+      expect(t.layer.held).toBe(1)
+      // The approval lands: the placement now binds it.
+      t.bound.push('deploys::akzm.k2.dev')
+      t.layer.boundChanged()
+      expect(t.layer.held).toBe(0)
+      expect(t.timers.size).toBe(0)
+      await settle()
+      expect(t.h.pushes.find((p) => p.sub === 7)?.value).toMatchObject({ address: 'deploys::akzm.k2.dev', reach: 'ok' })
+      expect(t.errors).toEqual([])
+    })
+
+    it('answers the refusal through pushError when no rebind comes in time', async () => {
+      const t = timed(['fleet'])
+      expect(await t.layer.handle({ sub: 8, verb: 'sources.subscribe', args: ['money'] })).toBeNull()
+      t.fire()
+      expect(t.errors).toEqual([{ sub: 8, error: expect.objectContaining({ code: 'not_bound', room: 'money' }) }])
+      expect(t.layer.held).toBe(0)
+      expect(t.layer.subscriptions).toBe(0)
+      // A late rebind does nothing for an answered subscription.
+      t.bound.push('money')
+      t.layer.boundChanged()
+      await settle()
+      expect(t.h.pushes.find((p) => p.sub === 8)).toBeUndefined()
+    })
+
+    it('an unsubscribe or dispose drops the hold; other verbs and refusals answer at once', async () => {
+      const t = timed(['fleet'])
+      await t.layer.handle({ sub: 9, verb: 'sources.subscribe', args: ['money'] })
+      await t.layer.handle({ unsub: 9 })
+      expect(t.layer.held).toBe(0)
+      expect(t.timers.size).toBe(0)
+      t.fire()
+      expect(t.errors).toEqual([])
+      // sources.read is a call: not_bound answers at once.
+      expect(await call(t.layer, 'sources.read', 'money')).toMatchObject({ ok: false, error: { code: 'not_bound' } })
+      await t.layer.handle({ sub: 10, verb: 'sources.subscribe', args: ['money'] })
+      t.layer.dispose()
+      expect(t.layer.held).toBe(0)
+      expect(t.timers.size).toBe(0)
+    })
+  })
 })

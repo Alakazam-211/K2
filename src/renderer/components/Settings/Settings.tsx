@@ -38,6 +38,7 @@ import { primaryScope as settingsPrimaryScope } from '@/kessel/server-scope'
 import type { FeatureKey } from '@/lib/server-capabilities'
 import type { ReportedFeatureKey } from '@/lib/reported-features'
 import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
+import { PROJECT_GROUPS_MANIFEST } from '@/components/Projects/project-settings'
 import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHostingSection'
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
 import { DataSection, DATA_MANIFEST } from './sections/DataSection'
@@ -292,6 +293,7 @@ export default function Settings(): React.JSX.Element {
       ...TOKEN_USAGE_MANIFEST,
       ...STYLES_MANIFEST,
       ...PROJECTS_MANIFEST,
+      ...PROJECT_GROUPS_MANIFEST,
       ...TICKETS_MANIFEST,
       ...(threadPushAvailable() ? NOTIFICATIONS_MANIFEST : []),
       ...CONTEXT_CATALOG_MANIFEST,

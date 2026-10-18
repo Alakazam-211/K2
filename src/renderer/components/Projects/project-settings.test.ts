@@ -6,36 +6,18 @@
 import { describe, it, expect } from 'vitest'
 import {
   addableWorkspaces,
-  appendHtmlDocPane,
+  dashboardShowsDoc,
   filterGroupsByQuery,
   hasHtmlDocPane,
+  projectSettingsCaps,
+  readOnlyBannerText,
   removeMemberBlockedReason,
 } from './project-settings'
-import {
-  parseDashboardLayout,
-  readingOrder,
-  serializeDashboardLayout,
-  isHtmlDocPane,
-  isTerminalPane,
-  type LayoutNode,
-  type PaneSpec,
-} from './dashboard-layout'
+import { serializeDashboardLayout, type LayoutNode, type PaneSpec } from './dashboard-layout'
 
 const EMPTY_LAYOUT_V1 = '{"version":1,"panes":[]}' // the daemon's untouched seed
 
 const pane = (p: PaneSpec): LayoutNode => ({ type: 'pane', pane: p })
-
-function panesOf(layoutJson: string): PaneSpec[] {
-  const parsed = parseDashboardLayout(layoutJson)
-  if (parsed.kind !== 'layout') throw new Error(`expected a layout blob, got ${parsed.kind}`)
-  return readingOrder(parsed.root)
-}
-
-function rootOf(layoutJson: string): LayoutNode | null {
-  const parsed = parseDashboardLayout(layoutJson)
-  if (parsed.kind !== 'layout') throw new Error(`expected a layout blob, got ${parsed.kind}`)
-  return parsed.root
-}
 
 describe('filterGroupsByQuery', () => {
   const groups = [{ name: 'Release 41' }, { name: 'infra' }, { name: 'Docs sprint' }]
@@ -71,80 +53,62 @@ describe('addableWorkspaces', () => {
 
 describe('removeMemberBlockedReason', () => {
   it('blocks ONLY the current PoC, with the successor explanation', () => {
-    expect(removeMemberBlockedReason('w1', 'w1')).toMatch(/Point of Contact/)
+    expect(removeMemberBlockedReason('w1', 'w1')).toMatch(/point of contact/)
     expect(removeMemberBlockedReason('w2', 'w1')).toBeNull()
     expect(removeMemberBlockedReason('w1', null)).toBeNull()
   })
 })
 
-describe('appendHtmlDocPane', () => {
+describe('dashboardShowsDoc', () => {
   const doc = { workspaceId: 'w1', filePath: '/tmp/status.html' }
 
-  it('materializes the PoC seed from an untouched blob, then appends right-most', () => {
-    const { layoutJson, added } = appendHtmlDocPane(EMPTY_LAYOUT_V1, 'poc-1', doc)
-    expect(added).toBe(true)
-    const panes = panesOf(layoutJson)
-    expect(panes).toHaveLength(2)
-    expect(isTerminalPane(panes[0]) && panes[0].workspaceId === 'poc-1').toBe(true)
-    expect(isHtmlDocPane(panes[1])).toBe(true)
-    // 50/50 row (insertEdge right on a single-pane root).
-    const root = rootOf(layoutJson)
-    expect(root?.type).toBe('split')
-    if (root?.type !== 'split') return
-    expect(root.dir).toBe('row')
-    expect(root.children.map((c) => c.size)).toEqual([50, 50])
+  it('an untouched dashboard shows only the point of contact, never a file', () => {
+    expect(dashboardShowsDoc(EMPTY_LAYOUT_V1, 'poc-1', doc)).toBe(false)
   })
 
-  it('appends as a right-most region of a saved layout (equal share)', () => {
+  it('finds the file in a saved layout on BOTH workspace and path', () => {
     const saved = serializeDashboardLayout({
       type: 'split',
       dir: 'row',
       children: [
-        { size: 60, node: pane({ kind: 'terminal', workspaceId: 'poc-1' }) },
-        { size: 40, node: pane({ kind: 'terminal', workspaceId: 'w9' }) },
+        { size: 50, node: pane({ kind: 'terminal', workspaceId: 'poc-1' }) },
+        { size: 50, node: pane({ kind: 'htmlDoc', ...doc }) },
       ],
     })
-    const { layoutJson, added } = appendHtmlDocPane(saved, 'poc-1', doc)
-    expect(added).toBe(true)
-    const panes = panesOf(layoutJson)
-    expect(panes).toHaveLength(3)
-    expect(panes[2]).toEqual({ kind: 'htmlDoc', workspaceId: 'w1', filePath: '/tmp/status.html' })
-    const root = rootOf(layoutJson)
-    if (root?.type !== 'split') throw new Error('expected a split root')
-    expect(root.children.reduce((acc, c) => acc + c.size, 0)).toBeCloseTo(100)
+    expect(dashboardShowsDoc(saved, 'poc-1', doc)).toBe(true)
+    expect(dashboardShowsDoc(saved, 'poc-1', { ...doc, workspaceId: 'w2' })).toBe(false)
+    expect(dashboardShowsDoc(saved, 'poc-1', { ...doc, filePath: '/tmp/other.html' })).toBe(false)
+  })
+})
+
+describe('projectSettingsCaps / readOnlyBannerText (role, not window mode)', () => {
+  it('owner and admin may change everything; no banner', () => {
+    for (const role of ['owner', 'admin'] as const) {
+      expect(projectSettingsCaps(role)).toEqual({
+        canEdit: true,
+        canEditLooks: true,
+        canEditDashboards: true,
+        canDelete: true,
+      })
+      expect(readOnlyBannerText(role)).toBeNull()
+    }
   })
 
-  it('accepts a v1 blob (converts on adopt, saves v2)', () => {
-    const v1 = JSON.stringify({
-      version: 1,
-      columns: [{ widthPct: 100, pane: { kind: 'terminal', workspaceId: 'poc-1' } }],
+  it('a member may rename, pin and change agents, but not looks, dashboards or delete', () => {
+    expect(projectSettingsCaps('member')).toEqual({
+      canEdit: true,
+      canEditLooks: false,
+      canEditDashboards: false,
+      canDelete: false,
     })
-    const { layoutJson, added } = appendHtmlDocPane(v1, 'poc-1', doc)
-    expect(added).toBe(true)
-    expect((JSON.parse(layoutJson) as { version: number }).version).toBe(2)
-    expect(panesOf(layoutJson)).toHaveLength(2)
+    const text = readOnlyBannerText('member')
+    expect(text).toMatch(/owner or an admin/)
+    expect(text).toMatch(/delete/)
   })
 
-  it('memberless (no PoC) untouched blob → the doc becomes the only pane', () => {
-    const { layoutJson, added } = appendHtmlDocPane(EMPTY_LAYOUT_V1, null, doc)
-    expect(added).toBe(true)
-    const panes = panesOf(layoutJson)
-    expect(panes).toHaveLength(1)
-    expect(rootOf(layoutJson)?.type).toBe('pane')
-  })
-
-  it('is idempotent per (workspaceId, filePath): already present → added:false, blob untouched', () => {
-    const first = appendHtmlDocPane(EMPTY_LAYOUT_V1, 'poc-1', doc)
-    const again = appendHtmlDocPane(first.layoutJson, 'poc-1', doc)
-    expect(again.added).toBe(false)
-    expect(again.layoutJson).toBe(first.layoutJson)
-    // The SAME path from a DIFFERENT workspace is a distinct doc.
-    const other = appendHtmlDocPane(first.layoutJson, 'poc-1', {
-      workspaceId: 'w2',
-      filePath: '/tmp/status.html',
-    })
-    expect(other.added).toBe(true)
-    expect(panesOf(other.layoutJson)).toHaveLength(3)
+  it('an unknown role leaves it to the daemon (like roleMeetsFloor)', () => {
+    expect(projectSettingsCaps(null).canDelete).toBe(true)
+    expect(readOnlyBannerText(null)).toBeNull()
   })
 })
 

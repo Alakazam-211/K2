@@ -53,7 +53,7 @@ apps_e2e_wall() {
 	done
 	CTR="$(basename "$Q" .container)"
 	asapp podman inspect "$CTR" >/tmp/w-ia.json
-	jq_ 'c=v[0]; lc=c["HostConfig"]["LogConfig"]; assert lc["Type"]=="k8s-file", lc; assert int(lc.get("Size") or 0)==52428800 or lc.get("Size") in ("50MiB","50MB","52428800"), lc' /tmp/w-ia.json
+	jq_ 'c=v[0]; lc=c["HostConfig"]["LogConfig"]; assert lc["Type"]=="k8s-file", lc; assert str(lc.get("Size")) in ("52428800","50MiB","50MB","52.43MB"), lc' /tmp/w-ia.json
 	K2 app logs esc-a >/tmp/w-la.txt 2>&1 || true
 	grep -q "esc a2 up\|esc a1 up" /tmp/w-la.txt || fail "the App's output through the engine's logs verb: $(tail -c 1500 /tmp/w-la.txt)"
 	ok "guarded unit: OOMPolicy=kill, no swap, 4096 files, a 50 MiB k8s-file log read back by k2 app logs"
@@ -110,7 +110,7 @@ import json, sys
 v = json.load(open(sys.argv[1]))
 assert v["tag"] == "shop"
 assert v["writeApp"]["ok"] is True, ("the code copy is writable", v["writeApp"])
-assert v["writeRoot"]["ok"] is True, ("a writable root", v["writeRoot"])
+assert v["writeUsr"]["ok"] is True, ("a writable root (the image tree)", v["writeUsr"])
 assert v["writeData"]["ok"] is True and v["writeData"]["out"] == "shop", v["writeData"]
 assert v["capEff"] == "0000000000000000" and v["capBnd"] == "0000000000000000", (v["capEff"], v["capBnd"])
 assert v["noNewPrivs"] == "1" and v["seccomp"] == "2", (v["noNewPrivs"], v["seccomp"])

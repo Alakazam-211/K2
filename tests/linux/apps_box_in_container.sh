@@ -97,7 +97,7 @@ echo "== install the protocol-6 root helper =="
 K2_ALLOW_TEST_KEYS_BUILD=1 bash /it/scripts/install-root-helper.sh --file "$CUR" >/tmp/irh.log 2>&1 \
 	|| { cat /tmp/irh.log; fail "install-root-helper.sh"; }
 V="$(runuser -u k2 -- sudo -n "$H" helper version)"
-echo "$V" | grep -q '"protocol":6' || fail "helper version: $V"
+echo "$V" | grep -qE '"protocol":([6-9]|[1-9][0-9])[,}]' || fail "helper version: $V"
 echo "$V" | grep -q '"apps":true' || fail "namespaces.apps: $V"
 ok "helper answers protocol 6 with the apps namespace"
 

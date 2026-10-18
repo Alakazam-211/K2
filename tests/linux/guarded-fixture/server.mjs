@@ -123,6 +123,9 @@ async function probe() {
     // E13: the Seed and the root are read-only; data is writable.
     writeApp: attempt(() => fs.writeFileSync("/app/pwn", "x")),
     writeRoot: attempt(() => fs.writeFileSync("/pwn", "x")),
+    // Lane 1: inside the image tree (a relaxed container may write there;
+    // "/" itself is the overlay mount point, not the image's).
+    writeUsr: attempt(() => fs.writeFileSync("/usr/local/k2-probe", "x")),
     writeData: attempt(() => { fs.writeFileSync("/data/ok", TAG); return fs.readFileSync("/data/ok", "utf8"); }),
     // Floor: no capabilities, no new privileges, seccomp filter on.
     capEff: status("CapEff"),

@@ -1106,6 +1106,28 @@ pub(crate) fn skin_jail_need(
     Ok(jailed)
 }
 
+/// Thread attachments (0.46.1): may this guest read the room file `rel`
+/// in room `project_id` (rooted at `root`)? The same rules as the guest
+/// read doors: the room, `files:read` there, the R3 folder scope on the
+/// path as written, and (when the path resolves now) on the landed path
+/// too. A path that no longer resolves passes on the lexical check alone,
+/// so a gone file inside the guest's folders shows as gone, not hidden;
+/// it can never be opened (the open re-jails). "A pointer, not a grant":
+/// nothing here widens what the guest's file doors already allow.
+pub(crate) fn guest_may_read_rel(pass: &SkinPass, project_id: &str, root: &str, rel: &str) -> bool {
+    if !pass.has_room(project_id) || !pass.has_cap_in_room(project_id, crate::skin_routes::FILES_READ) {
+        return false;
+    }
+    let ws = SkinWorkspace { project_id: project_id.to_string(), path: root.to_string(), handle: String::new() };
+    let Ok(scope) = scope_gate(pass, &ws, rel, PathNeed::Read) else {
+        return false;
+    };
+    match jail_rel_path(root, rel, false) {
+        Ok(jailed) => scope_gate_landed(&scope, &ws, &jailed, PathNeed::Read, true).is_none(),
+        Err(_) => true,
+    }
+}
+
 fn skin_resolve_write(
     pass: &SkinPass,
     workspace: &str,

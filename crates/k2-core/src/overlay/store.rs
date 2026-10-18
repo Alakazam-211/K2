@@ -335,6 +335,30 @@ pub fn get_doc(id: &str) -> Result<Option<OverlayDoc>, String> {
     }
 }
 
+/// The Thread seq `doc_id` sits at in `conversation_id`, or `None` when
+/// the doc is not on that conversation's Thread (a scan of its own rows,
+/// newest first). Used by doors that take a doc id from a caller, so an id
+/// from another conversation never answers.
+pub fn thread_seq_of(conversation_id: &str, doc_id: &str) -> Result<Option<i64>, String> {
+    let db = db()?;
+    let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+    let table = txn.open_table(THREAD).map_err(|e| format!("overlay open thread: {e}"))?;
+    let start = format!("{conversation_id}/");
+    let end = conv_end(conversation_id);
+    for entry in table
+        .range(start.as_str()..end.as_str())
+        .map_err(|e| format!("overlay thread range: {e}"))?
+        .rev()
+    {
+        let (k, v) = entry.map_err(|e| format!("overlay thread entry: {e}"))?;
+        if v.value() == doc_id {
+            let seq = k.value().rsplit('/').next().and_then(|s| s.parse::<i64>().ok());
+            return Ok(seq);
+        }
+    }
+    Ok(None)
+}
+
 pub fn link_thread(conversation_id: &str, seq: i64, doc_id: &str) -> Result<(), String> {
     link_conv(THREAD, conversation_id, seq, doc_id)
 }

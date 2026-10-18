@@ -887,6 +887,7 @@ impl Rewrite<'_> {
             imported: Some(meta),
             delivery_id: None,
             handoff: None,
+            attachments: Vec::new(),
         };
         let key = import_key(
             project_id,

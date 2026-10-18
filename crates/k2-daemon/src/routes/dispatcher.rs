@@ -11563,6 +11563,7 @@ async fn handle_one_request(
             || p == "/cli/thread"
             || p == "/cli/thread/latest"
             || p == "/cli/thread/activity"
+            || p == crate::thread_attachments::ROUTE
             || p == "/cli/chatter"
             || p == "/cli/chatterlog" =>
         {
@@ -11627,7 +11628,12 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let mut bound_skin = None;
-            let (auth_ok, scoped_principal) = if skin_presented && (p == "/cli/thread" || p == "/cli/thread/latest") {
+            // thread-attachments-v1: a guest opens a Thread attachment
+            // with its Thread read rights here; the handler adds its file
+            // rights (files:read + folder scope) per attachment.
+            let (auth_ok, scoped_principal) = if skin_presented
+                && (p == "/cli/thread" || p == "/cli/thread/latest" || p == crate::thread_attachments::ROUTE)
+            {
                 match super::http::extract_token(&query).and_then(crate::apps::gateway::resolve_pass)
                 {
                     Some(pass)

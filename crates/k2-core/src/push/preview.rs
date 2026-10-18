@@ -45,6 +45,26 @@ pub fn message_preview(text: &str) -> String {
     cap_chars(&first, PREVIEW_MAX_CHARS)
 }
 
+/// The preview of a message that carries `files` file objects (0.46.1,
+/// `thread-attachments-v1`): the text's preview with `[file]` /
+/// `[N files]` after it, still at most [`PREVIEW_MAX_CHARS`]. A post with
+/// only files previews as the placeholder alone. File NAMES never go into
+/// a push: only the count.
+pub fn message_preview_with_files(text: &str, files: usize) -> String {
+    let Some(tag) = crate::overlay::attachments::placeholder(files) else {
+        return message_preview(text);
+    };
+    let plain = strip_markdown(text);
+    let first = first_sentences(&plain, PREVIEW_SENTENCES);
+    let room = PREVIEW_MAX_CHARS.saturating_sub(tag.chars().count() + 1);
+    let head = cap_chars(&first, room);
+    if head.is_empty() {
+        tag
+    } else {
+        format!("{head} {tag}")
+    }
+}
+
 /// Cut `s` to at most `max` characters on a grapheme boundary, ending in
 /// "…" when anything was dropped. A string that already fits is returned
 /// as is. A cut backs off to the last space when one is near, so a word is
@@ -628,5 +648,17 @@ mod tests {
         assert_eq!(cap_chars("abcdefghij", 5), "abcd…");
         assert_eq!(cap_chars("Done. More text here", 6), "Done…");
         assert_eq!(cap_chars("anything", 0), "");
+    }
+
+    #[test]
+    fn file_objects_preview_as_a_count_never_a_name() {
+        assert_eq!(message_preview_with_files("Report is ready.", 0), "Report is ready.");
+        assert_eq!(message_preview_with_files("Report is ready.", 1), "Report is ready. [file]");
+        assert_eq!(message_preview_with_files("", 1), "[file]");
+        assert_eq!(message_preview_with_files("   ", 2), "[2 files]");
+        let long = "word ".repeat(80);
+        let p = message_preview_with_files(&long, 3);
+        assert!(p.chars().count() <= PREVIEW_MAX_CHARS, "{p}");
+        assert!(p.ends_with("… [3 files]"), "{p}");
     }
 }

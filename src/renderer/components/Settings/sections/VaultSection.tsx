@@ -37,6 +37,9 @@ import {
   type VaultStatus,
 } from './vault-api'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
+import { useServerSupports } from '@/lib/server-capabilities'
+import { handoffOriginText, takeRequestedVaultTab } from './handoff-api'
+import { IncomingList, SentList } from './HandoffLists'
 
 export const VAULT_MANIFEST: SettingEntry[] = [
   {
@@ -59,6 +62,13 @@ export const VAULT_MANIFEST: SettingEntry[] = [
     label: 'Secret requests',
     description: 'Thread secret cards: waiting, saved, declined, expired',
     keywords: ['vault', 'secret card', 'thread', 'request'],
+  },
+  {
+    id: 'vault.incoming',
+    section: 'vault',
+    label: 'Secrets from other agents',
+    description: 'Secrets agents sent to each other: waiting for you, accepted, declined; what your agents sent',
+    keywords: ['vault', 'handoff', 'incoming', 'sent', 'send secret', 'accept', 'decline', 'agent to agent'],
   },
 ]
 
@@ -96,8 +106,9 @@ function kindLabel(k: string): string {
 }
 
 /** Where a secret came from, in words. */
-export function originLabel(s: Pick<VaultSecret, 'origin' | 'createdBy'>): string {
+export function originLabel(s: Pick<VaultSecret, 'origin' | 'createdBy'> & Pick<Partial<VaultSecret>, 'handoff'>): string {
   if (s.origin.startsWith('thread:')) return 'Thread card'
+  if (s.origin.startsWith('handoff:')) return handoffOriginText(s.origin, s.handoff)
   if (s.origin.startsWith('adopt:')) return 'moved in from older K2 storage'
   if (s.createdBy.startsWith('agent:')) return `agent ${s.createdBy.slice('agent:'.length)}`
   if (s.createdBy.startsWith('guest:')) return `guest ${s.createdBy.slice('guest:'.length)}`
@@ -1204,8 +1215,23 @@ function RequestsList(): React.JSX.Element {
 
 // ── Page ─────────────────────────────────────────────────────────────
 
+type VaultTab = 'secrets' | 'incoming' | 'sent' | 'requests'
+
+const TAB_LABEL: Record<VaultTab, string> = { secrets: 'Secrets', incoming: 'Incoming', sent: 'Sent', requests: 'Requests' }
+const TAB_SETTINGS_ID: Record<VaultTab, string> = {
+  secrets: 'vault.secrets',
+  incoming: 'vault.incoming',
+  sent: 'vault.sent',
+  requests: 'vault.requests',
+}
+
 export function VaultSection(): React.JSX.Element {
-  const [tab, setTab] = useState<'secrets' | 'requests'>('secrets')
+  const handoff = useServerSupports('vault-handoff')
+  const [tab, setTab] = useState<VaultTab>(() => {
+    const want = takeRequestedVaultTab()
+    return want === 'incoming' || want === 'sent' ? want : 'secrets'
+  })
+  const tabs: VaultTab[] = handoff ? ['secrets', 'incoming', 'sent', 'requests'] : ['secrets', 'requests']
   const [status, setStatus] = useState<VaultStatus | null>(null)
   const [secrets, setSecrets] = useState<VaultSecret[]>([])
   const [system, setSystem] = useState<VaultSecret[]>([])
@@ -1255,26 +1281,28 @@ export function VaultSection(): React.JSX.Element {
       {status && <VaultStatusCard status={status} onRecoveryConfirmed={() => void refresh()} />}
 
       <div className="flex gap-1 border-b border-[var(--color-border)]" role="tablist">
-        {(['secrets', 'requests'] as const).map((t) => (
+        {tabs.map((t) => (
           <button
             key={t}
             type="button"
             role="tab"
             aria-selected={tab === t}
             onClick={() => setTab(t)}
-            data-settings-id={t === 'secrets' ? 'vault.secrets' : 'vault.requests'}
+            data-settings-id={TAB_SETTINGS_ID[t]}
             className={`px-3 py-1.5 text-[11px] cursor-pointer -mb-px border-b-2 ${
               tab === t
                 ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
                 : 'border-transparent text-[var(--color-text-muted)]'
             }`}
           >
-            {t === 'secrets' ? 'Secrets' : 'Requests'}
+            {TAB_LABEL[t]}
           </button>
         ))}
       </div>
 
       {tab === 'requests' && <RequestsList />}
+      {handoff && tab === 'incoming' && <IncomingList />}
+      {handoff && tab === 'sent' && <SentList />}
 
       {tab === 'secrets' && (
         <div className="space-y-3">

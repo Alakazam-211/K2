@@ -94,6 +94,12 @@ export const FEATURES = {
    *  Gates Settings → Logs → Access Audit so a pre-144 remote shows the
    *  update copy instead of hammering 404s. Local is always true. */
   'users-audit': '0.40.144',
+  /** Agent-to-agent secret handoff (prd-agent-secret-handoff-v1, 0.46.1):
+   *  `/cli/vault/incoming|sent|incoming/decide|accept-from`, the `handoff`
+   *  Thread card and `vault-handoff` audit lines. Gates Settings → Vault
+   *  Incoming/Sent, the Agent tab's "Secrets from other agents" block and
+   *  the Access Audit filter. Local is always true. */
+  'vault-handoff': '0.46.1',
   /** GET /cli/usage/turns — owner-only raw per-turn ledger log, keyset-paged
    *  (0.40.150). Gates the Settings → Token usage live log so a pre-150
    *  remote hides the panel instead of hammering 404s. Local is always

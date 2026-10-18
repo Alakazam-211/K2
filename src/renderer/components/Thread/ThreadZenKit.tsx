@@ -19,6 +19,12 @@ import type { CSSProperties, JSX, ReactNode, Ref } from 'react'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { ChoiceCard } from '@/components/SessionView/ChoiceCard'
 import { SecretCard } from '@/components/SessionView/SecretCard'
+import { HandoffCard } from '@/components/SessionView/HandoffCard'
+import {
+  handoffApi,
+  type HandoffDecideBody,
+  type HandoffDecideResult,
+} from '@/components/Settings/sections/handoff-api'
 import type { OverlayThreadItem, ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
@@ -278,6 +284,8 @@ export function threadBubbleText(item: OverlayThreadItem): string {
   const d = item.doc
   if (d.kind === 'choice') return d.choice?.prompt || d.body || ''
   if (d.kind === 'secret') return d.secret ? '' : d.body || ''
+  // A handoff card draws itself; `body` is the plain line for old renderers.
+  if (d.kind === 'handoff') return d.handoff ? '' : d.body || ''
   return d.body || ''
 }
 
@@ -300,6 +308,7 @@ export function ThreadBubble({
   onVoid,
   secret,
   nowSec,
+  onHandoffDecide,
 }: {
   item: OverlayThreadItem
   /** The viewer's own post: right side, accent bubble. */
@@ -314,6 +323,9 @@ export function ThreadBubble({
   onAnswer?: (payload: ThreadAnswerPayload) => unknown
   onVoid?: () => void
   secret?: ThreadBubbleSecret
+  /** A handoff card's decision (`/cli/vault/incoming/decide` on the room's
+   *  server). Absent: this window's own server. */
+  onHandoffDecide?: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>
 }): JSX.Element {
   const kind = item.doc.kind
   const text = threadBubbleText(item)
@@ -323,7 +335,7 @@ export function ThreadBubble({
       data-testid="thread-item"
       data-kind={kind}
       data-seq={item.seq}
-      data-status={item.doc.choice?.status || item.doc.secret?.status || ''}
+      data-status={item.doc.choice?.status || item.doc.secret?.status || item.doc.handoff?.status || ''}
       data-mine={mine ? '' : undefined}
       className="flex flex-col"
       style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: 'min(78%, 46rem)', minWidth: 0, gap: 3 }}
@@ -386,6 +398,16 @@ export function ThreadBubble({
               }}
               onDismiss={() => onVoid?.()}
               onMoreOptions={secret?.onMoreOptions}
+            />
+          </div>
+        )}
+        {kind === 'handoff' && item.doc.handoff && (
+          <div style={{ marginTop: 6 }}>
+            <HandoffCard
+              handoff={item.doc.handoff}
+              answeredBy={cardAnswererLabel(item.doc.handoff.answeredBy, viewer)}
+              nowSec={nowSec}
+              onDecide={onHandoffDecide ?? ((body) => handoffApi.decide(body))}
             />
           </div>
         )}

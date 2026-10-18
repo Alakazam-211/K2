@@ -13,7 +13,8 @@ vi.mock('@/stores/projects', () => ({
     sel({ projects: [{ id: 'p-sales', name: 'sales', handle: 'sales', path: '/w/sales' }] }),
 }))
 
-import { VaultSection, groupSecrets, REVEAL_SHOW_MS } from './VaultSection'
+import { VaultSection, groupSecrets, originLabel, REVEAL_SHOW_MS } from './VaultSection'
+import { requestVaultTab, type HandoffView } from './handoff-api'
 import { toBase64, type VaultSecret, type VaultStatus } from './vault-api'
 
 const VALUE = 'k2test_REVEALED_789'
@@ -366,5 +367,117 @@ describe('groupSecrets', () => {
       ['session', ['C']],
       ['other', ['E']],
     ])
+  })
+})
+
+describe('originLabel (handoff, prd-agent-secret-handoff-v1 §10.3)', () => {
+  it('names the sender, host, day and short delivery id', () => {
+    expect(
+      originLabel({
+        origin: 'handoff:hd_7f3c0000000000000000000000000000',
+        createdBy: 'system:handoff',
+        handoff: { deliveryId: 'hd_7f3c0000000000000000000000000000', from: 'sales::rosson.k2.dev', at: '2026-10-16T10:00:00Z' },
+      }),
+    ).toBe('sent by sales on rosson.k2.dev, 16 Oct (hd_7f3c…)')
+    expect(
+      originLabel({
+        origin: 'handoff:hd_7f3c0000000000000000000000000000',
+        createdBy: 'system:handoff',
+        handoff: { deliveryId: 'hd_7f3c0000000000000000000000000000', from: 'billing', at: null },
+      }),
+    ).toBe('sent by billing (hd_7f3c…)')
+    expect(originLabel({ origin: 'handoff:hd_abcd0000000000000000000000000000', createdBy: 'system:handoff' })).toBe(
+      'sent by another agent (hd_abcd…)',
+    )
+    expect(originLabel({ origin: 'thread:c1', createdBy: 'owner' })).toBe('Thread card')
+  })
+})
+
+describe('Vault → Incoming / Sent (prd-agent-secret-handoff-v1 §10.3)', () => {
+  function hv(over: Partial<HandoffView>): HandoffView {
+    return {
+      deliveryId: 'hd_1111aaaa000000000000000000000000',
+      direction: 'in',
+      status: 'pending',
+      workspaceId: 'p-ops',
+      workspace: 'ops',
+      peer: 'sales::rosson.k2.dev',
+      cross: true,
+      name: 'STRIPE_KEY',
+      kind: 'api_key',
+      hosts: ['https://api.stripe.com:443'],
+      note: 'for the refund job',
+      reason: 'not_allowed',
+      createdAt: '2026-10-17T09:00:00Z',
+      ref: null,
+      ...over,
+    }
+  }
+
+  let incoming: HandoffView[] = []
+  let sent: HandoffView[] = []
+
+  beforeEach(() => {
+    incoming = [
+      hv({}),
+      hv({ deliveryId: 'hd_2222bbbb000000000000000000000000', name: 'OLD_KEY', status: 'landed', ref: 'k2v://ws/ops/OLD_KEY', decidedBy: 'owner' }),
+    ]
+    sent = [hv({ deliveryId: 'hd_3333cccc000000000000000000000000', direction: 'out', workspace: 'sales', peer: 'ops', status: 'landed' })]
+    const base = daemonCliGet.getMockImplementation()!
+    daemonCliGet.mockImplementation(async (scope: unknown, route: string, params?: Record<string, unknown>) => {
+      if (route === 'vault/incoming') return { items: incoming }
+      if (route === 'vault/sent') return { items: sent }
+      return base(scope, route, params)
+    })
+  })
+
+  it('lists incoming rows with peer, status and short id; Accept posts decide and reloads', async () => {
+    await renderPage()
+    fireEvent.click(screen.getByRole('tab', { name: 'Incoming' }))
+    const rows = await screen.findAllByTestId('vault-incoming-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.textContent).toContain('from sales on rosson.k2.dev to ops')
+    expect(rows[0]!.textContent).toContain('waiting for a person')
+    expect(rows[0]!.textContent).toContain('hd_1111…')
+    expect(rows[1]!.textContent).toContain('k2v://ws/ops/OLD_KEY')
+    expect(within(rows[1]!).queryByTestId('vault-incoming-accept')).toBeNull()
+    postHandler = (route) => {
+      if (route === 'vault/incoming/decide') {
+        incoming = [hv({ status: 'landed', ref: 'k2v://ws/ops/STRIPE_KEY' }), incoming[1]!]
+        return { ok: true, delivery: incoming[0] }
+      }
+      return { ok: true }
+    }
+    fireEvent.click(within(rows[0]!).getByTestId('vault-incoming-accept'))
+    await waitFor(() => expect(posts.some((p) => p.route === 'vault/incoming/decide')).toBe(true))
+    expect(posts.find((p) => p.route === 'vault/incoming/decide')!.body).toEqual({
+      id: 'hd_1111aaaa000000000000000000000000',
+      action: 'accept',
+    })
+    await waitFor(() => expect(screen.getAllByTestId('vault-incoming-row')[0]!.getAttribute('data-status')).toBe('landed'))
+  })
+
+  it('name_taken on Accept offers Accept as and Replace', async () => {
+    postHandler = (route) => {
+      if (route === 'vault/incoming/decide') {
+        throw new Error(JSON.stringify({ error: { code: 'name_taken', hint: 'this workspace already has STRIPE_KEY' } }))
+      }
+      return { ok: true }
+    }
+    await renderPage()
+    fireEvent.click(screen.getByRole('tab', { name: 'Incoming' }))
+    const row = (await screen.findAllByTestId('vault-incoming-row'))[0]!
+    fireEvent.click(within(row).getByTestId('vault-incoming-accept'))
+    await within(row).findByTestId('vault-incoming-replace')
+    expect(within(row).getByTestId('vault-incoming-as')).toBeTruthy()
+    expect(within(row).getByRole('alert').textContent).toContain('already has STRIPE_KEY')
+  })
+
+  it('the Sent tab lists what this server sent, and a requested tab opens first', async () => {
+    requestVaultTab('sent')
+    render(<VaultSection />)
+    const rows = await screen.findAllByTestId('vault-sent-row')
+    expect(rows[0]!.textContent).toContain('from sales to ops')
+    expect(rows[0]!.textContent).toContain('in the vault')
   })
 })

@@ -70,6 +70,32 @@ export interface OverlaySecret {
   expiresAt?: number | null
 }
 
+/** A secret another agent sent (prd-agent-secret-handoff-v1 §10.1, H18):
+ *  names, sites and the note only, never a value. A person answers it
+ *  through `/cli/vault/incoming/decide`, not `thread/answer`. */
+export interface OverlayHandoff {
+  deliveryId: string
+  name: string
+  /** The sender: `sales` (this server) or `sales::rosson.k2.dev`. */
+  from: string
+  host?: string | null
+  kind: string
+  hosts: string[]
+  note: string
+  reason?: string | null
+  /** The receiving workspace already has a secret by that name. */
+  clash: boolean
+  /** `pending` | `landed` | `declined` | `expired` */
+  status: string
+  /** After it landed: the `k2v://` reference. */
+  reference?: string | null
+  answeredBy?: ThreadAuthor | null
+  answeredAt?: number | null
+  expiresAt?: number | null
+  /** The receiving workspace (label). */
+  workspace?: string | null
+}
+
 /** Where a secret card's answer is kept (the vault's scope). */
 export type SecretScope = 'workspace' | 'server' | 'session'
 /** How the agent gets a secret card's answer. */
@@ -145,6 +171,7 @@ export interface OverlayDoc {
   via?: string | null
   choice?: OverlayChoice | null
   secret?: OverlaySecret | null
+  handoff?: OverlayHandoff | null
   /** Set when a Garden widget sent this post for the person
    *  (prd-zen-user-widgets-v2 UWB12a; daemon feature `thread-widget-origin`). */
   widget?: { widget: string; garden: string } | null
@@ -729,6 +756,7 @@ function coerceItem(row: unknown): OverlayThreadItem | null {
       via: typeof d.via === 'string' ? d.via : null,
       choice: coerceChoice(d.choice),
       secret: coerceSecret(d.secret),
+      ...(d.handoff ? { handoff: coerceHandoff(d.handoff) } : {}),
       ...docExtras(d),
     },
   }
@@ -781,6 +809,30 @@ export function cardExpiryLabel(expiresAt: number | null | undefined, nowSec: nu
   if (left < 3600) return `expires in ${plural(Math.max(1, Math.ceil(left / 60)), 'minute')}`
   if (left < 2 * 86400) return `expires in ${plural(Math.round(left / 3600), 'hour')}`
   return `expires in ${plural(Math.round(left / 86400), 'day')}`
+}
+
+export function coerceHandoff(raw: unknown): OverlayHandoff | null {
+  if (!raw || typeof raw !== 'object') return null
+  const h = raw as Record<string, unknown>
+  const deliveryId = typeof h.deliveryId === 'string' ? h.deliveryId : ''
+  if (!deliveryId) return null
+  // Names and the reference only; anything else on the card is dropped.
+  const out: OverlayHandoff = {
+    deliveryId,
+    name: typeof h.name === 'string' ? h.name : '',
+    from: typeof h.from === 'string' ? h.from : '',
+    kind: typeof h.kind === 'string' ? h.kind : '',
+    hosts: Array.isArray(h.hosts) ? h.hosts.filter((x): x is string => typeof x === 'string') : [],
+    note: typeof h.note === 'string' ? h.note : '',
+    clash: h.clash === true,
+    status: typeof h.status === 'string' ? h.status : 'pending',
+  }
+  if (typeof h.host === 'string') out.host = h.host
+  if (typeof h.reason === 'string') out.reason = h.reason
+  if (typeof h.reference === 'string') out.reference = h.reference
+  if (typeof h.workspace === 'string') out.workspace = h.workspace
+  Object.assign(out, closedExtras(h))
+  return out
 }
 
 function coerceSecret(raw: unknown): OverlaySecret | null {

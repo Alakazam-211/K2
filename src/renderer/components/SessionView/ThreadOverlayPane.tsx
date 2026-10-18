@@ -29,6 +29,7 @@ import {
   zenEmptyThreadText,
 } from '@/components/Thread/ThreadZenKit'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
+import { handoffApi, type HandoffDecideBody, type HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
 
 // The choice card lives in its own file; Zen and Grok Bots import it from here.
 import { CloneProposalsBanner } from '@/components/CloneToDialog/CloneProposalsBanner'
@@ -287,6 +288,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
               onAnswer={(payload) => answer(it.id, payload)}
               onVoid={() => void voidCard(it.id)}
               cardContext={{ workspace: addr.split('/')[0], server: roomScope.label }}
+              onHandoffDecide={(body) => handoffApi.decide(body, roomScope)}
             />
           ))}
         </div>
@@ -334,6 +336,7 @@ export function ThreadItemRow({
   onAnswer,
   onVoid,
   cardContext,
+  onHandoffDecide,
 }: {
   item: OverlayThreadItem
   /** Who is looking (`useThreadViewer` on the room's server). Defaults to
@@ -348,6 +351,8 @@ export function ThreadItemRow({
   onAnswer?: (payload: ThreadAnswerPayload) => unknown
   onVoid?: () => void
   cardContext?: SecretCardContext
+  /** A handoff card's decision on the room's server. */
+  onHandoffDecide?: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>
 }): JSX.Element {
   const { label: author, mine } = threadAuthorLabel(item.doc, viewer, currentAddr, pastAddresses)
   const now = nowSec ?? Math.floor(Date.now() / 1000)
@@ -363,6 +368,7 @@ export function ThreadItemRow({
       onVoid={onVoid}
       // The desktop Thread is where Zen's "More options" leads: the full card.
       secret={{ workspace: cardContext?.workspace, server: cardContext?.server }}
+      onHandoffDecide={onHandoffDecide}
     />
   )
 }

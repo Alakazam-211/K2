@@ -58,6 +58,8 @@ pub struct Facts {
     pub os_release: Option<String>,
     /// K2's Podman bundle is installed (`/opt/k2/podman`, lane P).
     pub podman_bundle: bool,
+    /// S17: `k2_core::agents_leaf::status_json()` (None off Linux).
+    pub agents_leaf: Option<J>,
 }
 
 fn s(v: &Option<String>) -> &str {
@@ -492,6 +494,22 @@ pub fn doctor(f: &Facts) -> J {
                 None,
             )
         });
+        // S17 / AR18: the agents' own memory budget inside the daemon's unit.
+        out.push(match &f.agents_leaf {
+            Some(v) if v["on"] == true => c(
+                "agentsLeaf",
+                "ok",
+                format!("agent sessions in {} (memory.high {})", v["leaf"].as_str().unwrap_or("?"), v["memoryHigh"].as_str().unwrap_or("?")),
+                None,
+            ),
+            Some(v) => c(
+                "agentsLeaf",
+                "warn",
+                format!("agent sessions share the daemon's memory: {}", v["why"].as_str().unwrap_or("?")),
+                Some("k2 app box prepare --cores-mem-min <MiB> (owner), then restart the daemon"),
+            ),
+            None => c("agentsLeaf", "unknown", "", None),
+        });
         out.push(match (hs("/enginePresent").as_bool() == Some(true), &f.engine) {
             (true, Some(Ok(v)))
                 if v["version"].as_str() == Some(env!("CARGO_PKG_VERSION"))
@@ -701,6 +719,7 @@ pub fn gather() -> Facts {
         return f;
     }
     apply_helper_status(&mut f, &st, |argv| root_helper::call_text(argv, None));
+    f.agents_leaf = Some(k2_core::agents_leaf::status_json());
     f.kernel = read_trim("/proc/sys/kernel/osrelease");
     f.cgroup2 = read_trim("/sys/fs/cgroup/cgroup.controllers");
     f.systemd = std::process::Command::new("/usr/bin/systemctl")
@@ -1121,6 +1140,20 @@ mod tests {
         let d = doctor(&f);
         assert_eq!(status_of(&d, "engine"), "warn", "{d}");
         assert!(d.to_string().contains("speaks protocol 2 and this daemon 3"), "{d}");
+    }
+
+    /// S17: the agents' leaf shows in the doctor and never blocks the box.
+    #[test]
+    fn the_agents_leaf_is_reported_not_gated() {
+        let mut f = good();
+        f.agents_leaf = Some(json!({"on": true, "leaf": "/sys/fs/cgroup/k2cores.slice/k2-daemon.service/agents", "memoryHigh": "6442450944"}));
+        let d = doctor(&f);
+        assert_eq!(status_of(&d, "agentsLeaf"), "ok", "{d}");
+        f.agents_leaf = Some(json!({"on": false, "why": "the daemon's unit isn't delegated to it"}));
+        let d = doctor(&f);
+        assert_eq!(status_of(&d, "agentsLeaf"), "warn");
+        assert_eq!(d["ready"], true, "a soft finding: {d:#}");
+        assert!(d.to_string().contains("--cores-mem-min"), "{d}");
     }
 
     #[test]

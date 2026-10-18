@@ -337,6 +337,24 @@ pub const FEATURE_GARDEN_DATA: &str = "garden-data-v1";
 /// `previews` only to a server with this key.
 pub const FEATURE_PUSH_PREVIEWS: &str = "push-previews-v1";
 
+/// Unread counts (thread-read-v1, 0.46.1, migration 0190): per-person read
+/// cursors and mutes for Threads and project chats — `GET
+/// /cli/thread/unread`, `POST /cli/thread/read`, `POST
+/// /cli/project-group/read`, `POST /cli/thread/mute`; `unread` /
+/// `waiting` / `muted` on `/cli/thread/latest` rows and the project list;
+/// person-scoped `thread_read` / `project_read` frames on
+/// `/cli/sessions/events`; `unreadTotal` + `waitingTotal` in Thread and
+/// project push data; silent `kind: "badge"` pushes. K2 Companion shows
+/// no dots and leaves a server out of its badge without this key.
+pub const FEATURE_THREAD_READ: &str = "thread-read-v1";
+
+/// True when the read-state tables exist in the daemon DB.
+fn thread_read_ready() -> bool {
+    k2_core::db::try_shared()
+        .map(|db| k2_core::read_state::tables_exist(&db.lock()))
+        .unwrap_or(false)
+}
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -373,6 +391,9 @@ pub fn features() -> Vec<&'static str> {
         out.push(FEATURE_THREAD_PUSH);
         // Same DB as 0157: migration 0189 (push_devices.previews) ran with it.
         out.push(FEATURE_PUSH_PREVIEWS);
+    }
+    if thread_read_ready() {
+        out.push(FEATURE_THREAD_READ);
     }
     out
 }
@@ -419,7 +440,8 @@ mod tests {
                 "garden-data-v1",
                 "grokbots-v1",
                 "thread-push-v1",
-                "push-previews-v1"
+                "push-previews-v1",
+                "thread-read-v1"
             ]
         );
     }

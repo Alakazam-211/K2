@@ -80,6 +80,13 @@ fn bus() -> &'static broadcast::Sender<OverlayFrame> {
 }
 
 pub fn publish(frame: OverlayFrame) {
+    // thread-read-v1: a Thread write (a post, a card's new status) may
+    // change every connected person's counts for that conversation.
+    if frame.collection == "thread" {
+        if let Some(conv) = frame.conversation_id.as_deref() {
+            crate::read_live::conversation_changed(k2_core::read_state::KIND_THREAD, conv);
+        }
+    }
     let _ = bus().send(frame);
 }
 
@@ -152,6 +159,9 @@ fn on_conversation_moved(mv: &k2_core::overlay::ConversationMove) {
         mv.chatter_moved
     );
     publish_moved(mv);
+    // thread-read-v1: the cursors were remapped in the move; every
+    // connected person gets the new key's counts.
+    crate::read_live::conversation_changed(k2_core::read_state::KIND_THREAD, &mv.to);
     // The open Thread turn follows its conversation. Off this thread: the
     // caller holds the shared DB lock, and the tracker must never be taken
     // under it.

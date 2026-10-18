@@ -173,6 +173,23 @@ pub fn resolve_identity(token: &str, owner_token: &str) -> Option<PresenceIdenti
     Some(PresenceIdentity::ConnectUser { username, role })
 }
 
+/// The login of every live `/cli/sessions/events` socket (`"owner"` for
+/// the owner token, else the Connect username), unique and sorted.
+/// thread-read-v1 computes read frames only for people who are connected.
+pub fn live_logins() -> Vec<String> {
+    let map = registry().lock().unwrap_or_else(|e| e.into_inner());
+    let mut out: Vec<String> = map
+        .values()
+        .map(|e| match &e.identity {
+            PresenceIdentity::Owner => "owner".to_string(),
+            PresenceIdentity::ConnectUser { username, .. } => username.clone(),
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// Register a live connection. `close` is the handler-owned watch
 /// sender whose paired receiver the WS loop selects on —
 /// [`close_connections_for`] fires it. Recomputes + broadcasts the

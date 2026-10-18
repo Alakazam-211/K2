@@ -252,16 +252,134 @@ pub fn notify_feedback_commented(feedback_id: &str, assignees: &[String]) {
     });
 }
 
-/// `project-group:message-created` with author != "owner" → mobile
-/// push. Called next to the `ProjectGroupMessageCreated` emit in
-/// `project_group_routes` — the CALLER applies the author gate (the
-/// rate-sanity rule: never push the owner their own message; V1 keeps
-/// it simple otherwise).
-pub fn notify_project_message_created(project_name: &str, group_id: &str) {
-    dispatch_push(PushEvent::ProjectMessageCreated {
-        project_name: project_name.to_string(),
-        group_id: group_id.to_string(),
-    });
+/// `project-group:message-created` → one mobile push per PERSON
+/// (thread-read-v1, 0.46.1), called next to the
+/// `ProjectGroupMessageCreated` emit in `project_group_routes`:
+/// - never to the author's own person (`author_person`: the poster's
+///   person key, `None` for an agent's line). Before 0.46.1 only the owner
+///   was skipped, so a Connect user's own post buzzed their own phone;
+/// - never to a person who muted the chat;
+/// - only to people whose server bell is on, removed/disabled logins never;
+/// - each carries `principal` and that person's `unreadTotal` /
+///   `waitingTotal` (strings). Content-free: project name + group id.
+pub fn notify_project_message_created(project_name: &str, group_id: &str, author_person: Option<&str>) {
+    if airgap_blocks() {
+        note_airgap_drop();
+        return;
+    }
+    for (person, logins, totals) in project_recipients(group_id, author_person) {
+        dispatch_push(PushEvent::ProjectPost(k2_core::push::ProjectPush {
+            project_name: project_name.to_string(),
+            group_id: group_id.to_string(),
+            principal: person,
+            device_usernames: logins,
+            unread_total: totals.total.to_string(),
+            waiting_total: totals.waiting_total.to_string(),
+        }));
+    }
+}
+
+/// Who gets a project chat push: (person, their device logins, their
+/// totals now), bell-filtered, author and muted people left out.
+pub(crate) fn project_recipients(
+    group_id: &str,
+    author_person: Option<&str>,
+) -> Vec<(String, Vec<String>, k2_core::read_state::Totals)> {
+    let people = match k2_core::notify_prefs::People::load() {
+        Ok(p) => p,
+        Err(e) => {
+            k2_core::log_debug!("[push] people load failed: {e}");
+            return Vec::new();
+        }
+    };
+    let devices = push_devices::list_devices().unwrap_or_default();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let prefs = if k2_core::notify_prefs::tables_exist(&conn) {
+        k2_core::notify_prefs::PrefsSnapshot::load(&conn).unwrap_or_default()
+    } else {
+        k2_core::notify_prefs::PrefsSnapshot::default()
+    };
+    let read_ready = k2_core::read_state::tables_exist(&conn);
+    let now = k2_core::read_state::now_secs();
+    let mut out = Vec::new();
+    for (person, group) in group_by_person(&people, k2_core::notify_prefs::bell_allowed_devices(&people, &prefs, devices)) {
+        if author_person == Some(person.as_str()) {
+            continue;
+        }
+        let mut totals = k2_core::read_state::Totals::default();
+        if read_ready {
+            match k2_core::read_state::is_muted(&conn, &person, k2_core::read_state::KIND_PROJECT, group_id, now) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(e) => k2_core::log_debug!("[push] mute check for {person}: {e}"),
+            }
+            let p = k2_core::read_state::Person::of_login(&people, &person);
+            match k2_core::read_state::totals(&conn, &p, now) {
+                Ok(t) => totals = t,
+                Err(e) => k2_core::log_debug!("[push] totals for {person}: {e}"),
+            }
+        }
+        let mut logins: Vec<String> = group.into_iter().map(|d| d.username).collect();
+        logins.sort();
+        logins.dedup();
+        out.push((person, logins, totals));
+    }
+    out
+}
+
+/// Take one call from the badge budget (thread-read-v1): its own bucket,
+/// never the Thread or ticket/project one. Dormant/test: always granted.
+pub(crate) fn take_badge_budget(now: Instant) -> bool {
+    #[cfg(test)]
+    {
+        let _ = now;
+        true
+    }
+    #[cfg(not(test))]
+    {
+        if current_cloud().is_none() {
+            return true;
+        }
+        budget::global().try_take(budget::BudgetClass::Badge, budget::BADGE_PER_HOUR, now)
+    }
+}
+
+/// True when pushes go out on the per-daemon relay path (a paired tunnel):
+/// the only path the relay takes a silent badge push on.
+pub(crate) fn per_daemon_path() -> bool {
+    current_config().is_some_and(|c| c.tunnel.is_some())
+}
+
+/// Send one silent badge push to one person's devices. Air-gap is checked
+/// again here; a relay refusal (429 included) is logged and dropped,
+/// never retried: the next badge push carries the full totals.
+pub(crate) fn deliver_badge(event: PushEvent) {
+    if airgap_blocks() {
+        note_airgap_drop();
+        return;
+    }
+    #[cfg(test)]
+    {
+        test_push_capture::capture(&event);
+    }
+    #[cfg(not(test))]
+    {
+        let Some(cloud) = current_cloud() else {
+            return;
+        };
+        let PushEvent::Badge(b) = &event else {
+            return;
+        };
+        let principal = b.principal.clone();
+        let logins = b.device_usernames.clone();
+        std::thread::spawn(move || {
+            let devices = push_devices::list_devices_for_usernames(&logins).unwrap_or_default();
+            if let Err(e) = cloud.dispatch(&event, &principal, &devices) {
+                k2_core::log_debug!("[push] badge dispatch dropped ({}): {e}", cloud.label());
+            }
+        });
+    }
 }
 
 /// How long a resolved gateway config is reused before it is read again
@@ -823,17 +941,20 @@ mod tests {
     /// trigger tests use.
     #[test]
     fn notify_helpers_shape_content_free_events() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        push_devices::upsert_device(&did("notify"), "apns", &tok("notify"), "owner").expect("owner phone");
         let fid = format!("fb-notify-{}", uuid::Uuid::new_v4());
-        let gid = format!("pg-notify-{}", uuid::Uuid::new_v4());
+        let gid = k2_core::project_groups::create_group(&format!("notify-{}", uuid::Uuid::new_v4())).expect("group").id;
         let mark = test_push_capture::mark();
         notify_feedback_created("cortana", &fid, &[]);
-        notify_project_message_created("Apollo", &gid);
+        notify_project_message_created("Apollo", &gid, None);
         let events = test_push_capture::since(mark);
         let mine: Vec<_> = events
             .iter()
             .filter(|e| match e {
                 PushEvent::FeedbackCreated { feedback_id, .. } => feedback_id == &fid,
-                PushEvent::ProjectMessageCreated { group_id, .. } => group_id == &gid,
+                PushEvent::ProjectPost(p) => p.group_id == gid,
                 _ => false,
             })
             .collect();
@@ -847,7 +968,56 @@ mod tests {
         assert_eq!(mine[1].body(), "New message in Apollo");
         assert_eq!(
             mine[1].data(),
-            serde_json::json!({ "kind": "project", "groupId": gid })
+            serde_json::json!({ "kind": "project", "groupId": gid, "unreadTotal": "0", "waitingTotal": "0" }),
+            "content-free: ids and the person's totals only"
+        );
+    }
+
+    /// thread-read-v1: a project chat push is per person; the author's own
+    /// person never gets it (a Connect user's own post used to buzz their
+    /// own phone), a person who muted the chat never gets it, and each
+    /// push carries that person's totals.
+    #[test]
+    fn project_pushes_skip_the_author_and_muted_people_and_carry_totals() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        k2_core::connect_users::add_user("prjalice", "password123").expect("alice");
+        k2_core::connect_users::add_user("prjbob", "password123").expect("bob");
+        for (id, user) in [("pa1", "owner"), ("pa2", "prjalice"), ("pa3", "prjbob")] {
+            push_devices::upsert_device(id, "apns", &format!("tok-{id}"), user).expect("device");
+        }
+        let gid = k2_core::project_groups::create_group(&format!("selfpush-{}", uuid::Uuid::new_v4())).expect("group").id;
+        let m = k2_core::project_groups::post_message_as(&gid, "prjalice", "person", "hi team").expect("post");
+        let principals = |events: &[PushEvent]| -> Vec<(String, String)> {
+            let mut v: Vec<(String, String)> = events
+                .iter()
+                .filter_map(|e| match e {
+                    PushEvent::ProjectPost(p) if p.group_id == gid => Some((p.principal.clone(), p.unread_total.clone())),
+                    _ => None,
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        let mark = test_push_capture::mark();
+        notify_project_message_created("Apollo", &gid, Some("prjalice"));
+        assert_eq!(
+            principals(&test_push_capture::since(mark)),
+            vec![("owner".to_string(), "1".to_string()), ("prjbob".to_string(), "1".to_string())],
+            "alice never gets her own post; the others have it unread (the chat is newer than them)"
+        );
+        assert_eq!(m.seq, 1);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::read_state::set_mute(&conn, "owner", k2_core::read_state::KIND_PROJECT, &gid, true, None).expect("mute");
+        }
+        let mark = test_push_capture::mark();
+        notify_project_message_created("Apollo", &gid, None);
+        assert_eq!(
+            principals(&test_push_capture::since(mark)),
+            vec![("prjalice".to_string(), "0".to_string()), ("prjbob".to_string(), "1".to_string())],
+            "a muted chat never pushes; an agent's line goes to every other person"
         );
     }
 
@@ -919,13 +1089,14 @@ mod tests {
         set_test_airgap(true);
         let mark = test_push_capture::mark();
         notify_feedback_commented(&fid, &[]);
-        notify_project_message_created("Apollo", &fid);
+        notify_project_message_created("Apollo", &fid, None);
         set_test_airgap(false);
         let after: Vec<_> = test_push_capture::since(mark)
             .into_iter()
             .filter(|e| match e {
                 PushEvent::FeedbackCommented { feedback_id, .. } => feedback_id == &fid,
                 PushEvent::ProjectMessageCreated { group_id, .. } => group_id == &fid,
+                PushEvent::ProjectPost(p) => p.group_id == fid,
                 _ => false,
             })
             .collect();

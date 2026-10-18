@@ -110,6 +110,8 @@ pub async fn serve_session_events_connection(
     // the identity is unresolvable we keep the sender alive locally so
     // the (never-fired) receiver arm stays pending rather than erroring.
     let identity = crate::presence::resolve_identity(&token, &owner_token);
+    // thread-read-v1: whose read frames this socket may carry.
+    let person = socket_person(identity.as_ref());
     let (close_tx, mut close_rx) = tokio::sync::watch::channel(false);
     let mut _unregistered_close_tx: Option<tokio::sync::watch::Sender<bool>> = None;
     let _presence_guard: Option<crate::presence::PresenceGuard> = match identity {
@@ -240,6 +242,9 @@ pub async fn serve_session_events_connection(
                         if !event_matches_workspace(&event, &workspace_path) {
                             continue;
                         }
+                        if !person_may_see(&event, person.as_deref()) {
+                            continue;
+                        }
                         if send_json(&mut write, &event).await.is_err() {
                             break;
                         }
@@ -306,6 +311,31 @@ pub async fn serve_session_events_connection(
         subscriber_id,
         workspace_path,
     );
+}
+
+/// thread-read-v1: may a socket held by `socket_person` see this event?
+/// Person-scoped events go only to their own person; every other event
+/// is unaffected.
+pub(crate) fn person_may_see(event: &SessionEvent, socket_person: Option<&str>) -> bool {
+    match event.person() {
+        None => true,
+        Some(p) => socket_person == Some(p),
+    }
+}
+
+/// The person key of the identity that holds a socket (`None` when it
+/// could not be resolved).
+fn socket_person(identity: Option<&crate::presence::PresenceIdentity>) -> Option<String> {
+    let login = match identity? {
+        crate::presence::PresenceIdentity::Owner => "owner".to_string(),
+        crate::presence::PresenceIdentity::ConnectUser { username, .. } => username.clone(),
+    };
+    Some(match k2_core::notify_prefs::People::load() {
+        Ok(people) => people.person_key(&login),
+        // Can't read the roster: the owner token is still the owner; a
+        // login is its own name (never another person's frames).
+        Err(_) => if login == "owner" { login } else { login.to_ascii_lowercase() },
+    })
 }
 
 /// RL6 / A30: the close code for a subscriber that fell behind the bus.
@@ -457,6 +487,9 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // Changes tab v1.1 (C5): app-level too; clients filter themselves.
         SessionEvent::GitNotesChanged { .. } => None,
         SessionEvent::OpenChanges { .. } => None,
+        // thread-read-v1: path-wise app-level; the socket loop also
+        // checks `SessionEvent::person` so only that person's sockets get it.
+        SessionEvent::ThreadRead(_) | SessionEvent::ProjectRead(_) => None,
 
         // 0.39.39 WORKSPACE-SCOPED events — each carries a project path
         // in `workspace_path`; the cwd-prefix filter routes them to the
@@ -851,7 +884,56 @@ mod tests {
             },
             SessionEvent::GitNotesChanged { workspace_path: "/x/foo".into() },
             SessionEvent::OpenChanges { workspace_path: "/x/foo".into() },
+            SessionEvent::ThreadRead(read_frame("owner")),
+            SessionEvent::ProjectRead(read_frame("owner")),
         ]
+    }
+
+    fn read_frame(person: &str) -> crate::session_events::ReadFrame {
+        crate::session_events::ReadFrame {
+            person: person.into(),
+            id: "conv-1".into(),
+            project_id: Some("p-1".into()),
+            seq: 3,
+            last_read_seq: 3,
+            last_seq: 5,
+            unread: 2,
+            waiting: 1,
+            muted: false,
+            muted_until: None,
+            total: 3,
+            waiting_total: 1,
+        }
+    }
+
+    /// thread-read-v1: a read frame's wire shape (the phone contract) and
+    /// its routing: only the socket of the same person gets it.
+    #[test]
+    fn read_frames_are_person_scoped_and_keep_their_wire_shape() {
+        let ev = SessionEvent::ThreadRead(read_frame("gina"));
+        let json: serde_json::Value = serde_json::from_str(&serde_json::to_string(&ev).expect("ser")).expect("json");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "kind": "thread_read",
+                "id": "conv-1",
+                "projectId": "p-1",
+                "seq": 3,
+                "lastReadSeq": 3,
+                "lastSeq": 5,
+                "unread": 2,
+                "waiting": 1,
+                "muted": false,
+                "total": 3,
+                "waitingTotal": 1,
+            }),
+            "the person never rides the wire"
+        );
+        assert!(person_may_see(&ev, Some("gina")));
+        assert!(!person_may_see(&ev, Some("owner")), "another person's socket");
+        assert!(!person_may_see(&ev, None), "an unresolved socket gets no person frames");
+        let app = SessionEvent::ProjectsChanged {};
+        assert!(person_may_see(&app, None) && person_may_see(&app, Some("gina")), "other kinds are untouched");
     }
 
     /// `SessionAdded` → `session_added` (serde's `rename_all = "snake_case"`).

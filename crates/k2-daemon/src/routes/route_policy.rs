@@ -811,6 +811,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/project-group/messages", Member),
     post("/cli/project-group/msg", Member),
     post("/cli/project-group/pin", Member),
+    // thread-read-v1 (0.46.1): a person marks a project chat read (their
+    // own cursor; agent passports and app passes are refused by the arm).
+    post("/cli/project-group/read", Member),
     post("/cli/project-group/remove-member", Member),
     post("/cli/project-group/rename", Member),
     get("/cli/project-group/resources", Member),
@@ -1085,8 +1088,13 @@ pub const ROUTES: &[Route] = &[
     get("/cli/thread/imports", Member),
     // Zen Z41: latest Thread item per addr, for previews. GET only.
     get("/cli/thread/latest", Member),
+    // thread-read-v1 (0.46.1): a person's own read state. Every login
+    // reads and changes only its own person's cursors and mutes.
+    post("/cli/thread/mute", Member),
     both("/cli/thread/post", Member),
+    post("/cli/thread/read", Member),
     post("/cli/thread/secret", Member),
+    get("/cli/thread/unread", Member),
     both("/cli/thread/void", Member),
     // Settings → Tickets (0.45.4): any login reads the rules; changing
     // them is Owner/Admin (the handler also refuses agent passports).

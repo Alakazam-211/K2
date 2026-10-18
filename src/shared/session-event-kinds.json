@@ -39,6 +39,8 @@
   "git_changed": "app",
   "git_notes_changed": "app",
   "open_changes": "app",
+  "thread_read": "app",
+  "project_read": "app",
   "zen_changed": "app",
   "sources_changed": "app",
   "garden_data_changed": "app",

@@ -42,6 +42,8 @@ pub fn log_timestamp() -> String {
 }
 
 pub mod active;
+// S17: agent sessions in their own memory budget inside the daemon's unit.
+pub mod agents_leaf;
 // prd-daemon-activity-and-thread-working-v1 S2: the per-session activity
 // row and state machine (pure; the daemon's `activity_store` owns rows).
 pub mod activity;

@@ -369,6 +369,9 @@ async fn async_main() {
     // Node admin: offline alerts and request expiry, headless (60 s).
     crate::compute_admin::spawn_watch();
     k2_core::deploy::set_enabled(k2_core::app_settings::load().apps_preview);
+    // S17 / AR18: in a delegated unit (box prep's cores slice), agent
+    // sessions get their own memory budget beside the daemon.
+    k2_core::agents_leaf::init();
     // App box prep: the nft table and io.cost don't survive a reboot.
     // Re-apply on a prepared box (Linux, preview on, helper protocol 6).
     crate::apps::box_prep::spawn_boot_reapply();

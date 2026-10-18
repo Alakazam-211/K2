@@ -891,6 +891,11 @@ impl DaemonPtySession {
                 return Err(e);
             }
         };
+        // S17 / AR18: the session's child joins the agents' memory budget
+        // (a no-op unless the daemon's unit is delegated; agents_leaf).
+        if let Some(pid) = child_pid.and_then(|p| u32::try_from(p).ok()) {
+            crate::agents_leaf::join(pid);
+        }
 
         let pty_ms = __t_pty.elapsed().as_secs_f64() * 1000.0;
         log_debug!(

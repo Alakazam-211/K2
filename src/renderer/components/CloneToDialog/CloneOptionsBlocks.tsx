@@ -148,10 +148,14 @@ export function SecretsBlock({ pull }: { pull: boolean }): React.JSX.Element | n
   )
 }
 
+const NO_ENV_FILES: string[] = []
+
 export function EnvFilesBlock({ pull }: { pull: boolean }): React.JSX.Element {
   const carrySecrets = useCloneToDialogStore((s) => s.carrySecrets)
   const setCarrySecrets = useCloneToDialogStore((s) => s.setCarrySecrets)
-  const envFiles = useCloneToDialogStore((s) => s.preview?.envFiles ?? [])
+  // A stable empty list: a fresh [] from the selector while the preview
+  // loads made every store read look like a change (an endless re-render).
+  const envFiles = useCloneToDialogStore((s) => s.preview?.envFiles ?? NO_ENV_FILES)
   return (
     <div className="space-y-1" data-testid="clone-env-block">
       <Tick checked={carrySecrets} onChange={setCarrySecrets} testId="clone-env-files">

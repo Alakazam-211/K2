@@ -336,6 +336,12 @@ pub const FEATURE_GARDEN_DATA: &str = "garden-data-v1";
 /// and a guest or App pass may read `GET /cli/thread/latest` for its rooms.
 pub const FEATURE_APP_API: &str = "app-api-v1";
 
+/// RS-A15 `guests:rooms` (0.46.1): an App with the owner's `guests-rooms`
+/// grant reads and sets its own guests' rooms with its own pass
+/// (`/cli/skin/guests/rooms`), and a Garden widget does the same for any
+/// local App through `/cli/zen/call`, each write behind K2's confirm sheet.
+pub const FEATURE_GUESTS_ROOMS: &str = "guests-rooms-v1";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -369,6 +375,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_GARDEN_DATA);
     out.push(FEATURE_GROKBOTS);
     out.push(FEATURE_APP_API);
+    out.push(FEATURE_GUESTS_ROOMS);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
     }
@@ -417,6 +424,7 @@ mod tests {
                 "garden-data-v1",
                 "grokbots-v1",
                 "app-api-v1",
+                "guests-rooms-v1",
                 "thread-push-v1"
             ]
         );

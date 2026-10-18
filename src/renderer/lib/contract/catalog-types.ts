@@ -125,6 +125,14 @@ export const CATALOG_ERROR_CODES = [
   'guest_required',
   'no_app_pass',
   'no_app_key',
+  // RS-A15 guest rooms (App route + Garden door).
+  'app_pass_required',
+  'grant_required',
+  'outside_app_rooms',
+  'above_role',
+  'has_role',
+  'confirm_required',
+  'declined',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

@@ -1,17 +1,17 @@
 {
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
-  "catalogVersion": 10,
-  "catalogSha256": "c1908a88bfb0312ce08874f073a7e77c99cab951e2e69304d6308095ce10f4ca",
+  "catalogVersion": 11,
+  "catalogSha256": "e66be1d8a049ae0dbbe84f065c355803f76a66404c6957c5f42cf316e8c16a93",
   "runtimeSha256": "3a4b6a97a1b29b52f8dcb05d0fddba5b482bbb71cb077fe2ca6d14b577842a5a",
   "files": {
-    "cli/k2": "b4eb5bea43371fed4e49392b522bc2b3af2a341ab74c4bb1f1dee1b72c346ced",
-    "cli/k2#study app-api": "ca7dd777b7e954293c139505f4ed2a63821e495c8c57a9270a7e54235e3e5852",
-    "crates/k2-core/src/app_surface.rs": "8e7be62a0a28ccc37d3f781dd6f8bc19167a24fb20fb59a0547bc71620c538b5",
-    "sdk/generated/k2-frame.js": "5629b064a4d6844cb2b4da85bed034811042cb58bdfb8b86cc531a1a3e2edbe3",
-    "sdk/generated/k2.d.ts": "2f9de35b9c0fdd2fecf95f586898349493954e0c1659bb93681e924a0a1afecc",
-    "sdk/server/src/generated/verbs.ts": "84860e3f377731ceab34e1ae78d3d0b2d8e12747b3484f67bdd584142843c219",
-    "src/renderer/lib/k2-caps.generated.ts": "a2e55ac3077c7849759ab7a0484646405c33123f64e67c18b51b8ae44a6b3a43",
-    "src/renderer/lib/zen/zen-verbs.generated.ts": "f80b75146175b27c08b88b548b4720feb5f9a2caa667de2a5a05c18e13ec491e"
+    "cli/k2": "14539d8db04dd01850ca521037863f78fc893b263e57e016b4acd822bef1738b",
+    "cli/k2#study app-api": "fc82e640d40fbab5fd7a2dad319bdb371270d8cef0fa83fe18c12a82a48512f5",
+    "crates/k2-core/src/app_surface.rs": "7db879583b6718ee2a1741847012a4dcb151a64115d063b6cd53121e6f7c7fb5",
+    "sdk/generated/k2-frame.js": "b78a9bbd0361e1c487a8ca48c10531a6290d945a482459827452fd07cd0ed5ad",
+    "sdk/generated/k2.d.ts": "501bbdb50792635aea4448beef488a9a4c1c924f839a0ae32b27db390a501a97",
+    "sdk/server/src/generated/verbs.ts": "25264427fb2355e146163eb6c91de3c3c6f6d6371de6b2143c78c3d4d7ed7474",
+    "src/renderer/lib/k2-caps.generated.ts": "1247d77e71fefc8a8169f2a12ecd01c05481885f3cd52a43f43a6f62951d581c",
+    "src/renderer/lib/zen/zen-verbs.generated.ts": "e8bad3a80cf11017e256c89f6fe6592b6edafeaf1e27e0c3cfee3522cd919171"
   }
 }

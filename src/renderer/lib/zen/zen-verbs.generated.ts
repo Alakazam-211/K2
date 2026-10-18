@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 10
+export const ZEN_CATALOG_VERSION = 11
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -53,7 +53,7 @@ export const ZEN_VERBS = {
 
 /** One custom-widget verb: its cap, portable or local, and how it answers. */
 export interface ZenCustomVerbRow {
-  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'store:read' | 'store:write' | null
+  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'store:read' | 'store:write' | 'guests:rooms' | null
   readonly reach: CatalogReach
   readonly kind: CatalogVerbKind
 }
@@ -103,6 +103,8 @@ export const ZEN_CUSTOM_VERBS = {
   'store.txAdd': { cap: 'store:write', reach: 'local', kind: 'call' },
   'store.txCommit': { cap: 'store:write', reach: 'local', kind: 'call' },
   'store.txAbort': { cap: 'store:write', reach: 'local', kind: 'call' },
+  'guests.rooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
+  'guests.setRooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
 } as const satisfies Record<string, ZenCustomVerbRow>
 
 export type ZenCustomVerb = keyof typeof ZEN_CUSTOM_VERBS

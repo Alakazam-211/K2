@@ -240,7 +240,7 @@ ok "podman inspect: crun, read-only root, 256 MiB no swap, pids 512, no-new-priv
 PASTA="$(pgrep -u k2app -x pasta.avx2 || pgrep -u k2app -x pasta || true)"
 for p in $PASTA; do grep -q 'k2apps-esc_a.slice' "/proc/$p/cgroup" && PCG=1; done
 [ "${PCG:-0}" = 1 ] || fail "pasta for esc-a is not in the App's slice: $(for p in $PASTA; do cat "/proc/$p/cgroup"; done)"
-nft list chain inet k2app k2app_apps | grep -q 'k2apps-esc_a.slice" oifname "lo" tcp dport { 38600, 38900 } accept' || fail "per-App rule: $(nft list chain inet k2app k2app_apps)"
+grep -q 'k2apps-esc_a.slice" oifname "lo" tcp dport { 38600, 38900 } accept' <<<"$(nft list chain inet k2app k2app_apps)" || fail "per-App rule: $(nft list chain inet k2app k2app_apps)"
 ok "pasta runs in the App's slice; the per-App nft rule admits only its gateway and proxy ports"
 
 echo "== a second App: its own slot, port and gateway =="
@@ -257,7 +257,7 @@ DA="$(stat -c %u /var/lib/k2app/apps/esc-a/data)"; DB="$(stat -c %u /var/lib/k2a
 ok "esc-b: slot 1, gateway 38601, its own ids for its data ($DB vs esc-a $DA)"
 
 echo "== egress (S15): only through the App's own proxy, only listed hosts =="
-nft list chain inet k2app k2app_apps | grep -q 'k2apps-esc_b.slice" oifname "lo" tcp dport { 38601, 38901 } accept' || fail "esc-b per-App rule: $(nft list chain inet k2app k2app_apps)"
+grep -q 'k2apps-esc_b.slice" oifname "lo" tcp dport { 38601, 38901 } accept' <<<"$(nft list chain inet k2app k2app_apps)" || fail "esc-b per-App rule: $(nft list chain inet k2app k2app_apps)"
 ss -ltnH 'sport = :38900' | grep -q 127.0.0.1 || fail "the daemon's proxy for esc-a isn't listening on 38900"
 curl -s -m 30 "http://127.0.0.1:$FA/egress?target=example.com:443" >/tmp/ea.json
 python3 - /tmp/ea.json <<'PY'
@@ -452,7 +452,7 @@ kill "$ECHO" 2>/dev/null || true
 # Leave esc-a as the later sections expect it (the dummy is approved too on
 # the in-person path).
 K2 app box-service revoke esc-a e2e-dummy >/dev/null
-nft list chain inet k2app k2app_apps | grep -q 'k2apps-esc_a.slice" oifname "lo" tcp dport { 38600, 38900 } accept' || fail "esc-a's rule after the revokes: $(nft list chain inet k2app k2app_apps)"
+grep -q 'k2apps-esc_a.slice" oifname "lo" tcp dport { 38600, 38900 } accept' <<<"$(nft list chain inet k2app k2app_apps)" || fail "esc-a's rule after the revokes: $(nft list chain inet k2app k2app_apps)"
 
 echo "== zero-downtime switch under load =="
 LOG=/tmp/load.txt
@@ -600,7 +600,7 @@ K2 app uninstall esc-b --purge >/dev/null
 [ -z "$(asapp podman ps -a --format '{{.Names}}' | grep '^k2app-esc-b--' || true)" ] || fail "esc-b container left"
 [ ! -e /var/lib/k2app/apps/esc-b ] || fail "esc-b data left"
 runuser -u k2app -- cat /var/lib/k2app/engine/slots.json | grep -q esc-b && fail "esc-b slot not freed"
-nft list chain inet k2app k2app_apps | grep -q esc_b && fail "esc-b nft rule left"
+grep -q esc_b <<<"$(nft list chain inet k2app k2app_apps)" && fail "esc-b nft rule left"
 ok "purged: container, data, id slot and gateway rule gone"
 
 # ── the lane phases (plan-0461-lanes "tests/linux": lane 1 owns this

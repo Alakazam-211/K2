@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection, highlightWhitespace, gutter, GutterMarker, Decoration, ViewPlugin, ViewUpdate, type DecorationSet, scrollPastEnd } from '@codemirror/view'
 import { EditorState, Compartment, RangeSet, type Extension } from '@codemirror/state'
-import { lineColToPos, onFileLineRequest, takeFileLine } from '@/lib/file-open-requests'
+import { lineColToPos, onFileLineRequest, peekFileLine, takeFileLine } from '@/lib/file-open-requests'
 import type { EditorSettingsBackend, EditorThemeId } from '@shared/types'
 import { invoke } from '@tauri-apps/api/core'
 // Plan B — git diff (for the gutter) is host-aware daemon data: route it
@@ -1378,11 +1378,16 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
   // for that line (lib/file-open-requests). Runs after the mount effect
   // (and its deferred scroll restore), and again for a request while the
   // editor is already showing the file.
+  // A background open (Option/Alt-click) waits until this tab is showing
+  // and never takes focus from the Thread it was clicked in.
   const hostKey = scope?.hostKey
   useEffect(() => {
     if (!hostKey) return
     const apply = (): void => {
       if (!viewRef.current) return
+      const pending = peekFileLine(hostKey, filePath)
+      if (!pending) return
+      if (pending.background && !isVisible) return
       const req = takeFileLine(hostKey, filePath)
       if (!req) return
       requestAnimationFrame(() => {
@@ -1393,12 +1398,12 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
           selection: { anchor: pos, head: pos },
           effects: EditorView.scrollIntoView(pos, { y: 'center' }),
         })
-        view.focus()
+        if (!req.background) view.focus()
       })
     }
     apply()
     return onFileLineRequest(hostKey, filePath, apply)
-  }, [hostKey, filePath, readOnly])
+  }, [hostKey, filePath, readOnly, isVisible])
 
   // Re-measure the editor when it transitions from hidden to visible.
   // CodeMirror caches viewport dimensions; a display:none parent means

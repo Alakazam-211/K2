@@ -817,6 +817,10 @@ export interface SerializedLayout {
   activeGroupIndex?: number
 }
 
+/** What `openFileAsTab` / `parkFileTab` did: added a tab, or found the
+ *  file already open (and, with `activate: false`, left it be). */
+export type FileTabOpenResult = 'opened' | 'existing'
+
 // ── Background workspace snapshot (live tabs with running PTYs) ─────────
 
 export interface WorkspaceTabSnapshot {
@@ -922,7 +926,11 @@ export interface TabsState {
     projectPath: string,
     heartbeatName: string,
   ) => Promise<string | null>
-  openFileAsTab: (filePath: string) => void
+  /** Open `filePath` as a file tab, or bring its existing tab forward.
+   *  `activate: false` (a Thread link's Option/Alt-click): add the tab, or
+   *  find the one already open, without selecting it or changing column, so
+   *  the view stays where it is. Says whether the tab was new. */
+  openFileAsTab: (filePath: string, opts?: { activate?: boolean }) => FileTabOpenResult
   openFileInPaneGroup: (tabId: string, paneGroupId: string, filePath: string) => void
   openDiffInPane: (tabId: string, filePath: string) => void
   pinPane: (tabId: string, paneGroupId: string) => void
@@ -1684,6 +1692,41 @@ function makeFileViewerPaneGroup(
     ],
     activeItemIndex: 0,
   }
+}
+
+/** A new tab holding one file viewer (`openFileAsTab`, a parked file tab). */
+function makeFileTab(filePath: string): Tab {
+  const pgId = crypto.randomUUID()
+  return {
+    id: crypto.randomUUID(),
+    title: filePath.split('/').pop() || filePath,
+    mosaicTree: pgId,
+    paneGroups: new Map([[pgId, makeFileViewerPaneGroup(pgId, filePath, false)]]),
+  }
+}
+
+/** Does a stored layout already hold a file viewer for `filePath`? */
+function serializedLayoutHasFile(layout: SerializedLayout, filePath: string): boolean {
+  const cols = [layout.tabs ?? [], ...(layout.extraGroups ?? []).map((g) => g.tabs ?? [])]
+  return cols.some((tabs) =>
+    tabs.some((t) =>
+      Object.values(t.paneGroups ?? {}).some((pg) =>
+        (pg.items ?? []).some((it) => it.type === 'file-viewer' && (it as SerializedFileViewerItem).filePath === filePath),
+      ),
+    ),
+  )
+}
+
+/** Does a live (stashed) workspace snapshot hold a file viewer for `filePath`? */
+function snapshotHasFile(snap: WorkspaceTabSnapshot, filePath: string): boolean {
+  const cols = [snap.tabs, ...snap.extraGroups.map((g) => g.tabs)]
+  return cols.some((tabs) =>
+    tabs.some((t) =>
+      Array.from(t.paneGroups.values()).some((pg) =>
+        pg.items.some((it) => it.type === 'file-viewer' && (it.data as FileViewerItemData).filePath === filePath),
+      ),
+    ),
+  )
 }
 
 /** Create a PaneGroup with a single browser item (browser-pane arc). */
@@ -2487,6 +2530,14 @@ export interface TabsRoomApi {
   initOpenChangesTabs(): UnsubscribeFn
   /** Apply one `workspace:*` op to this room's tabs. */
   applyWorkspaceOp(op: WorkspaceOp): void
+  /** Primary only: add a file tab to another workspace's layout without
+   *  showing it (a Thread link's Option/Alt-click). Daemon-first: reads the
+   *  stored layout with its revision, appends the tab, saves it with that
+   *  base (a 409 re-reads and retries), then updates this window's cached
+   *  copy and any stashed live snapshot, so the tab is there on switch.
+   *  The open workspace gets `openFileAsTab(path, { activate: false })`.
+   *  Rejects when the layout could not be saved. */
+  parkFileTab(projectId: string, workspaceId: string, filePath: string): Promise<FileTabOpenResult>
   /** Primary only: the #625 server-switch reset. */
   resetForHostSwitch(): void
   /** Pinned only: load the room's one workspace. */
@@ -2882,6 +2933,79 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     )
     applyLayoutSilently(key, merged, cwdForLayoutKey(key))
     await runLayoutSaveJob(key, job, attempt)
+  }
+
+  async function parkFileTab(projectId: string, workspaceId: string, filePath: string): Promise<FileTabOpenResult> {
+    assertPrimary('parkFileTab')
+    const key = `${projectId}:${workspaceId}`
+    if (store.getState().activeWorkspaceKey === key) {
+      return store.getState().openFileAsTab(filePath, { activate: false })
+    }
+    if (readOnly) throw new Error(`[tabs] parkFileTab: ${scope.hostKey} is view-only`)
+    const live = store.getState().backgroundWorkspaces[key]
+    if (live && snapshotHasFile(live, filePath)) return 'existing'
+
+    let result: FileTabOpenResult | null = null
+    let failure: unknown = null
+    await runInLayoutLane(key, async () => {
+      try {
+        for (let attempt = 0; attempt < LAYOUT_CONFLICT_MAX_ATTEMPTS; attempt++) {
+          const fetched = await fetchLayoutWithRevision(projectId, workspaceId)
+          // The user switched to it meanwhile: it is the open strip now.
+          if (store.getState().activeWorkspaceKey === key) {
+            result = store.getState().openFileAsTab(filePath, { activate: false })
+            return
+          }
+          const remote = fetched.layout ?? EMPTY_SERIALIZED_LAYOUT
+          if (serializedLayoutHasFile(remote, filePath)) {
+            result = 'existing'
+            return
+          }
+          const tab = makeFileTab(filePath)
+          const next: SerializedLayout = { ...remote, tabs: [...(remote.tabs ?? []), serializeTab(tab)] }
+          let res: { success?: boolean; revision?: number } | undefined
+          try {
+            res = await daemonCliPost<{ success?: boolean; revision?: number }>(scope, 'workspace-layouts/save', {
+              projectId,
+              workspaceId,
+              layoutJson: JSON.stringify(next),
+              ...(fetched.revision !== undefined ? { baseRevision: fetched.revision } : {}),
+            })
+          } catch (err) {
+            if (isLayoutRevisionConflict(err)) continue
+            throw err
+          }
+          if (typeof res?.revision === 'number') {
+            layoutRevisions.set(key, res.revision)
+            cacheRevisions.set(key, res.revision)
+          } else {
+            layoutRevisions.delete(key)
+            cacheRevisions.delete(key)
+          }
+          setAckedLayout(key, next)
+          store.setState((s) => {
+            const snap = s.backgroundWorkspaces[key]
+            return {
+              workspaceLayouts: { ...s.workspaceLayouts, [key]: next },
+              // A stashed workspace comes back from its live snapshot, not
+              // the layout: the tab goes there too, unselected.
+              ...(snap
+                ? { backgroundWorkspaces: { ...s.backgroundWorkspaces, [key]: { ...snap, tabs: [...snap.tabs, tab] } } }
+                : {}),
+            }
+          })
+          result = 'opened'
+          return
+        }
+        throw new Error(`layout for ${key} kept changing elsewhere`)
+      } catch (err) {
+        failure = err
+      }
+    })
+    // (Assigned inside the lane op; TS can't see that.)
+    const done = result as FileTabOpenResult | null
+    if (done) return done
+    throw failure instanceof Error ? failure : new Error(`[tabs] parkFileTab failed for ${key}`)
   }
 
   // ── Terminal close helpers ───────────────────────────────────────────────
@@ -4415,8 +4539,9 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       })
     },
 
-    openFileAsTab: (filePath: string) => {
+    openFileAsTab: (filePath: string, opts?: { activate?: boolean }): FileTabOpenResult => {
       const state = get()
+      const activate = opts?.activate !== false
 
       // Locate a matching file-viewer item within a tab's pane groups.
       const findFileInTab = (tab: Tab): { pgId: string; itemIdx: number } | null => {
@@ -4442,11 +4567,13 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       for (const tab of state.tabs) {
         const found = findFileInTab(tab)
         if (found) {
+          // Background: already open — leave every column as it is.
+          if (!activate) return 'existing'
           const newTabs = state.tabs.map((t) =>
             t.id === tab.id ? activateMatch(t, found.pgId, found.itemIdx) : t
           )
           set({ tabs: newTabs, activeTabId: tab.id, activeGroupIndex: 0 })
-          return
+          return 'existing'
         }
       }
 
@@ -4457,6 +4584,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
         for (const tab of group.tabs) {
           const found = findFileInTab(tab)
           if (found) {
+            if (!activate) return 'existing'
             const newGroups = [...state.extraGroups]
             newGroups[gi] = {
               ...group,
@@ -4466,24 +4594,21 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
               ),
             }
             set({ extraGroups: newGroups, activeGroupIndex: gi + 1 })
-            return
+            return 'existing'
           }
         }
       }
 
       // No existing tab — create a new one in the main group.
       tabCounter++
-      const tabId = crypto.randomUUID()
-      const pgId = crypto.randomUUID()
-      const title = filePath.split('/').pop() || filePath
-      const pg = makeFileViewerPaneGroup(pgId, filePath, false)
-      const tab: Tab = {
-        id: tabId,
-        title,
-        mosaicTree: pgId,
-        paneGroups: new Map([[pgId, pg]]),
+      const tab = makeFileTab(filePath)
+      if (!activate) {
+        // Appended unselected: the strip grows, the view stays put.
+        set((s) => ({ tabs: [...s.tabs, tab] }))
+        return 'opened'
       }
-      set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tabId }))
+      set((s) => ({ tabs: [...s.tabs, tab], activeTabId: tab.id }))
+      return 'opened'
     },
 
     openFileInPaneGroup: (tabId: string, paneGroupId: string, filePath: string) => {
@@ -8015,6 +8140,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     initOpenUrlBrowserTabs,
     initOpenChangesTabs,
     applyWorkspaceOp,
+    parkFileTab,
     resetForHostSwitch,
     open,
     dispose,

@@ -43,7 +43,16 @@ function renderThread(text: string, transport: FileLinkTransport, open: FileLink
   )
 }
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
+
+/** Pretend to be a Mac (or not) for the platform-aware tooltip. */
+function onPlatform(mac: boolean): void {
+  vi.spyOn(navigator, 'platform', 'get').mockReturnValue(mac ? 'MacIntel' : 'Win32')
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(mac ? 'Mozilla/5.0 (Macintosh)' : 'Mozilla/5.0 (Windows NT 10.0)')
+}
 
 describe('Thread file links', () => {
   it('links a workspace file in prose and in inline code; clicking opens it at its line', async () => {
@@ -136,6 +145,75 @@ describe('Thread file links', () => {
     await flush()
     expect(r.get('src/z.ts')).toBeUndefined()
     expect((transport as ReturnType<typeof vi.fn>).mock.calls.length).toBe(calls + 1)
+  })
+})
+
+describe('Option/Alt-click and the tooltip', () => {
+  const daemonWithA = () => fakeDaemon({ 'src/a.ts': { kind: 'file', rel: 'src/a.ts', path: `${ROOT}/src/a.ts` } })
+
+  it('Option-click opens in the background and stops the browser\'s own Option-click', async () => {
+    const { transport } = daemonWithA()
+    const open = vi.fn<FileLinkOpen>()
+    renderThread('see src/a.ts:12 here', transport, open)
+    await flush()
+    const link = screen.getByRole('link')
+    // Pressing the mouse with Option keeps focus where it is (the composer).
+    expect(fireEvent.mouseDown(link, { altKey: true })).toBe(false)
+    // fireEvent returns false when the handler called preventDefault.
+    expect(fireEvent.click(link, { altKey: true })).toBe(false)
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(open.mock.calls[0][0].path).toBe(`${ROOT}/src/a.ts`)
+    expect(open.mock.calls[0][1]).toBe(12)
+    expect(open.mock.calls[0][3]).toEqual({ background: true })
+  })
+
+  it('a plain click opens and shows it (no background)', async () => {
+    const { transport } = daemonWithA()
+    const open = vi.fn<FileLinkOpen>()
+    renderThread('see src/a.ts here', transport, open)
+    await flush()
+    const link = screen.getByRole('link')
+    expect(fireEvent.mouseDown(link)).toBe(true)
+    fireEvent.click(link)
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(open.mock.calls[0][3]).toBeUndefined()
+  })
+
+  it('Alt+Enter opens in the background too', async () => {
+    const { transport } = daemonWithA()
+    const open = vi.fn<FileLinkOpen>()
+    renderThread('see src/a.ts here', transport, open)
+    await flush()
+    fireEvent.keyDown(screen.getByRole('link'), { key: 'Enter', altKey: true })
+    expect(open.mock.calls[0][3]).toEqual({ background: true })
+  })
+
+  it('the tooltip names the path and line, then the gesture, on a Mac', async () => {
+    onPlatform(true)
+    const { transport } = daemonWithA()
+    renderThread('see src/a.ts:12:3 here', transport)
+    await flush()
+    const link = screen.getByRole('link')
+    expect(link.getAttribute('title')).toBe('src/a.ts:12:3\nClick to open · ⌥-click to open in background')
+    expect(link.getAttribute('aria-label')).toBe('Open src/a.ts:12:3. Option-click to open in background')
+  })
+
+  it('the tooltip says Alt-click off a Mac', async () => {
+    onPlatform(false)
+    const { transport } = daemonWithA()
+    renderThread('see src/a.ts here', transport)
+    await flush()
+    const link = screen.getByRole('link')
+    expect(link.getAttribute('title')).toBe('src/a.ts\nClick to open · Alt-click to open in background')
+    expect(link.getAttribute('aria-label')).toBe('Open src/a.ts. Alt-click to open in background')
+  })
+
+  it('a folder link shows in Files: no background gesture offered', async () => {
+    onPlatform(true)
+    const { transport } = fakeDaemon({ 'src/renderer/': { kind: 'directory', rel: 'src/renderer', path: `${ROOT}/src/renderer` } })
+    renderThread('look in src/renderer/ first', transport)
+    await flush()
+    expect(screen.getByRole('link').getAttribute('title')).toBe('Show src/renderer in Files')
   })
 })
 

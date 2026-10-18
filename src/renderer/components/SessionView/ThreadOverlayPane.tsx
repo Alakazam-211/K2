@@ -100,13 +100,16 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   // Thread file links: the room's own server decides which printed paths
   // are files in this Thread's workspace; a click opens them in this room.
   const fileLinkTransport = useMemo(() => scopeFileLinkTransport(roomScope), [roomScope])
-  const openFileLink = useCallback<FileLinkOpen>((link, line, col) => openThreadFileLink(room, link, line, col), [room])
+  const openFileLink = useCallback<FileLinkOpen>(
+    (link, line, col, opts) => openThreadFileLink(room, link, line, col, opts),
+    [room],
+  )
   // Thread file objects (thread-attachments-v1): the same opener, through
   // the same server resolve; a moved file searches the Files drawer.
   const fileActions = useMemo<ThreadFileActions>(
     () => ({
-      open: (file) => {
-        void openThreadAttachment(room, fileLinkTransport, addr, file).catch((err: unknown) =>
+      open: (file, opts) => {
+        void openThreadAttachment(room, fileLinkTransport, addr, file, opts).catch((err: unknown) =>
           console.warn('[thread] open attachment failed:', err),
         )
       },

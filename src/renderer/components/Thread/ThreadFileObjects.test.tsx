@@ -48,7 +48,14 @@ import { ThreadBubble } from './ThreadZenKit'
 afterEach(() => {
   cleanup()
   activateTab.mockClear()
+  vi.restoreAllMocks()
 })
+
+/** Pretend to be a Mac (or not) for the platform-aware tooltip. */
+function onPlatform(mac: boolean): void {
+  vi.spyOn(navigator, 'platform', 'get').mockReturnValue(mac ? 'MacIntel' : 'Linux x86_64')
+  vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(mac ? 'Mozilla/5.0 (Macintosh)' : 'Mozilla/5.0 (X11; Linux x86_64)')
+}
 
 const pdf: ThreadFileObject = {
   kind: 'file',
@@ -92,9 +99,51 @@ describe('chips', () => {
     expect(container.querySelector('[data-thread-file-list]')).toBeNull()
     expect(chips[0].textContent).toContain('report-q3.pdf')
     expect(chips[0].textContent).toContain('240 KB · PDF')
-    expect(chips[1].getAttribute('title')).toBe('Open src/session.rs:212–240')
     fireEvent.click(chips[1])
-    expect(open).toHaveBeenCalledWith(rs)
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(open.mock.calls[0][0]).toBe(rs)
+    // A plain click opens and shows it.
+    expect(open.mock.calls[0][1]).toBeUndefined()
+  })
+
+  it('Option-click opens a chip in the background and stops the browser default', () => {
+    const open = vi.fn()
+    const { container } = withActions(<ThreadFileObjects files={[pdf, rs]} mine={false} />, { open })
+    const chip = container.querySelectorAll('[data-thread-file]')[1]
+    expect(fireEvent.mouseDown(chip, { altKey: true })).toBe(false)
+    expect(fireEvent.click(chip, { altKey: true })).toBe(false)
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(open.mock.calls[0][0]).toBe(rs)
+    expect(open.mock.calls[0][1]).toEqual({ background: true })
+  })
+
+  it('the chip tooltip: path and lines, then the gesture (Mac)', () => {
+    onPlatform(true)
+    const { container } = withActions(<ThreadFileObjects files={[rs]} mine={false} />, { open: vi.fn() })
+    const chip = container.querySelector('[data-thread-file]')!
+    expect(chip.getAttribute('title')).toBe('src/session.rs:212–240\nClick to open · ⌥-click to open in background')
+    expect(chip.getAttribute('aria-label')).toBe('Open session.rs. Option-click to open in background')
+  })
+
+  it('the chip tooltip off a Mac says Alt-click', () => {
+    onPlatform(false)
+    const { container } = withActions(<ThreadFileObjects files={[rs]} mine={false} />, { open: vi.fn() })
+    const chip = container.querySelector('[data-thread-file]')!
+    expect(chip.getAttribute('title')).toBe('src/session.rs:212–240\nClick to open · Alt-click to open in background')
+    expect(chip.getAttribute('aria-label')).toBe('Open session.rs. Alt-click to open in background')
+  })
+
+  it('list-card rows take Option-click and carry the same tooltip', () => {
+    onPlatform(true)
+    const open = vi.fn()
+    const files: ThreadFileObject[] = Array.from({ length: 3 }, (_, i) => ({ ...pdf, path: `docs/f${i}.md`, name: `f${i}.md`, line: i + 1 }))
+    const { container } = withActions(<ThreadFileObjects files={files} mine={false} />, { open })
+    const row = container.querySelector('[data-thread-file="docs/f2.md"]')!
+    expect(row.getAttribute('title')).toBe('docs/f2.md:3\nClick to open · ⌥-click to open in background')
+    expect(fireEvent.click(row, { altKey: true })).toBe(false)
+    expect(open.mock.calls[0]).toEqual([files[2], { background: true }])
+    fireEvent.click(row)
+    expect(open.mock.calls[1][1]).toBeUndefined()
   })
 
   it('changed keeps an amber dot and still opens', () => {
@@ -151,7 +200,7 @@ describe('chips', () => {
     fireEvent.click(getByText('Show all 7'))
     expect(card.querySelectorAll('[data-thread-file]')).toHaveLength(7)
     fireEvent.click(card.querySelector('[data-thread-file="docs/f6.md"]')!)
-    expect(open).toHaveBeenCalledWith(files[6])
+    expect(open.mock.calls[0][0]).toBe(files[6])
     fireEvent.click(card.querySelector('[data-thread-file="hidden"]')!)
     expect(open).toHaveBeenCalledTimes(1)
   })
@@ -210,6 +259,19 @@ describe('the shared opener', () => {
     expect(transport).toHaveBeenCalledWith('sales', ['src/session.rs'])
     expect(openFileAsTab).toHaveBeenCalledWith('/ws/src/session.rs')
     expect(takeFileLine('local', '/ws/src/session.rs')).toEqual({ line: 212 })
+  })
+
+  it('Option-click: the same resolve, then the tab opens unselected and the line waits for it', async () => {
+    const { room, openFileAsTab } = fakeRoom()
+    const transport = vi.fn(async () => ({
+      root: '/ws',
+      prefixes: ['/ws'],
+      links: [{ input: 'src/session.rs', linkable: true, kind: 'file' as const, rel: 'src/session.rs', path: '/ws/src/session.rs' }],
+    }))
+    await expect(openThreadAttachment(room, transport, 'sales', rs, { background: true })).resolves.toBe(true)
+    expect(openFileAsTab).toHaveBeenCalledWith('/ws/src/session.rs', { activate: false })
+    expect(activateTab).not.toHaveBeenCalled()
+    expect(takeFileLine('local', '/ws/src/session.rs')).toEqual({ line: 212, background: true })
   })
 
   it('a file the server no longer links does not open', async () => {

@@ -16,11 +16,20 @@
 // never clickable.
 //
 // What a click does comes from `ThreadFileActionsProvider` (the desktop
-// Thread opens a file tab at the line). Without one (Zen, Home) the chips
+// Thread opens a file tab at the line; Option/Alt-click opens it in the
+// background, and the tooltip says so). Without one (Zen, Home) the chips
 // show but don't open.
 
-import { createContext, useContext, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
+import { createContext, useContext, useState, type CSSProperties, type JSX, type MouseEvent, type ReactNode } from 'react'
 import type { ThreadFileObject } from '@/components/SessionView/overlayThread'
+import { isMacPlatform } from '@/lib/desktop-chrome'
+import {
+  fileOpenAriaHint,
+  fileOpenOptionsFor,
+  fileOpenTooltip,
+  isBackgroundOpenEvent,
+  type FileOpenOptions,
+} from '@/lib/file-open-modifier'
 import { SetiFileIcon } from '@/lib/seti-file-icons/SetiFileIcon'
 import { ZEN_SOLID_PROPS } from '@/lib/zen/zen-materials'
 import { chamferCutFor, chamferVars } from './chamfer'
@@ -32,8 +41,9 @@ export const FILE_LIST_CARD_AT = 3
 export const FILE_LIST_CARD_ROWS = 5
 
 export interface ThreadFileActions {
-  /** Open the file (a file tab at `line`). */
-  open: (file: ThreadFileObject) => void
+  /** Open the file (a file tab at `line`); `opts.background` (Option/Alt-
+   *  click) opens it without showing it. */
+  open: (file: ThreadFileObject, opts?: FileOpenOptions) => void
   /** Search the Files drawer for a file that moved. */
   find?: (file: ThreadFileObject) => void
 }
@@ -141,6 +151,24 @@ function FindButton({ file, onFind }: { file: ThreadFileObject; onFind: (f: Thre
 
 const FILE_TOKENS = { '--thread-file-changed': 'var(--zen-needs-you)' } as CSSProperties
 
+/** The click handlers of an openable chip or row: a plain click opens and
+ *  shows the file; Option/Alt-click opens it in the background, without the
+ *  browser's own Option-click and without moving focus off the composer. */
+function openHandlers(open: (opts?: FileOpenOptions) => void): {
+  onMouseDown: (e: MouseEvent) => void
+  onClick: (e: MouseEvent) => void
+} {
+  return {
+    onMouseDown: (e) => {
+      if (e.button === 0 && isBackgroundOpenEvent(e)) e.preventDefault()
+    },
+    onClick: (e) => {
+      if (isBackgroundOpenEvent(e)) e.preventDefault()
+      open(fileOpenOptionsFor(e))
+    },
+  }
+}
+
 /** One file as a chip (one or two files on a message). */
 export function ThreadFileChip({ file }: { file: ThreadFileObject }): JSX.Element {
   const actions = useContext(ThreadFileActionsContext)
@@ -170,13 +198,14 @@ export function ThreadFileChip({ file }: { file: ThreadFileObject }): JSX.Elemen
     ...ZEN_SOLID_PROPS,
   }
   if (canOpen) {
+    const isMac = isMacPlatform()
     return (
       <button
         type="button"
         {...common}
-        title={`Open ${where}`}
-        aria-label={`Open ${file.name}${file.state === 'changed' ? ' (changed since sent)' : ''}`}
-        onClick={() => actions!.open(file)}
+        title={fileOpenTooltip(where, isMac)}
+        aria-label={`Open ${file.name}${file.state === 'changed' ? ' (changed since sent)' : ''}. ${fileOpenAriaHint(isMac)}`}
+        {...openHandlers((opts) => actions!.open(file, opts))}
         className="inline-flex items-center gap-2"
         style={style}
       >
@@ -237,7 +266,15 @@ export function ThreadFileListCard({ files }: { files: ThreadFileObject[] }): JS
         const key = `${i}:${f.path ?? 'hidden'}`
         const attrs = { 'data-thread-file': hidden ? 'hidden' : f.path, 'data-state': hidden ? 'hidden' : f.state ?? 'ok' }
         return canOpen ? (
-          <button key={key} type="button" {...attrs} title={`Open ${f.path}${fileLineLabel(f)}`} onClick={() => actions!.open(f)} style={rowStyle}>
+          <button
+            key={key}
+            type="button"
+            {...attrs}
+            title={fileOpenTooltip(`${f.path}${fileLineLabel(f)}`)}
+            aria-label={`Open ${f.name}${f.state === 'changed' ? ' (changed since sent)' : ''}. ${fileOpenAriaHint()}`}
+            {...openHandlers((opts) => actions!.open(f, opts))}
+            style={rowStyle}
+          >
             <FileRowContent file={f} />
           </button>
         ) : (

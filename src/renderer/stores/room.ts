@@ -171,6 +171,11 @@ let primaryProjects: PrimaryProjectsStore | null = null
 export function primaryProjectForRoot(root: string): {
   showing: boolean
   show: (afterShown: () => void) => void
+  /** Its id and the workspace a switch shows (the tabs' layout key). */
+  projectId: string
+  workspaceId: string | null
+  /** What the window calls it (its name, else the folder's). */
+  name: string
 } | null {
   if (!primaryProjects) return null
   const trim = (p: string): string => (p.length > 1 ? p.replace(/\/+$/, '') : p)
@@ -180,6 +185,9 @@ export function primaryProjectForRoot(root: string): {
   if (!project) return null
   const setActive = ps.setActiveProject
   return {
+    projectId: project.id,
+    workspaceId: project.workspaces?.[0]?.id ?? null,
+    name: project.name || want.split('/').pop() || want,
     showing: project.id === ps.activeProjectId,
     show: (afterShown) => {
       // A project with no workspace never reaches "showing": open in place.

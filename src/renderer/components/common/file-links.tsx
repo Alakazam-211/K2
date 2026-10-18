@@ -14,7 +14,9 @@
 //     it has (`lib/file-link-legacy.ts`), so its Threads link too.
 //   - `FileLink` draws a linkable candidate as a keyboard-reachable link;
 //     anything else stays plain text. A click opens the file in the
-//     Thread's own workspace (`lib/thread-file-link-open.ts`).
+//     Thread's own workspace (`lib/thread-file-link-open.ts`); an
+//     Option/Alt-click opens it there in the background (no switch, no
+//     focus move), and the tooltip says so (`lib/file-open-modifier.ts`).
 //
 // Only a message rendered under a `FileLinkProvider` gets links; every
 // other `ChatMessageBody` (tickets, project chat, Grok Bots, Zen) is
@@ -35,6 +37,14 @@ import { findFilePaths, matchWholeFilePath } from '@/lib/file-link-match'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { isMissingResolveLinksRoute, legacyResolveLinks, type LegacyResolveDeps } from '@/lib/file-link-legacy'
 import type { ServerScope } from '@/kessel/server-scope'
+import {
+  fileOpenAriaHint,
+  fileOpenOptionsFor,
+  fileOpenTooltip,
+  isBackgroundOpenEvent,
+  type FileOpenOptions,
+} from '@/lib/file-open-modifier'
+import { isMacPlatform } from '@/lib/desktop-chrome'
 
 /** One daemon answer (`k2_core::file_links::LinkAnswer`). */
 export interface FileLinkAnswer {
@@ -55,8 +65,14 @@ interface ResolveLinksResponse {
   links: FileLinkAnswer[]
 }
 
-/** What a click does with a linkable answer. */
-export type FileLinkOpen = (answer: FileLinkAnswer & { linkable: true; path: string }, line?: number, col?: number) => void
+/** What a click does with a linkable answer. `opts.background`: the
+ *  Option/Alt-click, open without showing it (`lib/file-open-modifier.ts`). */
+export type FileLinkOpen = (
+  answer: FileLinkAnswer & { linkable: true; path: string },
+  line?: number,
+  col?: number,
+  opts?: FileOpenOptions,
+) => void
 
 /** Sends one batch to the daemon. Injectable for tests. */
 export type FileLinkTransport = (workspace: string, paths: string[]) => Promise<ResolveLinksResponse>
@@ -363,26 +379,36 @@ export function FileLink({
   }, [ctx, path])
   if (!ctx || !answer || answer === 'pending' || !answer.linkable || !answer.path) return <>{children}</>
   const target = answer as FileLinkAnswer & { linkable: true; path: string }
-  const go = (): void => ctx.open(target, line, col)
+  const go = (opts?: FileOpenOptions): void => ctx.open(target, line, col, opts)
   const where = `${target.rel || '.'}${line ? `:${line}${col ? `:${col}` : ''}` : ''}`
+  const dir = target.kind === 'directory'
+  // A folder shows in Files (no tab to open behind the view): no modifier.
+  const isMac = isMacPlatform()
   return (
     <span
       role="link"
       tabIndex={0}
       className="k2-file-link"
       data-k2-file-link={target.kind}
-      title={target.kind === 'directory' ? `Show ${where} in Files` : `Open ${where}`}
+      title={dir ? `Show ${where} in Files` : fileOpenTooltip(where, isMac)}
+      aria-label={dir ? `Show ${where} in Files` : `Open ${where}. ${fileOpenAriaHint(isMac)}`}
+      onMouseDown={(e: MouseEvent) => {
+        // Option/Alt-click keeps focus where it is (the composer).
+        if (e.button === 0 && isBackgroundOpenEvent(e)) e.preventDefault()
+      }}
       onClick={(e: MouseEvent) => {
+        // Option-click on a link can download it in WebKit: always ours.
+        if (isBackgroundOpenEvent(e)) e.preventDefault()
         if (e.button !== 0 || selectingText()) return
         e.preventDefault()
         e.stopPropagation()
-        go()
+        go(fileOpenOptionsFor(e))
       }}
       onKeyDown={(e: KeyboardEvent) => {
         if (e.key !== 'Enter' && e.key !== ' ') return
         e.preventDefault()
         e.stopPropagation()
-        go()
+        go(fileOpenOptionsFor(e))
       }}
     >
       {children}

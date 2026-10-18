@@ -11,10 +11,16 @@
 // view) never fires later.
 
 const TTL_MS = 5_000
+/** A background open (Option/Alt-click) leaves its tab unshown: the line
+ *  waits until the user switches to it, so it lives much longer. */
+const BACKGROUND_TTL_MS = 30 * 60_000
 
 export interface LineRequest {
   line: number
   col?: number
+  /** Asked by a background open: apply only once the editor is showing,
+   *  and never take focus. */
+  background?: boolean
 }
 
 type Key = string
@@ -23,21 +29,54 @@ const keyOf = (hostKey: string, path: string): Key => `${hostKey}\n${path}`
 const lines = new Map<Key, LineRequest & { at: number }>()
 const lineListeners = new Set<(key: Key) => void>()
 
-/** Ask the editor showing `path` on `hostKey` to jump to `line` (1-based). */
-export function requestFileLine(hostKey: string, path: string, line: number, col?: number): void {
+/** Ask the editor showing `path` on `hostKey` to jump to `line` (1-based).
+ *  `background`: the file was opened without showing its tab. */
+export function requestFileLine(
+  hostKey: string,
+  path: string,
+  line: number,
+  col?: number,
+  opts?: { background?: boolean },
+): void {
   const key = keyOf(hostKey, path)
-  lines.set(key, { line, ...(col !== undefined ? { col } : {}), at: Date.now() })
+  lines.set(key, {
+    line,
+    ...(col !== undefined ? { col } : {}),
+    ...(opts?.background ? { background: true } : {}),
+    at: Date.now(),
+  })
   for (const fn of lineListeners) fn(key)
+}
+
+function fresh(key: Key): (LineRequest & { at: number }) | null {
+  const req = lines.get(key)
+  if (!req) return null
+  if (Date.now() - req.at > (req.background ? BACKGROUND_TTL_MS : TTL_MS)) {
+    lines.delete(key)
+    return null
+  }
+  return req
+}
+
+/** A fresh line request for `path` on `hostKey`, left in place. */
+export function peekFileLine(hostKey: string, path: string): LineRequest | null {
+  const req = fresh(keyOf(hostKey, path))
+  if (!req) return null
+  const { at: _at, ...out } = req
+  return out
 }
 
 /** Take (and clear) a fresh line request for `path` on `hostKey`. */
 export function takeFileLine(hostKey: string, path: string): LineRequest | null {
   const key = keyOf(hostKey, path)
-  const req = lines.get(key)
-  if (!req) return null
+  const req = fresh(key)
   lines.delete(key)
-  if (Date.now() - req.at > TTL_MS) return null
-  return req.col !== undefined ? { line: req.line, col: req.col } : { line: req.line }
+  if (!req) return null
+  return {
+    line: req.line,
+    ...(req.col !== undefined ? { col: req.col } : {}),
+    ...(req.background ? { background: true } : {}),
+  }
 }
 
 /** Called whenever a line is requested for `path` on `hostKey`. */

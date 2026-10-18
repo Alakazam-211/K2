@@ -21,8 +21,9 @@ projectsState.setActiveProject = (id, afterShown) => {
   switched.push({ id, afterShown })
 }
 
-import { openThreadFileLink } from './thread-file-link-open'
-import { lineColToPos, onFileLineRequest, onFileTreeReveal, takeFileLine, takeFileTreeReveal } from './file-open-requests'
+import { openFileInBackground, openThreadFileLink } from './thread-file-link-open'
+import { useToastStore } from '@/stores/toast'
+import { lineColToPos, onFileLineRequest, onFileTreeReveal, peekFileLine, takeFileLine, takeFileTreeReveal } from './file-open-requests'
 import { Text } from '@codemirror/state'
 import { registerPrimaryRoomProjects, type PrimaryProjectsStore } from '@/stores/room'
 
@@ -35,13 +36,16 @@ registerPrimaryRoomProjects({
 
 function fakeRoom(isPrimary = true) {
   const openFileAsTab = vi.fn()
+  const parkFileTab = vi.fn(async () => 'opened' as const)
   return {
-    room: { scope: { hostKey: 'local' }, tabs: { getState: () => ({ openFileAsTab }) }, isPrimary } as never,
+    room: { scope: { hostKey: 'local' }, tabs: { getState: () => ({ openFileAsTab }), room: { parkFileTab } }, isPrimary } as never,
     openFileAsTab,
+    parkFileTab,
   }
 }
 
 beforeEach(() => {
+  useToastStore.setState({ toasts: [] })
   activateTab.mockClear()
   switched.length = 0
   projectsState.activeProjectId = 'p-k2'
@@ -149,6 +153,95 @@ describe('openThreadFileLink opens in the Thread\'s own workspace', () => {
     openThreadFileLink(room, { ...link, root: '/elsewhere' })
     expect(switched).toEqual([])
     expect(openFileAsTab).toHaveBeenCalledWith(link.path)
+  })
+})
+
+describe('Option/Alt-click opens in the background', () => {
+  const K2 = '/Users/me/Alakazam Labs/K2'
+  const link = {
+    input: 'crates/k2-daemon/src/push_routes.rs',
+    linkable: true,
+    kind: 'file',
+    rel: 'crates/k2-daemon/src/push_routes.rs',
+    path: `${K2}/crates/k2-daemon/src/push_routes.rs`,
+    root: K2,
+  } as const
+  const flush = async (): Promise<void> => {
+    for (let i = 0; i < 3; i++) await Promise.resolve()
+  }
+  const toasts = (): string[] => useToastStore.getState().toasts.map((t) => t.message)
+
+  it('the Thread\'s workspace is showing: the tab is added unselected, nothing switches', async () => {
+    const { room, openFileAsTab, parkFileTab } = fakeRoom()
+    openThreadFileLink(room, link, 40, undefined, { background: true })
+    await flush()
+    expect(switched).toEqual([])
+    expect(openFileAsTab).toHaveBeenCalledWith(link.path, { activate: false })
+    expect(parkFileTab).not.toHaveBeenCalled()
+    expect(activateTab).not.toHaveBeenCalled()
+    expect(toasts()).toEqual(['Opened push_routes.rs in K2'])
+  })
+
+  it('another workspace is showing: the tab is parked in the Thread\'s workspace, no switch', async () => {
+    projectsState.activeProjectId = 'p-sew'
+    const { room, openFileAsTab, parkFileTab } = fakeRoom()
+    openThreadFileLink(room, link, 40, undefined, { background: true })
+    await flush()
+    expect(switched).toEqual([])
+    expect(openFileAsTab).not.toHaveBeenCalled()
+    expect(parkFileTab).toHaveBeenCalledWith('p-k2', 'w-k2', link.path)
+    expect(toasts()).toEqual(['Opened push_routes.rs in K2'])
+  })
+
+  it('keeps the line for when the tab is shown, past the plain request\'s life', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-18T12:00:00Z'))
+    const { room } = fakeRoom()
+    openThreadFileLink(room, link, 40, 2, { background: true })
+    vi.setSystemTime(new Date('2026-10-18T12:05:00Z'))
+    expect(peekFileLine('local', link.path)).toEqual({ line: 40, col: 2, background: true })
+    expect(takeFileLine('local', link.path)).toEqual({ line: 40, col: 2, background: true })
+  })
+
+  it('a file already open: a small "already open" note and nothing else', async () => {
+    const { room, openFileAsTab } = fakeRoom()
+    openFileAsTab.mockReturnValue('existing')
+    await openFileInBackground(room, link)
+    expect(openFileAsTab).toHaveBeenCalledWith(link.path, { activate: false })
+    expect(toasts()).toEqual(['push_routes.rs is already open in K2'])
+  })
+
+  it('a Home room opens in its own strip, unselected', async () => {
+    projectsState.activeProjectId = 'p-sew'
+    const { room, openFileAsTab, parkFileTab } = fakeRoom(false)
+    await openFileInBackground(room, link)
+    expect(parkFileTab).not.toHaveBeenCalled()
+    expect(openFileAsTab).toHaveBeenCalledWith(link.path, { activate: false })
+    expect(toasts()).toEqual(['Opened push_routes.rs in background'])
+  })
+
+  it('a layout save that fails says so', async () => {
+    projectsState.activeProjectId = 'p-sew'
+    const { room, parkFileTab } = fakeRoom()
+    parkFileTab.mockRejectedValueOnce(new Error('boom'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(await openFileInBackground(room, link)).toBeNull()
+    warn.mockRestore()
+    expect(useToastStore.getState().toasts.map((t) => [t.type, t.message])).toEqual([['error', "Couldn't open push_routes.rs in K2"]])
+  })
+
+  it('a folder has no tab to open behind the view: it shows in Files as on a plain click', () => {
+    const { room, openFileAsTab } = fakeRoom()
+    openThreadFileLink(room, { input: 'src/', linkable: true, kind: 'directory', rel: 'src', path: `${K2}/src`, root: K2 }, undefined, undefined, { background: true })
+    expect(openFileAsTab).not.toHaveBeenCalled()
+    expect(activateTab).toHaveBeenCalledWith('files')
+  })
+
+  it('a plain click still shows the tab (one argument, as before)', () => {
+    const { room, openFileAsTab } = fakeRoom()
+    openThreadFileLink(room, link)
+    expect(openFileAsTab).toHaveBeenCalledWith(link.path)
+    expect(toasts()).toEqual([])
   })
 })
 

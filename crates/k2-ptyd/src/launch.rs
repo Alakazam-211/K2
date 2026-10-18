@@ -100,19 +100,7 @@ pub fn launcher(cfg_without_ready: Config) -> i32 {
 pub fn spawn_detached(exe: &Path, home: &Path, extra: &[(&str, &str)]) -> io::Result<()> {
     let mut cmd = Command::new(exe);
     cmd.arg("--launch").env_clear();
-    for (k, v) in std::env::vars_os() {
-        if let Some(name) = k.to_str() {
-            if crate::env_allowed(name) && name != "K2_HOME" {
-                cmd.env(&k, &v);
-            }
-        }
-    }
-    cmd.env("K2_HOME", home);
-    for (k, v) in extra {
-        if crate::env_allowed(k) {
-            cmd.env(k, v);
-        }
-    }
+    cmd.envs(launch_env(std::env::vars_os(), home, extra));
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
     let out = cmd.output()?;
     match out.status.code() {
@@ -123,6 +111,27 @@ pub fn spawn_detached(exe: &Path, home: &Path, extra: &[(&str, &str)]) -> io::Re
             String::from_utf8_lossy(&out.stderr).trim()
         ))),
     }
+}
+
+/// The complete environment ptyd is launched with (P5): the allowlisted
+/// names from `parent`, `K2_HOME` = `home`, then allowlisted `extra`
+/// entries. Nothing else — whatever the parent carries.
+pub fn launch_env(
+    parent: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    home: &Path,
+    extra: &[(&str, &str)],
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    let mut env: std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString> = parent
+        .into_iter()
+        .filter(|(k, _)| k.to_str().map(|n| crate::env_allowed(n) && n != "K2_HOME").unwrap_or(false))
+        .collect();
+    env.insert("K2_HOME".into(), home.as_os_str().to_owned());
+    for (k, v) in extra {
+        if crate::env_allowed(k) {
+            env.insert((*k).into(), (*v).into());
+        }
+    }
+    env.into_iter().collect()
 }
 
 /// `pipe` helper kept for callers that pass a ready fd to `--serve`.

@@ -24,6 +24,7 @@ import { KeybindingsSection, KEYBINDINGS_MANIFEST } from './sections/Keybindings
 import { TimerSection, TIMER_MANIFEST } from './sections/TimerSection'
 import { AccessAuditSection, ACCESS_AUDIT_MANIFEST } from './sections/AccessAuditSection'
 import { CompanionSection, COMPANION_MANIFEST } from './sections/CompanionSection'
+import { HomesSyncSection, HOMES_SYNC_MANIFEST } from './sections/HomesSyncSection'
 import { CONNECTIONS_MANIFEST } from './sections/ConnectionsSection'
 import { K2_CONNECT_MANIFEST } from './sections/K2ConnectSection'
 import { K2ConnectSettingsShell } from './sections/K2ConnectSettingsShell'
@@ -209,6 +210,9 @@ export function settingsNav({
         { id: 'domains', label: 'Custom Domains' },
         { id: 'connections', label: 'Connected Servers' },
         { id: 'companion', label: 'K2 Companion' },
+        // homes-sync-v1 (0.46.1): your Homes between this computer and your
+        // phone; the devices syncing from this server, with Remove.
+        { id: 'homes-sync', label: 'Homes Sync' },
         // No Gardens group here (web, Windows): External Data stays reachable.
         ...(zenGardens ? [] : [{ id: 'data-sources' as const, label: 'External Data' }]),
       ],
@@ -304,6 +308,7 @@ export default function Settings(): React.JSX.Element {
       ...TIMER_MANIFEST,
       ...ACCESS_AUDIT_MANIFEST,
       ...COMPANION_MANIFEST,
+      ...HOMES_SYNC_MANIFEST,
       ...CONNECTIONS_MANIFEST,
       ...K2_CONNECT_MANIFEST,
       ...DOMAINS_MANIFEST,
@@ -594,6 +599,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'companion' && (
           <SectionErrorBoundary>
             <CompanionSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'homes-sync' && (
+          <SectionErrorBoundary>
+            <HomesSyncSection />
           </SectionErrorBoundary>
         )}
         {(activeSection === 'k2-connect' ||

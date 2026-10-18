@@ -12,6 +12,10 @@ import {
   HOMES_STORAGE_KEY,
   HOMES_LAST_SELECTED_KEY,
   HOMES_WINDOW_SELECTED_KEY,
+  HOMES_SYNC_STORAGE_KEY,
+  resolveHomeId,
+  followHomeRedirects,
+  parseHomeRedirects,
   type KeyValueStorage,
   type HomeRow,
 } from './homes'
@@ -313,5 +317,64 @@ describe('home row addresses (H14)', () => {
     expect(savedHostForKey(hosts, 'box.k2.dev')?.id).toBe('b')
     expect(savedHostForKey(hosts, '10.0.0.5:38471')?.id).toBe('c')
     expect(savedHostForKey(hosts, '10.0.0.5')).toBeNull()
+  })
+})
+
+// homes-sync-v1 (0.46.1): merged results land through applySynced; a Home
+// merged away on a first sync keeps its id as a redirect, so a window's
+// selection, the last-selected id and lookups by old id still resolve.
+describe('Homes store — sync results and merge redirects', () => {
+  it('applySynced saves the merged Homes and keeps this window’s selection, following a redirect', () => {
+    const local = new MemStorage()
+    const session = new MemStorage()
+    const store = createHomesStore({ local, session, newId: ids() })
+    const old = store.getState().homes[0].id
+    store.getState().selectHome(old)
+    store.getState().applySynced(
+      [
+        { id: 'srv-home', name: 'Home', rows: [row('atlas::local')] },
+        { id: 'srv-work', name: 'Work', rows: [] },
+      ],
+      { [old]: 'srv-home' },
+    )
+    const s = store.getState()
+    expect(s.homes.map((h) => h.id)).toEqual(['srv-home', 'srv-work'])
+    expect(s.selectedId).toBe('srv-home')
+    expect(session.getItem(HOMES_WINDOW_SELECTED_KEY)).toBe('srv-home')
+    expect(stored(local).homes.map((h) => h.id)).toEqual(['srv-home', 'srv-work'])
+    expect(resolveHomeId(s, old)).toBe('srv-home')
+    expect(resolveHomeId(s, 'nope')).toBeNull()
+    // A selection that still exists is kept (per window; sync never moves it).
+    store.getState().selectHome('srv-work')
+    store.getState().applySynced(
+      [
+        { id: 'srv-home', name: 'Home', rows: [] },
+        { id: 'srv-work', name: 'Work 2', rows: [] },
+      ],
+      s.redirects,
+    )
+    expect(store.getState().selectedId).toBe('srv-work')
+  })
+
+  it('a new window opens on the redirected last-selected Home; another window learns redirects by storage event', () => {
+    const local = new MemStorage()
+    local.setItem(HOMES_STORAGE_KEY, JSON.stringify({ version: 1, homes: [{ id: 'srv-home', name: 'Home', rows: [] }] }))
+    local.setItem(HOMES_LAST_SELECTED_KEY, 'old-home')
+    local.setItem(HOMES_SYNC_STORAGE_KEY, JSON.stringify({ version: 1, deviceId: 'd', redirects: { 'old-home': 'srv-home' } }))
+    const a = createHomesStore({ local, session: new MemStorage(), newId: ids() })
+    expect(a.getState().selectedId).toBe('srv-home')
+    expect(a.getState().redirects).toEqual({ 'old-home': 'srv-home' })
+    expect(parseHomeRedirects('junk')).toEqual({})
+    // Window B follows a redirect another window's runner wrote.
+    const target = new EventTarget()
+    const b = createHomesStore({ local, session: new MemStorage(), newId: ids() })
+    attachHomesStorageSync(b, target, local)
+    const ev = Object.assign(new Event('storage'), {
+      key: HOMES_SYNC_STORAGE_KEY,
+      newValue: JSON.stringify({ version: 1, deviceId: 'd', redirects: { 'old-home': 'srv-home', x: 'srv-home' } }),
+    })
+    target.dispatchEvent(ev)
+    expect(b.getState().redirects).toEqual({ 'old-home': 'srv-home', x: 'srv-home' })
+    expect(followHomeRedirects({ a: 'b', b: 'a' }, 'a')).toBe('a')
   })
 })

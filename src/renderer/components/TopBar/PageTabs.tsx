@@ -29,6 +29,7 @@ import {
 import { openWikiForView } from '@/lib/wiki-open'
 import { pageShortcutLabel } from '@/lib/page-shortcuts'
 import { isMacPlatform } from '@/lib/desktop-chrome'
+import { HomesSyncBadge } from '@/components/Home/HomesSyncBadge'
 
 /** The Tickets tab's badge from the feedback store (prd-tickets-badge-
  *  orphans TB8/TB15/TB17 + Appa A3): a fresh count; the last count dimmed
@@ -237,6 +238,8 @@ export default function PageTabs(): React.JSX.Element {
             {...badge}
           >
             <Icon size={PAGE_TAB_ICON_PX} />
+            {/* homes-sync-v1: which server this device's Homes sync with. */}
+            {p === 'home' && <HomesSyncBadge />}
           </PageTab>
         )
       })}

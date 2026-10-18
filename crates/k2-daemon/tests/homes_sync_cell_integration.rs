@@ -1,6 +1,7 @@
-//! homes-sync-v1: an agent's own cell socket gets 403 `homes_person_only`
-//! (405 for a GET of a POST-only path), never a Homes doc and never
-//! "route not served".
+//! homes-sync-v1: an agent's own cell socket never reaches a person's
+//! Homes. `/cli/me/homes*` is not on the scoped-token capability allowlist
+//! (`session_token::require_hook`), so every method on every Homes path is
+//! 403 before any handler runs, and nothing is written.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -62,15 +63,21 @@ async fn the_agent_cell_socket_refuses_every_homes_route() {
     let listener = cell_uds::bind_cell_socket(&sid).expect("bind cell socket");
     let sock = cell_uds::cell_socket_path(&sid);
     cell_server::serve_cell(sid, listener, None);
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
 
-    for (method, path, body, want) in [
-        ("GET", "/cli/me/homes?deviceId=x", "", 403),
-        ("GET", "/cli/me/homes/devices", "", 403),
-        ("POST", "/cli/me/homes/push", r#"{"deviceId":"x","changes":[]}"#, 403),
-        ("POST", "/cli/me/homes/devices/register", r#"{"deviceId":"x","name":"x","platform":"ios"}"#, 403),
-        ("POST", "/cli/me/homes/devices/remove", r#"{"deviceId":"x"}"#, 403),
-        ("GET", "/cli/me/homes/push", "", 405),
-        ("GET", "/cli/me/homes/devices/remove", "", 405),
+    // The same token IS good on this socket for an agent verb (so the 403s
+    // below are about the Homes paths, not a broken token).
+    let raw = format!("GET /cli/thread?addr=nobody HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\n\r\n");
+    let (status, body) = uds(&sock, &raw).await;
+    assert_ne!(status, 403, "the agent token works on its own socket: {body}");
+
+    for (method, path, body) in [
+        ("GET", "/cli/me/homes?deviceId=x", ""),
+        ("GET", "/cli/me/homes/devices", ""),
+        ("POST", "/cli/me/homes/push", r#"{"deviceId":"x","changes":[]}"#),
+        ("POST", "/cli/me/homes/devices/register", r#"{"deviceId":"x","name":"x","platform":"ios"}"#),
+        ("POST", "/cli/me/homes/devices/remove", r#"{"deviceId":"x"}"#),
+        ("GET", "/cli/me/homes/push", ""),
     ] {
         let raw = format!(
             "{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {token}\r\n\
@@ -78,10 +85,12 @@ async fn the_agent_cell_socket_refuses_every_homes_route() {
             body.len()
         );
         let (status, resp) = uds(&sock, &raw).await;
-        assert_eq!(status, want, "{method} {path}: {resp}");
-        if want == 403 {
-            assert!(resp.contains("homes_person_only"), "{method} {path}: {resp}");
-        }
+        assert_eq!(status, 403, "{method} {path}: {resp}");
+        assert!(!resp.contains("changes") && !resp.contains("devices"), "{method} {path} leaked: {resp}");
     }
+    // Nothing was registered for anyone.
+    let db = k2_core::db::shared();
+    let n: i64 = db.lock().query_row("SELECT COUNT(*) FROM homes_devices", [], |r| r.get(0)).expect("count");
+    assert_eq!(n, 0);
     let _ = std::fs::remove_dir_all(&home);
 }

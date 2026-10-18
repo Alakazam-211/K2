@@ -160,6 +160,9 @@ export interface ZenWidgetRunReport {
   class?: string
   code?: string
   line?: number
+  /** 0.46.1: a refused `sources.*` call's address; the daemon keeps it only
+   *  when a placement config names it. */
+  address?: string
 }
 
 /** `TypeError` from `TypeError: x is undefined` (a JS identifier only). */
@@ -180,11 +183,16 @@ export function zenErrorLine(stack: string | undefined): number | undefined {
 export function zenRunReportBody(
   widget: string,
   hash: string,
-  r: { event: 'ready' } | { event: 'error'; message: string; stack?: string } | { event: 'refusal'; verb: string; code: string },
+  r:
+    | { event: 'ready' }
+    | { event: 'error'; message: string; stack?: string }
+    | { event: 'refusal'; verb: string; code: string; address?: string },
   readsSources: boolean,
 ): ZenWidgetRunReport {
   if (r.event === 'ready') return { widget, hash, event: 'ready' }
-  if (r.event === 'refusal') return { widget, hash, event: 'error', kind: 'refusal', class: r.verb, code: r.code }
+  if (r.event === 'refusal') {
+    return { widget, hash, event: 'error', kind: 'refusal', class: r.verb, code: r.code, ...(r.address ? { address: r.address } : {}) }
+  }
   const cls = zenErrorClass(r.message)
   const line = zenErrorLine(r.stack)
   const fixed = { kind: 'error' as const, ...(cls ? { class: cls } : {}), ...(line !== undefined ? { line } : {}) }

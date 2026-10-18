@@ -58,6 +58,7 @@ fn a_sources_widget_run_report_keeps_no_text() {
         class: Some("TypeError"),
         code: None,
         line: Some(9),
+        address: None,
     };
     f.record_widget_run_with("fleet-card", &h, "error", &detail).expect("error");
     let refusal = runs::RunDetail { kind: Some("refusal"), class: Some("sources.read"), code: Some("not_bound"), ..Default::default() };
@@ -86,6 +87,45 @@ fn a_sources_widget_run_report_keeps_no_text() {
     assert!(matches!(f.record_widget_run_with("plain", &h, "error", &bad), Err(ZenError::BadRequest(_))));
     let bad = runs::RunDetail { kind: Some("crash"), ..Default::default() };
     assert!(matches!(f.record_widget_run_with("plain", &h, "error", &bad), Err(ZenError::BadRequest(_))));
+}
+
+/// 0.46.1 S3: a refused `sources.*` call names its address in `widget
+/// errors` only when a placement's config (or the manifest) names it.
+#[test]
+fn a_refusal_names_a_config_address_and_withholds_any_other() {
+    let (_t, f) = set_up("refused-address");
+    source_widget(&f, "fleet-edge", "[\"sources:read\"]", "\"config\"");
+    let g = gid(&f, "Garden 2");
+    write_garden(&f, &g, &source_page("fleet-edge", "sources = \"fleet, k2-ops-edge\""));
+    assert_eq!(f.configured_source_addresses("fleet-edge"), vec!["fleet".to_string(), "k2-ops-edge".to_string()]);
+    let h = "c".repeat(64);
+    let named = runs::RunDetail {
+        kind: Some("refusal"),
+        class: Some("sources.subscribe"),
+        code: Some("not_bound"),
+        address: Some("K2-Ops-Edge"),
+        ..Default::default()
+    };
+    f.record_widget_run_with("fleet-edge", &h, "error", &named).expect("named refusal");
+    // An address no placement names could carry a value read from a source.
+    let other = runs::RunDetail { address: Some("eur-4242"), ..named.clone() };
+    f.record_widget_run_with("fleet-edge", &h, "error", &other).expect("other refusal");
+    let e = f.widget_errors("fleet-edge", None).expect("errors");
+    let rows = e["errors"].as_array().expect("rows");
+    assert_eq!(rows[0]["address"], "k2-ops-edge", "{e}");
+    assert!(runs::run_text(&rows[0]).contains("(not_bound) for k2-ops-edge"), "{}", runs::run_text(&rows[0]));
+    assert!(rows[0]["suggestion"].as_str().is_some_and(|s| s.contains("named in this widget's placement config")), "{e}");
+    assert!(rows[1].get("address").is_none(), "{e}");
+    assert_eq!(rows[1]["addressWithheld"], true, "{e}");
+    assert!(rows[1]["suggestion"].as_str().is_some_and(|s| s.contains("add it to the placement's config.sources")), "{e}");
+    assert!(!e.to_string().contains("4242"), "the unnamed address never lands: {e}");
+    let on_disk = fs::read_to_string(f.widget_history_dir("fleet-edge").join("runtime.jsonl")).expect("log");
+    assert!(!on_disk.contains("4242"), "{on_disk}");
+    // A bad shape is withheld too.
+    let odd = runs::RunDetail { address: Some("fleet; rm -rf"), ..named.clone() };
+    f.record_widget_run_with("fleet-edge", &h, "error", &odd).expect("odd");
+    let e = f.widget_errors("fleet-edge", Some(2)).expect("errors");
+    assert_eq!(e["errors"][0]["addressWithheld"], true, "{e}");
 }
 
 /// Manifest `sources`: needs the cap, takes "config" or names, warns on thread:post.

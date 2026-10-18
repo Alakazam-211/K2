@@ -649,3 +649,125 @@ fn kept_cards_are_posted_when_an_imported_thread_settles() {
         let _ = k2_core::projects_ops::projects_delete(&new_id);
     });
 }
+
+/// A clone proposal for `project_id`, open, from an agent.
+fn propose(project_id: &str, target: &str) -> k2_core::clone_proposals::Proposal {
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    k2_core::clone_proposals::create(
+        &conn,
+        k2_core::clone_proposals::NewProposal {
+            project_id,
+            proposed_by: "agent:sales/s1",
+            target,
+            options: k2_core::clone_proposals::CloneOptions { threads: true, ..Default::default() },
+            why: Some("move to the new box"),
+        },
+        chrono::Utc::now().timestamp(),
+    )
+    .expect("propose")
+}
+
+/// 0.46.1: approving a proposal that copies secrets is ONE person confirm.
+/// `/cli/clone/vault/confirm` with `proposal` checks the person once and
+/// answers both tokens: `clone-carry` for the exact plan and
+/// `clone-approve` for the proposal, each single-use and bound to this
+/// person. The reason names both. A plan with nothing to copy answers only
+/// the approve token. A wrong password mints neither; a proposal for
+/// another workspace, a decided one, or a Member is refused.
+#[test]
+fn one_confirm_approves_a_proposal_and_covers_its_secret_copy() {
+    crate::test_support::with_temp_home(|| {
+        let (_d, v) = temp_vault("ca-approve-one");
+        v.set_confirm_password("correct horse", &Actor::Owner).expect("vault password");
+        let s = Src::new(&v);
+        let p = propose(&s.id, "luzz.k2.dev");
+        let target = target_of(&v, "luzz.k2.dev");
+        let body = |extra: Value| -> ConfirmBody {
+            let mut b = json!({ "project_path": s.path, "vault_target": target, "clone_id": "ca-one", "method": "vault-password", "password": "correct horse", "proposal": p.id });
+            for (k, val) in extra.as_object().expect("obj") {
+                b[k] = val.clone();
+            }
+            serde_json::from_value(b).expect("body")
+        };
+        let approve_action = crate::clone_proposal_routes::CONFIRM_ACTION;
+
+        // Wrong password: nothing minted.
+        let e = confirm_route(&v, &owner(), &body(json!({ "password": "nope" })), "test").expect_err("wrong password");
+        assert_eq!(e.code, "confirm_failed", "{e:?}");
+
+        // One call, one check: both tokens.
+        let r = confirm_route(&v, &owner(), &body(json!({})), "test").expect("one confirm");
+        let reason = r["reason"].as_str().expect("reason");
+        assert!(reason.starts_with(&format!("approve the clone of {} to luzz.k2.dev and copy 1 secret", s.label)), "{reason}");
+        assert_eq!(r["proposal"], json!(p.id));
+        let approve = r["approveToken"].as_str().expect("approve token").to_string();
+        let carry = r["token"].as_str().expect("carry token").to_string();
+        assert_ne!(approve, carry, "two tokens, one per action");
+        assert!(v.confirm.take(&approve, approve_action, Some("cp_other"), "owner").is_err(), "bound to the proposal");
+        let r2 = confirm_route(&v, &owner(), &body(json!({})), "test").expect("again");
+        let approve2 = r2["approveToken"].as_str().expect("approve").to_string();
+        assert!(v.confirm.take(&approve2, approve_action, Some(&p.id), "connect:lee").is_err(), "bound to the person");
+        let r3 = confirm_route(&v, &owner(), &body(json!({})), "test").expect("again");
+        let approve3 = r3["approveToken"].as_str().expect("approve").to_string();
+        match v.confirm.take(&approve3, approve_action, Some(&p.id), "owner").expect("approve token works") {
+            k2_vault::HumanProof::Confirmed { method } => assert_eq!(method, "vault-password"),
+            other => panic!("expected a confirmed proof, got {other:?}"),
+        }
+        assert!(v.confirm.take(&approve3, approve_action, Some(&p.id), "owner").is_err(), "single use");
+        let carry3 = r3["token"].as_str().expect("carry").to_string();
+        assert!(v.confirm.take(&carry3, approve_action, Some(&p.id), "owner").is_err(), "the carry token can't approve");
+        // The carry token: the exact plan, as before.
+        let ask: CarryAsk =
+            serde_json::from_value(json!({ "project_path": s.path, "vault_target": target, "clone_id": "ca-one", "confirm_token": carry })).expect("ask");
+        let plan = build_plan(&v, &owner(), &s.id, &ask).expect("plan");
+        assert_eq!(r["secretId"], json!(confirm_binding(&v, &owner(), &ask).expect("binding").0));
+        assert_eq!(take_confirm(&v, &owner(), &plan, &ask).expect("carry token works").as_deref(), Some("vault-password"));
+
+        // Nothing to copy: only the approve token.
+        let skip_all: serde_json::Map<String, Value> = plan.rows.iter().map(|row| (row.name.clone(), json!("skip"))).collect();
+        let r = confirm_route(&v, &owner(), &body(json!({ "secrets": skip_all })), "test").expect("approve only");
+        assert!(r["token"].is_null(), "{r}");
+        assert_eq!(r["reason"], json!(format!("approve the clone of {} to luzz.k2.dev", s.label)));
+        let a = r["approveToken"].as_str().expect("approve").to_string();
+        assert!(v.confirm.take(&a, approve_action, Some(&p.id), "owner").is_ok());
+
+        // The same one confirm through `/cli/vault/confirm/finish` (what
+        // `k2 clone approve` reaches over vault.sock).
+        let fin = crate::vault_routes::handle_on(
+            &v,
+            crate::vault_routes::CONFIRM_FINISH,
+            Ok(owner()),
+            json!({ "action": CONFIRM_ACTION, "clonePlan": { "project_path": s.path, "vault_target": target, "clone_id": "ca-one" }, "proposal": p.id, "method": "vault-password", "password": "correct horse" })
+                .to_string()
+                .as_bytes(),
+            &Default::default(),
+            "test",
+            None,
+        );
+        assert_eq!(&fin.status[..3], "200", "{}", fin.body);
+        let fv: Value = serde_json::from_str(&fin.body).expect("json");
+        let fa = fv["approveToken"].as_str().expect("approve via finish").to_string();
+        assert!(v.confirm.take(&fa, approve_action, Some(&p.id), "owner").is_ok(), "{fv}");
+        assert!(fv["token"].is_string(), "the carry token too: {fv}");
+
+        // Refusals.
+        let (_d2, other_id) = register("ca-approve-other");
+        let other = propose(&other_id, "here");
+        let e = confirm_route(&v, &owner(), &body(json!({ "proposal": other.id })), "test").expect_err("mismatch");
+        assert_eq!(e.code, "proposal_mismatch", "{e:?}");
+        let e = confirm_route(&v, &owner(), &body(json!({ "proposal": "cp_nope_nope" })), "test").expect_err("unknown");
+        assert_eq!(e.status, 404, "{e:?}");
+        let e = confirm_route(&v, &login(Role::Member), &body(json!({})), "test").expect_err("member");
+        assert_eq!(e.status, 403, "{e:?}");
+        {
+            let h = k2_core::db::shared();
+            let conn = h.lock();
+            k2_core::clone_proposals::decide(&conn, &p.id, k2_core::clone_proposals::STATUS_DENIED, "owner", chrono::Utc::now().timestamp())
+                .expect("deny");
+        }
+        let e = confirm_route(&v, &owner(), &body(json!({})), "test").expect_err("decided");
+        assert_eq!(e.code, "proposal_not_open", "{e:?}");
+        let _ = k2_core::projects_ops::projects_delete(&other_id);
+    });
+}

@@ -1008,6 +1008,11 @@ struct ConfirmBody {
     /// daemon rebuilds the plan from it, binds the token to its digest and
     /// writes the sheet's reason itself (CL14); `label` is ignored.
     clone_plan: Option<crate::clone_vault::CarryAsk>,
+    /// `clone-carry` with `clonePlan` only (0.46.1): the agent's clone
+    /// proposal this clone runs. The one check then also mints its
+    /// `clone-approve` token (`approveToken`), so approving and copying is
+    /// one person interaction (`clone_vault::confirm_for_proposal`).
+    proposal: Option<String>,
 }
 
 const CONFIRM_ACTIONS: &[&str] = &[
@@ -1088,6 +1093,12 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
     let action = b.action.as_deref().unwrap_or("");
     if !CONFIRM_ACTIONS.contains(&action) {
         return Err(err("bad_action", 400, "unknown confirm action"));
+    }
+    if action == crate::clone_vault::CONFIRM_ACTION {
+        if let Some(pid) = b.proposal.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            let ask = b.clone_plan.as_ref().ok_or_else(|| err("clone_plan_required", 400, "a clone-carry confirm needs the clone request (clonePlan)"))?;
+            return crate::clone_vault::confirm_for_proposal(vault, c, ask, pid, b.method.as_deref().unwrap_or(""), b.password.as_deref(), ingress);
+        }
     }
     // CL14: a clone-carry confirm is bound to the plan the daemon builds
     // from the request, and the sheet says what the plan does.

@@ -21183,15 +21183,21 @@ def carry_ask(path, target, choices, env_files):
     return a
 
 
-def carry_confirm(side, ask, pv):
-    """A fresh clone-carry confirm for exactly this plan (copies and/or
-    .env files): vault.sock on this computer, else the source's
-    /cli/clone/vault/confirm with the person's password."""
+def carry_confirm_call(side, ask, pv, proposal=None):
+    """One person confirm for exactly this plan (copies and/or .env files):
+    vault.sock on this computer, else the source's /cli/clone/vault/confirm
+    with the person's password. With `proposal` (0.46.1) the same single
+    confirm also approves that clone proposal: the answer carries
+    `approveToken` next to `token`."""
     local = side[0] == "local" and VSOCK and os.path.exists(VSOCK)
     reason = ((pv.get("secrets") or {}).get("confirm") or {}).get("reason") or "copy secrets in a clone"
+    if proposal:
+        reason = "approve the clone proposal and " + reason
     if local:
         methods = vault_sock("confirm/start", {"action": "clone-carry"}).get("methods") or []
         body = {"action": "clone-carry", "clonePlan": ask}
+        if proposal:
+            body["proposal"] = proposal
         if "local-auth" in methods:
             say("Approve on this Mac (Touch ID or your login password): %s" % reason)
             body["method"] = "local-auth"
@@ -21199,20 +21205,37 @@ def carry_confirm(side, ask, pv):
             body.update(method="vault-password", password=password("Vault password (%s): " % reason))
         else:
             raise Fail("no_confirm_method", "set a vault password first: k2 vault confirm-password set (from a terminal outside K2)", 3)
-        tok = vault_sock("confirm/finish", body)["token"]
+        r = vault_sock("confirm/finish", body)
         body.pop("password", None)
-        return tok
+        return r
     methods = ((pv.get("secrets") or {}).get("confirm") or {}).get("methods") or []
     body = dict(ask)
+    if proposal:
+        body["proposal"] = proposal
     if "connect-password" in methods:
         body.update(method="connect-password", password=password("Your password on %s (%s): " % (side[1], reason)))
     elif "vault-password" in methods:
         body.update(method="vault-password", password=password("Vault password on %s (%s): " % (side[1], reason)))
     else:
         raise Fail("no_confirm_method", "%s offers no password confirm for you (an Owner or Admin login, or a vault password, is needed)" % side[1], 3)
-    tok = call(side, "POST", "/cli/clone/vault/confirm", body)["token"]
+    r = call(side, "POST", "/cli/clone/vault/confirm", body)
     body.pop("password", None)
-    return tok
+    return r
+
+
+def carry_confirm(side, ask, pv):
+    """A fresh clone-carry confirm for exactly this plan."""
+    return carry_confirm_call(side, ask, pv)["token"]
+
+
+APPROVED = {}
+
+
+def approve_proposal(approve_token):
+    """Approve OPTS["proposal"] with a clone-approve token (once)."""
+    pid = OPTS["proposal"]
+    call(LOCAL, "POST", "/cli/clone-proposal/approve", {"proposal": pid, "confirmToken": approve_token})
+    APPROVED[pid] = True
 
 
 def threads_value():
@@ -21308,9 +21331,20 @@ def bundle_body(side, pv, choices, target, with_vault=True):
         body["secrets"] = choices
         body["own_box_move"] = bool(OPTS.get("own"))
     copies = with_vault and any(c == "copy" for c in choices.values())
+    if copies and not target:
+        raise Fail("clone_carry_unavailable", "the destination can't take a vault carry (older K2 or its vault is closed); choose blank or skip", 3)
+    pid = OPTS.get("proposal")
+    if pid and not APPROVED.get(pid):
+        # k2 clone approve (0.46.1): ONE confirm approves the proposal and,
+        # when this plan copies secrets or sends .env files, covers them too.
+        if copies or env:
+            r = carry_confirm_call(side, ask, pv, proposal=pid)
+            approve_proposal(r["approveToken"])
+            body["confirm_token"] = r["token"]
+        else:
+            approve_proposal(confirm(LOCAL, "clone-approve", pid, "approve " + (OPTS.get("proposalSummary") or pid)[:60]))
+        return body
     if copies or env:
-        if copies and not target:
-            raise Fail("clone_carry_unavailable", "the destination can't take a vault carry (older K2 or its vault is closed); choose blank or skip", 3)
         body["confirm_token"] = carry_confirm(side, ask, pv)
     return body
 
@@ -21502,12 +21536,15 @@ def approve(token):
         raise Fail("proposal_not_open", "%s is %s" % (p["id"], p["status"]), 3)
     say("%s: %s" % (p["id"], p["summary"]))
     say("asked by %s%s" % (p["proposedBy"], (": " + p["why"]) if p.get("why") else ""))
-    tok = confirm(LOCAL, "clone-approve", p["id"], "approve " + p["summary"][:60])
-    a = call(LOCAL, "POST", "/cli/clone-proposal/approve", {"proposal": p["id"], "confirmToken": tok})
-    run = a["run"]
-    o = run["options"]
+    # The approve happens inside the run, right before the bundle, with the
+    # same single confirm that covers copying secrets (bundle_body).
+    run = {"workspacePath": p.get("workspacePath"), "target": p["target"]}
+    if not run["workspacePath"]:
+        raise Fail("workspace_not_found", "the proposal's workspace isn't registered here any more", 3)
+    o = p.get("options") or {}
     OPTS.update({
-        "proposal": p["id"], "noThreads": not o.get("threads", True), "threadsSince": o.get("sinceDays"),
+        "proposal": p["id"], "proposalSummary": p.get("summary"),
+        "noThreads": not o.get("threads", True), "threadsSince": o.get("sinceDays"),
         "liveOnly": not o.get("allHistory", True), "dest": OPTS.get("dest") or o.get("dest"),
         "copy": [n for n, c in (o.get("secrets") or {}).items() if c == "copy"],
         "blank": [n for n, c in (o.get("secrets") or {}).items() if c == "blank"],
@@ -21516,7 +21553,8 @@ def approve(token):
     try:
         res = here(run["workspacePath"]) if run["target"] == "here" else push(run["workspacePath"])
     except Fail as e:
-        call(LOCAL, "POST", "/cli/clone-proposal/finish", {"proposal": p["id"], "ok": False, "detail": e.code})
+        if APPROVED.get(p["id"]):
+            call(LOCAL, "POST", "/cli/clone-proposal/finish", {"proposal": p["id"], "ok": False, "detail": e.code})
         raise
     call(LOCAL, "POST", "/cli/clone-proposal/finish", {"proposal": p["id"], "ok": True})
     res["proposal"] = p["id"]

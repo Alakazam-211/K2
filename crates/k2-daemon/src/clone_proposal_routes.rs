@@ -23,7 +23,10 @@
 //!   proposal id (Touch ID, the vault password or the Connect password;
 //!   60 s, single use) and the clone gate (`clone_gate::Door::
 //!   ProposalApprove`). Copying secrets then needs its own `clone-carry`
-//!   confirm on the clone itself (D1: Owner/Admin only).
+//!   confirm on the clone itself (D1: Owner/Admin only). 0.46.1: one
+//!   person check can mint both tokens (`/cli/clone/vault/confirm` or
+//!   `/cli/vault/confirm/finish` with `proposal`,
+//!   `clone_vault::confirm_for_proposal`), so the person confirms once.
 //! - Proposing posts one line on the workspace's main Thread for its
 //!   human; every decision is told to the agent (a `k2 msg`).
 //! - `options` hold names and choices only (never a value).
@@ -443,7 +446,7 @@ fn approve(who: &Who, body: &[u8], ingress: &str) -> R<J> {
     let ws = ws_by_id(&done.project_id);
     let copies = done.options.secrets.values().filter(|c| **c == SecretChoice::Copy).count();
     let hint = if copies > 0 {
-        "approved: run it now (k2 clone approve runs it for you). Copying secrets asks you to confirm once more."
+        "approved: run it now (k2 clone approve runs it for you). Copying secrets needs the clone-carry confirm; k2 clone approve and K2 get both in one confirm (/cli/clone/vault/confirm with proposal)."
     } else {
         "approved: run it now (k2 clone approve runs it for you)."
     };

@@ -389,6 +389,8 @@ pub fn cleanup_removed_user(conn: &Connection, username: &str) -> Result<(), Str
     delete_person(conn, &name)?;
     conn.execute("DELETE FROM push_devices WHERE username = ?1", params![name])
         .map_err(|e| format!("push device cleanup: {e}"))?;
+    // Their read cursors and mutes go too (thread-read-v1).
+    crate::read_state::delete_person(conn, &name)?;
     Ok(())
 }
 

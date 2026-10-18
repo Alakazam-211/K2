@@ -657,6 +657,7 @@ pub fn add_user_with_names(
         return Err("password must not be empty".to_string());
     }
     let hash = hash_password(password)?;
+    let seen = username.clone();
     update_store(|store| {
         // Enforce the stored password policy (K2SO #620).
         validate_password(password, &store.policy)?;
@@ -687,6 +688,16 @@ pub fn add_user_with_names(
         });
         Ok(())
     })?;
+    // thread-read-v1: a new teammate starts with everything read, not with
+    // the server's whole history unread.
+    if let Some(db) = crate::db::try_shared() {
+        let conn = db.lock();
+        if crate::read_state::tables_exist(&conn) {
+            if let Err(e) = crate::read_state::ensure_person(&conn, &seen.to_ascii_lowercase()) {
+                crate::log_debug!("[connect_users] read state for '{seen}' not seeded: {e}");
+            }
+        }
+    }
     crate::workspace::context_layers::refresh_users_roster_after_people_change();
     Ok(())
 }

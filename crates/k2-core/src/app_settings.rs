@@ -1152,7 +1152,7 @@ pub fn save(settings: &AppSettings) -> Result<(), String> {
     fs::write(&tmp, &json).map_err(|e| format!("write {tmp:?}: {e}"))?;
     fs::rename(&tmp, &file).map_err(|e| format!("rename {tmp:?} -> {file:?}: {e}"))?;
     restrict_mode(&file);
-    // Sew S27: `owner_display_name` is the `k2:owner` chat profile.
+    // Sew S27: `ownerAccounts` picks the `k2:owner` chat profile's name.
     crate::tool_hook::kick_reconcile();
     Ok(())
 }

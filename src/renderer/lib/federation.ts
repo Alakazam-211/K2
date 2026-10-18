@@ -137,6 +137,28 @@ export function trustedPeers(peers: FederationPeer[]): FederationPeer[] {
   return peers.filter((p) => p.trust === 'trusted')
 }
 
+/** Picker order (0.46.1): by the name shown, case-insensitively, then by
+ *  the address. The daemon sends pairing order (servers) and the other
+ *  server's sidebar order (agents). */
+function byShownName<T>(items: T[], key: (t: T) => [string, string]): T[] {
+  const cmp = (a: string, b: string): number => a.localeCompare(b, undefined, { sensitivity: 'base' })
+  return [...items].sort((x, y) => {
+    const [nx, ax] = key(x)
+    const [ny, ay] = key(y)
+    return cmp(nx, ny) || cmp(ax, ay)
+  })
+}
+
+/** Paired servers for a picker, A to Z by label (as the picker shows it). */
+export function sortPeersForPicker(peers: FederationPeer[]): FederationPeer[] {
+  return byShownName(peers, (p) => [p.label || p.subdomain || p.fingerprint.slice(0, 12), federatedPeerHost(p) || p.fingerprint])
+}
+
+/** A server's agents for a picker, A to Z by handle, then address. */
+export function sortRosterForPicker(agents: RosterAgent[]): RosterAgent[] {
+  return byShownName(agents, (a) => [a.agent, a.address])
+}
+
 /**
  * Whether a pinned peer routes to the given Connect-host hostname
  * (e.g. `rpm.k2.dev`, `rpm`, or `rpm.k2.dev:443`). Matching is by subdomain

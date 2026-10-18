@@ -17,6 +17,8 @@ import {
   fetchPeerRoster,
   formatAgentHost,
   federatedPeerHost,
+  sortPeersForPicker,
+  sortRosterForPicker,
   type RemoteConnectionEntry,
   type FederationPeer,
   type RosterAgent,
@@ -3726,7 +3728,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
       const res = await listFederationPeers()
       if (cancelled) return
       setFedPeersAvailable(res.available)
-      setFedPeers(res.available ? trustedPeers(res.data) : [])
+      setFedPeers(res.available ? sortPeersForPicker(trustedPeers(res.data)) : [])
     })()
     return () => {
       cancelled = true
@@ -3782,11 +3784,13 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
   const availableRosterAgents = useMemo(() => {
     if (!selectedPeer) return []
     const host = federatedPeerHost(selectedPeer)
-    if (!host) return rosterAgents
-    return rosterAgents.filter((a) => {
-      const addr = formatAgentHost(a.agent, host).toLowerCase()
-      return !linkedRemoteAddrs.has(addr)
-    })
+    if (!host) return sortRosterForPicker(rosterAgents)
+    return sortRosterForPicker(
+      rosterAgents.filter((a) => {
+        const addr = formatAgentHost(a.agent, host).toLowerCase()
+        return !linkedRemoteAddrs.has(addr)
+      }),
+    )
   }, [rosterAgents, selectedPeer, linkedRemoteAddrs])
 
   const handleAddLocal = useCallback(

@@ -53,7 +53,10 @@ import {
   peerMatchesHostname,
   federatedHostFromSubdomain,
   federatedPeerHost,
+  sortPeersForPicker,
+  sortRosterForPicker,
   type FederationPeer,
+  type RosterAgent,
 } from '@/lib/federation'
 
 const REMOTE_BASE = 'https://rpm.k2.dev' // secure + port 443 → no :port
@@ -852,5 +855,33 @@ describe('roster slug matcher (D9 / D20)', () => {
     const hits = matchRosterAgents('sales team', [sales])
     expect(hits).toHaveLength(1)
     expect(hits[0].agent).toBe('sales-team')
+  })
+})
+
+describe('picker order (0.46.1): A to Z by the name shown, the address breaking ties', () => {
+  it('sorts servers by label case-insensitively, then by host; falls back to subdomain', () => {
+    const peer = (label: string, subdomain: string, fp: string) =>
+      ({ fingerprint: fp, label, subdomain, trust: 'trusted' }) as unknown as FederationPeer
+    const peers = [
+      peer('zeta', 'zeta', 'fp-z'),
+      peer('Alpha', 'alpha-two', 'fp-a2'),
+      peer('', 'mango', 'fp-m'),
+      peer('alpha', 'alpha-one', 'fp-a1'),
+    ]
+    const sorted = sortPeersForPicker(peers).map((p) => p.fingerprint)
+    expect(sorted).toEqual(['fp-a1', 'fp-a2', 'fp-m', 'fp-z'])
+    // The input is not reordered in place.
+    expect(peers.map((p) => p.fingerprint)).toEqual(['fp-z', 'fp-a2', 'fp-m', 'fp-a1'])
+  })
+
+  it('sorts a server’s agents by handle case-insensitively, then by address', () => {
+    const agent = (handle: string, ws: string): RosterAgent => ({
+      workspace_id: ws,
+      workspace_name: handle,
+      agent: handle,
+      address: `${ws}::${handle}`,
+    })
+    const sorted = sortRosterForPicker([agent('sales', 'w3'), agent('Billing', 'w2'), agent('billing', 'w1'), agent('ops', 'w4')])
+    expect(sorted.map((a) => a.address)).toEqual(['w1::billing', 'w2::Billing', 'w4::ops', 'w3::sales'])
   })
 })

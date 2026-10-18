@@ -1562,6 +1562,14 @@ fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> 
     let mut v = job_summary(&j);
     // `commit` is srcCommit; `dirty` says whether --dirty changes rode along.
     v["dirty"] = j.dirty_sha256.is_some().into();
+    // The audit line: who asked for the cancel, and when.
+    if j.state == "cancelled" || j.reason.as_deref() == Some("cancel_requested") {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Some((by, at)) = store::last_job_event(&conn, &j.id, "job_cancel") {
+            v["cancelledBy"] = serde_json::json!({"by": by, "at": at});
+        }
+    }
     if j.state == "queued" {
         if let Some((pos, why)) = compute_ws::decision_for(&j.node_id).waiting.get(&j.id) {
             v["queue"] = serde_json::json!({"position": pos, "reason": why.code, "message": why.message});
@@ -1636,39 +1644,99 @@ fn job_receipt(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Val
     }))
 }
 
+/// The job has left the queue; a queued-only cancel (`ifState: queued`,
+/// what the CLI sends without `--force`) refuses it.
+pub(crate) const JOB_STARTED: &str = "job_started";
+
 fn job_cancel(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let v = json_body(body)?;
-    let j = job_for(who, s(&v, "job"))?;
-    if j.is_terminal() {
-        return Err(no("already_ended", 409, format!("job {} already ended ({})", compute::message::short(&j.id), j.state)));
-    }
-    if j.state == "queued" {
-        {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            let _ = store::set_job_state(&conn, &j.id, JobState::Cancelled, Some("cancelled"), None, compute::now());
-            store::record_event(&conn, &who.label(), "job_cancel", Some(&j.node_id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({"state": "queued"}));
-        }
-        compute_ws::finalize(&j.id);
-        compute_ws::notify_change();
-        return Ok(serde_json::json!({"ok": true, "state": "cancelled"}));
-    }
-    let sent = compute_ws::send_cancel(&j.node_id, &j.id, j.generation);
-    {
+    let queued_only = match s(&v, "ifState") {
+        None => false,
+        Some("queued") => true,
+        Some(_) => return Err(no(codes::BAD_REQUEST, 400, "ifState is \"queued\" (or leave it out to cancel in any state)")),
+    };
+    // Visibility (a passport sees only its workspace's jobs).
+    let seen = job_for(who, s(&v, "job"))?;
+    let by = who.label();
+    let short = compute::message::short(&seen.id).to_string();
+    let node_name = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::set_job_reason(&conn, &j.id, Some("cancel_requested"), None);
-        store::record_event(&conn, &who.label(), "job_cancel", Some(&j.node_id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({"state": j.state, "sent": sent}));
+        store::node_by_id(&conn, &seen.node_id).map(|n| n.name).unwrap_or_else(|| seen.node_id.clone())
+    };
+    // Decide under the placement lock on a fresh read: `kick` can't assign
+    // between the read and the write, and the queued path is a
+    // compare-and-set, so `cancelled` never lands on a job that runs.
+    enum Done {
+        Queued,
+        Sent(store::JobRow, bool),
     }
-    compute_ws::notify_change();
-    Ok(serde_json::json!({"ok": true, "state": j.state, "cancel": if sent { "sent" } else { "delivered when the node reconnects" }}))
+    let done = compute_ws::with_kick_lock(|| -> R<Done> {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let j = store::job_by_id(&conn, &seen.id).ok_or_else(|| no(codes::JOB_NOT_FOUND, 404, format!("no job '{short}'")))?;
+        if j.is_terminal() {
+            return Err(no("already_ended", 409, format!("job {short} already ended ({})", j.state)));
+        }
+        if j.state == "queued" && store::cancel_if_queued(&conn, &j.id, compute::now()).map_err(|e| no("internal", 500, e))? {
+            store::record_event(
+                &conn,
+                &by,
+                "job_cancel",
+                Some(&j.node_id),
+                Some(&j.workspace_id),
+                Some(&j.id),
+                serde_json::json!({"state": "queued", "by": by, "force": !queued_only}),
+            );
+            return Ok(Done::Queued);
+        }
+        let j = store::job_by_id(&conn, &seen.id).ok_or_else(|| no(codes::JOB_NOT_FOUND, 404, format!("no job '{short}'")))?;
+        if queued_only {
+            let since = j.started_at.or(j.assigned_at).map(|t| compute::message::duration(compute::now() - t));
+            return Err(no(
+                JOB_STARTED,
+                409,
+                format!(
+                    "job {short} {} on {node_name}{}; k2 compute cancel {short} --force stops it",
+                    if j.state == "assigned" { "was just assigned" } else { "started" },
+                    since.map(|d| format!(" {d} ago")).unwrap_or_default(),
+                ),
+            ));
+        }
+        let sent = compute_ws::send_cancel(&j.node_id, &j.id, j.generation);
+        store::set_job_reason(&conn, &j.id, Some("cancel_requested"), None);
+        store::record_event(
+            &conn,
+            &by,
+            "job_cancel",
+            Some(&j.node_id),
+            Some(&j.workspace_id),
+            Some(&j.id),
+            serde_json::json!({"state": j.state, "sent": sent, "by": by, "force": true}),
+        );
+        Ok(Done::Sent(j, sent))
+    })?;
+    match done {
+        Done::Queued => {
+            compute_ws::finalize(&seen.id);
+            compute_ws::notify_change();
+            Ok(serde_json::json!({"ok": true, "state": "cancelled", "was": "queued", "node": node_name, "by": by}))
+        }
+        Done::Sent(j, sent) => {
+            compute_ws::notify_change();
+            let ran = j.started_at.or(j.assigned_at).map(|t| compute::now() - t);
+            Ok(serde_json::json!({"ok": true, "state": j.state, "was": j.state, "node": node_name, "by": by,
+                "ranSecs": ran, "cancel": if sent { "sent" } else { "delivered when the node reconnects" }}))
+        }
+    }
 }
 
 fn job_retry(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let v = json_body(body)?;
     let j = job_for(who, s(&v, "job"))?;
     if !j.is_terminal() {
-        return Err(no("still_running", 409, "the job hasn't ended; cancel it first"));
+        let short = compute::message::short(&j.id);
+        return Err(no("still_running", 409, format!("the job hasn't ended; k2 compute cancel {short} --force first")));
     }
     let n = {
         let db = k2_core::db::shared();

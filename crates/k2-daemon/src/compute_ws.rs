@@ -704,7 +704,25 @@ fn apply_observation(
     }
     let now = compute::now();
     if state == JobState::Queued {
-        // The node refused the assign right now; it waits for a fresh offer.
+        // The node refused the assign. A cancel already asked for ends it
+        // here (the node never started it, so it would answer that Cancel
+        // with `unknown`, and re-queueing would run it later).
+        if job.reason.as_deref() == Some("cancel_requested") {
+            let _ = store::set_job_state(&conn, job_id, JobState::Cancelled, Some("cancelled"), None, now);
+            store::record_event(
+                &conn,
+                "node",
+                "job_end",
+                Some(node_id),
+                Some(&job.workspace_id),
+                Some(job_id),
+                serde_json::json!({"state": "cancelled", "reason": "cancelled", "refused": reason}),
+            );
+            drop(conn);
+            finalize(job_id);
+            return;
+        }
+        // Otherwise it waits for a fresh offer.
         let _ = store::set_job_state(&conn, job_id, JobState::Queued, reason, detail, now);
         return;
     }
@@ -1044,6 +1062,13 @@ pub fn decision_for(node_id: &str) -> scheduler::Decision {
     scheduler::decide(&queue, last.as_deref(), &load, &|ws| caps.get(ws).copied().unwrap_or(1), offer.as_ref(), pause.as_deref())
 }
 
+/// Run `f` holding the placement lock `kick` holds, so no placement can
+/// interleave (the cancel route re-reads and decides under it).
+pub fn with_kick_lock<T>(f: impl FnOnce() -> T) -> T {
+    let _k = KICK.lock().unwrap_or_else(|p| p.into_inner());
+    f()
+}
+
 /// Try to place one queued job on `node_id`.
 pub fn kick(node_id: &str) {
     let _k = KICK.lock().unwrap_or_else(|p| p.into_inner());
@@ -1096,7 +1121,9 @@ pub fn kick(node_id: &str) {
     let Some(job) = store::job_by_id(&conn, &id) else { return };
     let Some(plan) = job.plan() else { return };
     let fence = Fence { job_id: job.id.clone(), attempt: job.attempt as u32, generation: job.generation as u32, plan_digest: job.plan_digest.clone() };
-    if store::set_job_state(&conn, &job.id, JobState::Assigned, None, None, compute::now()).is_err() {
+    // Compare-and-set: the decision was read under a different DB lock,
+    // and a cancel may have ended the job since. Never assign over it.
+    if store::assign_if_queued(&conn, &job.id, compute::now()) != Ok(true) {
         return;
     }
     if tx.send(Out::Frame(Box::new(Frame::Assign(Assign { fence, plan })))).is_err() {
@@ -1168,4 +1195,64 @@ fn ensure_ticker() {
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k2_core::compute::proto::frames::{JobLimits, Plan};
+
+    fn job_on(conn: &rusqlite::Connection, id: &str, node: &str) -> store::JobRow {
+        let plan = Plan {
+            job_id: id.into(),
+            node_id: node.into(),
+            workspace_id: "ws".into(),
+            workspace_label: "ws".into(),
+            requested_by: "owner".into(),
+            argv: vec!["true".into()],
+            env: BTreeMap::new(),
+            cwd: None,
+            limits: JobLimits { max_secs: 60, cpu_millis: None, mem_bytes: None, disk_bytes: 1, log_cap_bytes: 1 },
+            src: None,
+            exclusive: false,
+            created_at: 10,
+            needs: Vec::new(),
+        };
+        store::insert_job(
+            conn,
+            &store::NewJob { plan: &plan, client_job_id: id, session_id: None, request_sha256: "h", detach: false, retry_interrupted: false },
+        )
+        .expect("insert job")
+    }
+
+    /// C11: a job whose cancel was asked for while assigned, and that the
+    /// node then refused, ends `cancelled` instead of going back to the
+    /// queue (where it would run later).
+    #[test]
+    fn a_cancel_requested_job_the_node_refuses_ends_cancelled() {
+        let _db = k2_core::db::scoped_for_test();
+        let db = k2_core::db::shared();
+        let job = {
+            let conn = db.lock();
+            store::insert_pending_node(&conn, "n1", "n1", "fp", "pem", &BTreeMap::new(), "owner", "123456", 1).expect("node");
+            let j = job_on(&conn, "aaaaaaaa0123456789abcdef01234567", "n1");
+            assert!(store::assign_if_queued(&conn, &j.id, 20).expect("assign"));
+            store::set_job_reason(&conn, &j.id, Some("cancel_requested"), None);
+            j
+        };
+        apply_observation("n1", &job.id, job.generation as u32, JobState::Queued, Some("parallel_full"), None, None, None);
+        let row = store::job_by_id(&db.lock(), &job.id).expect("row");
+        assert_eq!((row.state.as_str(), row.reason.as_deref()), ("cancelled", Some("cancelled")));
+        assert!(row.ended_at.is_some());
+        // Without a pending cancel, a refusal re-queues as before.
+        let other = {
+            let conn = db.lock();
+            let j = job_on(&conn, "bbbbbbbb0123456789abcdef01234567", "n1");
+            assert!(store::assign_if_queued(&conn, &j.id, 20).expect("assign"));
+            j
+        };
+        apply_observation("n1", &other.id, other.generation as u32, JobState::Queued, Some("parallel_full"), None, None, None);
+        let row = store::job_by_id(&db.lock(), &other.id).expect("row");
+        assert_eq!((row.state.as_str(), row.reason.as_deref()), ("queued", Some("parallel_full")));
+    }
 }

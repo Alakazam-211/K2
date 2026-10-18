@@ -254,12 +254,40 @@ expect_has "controller sees the pause" "$(k2 compute nodes)" "paused"
 JOB2="$(k2 compute run mini --detach -- echo after-resume 2>/dev/null)"
 sleep 1.5
 expect_has "paused node holds the job" "$(k2 compute get "$JOB2")" "local_paused"
+JOB3="$(k2 compute run mini --detach -- echo never-runs 2>/dev/null)"
+expect_eq "cancel of a queued job needs no --force" "$(k2 compute cancel "$JOB3")" "cancelled $JOB3 (was queued on mini)"
+expect_has "get names who cancelled" "$(k2 compute get "$JOB3")" "cancel asked by owner"
 k2 compute local resume >/dev/null
 for _ in $(seq 1 100); do
     k2 compute get "$JOB2" | grep -q ": done" && break
     sleep 0.2
 done
 expect_has "resume releases it" "$(k2 compute get "$JOB2")" ": done"
+expect_has "the cancelled job stayed cancelled" "$(k2 compute get "$JOB3")" ": cancelled"
+
+echo "== cancel a started job (A4: --force) =="
+JOBC="$(k2 compute run mini --detach -- sleep 30 2>/dev/null)"
+for _ in $(seq 1 100); do
+    k2 compute get "$JOBC" | grep -q ": running" && break
+    sleep 0.2
+done
+set +e
+k2 compute cancel "$JOBC" >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "cancel of a started job without --force exits 3" "$rc" "3"
+expect_has "job_started" "$(cat "$SANDBOX/err")" "job_started"
+expect_has "the refusal teaches --force" "$(cat "$SANDBOX/err")" "k2 compute cancel $JOBC --force"
+expect_has "it kept running" "$(k2 compute get "$JOBC")" ": running"
+set +e
+k2 compute cancel "$JOBC" --bogus >/dev/null 2>&1; rc=$?
+set -e
+expect_eq "an unknown cancel flag is a bad request" "$rc" "2"
+expect_has "--force after the id stops it" "$(k2 compute cancel "$JOBC" --force)" "stopping $JOBC (was running on mini for"
+for _ in $(seq 1 100); do
+    k2 compute get "$JOBC" | grep -q ": cancelled" && break
+    sleep 0.2
+done
+expect_has "the job ended cancelled" "$(k2 compute get "$JOBC")" ": cancelled"
 
 echo "== remove =="
 out="$(k2 compute node remove mini)"

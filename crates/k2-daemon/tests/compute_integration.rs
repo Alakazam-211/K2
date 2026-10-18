@@ -1181,3 +1181,72 @@ async fn a_queued_job_over_caps_is_failed_and_finalized() {
     stop_node(port, "dxa-caps", running).await;
     drop(env);
 }
+
+/// A4: cancel never races placement. A queued-only cancel (`ifState`)
+/// cancels a waiting job without the node ever seeing an assign, and is
+/// refused (409 job_started) for a running one, which keeps running; a
+/// plain cancel still stops a running job; `get` names who cancelled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn cancel_if_queued_never_kills_a_started_job() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "dxa-cancel");
+    let (agent, _) = passport(&ws);
+    let (running, _) = online_node_for(&env, port, "dxa-cancel", &ws).await;
+
+    // (1) queued: cancelled at once, never assigned.
+    node_pause(port, "dxa-cancel", "pause").await;
+    let mut body = run_body("dxa-cancel", &["true"], "client-dxa-cancel-0001");
+    body["noSource"] = json!(true);
+    let r = post(port, "/cli/compute/run", &agent, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let queued = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    let r = post(port, "/cli/compute/jobs/cancel", &agent, json!({"job": queued, "ifState": "queued"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    assert_eq!((v["state"].as_str(), v["was"].as_str(), v["node"].as_str()), (Some("cancelled"), Some("queued"), Some("dxa-cancel")), "{v}");
+    node_pause(port, "dxa-cancel", "resume").await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let fin = job_json(port, &agent, &queued).await;
+    assert_eq!(fin["state"], "cancelled", "{fin}");
+    assert!(fin["assignedAt"].is_null(), "never assigned: {fin}");
+    assert!(fin["cancelledBy"]["by"].as_str().is_some_and(|b| b.starts_with("agent:")), "{fin}");
+    let r = post(port, "/cli/compute/jobs/cancel", &agent, json!({"job": queued})).await;
+    assert_eq!((r.status, code(&r)), (409, "already_ended".to_string()));
+    let r = post(port, "/cli/compute/jobs/cancel", &agent, json!({"job": queued, "ifState": "running"})).await;
+    assert_eq!(r.status, 400, "{}", r.body);
+
+    // (2) running + ifState: refused, the job keeps running and ends normally.
+    let mut body = run_body("dxa-cancel", &["sh", "-c", "sleep 2; exit 6"], "client-dxa-cancel-0002");
+    body["noSource"] = json!(true);
+    let r = post(port, "/cli/compute/run", &agent, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let live = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    wait_state(port, &agent, &live, "running").await;
+    let r = post(port, "/cli/compute/jobs/cancel", &agent, json!({"job": live, "ifState": "queued"})).await;
+    assert_eq!(r.status, 409, "{}", r.body);
+    assert_eq!(code(&r), "job_started");
+    let hint = j(&r)["error"]["hint"].as_str().expect("hint").to_string();
+    assert!(hint.contains(&format!("k2 compute cancel {} --force", &live[..8])) && hint.contains("dxa-cancel"), "{hint}");
+    let (_, _, fin) = follow(port, &agent, &live).await;
+    assert_eq!((fin["state"].as_str(), fin["exitCode"].as_i64()), (Some("done"), Some(6)), "{fin}");
+
+    // (3) running, no ifState (--force): stopped on the node.
+    let mut body = run_body("dxa-cancel", &["sh", "-c", "sleep 30"], "client-dxa-cancel-0003");
+    body["noSource"] = json!(true);
+    let r = post(port, "/cli/compute/run", &agent, body).await;
+    let long = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    wait_state(port, &agent, &long, "running").await;
+    let r = post(port, "/cli/compute/jobs/cancel", OWNER, json!({"job": long})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    assert_eq!((v["was"].as_str(), v["cancel"].as_str(), v["by"].as_str()), (Some("running"), Some("sent"), Some("owner")), "{v}");
+    let (_, _, fin) = follow(port, &agent, &long).await;
+    assert_eq!(fin["state"], "cancelled", "{fin}");
+    assert_eq!(job_json(port, &agent, &long).await["cancelledBy"]["by"], "owner");
+
+    stop_node(port, "dxa-cancel", running).await;
+    drop(env);
+}

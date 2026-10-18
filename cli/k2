@@ -13943,7 +13943,10 @@ Agents:
   k2 compute get <job> [--json]
   k2 compute attach <job> [--since SEQ] [--raw]
   k2 compute logs <job> [--tail N] [--failures] [--raw]
-  k2 compute cancel <job>        k2 compute retry <job>
+  k2 compute cancel <job> [--force]
+                 a queued job is cancelled at once; one that already started
+                 (or was just assigned) needs --force (else job_started, exit 3)
+  k2 compute retry <job>
   k2 compute receipt <job>
 Owner / admin (refused for agents and inside K2 terminals):
   k2 compute preview on|off|status             turn the preview on for this server (owner)
@@ -14214,6 +14217,9 @@ elif verb == "get":
     if j.get("queue"):
         q = j["queue"]
         print("  queued: position %s — %s (%s)" % (q["position"], q["reason"], q["message"]))
+    cb = j.get("cancelledBy")
+    if isinstance(cb, dict):
+        print("  cancel asked by %s at %s" % (cb.get("by"), time.strftime("%H:%M:%S", time.localtime(cb.get("at") or 0))))
 elif verb == "receipt":
     print(json.dumps(v.get("receipt"), indent=2))
     print("verified: %s  (%s)" % ("yes" if v.get("verified") else "NO", v.get("proves")))
@@ -14253,7 +14259,7 @@ _compute_follow() {
     local cursor=0 query state_file fails=0 lost=0
     state_file="$(mktemp -t k2-compute-XXXXXX)"
     # shellcheck disable=SC2064
-    trap "rm -f '$state_file'; echo '[k2 compute] detached; the job keeps running. k2 compute attach $job | k2 compute cancel $job' >&2; exit 130" INT
+    trap "rm -f '$state_file'; echo '[k2 compute] detached; the job keeps running. k2 compute attach ${job:0:8} | k2 compute cancel ${job:0:8} --force' >&2; exit 130" INT
     case "$start" in
         seq:*) query="since_seq=${start#seq:}" ;;
         *) cursor="$start"; query="" ;;
@@ -15072,14 +15078,49 @@ cmd_compute() {
             _compute_follow "$job" "$raw" "seq:${since:-0}"
             ;;
         logs) cmd_compute_logs "$@" ;;
-        cancel|retry)
-            [ -n "${1:-}" ] || { echo "usage: k2 compute $sub <job>" >&2; exit 2; }
-            _compute_call POST "/cli/compute/jobs/$sub" "$(_compute_json K2_CJ_job="$1")"
+        cancel)
+            # 0.46.1: a job that already left the queue is stopped only with
+            # --force (the CLI sends ifState: queued without it; 409
+            # job_started → exit 3). --force goes before or after the id.
+            local cjob="" force=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --force|-f) force=1; shift ;;
+                    --json) shift ;;
+                    -*) echo "usage: k2 compute cancel <job> [--force] (unknown flag '$1')" >&2; exit 2 ;;
+                    *)
+                        [ -z "$cjob" ] || { echo "usage: k2 compute cancel <job> [--force] (one job)" >&2; exit 2; }
+                        cjob="$1"; shift ;;
+                esac
+            done
+            [ -n "$cjob" ] || { echo "usage: k2 compute cancel <job> [--force]" >&2; exit 2; }
+            local if_state="queued"
+            [ "$force" = "1" ] && if_state=""
+            _compute_call POST /cli/compute/jobs/cancel "$(_compute_json K2_CJ_job="$cjob" K2_CJ_ifState="$if_state")"
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            printf '%s' "$_CP_BODY" | K2_CP_JOB="$cjob" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+job = os.environ["K2_CP_JOB"][:8]
+node = v.get("node") or "?"
+def took(s):
+    if s is None: return ""
+    s = int(s)
+    return " for %dm%02ds" % (s // 60, s % 60)
+if v.get("state") == "cancelled" and v.get("was") == "queued":
+    print("cancelled %s (was queued on %s)" % (job, node))
+elif "cancel" in v:
+    print("stopping %s (was %s on %s%s; cancel %s)" % (job, v.get("was") or v.get("state"), node, took(v.get("ranSecs")), v["cancel"]))
+else:
+    print(v.get("state", "ok"))'
+            ;;
+        retry)
+            [ -n "${1:-}" ] || { echo "usage: k2 compute retry <job>" >&2; exit 2; }
+            _compute_call POST /cli/compute/jobs/retry "$(_compute_json K2_CJ_job="$1")"
             printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
-if "cancel" in v: print("cancel %s (job was %s)" % (v["cancel"], v["state"]))
-elif "job" in v: print("retrying as attempt %s: k2 compute attach %s" % (v["job"]["attempt"], v["job"]["short"]))
+if "job" in v: print("retrying as attempt %s: k2 compute attach %s" % (v["job"]["attempt"], v["job"]["short"]))
 else: print(v.get("state", "ok"))'
             ;;
         receipt)
@@ -31158,6 +31199,13 @@ RUN
   Env starts empty: PATH, HOME, CARGO_*, TMPDIR, CI=1 and your --env
   NAME=value. No K2 token, socket or port ever reaches a job.
 
+CANCEL
+  k2 compute cancel <job> cancels a QUEUED job at once. A job that already
+  started (or was just assigned) is refused with job_started (exit 3) and
+  the line to stop it: k2 compute cancel <job> --force. So a cancel you
+  meant for a waiting job never kills one that just began. The event log
+  and k2 compute get record who asked for the cancel.
+
 TOOLCHAINS (what the job needs installed)
   Say it, and the node installs it into its own home before the job
   starts (cached for the next job; no root):
@@ -31190,7 +31238,8 @@ LOGS ARE DATA
 EXIT CODES
   0–255  the command's own exit (a failing test is never exit 3)
   3      infra: node_offline, node_paused, not_granted, compute_off,
-         queue_full, owner_only, timeout, cancelled, interrupted, unknown
+         queue_full, owner_only, timeout, cancelled, interrupted, unknown,
+         job_started (cancel without --force on a started job)
   2      bad usage
 
 RECEIPTS

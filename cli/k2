@@ -6885,6 +6885,12 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app grant copy-host <app> [--dry-run] [--json]
                                         Owner only. Everyone with the box login gets the same access on <app>
                                         (an App published after 0.45.5 starts with nobody).
+  k2 app grant <app> --kind guests-rooms [--room <handle>]... [--revoke]
+                                        Owner only. <app> sets its OWN guests' rooms with its own pass
+                                        (no owner token): its --room rooms plus its own, never above a role.
+  k2 app guest rooms <app> <user> [set <room,...>]
+                                        Read/set one guest's rooms on <app> (owner; an agent within the grant).
+                                        k2 app guest --help.
   k2 app hydra [on|off] [--json]       OIDC issuer sidecar (Linux; leftover)
   k2 app token create --name vercel --agent sales [--caps thread:read,thread:post,files:read]
                                         Mint platform k2skn_ pass (secret once; ≥1 --agent; no user)
@@ -9375,6 +9381,158 @@ for p in ps:
     print("%s  %-7s %s  expires %s  caps %s" % (p["id"][:8], state, p["prefix"], time.strftime("%Y-%m-%d %H:%M", time.localtime(p["expiresAt"])), ", ".join(p.get("caps") or []) or "none"))'
 }
 
+# ── RS-A15 guests:rooms (0.46.1) ─────────────────────────────────────
+# k2 app grant <app> --kind guests-rooms, k2 app guest rooms <app> <user>.
+# Exit codes: 0 done, 2 usage, 3 refused or infra.
+
+_app_guest_rooms_usage() {
+    cat <<'EOF'
+k2 app — guests' rooms (RS-A15, 0.46.1): an App sets its own guests' rooms
+without the owner token.
+
+  k2 app grant <app> --kind guests-rooms [--room <handle>]... [--json]
+                                       Owner only. Lets <app> set its own
+                                       guests' rooms with its own pass
+                                       (GET|POST /cli/skin/guests/rooms, the
+                                       server SDK's k2.asApp().guests.*). It may
+                                       hand out the --room rooms plus its own
+                                       room, never above a guest's role.
+                                       Again = replace the rooms. Audited.
+  k2 app grant <app> --kind guests-rooms --revoke
+                                       Take it back (an agent may, for its own
+                                       App: it only narrows).
+  k2 app grants <app> [--json]         The App's owner grants.
+  k2 app guest rooms <app> <user> [--json]
+                                       One guest's rooms on <app> and its role.
+  k2 app guest rooms <app> <user> set <room,room,...|-> [--json]
+                                       Set them ("-" or "" = no rooms). The
+                                       owner: any room. An agent: its own
+                                       workspace's App, within the owner's
+                                       grant. Idempotent; 60 calls a minute per
+                                       App; every change audited (k2 app history).
+
+  <app> = an App id, a published service id, <workspace>/<name> or a name.
+EOF
+}
+
+_app_guest_rooms_print() {
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+rooms = ", ".join(v.get("roomHandles") or []) or "no rooms"
+role = (" role " + v["role"]) if v.get("role") else " (Thread-only rooms)"
+state = "" if v.get("enabled", True) else "  [disabled on this App]"
+line = "%s on %s: %s%s%s" % (v.get("username"), v.get("app"), rooms, role, state)
+if "changed" in v and "before" in v:
+    if v.get("changed"):
+        line += "  (was: %s)" % (", ".join(v.get("beforeHandles") or []) or "no rooms")
+    else:
+        line += "  (unchanged)"
+print(line)'
+}
+
+cmd_app_grant_kind() {
+    local app="" kind="" revoke=0 json_out=0 rooms_csv=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --kind) kind="${2:-}"; shift 2 ;;
+            --kind=*) kind="${1#--kind=}"; shift ;;
+            --room|--agent) rooms_csv="${rooms_csv:+$rooms_csv,}${2:-}"; shift 2 ;;
+            --room=*) rooms_csv="${rooms_csv:+$rooms_csv,}${1#--room=}"; shift ;;
+            --revoke) revoke=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_guest_rooms_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    if [ -z "$app" ] || [ -z "$kind" ]; then
+        echo "usage: k2 app grant <app> --kind guests-rooms [--room <handle>]... [--revoke]" >&2
+        exit 2
+    fi
+    if [ "$revoke" = 1 ]; then
+        _compute_call POST /cli/app/grant/revoke "$(_compute_json K2_CJ_app="$app" K2_CJ_kind="$kind")"
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+a = v["app"]
+print("%s: guests-rooms grant %s" % (a.get("handle") or a.get("serviceId"), "revoked" if v.get("revoked") else "was not there"))'
+        return 0
+    fi
+    local rooms_j
+    rooms_j="$(K2_GR_ROOMS="$rooms_csv" python3 -c 'import json,os; print(json.dumps([r.strip() for r in os.environ["K2_GR_ROOMS"].split(",") if r.strip()]))')"
+    _compute_call POST /cli/app/grant "$(_compute_json K2_CJ_app="$app" K2_CJ_kind="$kind" K2_CJ_rooms_j="$rooms_j")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+a, g = v["app"], v["grant"]
+print("%s may set its own guests rooms: %s (never above a guest role)" % (a.get("handle") or a.get("serviceId"), ", ".join(g.get("handsOut") or []) or "its own room"))
+print("  its server: GET|POST /cli/skin/guests/rooms with its own pass (k2.asApp().guests.setRooms)")'
+}
+
+cmd_app_grants() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_guest_rooms_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app grants <app> [--json]" >&2; exit 2; }
+    _compute_call GET /cli/app/grants "app=$(urlencode "$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+a = v["app"]
+gs = v.get("grants") or []
+if not gs:
+    print("%s: no owner grants (k2 app grant %s --kind guests-rooms, the owner)" % (a.get("handle"), a.get("name"))); sys.exit(0)
+for g in gs:
+    print("%s  %s  hands out %s  by %s %s" % (a.get("handle"), g["kind"], ", ".join(g.get("handsOut") or []), g.get("grantedBy"),
+        time.strftime("%Y-%m-%d %H:%M", time.localtime(g["grantedAt"]))))'
+}
+
+cmd_app_guest() {
+    local what="${1:-}"
+    case "$what" in
+        rooms) shift ;;
+        -h|--help|"") _app_guest_rooms_usage; return 0 ;;
+        *) echo "usage: k2 app guest rooms <app> <user> [set <room,...>]" >&2; exit 2 ;;
+    esac
+    local app="" user="" set_mode=0 rooms_csv="" json_out=0 have_rooms=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_guest_rooms_usage; return 0 ;;
+            set) set_mode=1; shift
+                if [ $# -gt 0 ] && [ "${1:-}" != "--json" ]; then rooms_csv="$1"; have_rooms=1; shift; fi ;;
+            -*) [ "$1" = "-" ] && [ "$set_mode" = 1 ] && { rooms_csv=""; have_rooms=1; shift; continue; }
+                echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$user" ]; then user="$1"; else echo "unexpected: $1" >&2; exit 2; fi; shift ;;
+        esac
+    done
+    if [ -z "$app" ] || [ -z "$user" ]; then
+        echo "usage: k2 app guest rooms <app> <user> [set <room,...>]" >&2
+        exit 2
+    fi
+    if [ "$set_mode" = 1 ]; then
+        [ "$have_rooms" = 1 ] || { echo "usage: k2 app guest rooms <app> <user> set <room,room,...>   (- for no rooms)" >&2; exit 2; }
+        [ "$rooms_csv" = "-" ] && rooms_csv=""
+        local rooms_j
+        rooms_j="$(K2_GR_ROOMS="$rooms_csv" python3 -c 'import json,os; print(json.dumps([r.strip() for r in os.environ["K2_GR_ROOMS"].split(",") if r.strip()]))')"
+        _compute_call POST /cli/app/guest/rooms "$(_compute_json K2_CJ_app="$app" K2_CJ_username="$user" K2_CJ_rooms_j="$rooms_j")"
+    else
+        _compute_call GET /cli/app/guest/rooms "app=$(urlencode "$app")&username=$(urlencode "$user")"
+    fi
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_guest_rooms_print
+}
+
 cmd_app() {
     case "${1:-}" in
         validate) shift; cmd_app_validate "$@" ;;
@@ -9411,6 +9569,17 @@ cmd_app() {
         audit) shift; cmd_app_audit "$@" ;;
         quota|quotas) shift; cmd_app_quota "$@" ;;
         remote-pass) shift; cmd_app_remote_pass "$@" ;;
+        # RS-A15: `grant <app> --kind …` is an App's own owner grant; the
+        # list|add|rm|copy-host forms stay the guest-login grants (cmd_skin).
+        grant|grants)
+            case "${2:-}" in
+                ""|list|add|create|rm|remove|delete|revoke|copy-host|copyhost|-h|--help) cmd_skin "$@" ;;
+                *)
+                    if [ "$1" = grants ]; then shift; cmd_app_grants "$@"; else shift; cmd_app_grant_kind "$@"; fi
+                    ;;
+            esac
+            ;;
+        guest) shift; cmd_app_guest "$@" ;;
         door) shift; _app_door_usage ;;
         grace|crossover) shift; _app_grace_usage ;;
         egress) shift; cmd_app_egress "$@" ;;
@@ -26514,6 +26683,28 @@ cmd_schema() {
       ]
     },
     {
+      "name": "app grant guests-rooms",
+      "usage": "k2 app grant <app> --kind guests-rooms [--room <handle>]... [--revoke] [--json]",
+      "description": "Owner only (RS-A15, 0.46.1). Lets <app> read and set its OWN guests' rooms with its own App pass (GET|POST /cli/skin/guests/rooms; the server SDK's k2.asApp().guests.rooms / guests.setRooms), so its server never carries the owner token. It may hand out the --room rooms plus its own room, never a room above a guest's role, never the owner, Connect users or another App's guests. Granting again replaces the rooms. --revoke takes it back (an agent may revoke its own App's: it narrows). Audited (k2 app history).",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--kind", "arg": "guests-rooms", "description": "The grant kind."},
+        {"name": "--room", "arg": "handle", "description": "A room the App may hand its guests (repeatable)."},
+        {"name": "--revoke", "arg": null, "description": "Take the grant back."},
+        {"name": "--json", "arg": null, "description": "Print the daemon body."}
+      ]
+    },
+    {
+      "name": "app guest rooms",
+      "usage": "k2 app guest rooms <app> <user> [set <room,room,...|->] [--json]",
+      "description": "Read or set one guest's rooms on <app> (RS-A15). The owner acts with owner rights (any room); an agent acts on its own workspace's App only while the owner's guests-rooms grant stands, and only within it. Never above the guest's role (a role guest keeps its role's rooms). Idempotent (the same rooms are a no-op), 60 calls a minute per App, every change audited with before and after. Other Apps' guests and unknown names are the same not_found.",
+      "args": [{"name": "app", "required": true}, {"name": "user", "required": true}],
+      "flags": [
+        {"name": "set", "arg": "rooms", "description": "Comma-separated handles or ids; - for no rooms."},
+        {"name": "--json", "arg": null, "description": "Print AppGuestRooms {ok,app,username,rooms,roomHandles,role,enabled,changed}."}
+      ]
+    },
+    {
       "name": "app hydra",
       "usage": "k2 app hydra [on|off] [--json]",
       "description": "OIDC issuer sidecar (Linux leftover). Still owner even when Agent-tab Apps is on.",
@@ -29009,6 +29200,28 @@ PER-APP LOGINS (0.45.5)
   Isolation for a person only holds when they have no box login (User
   Access → host switch off). Box login off still ends ALL their sessions.
   Removing an App (`k2 publish rm`) ends its passes; its grants stay.
+
+GUESTS' ROOMS FROM THE APP (RS-A15, 0.46.1; no owner token)
+  An App resets its OWN guests' rooms (say at login) with its own pass:
+    owner, once:  k2 app grant <app> --kind guests-rooms [--room acme]...
+    the App:      GET  /cli/skin/guests/rooms?username=dana
+                  POST /cli/skin/guests/rooms {"username":"dana","rooms":["acme"]}
+                  Authorization: Bearer <its App pass: K2_PASS_FILE in the
+                  wall, or its remote pass (k2 app token rotate) elsewhere>
+                  SDK: await k2.asApp().guests.setRooms({username, rooms})
+    → 200 {"ok":true,"app":"<service id>","username":"dana","rooms":[ids],
+           "roomHandles":["acme"],"role":null,"enabled":true,"changed":true}
+  Rules: only this App's guests (anyone else, Connect users included, is
+  404 not_found); only the --room rooms plus the App's own (403
+  outside_app_rooms); never above a role (403 above_role; a role guest
+  keeps its role's rooms, 409 has_role); the same rooms = changed:false;
+  60 calls a minute per App (429 rate_limited, retryAfterMs); no grant =
+  403 grant_required; a guest's pass, a platform pass or the owner token =
+  403 app_pass_required. Every change is audited (k2 app history <app>).
+  Agents, end to end within the grant: k2 app guest rooms <app> <u> [set a,b].
+  Gardens: k2.guests.rooms / k2.guests.setRooms({app, username, rooms}) for
+  any local App (cap guests:rooms); every write asks you on K2's own sheet.
+  This replaces POST /cli/skin/users/rooms with the owner token.
 
 BYO BFF (not --skin)
   Same permission system as official --skin. Same Apps roster,
@@ -56217,7 +56430,16 @@ EOF
         # Exact match only. Does not steal app-update or update --app.
         case "${2:-}" in
             # App runtime verbs (prd-k2-app-runtime-v1 stage 1) own their --help.
-            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|egress|approvals|approve|deny)
+            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|egress|approvals|approve|deny|guest)
+                shift; cmd_app "$@"
+                ;;
+            # RS-A15: `k2 app grant <app> --kind …` owns its --help too.
+            grant)
+                case "${3:-}" in
+                    ""|list|add|create|rm|remove|delete|revoke|copy-host|copyhost|-h|--help)
+                        if _wants_help "${@:2}"; then _skin_usage; _app_rt_usage >&2; exit 0; fi
+                        ;;
+                esac
                 shift; cmd_app "$@"
                 ;;
             *)

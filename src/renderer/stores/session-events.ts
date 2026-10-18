@@ -319,6 +319,38 @@ export interface NotifyPrefsChangedEvent {
   kind: 'notify_prefs_changed'
 }
 
+/** APP-LEVEL (thread-read-v1, 0.46.1) — one conversation's read state for
+ *  THIS person changed: they read or muted it on any device, someone else
+ *  posted, a card was answered / voided / expired, or a Thread moved. The
+ *  daemon sends it only to sockets of the same person. The frame is the
+ *  conversation's whole state plus the person's badge totals: it replaces
+ *  what the client holds for `id` (`stores/unread.ts`). `projectId` is a
+ *  Thread's workspace (`projects.id`); project chats have none. */
+export interface ReadStateFrame {
+  id: string
+  projectId?: string
+  /** = `lastReadSeq`. */
+  seq: number
+  lastReadSeq: number
+  lastSeq: number
+  /** Capped at 100 by the daemon ("99+"). */
+  unread: number
+  /** Pending choice / secret cards: only answering or dismissing clears it. */
+  waiting: number
+  muted: boolean
+  mutedUntil?: number
+  total: number
+  waitingTotal: number
+}
+
+export interface ThreadReadEvent extends ReadStateFrame {
+  kind: 'thread_read'
+}
+
+export interface ProjectReadEvent extends ReadStateFrame {
+  kind: 'project_read'
+}
+
 /** APP-LEVEL — a remote drive attempt was refused (owner audit). Ignored:
  *  no client surface shows it yet. Fields are snake_case on the wire. */
 export interface RemoteSessionAccessDeniedEvent {
@@ -782,6 +814,8 @@ export type SessionEventMessage =
   | DomainsChangedEvent
   | FederationPeersChangedEvent
   | NotifyPrefsChangedEvent
+  | ThreadReadEvent
+  | ProjectReadEvent
   | RemoteSessionAccessDeniedEvent
   | SewChangedEvent
   | RoomMembersChangedEvent
@@ -1266,6 +1300,9 @@ type DomainsChangedHandler = (e: DomainsChangedEvent) => void
 type FederationPeersChangedHandler = (e: FederationPeersChangedEvent) => void
 // Thread push §5.5 — Settings → Notifications' refetch signal.
 type NotifyPrefsChangedHandler = () => void
+// thread-read-v1 — the unread store's live state (`thread_read` /
+// `project_read`, the whole frame).
+export type ReadStateChangedHandler = (e: ThreadReadEvent | ProjectReadEvent) => void
 
 type SessionActivityHandler = (e: SessionActivityChangedEvent) => void
 
@@ -1314,6 +1351,7 @@ interface AppBusHandlers {
   domainsChanged: Set<DomainsChangedHandler>
   federationPeersChanged: Set<FederationPeersChangedHandler>
   notifyPrefsChanged: Set<NotifyPrefsChangedHandler>
+  readStateChanged: Set<ReadStateChangedHandler>
   activeChanged: Set<ActiveChangedHandler>
   zenChanged: Set<ZenChangedHandler>
   sourcesChanged: Set<SourcesChangedHandler>
@@ -1364,6 +1402,7 @@ function createBusState(scopeId: string): BusState {
       domainsChanged: new Set(),
       federationPeersChanged: new Set(),
       notifyPrefsChanged: new Set(),
+      readStateChanged: new Set(),
       activeChanged: new Set(),
       zenChanged: new Set(),
       sourcesChanged: new Set(),
@@ -1681,6 +1720,14 @@ export function onNotifyPrefsChanged(scope: ServerScope, fn: NotifyPrefsChangedH
   return addHandler(busFor(scope).handlers.notifyPrefsChanged, fn)
 }
 
+/** thread-read-v1 — subscribe to APP-LEVEL `thread_read` / `project_read`
+ *  on `scope`'s server: this person's read state for one conversation (the
+ *  whole frame, with the person's totals). `stores/unread.ts` is the
+ *  consumer. */
+export function onReadStateChanged(scope: ServerScope, fn: ReadStateChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.readStateChanged, fn)
+}
+
 /** Home M4: the server's whole Active set changed (`active_changed`).
  *  Fed by a pinned room's carrier socket; the window's own Active set
  *  stays on `subscribeToActiveState` → `useActiveStore`. */
@@ -1844,6 +1891,12 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   notify_prefs_changed: (h) => {
     for (const fn of h.notifyPrefsChanged) fn()
+  },
+  thread_read: (h, m) => {
+    for (const fn of h.readStateChanged) fn(m)
+  },
+  project_read: (h, m) => {
+    for (const fn of h.readStateChanged) fn(m)
   },
   zen_changed: (h) => {
     for (const fn of h.zenChanged) fn()

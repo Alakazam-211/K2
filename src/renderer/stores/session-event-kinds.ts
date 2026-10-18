@@ -167,6 +167,12 @@ export const SESSION_EVENT_ROUTES = {
     class: 'app',
     ignored: 'Gardens call app.self when they draw; the Apps page refetches on publish_services_changed.',
   },
+  // thread-read-v1 (0.46.1): this person's read state for one Thread /
+  // project chat, sent only to the same person's sockets. The unread store
+  // (`stores/unread.ts`) patches its entry and totals. Not carried: the
+  // store reads the window's own server.
+  thread_read: { class: 'app', app: true },
+  project_read: { class: 'app', app: true },
 } as const satisfies { readonly [K in SessionEventMessage['kind']]: SessionEventRoute }
 
 type Routes = typeof SESSION_EVENT_ROUTES

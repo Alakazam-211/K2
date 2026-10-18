@@ -12,7 +12,8 @@
 // built-in `themes/basic.toml` and its `FONT_FAMILIES` table.
 
 /** Colour tokens, the same keys in `colors.light` and `colors.dark`.
- *  (Decision 9, 2026-10-04: no unread tracking, so `idle`, not `unread`.) */
+ *  (Decision 9, 2026-10-04: no unread tracking, so `idle`, not `unread`.
+ *  `ok` (0.46.1) colours a success mark: a finished turn's ✓.) */
 export const ZEN_COLOR_TOKENS = [
   'canvas',
   'surface',
@@ -29,6 +30,7 @@ export const ZEN_COLOR_TOKENS = [
   'working',
   'idle',
   'needs-you',
+  'ok',
   'danger',
 ] as const
 export type ZenColorToken = (typeof ZEN_COLOR_TOKENS)[number]
@@ -141,6 +143,7 @@ export const ZEN_DEFAULT_COLORS: Record<'light' | 'dark', Record<ZenColorToken, 
     working: '#2563eb',
     idle: '#a39b90',
     'needs-you': '#c27c0e',
+    ok: '#2f855a',
     danger: '#c53030',
   },
   dark: {
@@ -159,6 +162,7 @@ export const ZEN_DEFAULT_COLORS: Record<'light' | 'dark', Record<ZenColorToken, 
     working: '#60a5fa',
     idle: '#7d766d',
     'needs-you': '#e0a43a',
+    ok: '#5cc08a',
     danger: '#f07167',
   },
 }

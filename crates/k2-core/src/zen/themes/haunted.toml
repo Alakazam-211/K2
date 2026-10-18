@@ -30,6 +30,7 @@ bubble-agent-text = "#e9dcc4"
 working = "#e9dcc4"
 idle = "#7d7266"
 needs-you = "#c44a2c"
+ok = "#8a9a5b"
 danger = "#d0503c"
 
 [shape]

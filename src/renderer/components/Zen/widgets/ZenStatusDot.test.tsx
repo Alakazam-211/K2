@@ -48,6 +48,9 @@ describe('ZenStatusDot', () => {
     const done = dot({ activity: 'idle', unseen: 'done' })
     expect(done.getAttribute('aria-label')).toBe('Done (not viewed yet)')
     expect(done.querySelector('path')?.getAttribute('d')).toBe('M3.7 6.2 L5.3 7.8 L8.4 4.4')
+    // 0.46.1: done is drawn in Zen's own ok colour, not the working blue.
+    expect(done.querySelector('circle')?.getAttribute('stroke')).toBe('var(--zen-ok)')
+    expect(done.querySelector('path')?.getAttribute('stroke')).toBe('var(--zen-ok)')
   })
 
   it('working pulses, needs you is filled, both labelled; circles stay round', () => {

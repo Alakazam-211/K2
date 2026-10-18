@@ -60,6 +60,7 @@ export const THREAD_ZEN_DESKTOP_TOKENS = {
   '--zen-working': 'var(--color-status-working)',
   '--zen-idle': 'var(--color-text-muted)',
   '--zen-needs-you': 'var(--color-status-needs-you)',
+  '--zen-ok': 'var(--color-status-ok)',
   '--zen-danger': 'var(--color-status-error)',
   // Zen's default shape (zen-tokens), not the Style's square corners.
   '--zen-radius': '14px',

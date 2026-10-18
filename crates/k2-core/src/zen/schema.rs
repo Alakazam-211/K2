@@ -50,7 +50,8 @@ pub const MIN_CONTRAST: f64 = 3.0;
 
 /// Colour tokens, the same keys in `[colors.light]` and `[colors.dark]`.
 /// Decision 9 (2026-10-04): no unread tracking, so there is no `unread`
-/// colour; `idle` colours an agent that is not working.
+/// colour; `idle` colours an agent that is not working. `ok` (0.46.1)
+/// colours a success mark: a finished turn's ✓, a passing check.
 pub const COLOR_TOKENS: &[&str] = &[
     "canvas",
     "surface",
@@ -67,6 +68,7 @@ pub const COLOR_TOKENS: &[&str] = &[
     "working",
     "idle",
     "needs-you",
+    "ok",
     "danger",
 ];
 

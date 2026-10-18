@@ -327,7 +327,7 @@ export function ZenStatusDot({ row, size = 10 }: { row: ZenAgentRow; size?: numb
   const state = zenDotState(row)
   if (state === null) return null
   if (state === 'failed' || state === 'done') {
-    const ink = state === 'failed' ? 'var(--zen-danger)' : 'var(--zen-working)'
+    const ink = state === 'failed' ? 'var(--zen-danger)' : 'var(--zen-ok)'
     return (
       <svg
         role="img"

@@ -275,6 +275,12 @@ export function ThreadZenStyles(): JSX.Element {
   return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS + THREAD_FOOTER_FADE_CSS}</style>
 }
 
+/** The message list's padding and the space between messages (the
+ *  desktop Thread, and the chats that wear its look: a ticket's discussion,
+ *  the project chat). */
+export const THREAD_LIST_PADDING = '14px var(--zen-gap) 8px'
+export const THREAD_LIST_GAP = 10
+
 /** The empty Thread's line (Zen and the desktop Thread). */
 export const zenEmptyThreadText = (label: string): string => `Message ${label}. It reads this like a text.`
 
@@ -309,6 +315,7 @@ export function ThreadBubble({
   secret,
   nowSec,
   onHandoffDecide,
+  footer,
 }: {
   item: OverlayThreadItem
   /** The viewer's own post: right side, accent bubble. */
@@ -326,6 +333,9 @@ export function ThreadBubble({
   /** A handoff card's decision (`/cli/vault/incoming/decide` on the room's
    *  server). Absent: this window's own server. */
   onHandoffDecide?: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>
+  /** A line under "author · time", on the same side (the project chat's
+   *  "delivered to …"). Absent (the Thread): nothing is drawn. */
+  footer?: ReactNode
 }): JSX.Element {
   const kind = item.doc.kind
   const text = threadBubbleText(item)
@@ -423,6 +433,19 @@ export function ThreadBubble({
       >
         <span data-thread-author="">{author}</span> · <span data-thread-time="">{timeLabel}</span>
       </span>
+      {footer != null && (
+        <span
+          data-zen-message-footer=""
+          style={{
+            alignSelf: mine ? 'flex-end' : 'flex-start',
+            padding: '0 6px',
+            fontSize: '0.72em',
+            color: 'var(--zen-text-muted)',
+          }}
+        >
+          {footer}
+        </span>
+      )}
     </div>
   )
 }
@@ -642,6 +665,7 @@ export function ThreadSendButton({
   label = 'Send',
   title = 'Send (Enter)',
   size = 32,
+  testId,
 }: {
   canSend: boolean
   onClick: () => void
@@ -649,6 +673,7 @@ export function ThreadSendButton({
   title?: string
   /** Its square side (px); the desktop Thread's box uses 26. */
   size?: number
+  testId?: string
 }): JSX.Element {
   // The square Style cut keeps the proportion of 5px at 32px (to 0.5px).
   const cut = chamferCutFor(size)
@@ -658,6 +683,7 @@ export function ThreadSendButton({
       aria-label={label}
       title={title}
       data-zen-send=""
+      data-testid={testId}
       {...ZEN_TILE_RAISED_PROPS}
       data-chamfer=""
       disabled={!canSend}

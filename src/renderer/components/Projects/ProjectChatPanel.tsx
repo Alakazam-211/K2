@@ -1,10 +1,13 @@
 // Projects V1 P6 (prd-projects-v1 §6.4, reshaped by §6.7.3) — the
 // project chat as a full-height RIGHT-HAND side panel of the dashboard
-// area (was a bottom drawer), recycling the feedback thread UI
-// (FeedbackItemView's Thread tab):
+// area (was a bottom drawer). Since 0.46.1 (Rosson 2026-10-18) its stream
+// and message box are the Thread's (`components/Thread/ThreadChat`): the
+// Thread's bubbles, "author · time", markdown, list spacing, message box
+// and round Send, in every K2 Style. Data, routes, unread/mute and the PoC
+// delivery are unchanged.
 //
 //   - ONE message stream per project, oldest-first, author-attributed
-//     ('owner' renders as "You" in accent — the feedback idiom). The
+//     ('owner' renders as "You", on the right in the accent). The
 //     chat is per-PROJECT: the panel renders across all dashboard tabs
 //     (mounted beside the tab area, never per-dashboard).
 //   - Opens on the recent tail (GET messages, default 20); "Show
@@ -16,8 +19,8 @@
 //     PROTECTION: the composer draft lives in panel-local state;
 //     refetches only ever replace `messages`.
 //   - Composer posts as the human owner (`author` omitted → the daemon
-//     defaults 'owner'), ⌘/Ctrl+Enter to send (the feedback composer's
-//     send idiom). The msg response's delivery outcome renders the §6.4
+//     defaults 'owner'). Enter sends and Shift+Enter is a new line (the
+//     Thread's keys); ⌘/Ctrl+Enter still sends. The msg response's delivery outcome renders the §6.4
 //     line under the sent message: "delivered to <PoC>" / "PoC session
 //     unreachable" (mapping in project-chat.ts).
 //   - Open/closed rides store.chatCollapsed (persisted per client,
@@ -37,9 +40,7 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { usePageViewStore } from '@/stores/page-view'
 import { useAutoMarkRead } from '@/stores/unread'
 import { MuteToggleButton } from '@/components/common/UnreadBadge'
-import { useSettingsStore } from '@/stores/settings'
 import { formatRelativeTime } from '@/lib/format-relative-time'
-import { KeyCombo } from '@/components/KeySymbol'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import {
   fetchProjectGroupMessages,
@@ -63,7 +64,16 @@ import {
   SelectableRegion,
   clearStuckBodyUserSelect,
 } from '@/components/common/SelectableText'
-import { ChatMessage } from '@/components/common/ChatMessage'
+import {
+  ThreadChatBubble,
+  ThreadChatComposer,
+  ThreadChatEmpty,
+  ThreadChatNote,
+  ThreadChatScope,
+} from '@/components/Thread/ThreadChat'
+import { THREAD_LIST_GAP, THREAD_LIST_PADDING, ThreadLoadOlder } from '@/components/Thread/ThreadZenKit'
+import { useChatSessionTurn, type ChatSessionTarget } from '@/components/Thread/sessionTurn'
+import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { useIsYouAuthor } from '@/components/Settings/sections/useNotifyPrefs'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import {
@@ -103,8 +113,6 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     }
   }, [])
   const readOnly = !canPostProjectChat(connectRole)
-  // Match Code Editor → Appearance → Font Size (default 12).
-  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
 
   // null = never fetched (loading state on first expand).
   const [messages, setMessages] = useState<ProjectGroupMessage[] | null>(null)
@@ -116,7 +124,6 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   // Composer drafts survive panel unmount (leave project / switch pages).
   const [draft, setDraft] = useState(() => getProjectChatDraft(show.id))
   const [busy, setBusy] = useState(false)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const setDraftAndPersist = (text: string): void => {
     setDraft(text)
@@ -128,16 +135,6 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     clearStuckBodyUserSelect()
   }, [show.id])
 
-  // Auto-grow the composer with content — same as ticket FeedbackItemView:
-  // always measure from `height: auto` so the rows={2} resting size is kept
-  // when empty / first character (not collapsed to a 1-line floor).
-  useEffect(() => {
-    const el = textareaRef.current
-    if (!el) return
-    const MAX = 240
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, MAX)}px`
-  }, [draft])
   const [sendError, setSendError] = useState<string | null>(null)
   const [lastPost, setLastPost] = useState<LastPost | null>(null)
 
@@ -312,6 +309,10 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   }, [])
 
   const poc = pocLabel(show.members, show.pocWorkspaceId)
+  // The PoC's working strip: posts land in the PoC workspace's agent
+  // (`deliver_live`, its pinned Chat: v2 agent name = project id). From
+  // the daemon's activity rows; no PoC, no strip.
+  const pocTurn = useChatSessionTurn(primaryScope(), projectChatTarget(show.pocWorkspaceId))
   const showEarlier = canLoadEarlier(limit, truncated)
   const atCeiling = truncated && !showEarlier
 
@@ -348,128 +349,109 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
         <MuteToggleButton kind="project" id={show.id} noun="project chat" />
       </div>
 
-      <div className="flex-1 flex flex-col min-h-0">
+      {/* The stream and the message box wear the Thread's look in every
+          Style (Rosson 2026-10-18; components/Thread/ThreadChat). */}
+      <ThreadChatScope className="flex-1 flex flex-col min-h-0" style={{ background: 'var(--zen-canvas)' }} testId="project-chat-thread">
         {/* The stream, oldest-first — SelectableRegion re-enables text
             selection (form textareas work without this; div text does not
             under body user-select:none / parent gesture handlers). */}
         <SelectableRegion className="flex-1 min-h-0 flex flex-col">
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 px-3 py-2"
+          className="flex-1 overflow-y-auto overflow-x-hidden min-h-0"
           data-project-chat={show.id}
+          data-zen-conversation-body=""
+          style={{ padding: THREAD_LIST_PADDING }}
         >
           {loadError ? (
-            <div className="text-[11px] text-[var(--color-status-error-soft)]">Failed to load chat: {loadError}</div>
+            <ThreadChatNote error>Failed to load chat: {loadError}</ThreadChatNote>
           ) : messages === null ? (
-            <div className="h-full flex items-center justify-center text-xs text-[var(--color-text-muted)]">
-              Loading chat…
-            </div>
+            <ThreadChatEmpty>Loading chat…</ThreadChatEmpty>
           ) : messages.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-center px-6">
-              <p className="text-[11px] text-[var(--color-text-muted)]">
-                No messages yet — everything posted here also lands in the PoC&rsquo;s session.
-              </p>
-            </div>
+            <ThreadChatEmpty testId="project-chat-empty">
+              No messages yet — everything posted here also lands in the PoC&rsquo;s session.
+            </ThreadChatEmpty>
           ) : (
-            <>
+            <div className="flex flex-col" style={{ gap: THREAD_LIST_GAP }}>
               {showEarlier && (
-                <div className="flex justify-center mb-2">
-                  <button
-                    type="button"
-                    disabled={loadingEarlier}
-                    onClick={() => void loadEarlier()}
-                    className="px-2.5 py-1 text-[10px] font-medium text-[var(--color-text-secondary)] bg-white/[0.04] hover:bg-white/[0.08] hover:text-[var(--color-text-primary)] disabled:opacity-50 transition-colors cursor-pointer"
-                  >
-                    {loadingEarlier ? 'Loading…' : 'Show earlier messages'}
-                  </button>
-                </div>
+                <ThreadLoadOlder
+                  loading={loadingEarlier}
+                  onClick={() => void loadEarlier()}
+                  testId="project-chat-load-earlier"
+                />
               )}
               {atCeiling && (
-                <div className="mb-2 text-center text-[9px] text-[var(--color-text-muted)] opacity-70">
+                <div
+                  className="text-center"
+                  style={{ fontSize: '0.75em', color: 'var(--zen-text-muted)' }}
+                >
                   Showing the latest 500 messages — earlier history isn&rsquo;t shown.
                 </div>
               )}
-              <div className="flex flex-col gap-2.5">
-                {messages.map((m) => {
-                  const isOwner = isYou(m.author)
-                  const delivery =
-                    lastPost?.messageId === m.id
-                      ? deliveredLine(lastPost.delivered, lastPost.deliveryReason, poc)
-                      : null
-                  return (
-                    <ChatMessage
-                      key={m.id}
-                      author={isOwner ? 'You' : m.author}
-                      isOwner={isOwner}
-                      timeLabel={formatRelativeTime(m.createdAt, nowSec)}
-                      body={m.body}
-                      fontSize={editorFontSize}
-                      footer={
-                        delivery ? (
-                          <div className="text-[9px] text-[var(--color-text-muted)] opacity-80 italic">
-                            {delivery}
-                          </div>
-                        ) : null
-                      }
-                    />
-                  )
-                })}
-              </div>
-            </>
+              {messages.map((m) => {
+                const delivery =
+                  lastPost?.messageId === m.id
+                    ? deliveredLine(lastPost.delivered, lastPost.deliveryReason, poc)
+                    : null
+                return (
+                  <ThreadChatBubble
+                    key={m.id}
+                    id={m.id}
+                    seq={m.seq}
+                    author={m.author}
+                    mine={isYou(m.author)}
+                    body={m.body}
+                    createdAt={m.createdAt}
+                    timeLabel={formatRelativeTime(m.createdAt, nowSec)}
+                    footer={delivery ? <span data-project-chat-delivery="" style={{ fontStyle: 'italic' }}>{delivery}</span> : undefined}
+                  />
+                )
+              })}
+            </div>
           )}
         </div>
         </SelectableRegion>
 
         {/* Composer — gated on Connect role (≥ Member); hidden for Viewers. */}
-        <div className="border-t border-[var(--color-border)] px-3 py-2 flex-shrink-0 min-w-0 w-full">
-          {readOnly ? (
-            <div className="flex items-center gap-2">
+        {readOnly ? (
+          <div className="flex flex-col flex-shrink-0" style={{ padding: '8px var(--zen-gap) var(--zen-gap)' }}>
+            {/* No message box: the drawer is a free tile (the Thread's
+                view-only look). */}
+            <ZenActivityDrawer turn={pocTurn} attached={false} />
+            <div className="flex items-center gap-2" data-project-chat-actions="">
               <HideChatButton />
-              <div className="text-[10px] text-[var(--color-text-muted)] py-1">
+              <div style={{ fontSize: '0.8em', color: 'var(--zen-text-muted)' }}>
                 Viewers can read project chat but can&rsquo;t post.
               </div>
             </div>
-          ) : (
-            <>
-              {sendError && <div className="mb-1.5 text-[11px] text-[var(--color-status-error-soft)]">{sendError}</div>}
-              <textarea
-                ref={textareaRef}
-                value={draft}
-                onChange={(e) => setDraftAndPersist(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault()
-                    send()
-                  }
-                  // Keep Esc local — the page-level Esc focuses the
-                  // dashboard's last-used terminal pane (§6.7.4).
-                  if (e.key === 'Escape') e.stopPropagation()
-                }}
-                placeholder={composerPlaceholder(show.members, show.pocWorkspaceId)}
-                rows={2}
-                className="min-w-0 w-full max-w-full box-border px-2.5 py-2 bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-x-hidden overflow-y-auto break-words placeholder:text-[var(--color-text-muted)] selectable-copy"
-                style={{ fontSize: editorFontSize }}
-              />
-              {/* Hide (left) across from Send (right). Hide is the nav
-                  toggles' 32×32 box; Send stretches to the same height. */}
-              <div className="flex items-stretch justify-between mt-1.5" data-project-chat-actions="">
+          </div>
+        ) : (
+          <ThreadChatComposer
+            testId="project-chat-compose"
+            inputTestId="project-chat-input"
+            sendTestId="project-chat-send"
+            value={draft}
+            onChange={setDraftAndPersist}
+            onSend={send}
+            busy={busy}
+            drawer={<ZenActivityDrawer turn={pocTurn} />}
+            placeholder={composerPlaceholder(show.members, show.pocWorkspaceId)}
+            onKeyDown={(e) => {
+              // Keep Esc local — the page-level Esc focuses the
+              // dashboard's last-used terminal pane (§6.7.4).
+              if (e.key === 'Escape') e.stopPropagation()
+            }}
+            above={sendError ? <ThreadChatNote error>{sendError}</ThreadChatNote> : undefined}
+            // Hide (left) beside the box, across from Send (right, in the
+            // box); level with a one-line field (40px) at its bottom.
+            leading={
+              <div data-project-chat-hide-slot="" className="flex-shrink-0" style={{ paddingBottom: 4 }}>
                 <HideChatButton />
-                <button
-                  type="button"
-                  disabled={busy || draft.trim().length === 0}
-                  onClick={send}
-                  className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer flex items-center gap-1.5"
-                >
-                  Send
-                  <span className="text-[9px] font-mono text-[var(--color-text-muted)]">
-                    <KeyCombo combo="⌘⏎" />
-                  </span>
-                </button>
               </div>
-            </>
-          )}
-        </div>
-      </div>
+            }
+          />
+        )}
+      </ThreadChatScope>
     </div>
   )
 }
@@ -487,6 +469,12 @@ function HideChatButton(): React.JSX.Element {
       onToggle={() => useProjectGroupsStore.getState().setChatCollapsed(true)}
     />
   )
+}
+
+/** The one session a project chat post lands in: the PoC workspace's
+ *  agent (its pinned Chat, v2 agent name = the project id). No PoC: none. */
+export function projectChatTarget(pocWorkspaceId: string | null): ChatSessionTarget | null {
+  return pocWorkspaceId ? { agentName: pocWorkspaceId } : null
 }
 
 /** The newest per-group seq among loaded messages (0 = none / an older

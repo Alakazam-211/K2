@@ -18,6 +18,7 @@
 
 import { TicketsPageBoard } from '@/components/Feedback/FeedbackPage'
 import { TicketRailTerminalContext } from '@/components/Feedback/TicketAgentRail'
+import { ThreadChatZenContext } from '@/components/Thread/ThreadChat'
 import { zenGlassRule } from '@/lib/zen/zen-glass'
 import type { ZenWidgetProps } from '../zen-registry'
 
@@ -52,7 +53,7 @@ ${PANELS.join(',\n')} {
   backdrop-filter: var(--zen-glass-blur);
 }
 [data-zen-root] [data-zen-tickets] input,
-[data-zen-root] [data-zen-tickets] textarea {
+[data-zen-root] [data-zen-tickets] textarea:not([data-zen-compose-input]) {
   background: color-mix(in srgb, var(--zen-surface-raised) 70%, transparent);
   border-radius: calc(var(--zen-radius) / 2);
 }
@@ -76,7 +77,10 @@ export function ZenTicketsViewWidget({ decl }: ZenWidgetProps): React.JSX.Elemen
     >
       <style data-zen-tickets-glass="">{ZEN_TICKETS_GLASS_CSS}</style>
       <TicketRailTerminalContext.Provider value={false}>
-        <TicketsPageBoard />
+        {/* The ticket's chat wears the Thread's look; here Zen's tokens. */}
+        <ThreadChatZenContext.Provider value={true}>
+          <TicketsPageBoard />
+        </ThreadChatZenContext.Provider>
       </TicketRailTerminalContext.Provider>
     </div>
   )

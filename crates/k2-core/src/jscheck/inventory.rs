@@ -69,7 +69,7 @@ struct Inv<'s> {
     out: Inventory,
 }
 
-const K2_RUNTIME: &[&str] = &["call", "subscribe", "on", "can", "connected", "ready", "asset", "config", "widget", "motion"];
+const K2_RUNTIME: &[&str] = &["call", "subscribe", "on", "can", "connected", "ready", "asset", "config", "widget", "motion", "shape", "K2Error", "retryable"];
 const GLOBAL_OBJECTS: &[&str] = &["window", "globalThis", "self", "top", "parent"];
 
 impl Inv<'_> {

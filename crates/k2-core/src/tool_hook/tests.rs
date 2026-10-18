@@ -1082,7 +1082,7 @@ fn reconcile_plan_table() {
         "solo",
     );
     let other = member(
-        ExternalId::Other("k2:connect:abc".into()),
+        ExternalId::Other("link:4242:AB3DEFGHIJKLMNOP".into()),
         MemberKind::Person,
         "conn",
         "conn",
@@ -1117,12 +1117,13 @@ fn reconcile_plan_table() {
 }
 
 /// K-M6 (Meet): reconcile deprovisions only the members K2 owns
-/// (`k2:principal:*`, `k2:workspace:*`). A Meet link guest
+/// (`k2:principal:*`, `k2:workspace:*`, `k2:connect:*`). A Meet link guest
 /// (`link:<channel>:<base32>`, install role `link_guest`, Sew CC2) is
 /// never K2's: Sew hides it from the list by default (CC7), and if a list
 /// carries one anyway (`?include=link_guests`, a newer Sew), it parses
-/// leniently and is ignored, never deprovisioned. Same for `k2:connect:*`
-/// (rev 147). The lenient parse must survive the K1 swap to the vendored
+/// leniently and is ignored, never deprovisioned. A `k2:connect:*` member
+/// IS K2's (SW2): with no `connect` grant it is deprovisioned like a
+/// principal. The lenient parse must survive the K1 swap to the vendored
 /// sew-proto (its `ExternalId` has no `link:` form).
 #[test]
 fn reconcile_never_deprovisions_meet_link_guests_k_m6() {
@@ -1146,14 +1147,16 @@ fn reconcile_never_deprovisions_meet_link_guests_k_m6() {
     );
     assert!(!link.external_id.is_known());
     assert_eq!(link.install_role, InstallRole::Unknown);
-    assert!(matches!(page.items[1].external_id, ExternalId::Other(_)));
+    let connect = ExternalId::K2Connect("2b0c8f1e-9a43-4d55-8f7e-1c2d3e4f5a6b".into());
+    assert_eq!(page.items[1].external_id, connect);
     let left = ExternalId::K2Principal("0f6a3c1d-5b2e-4c7a-9d8e-112233445566".into());
     assert_eq!(page.items[2].external_id, left);
 
-    // Nothing is desired: the K2 principal goes; the link guest and the
-    // Connect user are counted and left alone.
+    // Nothing is desired: the K2 principal and the Connect login (no
+    // grant) go; the link guest is counted and left alone.
     let (planned, s) = reconcile::plan(&[], &page.items, &HashSet::new(), &HashMap::new());
     assert_eq!(ops_for(&planned, &left), [Op::Deprovision]);
+    assert_eq!(ops_for(&planned, &connect), [Op::Deprovision]);
     assert_eq!(
         planned
             .iter()
@@ -1163,14 +1166,14 @@ fn reconcile_never_deprovisions_meet_link_guests_k_m6() {
         0,
         "never an op for a link guest: {planned:?}"
     );
-    assert_eq!(planned.len(), 1, "{planned:?}");
-    assert_eq!((s.deprovisioned, s.ignored_other), (1, 2));
+    assert_eq!(planned.len(), 2, "{planned:?}");
+    assert_eq!((s.deprovisioned, s.ignored_other), (2, 1));
 
     // Busy or not, a link guest is never K2's to remove.
     let busy: HashSet<String> = ["link:4242:AB3DEFGHIJKLMNOP".to_string()].into();
     let (planned, s) = reconcile::plan(&[], &page.items, &busy, &HashMap::new());
-    assert_eq!(planned.len(), 1);
-    assert_eq!((s.skipped_busy, s.ignored_other), (0, 2));
+    assert_eq!(planned.len(), 2);
+    assert_eq!((s.skipped_busy, s.ignored_other), (0, 1));
 }
 
 #[test]
@@ -1460,6 +1463,53 @@ fn summary_held() -> i64 {
         .held
 }
 
+/// SW2: a `connect` chat grant names a Connect login by username or id,
+/// stores its id, and provisions `k2:connect:<id>` with the login as the
+/// username. `connect` is a chat-only subject; an unknown login is refused.
+#[test]
+fn connect_chat_grant_stores_the_id_and_provisions_the_login() {
+    let _e = setup();
+    enable_chat();
+    crate::connect_users::add_user_with_names("bob", "pw-bob-long", Some("Bob"), Some("Stone"))
+        .unwrap();
+    let id = crate::connect_users::user_uuid("bob").unwrap().unwrap();
+    let w = |subject: &str, kind: &str, scope: Option<&str>| SkinGrantWrite {
+        subject_kind: "connect".into(),
+        subject_id: subject.into(),
+        kind: kind.into(),
+        target_id: if kind == "app" { "svc-x".into() } else { String::new() },
+        role: None,
+        scope: scope.map(str::to_string),
+        created_by: Some("owner-token".into()),
+    };
+    assert_eq!(
+        skin::create_grant(&w("nobody", "chat", None)).unwrap_err(),
+        "unknown Connect user 'nobody'"
+    );
+    assert_eq!(
+        skin::create_grant(&w("bob", "app", Some("[]"))).unwrap_err(),
+        "subjectKind connect is only for kind=chat"
+    );
+    assert_eq!(
+        skin::create_grant(&w("bob", "chat", Some("coworker"))).unwrap_err(),
+        chat::SCOPE_ERR
+    );
+    let g = skin::create_grant(&w("bob", "chat", Some("guest"))).unwrap();
+    assert_eq!((g.subject_id.as_str(), g.scope.as_deref()), (id.as_str(), Some("guest")));
+    let r = rows_for(&format!("k2:connect:{id}")).remove(0);
+    assert_eq!(r.op, "provision");
+    let p = payload(&r);
+    assert_eq!(p["kind"], "person");
+    assert_eq!(p["guest"], true);
+    assert_eq!(p["profile"]["username"], "bob");
+    assert_eq!(p["profile"]["display_name"], "Bob Stone");
+    // By id works too (same grant → refused as a duplicate).
+    assert_eq!(
+        skin::create_grant(&w(&id, "chat", None)).unwrap_err(),
+        "grant already exists for this subject, kind, and target"
+    );
+}
+
 #[test]
 fn rev147_connect_owners_and_admins_are_never_provisioned_by_role() {
     let _e = setup();
@@ -1493,7 +1543,7 @@ fn rev147_connect_owners_and_admins_are_never_provisioned_by_role() {
         created_by: Some("user:boss".into()),
     })
     .unwrap_err();
-    assert_eq!(e, "subjectKind must be principal or workspace");
+    assert_eq!(e, "subjectKind must be principal, workspace or connect");
     // App user changes (an App grant for a Connect-named principal) never
     // provision anyone by themselves.
     let subjects: HashSet<String> = rows().into_iter().map(|r| r.subject_key).collect();

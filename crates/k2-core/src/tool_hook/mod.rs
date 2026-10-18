@@ -18,8 +18,12 @@
 //! Rules this module keeps:
 //! - **Rev 147:** a Sew account comes only from a `chat` grant (or the box
 //!   owner `k2:owner` when the target is enabled). Connect users — owners
-//!   and admins included — are never provisioned by role. App Space
-//!   membership (K31) will come only from that App's `kind=app` grants.
+//!   and admins included — are never provisioned by role: a Connect login
+//!   (`k2:connect:<id>`) becomes a member only through a `connect` chat
+//!   grant, written by the owner or by that login's own first chat-pass
+//!   mint ([`connect_chat_gate`]). Provisioning makes an install member
+//!   only; App Space membership (K31) will come only from that App's
+//!   `kind=app` grants (Space adds stay explicit, rev 134/147).
 //! - **HC2:** `skipped` lives on the batch Space/channel member-add
 //!   responses (not on provision). The seam is here for K5/K31: a member
 //!   recorded `held` is not re-added by reconcile until its grant changes.
@@ -41,7 +45,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::skin::{SkinGrant, SkinGrantWrite, SkinPrincipal};
@@ -132,6 +136,10 @@ pub enum Cause {
     Reconcile,
     /// A K2 login session that could hold a Sew session ended (S28 §12).
     SessionRevoke,
+    /// A Connect login was removed (its `connect` chat grant goes).
+    ConnectUserDelete,
+    /// A Connect login's chat-pass mint found no delivered member.
+    PassMint,
 }
 
 impl Cause {
@@ -149,6 +157,8 @@ impl Cause {
             Cause::InstallChanged => "install_changed",
             Cause::Reconcile => "reconcile",
             Cause::SessionRevoke => "session_revoke",
+            Cause::ConnectUserDelete => "connect_user_delete",
+            Cause::PassMint => "pass_mint",
         }
     }
 }
@@ -241,6 +251,31 @@ pub struct HookCtx {
     /// ([`crate::person_name::owner_login`]): the `k2:owner` Sew username
     /// ([`chat::owner_username`]). `None` (nothing linked) → `owner`.
     pub owner_login: Option<String>,
+    /// Connect logins by K7 id (`connect` chat subjects). Every account
+    /// is loaded (a handful per box); absent = removed.
+    pub connect: HashMap<String, ConnectFacts>,
+    /// The Connect store could not be read: reconcile must not treat a
+    /// `connect` grant as orphaned.
+    pub connect_unreadable: bool,
+}
+
+/// One Connect login as a `k2:connect:<id>` member needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectFacts {
+    pub id: String,
+    pub username: String,
+    /// The login's "First Last", else its username.
+    pub display_name: String,
+}
+
+/// Every Connect login with an id, keyed by id.
+pub fn connect_facts() -> Result<HashMap<String, ConnectFacts>, String> {
+    Ok(crate::connect_users::chat_member_facts()?
+        .into_iter()
+        .map(|(id, username, display_name)| {
+            (id.clone(), ConnectFacts { id, username, display_name })
+        })
+        .collect())
 }
 
 impl HookCtx {
@@ -254,6 +289,13 @@ impl HookCtx {
                 workspaces.insert(id.clone(), f);
             }
         }
+        let (connect, connect_unreadable) = match connect_facts() {
+            Ok(m) => (m, false),
+            Err(e) => {
+                crate::log_debug!("[grant-hook] Connect users unreadable: {e}");
+                (HashMap::new(), true)
+            }
+        };
         HookCtx {
             actor: actor.to_string(),
             workspaces,
@@ -261,6 +303,8 @@ impl HookCtx {
                 crate::person_name::load_effective(crate::notify_prefs::OWNER).display_name,
             ),
             owner_login: crate::person_name::owner_login_now(),
+            connect,
+            connect_unreadable,
         }
     }
 }
@@ -557,6 +601,164 @@ pub fn drop_target_grants(kind: &str) -> Result<DropReport, String> {
 pub struct DropReport {
     pub grants_deleted: usize,
     pub rows_skipped: usize,
+}
+
+// ── Connect logins (`k2:connect:<id>`, SW2) ──────────────────────────
+
+/// A Connect login's `connect` chat grant, if any.
+pub fn connect_chat_grant(conn: &Connection, user_id: &str) -> Result<Option<SkinGrant>, String> {
+    conn.query_row(
+        &format!(
+            "{} WHERE kind = ?1 AND subject_kind = 'connect' AND subject_id = ?2",
+            crate::skin::GRANT_SELECT
+        ),
+        rusqlite::params![CHAT_KIND, user_id],
+        crate::skin::map_grant_row,
+    )
+    .optional()
+    .map_err(|e| format!("connect chat grant lookup: {e}"))
+}
+
+/// A Connect login was removed: its chat grant goes, which enqueues the
+/// `deprovision` of its `k2:connect:<id>` member (as a removed App user's
+/// does). `Ok(false)` when it had none (or Sew was never set up).
+pub fn connect_user_removed(user_id: &str) -> Result<bool, String> {
+    if !skin_store_exists() {
+        return Ok(false);
+    }
+    let Some(g) = crate::skin::with_skin_conn(|c| connect_chat_grant(c, user_id))? else {
+        return Ok(false);
+    };
+    Ok(crate::skin::delete_grant_by_id_with_cascade(&g.id, ACTOR_SYSTEM)?.is_some())
+}
+
+/// May a Connect login's chat pass be minted now? Sew never invents
+/// members: a pass whose `sub` has no member gets 403 `not_provisioned`
+/// from Sew, so K2 checks first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectChatGate {
+    /// The `k2:connect:<id>` member was delivered: mint.
+    Ready,
+    /// Its provision is queued or in flight (this call may have queued
+    /// it): answer "retry shortly", never mint.
+    Pending,
+    /// Its provision is blocked or was skipped (owner action needed).
+    Blocked(String),
+    /// The owner switched this login's chat grant off.
+    Disabled,
+    /// Chat (the Sew target) is not enabled on this box.
+    Off,
+}
+
+/// The chat-pass gate for a Connect login (S28 §5, SW2).
+///
+/// Rev 134 lets every Connect login (any role) mint, so the login's own
+/// first mint is its chat grant: with none, this writes a `connect` chat
+/// grant (scope `member`, `created_by user:<name>`), whose hook queues the
+/// provision. Rev 147 holds: nobody becomes a member by role, only by a
+/// grant (the owner's, or the person signing in to chat). An enabled grant
+/// whose member was never delivered (or whose rows were pruned, or whose
+/// last op was a deprovision) gets a fresh provision row (`pass_mint`);
+/// the upsert is idempotent and A8 keeps Sew-owned fields.
+pub fn connect_chat_gate(user_id: &str, username: &str) -> Result<ConnectChatGate, String> {
+    enum Step {
+        Off,
+        NoGrant,
+        Grant(SkinGrant),
+    }
+    if !skin_store_exists() {
+        return Ok(ConnectChatGate::Off);
+    }
+    let step = crate::skin::with_skin_conn(|conn| {
+        if !outbox::target_enabled(conn, CHAT_KIND)? {
+            return Ok(Step::Off);
+        }
+        Ok(match connect_chat_grant(conn, user_id)? {
+            Some(g) => Step::Grant(g),
+            None => Step::NoGrant,
+        })
+    })?;
+    let actor = format!("user:{username}");
+    let grant = match step {
+        Step::Off => return Ok(ConnectChatGate::Off),
+        Step::NoGrant => {
+            let w = SkinGrantWrite {
+                subject_kind: "connect".into(),
+                subject_id: user_id.into(),
+                kind: CHAT_KIND.into(),
+                target_id: String::new(),
+                role: None,
+                scope: Some("member".into()),
+                created_by: Some(actor),
+            };
+            return match crate::skin::create_grant(&w) {
+                Ok(_) => Ok(ConnectChatGate::Pending),
+                // A concurrent mint wrote it first: its row is queued.
+                Err(e) if e.starts_with("grant already exists") => Ok(ConnectChatGate::Pending),
+                Err(e) => Err(e),
+            };
+        }
+        Step::Grant(g) if !g.enabled => return Ok(ConnectChatGate::Disabled),
+        Step::Grant(g) => g,
+    };
+    let subject = sew_wire::ExternalId::K2Connect(user_id.to_string()).to_string();
+    let ctx = HookCtx::load(&actor, &[]);
+    let now = outbox::now_secs();
+    let gate = crate::skin::with_skin_conn(|conn| {
+        let open: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT state, last_error FROM tool_outbox
+                 WHERE tool = ?1 AND subject_key = ?2 AND state IN ('pending','blocked')
+                 ORDER BY CASE state WHEN 'blocked' THEN 0 ELSE 1 END, seq LIMIT 1",
+                rusqlite::params![CHAT_KIND, subject],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("connect chat gate: {e}"))?;
+        match open {
+            Some((s, e)) if s == outbox::STATE_BLOCKED => {
+                return Ok(ConnectChatGate::Blocked(
+                    e.unwrap_or_else(|| "chat provisioning is blocked".into()),
+                ))
+            }
+            Some(_) => return Ok(ConnectChatGate::Pending),
+            None => {}
+        }
+        let newest: Option<(String, String)> = conn
+            .query_row(
+                "SELECT op, state FROM tool_outbox
+                 WHERE tool = ?1 AND subject_key = ?2 AND state != 'superseded'
+                 ORDER BY seq DESC LIMIT 1",
+                rusqlite::params![CHAT_KIND, subject],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("connect chat gate: {e}"))?;
+        match newest.as_ref().map(|(o, s)| (o.as_str(), s.as_str())) {
+            Some(("provision" | "update", outbox::STATE_DONE)) => {
+                return Ok(ConnectChatGate::Ready)
+            }
+            Some((_, s)) if s != outbox::STATE_DONE => {
+                return Ok(ConnectChatGate::Blocked(format!(
+                    "chat provisioning was {s}; ask the owner to retry it"
+                )))
+            }
+            // No row (pruned) or a delivered deprovision: queue one.
+            _ => {}
+        }
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| format!("connect chat gate begin: {e}"))?;
+        let op = chat::provision_op(&tx, &grant, &ctx, Cause::PassMint)?;
+        outbox::enqueue(&tx, &[op], &ctx.actor, now)?;
+        tx.commit()
+            .map_err(|e| format!("connect chat gate commit: {e}"))?;
+        Ok(ConnectChatGate::Pending)
+    })?;
+    if gate == ConnectChatGate::Pending {
+        kick();
+    }
+    Ok(gate)
 }
 
 /// S29 waits on this after enable (S27-A10).

@@ -24,6 +24,12 @@
 //!    the person (`k2:principal:<id>`), its `sid` is that App session and
 //!    `app` in the answer is the App's service id; the audience is the
 //!    box's one Sew install (`sew:<install id>`), the same for every App.
+//! 5b. A Connect login (`k2:connect:<id>`): its Sew member must be
+//!    delivered first (SW2: Sew never invents members). None yet → the
+//!    gate writes its `connect` chat grant / queues the provision and the
+//!    mint answers 503 `chat_member_pending` + `Retry-After: 2`; a blocked
+//!    provision → 503 `chat_member_blocked`; its grant switched off → 403
+//!    `no_chat_grant`.
 //! 6. Rate limit per `sid` and per daemon → 429 `rate_limited` +
 //!    `Retry-After`.
 //! 7. Install id ([`super::link`]) → else 503 `chat_unavailable`.
@@ -58,6 +64,7 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use k2_core::tool_hook::ConnectChatGate;
 use k2_vault::{Actor, Role, VaultError};
 
 use super::handoff::{self, RedeemError};
@@ -125,6 +132,60 @@ pub struct Deps<'a> {
     pub sign: &'a dyn Fn(&ChatPassClaims) -> Result<String, KeyError>,
     pub limiter: &'a Limiter,
     pub codes: &'a handoff::Store,
+    /// A Connect login's member gate (`(id, username)` →
+    /// [`ConnectChatGate`]); live: [`k2_core::tool_hook::connect_chat_gate`].
+    pub connect_gate: &'a ConnectGateFn<'a>,
+}
+
+/// See [`Deps::connect_gate`].
+pub type ConnectGateFn<'a> = dyn Fn(&str, &str) -> Result<ConnectChatGate, String> + 'a;
+
+/// Seconds a BFF waits before retrying a mint whose member is queued.
+pub const MEMBER_PENDING_RETRY_SECS: i64 = 2;
+
+/// SW2: Sew never invents members, and a pass whose `sub` has no member
+/// gets 403 `not_provisioned` from Sew. So a Connect login's mint first
+/// makes sure its `k2:connect:<id>` member was delivered; if not, the gate
+/// queues the provision and the mint answers "retry shortly" (503
+/// `chat_member_pending` + `Retry-After`), never a pass Sew would refuse.
+fn connect_gate_refusal(ident: &PassIdentity, d: &Deps<'_>, req: &PassRequest<'_>) -> Option<Reply> {
+    if ident.provenance != Provenance::ConnectLogin {
+        return None;
+    }
+    let id = ident.sub.strip_prefix("k2:connect:")?;
+    let login = ident.actor.strip_prefix("user:").unwrap_or(&ident.actor);
+    let refuse = |status: u16, code: &str, hint: &str| -> Option<Reply> {
+        audit("chat-pass", &ident.actor, code, req.ingress, req.ip);
+        Some(error(status, code, hint, None).into())
+    };
+    match (d.connect_gate)(id, login) {
+        Ok(ConnectChatGate::Ready) => None,
+        Ok(ConnectChatGate::Pending) => {
+            audit("chat-pass", &ident.actor, "chat_member_pending", req.ingress, req.ip);
+            Some(Reply {
+                response: error(
+                    503,
+                    "chat_member_pending",
+                    "K2 is adding this login to chat; retry shortly",
+                    Some(json!({ "retry_after_ms": MEMBER_PENDING_RETRY_SECS * 1000 })),
+                ),
+                retry_after_secs: Some(MEMBER_PENDING_RETRY_SECS),
+            })
+        }
+        Ok(ConnectChatGate::Blocked(why)) => refuse(
+            503,
+            "chat_member_blocked",
+            &format!("this login's chat account is stuck: {why}"),
+        ),
+        Ok(ConnectChatGate::Disabled) => {
+            refuse(403, "no_chat_grant", "this login's chat access is switched off (grant kind chat)")
+        }
+        Ok(ConnectChatGate::Off) => refuse(503, "chat_unavailable", "Sew is not enabled on this box"),
+        Err(e) => {
+            super::keyring::klog(format!("pass mint: connect member gate: {e}"));
+            refuse(503, "chat_unavailable", "K2 could not check this login's chat account")
+        }
+    }
 }
 
 /// Whether a request head is browser-shaped: an `Origin` (every browser
@@ -223,6 +284,7 @@ pub fn handle_pass(req: &PassRequest<'_>) -> Reply {
             sign: &sign,
             limiter: &ratelimit::MINTS,
             codes: &handoff::CODES,
+            connect_gate: &k2_core::tool_hook::connect_chat_gate,
         },
     )
 }
@@ -318,6 +380,11 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
                             )
                             .into();
                         }
+                    }
+                    // Before the rate limit: a "retry shortly" answer must
+                    // not spend the BFF's mint budget.
+                    if let Some(r) = connect_gate_refusal(&i, d, req) {
+                        return r;
                     }
                     if let Err(ms) = d.limiter.check_and_record(&i.sid, d.now) {
                         audit("chat-pass", &i.actor, "rate_limited", req.ingress, req.ip);

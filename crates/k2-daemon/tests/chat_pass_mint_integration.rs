@@ -165,6 +165,24 @@ fn guest(name: &str, chat: bool) -> (String, String, String) {
     (p.id, raw, meta.id)
 }
 
+/// SW2: a Connect login's first mint queues its `k2:connect:<id>`
+/// provision (503 `chat_member_pending`); the harness runs no worker, so
+/// record the row delivered. Enables the chat target if needed.
+fn deliver_connect_member(port: u16, tok: &str, name: &str) {
+    k2_core::tool_hook::allow_target_off_linux_for_tests(true);
+    k2_core::tool_hook::set_target("chat", true, Some("/tmp/k2-mint-sew.sock"), Some("/tmp/k2-mint-sew.token"), "owner-token")
+        .expect("enable chat target");
+    let r = pass(port, Some(tok), "{}");
+    assert_eq!((r.status, err_code(&r).as_str()), (503, "chat_member_pending"), "{name}: {}", r.raw_body);
+    let uuid = connect_users::user_uuid(name).expect("uuid").expect("exists");
+    let row = k2_core::tool_hook::log(50, Some(&format!("k2:connect:{uuid}")))
+        .expect("outbox log")
+        .into_iter()
+        .find(|r| r.op == "provision" && r.state == "pending")
+        .unwrap_or_else(|| panic!("{name}: no provision row queued"));
+    k2_core::tool_hook::record_done(&row.id, 200, "{}").expect("deliver");
+}
+
 static SEEN: StdMutex<Vec<SewSessionRevoke>> = StdMutex::new(Vec::new());
 
 fn recorder() {
@@ -222,9 +240,29 @@ async fn app_session_owner_token_and_connect_logins_get_their_own_passes() {
 
     // Connect logins: every role is its own member (Owner included: K2
     // Connect Owner is server control, not Sew admin). sid = cu_<digest>.
+    // SW2: Sew never invents members, so the first mint queues the
+    // login's `k2:connect:<id>` provision and answers 503
+    // chat_member_pending + Retry-After; once it is delivered, the pass.
+    k2_core::tool_hook::allow_target_off_linux_for_tests(true);
+    k2_core::tool_hook::set_target("chat", true, Some("/tmp/k2-mint-sew.sock"), Some("/tmp/k2-mint-sew.token"), "owner-token")
+        .expect("enable chat target");
     for (name, role, sew_role) in [("olga", Role::Owner, "member"), ("adam", Role::Admin, "member"), ("mia", Role::Member, "member")] {
         let tok = login(name, role);
         let uuid = connect_users::user_uuid(name).expect("uuid").expect("exists");
+        let r = pass(d.port, Some(&tok), "{}");
+        assert_eq!((r.status, err_code(&r).as_str()), (503, "chat_member_pending"), "{name}: {}", r.raw_body);
+        assert_eq!(header(&r, "Retry-After"), Some("2"), "{name}");
+        assert!(!r.raw_body.contains("\"pass\""));
+        let row = k2_core::tool_hook::log(50, Some(&format!("k2:connect:{uuid}")))
+            .expect("outbox log")
+            .into_iter()
+            .find(|r| r.op == "provision")
+            .unwrap_or_else(|| panic!("{name}: no provision row queued"));
+        assert_eq!((row.state.as_str(), row.actor.as_str()), ("pending", format!("user:{name}").as_str()));
+        let r = pass(d.port, Some(&tok), "{}");
+        assert_eq!(err_code(&r), "chat_member_pending", "still queued");
+        // The worker delivers it (no worker in the harness: record it).
+        k2_core::tool_hook::record_done(&row.id, 200, "{}").expect("deliver");
         let r = pass(d.port, Some(&tok), "{}");
         let c = verified(d.port, &r);
         assert_eq!(c.sub, format!("k2:connect:{uuid}"), "{name}");
@@ -403,6 +441,7 @@ async fn revocations_reach_sew_as_ops() {
     recorder();
     // Connect logout → {k2_sid: cu_…} equal to the minted sid.
     let tok = login("olga", Role::Owner);
+    deliver_connect_member(d.port, &tok, "olga");
     let minted = verified(d.port, &pass(d.port, Some(&tok), "{}"));
     let r = http_with(d.port, "POST", "/cli/auth/logout", &[("Authorization", &format!("Bearer {tok}"))], Some("{}"));
     assert!(r.status == 200 || r.status == 204, "{}", r.raw_body);

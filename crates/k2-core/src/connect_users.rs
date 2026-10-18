@@ -656,6 +656,20 @@ pub fn user_uuid(username: &str) -> Result<Option<String>, String> {
     Ok(store.users.iter().find(|u| u.username == username).map(|u| u.id.clone()))
 }
 
+/// Sew S27 (`k2:connect:<id>` members): `(id, username, displayName)` of
+/// every account that has an id, read-only (no backfill write; the daemon
+/// backfills at boot). Disabled accounts included: a disabled login keeps
+/// its member until its grant goes.
+pub fn chat_member_facts() -> Result<Vec<(String, String, String)>, String> {
+    let store = load_store()?;
+    Ok(store
+        .users
+        .iter()
+        .filter(|u| !u.id.is_empty())
+        .map(|u| (u.id.clone(), u.username.clone(), ConnectUserView::from(u).display_name))
+        .collect())
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Account management (owner-only at the route layer)
 // ─────────────────────────────────────────────────────────────────────
@@ -771,11 +785,13 @@ pub fn add_user_with_names(
 /// Remove an account and revoke any live sessions for it.
 pub fn remove_user(username: &str) -> Result<(), String> {
     let username = normalize_username(username)?;
+    let mut gone_id = String::new();
     update_store(|store| {
         let Some(pos) = store.users.iter().position(|u| u.username == username) else {
             return Err(format!("user '{username}' not found"));
         };
         let gone = store.users.remove(pos);
+        gone_id = gone.id.clone();
         // K7: the removed person's id is never handed out again.
         if !gone.id.is_empty() && !store.retired_ids.contains(&gone.id) {
             store.retired_ids.push(gone.id);
@@ -783,6 +799,13 @@ pub fn remove_user(username: &str) -> Result<(), String> {
         Ok(())
     })?;
     revoke_user_sessions(&username);
+    // Sew S27: the login's chat grant goes, which deprovisions its
+    // `k2:connect:<id>` member (as a removed App user's does).
+    if !gone_id.is_empty() {
+        if let Err(e) = crate::tool_hook::connect_user_removed(&gone_id) {
+            crate::log_debug!("[connect_users] chat grant cleanup for '{username}' failed: {e}");
+        }
+    }
     // TP11 (prd-thread-push-notifications-v1): a removed login's phones
     // stop getting pushes and its notification rows go with it.
     if let Some(db) = crate::db::try_shared() {

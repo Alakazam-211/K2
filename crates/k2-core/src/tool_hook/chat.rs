@@ -13,9 +13,13 @@
 //! | workspace | `coworker` | agent, `agent_kind: coworker` |
 //! | workspace | `assistant:<principal-id>` | agent, assistant of `k2:principal:<id>` |
 //! | workspace | `assistant:owner` | agent, assistant of `k2:owner` |
+//! | connect | `member` | person `k2:connect:<id>` |
+//! | connect | `guest` | person `k2:connect:<id>`, `guest: true` |
 //!
-//! Subjects are skin principals and workspaces only. Connect users (any
-//! role) never get a Sew account from this module (rev 147).
+//! Subjects are skin principals, workspaces and Connect logins (SW2). A
+//! Connect login (any role) gets a Sew account only from its own `connect`
+//! chat grant, never by role (rev 147). Its username is its login
+//! ([`login_username`]), never its id.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
@@ -31,7 +35,12 @@ use super::{
 use crate::skin::{SkinGrant, SkinGrantWrite};
 
 pub const SCOPE_ERR: &str =
-    "chat scope must be member|guest (principal) or coworker|assistant:<person> (workspace)";
+    "chat scope must be member|guest (principal, connect) or coworker|assistant:<person> (workspace)";
+
+/// A person subject (principal or Connect login), as opposed to an agent.
+fn is_person_subject(subject_kind: &str) -> bool {
+    matches!(subject_kind, "principal" | "connect")
+}
 pub const KIND_FLIP_ERR: &str = "delete the grant and add it again to change agent kind";
 const DISPLAY_NAME_MAX: usize = 100;
 
@@ -148,11 +157,10 @@ pub fn parse_input_scope(
 ) -> Result<ChatScope, String> {
     let raw = raw.map(str::trim).filter(|s| !s.is_empty());
     let Some(raw) = raw else {
-        return match subject_kind {
-            "principal" => Ok(ChatScope::Member),
-            _ => {
-                Err("chat scope is required for a workspace: coworker or assistant:<person>".into())
-            }
+        return if is_person_subject(subject_kind) {
+            Ok(ChatScope::Member)
+        } else {
+            Err("chat scope is required for a workspace: coworker or assistant:<person>".into())
         };
     };
     let (kw, rest) = match raw.split_once(':') {
@@ -160,8 +168,8 @@ pub fn parse_input_scope(
         None => (raw.to_ascii_lowercase(), None),
     };
     match (subject_kind, kw.as_str(), rest) {
-        ("principal", "member", None) => Ok(ChatScope::Member),
-        ("principal", "guest", None) => Ok(ChatScope::Guest),
+        ("principal" | "connect", "member", None) => Ok(ChatScope::Member),
+        ("principal" | "connect", "guest", None) => Ok(ChatScope::Guest),
         ("workspace", "coworker", None) => Ok(ChatScope::Coworker),
         ("workspace", "assistant", Some(person)) if !person.is_empty() => {
             if person.eq_ignore_ascii_case("owner") {
@@ -176,7 +184,8 @@ pub fn parse_input_scope(
     }
 }
 
-/// `k2:principal:<id>` / `k2:workspace:<id>`; refuses non-uuid ids (§6.3.3).
+/// `k2:principal:<id>` / `k2:workspace:<id>` / `k2:connect:<id>`; refuses
+/// non-uuid ids (§6.3.3).
 pub fn external_id(subject_kind: &str, subject_id: &str) -> Result<ExternalId, String> {
     if !sew_wire::is_lower_uuid(subject_id) {
         return Err(format!("id '{subject_id}' is not a UUID; chat needs one"));
@@ -184,10 +193,30 @@ pub fn external_id(subject_kind: &str, subject_id: &str) -> Result<ExternalId, S
     match subject_kind {
         "principal" => Ok(ExternalId::K2Principal(subject_id.to_string())),
         "workspace" => Ok(ExternalId::K2Workspace(subject_id.to_string())),
+        "connect" => Ok(ExternalId::K2Connect(subject_id.to_string())),
         other => Err(format!(
-            "chat subjects are principals or workspaces, not '{other}'"
+            "chat subjects are principals, workspaces or Connect logins, not '{other}'"
         )),
     }
+}
+
+/// A Connect login's Sew username: its login, normalised
+/// ([`login_username`]); never its id.
+pub fn connect_username(c: &super::ConnectFacts) -> Result<String, String> {
+    let u = login_username(&c.username).ok_or_else(|| {
+        format!(
+            "Connect user '{}' gives no chat username (2–64 of a-z, 0-9, _ or -)",
+            c.username
+        )
+    })?;
+    check_username(&u)?;
+    Ok(u)
+}
+
+fn connect_facts<'a>(ctx: &'a HookCtx, id: &str) -> Result<&'a super::ConnectFacts, String> {
+    ctx.connect
+        .get(id)
+        .ok_or_else(|| format!("unknown Connect user id '{id}'"))
 }
 
 /// §6.3.4: the name must fit Sew's handle grammar.
@@ -376,6 +405,29 @@ pub fn provision_request(
                     ),
                     username: p.username,
                     email: p.email,
+                    title: None,
+                    pronouns: None,
+                },
+            }
+        }
+        "connect" => {
+            let c = connect_facts(ctx, &grant.subject_id)?;
+            let username = connect_username(c)?;
+            let display = Some(c.display_name.trim())
+                .filter(|d| !d.is_empty())
+                .unwrap_or(&c.username);
+            ProvisionRequest {
+                external_id: ext,
+                kind: MemberKind::Person,
+                agent_kind: None,
+                assistant_of: None,
+                guest: scope == ChatScope::Guest,
+                profile: ProfileInput {
+                    display_name: truncate_chars(display, DISPLAY_NAME_MAX),
+                    username,
+                    // A Connect login has no email K2 owns: a re-provision
+                    // copies Sew's back (A8, like `k2:owner`).
+                    email: None,
                     title: None,
                     pronouns: None,
                 },
@@ -622,16 +674,21 @@ impl ToolProvisioner for ChatProvisioner {
                     .ok_or_else(|| format!("workspace '{token}' has no handle; chat needs one"))?;
                 (f.id.clone(), handle)
             }
+            // Resolved to the login's K7 id by `skin` before this runs.
+            "connect" => {
+                let c = connect_facts(ctx, token)?;
+                (c.id.clone(), connect_username(c)?)
+            }
             other => {
                 return Err(format!(
-                    "chat subjects are principals or workspaces, not '{other}' (Connect users never get chat from a grant)"
+                    "chat subjects are principals, workspaces or Connect logins, not '{other}'"
                 ))
             }
         };
         external_id(&subject_kind, &subject_id)?;
         check_username(&username)?;
         let scope = parse_input_scope(conn, &subject_kind, w.scope.as_deref())?;
-        if scope.for_principal() != (subject_kind == "principal") {
+        if scope.for_principal() != is_person_subject(&subject_kind) {
             return Err(SCOPE_ERR.into());
         }
         check_assistant_person(conn, &scope)?;
@@ -655,13 +712,16 @@ impl ToolProvisioner for ChatProvisioner {
     ) -> Result<String, String> {
         let old_scope = ChatScope::parse_stored(old.scope.as_deref().unwrap_or(""))?;
         let new_scope = parse_input_scope(conn, &old.subject_kind, Some(scope))?;
-        if new_scope.for_principal() != (old.subject_kind == "principal") {
+        if new_scope.for_principal() != is_person_subject(&old.subject_kind) {
             return Err(SCOPE_ERR.into());
         }
         if old_scope.is_assistant() != new_scope.is_assistant() {
             return Err(KIND_FLIP_ERR.into());
         }
-        if old_scope == ChatScope::Member && new_scope == ChatScope::Guest {
+        if old.subject_kind == "principal"
+            && old_scope == ChatScope::Member
+            && new_scope == ChatScope::Guest
+        {
             assistant_refusal(conn, &old.subject_id)?;
         }
         check_assistant_person(conn, &new_scope)?;

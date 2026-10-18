@@ -5,9 +5,12 @@
 //!
 //! The desired set is EXACTLY: `k2:owner` (the box owner, implicit while
 //! the target is enabled) plus one member per ENABLED chat grant whose
-//! subject still exists. Nothing else — in particular no Connect user of
-//! any role (rev 147: App Space membership only from App grants; Connect
-//! owners/admins are never provisioned by role).
+//! subject still exists (a skin principal, a workspace, or a Connect login
+//! `k2:connect:<id>` with its own `connect` chat grant). Nothing else — in
+//! particular no Connect user by role (rev 147: App Space membership only
+//! from App grants; Connect owners/admins are never provisioned by role).
+//! An active `k2:connect:*` member with no enabled grant is deprovisioned,
+//! as a principal's is.
 
 use std::collections::{HashMap, HashSet};
 
@@ -73,7 +76,7 @@ pub struct Summary {
     /// HC2: subjects Sew answered `skipped`, left alone until the grant changes.
     pub skipped_held: usize,
     pub ignored_local: usize,
-    /// External ids K2 does not own (e.g. a future `k2:connect:*`).
+    /// External ids K2 does not own (e.g. Meet link guests, K-M6).
     pub ignored_other: usize,
     pub orphans_removed: usize,
 }
@@ -133,6 +136,9 @@ pub fn build_desired(conn: &Connection, ctx: &HookCtx) -> Result<DesiredBuild, S
             "workspace" => {
                 (!ctx.workspaces.contains_key(&g.subject_id)).then_some(Cause::WorkspaceRemoved)
             }
+            // An unreadable Connect store is never "every login is gone".
+            "connect" => (!ctx.connect_unreadable && !ctx.connect.contains_key(&g.subject_id))
+                .then_some(Cause::ConnectUserDelete),
             _ => None,
         };
         if let Some(cause) = gone {
@@ -185,10 +191,10 @@ fn deprovision(ext: &ExternalId, grant_rev: Option<String>) -> PlannedOp {
 /// | desired, active, agent kind differs | deprovision, then provision |
 /// | desired, active, guest or assistant_of differs | provision (upsert) |
 /// | desired, active, display name / username differs | update |
-/// | active `k2:principal`/`k2:workspace`, not desired | deprovision |
+/// | active `k2:principal`/`k2:workspace`/`k2:connect`, not desired | deprovision |
 /// | `k2:owner` | never deprovision, never owner_set |
 /// | `local:` | ignored, counted |
-/// | any other form (`k2:connect:*`, Meet's `link:<channel>:<id>` guests, K-M6) | ignored, counted `ignored_other` |
+/// | any other form (Meet's `link:<channel>:<id>` guests, K-M6) | ignored, counted `ignored_other` |
 /// | busy (open outbox row) | skipped, counted |
 /// | held (HC2) under the same grant rev | skipped, counted |
 ///
@@ -299,7 +305,7 @@ pub fn plan(
             ExternalId::K2Owner => {}
             ExternalId::Local(_) => s.ignored_local += 1,
             ExternalId::Other(_) => s.ignored_other += 1,
-            ExternalId::K2Principal(_) | ExternalId::K2Workspace(_) => {
+            ExternalId::K2Principal(_) | ExternalId::K2Workspace(_) | ExternalId::K2Connect(_) => {
                 if m.deactivated {
                     continue;
                 }

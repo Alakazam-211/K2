@@ -41828,7 +41828,11 @@ Server:
          --identity picks how people sign in. It is fixed for the life of an
          install: changing it later means a fresh install (uninstall --purge,
          then enable). Default k2; standalone = Sew's own password logins.
-  k2 hostchat disable | rollback | doctor | backup | backups [--json]
+  k2 hostchat disable | doctor | backup | backups [--json]
+  k2 hostchat rollback [--media-tarball FILE] [--json]
+                                            (with voice: the previous release's sew-media tarball when the
+                                             box doesn't keep it; the old core puts that engine back, then
+                                             sew doctor's media checks are shown; exit 3 unless all is well)
   k2 hostchat upgrade [--tarball FILE] [--media-tarball FILE] [--dry-run] [--no-wait] [--json]
                                             (--media-tarball: the sew-media release, needed when voice is on;
                                              waits for the result; exit 3 unless it is done)
@@ -41997,10 +42001,10 @@ sys.exit(3 if bad else 0)
 # result "done"; anything else (refused, aborted, rolled_back, media_failed,
 # rollback_failed) exits 3 with the reason on stderr.
 _hostchat_upgrade_wait() {
-    local as_json="${1:-0}" i=0 last=""
-    while [ "$i" -lt 900 ]; do
+    local as_json="${1:-0}" i=0 shown=""
+    while [ "$i" -lt 1800 ]; do
         _hostchat_call GET /cli/sew/status ""
-        local now
+        local now steps
         now="$(printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
@@ -42008,6 +42012,19 @@ p = v.get("upgradeProgress") or {}
 busy = v.get("state") == "upgrading" or (p.get("result") is None and p.get("current") is not None)
 print(("busy " if busy else "done ") + str(p.get("current") or "-"))
 ')"
+        # Each step once, as it completes (upgradeProgress.steps, in time order).
+        steps="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+p = json.load(sys.stdin).get("upgradeProgress") or {}
+st = p.get("steps") or {}
+print(" ".join(k for k, _ in sorted(st.items(), key=lambda kv: (kv[1] or {}).get("at") or 0)))
+')"
+        if [ "$as_json" != "1" ]; then
+            local s
+            for s in $steps; do
+                case " $shown " in *" $s "*) ;; *) echo "… $s: done" >&2; shown="$shown $s" ;; esac
+            done
+        fi
         case "$now" in
             done*)
                 if [ "$as_json" = "1" ]; then
@@ -42033,11 +42050,7 @@ sys.exit(3)
                 return $?
                 ;;
         esac
-        if [ "$now" != "$last" ] && [ "$as_json" != "1" ]; then
-            echo "… upgrading: ${now#busy }" >&2
-            last="$now"
-        fi
-        sleep 2
+        sleep 1
         i=$((i + 1))
     done
     echo '{"error":"timeout","hint":"still upgrading after 30 minutes: k2 hostchat status"}' >&2
@@ -42126,7 +42139,16 @@ cmd_hostchat() {
             fi
             _hostchat_print enable "$as_json" ;;
         disable) _hostchat_call POST /cli/sew/server/disable "{}"; _hostchat_print disable "$as_json" ;;
-        rollback) _hostchat_call POST /cli/sew/server/rollback "{}"; _hostchat_print rollback "$as_json" ;;
+        rollback)
+            _hostchat_call POST /cli/sew/server/rollback "$(_compute_json K2_CJ_mediaTarballPath="$(abs "$media_tarball")")"
+            _hostchat_print rollback "$as_json"
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("ok") is False:
+    print(json.dumps({"error": "rollback_incomplete", "hint": v.get("error") or "see the answer above"}), file=sys.stderr)
+    sys.exit(3)
+' || return $? ;;
         doctor) _hostchat_call POST /cli/sew/server/doctor "{}"; _hostchat_print doctor "$as_json" ;;
         backup) K2_CP_MAX_TIME=1900 _hostchat_call POST /cli/sew/server/backup "{}"; _hostchat_print backup "$as_json" ;;
         backups) _hostchat_call GET /cli/sew/backups ""; _hostchat_print backups "$as_json" ;;

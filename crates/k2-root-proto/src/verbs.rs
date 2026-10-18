@@ -210,7 +210,10 @@ pub enum SewVerb {
     /// Stdin: the core release tarball. Kept only when its sha256 is the
     /// pin's for this arch.
     Stage,
-    /// Stdin: the `sew-media` release tarball, pin-checked the same way.
+    /// Stdin: a `sew-media` release tarball. The pin's is staged (as the
+    /// core's); an OLDER release's of this build's table is kept instead
+    /// (`crate::sew::SEW_KEEP_DIR`) for a rollback's `media rollback`
+    /// (protocol 8). Anything else is refused.
     StageMedia,
     /// Remove the staged files.
     Unstage,
@@ -264,6 +267,11 @@ pub enum SewVerb {
     /// first, checks it, and only then the voice engine. Sew swaps, drains,
     /// restarts and rolls back the engine by itself; exit code as data.
     MediaUpgrade,
+    /// The reverse of `media upgrade` (protocol 8, Sew 2026-10-17): after a
+    /// core rollback, the OLD (installed) core runs `sew media upgrade
+    /// --tarball <kept engine tarball of its own release> --now`. Refused,
+    /// with nothing run, when that tarball is not kept.
+    MediaRollback,
     /// Stdin: [`crate::sew::MediaRequest`] (no tarball) → `sew media install
     /// --reconfigure --config-json`: a new `voice.public_url`, node IP or
     /// TURN material on an installed engine (K13). `restart_now` adds
@@ -311,6 +319,7 @@ impl SewVerb {
             ["media", "install"] => Self::MediaInstall,
             ["media", "uninstall"] => Self::MediaUninstall,
             ["media", "upgrade"] => Self::MediaUpgrade,
+            ["media", "rollback"] => Self::MediaRollback,
             ["media", "reconfigure"] => Self::MediaReconfigure { restart_now: false },
             ["media", "reconfigure", "restart-now"] => Self::MediaReconfigure { restart_now: true },
             ["media", "turn-cert"] => Self::MediaTurnCert,
@@ -350,6 +359,7 @@ impl SewVerb {
             Self::MediaInstall => s(&["media", "install"]),
             Self::MediaUninstall => s(&["media", "uninstall"]),
             Self::MediaUpgrade => s(&["media", "upgrade"]),
+            Self::MediaRollback => s(&["media", "rollback"]),
             Self::MediaReconfigure { restart_now: false } => s(&["media", "reconfigure"]),
             Self::MediaReconfigure { restart_now: true } => s(&["media", "reconfigure", "restart-now"]),
             Self::MediaTurnCert => s(&["media", "turn-cert"]),
@@ -392,6 +402,7 @@ impl SewVerb {
             | Self::MediaInstall
             | Self::MediaUninstall
             | Self::MediaUpgrade
+            | Self::MediaRollback
             | Self::MediaReconfigure { .. }
             | Self::MediaTurnCert
             | Self::MediaEnable
@@ -438,6 +449,7 @@ impl SewVerb {
             Self::MediaInstall,
             Self::MediaUninstall,
             Self::MediaUpgrade,
+            Self::MediaRollback,
             Self::MediaReconfigure { restart_now: false },
             Self::MediaReconfigure { restart_now: true },
             Self::MediaTurnCert,
@@ -1816,6 +1828,7 @@ mod tests {
             &["engine", "sew", "media", "install"],
             &["engine", "sew", "media", "uninstall"],
             &["engine", "sew", "media", "upgrade"],
+            &["engine", "sew", "media", "rollback"],
             &["engine", "sew", "media", "reconfigure"],
             &["engine", "sew", "media", "reconfigure", "restart-now"],
             &["engine", "sew", "media", "turn-cert"],
@@ -1889,6 +1902,8 @@ mod tests {
             &["engine", "sew", "media", "upgrade", "--tarball", "/tmp/evil.tar.gz"],
             &["engine", "sew", "media", "upgrade", "--when-idle"],
             &["engine", "sew", "media", "upgrade", "--force"],
+            &["engine", "sew", "media", "rollback", "0.1.2"],
+            &["engine", "sew", "media", "rollback", "/var/lib/k2-root-helper/sew/kept/x.tar.gz"],
             &["engine", "sew", "upgrade", "--binary", "/tmp/evil"],
             &["engine", "sew", "media", "reconfigure", "wss://hearth.box.k2.dev"],
             &["engine", "sew", "media", "reconfigure", "--restart", "--now"],

@@ -117,9 +117,17 @@ class H(BaseHTTPRequestHandler):
             state["upolls"] = state.get("upolls", 0) + 1
             busy = state["upolls"] < 2
             why = None if mode == "done" else "upgrade to 0.2.0 refused by Sew (exit 3): the tarball must hold exactly one regular file named sew"
+            steps = {"stage": {"at": 1}} if busy else {"stage": {"at": 1}, "upgrade": {"at": 2}, "health": {"at": 3}, "media": {"at": 4}}
             out = {"ok": True, "supported": True, "state": "upgrading" if busy else "running", "lastError": why,
-                   "upgradeProgress": {"from": "0.1.2", "to": "0.2.0", "current": "upgrade" if busy else None,
+                   "upgradeProgress": {"from": "0.1.2", "to": "0.2.0", "current": "upgrade" if busy else None, "steps": steps,
                                        "result": None if busy else mode, "lastError": None if busy else why}}
+        elif p == "/cli/sew/server/rollback":
+            if b.get("mediaTarballPath"):
+                out = {"ok": True, "state": "running", "version": "0.1.2", "media": {"result": "done", "to": "0.1.2"},
+                       "doctor": {"ok": True, "mediaVersion": {"id": "media.version", "status": "ok", "detail": "sew-media 0.1.2"}}}
+            else:
+                out = {"ok": False, "state": "running", "version": "0.1.2", "media": {"result": "failed", "to": "0.1.2"},
+                       "error": "Sew is back on 0.1.2, but its voice engine was not put back: not kept"}
         elif p == "/cli/sew/server/upgrade":
             state["upolls"] = 0
             out = {"ok": True, "state": "upgrading", "hint": "poll GET /cli/sew/status (upgradeProgress)"}
@@ -344,12 +352,23 @@ assert_contains "upgrade: tarball absolute" "$body" "\"tarballPath\": \"$WORK/se
 assert_contains "upgrade: media tarball absolute" "$body" "\"mediaTarballPath\": \"$WORK/sew-media.tar.gz\""
 assert_contains "upgrade refused: result on stderr" "$err" '"error": "upgrade_refused"'
 assert_contains "upgrade refused: Sew's reason on stderr" "$err" "the tarball must hold exactly one regular file named sew"
+assert_contains "upgrade: completed steps are shown" "$err" "… upgrade: done"
+assert_contains "upgrade: the media step is shown" "$err" "… media: done"
 echo done > "$WORK/upgrade"
 run owner hostchat upgrade --tarball sew.tar.gz
 assert_eq "upgrade done → exit 0" "$rc" "0"
 assert_contains "upgrade done: from → to" "$out" "upgraded: 0.1.2 -> 0.2.0"
 assert_absent "upgrade done: no media path sent" "$(req_where /cli/sew/server/upgrade body)" "mediaTarballPath"
 rm -f "$WORK/upgrade"
+
+echo "== rollback carries the previous engine and fails loudly =="
+run owner hostchat rollback --media-tarball sew-media.tar.gz
+assert_eq "rollback ok → exit 0" "$rc" "0"
+assert_contains "rollback: media tarball absolute" "$(req_where /cli/sew/server/rollback body)" "\"mediaTarballPath\": \"$WORK/sew-media.tar.gz\""
+assert_contains "rollback: doctor shown" "$out" "sew-media 0.1.2"
+run owner hostchat rollback
+assert_eq "rollback not ok → exit 3" "$rc" "3"
+assert_contains "rollback not ok: the reason on stderr" "$err" "voice engine was not put back"
 
 echo
 echo "hostchat CLI: $pass passed, $fail failed"

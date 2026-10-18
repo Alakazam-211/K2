@@ -21,6 +21,7 @@ import { resolveAgentCommand } from '@/lib/agent-resolve'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
 import { KeyCombo } from '@/components/KeySymbol'
 import { resolveChatHistoryHost } from './resolveHost'
+import { ImportedThreadsSection } from './ImportedThreads'
 import {
   collectStoreTabs,
   chatDisplayName,
@@ -1351,6 +1352,9 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
             })()}
           </>
         )}
+
+        {/* ── Section: Imported Threads (arrived with a clone; daemon list) ── */}
+        <ImportedThreadsSection projectPath={projectPath ?? null} />
 
         {/* ── Section: Sandboxed (API-triggered cell sessions; re-launch in sandbox) ── */}
         {sandboxSessions.length > 0 && (

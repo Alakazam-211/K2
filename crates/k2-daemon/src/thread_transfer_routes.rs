@@ -6,7 +6,8 @@
 //! POST /cli/thread/export   {ws, sinceDays?}   → {path, summary, participants}
 //!                           file ~/.k2/clone-tmp/threads-<handle>-<ts>.json (0600)
 //! POST /cli/thread/import   {path, to}         → ImportReport (names, counts)
-//! GET  /cli/thread/imports?ws=                 → overlay_imports rows (names only)
+//! GET  /cli/thread/imports?ws=                 → overlay_imports rows (names only),
+//!                                                each with addr + readOnly (0.46.1)
 //! ```
 //!
 //! Export/import are Owner/Admin people and clone doors (the clone gate's
@@ -159,7 +160,31 @@ fn imports(who: &Who, params: &HashMap<String, String>) -> R<J> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let rows = t::list_imports(&conn, &w.id).map_err(|e| no("db", 500, e))?;
+    let rows: Vec<J> = rows.iter().map(|r| import_row_json(&conn, &w.id, r)).collect();
     Ok(json!({ "ok": true, "workspace": w.handle, "imports": rows }))
+}
+
+/// One import row as the clients list it (0.46.1 "Imported Threads"): the
+/// stored row plus where to read it now. `addr` is the address that opens
+/// the Thread: the `import:<id>` key for history with no session of its own
+/// (a detached sidecar, a main Thread still pending its pin), else the
+/// conversation's current address (the workspace for the main Thread,
+/// `ws/<handle>` for a sidecar), null when it has none. `readOnly` = the
+/// whole Thread is imported history (an `import:` key); a canonical or
+/// sidecar import is a live Thread whose imported lines alone are read-only.
+fn import_row_json(conn: &rusqlite::Connection, project_id: &str, r: &t::ImportRow) -> J {
+    let mut v = serde_json::to_value(r).unwrap_or(J::Null);
+    let read_only = t::is_import_key(&r.local_conversation_id);
+    let addr = if read_only {
+        Some(r.local_conversation_id.clone())
+    } else {
+        k2_core::workspace_session_handles::current_address_for(conn, project_id, &r.local_conversation_id)
+            .ok()
+            .flatten()
+    };
+    v["addr"] = json!(addr);
+    v["readOnly"] = json!(read_only);
+    v
 }
 
 #[cfg(test)]
@@ -214,6 +239,31 @@ mod tests {
         let l = handle(IMPORTS, &Who::Owner, b"", &q, &h);
         let lv: J = serde_json::from_str(&l.body).expect("json");
         assert!(!lv["imports"].as_array().expect("rows").is_empty(), "{lv}");
+        // 0.46.1: each row says where to read it. dst has no pin yet, so its
+        // main Thread waits as `import:<id>`: whole-Thread read-only.
+        let row = &lv["imports"][0];
+        assert_eq!(row["role"], "pending_canonical", "{lv}");
+        let key = row["localConversationId"].as_str().expect("key").to_string();
+        assert!(key.starts_with("import:"), "{lv}");
+        assert_eq!(row["addr"], key.as_str(), "{lv}");
+        assert_eq!(row["readOnly"], true, "{lv}");
+        // Once dst has a pin the import settles onto it: the workspace
+        // address opens it and the Thread is live (only its imported lines
+        // are read-only).
+        {
+            let h2 = k2_core::db::shared();
+            let conn = h2.lock();
+            k2_core::db::schema::WorkspaceSession::upsert(&conn, &format!("ws-{dst}"), &dst, None, Some(&format!("conv-{dst}")), "claude", "system", "running")
+                .expect("pin");
+            t::settle_pending(&conn, &dst).expect("settle");
+        }
+        let l = handle(IMPORTS, &Who::Owner, b"", &q, &h);
+        let lv: J = serde_json::from_str(&l.body).expect("json");
+        let row = &lv["imports"][0];
+        assert_eq!(row["role"], "canonical", "{lv}");
+        assert_eq!(row["localConversationId"], format!("conv-{dst}").as_str(), "{lv}");
+        assert_eq!(row["addr"], dst.as_str(), "{lv}");
+        assert_eq!(row["readOnly"], false, "{lv}");
         // Outside clone-tmp is refused.
         let r = handle(IMPORT, &Who::Owner, json!({"path": "/etc/hosts", "to": dst}).to_string().as_bytes(), &HashMap::new(), &h);
         assert_eq!(r.status, "400 Bad Request", "{}", r.body);

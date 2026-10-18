@@ -153,7 +153,9 @@ pub struct Rule {
     pub warn: Option<Cond>,
     pub ok: Option<Cond>,
     /// Checks in a row that aren't ok before this rule's warn goes hard
-    /// (1-20, default 1: at once). 0.46.1.
+    /// (1-20, default 1: at once). 0.46.1. Setting this or `critAfter` on
+    /// any rule opts the source in to per-rule thresholds
+    /// ([`SourceSpec::uses_rule_thresholds`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warn_after: Option<u8>,
     /// Checks in a row that aren't ok, the last one crit, before this
@@ -705,6 +707,17 @@ impl SourceSpec {
             spec.timeout_secs = super::FANOUT_TIMEOUT_SECS;
         }
         Ok(Validated { spec, origins, lan, warnings })
+    }
+
+    /// Per-rule thresholds are on (0.46.1 opt-in): some rule sets
+    /// `warnAfter` or `critAfter`. Then `failAfter` counts fetch failures
+    /// only and every rule's readings go hard after its own thresholds
+    /// (default 1). Off (every source made before 0.46.1, and any that sets
+    /// neither key): rule readings wait `failAfter` as they always did.
+    /// Setting either key changes the spec hash, so opting in is a change
+    /// a person approves; an untouched source keeps its hash.
+    pub fn uses_rule_thresholds(&self) -> bool {
+        self.rules.iter().any(|r| r.warn_after.is_some() || r.crit_after.is_some())
     }
 
     /// Fan-out (`targets`) rather than one URL.

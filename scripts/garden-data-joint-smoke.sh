@@ -74,7 +74,7 @@ widget_dir() { printf '%s/.k2/zen/widgets/%s' "$HOME" "$W"; }
 steps() {
     cat <<'EOF'
 1   person    make board-lite, edit it unsigned, place it: author_unknown; Settings offers It's mine
-2   builder   edit + k2 zen validate --widget: "Signed as board-builder"; widget gets not_granted
+2   builder   edit + k2 zen validate --widget --sign: "Signed as board-builder"; widget gets not_granted
 3   person    k2 zen data admin board-lite --agent board-builder --level write; add a note
 3b  builder   the note shows in k2 store list --widget board-lite
 4   builder   grant board-keeper write on project/7/; self_grant refused (exit 3)
@@ -119,7 +119,7 @@ step_1() {
 step_2() {
     need builder
     printf '\n// smoke: edited by board-builder\n' >> "$(widget_dir)/board-lite.js"
-    run k2 zen validate --widget "$W"
+    run k2 zen validate --widget "$W" --sign
     expect_rc "validate --widget" 0
     expect_has "signed as board-builder" "Signed as board-builder"
     confirm "The board now says its maker has no grant (not_granted)"

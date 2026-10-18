@@ -28239,22 +28239,52 @@ cmd_schema() {
     {
       "name": "zen widget errors",
       "usage": "k2 zen widget errors <name> [--since <seq>] [--follow] [--json]",
-      "description": "Runtime errors your widget hit in a Zen window (uncaught errors and rejections), newest last, each with a suggestion and the version (bundle hash) that hit it. --follow keeps printing new ones.",
+      "description": "Runtime errors your widget hit in a Zen window (uncaught errors and rejections, and bridge refusals such as not_bound), newest last, each with a suggestion and the version (bundle hash) that hit it. A refused sources.* call names its source address when a placement's config (or the manifest) names it; any other address is withheld. --follow keeps printing new ones.",
       "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--since", "arg": "seq", "description": "Only errors after this sequence number."},
         {"name": "--follow", "arg": null, "description": "Keep watching (Ctrl+C stops)."},
-        {"name": "--json", "arg": null, "description": "{widget, hash, errors: [{seq, at, hash, current, message, stack, suggestion}], last}."}
+        {"name": "--json", "arg": null, "description": "{widget, hash, errors: [{seq, at, hash, current, message, stack, kind, class, code, line, address?, addressWithheld?, redacted?, suggestion}], last}."}
       ]
     },
     {
       "name": "zen validate",
-      "usage": "k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> | --file <file>] [--json]",
-      "description": "Validate what is on disk now: widget scripts are parsed (oxc) and linted (catalog, leaks); prints file:line:col: message per finding with a suggestion line. Exit 0 ok, 1 errors (including runtime errors the saved widget version hit), 2 pending (--widget: a placed widget whose saved version has not run in a Zen window yet). Never changes what Zen shows.",
+      "usage": "k2 zen validate [--garden <name|id> [--from <file>|-] | --theme <name> | --widget <name> [--sign] [--types[=all]] | --dir <folder> [--as <name>] | --file <file>] [--strict] [--json]",
+      "description": "Validate Zen files without changing what Zen shows: widget scripts are parsed (oxc) and linted (catalog, leaks); prints file:line:col: message per finding with a suggestion line. --dir checks a STAGED widget folder anywhere on disk (code as text, images/fonts too) exactly like a widget folder, and --garden <g> --from <file> a staged Garden page; neither writes anything. A check never signs (0.46.1): --widget --sign signs a clean version as the caller. Exit 0 ok (and 'pending': a placed widget whose saved version has not run in a Zen window yet), 1 errors (including runtime errors the saved widget version hit), 2 usage or, with --strict, pending, 3 Zen not set up / Garden locked.",
       "args": [],
       "flags": [
+        {"name": "--dir", "arg": "folder", "description": "A staged widget folder outside ~/.k2: checked by the daemon, nothing written, Zen needn't be set up. Never pending."},
+        {"name": "--as", "arg": "name", "description": "--dir: the widget name to check as (default: manifest.json's id, else the folder name)."},
+        {"name": "--from", "arg": "file|-", "description": "--garden: a staged page checked against that Garden; never written."},
+        {"name": "--sign", "arg": null, "description": "--widget: when clean, sign this version as you (or this agent) for its Garden data calls. --no-sign is accepted and does nothing."},
+        {"name": "--strict", "arg": null, "description": "Exit 2 while a placed widget's saved version hasn't run yet (pending); without it pending exits 0."},
         {"name": "--types", "arg": null, "description": "--widget only: also type-check its scripts against k2.d.ts with tsc-rs (K2_TSC_RS or tsc-rs on PATH; K2_TS_CHECKER=tsc7 uses tsgo). Warnings only; lines without k2. are counted, --types=all lists them."},
-        {"name": "--json", "arg": null, "description": "{ok, status, errors, warnings, files, runtime, types}."}
+        {"name": "--json", "arg": null, "description": "{ok, status, errors, warnings, files, runtime, types, signed?}; --dir adds {widget, staged, manifest, bundleHash}."}
+      ]
+    },
+    {
+      "name": "zen widget put",
+      "usage": "k2 zen widget put <name> <file> --from <path>|- [--note \"…\"] [--json] | k2 zen widget put [<name>] --dir <folder> [--prune] [--note \"…\"] [--json]",
+      "description": "Change a custom widget through K2 from anywhere on disk (never edit ~/.k2 yourself). One code file (.html .js .css .json; written even if the widget then has errors, the last good version keeps running), or with --dir the whole staged folder (code, images, .woff2 fonts) in one checked write: a folder with errors is refused and nothing is written; files the folder lacks are left alone unless --prune. The person or an agent with Manage Gardens and data sources writes (audited); any other agent's put becomes proposals (one per changed code file; images, fonts and --prune need a writer). K2's built-in widgets are never written. k2 zen widget apply --from <folder> is the same as put --dir. Exit 0 written or proposed, 1 refused, 2 usage, 3 needs a person / Zen not set up, 4 no such widget.",
+      "args": [{"name": "name", "required": false}, {"name": "file", "required": false}],
+      "flags": [
+        {"name": "--from", "arg": "path|-", "description": "One code file's new text (- reads stdin)."},
+        {"name": "--dir", "arg": "folder", "description": "The whole staged folder; <name> defaults to manifest.json's id, else the folder name."},
+        {"name": "--prune", "arg": null, "description": "--dir: also remove code files, images and fonts the folder doesn't have (never README or dotfiles)."},
+        {"name": "--note", "arg": "text", "description": "One paragraph for whoever reviews a proposal."},
+        {"name": "--json", "arg": null, "description": "One file: {ok, widget, file, changed, hash, validate} or {proposed, proposal}. --dir: {ok, widget, file, changed, written, unchanged, removed, kept, validate} or {proposed, proposals, message}."}
+      ]
+    },
+    {
+      "name": "zen widget preview",
+      "usage": "k2 zen widget preview --dir <folder> [<name>] [--config key=value]... [--json] | k2 zen widget preview --clear [--json]",
+      "description": "Try a staged widget folder in Zen without touching the person's Gardens: K2 writes it as widgets/preview-<name>/ (manifest id renamed) and places it alone on K2's own \"Widget preview\" Garden (made the first time; each preview replaces the last). --config sets the placement's config (a card that reads data sources takes sources=a,b). It has its own empty store; its runtime errors are k2 zen widget errors preview-<name>. --clear removes the preview Garden and every preview-* widget. The person, or an agent with Manage Gardens and data sources (exit 3 otherwise). Exit 0 previewed or cleared, 1 refused (errors), 2 usage, 3 needs a person / Zen not set up.",
+      "args": [{"name": "name", "required": false}],
+      "flags": [
+        {"name": "--dir", "arg": "folder", "description": "The staged folder (checked first)."},
+        {"name": "--config", "arg": "key=value", "description": "The preview placement's config; repeatable (up to 16 keys)."},
+        {"name": "--clear", "arg": null, "description": "Remove the preview Garden and every preview-* widget."},
+        {"name": "--json", "arg": null, "description": "{ok, widget, preview, garden: {id, name}, placement, config, written, validate, page, open} or, with --clear, {ok, garden, removed}."}
       ]
     },
     {
@@ -28307,7 +28337,7 @@ cmd_schema() {
     },
     {
       "name": "zen widget",
-      "usage": "k2 zen widget <new <name> [--from k2:diary|hello|arcade|board-lite]|list|show <name>|errors <name>> [--json]",
+      "usage": "k2 zen widget <new <name> [--from k2:diary|hello|arcade|board-lite]|list|show <name>|errors <name>|put …|apply --from <folder>|preview --dir <folder>> [--json]",
       "description": "Custom widgets: your own sealed HTML, CSS and JS in ~/.k2/zen/widgets/<name>/, placed with [[widget]] kind = \"custom\". new copies a working example and prints the folder (409 widget_exists if it's there); list shows each widget's state, caps and every placement (and whether the runaway guard paused its posting); show <name> adds the caps it runs with, the taint note (a widget asking for sources:read never posts to the Thread) and the source addresses each placement reads; errors <name> [--since <seq>] [--follow] lists its runtime errors (class, code and line only for a widget that reads data sources). A widget in your own Garden can talk to your agents right away: no grant, no review. k2 zen widget grant and revoke only say so. The helpers a widget can call: k2 zen guide api.",
       "args": [{"name": "name|garden", "required": false}, {"name": "placement", "required": false}],
       "flags": [
@@ -30924,6 +30954,20 @@ WRITE THROUGH K2, OR PROPOSE
   a Garden, and you may approve proposals; each act is logged with your
   session. Never K2's built-in widgets (k2:<name>) or defaults: copy one
   with k2 zen widget new <name> --from k2:<name>.
+
+THE WIDGET DEV LOOP (keep your widget outside ~/.k2)
+  k2 zen validate --dir ./board              check; writes nothing
+  k2 zen widget preview --dir ./board --config sources=fleet
+                                             K2's own "Widget preview" Garden,
+                                             never one of the person's
+  k2 zen widget put board --dir ./board      the whole folder, one checked
+                                             write (errors: nothing written;
+                                             --prune drops files it lacks)
+  k2 zen validate --garden <id> --from page.toml   a staged page, unwritten
+  k2 zen widget errors board                 runtime errors and refusals
+  validate never signs (--widget --sign does) and "pending" (not run in a
+  Zen window yet) exits 0; --strict keeps exit 2 for a loop. Without the
+  switch, put --dir proposes each changed code file; preview needs it.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
@@ -53088,9 +53132,10 @@ GRANTS (you need one; the person gives it)
   the grants it made (not_own). Grants are re-read on every call.
 
 WIDGETS YOU MAKE
-  After editing a widget, run `k2 zen validate --widget <w>`: when clean it
-  signs that version as you, and the widget then reads and writes data with
-  YOUR grants. An unsigned version gets no data (author_unknown) until
+  After editing a widget, run `k2 zen validate --widget <w> --sign` (or
+  k2 zen widget sign <w>): when clean it signs that version as you, and the
+  widget then reads and writes data with YOUR grants. A plain validate is a
+  check only and never signs (0.46.1). An unsigned version gets no data (author_unknown) until
   someone signs it or the person clicks It's mine. Never edit a widget the
   person made unless asked; an edit is a new version signed by its editor.
 
@@ -53387,9 +53432,12 @@ USAGE
   k2 zen widget sign <name> [--json]      # stamp this version as made by you (or this agent)
   k2 zen widget claim <name> [--json]     # It's mine: the person only, outside K2
   k2 zen widget put <name> <file> --from <path>|- [--note "…"] [--json]
+  k2 zen widget put [<name>] --dir <folder> [--prune] [--note "…"] [--json]   # the whole folder
+  k2 zen widget apply --from <folder> [<name>] [--prune] [--json]            # = put --dir
+  k2 zen widget preview --dir <folder> [<name>] [--config k=v]... | --clear [--json]
   k2 zen proposals [--all] [--json]       # Garden/widget changes waiting for approval
   k2 zen proposals show|approve|reject <id> [--json]
-  k2 zen validate [--garden <name|id> | --theme <name> | --widget <name> [--no-sign] [--types[=all]] | --file <file>] [--json]
+  k2 zen validate [--garden <name|id> [--from <file>|-] | --theme <name> | --widget <name> [--sign] [--types[=all]] | --dir <folder> [--as <name>] | --file <file>] [--strict] [--json]
   k2 zen inspect <file.k2garden | folder> [--json]   review a Garden you received (static; never runs it)
   k2 zen widget errors <name> [--since <seq>] [--follow] [--json]
   k2 zen reload [--json]
@@ -53432,7 +53480,13 @@ COMMANDS
             until the person clicks Resume on it. k2 zen guide api lists the
             k2 object's helpers.
   validate  Check what is on disk now. Prints file:line:col: message for
-            each error and exits 1; exits 0 when every file is clean.
+            each error and exits 1; exits 0 when every file is clean (a
+            placed widget not yet run in a Zen window is "pending": exit 0,
+            or 2 with --strict). --dir checks a staged widget folder
+            anywhere on disk and --garden <g> --from <file> a staged page:
+            nothing is written. A check never signs; --widget --sign does
+            (--no-sign is still accepted and does nothing).
+            k2 zen validate --help has the details.
   reload    Re-read now (the daemon also watches the folder) and print errors.
   reset     Keep the current file as a snapshot, then restore --to <snapshot>,
             or clear your changes: zen.toml goes back to empty, a Garden to
@@ -53456,11 +53510,19 @@ COMMANDS
             and whole example files to pipe into a Garden. Needs no daemon.
   put       garden put writes one Garden page (gardens/<id>.toml); widget
             put writes one code file (.html .js .css .json) in a widget
-            folder (made if missing). Both go through the daemon: a page
-            with errors is refused and nothing is written, a locked Garden
-            is refused (exit 3), K2's built-in widgets (k2:<name>) and
-            defaults are never written, and the old page is kept in
-            .history/ (k2 zen reset --to).
+            folder (made if missing), or with --dir a whole staged folder
+            (code, images, fonts) in one checked write: a folder with errors
+            writes nothing; --prune also removes files the folder doesn't
+            have. All go through the daemon: a page with errors is refused
+            and nothing is written, a locked Garden is refused (exit 3),
+            K2's built-in widgets (k2:<name>) and defaults are never
+            written, and the old page is kept in .history/ (k2 zen reset
+            --to). Keep your widget outside ~/.k2 and put it from there.
+  preview   widget preview --dir places a staged folder, as
+            preview-<name>, alone on K2's own "Widget preview" Garden
+            (never one of yours), with --config key=value for its placement
+            (e.g. sources=fleet). --clear removes it. The person, or an
+            agent with the switch.
   proposals Garden and widget changes waiting for approval. show prints the
             content; approve applies it (only if the file is unchanged since,
             else proposal_stale); reject drops it (an agent may withdraw its
@@ -53471,7 +53533,8 @@ AGENTS AND "MANAGE GARDENS AND DATA SOURCES"
   k2 sources access on|off --workspace <ws>). Inside a K2 terminal put and
   proposals carry your session's passport.
   Off (the default): garden put / widget put become a proposal that a person
-  approves (nothing is written until then); you can withdraw your own.
+  approves (nothing is written until then; put --dir proposes each changed
+  code file); you can withdraw your own. preview needs the switch.
   On: put writes right away, garden new makes a Garden, and you may approve
   or reject proposals. Each act is logged with the agent and session
   (Settings → Logs → Access Audit). Only the owner or an admin flips it.
@@ -54307,8 +54370,9 @@ BIG CHANGES
 WHO MAY TOUCH IT
   The widget uses its MAKER's rights: made by you (or It's mine) = all of
   its data; made by an agent = that agent's grants; nobody signed this
-  version = no data (author_unknown). `k2 zen validate --widget <w>` signs
-  a clean version as whoever runs it. Agents need a grant from the person
+  version = no data (author_unknown). `k2 zen validate --widget <w> --sign`
+  (or k2 zen widget sign <w>) signs a clean version as whoever runs it; a
+  plain validate never signs. Agents need a grant from the person
   (Settings → Gardens → Local Data, or k2 zen data grant): per agent (a
   wall), per K2 project (a convenience: any agent can join a project) or
   per key prefix. A grant admin grants inside its own prefix.
@@ -54344,7 +54408,7 @@ fields), a batch id per gesture, and subscribe for live changes.
 
 1. Make the widget (from a terminal outside K2, it is signed as yours):
      k2 zen widget new board-lite --from board-lite
-     k2 zen validate --widget board-lite
+     k2 zen validate --widget board-lite --sign
 2. Place it in a Garden (k2 zen garden list for the id):
      k2 zen guide example board-lite --toml > ~/.k2/zen/gardens/<id>.toml
      k2 zen validate --garden <id>
@@ -54361,7 +54425,7 @@ fields), a batch id per gesture, and subscribe for live changes.
      bin/board-lite watch 0                # k2 store changes --follow
    The widget shows each change at once, labelled with the agent's handle.
 
-If the widget says nobody signed it: k2 zen validate --widget board-lite,
+If the widget says nobody signed it: k2 zen widget sign board-lite,
 or It's mine in Settings → Gardens → Local Data. Data and grants: k2 zen
 guide services.
 EOF
@@ -54909,8 +54973,9 @@ if as_json:
     print(json.dumps(d, indent=2))
     if verb == "validate" and d.get("ok") is False:
         sys.exit(1)
-    # Loopable (decision-k2-runtime-v1 stage 0 (e)): 2 = saved, not run yet.
-    if verb == "validate" and d.get("status") == "pending":
+    # Loopable (decision-k2-runtime-v1 stage 0 (e)): "pending" = saved, not
+    # run yet. 0.46.1: that is not a failure (exit 0); --strict keeps 2.
+    if verb == "validate" and d.get("status") == "pending" and os.environ.get("ZEN_STRICT") == "true":
         sys.exit(2)
     sys.exit(0)
 
@@ -54965,6 +55030,9 @@ if verb in ("validate", "reload"):
         print("types: %s%s" % ("checked with %s" % ty["checker"] if ty.get("checker") else "not checked", "; %s" % ty["note"] if ty.get("note") else ""))
     if verb == "reload":
         print("reloaded: %s" % ("changed" if d.get("changed") else "no change"))
+    if errs and any(str(f).startswith("staged") for f in (d.get("files") or [])):
+        print("%d error(s) in the staged copy; nothing was written." % len(errs), file=sys.stderr)
+        sys.exit(1)
     if errs:
         print("%d error(s). Zen is showing the last good version." % len(errs), file=sys.stderr)
         # Point at the guide page for each kind of error (FC35), unless the
@@ -54995,7 +55063,10 @@ if verb in ("validate", "reload"):
         rt = d.get("runtime") if isinstance(d.get("runtime"), dict) else None
         if d.get("status") == "pending":
             print("pending: %s parses; %s" % (", ".join(files), rt.get("note") if rt else "it hasn\x27t run yet"))
-            sys.exit(2)
+            if os.environ.get("ZEN_STRICT") == "true":
+                sys.exit(2)
+            print("(exit 0: pending is not an error; --strict exits 2 until it has run)")
+            sys.exit(0)
         print("ok: %s" % (", ".join(files) if files else "no files"))
         if rt and rt.get("note"):
             print("runtime: %s" % rt["note"])
@@ -55205,6 +55276,11 @@ else:
         t = "refused %s" % (e.get("class") or "") if e.get("kind") == "refusal" else (e.get("class") or "error")
         if e.get("code"):
             t += " (%s)" % e["code"]
+        # 0.46.1: the refused source, when a placement config names it.
+        if e.get("address"):
+            t += " for %s" % e["address"]
+        elif e.get("addressWithheld"):
+            t += " for an address no placement of this widget names (withheld)"
         if e.get("line") is not None:
             t += " at line %s" % e["line"]
         if e.get("redacted"):
@@ -55294,6 +55370,14 @@ cmd_zen_widget() {
     shift || true
     if [ "$verb" = "put" ]; then
         cmd_zen_widget_put "$@"
+        return
+    fi
+    if [ "$verb" = "apply" ]; then
+        cmd_zen_widget_apply "$@"
+        return
+    fi
+    if [ "$verb" = "preview" ]; then
+        cmd_zen_widget_preview "$@"
         return
     fi
     if [ "$verb" = "errors" ]; then
@@ -55429,9 +55513,25 @@ _zen_no_home() {
 # Parse --garden/--file/--theme/--to/--json into ZEN_* globals.
 _zen_args() {
     ZEN_AS_JSON=false; ZEN_GARDEN_SEL=""; ZEN_FILE_SEL=""; ZEN_TO=""; ZEN_THEME_SEL=""; ZEN_WIDGET_SEL=""; ZEN_NO_SIGN=false; ZEN_TYPES=""
+    # validate only (0.46.1 S3): a staged folder or Garden page, --strict, --sign.
+    ZEN_DIR_SEL=""; ZEN_AS=""; ZEN_FROM=""; ZEN_STRICT=false; ZEN_SIGN=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --no-sign) ZEN_NO_SIGN=true; shift ;;
+            --sign) ZEN_SIGN=true; shift ;;
+            --strict) ZEN_STRICT=true; shift ;;
+            --dir)
+                [ -n "${2:-}" ] || { echo "Error: --dir needs a staged widget folder" >&2; exit 2; }
+                ZEN_DIR_SEL="$2"; shift 2 ;;
+            --dir=*) ZEN_DIR_SEL="${1#*=}"; shift ;;
+            --as)
+                [ -n "${2:-}" ] || { echo "Error: --as needs a widget name" >&2; exit 2; }
+                ZEN_AS="$2"; shift 2 ;;
+            --as=*) ZEN_AS="${1#*=}"; shift ;;
+            --from)
+                [ -n "${2:-}" ] || { echo "Error: --from needs a staged Garden page (or - for stdin)" >&2; exit 2; }
+                ZEN_FROM="$2"; shift 2 ;;
+            --from=*) ZEN_FROM="${1#*=}"; shift ;;
             --widget)
                 [ -n "${2:-}" ] || { echo "Error: --widget needs a widget folder name (see k2 zen widget list)" >&2; exit 2; }
                 ZEN_WIDGET_SEL="$2"; shift 2 ;;
@@ -55464,8 +55564,19 @@ _zen_args() {
     [ -n "$ZEN_FILE_SEL" ] && n=$((n + 1))
     [ -n "$ZEN_THEME_SEL" ] && n=$((n + 1))
     [ -n "$ZEN_WIDGET_SEL" ] && n=$((n + 1))
+    [ -n "$ZEN_DIR_SEL" ] && n=$((n + 1))
     if [ "$n" -gt 1 ]; then
-        echo "Error: pass one of --garden, --theme, --widget or --file" >&2
+        echo "Error: pass one of --garden, --theme, --widget, --dir or --file" >&2
+        exit 2
+    fi
+}
+
+# The validate-only flags (0.46.1 S3) on any other verb are a usage error.
+_zen_validate_only_flags() {
+    local sub="$1"
+    [ "$sub" = "validate" ] && return 0
+    if [ -n "$ZEN_DIR_SEL$ZEN_AS$ZEN_FROM" ] || [ "$ZEN_STRICT" = true ] || [ "$ZEN_SIGN" = true ]; then
+        echo "Error: --dir, --as, --from, --strict and --sign are for k2 zen validate" >&2
         exit 2
     fi
 }
@@ -55963,6 +56074,38 @@ if view == "put":
         v = d.get("validate") or {}
         for e in v.get("errors") or []:
             print("%s:%s:%s: %s" % (e.get("file"), e.get("line"), e.get("col"), e.get("message")))
+elif view == "folder":
+    if d.get("proposed"):
+        for p in d.get("proposals") or []:
+            print("Proposed %s (widgets/%s/%s)" % (p.get("id"), p.get("target"), p.get("file")))
+        print(d.get("message") or "")
+    elif d.get("proposed") is False:
+        print("No change: widgets/%s matches the folder." % d.get("widget"))
+    else:
+        w = d.get("written") or []
+        print("Wrote %s: %s" % (d.get("file"), ", ".join(w) if w else "no change"))
+        if d.get("removed"):
+            print("Removed: %s" % ", ".join(d["removed"]))
+        if d.get("kept"):
+            print("Left alone (not in the folder; --prune removes them): %s" % ", ".join(d["kept"]))
+        v = d.get("validate") or {}
+        for e in v.get("errors") or []:
+            print("%s:%s:%s: %s" % (e.get("file"), e.get("line"), e.get("col"), e.get("message")))
+        rt = v.get("runtime") if isinstance(v.get("runtime"), dict) else None
+        if rt and rt.get("note"):
+            print("runtime: %s" % rt["note"])
+elif view == "preview":
+    if "removed" in d and "preview" not in d:
+        print("Cleared the preview%s%s" % (
+            " Garden" if d.get("garden") else "",
+            (" and " + ", ".join("widgets/%s" % r for r in d["removed"])) if d.get("removed") else ""))
+    else:
+        g = d.get("garden") or {}
+        print("Previewing %s as widgets/%s on the \"%s\" Garden (%s)" % (d.get("widget"), d.get("preview"), g.get("name"), g.get("id")))
+        v = d.get("validate") or {}
+        for e in v.get("errors") or []:
+            print("%s:%s:%s: %s" % (e.get("file"), e.get("line"), e.get("col"), e.get("message")))
+        print(d.get("open") or "")
 elif view == "list":
     rows = d.get("proposals") or []
     if not rows:
@@ -56017,20 +56160,212 @@ print(json.dumps(b))')"
     _zen_agent_print put "$as_json" "$raw"
 }
 
+# ── The widget dev loop (0.46.1 S3) ────────────────────────────────────
+# A staged widget folder anywhere on disk goes to the daemon whole: code
+# files as text, images and fonts as base64. The daemon never reads the
+# path. Same rules as a widget folder: top-level files only, dotfiles and
+# README/LICENSE skipped quietly, other files and subfolders skipped with a
+# note, links refused.
+
+# _zen_dir_body <dir> <out-file> <extra-json> <name-key>
+#   Writes {...extra, files: [{name, text|base64}]} to <out-file>. With
+#   <name-key> "widget" and no "widget" in extra, adds the manifest's id (or
+#   the folder's own name); with "fallback", adds the folder's own name as
+#   "fallback". Exit 2 on a usage problem (no folder, a link, too big).
+_zen_dir_body() {
+    ZD_DIR="$1" ZD_OUT="$2" ZD_EXTRA="${3:-}" ZD_NAME_KEY="${4:-}" python3 -c '
+import base64, json, os, sys
+d = os.environ["ZD_DIR"]
+if not os.path.isdir(d):
+    print("Error: no folder %s" % d, file=sys.stderr); sys.exit(2)
+CODE = ("html", "js", "css", "json")
+ASSET = ("png", "jpg", "jpeg", "gif", "webp", "woff2", "svg")
+files, skipped, total = [], [], 0
+for name in sorted(os.listdir(d)):
+    p = os.path.join(d, name)
+    low = name.lower()
+    if low.startswith(".") or low.startswith("readme") or low == "license" or low.startswith("license."):
+        continue
+    if os.path.islink(p):
+        print("Error: %s is a link; put the file itself in the folder" % p, file=sys.stderr); sys.exit(2)
+    if os.path.isdir(p):
+        skipped.append(name + "/"); continue
+    ext = low.rsplit(".", 1)[-1] if "." in low else ""
+    if ext in CODE:
+        raw = open(p, "rb").read()
+        try:
+            files.append({"name": name, "text": raw.decode("utf-8")})
+        except UnicodeDecodeError:
+            print("Error: %s is not UTF-8 text" % p, file=sys.stderr); sys.exit(2)
+    elif ext in ASSET:
+        raw = open(p, "rb").read()
+        files.append({"name": name, "base64": base64.b64encode(raw).decode("ascii")})
+    else:
+        skipped.append(name); continue
+    total += len(raw)
+    if total > 4 * 1024 * 1024:
+        print("Error: %s is over 4 MB of widget files" % d, file=sys.stderr); sys.exit(2)
+if skipped:
+    print("note: skipped %s (a widget is one flat folder of .html .js .css .json, images and .woff2 fonts)" % ", ".join(skipped), file=sys.stderr)
+if not files:
+    print("Error: %s has no widget files (manifest.json, the entry .html, ...)" % d, file=sys.stderr); sys.exit(2)
+body = json.loads(os.environ.get("ZD_EXTRA") or "{}")
+body["files"] = files
+own = os.path.basename(os.path.abspath(d))
+key = os.environ.get("ZD_NAME_KEY")
+if key == "widget" and not body.get("widget"):
+    mid = None
+    for f in files:
+        if f["name"] == "manifest.json":
+            try:
+                mid = json.loads(f["text"]).get("id")
+            except Exception:
+                mid = None
+    body["widget"] = mid if isinstance(mid, str) and mid else own
+elif key == "fallback":
+    body["fallback"] = own
+with open(os.environ["ZD_OUT"], "w") as out:
+    json.dump(body, out)
+'
+}
+
+# POST a JSON body from a file, with the session passport inside a K2
+# terminal (like _zen_session_post) and the owner token outside. For the
+# folder routes, whose bodies can be megabytes.
+_zen_session_post_file() {
+    local endpoint="$1" file="$2" hook_sock="${K2_HOOK_SOCK:-${K2SO_HOOK_SOCK:-}}" tok="$TOKEN"
+    if [ -n "$hook_sock" ]; then
+        tok="${SCOPED_TOKEN:-${K2_HOOK_TOKEN:-${K2SO_HOOK_TOKEN:-}}}"
+    fi
+    local _K2_CFG=""
+    _k2_cfg_add url "${BASE_URL}${endpoint}?token=${tok}"
+    _k2_curl "$_K2_CFG" -s -X POST \
+        --connect-timeout 5 --max-time 120 \
+        -H "Content-Type: application/json" --data-binary "@$file" 2>/dev/null
+}
+
+# _zen_dir_call <endpoint> <dir> <extra-json> <name-key>: build, post, clean up.
+_zen_dir_call() {
+    local tmp rc=0
+    tmp="$(mktemp "${TMPDIR:-/tmp}/k2-zen-dir.XXXXXX")" || { echo "Error: can't make a temp file" >&2; exit 1; }
+    _zen_dir_body "$2" "$tmp" "$3" "$4" || rc=$?
+    if [ "$rc" -ne 0 ]; then rm -f "$tmp"; exit "$rc"; fi
+    # A curl failure prints nothing: the printer then says the daemon didn't answer.
+    _zen_session_post_file "$1" "$tmp" || true
+    rm -f "$tmp"
+}
+
+_zen_help_validate() {
+    cat <<'EOF'
+Usage: k2 zen validate [--json] [--strict]
+       k2 zen validate --garden <name|id> [--from <file>|-] [--json]
+       k2 zen validate --theme <name> | --file <file> [--json]
+       k2 zen validate --widget <name> [--types[=all]] [--sign] [--strict] [--json]
+       k2 zen validate --dir <folder> [--as <name>] [--json]
+
+Check Zen files without changing what Zen shows. Prints file:line:col:
+message for each error (with a suggestion line) and warnings.
+
+  (no target)            every file in ~/.k2/zen.
+  --garden <g>           one Garden page as it is on disk.
+  --garden <g> --from F  a STAGED Garden page (a file anywhere, - for stdin)
+                         checked against that Garden. Nothing is written.
+  --widget <name>        a widget folder as it is on disk: manifest, folder
+                         rules, bundle, scripts (oxc parse + catalog lints)
+                         and the runtime errors its saved version hit.
+  --dir <folder>         a STAGED widget folder anywhere on disk, checked
+                         exactly like a widget folder. Nothing is written and
+                         Zen needn't be set up. --as names it (default:
+                         manifest.json's "id", else the folder's name).
+  --types[=all]          --widget: also type-check its scripts (tsc-rs).
+  --sign                 --widget: when clean, sign this version as made by
+                         you (or this agent) for its Garden data calls. A
+                         check never signs on its own (0.46.1); --no-sign is
+                         accepted and does nothing. k2 zen widget sign <name>
+                         signs without checking.
+  --strict               exit 2 while a placed widget's saved version hasn't
+                         run in a Zen window yet ("pending"). Without it,
+                         pending exits 0 with a note.
+
+The dev loop for a widget kept outside ~/.k2:
+  k2 zen validate --dir ./board              check (writes nothing)
+  k2 zen widget preview --dir ./board        try it on K2's preview Garden
+  k2 zen widget put board --dir ./board      write it (or propose it)
+  k2 zen widget errors board                 its runtime errors in Zen
+
+Exit: 0 clean (or pending without --strict) · 1 errors · 2 usage, or pending
+with --strict · 3 Zen isn't set up, or the Garden is locked.
+EOF
+}
+
+_zen_help_widget_put() {
+    cat <<'EOF'
+Usage: k2 zen widget put <name> <file> --from <path>|- [--note "…"] [--json]
+       k2 zen widget put [<name>] --dir <folder> [--prune] [--note "…"] [--json]
+       k2 zen widget apply --from <folder> [<name>] [--prune] [--note "…"] [--json]
+
+Change a custom widget (~/.k2/zen/widgets/<name>/) through K2, from anywhere
+on disk. You never edit ~/.k2 yourself.
+
+  <file> --from <path>   one code file (.html .js .css .json); "-" reads stdin.
+                         Written even if the widget then has errors (the last
+                         good version keeps running); the errors are printed.
+  --dir <folder>         the whole folder in one checked write: code files,
+                         images and .woff2 fonts. A folder with errors is
+                         refused and NOTHING is written. <name> defaults to
+                         manifest.json's "id", else the folder's own name.
+                         Files the folder doesn't have are left alone.
+  --prune                with --dir: also remove code files, images and fonts
+                         the folder doesn't have (never README or dotfiles).
+  --note "…"             one paragraph for the person reviewing a proposal.
+  apply --from <folder>  the same as put --dir.
+
+Who may write: the person (outside K2), or an agent with "Manage Gardens and
+data sources". Any other agent's put becomes proposals (one per changed code
+file; images, fonts and --prune need a writer), approved with
+k2 zen proposals approve <id>. K2's built-in widgets (k2:<name>) are never
+written.
+
+Check first, write nothing:  k2 zen validate --dir <folder>
+Try it on K2's preview page: k2 zen widget preview --dir <folder>
+
+Exit: 0 written or proposed · 1 refused (errors, a bad file name) · 2 usage ·
+3 Zen isn't set up / needs a person · 4 no such widget.
+EOF
+}
+
 cmd_zen_widget_put() {
-    local as_json=false from="" note=""
+    local as_json=false from="" note="" dir="" prune=false
     local -a pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
             --from) [ -n "${2:-}" ] || { echo "Error: --from needs a file (or - for stdin)" >&2; exit 2; }; from="$2"; shift 2 ;;
+            --dir) [ -n "${2:-}" ] || { echo "Error: --dir needs a widget folder" >&2; exit 2; }; dir="$2"; shift 2 ;;
+            --dir=*) dir="${1#*=}"; shift ;;
+            --prune) prune=true; shift ;;
             --note) note="${2:-}"; shift 2 ;;
-            -h|--help) cmd_help_zen; exit 0 ;;
-            -*) echo "Error: unexpected '$1' (see k2 zen --help)" >&2; exit 2 ;;
+            -h|--help) _zen_help_widget_put; exit 0 ;;
+            -*) echo "Error: unexpected '$1' (k2 zen widget put --help)" >&2; exit 2 ;;
             *) pos+=("$1"); shift ;;
         esac
     done
-    [ "${#pos[@]}" -eq 2 ] && [ -n "$from" ] || { echo "Error: k2 zen widget put <widget> <file.html|.js|.css|.json> --from <path>|- [--note \"…\"]" >&2; exit 2; }
+    if [ -n "$dir" ]; then
+        [ -z "$from" ] || { echo "Error: --dir puts a whole folder; --from is for one file" >&2; exit 2; }
+        [ "${#pos[@]}" -le 1 ] || { echo "Error: k2 zen widget put [<name>] --dir <folder> [--prune]" >&2; exit 2; }
+        local extra raw
+        extra=$(ZW="${pos[0]:-}" ZN="$note" ZP="$prune" python3 -c '
+import json, os
+b = {"prune": os.environ["ZP"] == "true"}
+if os.environ.get("ZW"): b["widget"] = os.environ["ZW"]
+if os.environ.get("ZN"): b["note"] = os.environ["ZN"]
+print(json.dumps(b))')
+        raw=$(_zen_dir_call "/cli/zen/widget/folder/put" "$dir" "$extra" widget) || exit $?
+        _zen_agent_print folder "$as_json" "$raw"
+        return
+    fi
+    [ "$prune" = false ] || { echo "Error: --prune is for k2 zen widget put --dir" >&2; exit 2; }
+    [ "${#pos[@]}" -eq 2 ] && [ -n "$from" ] || { echo "Error: k2 zen widget put <widget> <file.html|.js|.css|.json> --from <path>|- [--note \"…\"] (or --dir <folder>; k2 zen widget put --help)" >&2; exit 2; }
     local body raw
     body="$(_zen_read_text "$from" | ZW="${pos[0]}" ZF="${pos[1]}" ZN="$note" python3 -c '
 import json, os, sys
@@ -56039,6 +56374,90 @@ if os.environ.get("ZN"): b["note"] = os.environ["ZN"]
 print(json.dumps(b))')"
     raw=$(_zen_session_post "/cli/zen/widget/put" "$body")
     _zen_agent_print put "$as_json" "$raw"
+}
+
+# k2 zen widget apply --from <folder> [<name>] = k2 zen widget put [<name>] --dir <folder>.
+cmd_zen_widget_apply() {
+    local -a args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --from) [ -n "${2:-}" ] || { echo "Error: --from needs a widget folder" >&2; exit 2; }; args+=(--dir "$2"); shift 2 ;;
+            --from=*) args+=(--dir "${1#*=}"); shift ;;
+            --dir) echo "Error: k2 zen widget apply takes --from <folder> (or use k2 zen widget put --dir)" >&2; exit 2 ;;
+            -h|--help) _zen_help_widget_put; exit 0 ;;
+            *) args+=("$1"); shift ;;
+        esac
+    done
+    case " ${args[*]:-} " in
+        *" --dir "*) ;;
+        *) echo "Error: k2 zen widget apply --from <folder> [<name>] [--prune]" >&2; exit 2 ;;
+    esac
+    cmd_zen_widget_put "${args[@]}"
+}
+
+_zen_help_widget_preview() {
+    cat <<'EOF'
+Usage: k2 zen widget preview --dir <folder> [<name>] [--config key=value]... [--json]
+       k2 zen widget preview --clear [--json]
+
+Try a staged widget folder in Zen without touching your Gardens. K2 writes it
+as widgets/preview-<name>/ (its manifest id renamed to match) and places it,
+alone, on K2's own "Widget preview" Garden (made the first time). Each preview
+replaces the last. Open Zen and switch to "Widget preview" to see it.
+
+  --dir <folder>         the staged folder (checked first; errors refuse it).
+  <name>                 defaults to manifest.json's "id", else the folder name.
+  --config key=value     the placement's config, repeatable. A card that reads
+                         data sources takes them here, for example
+                         --config sources=fleet,k2-ops-boxes
+  --clear                remove the preview Garden and every preview-* widget.
+
+The preview runs as its own widget (preview-<name>): it has its own empty
+store, and its runtime errors are k2 zen widget errors preview-<name>.
+Who may preview: the person, or an agent with "Manage Gardens and data
+sources" (exit 3 otherwise). Check without writing: k2 zen validate --dir.
+
+Exit: 0 previewed or cleared · 1 refused (errors) · 2 usage · 3 needs a person
+or Zen isn't set up.
+EOF
+}
+
+cmd_zen_widget_preview() {
+    local as_json=false dir="" clear=false raw
+    local -a pos=() cfg=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --dir) [ -n "${2:-}" ] || { echo "Error: --dir needs a widget folder" >&2; exit 2; }; dir="$2"; shift 2 ;;
+            --dir=*) dir="${1#*=}"; shift ;;
+            --config) [ -n "${2:-}" ] || { echo "Error: --config needs key=value" >&2; exit 2; }; cfg+=("$2"); shift 2 ;;
+            --config=*) cfg+=("${1#*=}"); shift ;;
+            --clear) clear=true; shift ;;
+            -h|--help) _zen_help_widget_preview; exit 0 ;;
+            -*) echo "Error: unexpected '$1' (k2 zen widget preview --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    if [ "$clear" = true ]; then
+        [ -z "$dir" ] && [ "${#pos[@]}" -eq 0 ] && [ "${#cfg[@]}" -eq 0 ] || { echo "Error: k2 zen widget preview --clear takes only --json" >&2; exit 2; }
+        raw=$(_zen_session_post "/cli/zen/widget/preview" '{"clear":true}')
+        _zen_agent_print preview "$as_json" "$raw"
+        return
+    fi
+    [ -n "$dir" ] && [ "${#pos[@]}" -le 1 ] || { echo "Error: k2 zen widget preview --dir <folder> [<name>] [--config key=value]..." >&2; exit 2; }
+    local extra
+    extra=$(ZW="${pos[0]:-}" python3 -c '
+import json, os, sys
+b = {"config": {}}
+if os.environ.get("ZW"): b["widget"] = os.environ["ZW"]
+for kv in sys.argv[1:]:
+    if "=" not in kv:
+        print("Error: --config takes key=value, not %r" % kv, file=sys.stderr); sys.exit(2)
+    k, v = kv.split("=", 1)
+    b["config"][k.strip()] = v
+print(json.dumps(b))' ${cfg[@]+"${cfg[@]}"}) || exit $?
+    raw=$(_zen_dir_call "/cli/zen/widget/preview" "$dir" "$extra" fallback) || exit $?
+    _zen_agent_print preview "$as_json" "$raw"
 }
 
 # k2 zen proposals [--all] | show <id> | approve <id> | reject <id>
@@ -56081,14 +56500,53 @@ cmd_zen() {
     case "$sub" in
         validate|history)
             _zen_args "$@"
+            _zen_validate_only_flags "$sub"
             [ -z "$ZEN_TO" ] || { echo "Error: --to is for k2 zen reset" >&2; exit 2; }
             if [ "$ZEN_NO_SIGN" = true ] && { [ "$sub" != "validate" ] || [ -z "$ZEN_WIDGET_SEL" ]; }; then
                 echo "Error: --no-sign is for k2 zen validate --widget" >&2
                 exit 2
             fi
+            if [ "$ZEN_SIGN" = true ] && [ -z "$ZEN_WIDGET_SEL" ]; then
+                echo "Error: --sign is for k2 zen validate --widget <name>" >&2
+                exit 2
+            fi
+            if [ "$ZEN_SIGN" = true ] && [ "$ZEN_NO_SIGN" = true ]; then
+                echo "Error: pass --sign or --no-sign, not both" >&2
+                exit 2
+            fi
             if [ -n "$ZEN_TYPES" ] && { [ "$sub" != "validate" ] || [ -z "$ZEN_WIDGET_SEL" ]; }; then
                 echo "Error: --types is for k2 zen validate --widget <name>" >&2
                 exit 2
+            fi
+            if [ -n "$ZEN_AS" ] && [ -z "$ZEN_DIR_SEL" ]; then
+                echo "Error: --as names a staged folder: k2 zen validate --dir <folder> --as <name>" >&2
+                exit 2
+            fi
+            if [ -n "$ZEN_FROM" ] && [ -z "$ZEN_GARDEN_SEL" ]; then
+                echo "Error: --from checks a staged Garden page: k2 zen validate --garden <name|id> --from <file>|-" >&2
+                exit 2
+            fi
+            export ZEN_STRICT
+            # A staged widget folder (0.46.1 S3): checked by the daemon,
+            # nothing written, Zen needn't be set up. Never pending.
+            if [ -n "$ZEN_DIR_SEL" ]; then
+                local extra
+                extra=$(ZA="$ZEN_AS" python3 -c 'import json, os; b = {}
+if os.environ.get("ZA"): b["widget"] = os.environ["ZA"]
+print(json.dumps(b))')
+                raw=$(_zen_dir_call "/cli/zen/widget/folder/check" "$ZEN_DIR_SEL" "$extra" fallback) || exit $?
+                _zen_print validate "$ZEN_AS_JSON" "$raw"
+                return
+            fi
+            # A staged Garden page: checked against that Garden, never written.
+            if [ -n "$ZEN_FROM" ]; then
+                local body
+                body="$(_zen_read_text "$ZEN_FROM" | ZG="$ZEN_GARDEN_SEL" python3 -c '
+import json, os, sys
+print(json.dumps({"garden": os.environ["ZG"], "text": sys.stdin.read()}))')"
+                raw=$(_zen_session_post "/cli/zen/garden/check" "$body")
+                _zen_print validate "$ZEN_AS_JSON" "$raw"
+                return
             fi
             local -a q=()
             [ -n "$ZEN_GARDEN_SEL" ] && q+=("garden=$(urlencode "$ZEN_GARDEN_SEL")")
@@ -56097,11 +56555,12 @@ cmd_zen() {
             [ -n "$ZEN_WIDGET_SEL" ] && q+=("widget=$(urlencode "$ZEN_WIDGET_SEL")")
             [ -n "$ZEN_TYPES" ] && q+=("types=$ZEN_TYPES")
             raw=$(cli_request "/cli/zen/$sub" ${q[@]+"${q[@]}"})
-            # Garden data (contract-garden-data-v1 §8): a clean
-            # `validate --widget` then signs that version as the caller (a
-            # second call; validate stays a read). --no-sign skips it.
+            # Garden data (contract-garden-data-v1 §8): `validate --widget
+            # --sign` then signs a clean version as the caller (a second call;
+            # validate stays a read). 0.46.1: a check never signs by default;
+            # --no-sign is kept as a no-op. k2 zen widget sign does it alone.
             local signed=""
-            if [ "$sub" = "validate" ] && [ -n "$ZEN_WIDGET_SEL" ] && [ "$ZEN_NO_SIGN" != true ] \
+            if [ "$sub" = "validate" ] && [ -n "$ZEN_WIDGET_SEL" ] && [ "$ZEN_SIGN" = true ] \
                 && [ "$(ZEN_RAW="$raw" python3 -c 'import json, os
 try:
     d = json.loads(os.environ.get("ZEN_RAW") or "")
@@ -56129,7 +56588,7 @@ print(json.dumps(d))')
             cmd_zen_inspect "$@"
             ;;
         reload)
-            _zen_args "$@"
+            _zen_args "$@"; _zen_validate_only_flags "$sub"
             if [ -n "$ZEN_GARDEN_SEL$ZEN_FILE_SEL$ZEN_TO$ZEN_THEME_SEL$ZEN_WIDGET_SEL" ]; then
                 echo "Error: k2 zen reload takes only --json" >&2
                 exit 2
@@ -56138,7 +56597,7 @@ print(json.dumps(d))')
             _zen_print reload "$ZEN_AS_JSON" "$raw"
             ;;
         reset)
-            _zen_args "$@"
+            _zen_args "$@"; _zen_validate_only_flags "$sub"
             local body
             body=$(ZG="$ZEN_GARDEN_SEL" ZF="$ZEN_FILE_SEL" ZT="$ZEN_TO" ZM="$ZEN_THEME_SEL" ZW="$ZEN_WIDGET_SEL" python3 -c '
 import json, os
@@ -56152,7 +56611,7 @@ print(json.dumps(b))
             _zen_print reset "$ZEN_AS_JSON" "$raw"
             ;;
         doctor|path)
-            _zen_args "$@"
+            _zen_args "$@"; _zen_validate_only_flags "$sub"
             if [ -n "$ZEN_GARDEN_SEL$ZEN_FILE_SEL$ZEN_TO$ZEN_THEME_SEL$ZEN_WIDGET_SEL" ]; then
                 echo "Error: k2 zen $sub takes only --json" >&2
                 exit 2
@@ -58242,6 +58701,19 @@ EOF
         # `k2 zen data` (Garden data, contract-garden-data-v1 §8).
         if [ "${2:-}" = "data" ] && _wants_help "${@:2}"; then
             cmd_help_zen_data
+            exit 0
+        fi
+        # The widget dev loop's verbs have their own pages (0.46.1 S3).
+        if [ "${2:-}" = "widget" ] && _wants_help "${@:3}"; then
+            case "${3:-}" in
+                put) _zen_help_widget_put; exit 0 ;;
+                apply) _zen_help_widget_put; exit 0 ;;
+                preview) _zen_help_widget_preview; exit 0 ;;
+                errors|show) shift; cmd_zen widget "${2}" --help ;;
+            esac
+        fi
+        if [ "${2:-}" = "validate" ] && _wants_help "${@:2}"; then
+            _zen_help_validate
             exit 0
         fi
         if [ "${2:-}" != "guide" ] && _wants_help "${@:2}"; then

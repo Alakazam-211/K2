@@ -130,7 +130,11 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// v20 = the Kanban Garden (0.45.7): New Garden lists it, `k2:kanban` in the
 /// examples, and its board's keys (`board/<garden id>/col|card/<id>`) for
 /// agents writing with `k2 store --widget k2:kanban`.
-pub const SKILL_VERSION_ZEN: u32 = 20;
+/// v21 = the widget dev loop (0.46.1 S3): keep a widget outside `~/.k2`
+/// (`validate --dir`, `widget preview --dir`, `widget put --dir`, a staged
+/// Garden page with `validate --garden --from`); validate signs only with
+/// `--sign` and "pending" exits 0 (`--strict` keeps 2).
+pub const SKILL_VERSION_ZEN: u32 = 21;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

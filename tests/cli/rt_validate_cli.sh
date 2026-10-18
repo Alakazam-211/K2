@@ -124,8 +124,10 @@ cp "$SANDBOX/hello.js.good" "$ZEN/widgets/w/hello.js"
 
 echo "== validate loops: pending, then ok, then failed on a runtime error =="
 capture zen validate --widget w
-assert_eq "a placed widget that hasn't run is pending (2)" "$rc" "2"
+assert_eq "a placed widget that hasn't run is pending, not a failure (0)" "$rc" "0"
 assert_contains "pending says why" "$out" "hasn't run in a Zen window yet"
+capture zen validate --widget w --strict
+assert_eq "--strict keeps pending at 2 for a loop" "$rc" "2"
 HASH="$(run_k2 zen validate --widget w --json 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["runtime"]["hash"])' || true)"
 assert_eq "the JSON names a 64-hex hash" "${#HASH}" "64"
 resp="$(post zen/widget/run "{\"widget\":\"w\",\"hash\":\"$HASH\",\"event\":\"ready\"}")"

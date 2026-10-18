@@ -645,7 +645,7 @@ impl ZenFiles {
                 }
                 _ => {
                     return Err(ZenError::BadRequest(format!(
-                        "unknown starter '{from}'; use hello, arcade, board-lite or a built-in like k2:diary"
+                        "unknown starter '{from}'; use hello, arcade, board-lite, source-trend or a built-in like k2:diary"
                     )))
                 }
             }

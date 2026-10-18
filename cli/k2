@@ -14187,8 +14187,21 @@ def node_line(n):
     os_arch = "%s-%s" % (n.get("os") or "?", n.get("arch") or "?")
     caps = o.get("caps") or {}
     free = o.get("free") or {}
-    res = "%s cores  %s RAM  %s free disk" % (cores(caps.get("cpu_millis")), gb(caps.get("mem_bytes")), gb(free.get("disk_free_bytes"))) if o else "-"
-    return "%-14s %-16s %-24s %-40s run %d  queue %d  seen %s" % (n["name"], os_arch, status[:24], res, n.get("running", 0), n.get("queued", 0), ago(n.get("lastSeen")))
+    # free CPU = the cap minus what running K2 jobs reserved (not idle CPU);
+    # free memory = the smaller of cap minus reserved and what the OS has.
+    res = ("cpu %s/%s unreserved  mem %.1f/%s free  disk %s" % (
+        cores(free.get("cpu_millis")), cores(caps.get("cpu_millis")),
+        (free.get("mem_bytes") or 0) / (1 << 30), gb(caps.get("mem_bytes")), gb(free.get("disk_free_bytes")))) if o else "-"
+    par = o.get("parallelMax")
+    run = "run %d/%s" % (n.get("running", 0), par if par is not None else "?")
+    g = n.get("grant")
+    grant = ("  grant %s/job %s parallel %s queued" % (dur(g.get("maxJobSecs")), g.get("maxParallel"), g.get("maxQueued"))) if isinstance(g, dict) else ""
+    return "%-14s %-16s %-24s %-52s %s  queue %d%s  seen %s" % (n["name"], os_arch, status[:24], res, run, n.get("queued", 0), grant, ago(n.get("lastSeen")))
+def dur(s):
+    s = int(s or 0)
+    if s >= 3600 and s % 3600 == 0: return "%dh" % (s // 3600)
+    if s >= 60 and s % 60 == 0: return "%dm" % (s // 60)
+    return "%ds" % s
 if verb == "nodes":
     rows = v.get("nodes", [])
     if not rows:
@@ -14205,7 +14218,7 @@ elif verb == "info":
     if v.get("routes"):
         print("routes: " + " ".join(v["routes"]))
     for g in v.get("grants") or []:
-        print("grant: %s  max %ss/job  %s parallel  %s queued  %s GB disk" % (g.get("workspace"), g["maxJobSecs"], g["maxParallel"], g["maxQueued"], g["maxDiskGb"]))
+        print("grant: %s  %s/job  %s parallel  %s queued  %s GB disk" % (g.get("workspace"), dur(g["maxJobSecs"]), g["maxParallel"], g["maxQueued"], g["maxDiskGb"]))
     for j in v.get("recentJobs") or []:
         print("job %s  %-9s exit %-4s %s" % (j["short"], j["state"], "-" if j.get("exitCode") is None else j["exitCode"], " ".join(j.get("argv") or [])[:60]))
 elif verb == "jobs":
@@ -14223,7 +14236,15 @@ elif verb == "get":
     print("  exit: %s  signal: %s  attempt %s (generation %s)" % (j.get("exitCode"), j.get("signal"), j.get("attempt"), j.get("generation")))
     if j.get("queue"):
         q = j["queue"]
-        print("  queued: position %s — %s (%s)" % (q["position"], q["reason"], q["message"]))
+        print("  queued: position %s%s — %s (%s)" % (q["position"], (" of %s" % q["of"]) if q.get("of") else "", q["reason"], q["message"]))
+        if q.get("parallel"):
+            print("  the node runs %s job(s) from this workspace at a time" % q["parallel"])
+        for a in q.get("ahead") or []:
+            age = a.get("elapsedSecs") if a.get("elapsedSecs") is not None else a.get("ageSecs")
+            print("  ahead: %-9s %-9s %-14s %s  %s%s" % (
+                a.get("short") or "-", a.get("state"), a.get("workspace") or "(other)",
+                ("%dm%02ds" % (age // 60, age % 60)) if age is not None else "-",
+                a.get("argv") or "", "  (" + a["reason"] + ")" if a.get("reason") else ""))
     cb = j.get("cancelledBy")
     if isinstance(cb, dict):
         print("  cancel asked by %s at %s" % (cb.get("by"), time.strftime("%H:%M:%S", time.localtime(cb.get("at") or 0))))
@@ -14325,9 +14346,11 @@ open(os.environ["K2_CP_STATE"], "w").write("|".join([
         local end st code sig reason short node started ended qpos qreason
         IFS='|' read -r cursor end st code sig reason short node started ended qpos qreason < "$state_file"
         lost=0
-        if [ "$st" = "queued" ] && [ -n "$qreason" ] && [ "$qreason" != "${_CP_LAST_Q:-}" ]; then
-            echo "[k2 compute] queued on $node: position $qpos — $qreason" >&2
-            _CP_LAST_Q="$qreason"
+        # A line on every position or reason change (k2 compute get <job>
+        # shows the jobs ahead).
+        if [ "$st" = "queued" ] && [ -n "$qreason" ] && [ "$qpos|$qreason" != "${_CP_LAST_Q:-}" ]; then
+            echo "[k2 compute] queued on $node: position $qpos ($qreason)" >&2
+            _CP_LAST_Q="$qpos|$qreason"
         fi
         if [ "$end" = "1" ]; then
             rm -f "$state_file"
@@ -15190,7 +15213,12 @@ cmd_compute() {
     for a in "$@"; do [ "$a" = "--json" ] && as_json=1; done
     case "$sub" in
         nodes|ls)
-            _compute_call GET /cli/compute/nodes ""
+            # Outside a K2 tab, name this checkout's workspace so each row
+            # shows its grant (a passport's comes from the passport).
+            local nq="" nws
+            nws="$(_compute_ws "")"
+            [ -n "$nws" ] && nq="workspace=$(urlencode "$nws")"
+            _compute_call GET /cli/compute/nodes "$nq"
             [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
             _compute_render nodes
             ;;

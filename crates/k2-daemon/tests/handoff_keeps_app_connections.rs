@@ -578,17 +578,8 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
     .await;
     let switched_in = t0.elapsed();
     assert!(pid_alive(old_pid), "the old daemon must still be draining its splices");
-    // The draining daemon let go of the singleton lock (a successor that
-    // died later must not be blocked by it for the whole drain).
-    #[cfg(target_os = "linux")]
-    {
-        let lock_path = std::fs::canonicalize(&lock).unwrap();
-        let held = std::fs::read_dir(format!("/proc/{old_pid}/fd"))
-            .unwrap()
-            .filter_map(|e| std::fs::read_link(e.ok()?.path()).ok())
-            .any(|t| t == lock_path);
-        assert!(!held, "the old daemon still holds daemon.lock");
-    }
+    // That the draining daemon let go of daemon.lock is checked at the
+    // second hand-off, where its successor can be killed (below).
 
     // Every old WebSocket still works (the old daemon still pumps them).
     for (i, w) in sockets.iter_mut().enumerate() {
@@ -697,6 +688,28 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
         .unwrap_or_else(|e| panic!("{}", dump(&format!("ws across the second hand-off: {e}"))));
     let mut fresh = ws(tls_port).await.expect("ws via the third daemon");
     echo(&mut fresh, "third").await.expect("echo");
+
+    // The draining daemon let go of the singleton lock: a successor that
+    // dies during the drain must not leave daemon.lock held by it (the
+    // supervisor's fresh daemon would be refused for the whole drain).
+    // The predecessor and successor share one open file description, so
+    // kill the successor while the second daemon still drains `held_ws`;
+    // then a NEW open file description can take the flock only if no
+    // process still holds the shared one. Behavioural, so it needs no
+    // root: the daemon is non-dumpable (vault Q18), and its /proc/<pid>/fd
+    // is unreadable to the same non-root user.
+    unsafe { libc::kill(third_pid, libc::SIGKILL) };
+    wait_for(20, "the killed third daemon to be gone", || !pid_alive(third_pid)).await;
+    assert!(pid_alive(new_pid), "the second daemon must still be draining held_ws");
+    {
+        use std::os::unix::io::AsRawFd;
+        let probe = std::fs::OpenOptions::new().read(true).write(true).open(&lock).expect("open daemon.lock");
+        let rc = unsafe { libc::flock(probe.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        let err = std::io::Error::last_os_error();
+        assert_eq!(rc, 0, "{}", dump(&format!("the draining daemon (pid {new_pid}) still holds daemon.lock: {err}")));
+        unsafe { libc::flock(probe.as_raw_fd(), libc::LOCK_UN) };
+    }
+
     let _ = held_ws.close(None).await;
     drop(held_ws);
     let _ = fresh.close(None).await;
@@ -704,7 +717,6 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
     wait_for(60, "the second daemon to drain and exit", || !pid_alive(new_pid)).await;
     let rec: serde_json::Value = serde_json::from_str(&read_trimmed(&pid_rec)).unwrap();
     assert_eq!(rec["pid"].as_i64().unwrap() as i32, frpc_pid, "still the same frpc");
-    let new_pid = third_pid;
 
     eprintln!(
         "[rt-h] hand-off: {N_WS} websockets + 1 stream kept, {} new connections during the \
@@ -712,12 +724,8 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
         ok_n.load(Ordering::SeqCst)
     );
 
-    // Stop the successor cleanly (it stops frpc), then everything else.
-    unsafe { libc::kill(new_pid, libc::SIGTERM) };
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while pid_alive(new_pid) && Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    // The last daemon was killed for the lock check; the reaper stops frpc
+    // and the App.
     drop(reaper);
     let _ = std::fs::remove_dir_all(&home);
 }

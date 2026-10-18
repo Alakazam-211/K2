@@ -260,9 +260,12 @@ fn send_inner(vault: &Arc<LocalVault>, c: &VaultCaller, b: &SendBody, ingress: &
     prep.note = crate::vault::redact_str(&prep.note);
     match target {
         Target::Local(token) => send_local(vault, c, &token, prep, b.reply_to.clone(), ingress),
-        Target::Remote { .. } => {
-            let _ = (&b.confirm_token, ingress, prep);
-            Err(VaultError::new("federation_off", 422, "cross-server handoff comes with the next slice (H3)").into())
+        Target::Remote { agent, host, legacy_at } => {
+            let mut v = crate::federation_vault::send_remote(vault, c, &agent, &host, prep, b.reply_to.clone(), b.confirm_token.as_deref(), ingress)?;
+            if legacy_at {
+                v["addressNote"] = json!(format!("{agent}@{host} is written {agent}::{host} now"));
+            }
+            Ok(v)
         }
     }
 }

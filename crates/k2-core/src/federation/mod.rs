@@ -47,6 +47,7 @@ pub mod roster;
 pub mod sas;
 pub mod seen;
 pub mod tray;
+pub mod vault_recipient;
 
 pub use dial::{
     advertised_federation_base, assert_may_dial, host_port, peer_address_host, resolve_peer_base_url,

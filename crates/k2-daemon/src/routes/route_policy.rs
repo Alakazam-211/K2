@@ -444,6 +444,10 @@ pub const ROUTES: &[Route] = &[
     get("/cli/federation/pubkey", Admin),
     get("/cli/federation/roster", Public),
     post("/cli/federation/send", Admin),
+    // Secret handoff (prd-agent-secret-handoff-v1 §13): signed envelopes
+    // from a pinned peer, no token (like /inbound).
+    post("/cli/federation/vault-handoff", Public),
+    post("/cli/federation/vault-recipient", Public),
     get("/cli/feed", Member),
     both("/cli/feedback/answer", Member),
     post("/cli/feedback/assign", Member),

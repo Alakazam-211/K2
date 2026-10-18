@@ -669,10 +669,13 @@ the source's **card view** from the server that runs it. Make and inspect source
   at most 16). `sources` without the cap is an error (`sources_needs_cap`).\n\
 - An address is `name` (this computer) or `name::host` (another server the human has\n\
   **saved**; else `server_not_saved`). At most 8 other servers per Garden.\n\
-- **A card that reads sources never posts to the Thread**: asking for `sources:read`\n\
-  drops `thread:post` (validate warns `sources_drops_thread_post`; `k2 zen widget show`\n\
-  says so). Use `k2.sources.ask(address, itemKey?)` to open K2's Ask an agent box: K2\n\
-  writes the question, the human sends it.\n\
+- **A card that reads sources may also post and save** (0.46.1): with `thread:post`\n\
+  and/or `store:write` in its caps too, it keeps them. Validate notes the reach\n\
+  (`sources_reach_thread`, `sources_reach_store`) and `k2 zen widget show` says it:\n\
+  source values it shows can reach the agents it posts to, or agents granted its data.\n\
+  Post only what the person asked for. Without `thread:post`,\n\
+  `k2.sources.ask(address, itemKey?)` opens K2's Ask an agent box: K2 writes the\n\
+  question, the human sends it.\n\
 - Its runtime errors reach you as class, code and line only, never message text\n\
   (`k2 zen widget errors <name>`), so don't put values in thrown errors.\n\
 - Draw from the view: `display` (pending / paused / stale / ok / warn / crit /\n\
@@ -990,7 +993,7 @@ mod tests {
     fn skill_documents_data_source_cards() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 16, "Garden v3 sources need a new skill version");
         let s = generate_k2_zen_skill();
-        for needle in ["### Cards that read data sources", "`sources:read`", "sources_needs_cap", "sources_drops_thread_post",
+        for needle in ["### Cards that read data sources", "`sources:read`", "sources_needs_cap", "sources_reach_thread",
             "server_not_saved", "err.last", "serverNow - updatedAt", "k2:fleet-grid@1", "k2:money-alerts@1", "--preset k2-fleet"]
         {
             assert!(s.contains(needle), "the k2-zen skill lost {needle}");

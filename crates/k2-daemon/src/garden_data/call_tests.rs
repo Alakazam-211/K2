@@ -242,12 +242,19 @@ fn a_stale_hash_and_a_missing_cap_are_refused() {
     assert_eq!(d.refuse("store.txBegin", json!([])), "cap_not_granted");
     assert_eq!(d.refuse("thread.post", json!(["a", "b"])), "not_exposed");
     assert_eq!(d.refuse("nope.nope", json!([])), "unknown_verb");
-    // A widget that reads data sources loses store:write (and keeps reads).
+    // 0.46.1 (Rosson 2026-10-17): a widget that reads data sources keeps
+    // store:write when its manifest asks for it...
     set_caps(&d.f, &["store:read", "store:write", "sources:read"]);
     d.stamp(MadeBy::Owner);
-    assert_eq!(d.refuse("store.put", json!(["k", 1])), "cap_not_granted");
     assert_eq!(d.call("store.get", json!(["k"])), Value::Null);
+    d.call("store.put", json!(["k", 1]));
+    assert_eq!(d.call("store.get", json!(["k"]))["value"], json!(1));
     d.call("save.set", json!(["k", 1]));
+    // ...and is refused when it didn't ask for it.
+    set_caps(&d.f, &["store:read", "sources:read"]);
+    d.stamp(MadeBy::Owner);
+    assert_eq!(d.refuse("store.put", json!(["k", 2])), "cap_not_granted");
+    assert_eq!(d.call("store.get", json!(["k"]))["value"], json!(1), "the refused write changed nothing");
 }
 
 #[test]

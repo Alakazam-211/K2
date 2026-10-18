@@ -1,5 +1,5 @@
 //! Garden v3 data sources, the Zen side (contract-sources-v1 §6, §11.4,
-//! §12.3): the `sources` manifest key, the static taint (GV48), run reports
+//! §12.3): the `sources` manifest key, the reach note (0.46.1; was GV48's taint), run reports
 //! without text (GV49), placement addresses, `locked_placement_sources`
 //! (GV16) and `k2 zen widget show`. Every Zen folder is under the temp dir.
 
@@ -128,9 +128,10 @@ fn a_refusal_names_a_config_address_and_withholds_any_other() {
     assert_eq!(e["errors"][0]["addressWithheld"], true, "{e}");
 }
 
-/// Manifest `sources`: needs the cap, takes "config" or names, warns on thread:post.
+/// Manifest `sources`: needs the cap, takes "config" or names, and keeps
+/// thread:post with a reach note (0.46.1, Rosson 2026-10-17).
 #[test]
-fn manifest_sources_need_the_cap_and_drop_thread_post() {
+fn manifest_sources_need_the_cap_and_keep_thread_post_with_a_note() {
     let (_t, f) = set_up("manifest");
     source_widget(&f, "no-cap", "[\"agents:read\"]", "\"config\"");
     let v = f.validate_widget("no-cap").expect("validate");
@@ -140,10 +141,13 @@ fn manifest_sources_need_the_cap_and_drop_thread_post() {
     source_widget(&f, "both", "[\"thread:post\", \"sources:read\"]", "[\"fleet\", \"deploys\"]");
     let v = f.validate_widget("both").expect("validate");
     assert_eq!(v["ok"], true, "{v}");
-    assert!(v["warnings"].to_string().contains("sources_drops_thread_post"), "{v}");
+    assert!(v["warnings"].to_string().contains("sources_reach_thread"), "{v}");
     let st = f.widget_status("both");
     assert_eq!(st.manifest.as_ref().and_then(|m| m.sources.clone()), Some(json!(["fleet", "deploys"])));
-    assert_eq!(effective_caps(WidgetOrigin::of("both"), &st.requested()), vec!["sources:read".to_string()]);
+    assert_eq!(
+        effective_caps(WidgetOrigin::of("both"), &st.requested()),
+        vec!["thread:post".to_string(), "sources:read".to_string()]
+    );
 
     for (bad, why) in [
         ("[\"fleet::akzm.k2.dev\"]", "no ::host in a manifest"),
@@ -230,17 +234,17 @@ fn locked_gardens_report_the_sources_they_read() {
     assert!(f.locked_placement_sources_for(Some("me.k2.dev")).is_empty());
 }
 
-/// `k2 zen widget show`: placements, caps, the taint note and sources.
+/// `k2 zen widget show`: placements, caps, the reach note and sources.
 #[test]
-fn widget_show_lists_caps_taint_and_sources() {
+fn widget_show_lists_caps_reach_and_sources() {
     let (_t, f) = set_up("show");
     source_widget(&f, "fleet-card", "[\"thread:post\", \"sources:read\"]", "\"config\"");
     let g = gid(&f, "Garden 2");
     write_garden(&f, &g, &source_page("fleet-card", "source = \"fleet::akzm.k2.dev\""));
     let s = f.widget_show("fleet-card", &WidgetPauses::empty()).expect("show");
-    assert_eq!(s["caps"], json!(["sources:read"]), "{s}");
-    assert_eq!(s["dropped"], json!(["thread:post"]), "{s}");
-    assert!(s["taint"].as_str().is_some_and(|t| t.contains("can't post")), "{s}");
+    assert_eq!(s["caps"], json!(["thread:post", "sources:read"]), "{s}");
+    assert_eq!(s["dropped"], json!([]), "{s}");
+    assert!(s["reach"].as_str().is_some_and(|t| t.contains("post to the Thread")), "{s}");
     assert_eq!(s["sources"], "config");
     assert_eq!(s["placements"][0]["sources"], json!(["fleet::akzm.k2.dev"]), "{s}");
     assert_eq!(s["placements"][0]["locked"], false);

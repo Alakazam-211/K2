@@ -250,14 +250,14 @@ pub const BRIDGE_CAPS: &[&str] = &[
 ///
 /// `sources:read` (Garden v3, contract-sources-v1 §6) lets a card read the
 /// data sources its placement names; its verbs are frame-host verbs (the
-/// custom layer answers them), so it isn't one of [`BRIDGE_CAPS`]. A widget
-/// that asks for it never runs with `thread:post` (GV48,
+/// custom layer answers them), so it isn't one of [`BRIDGE_CAPS`]. Since
+/// 0.46.1 a widget that asks for it keeps `thread:post` and `store:write`
+/// when it asks for them too (Rosson 2026-10-17;
 /// `widget_access::effective_caps`).
 ///
 /// `store:read` / `store:write` (Garden data, contract-garden-data-v1
 /// §7.2) are `garden-local`: their verbs run in this computer's daemon
-/// through `/cli/zen/call`, with the widget maker's rights. A widget that
-/// asks for `sources:read` never runs with `store:write` either.
+/// through `/cli/zen/call`, with the widget maker's rights.
 pub const USER_WIDGET_CAPS: &[&str] =
     &["agents:read", "presence:read", "thread:read", "thread:post", "sources:read", "store:read", "store:write"];
 

@@ -6,7 +6,7 @@
 //! `origin_refused`; none = a local owner-token process, audited); the
 //! placement → widget → live hash (`stale_widget`); the verb is a
 //! `garden-local` catalog row whose cap is in the manifest's effective caps
-//! after the Sources taint (`cap_not_granted`); the placement isn't paused
+//! (`cap_not_granted`; a sources reader keeps store:write since 0.46.1); the placement isn't paused
 //! (`paused`); the maker's rights for `store.*` (`author_unknown`,
 //! `not_granted`); budgets; then the store. Writes store
 //! `Actor::Widget { widget }`.
@@ -186,11 +186,7 @@ fn run(b: &CallBody) -> Result<J, DataError> {
     let w = resolve(b)?;
     if let Some(cap) = row.cap.as_deref() {
         if !w.caps.iter().any(|x| x == cap) {
-            let why = if cap == "store:write" && w.caps.iter().any(|x| x == "sources:read") {
-                format!("{} needs {cap}; a widget that reads data sources runs without it", b.verb)
-            } else {
-                format!("{} needs {cap}; add it to the widget's manifest caps", b.verb)
-            };
+            let why = format!("{} needs {cap}; add it to the widget's manifest caps", b.verb);
             return Err(refused("cap_not_granted", 403, why));
         }
     }

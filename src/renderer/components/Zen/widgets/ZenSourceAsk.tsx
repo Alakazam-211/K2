@@ -2,8 +2,8 @@
 // contract-sources-v1 §11.4). Opened from a card's ⋯ menu, a built-in
 // card's red / stale / unknown tile, or a widget's `k2.sources.ask` (the
 // widget supplies no text). It is the Ask my agent flow (`ZenAskMyAgent`)
-// in a K2 overlay, on K2's own bridge: the card's frame never gets
-// `thread:post` (GV48); K2 writes the draft (`zenSourceAskDraft`, no field
+// in a K2 overlay, on K2's own bridge: it works whether or not the card has
+// `thread:post` (0.46.1 lets a sources card keep it); K2 writes the draft (`zenSourceAskDraft`, no field
 // values ever) and the person sends it.
 //
 // Which agent (Q15): the source's maker when it is an agent on this

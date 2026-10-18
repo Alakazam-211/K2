@@ -184,24 +184,17 @@ export const ZEN_STORE_SUBSCRIBE_VERB = 'store.changes'
 
 /**
  * The caps a placement runs with, intersected again here (UW26 step 2:
- * `source: user` whatever the body said). **Static taint (GV48):** a widget
- * that asks for `sources:read` never runs with `thread:post`, so no
- * `thread.post`, `thread.answer` or `compose.draft` (the daemon's
- * `effective_caps` drops it too). K2's own `sources.ask` still works.
- * **Garden data:** it never runs with `store:write` either (it could copy
- * source values into data an agent can read); `store:read`, `save.*` and
- * `viewer.get` still work (contract-garden-data-v1 §7.1 step 4).
+ * `source: user` whatever the body said). **Sources widgets keep what they
+ * ask for (Rosson 2026-10-17, 0.46.1):** a widget that asks for
+ * `sources:read` may also post to the Thread (`thread:post`) and write its
+ * own store (`store:write`) when its manifest asks for those caps, the
+ * same rule as the daemon's `effective_caps`. A cap it didn't ask for is
+ * still refused (`cap_not_granted`), and the runaway guard still counts
+ * every post.
  */
-export const ZEN_TAINTED_BY_SOURCES: readonly string[] = ['thread:post', 'store:write']
-
 export function zenEffectiveCaps(w: Pick<ZenCustomWidgetPayload, 'caps' | 'requested'>): ReadonlySet<string> {
   const requested = w.requested as readonly string[]
-  const readsSources = requested.includes(SOURCES_READ_CAP)
-  return new Set(
-    (w.caps as readonly string[]).filter(
-      (c) => WIDGET_CAPS.has(c) && requested.includes(c) && !(readsSources && ZEN_TAINTED_BY_SOURCES.includes(c)),
-    ),
-  )
+  return new Set((w.caps as readonly string[]).filter((c) => WIDGET_CAPS.has(c) && requested.includes(c)))
 }
 
 /** Values cross as plain JSON: functions, prototypes and cycles never do. */
@@ -472,7 +465,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
         return { queued: r.queued, nextAt: r.nextAt ?? null }
       })
     },
-    // K2's own Ask box: the widget supplies no text (GV48 keeps thread:post away).
+    // K2's own Ask box: the widget supplies no text (works with or without thread:post).
     'sources.ask': async (args) => {
       const { address, src } = needSource('sources.ask', args[0])
       const key = args[1]

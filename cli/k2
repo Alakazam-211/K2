@@ -50599,8 +50599,9 @@ HISTORY AND EXPORT
 
 LOCK AND SOURCES
   Lock freezes how a Garden works, not what's in it: a locked Garden's data
-  still changes. A widget that asks for sources:read can't write data
-  (store:write is dropped); it can still read and save.
+  still changes. A widget that asks for sources:read may also write its
+  data when it asks for store:write (0.46.1); agents granted that data can
+  then read what it saves, so don't save values from sources that hide them.
 
 LIMITS
   20 MiB / 100,000 keys per widget; 60 writes/s (burst 120) per agent per
@@ -52743,8 +52744,8 @@ sys.exit(1 if any(e.get("current") for e in errs) else 0)
 
 # `k2 zen widget show <name> [--json]` (Garden v3, contract-sources-v1 §7):
 # each placement (Garden, locked, paused, the source addresses it reads),
-# the caps it asked for and runs with, and the taint note when sources:read
-# dropped thread:post.
+# the caps it asked for and runs with, and the reach note when a widget that
+# reads sources may also post to the Thread or save its shared data (0.46.1).
 cmd_zen_widget_show() {
     local name="" as_json=false
     while [ $# -gt 0 ]; do
@@ -52778,8 +52779,8 @@ if os.environ.get("ZS_JSON") == "true":
 print("%s (%s): %s" % (d.get("widget"), d.get("name"), d.get("state")))
 print("  asks for: %s" % (", ".join(d.get("requested") or []) or "nothing"))
 print("  runs with: %s" % (", ".join(d.get("caps") or []) or "nothing"))
-if d.get("taint"):
-    print("  note: %s" % d["taint"])
+if d.get("reach"):
+    print("  note: %s" % d["reach"])
 src = d.get("sources")
 if src is not None:
     print("  sources: %s" % (src if isinstance(src, str) else ", ".join(src)))

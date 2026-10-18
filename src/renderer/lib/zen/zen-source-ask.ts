@@ -1,5 +1,5 @@
 // Garden v3 data sources — "Ask an agent about this" (PRD §9.4,
-// contract-sources-v1 §11.4, GV48). A card reading sources can't post to the
+// contract-sources-v1 §11.4). A card reading sources without thread:post can't post to the
 // Thread; K2's own Ask box can. It opens the existing Ask my agent flow
 // (`ZenAskMyAgent`: the chooser, then that agent's conversation with the
 // message box filled, never sent) with a draft K2 writes itself:

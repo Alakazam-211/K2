@@ -526,25 +526,28 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
         let (l, c) = at("sources");
         errors.push(d(l, c, format!("sources_needs_cap: a widget that names sources must ask for \"{reads}\" in caps")));
     }
-    if caps.iter().any(|c| c == reads) && caps.iter().any(|c| c == super::widget_access::TAINTED_BY_SOURCES) {
+    // 0.46.1 (Rosson 2026-10-17): a sources reader keeps thread:post and
+    // store:write when it asks for them. Validate says so plainly, as a
+    // note (a warning, never an error), so the person sees the reach.
+    if caps.iter().any(|c| c == reads) && caps.iter().any(|c| c == super::widget_access::THREAD_POST) {
         let (l, c) = at("caps");
         warnings.push(d(
             l,
             c,
             format!(
-                "{}: a widget that reads data sources can't post to the Thread, so thread:post is dropped (use k2.sources.ask to open K2's Ask box)",
-                super::widget_access::SOURCES_DROPS_THREAD_POST
+                "{}: this widget reads data sources and may post to the Thread, so source values it shows can reach the agents it posts to; keep posts to what the person asked for",
+                super::widget_access::SOURCES_REACH_THREAD
             ),
         ));
     }
-    if caps.iter().any(|c| c == reads) && caps.iter().any(|c| c == super::widget_access::STORE_WRITE_TAINTED) {
+    if caps.iter().any(|c| c == reads) && caps.iter().any(|c| c == super::widget_access::STORE_WRITE) {
         let (l, c) = at("caps");
         warnings.push(d(
             l,
             c,
             format!(
-                "{}: a widget that reads data sources can't save to its shared data (agents could read it), so store:write is dropped; store:read and k2.save.* still work",
-                super::widget_access::SOURCES_DROPS_STORE_WRITE
+                "{}: this widget reads data sources and may save to its shared data, which agents granted that data can read; don't save values from sources that hide them from agents",
+                super::widget_access::SOURCES_REACH_STORE
             ),
         ));
     }
@@ -855,9 +858,9 @@ mod tests {
     }
 
     /// Garden data (contract-garden-data-v1 §7.2): store caps are widget
-    /// caps; with sources:read, store:write is dropped and validate warns.
+    /// caps; with sources:read, store:write is kept (0.46.1) and validate notes the reach.
     #[test]
-    fn store_caps_are_widget_caps_and_sources_drop_store_write() {
+    fn store_caps_are_widget_caps_and_sources_keep_store_write_with_a_note() {
         let src = "{\n  \"schema\": 1,\n  \"name\": \"Board\",\n  \"caps\": [\"store:read\", \"store:write\"]\n}\n";
         let (m, errs, warns) = manifest(src);
         assert!(errs.is_empty(), "{errs:?}");
@@ -868,8 +871,8 @@ mod tests {
         assert!(errs.is_empty(), "{errs:?}");
         assert!(m.is_some());
         let w: Vec<&str> = warns.iter().map(|d| d.message.as_str()).collect();
-        assert!(w.iter().any(|m| m.starts_with("sources_drops_store_write")), "{w:?}");
-        assert!(!w.iter().any(|m| m.starts_with("sources_drops_thread_post")), "{w:?}");
+        assert!(w.iter().any(|m| m.starts_with("sources_reach_store")), "{w:?}");
+        assert!(!w.iter().any(|m| m.starts_with("sources_reach_thread")), "{w:?}");
     }
 
     #[test]

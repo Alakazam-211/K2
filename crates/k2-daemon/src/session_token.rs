@@ -863,6 +863,7 @@ pub fn is_agent_verb(path: &str) -> bool {
         // from_workspace from HookPrincipal (Wave 0 PR-C).
         "/cli/federation/peers",
         "/cli/federation/peer-roster",
+        "/cli/federation/peer-rosters",
         "/cli/federation/send",
         // Sidecar identity: `k2 whoami` (NOT /cli/auth/whoami — that
         // `role` is connect-user).
@@ -1645,6 +1646,7 @@ mod tests {
         // PR1: federation agent send surface under passports.
         assert!(is_agent_verb("/cli/federation/peers"));
         assert!(is_agent_verb("/cli/federation/peer-roster"));
+        assert!(is_agent_verb("/cli/federation/peer-rosters"));
         assert!(is_agent_verb("/cli/federation/send"));
         assert!(
             is_agent_verb("/cli/whoami"),

@@ -1025,7 +1025,7 @@ _uds_eligible() {
         /cli/connections) return 0 ;;
         # PR1 federation dual-auth — peers/peer-roster/send under passport.
         # pair/confirm stay TCP owner-or-admin only (not here).
-        /cli/federation/peers|/cli/federation/peer-roster|/cli/federation/send) return 0 ;;
+        /cli/federation/peers|/cli/federation/peer-roster|/cli/federation/peer-rosters|/cli/federation/send) return 0 ;;
         # Named heartbeat schedule CRUD + fire/status (agent-owned workspace
         # schedules). OS tick install + fleet-wide list stay TCP owner-only.
         /cli/heartbeat/install-launchd|/cli/heartbeat/uninstall-launchd|/cli/heartbeat/apply-wake-scheduler) return 1 ;;

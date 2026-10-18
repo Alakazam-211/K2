@@ -1355,7 +1355,7 @@ pub(crate) fn gated_peer_base_url(
     Ok(base)
 }
 
-fn peer_selector_matches(peer: &k2_core::federation::FederationPeer, sel: &str) -> bool {
+pub(crate) fn peer_selector_matches(peer: &k2_core::federation::FederationPeer, sel: &str) -> bool {
     if peer.fingerprint == sel || peer.label == sel || peer.subdomain == sel {
         return true;
     }
@@ -1461,9 +1461,11 @@ pub fn handle_peers() -> CliResponse {
         k2_core::log_debug!("[federation] peers: address-notice outbox unreadable: {e}");
         Default::default()
     });
-    let peers: Vec<serde_json::Value> = store
-        .list()
-        .iter()
+    // 0.46.1: A to Z by the name shown, then host (the order every client
+    // shows: Settings, the Connections picker, `k2 fed peers`), not the
+    // order they were paired in.
+    let peers: Vec<serde_json::Value> = crate::federation_rosters::peers_in_order(store.list())
+        .into_iter()
         .map(|p| {
             serde_json::json!({
                 "fingerprint": p.fingerprint,
@@ -1584,10 +1586,13 @@ pub fn handle_peer_roster(peer_selector: &str) -> CliResponse {
     };
     match get_peer_roster(&roster_base, &fp, ts, &sig, std::time::Duration::from_secs(20)) {
         Ok(body) => {
-            let parsed: serde_json::Value =
+            let mut parsed: serde_json::Value =
                 serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
             // A7 S2: heal + bind this peer's rows (scoped to the peer, CA6).
             let _ = heal_rows_from_roster(&peer, &parsed);
+            // 0.46.1: A to Z here, at the local seam, so a peer on an older
+            // version (which sends its sidebar order) is sorted too.
+            crate::federation_rosters::sort_roster_json(&mut parsed);
             CliResponse::ok_json(
                 serde_json::json!({ "peer": peer.fingerprint, "roster": parsed }).to_string(),
             )
@@ -1660,7 +1665,7 @@ fn fetch_peer_roster(
 
 /// Heal + bind `peer`'s rows from a fetched roster body (S2). `None` when
 /// the body has no agents array (nothing is touched).
-fn heal_rows_from_roster(
+pub(crate) fn heal_rows_from_roster(
     peer: &k2_core::federation::FederationPeer,
     parsed: &serde_json::Value,
 ) -> Option<HealReport> {
@@ -2029,6 +2034,29 @@ fn peer_row_host_matcher(
     }
 }
 
+/// Why a roster GET failed, kept apart so the Connections picker can say
+/// "offline" for a server that never answered and something else for one
+/// that answered with a refusal (0.46.1 `peer-rosters`).
+#[derive(Debug)]
+pub(crate) enum RosterFetchError {
+    /// No answer: connect refused, DNS, TLS, or the time cap ran out.
+    Transport { timed_out: bool, message: String },
+    /// The peer answered with a non-2xx status.
+    Status(u16),
+    /// The peer answered 2xx but the body could not be read.
+    Body(String),
+}
+
+impl std::fmt::Display for RosterFetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RosterFetchError::Transport { message, .. } => f.write_str(message),
+            RosterFetchError::Status(code) => write!(f, "peer rejected roster: HTTP {code}"),
+            RosterFetchError::Body(message) => f.write_str(message),
+        }
+    }
+}
+
 /// GET `<base>/cli/federation/roster?fp&ts&sig` and return the body. Blocking
 /// (reqwest::blocking); a non-2xx or transport error returns `Err`.
 fn get_peer_roster(
@@ -2038,23 +2066,45 @@ fn get_peer_roster(
     sig: &str,
     timeout: std::time::Duration,
 ) -> Result<String, String> {
+    get_peer_roster_typed(base, fp, ts, sig, timeout).map_err(|e| e.to_string())
+}
+
+/// [`get_peer_roster`] with the failure kind kept (see [`RosterFetchError`]).
+/// `timeout` bounds the whole request, connect included.
+pub(crate) fn get_peer_roster_typed(
+    base: &str,
+    fp: &str,
+    ts: i64,
+    sig: &str,
+    timeout: std::time::Duration,
+) -> Result<String, RosterFetchError> {
     let url = format!("{base}/cli/federation/roster");
     let client = reqwest::blocking::Client::builder()
         // Never follow a redirect: a peer must not steer us to another host.
         .redirect(reqwest::redirect::Policy::none())
         .timeout(timeout)
+        .connect_timeout(timeout)
         .build()
-        .map_err(|e| format!("build http client: {e}"))?;
+        .map_err(|e| RosterFetchError::Body(format!("build http client: {e}")))?;
     let resp = client
         .get(&url)
         .query(&[("fp", fp), ("ts", &ts.to_string()), ("sig", sig)])
         .send()
-        .map_err(|e| format!("GET {url}: {e}"))?;
+        .map_err(|e| RosterFetchError::Transport {
+            timed_out: e.is_timeout(),
+            message: format!("GET {url}: {e}"),
+        })?;
     let status = resp.status();
     if !status.is_success() {
-        return Err(format!("peer rejected roster: HTTP {}", status.as_u16()));
+        return Err(RosterFetchError::Status(status.as_u16()));
     }
-    resp.text().map_err(|e| format!("read roster body: {e}"))
+    resp.text().map_err(|e| {
+        if e.is_timeout() {
+            RosterFetchError::Transport { timed_out: true, message: format!("read roster body: {e}") }
+        } else {
+            RosterFetchError::Body(format!("read roster body: {e}"))
+        }
+    })
 }
 
 #[cfg(test)]

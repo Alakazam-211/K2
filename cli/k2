@@ -15813,7 +15813,7 @@ k2 sources — data sources: HTTP JSON checks this server runs for Garden cards 
   k2 sources simulate <name> ok|warn|crit|stale|unknown|slow|off [--for 1h]
   k2 sources pending [--names a,b]          proposals waiting (agents: their own)
   k2 sources approve <name>… [--secret NAME]        one secret for every name: ONE confirm
-  k2 sources secret <name> NAME|--none      bind (or unbind) a vault secret
+  k2 sources secret <name>… NAME|--none     bind (or unbind) one secret: all or none, ONE confirm
   k2 sources pin|unpin <name>               pinned: agents without the switch can't change it
   k2 sources trigger list|show|log|propose|add|edit|approve|pause|resume|remove|test …
   k2 sources access on|off [--workspace <ws>]   owner/admin: the agent switch below
@@ -17076,20 +17076,73 @@ else:
 }
 
 cmd_sources_secret() {
-    local name="${1:-}" secret="${2:-}" use_anyway=""
-    case "$name" in ""|-*) echo "usage: k2 sources secret <name> NAME|--none [--use-anyway]" >&2; exit 2 ;; esac
-    [ -n "$secret" ] || { echo "usage: k2 sources secret <name> NAME|--none [--use-anyway]" >&2; exit 2; }
-    shift 2
+    # k2 sources secret <name>… NAME|--none [--use-anyway]: one secret for
+    # every name (0.46.1): all bound or none, ONE confirm for a person.
+    local pos=() none="" use_anyway=""
     _SRC_JSON=0
     while [ $# -gt 0 ]; do
         case "$1" in
+            --none) none=1; shift ;;
             --use-anyway) use_anyway=1; shift ;;
             --json) _SRC_JSON=1; shift ;;
-            *) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
+            -*) echo "Error: unknown flag '$1'" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
         esac
     done
+    local secret="" names=()
+    if [ -n "$none" ]; then
+        names=(${pos[@]+"${pos[@]}"})
+    elif [ "${#pos[@]}" -ge 2 ]; then
+        secret="${pos[${#pos[@]}-1]}"
+        names=("${pos[@]:0:${#pos[@]}-1}")
+    fi
+    [ "${#names[@]}" -gt 0 ] || { echo "usage: k2 sources secret <name>… NAME|--none [--use-anyway]" >&2; exit 2; }
     local body
-    if [ "$secret" = "--none" ]; then
+    if [ "${#names[@]}" -gt 1 ]; then
+        local namelist
+        namelist="$(printf '%s\n' "${names[@]}")"
+        if [ -n "$none" ] || _sources_in_k2; then
+            # Unbinding needs no confirm; an agent with "Manage Gardens and
+            # data sources" binds with none (others get person_only, exit 3).
+            body="$(K2_SRC_NAMES="$namelist" python3 -c '
+import json, os, sys
+b = {"names": os.environ["K2_SRC_NAMES"].splitlines(), "secret": sys.argv[1] or None}
+if sys.argv[2]: b["useAnyway"] = True
+print(json.dumps(b))' "$secret" "$use_anyway")"
+        else
+            # One confirm bound to the whole list: sha256 of the sorted
+            # "<sourceId>:<secret>" lines (as approve --secret uses).
+            local ids="" n sid
+            for n in "${names[@]}"; do
+                _sources_call GET /cli/sources/show "$(_sources_b2_query "name=$n")"
+                sid="$(printf '%s' "$_SRC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["source"].get("id") or "")')"
+                [ -n "$sid" ] || { echo "Error: the daemon didn't name the source id for $n (run this outside K2)" >&2; exit 3; }
+                ids="$ids$sid"$'\n'
+            done
+            local hash
+            hash="$(K2_SRC_IDS="$ids" python3 -c '
+import hashlib, os, sys
+lines = sorted("%s:%s" % (i, sys.argv[1]) for i in os.environ["K2_SRC_IDS"].splitlines() if i)
+print(hashlib.sha256("\n".join(lines).encode()).hexdigest())' "$secret")"
+            local tok
+            tok="$(_sources_b2_confirm source-batch "$hash" "${#names[@]} sources")" || exit 3
+            body="$(K2_SRC_NAMES="$namelist" python3 -c '
+import json, os, sys
+b = {"names": os.environ["K2_SRC_NAMES"].splitlines(), "secret": sys.argv[1], "confirmToken": sys.argv[2]}
+if sys.argv[3]: b["useAnyway"] = True
+print(json.dumps(b))' "$secret" "$tok" "$use_anyway")"
+            tok=""
+        fi
+        _sources_call POST /cli/sources/secret "$body"
+        if [ "$_SRC_JSON" = "1" ]; then _sources_print_json "$_SRC_BODY"; return 0; fi
+        printf '%s' "$_SRC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s: %s" % (", ".join(v["names"]), ("use " + v["secret"]) if v.get("secretBound") else "no secret"))'
+        return 0
+    fi
+    local name="${names[0]}"
+    if [ -n "$none" ]; then
         body="$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1], "secret": None}))' "$name")"
     elif _sources_in_k2; then
         # An agent with "Manage Gardens and data sources" binds with no
@@ -17406,9 +17459,13 @@ GOTCHAS
   never fire for it.
 
 CARDS
-  Built-in: k2:fleet-grid@1, k2:version-spread@1, k2:relays-dns@1,
-  k2:deploys@1, k2:money-alerts@1 (config.source = "name" or
-  "name::host"). A custom widget asks for cap sources:read. Its errors:
+  Built-in: k2:fleet-grid@2, k2:version-spread@2, k2:relays-dns@2,
+  k2:deploys@2, k2:money-alerts@2 (config.source = "name" or
+  "name::host"; config.sources = "a, b" for several, merged by item key).
+  @2 (0.46.1) says "soft crit 2/3", reads K2 Web's ops shapes (boxes with
+  customer / needs_go, edge relays, billing), shows a named list with
+  config.list, and subscribes again by itself after a refusal. @1 still
+  runs as shipped. A custom widget asks for cap sources:read. Its errors:
   k2 zen widget errors <name>.
 EOF
 }
@@ -25497,7 +25554,7 @@ cmd_schema() {
     {"name": "sources simulate", "usage": "k2 sources simulate <name> ok|warn|crit|stale|unknown|slow|off [--for <dur>]", "description": "Show a TEST state on cards without firing triggers (agents: up to 1h).", "args": [{"name": "name", "required": true}, {"name": "state", "required": true}], "flags": [{"name": "--for", "arg": "dur", "description": "Default 1h."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources pending", "usage": "k2 sources pending [--names a,b]", "description": "Proposed sources and triggers waiting for approval. Agents without the switch see only their own (\"scope\": \"own\").", "args": [], "flags": [{"name": "--names", "arg": "a,b", "description": "Only these."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources approve", "usage": "k2 sources approve <name>... [--secret NAME] [--viewers ...] [--agent-access ...] [--keep ...] [--use-anyway]", "description": "People only: approve proposals (a secret needs a confirm: Touch ID, login or vault password).", "args": [{"name": "name", "required": true}], "flags": [{"name": "--secret", "arg": "NAME", "description": "Bind this vault secret."}, {"name": "--use-anyway", "arg": null, "description": "Accept a root-key warning."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
-    {"name": "sources secret", "usage": "k2 sources secret <name> NAME|--none [--use-anyway]", "description": "People only: bind or unbind a source's vault secret.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources secret", "usage": "k2 sources secret <name>... NAME|--none [--use-anyway]", "description": "Bind or unbind a vault secret on one or several sources (all or none; a person gives ONE confirm for the list; an agent with the switch binds a secret it may use with none).", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources pin", "usage": "k2 sources pin|unpin <name>", "description": "People only: a pinned source can't be edited or removed by agents.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources trigger", "usage": "k2 sources trigger list|show|log|propose|add|edit|approve|pause|resume|remove|test ...", "description": "Wake an agent when a source goes red, amber, recovers or goes stale. Agents propose triggers for themselves; a person approves.", "args": [{"name": "verb", "required": true}], "flags": [{"name": "--source", "arg": "name", "description": "The source."}, {"name": "--on", "arg": "kind", "description": "went_crit | went_warn | recovered | item_went_crit | stale_for:30m."}, {"name": "--agent", "arg": "handle", "description": "Who wakes (default: me)."}, {"name": "--note", "arg": "text", "description": "Added to the wake note."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "changes", "usage": "k2 changes [--json] [--base <ref>] [--workspace <path>]", "description": "This workspace's git changes, the same list the Changes tab shows: staged, unstaged, untracked and conflicted files with +/- counts (--base: the branch-review view vs that ref). Inside a K2 terminal the session passport is sent and the daemon keeps you to your own workspace (folders inside it, e.g. .worktrees/<branch>, are fine). --json = GET /cli/git/snapshot as is. Exit 3 + code on a daemon refusal (not_a_repo, bad_ref, forbidden).", "args": [], "flags": [{"name": "--json", "arg": null, "description": "The daemon's snapshot JSON as is."}, {"name": "--base", "arg": "ref", "description": "Compare with a branch, tag or commit (merge-base to the working tree)."}, {"name": "--workspace", "arg": "path", "description": "Default: the git checkout you are in, else this workspace. Agents: only their own."}]},

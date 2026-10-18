@@ -731,7 +731,11 @@ fn batch_approve(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct SecretBody {
-    name: String,
+    /// One source, or `names` for several (0.46.1).
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    names: Vec<String>,
     secret: Option<String>,
     #[serde(default)]
     confirm_token: Option<String>,
@@ -741,10 +745,20 @@ struct SecretBody {
 
 fn secret(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
     let b: SecretBody = parse(body)?;
+    let mut names: Vec<String> = b.name.iter().chain(b.names.iter()).map(|n| n.trim().to_string()).collect();
+    let mut seen = std::collections::HashSet::new();
+    names.retain(|n| seen.insert(n.clone()));
+    match names.len() {
+        0 => return Err(bad_request("name the source (name) or sources (names)")),
+        1 => {}
+        n if n > 64 => return Err(bad_request("at most 64 sources at once")),
+        _ => return secret_many(who, &names, &b),
+    }
+    let name = names.remove(0);
     let row = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        source_by_name(&conn, &b.name)?
+        source_by_name(&conn, &name)?
     };
     if row.lan && !who.is_owner() {
         return Err(SourceErr::new("lan_owner_only", 403, "sources on a LAN address or plain http are the owner's"));
@@ -803,6 +817,115 @@ fn secret(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
             Ok(json!({"name": row.name, "secret": s, "secretBound": true}))
         }
     }
+}
+
+/// `k2 sources secret a b c NAME|--none` (0.46.1): one secret bound to (or
+/// unbound from) several sources, all or none. Everything is checked before
+/// anything changes; a person gives ONE `source-batch` confirm bound to the
+/// list (`batch_hash` of `<sourceId>:<secret>` pairs, as approve uses); an
+/// agent with the switch binds a secret it may use with no confirm.
+fn secret_many(who: &Who, names: &[String], b: &SecretBody) -> Result<Value, SourceErr> {
+    let rows: Vec<SourceRow> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        names.iter().map(|n| source_by_name(&conn, n)).collect::<Result<_, _>>()?
+    };
+    for r in &rows {
+        if r.lan && !who.is_owner() {
+            return Err(SourceErr::new("lan_owner_only", 403, format!("{} is on a LAN address or plain http; the owner binds it", r.name)));
+        }
+    }
+    let now = now();
+    let Some(s) = b.secret.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        // Unbind all.
+        for r in rows.iter().filter(|r| r.secret_bound) {
+            sec::unbind(&r.id)?;
+        }
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let tx = conn.unchecked_transaction().map_err(db_err)?;
+        let rev = store::bump_rev(&tx).map_err(db_err)?;
+        for r in &rows {
+            tx.execute(
+                "UPDATE sources SET secret_name = NULL, secret_bound = 0, secret_workspace = NULL, rev = ?2, updated_at = ?3 WHERE id = ?1",
+                params![r.id, rev, now],
+            )
+            .map_err(db_err)?;
+            audit(&tx, who, "unbind", Some(&r.id), None, json!({"secret": r.secret_name}));
+        }
+        tx.commit().map_err(db_err)?;
+        changed(&conn);
+        drop(conn);
+        for r in &rows {
+            crate::gardens_manage::audit_who(who, "sources-unbind", &r.name, r.secret_name.as_deref());
+        }
+        return Ok(json!({"names": names, "secret": Value::Null, "secretBound": false}));
+    };
+    // Check every source first; any refusal changes nothing.
+    for r in &rows {
+        if r.url_secret_name.is_some() {
+            return Err(bad_request(format!("{}'s URL is itself a vault secret; approve it to bind that secret", r.name)));
+        }
+        bind_origin(r)?;
+    }
+    let pairs: Vec<(String, String)> = rows.iter().map(|r| (r.id.clone(), s.to_string())).collect();
+    let (scope, proof) = if is_person(who) {
+        let token = b.confirm_token.as_deref().filter(|t| !t.is_empty()).ok_or_else(|| {
+            SourceErr::new("vault_confirm_required", 403, "binding one secret to several sources needs one vault confirm")
+                .with("batchHash", batch_hash(&pairs))
+        })?;
+        for r in &rows {
+            check_root_key(who, r, s, b.use_anyway)?;
+        }
+        let stamp = confirm_stamp(who).ok_or_else(person_only)?;
+        let v = vault()?;
+        let proof = v
+            .confirm
+            .take(token, k2_core::sources::CONFIRM_ACTION_BATCH, Some(&batch_hash(&pairs)), &stamp)
+            .map_err(|_| SourceErr::new("batch_changed", 409, "the confirm doesn't match this list; confirm the list again"))?;
+        (None, Some(proof))
+    } else {
+        let scope = bind_scope(who, s)?;
+        for r in &rows {
+            check_root_key_in(who, r, scope.as_deref(), s, b.use_anyway)?;
+        }
+        (scope, None)
+    };
+    // Bind (all or none), then one transaction for the rows.
+    let mut bound: Vec<&SourceRow> = Vec::new();
+    for r in &rows {
+        if r.secret_bound {
+            sec::unbind(&r.id)?;
+        }
+        if let Err(e) = bind_for(who, r, scope.as_deref(), s, proof.as_ref()) {
+            for done in &bound {
+                let _ = sec::unbind(&done.id);
+            }
+            return Err(e);
+        }
+        bound.push(r);
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let tx = conn.unchecked_transaction().map_err(db_err)?;
+        let rev = store::bump_rev(&tx).map_err(db_err)?;
+        for r in &rows {
+            tx.execute(
+                "UPDATE sources SET secret_name = ?2, secret_bound = 1, secret_workspace = ?5, rev = ?3, updated_at = ?4 WHERE id = ?1",
+                params![r.id, s, rev, now, scope],
+            )
+            .map_err(db_err)?;
+            audit(&tx, who, "bind", Some(&r.id), None, json!({"secret": s, "scope": scope_code(scope.as_deref())}));
+        }
+        tx.commit().map_err(db_err)?;
+        changed(&conn);
+    }
+    for r in &rows {
+        crate::gardens_manage::audit_who(who, "sources-bind", &r.name, Some(s));
+        let _ = super::engine().poll_now(&r.id);
+    }
+    Ok(json!({"names": names, "secret": s, "secretBound": true}))
 }
 
 // ── pin ──────────────────────────────────────────────────────────────

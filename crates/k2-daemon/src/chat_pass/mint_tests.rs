@@ -406,6 +406,7 @@ mod live_row {
                 sign: &sign,
                 limiter: &limiter,
                 codes: &codes,
+                connect_gate: &ready_gate,
             };
             mint::handle_pass_with(&req(Some(OWNER), b""), &d)
         }

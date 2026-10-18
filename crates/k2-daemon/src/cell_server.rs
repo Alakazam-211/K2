@@ -1081,6 +1081,10 @@ mod unix_impl {
                         let peer = params.get("peer").cloned().unwrap_or_default();
                         from_cli(crate::federation_routes::handle_peer_roster(&peer))
                     }
+                    "/cli/federation/peer-rosters" if !is_post => {
+                        let peer = params.get("peer").cloned();
+                        from_cli(crate::federation_rosters::handle_peer_rosters(peer.as_deref()))
+                    }
                     _ => (
                         "404 Not Found".to_string(),
                         "application/json",

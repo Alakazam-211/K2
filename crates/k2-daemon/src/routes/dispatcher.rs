@@ -10997,6 +10997,29 @@ async fn handle_one_request(
                         .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                     }
                 }
+                "/cli/federation/peer-rosters" => {
+                    // GET (0.46.1 Connections picker), same auth as
+                    // peer-roster: owner-or-admin OR scoped passport. Every
+                    // trusted server in parallel, 5 s cap each, sorted.
+                    let _ = stream.read(&mut buf).await;
+                    let (auth_ok, _) = owner_or_admin_or_scoped_hook_auth(
+                        p,
+                        &query,
+                        bearer_token.as_deref(),
+                        state.token.as_str(),
+                    );
+                    if !auth_ok {
+                        crate::cli_response::CliResponse::forbidden()
+                    } else {
+                        let params = super::http::parse_params(&path, &query);
+                        let peer = params.get("peer").cloned();
+                        tokio::task::spawn_blocking(move || {
+                            crate::federation_rosters::handle_peer_rosters(peer.as_deref())
+                        })
+                        .await
+                        .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    }
+                }
                 _ => {
                     let _ = stream.read(&mut buf).await;
                     crate::cli_response::CliResponse::not_found()

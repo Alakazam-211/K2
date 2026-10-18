@@ -46,6 +46,7 @@ pub mod federation_drain;
 pub mod sew_mgmt;
 pub mod tool_hook_worker;
 pub mod feedback_routes;
+pub mod federation_rosters;
 pub mod federation_routes;
 pub mod federation_vault;
 pub mod fs_routes;

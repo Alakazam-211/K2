@@ -103,6 +103,22 @@ if [ -z "$VERSION" ]; then
     exit 1
 fi
 
+# ── Release lock (z3mbpZ is also a K2 compute node) ──
+# Its node policy has foreign_locks = ["/var/tmp/k2-release.lock"]: while
+# the file exists the node takes no new jobs. Write it first, wait for a
+# job already running to finish (never killed), remove it on every exit
+# (only while it is still ours). scripts/release-lock.sh.
+# shellcheck source=release-lock.sh
+source "$(cd "$(dirname "$0")" && pwd)/release-lock.sh"
+if [ "$(uname -s)" = "Darwin" ]; then
+    k2_release_lock_acquire "$VERSION"
+    # The Arch gate trap (below) replaces this one and also releases.
+    trap 'k2_release_lock_release' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    k2_release_wait_node_idle
+fi
+
 TAG="v${VERSION}"
 SIGNING_IDENTITY="Developer ID Application: LZTEK, LLC (36B8R93HXV)"
 KEYCHAIN_PROFILE="K2SO-notarize"   # machine-local notarytool profile name — NOT renamed
@@ -310,6 +326,7 @@ k2_arch_gate_on_exit() {
             tail -n 8 "$ARCH_GATE_LOG" >&2
         fi
     fi
+    k2_release_lock_release
     exit "$rc"
 }
 trap k2_arch_gate_on_exit EXIT

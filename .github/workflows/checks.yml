@@ -50,6 +50,10 @@ jobs:
       - name: Linux SHA256SUMS merge and check (stubbed)
         run: bash tests/packaging/linux-sums.sh
 
+      # release.sh's /var/tmp/k2-release.lock + wait for a compute-node job.
+      - name: Release lock (temp paths, stub k2-node)
+        run: bash tests/packaging/release-lock.sh
+
       - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies

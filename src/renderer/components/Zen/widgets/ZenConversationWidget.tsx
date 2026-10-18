@@ -41,6 +41,7 @@ import {
   threadFadeTop,
   zenEmptyThreadText,
 } from '@/components/Thread/ThreadZenKit'
+import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { useZenMaterials } from '@/lib/zen/zen-materials'
 import type { ZenAgentRow } from '@/lib/zen/zen-data'
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
@@ -400,8 +401,10 @@ export function ZenConversation({
             {zenEmptyThreadText(row.label)}
           </div>
         )}
-        {ready &&
-          items.map((it) => (
+        {/* Narrow (< 480px, a phone): bubbles use the column (ThreadColumn). */}
+        {ready && (items.length > 0 || typing) && (
+          <ThreadMessageColumn gap={10} className="flex flex-shrink-0 flex-col" testId="zen-conversation-column">
+          {items.map((it) => (
             // `display: contents`: the list's gap and layout see the bubble;
             // the id lets "N waiting" scroll to a card.
             <div key={it.id} data-zen-item={it.id} data-zen-item-waiting={zenCardWaiting(it) ? '' : undefined} style={{ display: 'contents' }}>
@@ -416,7 +419,9 @@ export function ZenConversation({
               />
             </div>
           ))}
-        {ready && typing && <TypingIndicator />}
+          {typing && <TypingIndicator />}
+          </ThreadMessageColumn>
+        )}
       </div>
 
       {options.compose && (

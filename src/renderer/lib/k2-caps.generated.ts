@@ -57,6 +57,11 @@ export const K2_CAPS = {
     sentence: "Save this widget's own data on this computer. Agents you allow can read and change it too.",
     exposure: ['app', 'garden-local'],
   },
+  'guests:rooms': {
+    label: "Set its own guests' rooms (an owner grant per App, never a guest's)",
+    sentence: "See and change which rooms an App's guests can reach on this computer. Every change asks you first, outside the widget.",
+    exposure: ['app', 'garden-local'],
+  },
   'activity:read': { label: 'See when the agent is working', exposure: ['app'] },
   'heartbeats:read': { label: 'See heartbeats: schedule, next fire, history', exposure: ['app'] },
   'heartbeats:write': { label: 'Add, edit, turn on or off, archive and fire heartbeats', exposure: ['app'] },
@@ -68,6 +73,6 @@ export const K2_CAPS = {
 export type K2Cap = keyof typeof K2_CAPS
 
 /** Caps a custom widget may ask for (= the Rust `USER_WIDGET_CAPS`). */
-export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'store:read', 'store:write'] as const
+export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'store:read', 'store:write', 'guests:rooms'] as const
 
 export type UserWidgetCap = (typeof USER_WIDGET_CAPS)[number]

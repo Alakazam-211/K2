@@ -17,7 +17,7 @@
 //! test fails a hand edit).
 
 /// The catalog version this table was generated from.
-pub const CATALOG_VERSION: u32 = 10;
+pub const CATALOG_VERSION: u32 = 11;
 
 /// Every `(method, path)` the browser helper forwards with a guest's
 /// pass (rows for both doors and helper-only rows; a GET row also opens
@@ -110,6 +110,8 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("GET", "/cli/skin/agents"),
     ("HEAD", "/cli/skin/agents"),
     ("POST", "/cli/skin/login"),
+    ("GET", "/cli/skin/guests/rooms"),
+    ("POST", "/cli/skin/guests/rooms"),
     ("GET", "/cli/thread"),
     ("HEAD", "/cli/thread"),
     ("GET", "/cli/thread/latest"),
@@ -198,7 +200,7 @@ pub const WS_ALLOWLIST: &[(&str, &str)] = &[
 pub const HELPER_ONLY_HTTP: &[&str] = &["/cli/skin/password/change"];
 
 /// Routes only an App's gateway link serves: a BFF's server-side calls.
-pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/sew/pass"];
+pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/guests/rooms", "/cli/sew/pass"];
 
 /// The catalog verb behind each App-facing pair and socket
 /// (`(method, path, verb, door)`; sockets are `WS`), for refusals, the
@@ -207,6 +209,8 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("GET", "/cli/skin/me", "me.get", "both"),
     ("GET", "/cli/skin/agents", "roomAgents.list", "both"),
     ("POST", "/cli/skin/login", "guests.login", "link"),
+    ("GET", "/cli/skin/guests/rooms", "guests.rooms", "link"),
+    ("POST", "/cli/skin/guests/rooms", "guests.setRooms", "link"),
     ("POST", "/cli/skin/password/change", "password.change", "helper"),
     ("GET", "/cli/thread", "thread.page", "both"),
     ("GET", "/cli/thread/latest", "thread.latest", "both"),

@@ -1013,6 +1013,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/grants/enabled", Owner),
     post("/cli/skin/grants/host", Owner),
     post("/cli/skin/grants/update", Owner),
+    // RS-A15 (0.46.1): an App's own pass reads/sets its guests' rooms
+    // under the owner's grant; no login (or owner token) uses it.
+    both("/cli/skin/guests/rooms", NoLogin),
     both("/cli/skin/hydra", Owner),
     post("/cli/skin/login", Public),
     post("/cli/skin/logout", Public),

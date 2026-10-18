@@ -68,6 +68,14 @@ describe('day-0: verb tables', () => {
         expect(verb in ZEN_VERBS, verb).toBe(false)
         continue
       }
+      // RS-A15: guests.* rows ride both the App route and the Garden door
+      // (portable), answered by this computer's daemon in a Garden.
+      if (verb === 'guests.rooms' || verb === 'guests.setRooms') {
+        expect(row.reach).toBe('portable')
+        expect(row.cap).toBe('guests:rooms')
+        expect(verb in ZEN_VERBS, verb).toBe(false)
+        continue
+      }
       expect(verb in ZEN_VERBS, verb).toBe(true)
       expect(ZEN_VERBS[verb as keyof typeof ZEN_VERBS], verb).toBe(row.cap)
       if (row.cap) expect(USER_WIDGET_CAPS as readonly string[]).toContain(row.cap)

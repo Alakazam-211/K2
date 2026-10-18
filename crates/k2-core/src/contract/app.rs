@@ -129,8 +129,14 @@ pub(super) fn lint_row(v: &VerbRow, out: &mut Vec<String>) {
     if v.bindings.renderer.is_some() {
         out.push(format!("{name}: an app row has no renderer binding (its transport is the live route)"));
     }
-    if v.exposed_to(Exposure::Widget) || v.exposed_to(Exposure::GardenLocal) {
-        out.push(format!("{name}: an app row is exposed to app only until G1 joins the two transports (Q29)"));
+    // One reveal = both surfaces (room-scope §0.2, RS-A15): an app row may
+    // also be `garden-local`, the same verb through `/cli/zen/call`. The
+    // widget bridge stays separate until G1 (Q29).
+    if v.exposed_to(Exposure::Widget) {
+        out.push(format!("{name}: an app row is exposed to app (and garden-local) only until G1 joins the widget bridge (Q29)"));
+    }
+    if v.exposed_to(Exposure::GardenLocal) && v.kind != VerbKind::Call {
+        out.push(format!("{name}: an app + garden-local row is a call (the Garden door answers calls)"));
     }
     match v.kind {
         VerbKind::Call => {
@@ -283,11 +289,20 @@ pub const WS_ALLOWLIST: &[(&str, &str)] = &[\n",
     }
     s.push_str("];\n\n");
     s.push_str("/// Routes only the browser helper forwards: they act on a guest's own\n/// login session (`session=1`), which an App pass never is.\npub const HELPER_ONLY_HTTP: &[&str] = &[");
-    let helper: Vec<String> = pairs.iter().filter(|p| p.door == Some(Door::Helper) && p.method != "HEAD").map(|p| rs_str(p.route)).collect();
+    // One entry per route (a GET and a POST row on one route list it once).
+    let once = |door: Door| -> Vec<String> {
+        let mut seen = BTreeSet::new();
+        pairs
+            .iter()
+            .filter(|p| p.door == Some(door) && p.method != "HEAD" && seen.insert(p.route))
+            .map(|p| rs_str(p.route))
+            .collect()
+    };
+    let helper = once(Door::Helper);
     s.push_str(&helper.join(", "));
     s.push_str("];\n\n");
     s.push_str("/// Routes only an App's gateway link serves: a BFF's server-side calls.\npub const LINK_ONLY_HTTP: &[&str] = &[");
-    let link: Vec<String> = pairs.iter().filter(|p| p.door == Some(Door::Link) && p.method != "HEAD").map(|p| rs_str(p.route)).collect();
+    let link = once(Door::Link);
     s.push_str(&link.join(", "));
     s.push_str("];\n\n");
     s.push_str(

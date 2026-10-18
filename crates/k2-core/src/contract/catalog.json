@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 10,
+  "catalogVersion": 11,
   "caps": [
     {
       "name": "agents:read",
@@ -51,6 +51,12 @@
       "exposure": ["app", "garden-local"],
       "label": "Change dump-table rows",
       "sentence": "Save this widget's own data on this computer. Agents you allow can read and change it too."
+    },
+    {
+      "name": "guests:rooms",
+      "exposure": ["app", "garden-local"],
+      "label": "Set its own guests' rooms (an owner grant per App, never a guest's)",
+      "sentence": "See and change which rooms an App's guests can reach on this computer. Every change asks you first, outside the widget."
     },
     {"name": "activity:read", "exposure": ["app"], "label": "See when the agent is working"},
     {"name": "heartbeats:read", "exposure": ["app"], "label": "See heartbeats: schedule, next fire, history"},
@@ -128,7 +134,14 @@
     {"code": "no_app_pass", "doc": "Server SDK: asApp() where this App has no pass file (K2_PASS_FILE)."},
     {"code": "no_app_key", "doc": "Server SDK: users and rooms need the App key ($K2_SECRETS_DIR/K2_APP_KEY; the owner mints it with k2 app key mint)."},
     {"code": "no_chat_grant", "doc": "Sew: this guest has no chat access (a grant of kind chat)."},
-    {"code": "chat_unavailable", "doc": "Sew is not enabled or not reachable on this server, or its chat-pass keys are unavailable."}
+    {"code": "chat_unavailable", "doc": "Sew is not enabled or not reachable on this server, or its chat-pass keys are unavailable."},
+    {"code": "app_pass_required", "doc": "Guest rooms: only this App's own pass (its link pass or remote pass) calls this; never a guest's pass, the owner token or a login."},
+    {"code": "grant_required", "doc": "Guest rooms: the owner hasn't granted this App guests:rooms (k2 app grant <app> --kind guests-rooms)."},
+    {"code": "outside_app_rooms", "doc": "Guest rooms: a room this App may not hand out (or one that doesn't exist: the same answer)."},
+    {"code": "above_role", "doc": "Guest rooms: a room the guest's role doesn't cover; rooms never add caps beyond the role."},
+    {"code": "has_role", "doc": "Guest rooms: the guest's grant on this App carries a role, so its rooms are the role's; give a narrower role."},
+    {"code": "confirm_required", "doc": "A Garden write that needs the person's confirm on K2's sheet, outside the frame."},
+    {"code": "declined", "doc": "The person said no on K2's confirm sheet."}
   ],
   "bannedFields": [
     "projectPath",
@@ -3889,6 +3902,243 @@
       ],
       "doc": "Log a guest in through this App; the answer carries the guest's session pass.",
       "example": "const {pass} = await k2.login({username, password})"
+    },
+    {
+      "verb": "guests.rooms",
+      "cap": "guests:rooms",
+      "exposure": [
+        "app",
+        "garden-local"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "guests-rooms-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/guests/rooms",
+          "door": "link",
+          "head": false
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "string",
+              "description": "The App's service id. Garden: required (which local App). App: absent, or this App's own id.",
+              "default": ""
+            },
+            "username": {
+              "type": "string",
+              "description": "The guest's username."
+            }
+          },
+          "required": [
+            "username"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppGuestRooms",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "app": {
+            "type": "string",
+            "description": "The App's service id."
+          },
+          "username": {
+            "type": "string"
+          },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Project ids."
+          },
+          "roomHandles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The role on this App's grant; null = Thread-only rooms."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the guest's grant on this App is on."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "true only when a set wrote something (the same rooms are a no-op)."
+          }
+        },
+        "required": [
+          "ok",
+          "app",
+          "username",
+          "rooms",
+          "roomHandles",
+          "role",
+          "enabled",
+          "changed"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "app_pass_required",
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "grant_required",
+        "usage",
+        "not_found",
+        "rate_limited",
+        "cap_not_granted",
+        "stale_widget",
+        "author_unknown",
+        "failed"
+      ],
+      "doc": "One of this App's guests: its rooms on this App and its role (App: its own guests; Garden: any local App's).",
+      "example": "const g = await k2.asApp().guests.rooms({username: 'dana'})"
+    },
+    {
+      "verb": "guests.setRooms",
+      "cap": "guests:rooms",
+      "exposure": [
+        "app",
+        "garden-local"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "guests-rooms-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/guests/rooms",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "string",
+              "description": "The App's service id. Garden: required (which local App). App: absent, or this App's own id.",
+              "default": ""
+            },
+            "username": {
+              "type": "string",
+              "description": "The guest's username."
+            },
+            "rooms": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Room handles or project ids; [] takes every room away."
+            }
+          },
+          "required": [
+            "username",
+            "rooms"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppGuestRooms",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "app": {
+            "type": "string",
+            "description": "The App's service id."
+          },
+          "username": {
+            "type": "string"
+          },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Project ids."
+          },
+          "roomHandles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The role on this App's grant; null = Thread-only rooms."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether the guest's grant on this App is on."
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "true only when a set wrote something (the same rooms are a no-op)."
+          }
+        },
+        "required": [
+          "ok",
+          "app",
+          "username",
+          "rooms",
+          "roomHandles",
+          "role",
+          "enabled",
+          "changed"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "app_pass_required",
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "grant_required",
+        "usage",
+        "not_found",
+        "outside_app_rooms",
+        "above_role",
+        "has_role",
+        "rate_limited",
+        "cap_not_granted",
+        "stale_widget",
+        "author_unknown",
+        "failed",
+        "confirm_required",
+        "declined",
+        "paused"
+      ],
+      "doc": "Set one guest's rooms on this App, within the rooms the App may hand out and never above the guest's role; idempotent, audited.",
+      "example": "await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})"
     },
     {
       "verb": "password.change",

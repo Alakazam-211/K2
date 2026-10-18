@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 10
+export const CATALOG_VERSION = 11
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -70,6 +70,28 @@ export const APP_VERBS = {
     socket: null,
     responseNames: { 'pass': 'token' },
     response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"caps":{"items":{"type":"string"},"type":"array"},"ok":{"type":"boolean"},"pass":{"type":"string"},"principalId":{"type":"string"},"role":{"type":["string","null"]},"roomAccess":{"items":{"additionalProperties":false,"properties":{"caps":{"items":{"type":"string"},"type":"array"},"handle":{"type":"string"}},"type":"object"},"type":"array"},"roomHandles":{"items":{"type":"string"},"type":"array"},"rooms":{"items":{"type":"string"},"type":"array"},"username":{"type":"string"}},"type":"object"},
+  },
+  'guests.rooms': {
+    cap: 'guests:rooms',
+    effect: 'read',
+    kind: 'call',
+    feature: 'guests-rooms-v1',
+    door: 'link',
+    http: { method: 'GET', route: '/cli/skin/guests/rooms', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"changed":{"type":"boolean"},"enabled":{"type":"boolean"},"ok":{"type":"boolean"},"role":{"type":["string","null"]},"roomHandles":{"items":{"type":"string"},"type":"array"},"rooms":{"items":{"type":"string"},"type":"array"},"username":{"type":"string"}},"type":"object"},
+  },
+  'guests.setRooms': {
+    cap: 'guests:rooms',
+    effect: 'write',
+    kind: 'call',
+    feature: 'guests-rooms-v1',
+    door: 'link',
+    http: { method: 'POST', route: '/cli/skin/guests/rooms', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"changed":{"type":"boolean"},"enabled":{"type":"boolean"},"ok":{"type":"boolean"},"role":{"type":["string","null"]},"roomHandles":{"items":{"type":"string"},"type":"array"},"rooms":{"items":{"type":"string"},"type":"array"},"username":{"type":"string"}},"type":"object"},
   },
   'password.change': {
     cap: null,
@@ -759,6 +781,22 @@ export interface AppGuestLogin {
   readonly username: string
 }
 
+export interface AppGuestRooms {
+  /** The App's service id. */
+  readonly app: string
+  /** true only when a set wrote something (the same rooms are a no-op). */
+  readonly changed: boolean
+  /** Whether the guest's grant on this App is on. */
+  readonly enabled: boolean
+  readonly ok: boolean
+  /** The role on this App's grant; null = Thread-only rooms. */
+  readonly role: string | null
+  readonly roomHandles: string[]
+  /** Project ids. */
+  readonly rooms: string[]
+  readonly username: string
+}
+
 export interface AppOk {
   readonly ok: boolean
 }
@@ -1435,7 +1473,7 @@ export interface AppChatPass {
 }
 
 /** The shared error codes (catalog `errors`). */
-export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable'] as const
+export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined'] as const
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number]
 
@@ -1444,6 +1482,8 @@ export interface AppVerbs {
   'me.get': { args: Record<string, never>; value: AppMe }
   'roomAgents.list': { args: Record<string, never>; value: AppRoomAgents }
   'guests.login': { args: { app?: string; password: string; username: string }; value: AppGuestLogin }
+  'guests.rooms': { args: { app?: string; username: string }; value: AppGuestRooms }
+  'guests.setRooms': { args: { app?: string; rooms: string[]; username: string }; value: AppGuestRooms }
   'password.change': { args: { oldPassword: string; password: string }; value: AppOk }
   'thread.page': { args: { addr: string; beforeSeq?: number; limit?: number; sinceSeq?: number }; value: AppThreadPage }
   'thread.latest': { args: { addrs: string[] }; value: AppThreadLatest }
@@ -1503,7 +1543,7 @@ export interface AppVerbs {
   'chat.pass': { args: Record<string, never>; value: AppChatPass }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'chat.pass'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'chat.pass'
 export type AppSubscribeVerb = 'thread.events' | 'files.events' | 'activity.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -1519,6 +1559,10 @@ export interface AppSurfaces {
   readonly guests: {
     /** Log a guest in through this App; the answer carries the guest's session pass. no cap · POST /cli/skin/login. e.g. `const {pass} = await k2.login({username, password})` */
     login(args: { app?: string; password: string; username: string }): Promise<AppGuestLogin>
+    /** One of this App's guests: its rooms on this App and its role (App: its own guests; Garden: any local App's). cap guests:rooms · GET /cli/skin/guests/rooms. e.g. `const g = await k2.asApp().guests.rooms({username: 'dana'})` */
+    rooms(args: { app?: string; username: string }): Promise<AppGuestRooms>
+    /** Set one guest's rooms on this App, within the rooms the App may hand out and never above the guest's role; idempotent, audited. cap guests:rooms · POST /cli/skin/guests/rooms. e.g. `await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})` */
+    setRooms(args: { app?: string; rooms: string[]; username: string }): Promise<AppGuestRooms>
   }
   readonly thread: {
     /** A page of a room's Thread, oldest first; sinceSeq catches up, beforeSeq pages back. cap thread:read · GET /cli/thread. e.g. `const page = await k2.thread.page({addr: 'sales', limit: 50})` */

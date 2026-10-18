@@ -176,14 +176,26 @@ describe('TUWA5: the generated tables', () => {
       'store.txAdd': { cap: 'store:write', reach: 'local', kind: 'call' },
       'store.txCommit': { cap: 'store:write', reach: 'local', kind: 'call' },
       'store.txAbort': { cap: 'store:write', reach: 'local', kind: 'call' },
+      // RS-A15: one row on both the App route and the Garden door.
+      'guests.rooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
+      'guests.setRooms': { cap: 'guests:rooms', reach: 'portable', kind: 'call' },
     })
   })
 
   it('widget caps are bridge caps (or frame-host caps: sources:read; or Garden data: store:*), and K2’s own caps never are widget caps (UW69)', () => {
     const bridgeCaps = new Set<string>(Object.values(ZEN_VERBS).filter((c): c is NonNullable<typeof c> => c !== null))
-    const extra = ['sources:read', 'store:read', 'store:write']
+    const extra = ['sources:read', 'store:read', 'store:write', 'guests:rooms']
     for (const c of USER_WIDGET_CAPS) expect(bridgeCaps.has(c) || extra.includes(c), c).toBe(true)
-    expect([...USER_WIDGET_CAPS]).toEqual(['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'store:read', 'store:write'])
+    expect([...USER_WIDGET_CAPS]).toEqual([
+      'agents:read',
+      'presence:read',
+      'thread:read',
+      'thread:post',
+      'sources:read',
+      'store:read',
+      'store:write',
+      'guests:rooms',
+    ])
     expect(bridgeCaps.has('sources:read'), 'sources.* are answered by the custom layer, never ZEN_VERBS').toBe(false)
     for (const c of ['gardens:manage', 'gardens:template', 'agents:add', 'app:navigate']) {
       expect((USER_WIDGET_CAPS as readonly string[]).includes(c), c).toBe(false)
@@ -221,6 +233,8 @@ describe('TUWA10: one cap table', () => {
       'agent:identity': "Change the agent's name, color and picture",
       'agent:handle': "Change the agent's handle (its address)",
       'files:agentconfig': "Also allow writing the agent's .k2 folder (not recommended)",
+      // RS-A15: an owner grant to the App itself, never a role's or a pass's cap.
+      'guests:rooms': "Set its own guests' rooms (an owner grant per App, never a guest's)",
     })
   })
 

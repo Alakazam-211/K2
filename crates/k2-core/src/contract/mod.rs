@@ -70,6 +70,12 @@ pub enum Exposure {
     /// A custom Garden widget, through this computer's daemon only
     /// (`POST /cli/zen/call`; prd-gardens-local-services-v1 §3.1,
     /// contract-garden-data-v1 §7.2). Wire name `garden-local`.
+    ///
+    /// A row exposed to both `app` and `garden-local` is ONE verb with two
+    /// transports (room-scope §0.2 "one reveal = both surfaces", first used
+    /// by RS-A15 `guests.*`): its `http` binding is the App's live route,
+    /// and in a Garden the same verb, args and answer go through
+    /// `POST /cli/zen/call`. Such a row is `reach: portable`.
     #[serde(rename = "garden-local")]
     GardenLocal,
 }
@@ -367,7 +373,11 @@ mod tests {
         let err = crate::skin::parse_caps(Some(&["nope:nope".to_string()])).expect_err("unknown cap refused");
         let listed = err.split_once("accepted: ").map(|(_, l)| l).unwrap_or_else(|| panic!("no list in {err:?}"));
         let accepted: Vec<&str> = listed.split(", ").collect();
-        assert_eq!(c.caps_exposed_to(Exposure::App), accepted, "ACCEPTED_CAPS vs the catalog's app caps");
+        // Caps an owner grants an App itself (RS-A15) are never a pass's.
+        let pass_caps: Vec<&str> =
+            c.caps_exposed_to(Exposure::App).into_iter().filter(|cap| *cap != crate::skin::guest_rooms::CAP).collect();
+        assert_eq!(pass_caps, accepted, "ACCEPTED_CAPS vs the catalog's app caps");
+        assert!(!accepted.contains(&crate::skin::guest_rooms::CAP), "guests:rooms is an owner grant, never a pass cap");
     }
 
     /// TUWA1: every row's error codes and caps come from the shared tables,
@@ -382,8 +392,17 @@ mod tests {
         }
         // Garden data (contract-garden-data-v1 §7.2): every garden-local row
         // is local, reaches the widget door, and has no renderer binding.
-        let local = c.verbs_exposed_to(Exposure::GardenLocal);
+        let local: Vec<&VerbRow> = c.verbs_exposed_to(Exposure::GardenLocal).into_iter().filter(|v| !v.exposed_to(Exposure::App)).collect();
         assert_eq!(local.len(), 15, "store.* ×10, save.* ×4, viewer.get");
+        // One reveal = both surfaces (RS-A15): rows on the App route and
+        // the Garden door at once.
+        let both: Vec<&str> = c
+            .verbs_exposed_to(Exposure::GardenLocal)
+            .into_iter()
+            .filter(|v| v.exposed_to(Exposure::App))
+            .map(|v| v.verb.as_str())
+            .collect();
+        assert_eq!(both, ["guests.rooms", "guests.setRooms"]);
         for v in local {
             assert_eq!(v.reach, Reach::Local, "{}", v.verb);
             assert_eq!(v.feature, crate::garden_data::FEATURE, "{}", v.verb);
@@ -448,6 +467,14 @@ mod tests {
                 // Sew's chat pass (S28 §9) through the App transport.
                 "no_chat_grant",
                 "chat_unavailable",
+                // RS-A15 guest rooms (both transports).
+                "app_pass_required",
+                "grant_required",
+                "outside_app_rooms",
+                "above_role",
+                "has_role",
+                "confirm_required",
+                "declined",
             ]
         );
     }
@@ -461,13 +488,13 @@ mod tests {
         );
         assert_eq!(
             c.widget_caps(),
-            ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read", "store:read", "store:write"]
+            ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read", "store:read", "store:write", "guests:rooms"]
         );
         for name in c.widget_caps() {
             let s = c.cap(name).and_then(|r| r.sentence.as_deref());
             let s = s.unwrap_or_else(|| panic!("widget cap {name} has no sentence"));
             assert!(
-                s.contains("{where}") || ["presence:read", "sources:read", "store:read", "store:write"].contains(&name),
+                s.contains("{where}") || ["presence:read", "sources:read", "store:read", "store:write", "guests:rooms"].contains(&name),
                 "{name}: sentence names its scope: {s}"
             );
         }

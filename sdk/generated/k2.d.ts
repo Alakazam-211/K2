@@ -373,8 +373,24 @@ export interface StoreTxAborted {
   readonly aborted: boolean
 }
 
+export interface AppGuestRooms {
+  /** The App's service id. */
+  readonly app: string
+  /** true only when a set wrote something (the same rooms are a no-op). */
+  readonly changed: boolean
+  /** Whether the guest's grant on this App is on. */
+  readonly enabled: boolean
+  readonly ok: boolean
+  /** The role on this App's grant; null = Thread-only rooms. */
+  readonly role: string | null
+  readonly roomHandles: string[]
+  /** Project ids. */
+  readonly rooms: string[]
+  readonly username: string
+}
+
 /** A cap a widget may ask for. */
-export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'store:read' | 'store:write'
+export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'store:read' | 'store:write' | 'guests:rooms'
 
 /** What k2.store.subscribe delivers: the changed keys (value null = deleted), or after a gap the whole list again. `by` names the writer: you (by your name), `<you> via <widget>`, or `agent:<handle>`. */
 export type StoreDelivery = Array<{ key: string; rev: number; value: unknown; by: string }> | { resync: true; items: StoreEntry[] }
@@ -387,7 +403,7 @@ export interface StoreTxHandle {
 }
 
 /** The shared error codes (UWA10). */
-export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'pass_required' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'chat_unavailable'
+export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'pass_required' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'chat_unavailable' | 'app_pass_required' | 'grant_required' | 'outside_app_rooms' | 'above_role' | 'has_role' | 'confirm_required' | 'declined'
 
 /** What `k2.connected` resolves with: the hello K2 sent this frame. */
 export interface K2Hello {
@@ -451,10 +467,12 @@ export interface K2Verbs {
   'store.txAdd': { args: [txId: string, ops: StoreOp[]]; value: StoreTxStatus }
   'store.txCommit': { args: [txId: string]; value: StoreCommit }
   'store.txAbort': { args: [txId: string]; value: StoreTxAborted }
+  'guests.rooms': { args: [args: { app?: string; username: string }]; value: AppGuestRooms }
+  'guests.setRooms': { args: [args: { app?: string; rooms: string[]; username: string }]; value: AppGuestRooms }
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'guests.rooms' | 'guests.setRooms'
 export type K2SubscribeVerb = 'theme.changed' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'sources.subscribe'
 
 export interface K2 {
@@ -571,6 +589,12 @@ export interface K2 {
     putChunked(key: string, text: string, opts?: { ifRev?: number }): Promise<StoreCommit>
     /** Read a putChunked value back (null when missing). A part that doesn't match fails with reason chunk_mismatch. This computer only. */
     getChunked(key: string): Promise<string | null>
+  }
+  readonly guests: {
+    /** One of this App's guests: its rooms on this App and its role (App: its own guests; Garden: any local App's). This computer only. cap guests:rooms · portable · guests-rooms-v1. e.g. `const g = await k2.asApp().guests.rooms({username: 'dana'})` */
+    rooms(args: { app?: string; username: string }): Promise<AppGuestRooms>
+    /** Set one guest's rooms on this App, within the rooms the App may hand out and never above the guest's role; idempotent, audited. This computer only. cap guests:rooms · portable · guests-rooms-v1. e.g. `await k2.asApp().guests.setRooms({username: 'dana', rooms: ['acme']})` */
+    setRooms(args: { app?: string; rooms: string[]; username: string }): Promise<AppGuestRooms>
   }
   /** Any widget verb by name; a refused call rejects with K2Error. */
   call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>

@@ -194,8 +194,11 @@ fn lint_row(c: &Catalog, v: &VerbRow, out: &mut Vec<String>) {
         out.push(format!("{name}: a frame row exists only for custom widgets; expose it to widget"));
     }
     // Garden data (contract-garden-data-v1 §7.2): a garden-local row runs
-    // only in this computer's daemon, through the widget door.
-    if v.exposed_to(Exposure::GardenLocal) {
+    // only in this computer's daemon, through the widget door. A row also
+    // exposed to `app` is one verb with both transports (room-scope §0.2,
+    // RS-A15): its `http` binding is the App's live route, its Garden
+    // transport is always `/cli/zen/call`, and the app rules apply instead.
+    if v.exposed_to(Exposure::GardenLocal) && !v.exposed_to(Exposure::App) {
         let door = v.bindings.http.as_ref().is_some_and(|h| h.method == HttpMethod::Post && h.route == GARDEN_LOCAL_ROUTE);
         if !door {
             out.push(format!("{name}: a garden-local row binds http POST {GARDEN_LOCAL_ROUTE}"));

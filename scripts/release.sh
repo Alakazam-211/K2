@@ -61,6 +61,13 @@
 #   Escape: K2_SKIP_ARCH_GATE=1 (loud). Arch breaks then surface only
 #   after the tag, which is what sank 0.41.6 and 0.43.0.
 #
+# Linux SHA256SUMS (Step 10.6) — scripts/linux-sums.sh check. After the
+#   tag, app-linux.yml and arch-package.yml each merge their packages'
+#   lines into the release's SHA256SUMS-linux-x86_64.txt. Step 10.6 waits
+#   (K2_LINUX_SUMS_WAIT_MIN, default 120) until all four Linux packages and
+#   their lines are up and match GitHub's asset digests, else the release
+#   ends with exit 1 and a re-run line. Escape: K2_SKIP_LINUX_SUMS_CHECK=1.
+#
 # Usage:
 #   ./scripts/release.sh <version>
 #   Example: ./scripts/release.sh 0.25.0
@@ -938,6 +945,8 @@ ASSETS+=(
 # Arch/Omarchy pacman package. The k2-arch runner builds this after the
 # tag and uploads it (arch-package.yml). If a file is already in DIST_DIR,
 # attach it here. A missing file does not stop the release. No .sig.
+# Its SHA256SUMS-linux-x86_64.txt line comes from arch-package.yml's `sums`
+# job either way (a hand-attached file here gets none); Step 10.6 checks it.
 ARCH_PKG_NAME="k2-${VERSION}-x86_64.pkg.tar.zst"
 if [ -s "$DIST_DIR/$ARCH_PKG_NAME" ]; then
     ASSETS+=("$DIST_DIR/$ARCH_PKG_NAME")
@@ -1123,6 +1132,26 @@ if [ "${K2_SKIP_APP_ENGINE_SIGN:-0}" != "1" ]; then
     fi
 fi
 
+# ── Step 10.6: Every Linux package has a SHA256SUMS line ──
+# app-linux.yml (deb/rpm/AppImage) and arch-package.yml (pkg.tar.zst) each
+# merge their lines into SHA256SUMS-linux-x86_64.txt after the tag. The
+# desktop updater refuses a Linux package with no line (v0.46.0 shipped
+# without the Arch line). Waits for both workflows, then checks each line
+# against GitHub's own asset digest. Re-run by hand:
+#   bash scripts/linux-sums.sh check ${VERSION} --wait-min 60
+LINUX_SUMS_FAILED=""
+if [ "${K2_SKIP_LINUX_SUMS_CHECK:-0}" = "1" ]; then
+    echo ""
+    echo "  ⚠⚠ LINUX SHA256SUMS CHECK SKIPPED (K2_SKIP_LINUX_SUMS_CHECK=1) ⚠⚠"
+else
+    echo ""
+    echo "Step 10.6: Linux packages vs SHA256SUMS-linux-x86_64.txt (waits for app-linux + arch-package)..."
+    if ! bash "$PROJECT_DIR/scripts/linux-sums.sh" check "${VERSION}" --wait-min "${K2_LINUX_SUMS_WAIT_MIN:-120}"; then
+        LINUX_SUMS_FAILED=1
+        echo "  ✗ Linux SHA256SUMS incomplete or wrong — re-run: bash scripts/linux-sums.sh check ${VERSION} --wait-min 60" >&2
+    fi
+fi
+
 echo ""
 echo "═══════════════════════════════════════════════════"
 echo "  Release ${TAG} complete!"
@@ -1131,5 +1160,6 @@ echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 [ -n "$ROOT_HELPER_SIGN_FAILED" ] && echo "  ⚠  ROOT HELPER NOT SIGNED — bash scripts/sign-root-helper.sh ${VERSION}"
 [ -n "$K2_NODE_SIGN_FAILED" ] && echo "  ⚠  K2-NODE NOT SIGNED — bash scripts/sign-k2-node.sh ${VERSION}"
 [ -n "$APP_ENGINE_SIGN_FAILED" ] && echo "  ⚠  K2-APP-ENGINE NOT SIGNED — bash scripts/sign-app-engine.sh ${VERSION}"
+[ -n "$LINUX_SUMS_FAILED" ] && echo "  ⚠  LINUX SHA256SUMS INCOMPLETE — bash scripts/linux-sums.sh check ${VERSION} --wait-min 60"
 echo "═══════════════════════════════════════════════════"
-[ -z "$ROOT_HELPER_SIGN_FAILED" ] && [ -z "$K2_NODE_SIGN_FAILED" ] && [ -z "$APP_ENGINE_SIGN_FAILED" ] || exit 1
+[ -z "$ROOT_HELPER_SIGN_FAILED" ] && [ -z "$K2_NODE_SIGN_FAILED" ] && [ -z "$APP_ENGINE_SIGN_FAILED" ] && [ -z "$LINUX_SUMS_FAILED" ] || exit 1

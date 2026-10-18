@@ -46,6 +46,8 @@ jobs:
   build-linux-app:
     name: Build K2 app bundles (x86_64 deb/rpm/AppImage)
     runs-on: [self-hosted, linux, k2-linux]
+    outputs:
+      sums_b64: ${{ steps.collect.outputs.sums_b64 }}
     steps:
       - name: Checkout (at the release tag)
         uses: actions/checkout@v4
@@ -116,6 +118,7 @@ jobs:
         run: bunx tauri build --bundles deb,rpm,appimage
 
       - name: Collect + checksum artifacts
+        id: collect
         run: |
           set -euo pipefail
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
@@ -147,7 +150,11 @@ jobs:
             fi
             cp "$f" dist-linux/
           done
-          (cd dist-linux && sha256sum K2_* K2-* | tee SHA256SUMS-linux-x86_64.txt)
+          # Our three lines only. The `sums` job merges them into the
+          # release's SHA256SUMS-linux-x86_64.txt, keeping the Arch
+          # package's line (arch-package.yml) whichever run finishes last.
+          (cd dist-linux && sha256sum K2_* K2-* | tee app-linux.sums)
+          echo "sums_b64=$(base64 -w0 dist-linux/app-linux.sums)" >> "$GITHUB_OUTPUT"
           ls -la dist-linux
 
       - name: Upload to release
@@ -162,5 +169,36 @@ jobs:
           gh release upload "$TAG" --clobber \
             "dist-linux/K2_${VERSION}_amd64.deb" \
             "dist-linux/K2-${VERSION}-1.x86_64.rpm" \
-            "dist-linux/K2_${VERSION}_amd64.AppImage" \
-            "dist-linux/SHA256SUMS-linux-x86_64.txt"
+            "dist-linux/K2_${VERSION}_amd64.AppImage"
+
+  # Merge our three lines into the release's SHA256SUMS-linux-x86_64.txt
+  # (scripts/linux-sums.sh): create it on the first run, otherwise replace
+  # our lines and keep every other line (the Arch package's). Shares
+  # k2-linux-sums-<tag> with arch-package.yml's merge job so the two
+  # read-modify-writes never overlap. Never --clobber a whole new file.
+  sums:
+    name: Merge into SHA256SUMS-linux-x86_64.txt
+    needs: build-linux-app
+    runs-on: [self-hosted, linux, k2-linux]
+    timeout-minutes: 15
+    concurrency:
+      group: k2-linux-sums-${{ github.event.inputs.tag || github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout (for scripts/linux-sums.sh)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Merge the lines into the release SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          K2_RELEASE_REPO: ${{ github.repository }}
+          SUMS_B64: ${{ needs.build-linux-app.outputs.sums_b64 }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          test -n "$SUMS_B64"
+          printf '%s' "$SUMS_B64" | base64 -d > "$RUNNER_TEMP/app-linux.sums"
+          test "$(grep -c . "$RUNNER_TEMP/app-linux.sums")" = 3
+          scripts/linux-sums.sh merge "$TAG" "$RUNNER_TEMP/app-linux.sums" --create-if-missing

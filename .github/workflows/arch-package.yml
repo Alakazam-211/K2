@@ -15,6 +15,11 @@
 # runner also has self-hosted + Linux + X64. The extra label is what keeps
 # makepkg off that box and apt jobs off this one.
 #
+# After the upload, the `sums` job adds the package's line to the
+# release's SHA256SUMS-linux-x86_64.txt (scripts/linux-sums.sh). The build
+# job first waits for app-linux.yml to create that file and fails if it
+# never does. The desktop updater refuses a package with no line.
+#
 # No .sig. Do not pacman -U. Do not add a Linux GUI key to latest.json.
 
 name: arch-package
@@ -57,6 +62,8 @@ jobs:
     name: Build Arch package (x86_64)
     runs-on: [self-hosted, linux, k2-arch]
     timeout-minutes: 180
+    outputs:
+      sums_line: ${{ steps.sums_line.outputs.line }}
     steps:
       - name: Check inputs
         if: github.event_name == 'workflow_dispatch'
@@ -114,6 +121,29 @@ jobs:
           set -euo pipefail
           gh release upload "$IN_TAG" "$PKG_PATH" --clobber
 
+      # The SUMS line for exactly the file just uploaded. The `sums` job
+      # writes it into the release's SHA256SUMS-linux-x86_64.txt.
+      - name: SHA256SUMS line for the package
+        id: sums_line
+        if: github.event_name != 'workflow_dispatch' || inputs.upload
+        run: |
+          set -euo pipefail
+          line="$(scripts/linux-sums.sh line "$PKG_PATH")"
+          echo "$line"
+          echo "line=$line" >> "$GITHUB_OUTPUT"
+
+      # app-linux.yml creates SHA256SUMS-linux-x86_64.txt. Wait for it here,
+      # OUTSIDE the k2-linux-sums concurrency group, so the `sums` job never
+      # holds that group while app-linux's merge needs it. Fails loudly when
+      # the file never appears.
+      - name: Wait for the app-linux SHA256SUMS file
+        if: github.event_name != 'workflow_dispatch' || inputs.upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IN_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          K2_RELEASE_REPO: ${{ github.repository }}
+        run: scripts/linux-sums.sh wait "$IN_TAG" 150
+
       # Gate build: keep the package for a day so a human can pull it with
       # `gh run download`. Never a release asset.
       - name: Keep as a workflow artifact (gate build, no release)
@@ -124,3 +154,34 @@ jobs:
           path: ${{ env.PKG_PATH }}
           retention-days: 1
           if-no-files-found: error
+
+  # Add the package's line to the release's SHA256SUMS-linux-x86_64.txt:
+  # download, replace or append, re-upload with --clobber, read back.
+  # Shares k2-linux-sums-<tag> with app-linux.yml's merge job, so the two
+  # read-modify-writes never overlap. Idempotent: a re-run replaces the line.
+  sums:
+    name: Add the package to SHA256SUMS-linux-x86_64.txt
+    needs: build-arch-pkg
+    if: github.event_name != 'workflow_dispatch' || inputs.upload
+    runs-on: [self-hosted, linux, k2-arch]
+    timeout-minutes: 15
+    concurrency:
+      group: k2-linux-sums-${{ github.event.inputs.tag || github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout (for scripts/linux-sums.sh)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.event.inputs.tag || github.ref }}
+
+      - name: Merge the line into the release SHA256SUMS
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IN_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          K2_RELEASE_REPO: ${{ github.repository }}
+          SUMS_LINE: ${{ needs.build-arch-pkg.outputs.sums_line }}
+        run: |
+          set -euo pipefail
+          test -n "$SUMS_LINE"
+          printf '%s\n' "$SUMS_LINE" > "$RUNNER_TEMP/arch.sums"
+          scripts/linux-sums.sh merge "$IN_TAG" "$RUNNER_TEMP/arch.sums"

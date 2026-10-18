@@ -15,7 +15,7 @@ pub mod vault;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-pub use doc::{ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin};
+pub use doc::{ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin, WidgetPlacementClaim};
 pub use options::{parse_options_value, split_options_csv};
 pub use store::{ExtTxn, OverlayPage};
 pub use transfer::IMPORTED_READ_ONLY;

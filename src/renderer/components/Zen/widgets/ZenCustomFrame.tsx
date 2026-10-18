@@ -213,6 +213,9 @@ export function ZenCustomFrame({
         createZenCustomLayer({
           widget: () => widgetRef.current,
           gardenId: () => gardenId,
+          // The hash this frame runs: every Thread post names it with the
+          // placement, for the daemon's own `thread:post` check (0.46.1).
+          frameHash: () => loadedRef.current?.hash ?? widgetRef.current.hash,
           inner: bridge,
           boundRows: () => zenAgentRows(zenCustomViewFor(gardenId, widgetRef.current)),
           ensureConversation: (address) => ensureZenConversation(zenCustomViewFor(gardenId, widgetRef.current), address),

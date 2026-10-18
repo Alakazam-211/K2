@@ -819,6 +819,114 @@ fn audit_widget_post(origin: &overlay::WidgetOrigin, from: &str, addr: &str, tex
     ));
 }
 
+/// The cap a Garden widget needs to post, answer a card or draft.
+const WIDGET_THREAD_POST_CAP: &str = "thread:post";
+
+/// Parse a request's `origin` (UWB12a + the 0.46.1 placement claim). Only
+/// the person's own post or answer may carry one (unbound, not an app
+/// pass); `what` names the route for the usage message.
+fn widget_origin_param(
+    params: &HashMap<String, String>,
+    allowed: bool,
+    what: &str,
+) -> Result<Option<(overlay::WidgetOrigin, Option<overlay::WidgetPlacementClaim>)>, CliResponse> {
+    let Some(raw) = params.get("origin") else { return Ok(None) };
+    if !allowed {
+        return Err(usage(format!("origin is only for the person's own {what} from a Garden widget")));
+    }
+    let v: serde_json::Value =
+        serde_json::from_str(raw).map_err(|_| usage("origin must be {widget, garden, placement?, hash?}"))?;
+    overlay::WidgetOrigin::parse_claim(&v).map(Some).map_err(usage)
+}
+
+/// 0.46.1: the daemon's own `thread:post` check for a Garden widget's post
+/// or card answer. Before this only the renderer's custom layer checked the
+/// cap (`zen-custom-bridge.ts`).
+///
+/// The daemon can't see which widget is calling (prd-zen-user-widgets-v2
+/// §4.1, as for `/cli/zen/call`): a widget runs in a sealed frame with no
+/// token and reaches K2 only through the app's custom layer, which marks
+/// every post it makes with `origin` = {widget, garden, placement, hash}.
+/// So a widget can't drop the marking; only the app (the owner token) could,
+/// and the app can always post as the person anyway. The check is the third
+/// layer of UW26 (daemon decides the caps, renderer re-checks, every server
+/// checks the role): a guardrail against a renderer mistake or an injected
+/// prompt, not a wall against a same-user process.
+///
+/// Who checks: the daemon that holds the Garden (this computer's), because
+/// only it knows the placement's approved manifest:
+/// - `origin` with `placement` + `hash` (the app's post to an agent on this
+///   computer): the placement must be on this computer, place that widget,
+///   run that live hash, and its approved caps must include `thread:post`.
+///   Unknown Garden or placement, another widget, a stale hash →
+///   403 `widget_not_approved`; caps without `thread:post` (never asked, or
+///   dropped by the Sources taint) → 403 `widget_cap_missing`.
+/// - `origin` without them that names a Garden on this computer: refused
+///   (403 `widget_not_approved`): this computer's widgets always say where
+///   they sit, so the label alone can't skip the check.
+/// - `origin` without them naming a Garden this computer doesn't hold: a
+///   widget on another computer posting to an agent here. That computer's
+///   daemon already checked it (`POST /cli/zen/widget/check` before the app
+///   posts); this daemon keeps the label only, as before.
+///
+/// K2's own template widgets (the Garden's Ask box, `compose`) are K2's
+/// code granted by the template, not sealed frames: they post as the
+/// person's compose bar with no `origin`, so an unmarked post is unchanged.
+/// K2's built-in custom widgets (`k2:<name>@<n>`) are placements like any
+/// other and pass on their manifests' caps.
+fn widget_post_gate(
+    origin: &overlay::WidgetOrigin,
+    claim: Option<&overlay::WidgetPlacementClaim>,
+    from: &str,
+    addr: &str,
+) -> Result<(), CliResponse> {
+    let refusal = match claim {
+        Some(c) => {
+            let f = k2_core::zen::ZenFiles::local();
+            match k2_core::zen::widget_access::check_placement_cap(
+                &f,
+                &origin.garden,
+                &c.placement,
+                &origin.widget,
+                &c.hash,
+                WIDGET_THREAD_POST_CAP,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(r) => r,
+            }
+        }
+        None => {
+            // Read-only (no real-home guard needed, like `zen::is_set_up`).
+            let f = k2_core::zen::ZenFiles::new(k2_core::zen::zen_root());
+            if !k2_core::zen::widget_access::holds_garden(&f, &origin.garden) {
+                return Ok(());
+            }
+            k2_core::zen::widget_access::PlacementRefusal {
+                code: k2_core::zen::widget_access::WIDGET_NOT_APPROVED,
+                message: format!(
+                    "a widget in Garden '{}' must name its placement and hash; K2 reloads the widget",
+                    origin.garden
+                ),
+            }
+        }
+    };
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+        "zen.widget.post_refused",
+        from,
+        format!(
+            "widget={:?} garden={} placement={} to={addr} code={}",
+            origin.widget,
+            origin.garden,
+            claim.map_or("-", |c| c.placement.as_str()),
+            refusal.code
+        ),
+        "-",
+        "-",
+        "cli",
+    ));
+    Err(error_json("403 Forbidden", refusal.code, refusal.message))
+}
+
 /// One daemon-written line on a workspace's main Thread, for its human
 /// (clone proposals, prd-clone-carries-threads-and-vault-v1 §4.4). Plain
 /// text doc; no inject, no wake, no push. Returns the doc id.
@@ -915,22 +1023,22 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
     }
     // UWB12a: a Garden widget's post for the person carries `origin`. It is
     // only the person's own post (unbound via=compose, not an app pass, not
-    // a bound agent); anything else naming an origin is refused.
-    let origin = match params.get("origin") {
-        None => None,
-        Some(raw) => {
-            if request_skin().is_some() || bound || via != "compose" {
-                return usage("origin is only for the person's own post from a Garden widget (via=compose)");
+    // a bound agent); anything else naming an origin is refused. 0.46.1:
+    // the daemon checks the widget's approved `thread:post` too
+    // ([`widget_post_gate`]).
+    let origin = match widget_origin_param(
+        params,
+        request_skin().is_none() && !bound && via == "compose",
+        "post (via=compose)",
+    ) {
+        Ok(None) => None,
+        Ok(Some((o, claim))) => {
+            if let Err(e) = widget_post_gate(&o, claim.as_ref(), &from, &resolved.addr) {
+                return e;
             }
-            let v: serde_json::Value = match serde_json::from_str(raw) {
-                Ok(v) => v,
-                Err(_) => return usage("origin must be {widget, garden}"),
-            };
-            match overlay::WidgetOrigin::parse(&v) {
-                Ok(o) => Some(o),
-                Err(e) => return usage(e),
-            }
+            Some(o)
         }
+        Err(e) => return e,
     };
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -1529,6 +1637,23 @@ fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliR
     let principal = crate::caller_workspace::principal_from_params(params);
     if let Err(e) = authorize_write(principal.as_ref(), &resolved, "k2") {
         return e;
+    }
+    // 0.46.1: a Garden widget's card answer (`thread.answer`, cap
+    // `thread:post`) carries `origin` like its posts, and the daemon checks
+    // the placement's approved caps ([`widget_post_gate`]). A widget
+    // answers with a choice only, never a secret (UW50).
+    match widget_origin_param(params, request_skin().is_none() && !principal_is_bound(params), "card answer") {
+        Ok(None) => {}
+        Ok(Some((o, claim))) => {
+            if opt_param(params, "secret").is_some() || opt_param(params, "value").is_some() {
+                return usage("a Garden widget answers with a choice only, never a secret");
+            }
+            let from = card_actor_from(params, &resolved, session_author);
+            if let Err(e) = widget_post_gate(&o, claim.as_ref(), &from, &resolved.addr) {
+                return e;
+            }
+        }
+        Err(e) => return e,
     }
     if let Some(r) = refuse_if_expired(&resolved, &card_id) {
         return r;
@@ -2767,6 +2892,241 @@ mod tests {
             Some(0),
             "nothing refused was stored: {snap}"
         );
+    }
+
+    // ── 0.46.1: the daemon's own `thread:post` check for Garden widgets ──
+
+    /// The Garden page: custom placement `b1` of widget `board`, and `b2`
+    /// of K2's built-in `k2:diary@1`.
+    const WIDGET_PAGE: &str = "schema = 1\n\n[layout]\nkind = \"columns\"\n[[layout.column]]\nsize = 100\nmin-width = 200\n\n[[widget]]\nid = \"b1\"\nkind = \"custom\"\nwidget = \"board\"\ncolumn = 0\n\n[[widget]]\nid = \"b2\"\nkind = \"custom\"\nwidget = \"k2:diary@1\"\ncolumn = 0\n";
+
+    /// A temp HOME whose Zen folder's first Garden places `board` (asking
+    /// for `caps`) and the built-in diary, plus a pinned agent to post to.
+    struct WidgetGarden {
+        _home: crate::test_support::TempHome,
+        f: k2_core::zen::ZenFiles,
+        garden: String,
+        handle: String,
+        project_id: String,
+    }
+
+    impl WidgetGarden {
+        fn new(caps: &[&str]) -> Self {
+            let home = crate::test_support::TempHome::new();
+            let f = k2_core::zen::ZenFiles::local();
+            f.setup().expect("zen setup");
+            f.new_widget("board", Some("hello")).expect("widget folder");
+            let handle = format!("ovlwgate{}", &uuid::Uuid::new_v4().to_string()[..8]);
+            let (project_id, _) = seed(&handle);
+            pin(&project_id, &uuid::Uuid::new_v4().to_string());
+            let g = WidgetGarden { _home: home, garden: f.gardens()[0].id.clone(), f, handle, project_id };
+            g.set_caps(caps);
+            std::fs::write(g.f.path_of(&k2_core::zen::ZenFile::Garden(g.garden.clone())), WIDGET_PAGE)
+                .expect("garden page");
+            g
+        }
+
+        fn set_caps(&self, caps: &[&str]) {
+            let caps: Vec<String> = caps.iter().map(|c| format!("\"{c}\"")).collect();
+            let sources = if caps.iter().any(|c| c == "\"sources:read\"") { ",\n  \"sources\": \"config\"" } else { "" };
+            let manifest = format!(
+                "{{\n  \"schema\": 1,\n  \"name\": \"Board\",\n  \"entry\": \"index.html\",\n  \"caps\": [{}]{sources}\n}}\n",
+                caps.join(", ")
+            );
+            std::fs::write(self.f.widget_dir("board").join("manifest.json"), manifest).expect("manifest");
+        }
+
+        fn hash(&self, widget: &str) -> String {
+            let h = self.f.garden_widget_status(&self.garden, widget).hash().to_string();
+            assert_eq!(h.len(), 64, "{widget} bundles clean");
+            h
+        }
+
+        fn origin(&self, placement: &str, widget: &str) -> serde_json::Value {
+            serde_json::json!({
+                "widget": widget,
+                "garden": self.garden,
+                "placement": placement,
+                "hash": self.hash(widget),
+            })
+        }
+
+        fn post(&self, text: &str, origin: Option<serde_json::Value>) -> CliResponse {
+            let mut body = serde_json::json!({ "addr": self.handle, "text": text, "via": "compose" });
+            if let Some(o) = origin {
+                body["origin"] = o;
+            }
+            dispatch_post("/cli/thread/post", &HashMap::new(), body.to_string().as_bytes())
+        }
+
+        fn bodies(&self) -> Vec<String> {
+            let get = dispatch("/cli/thread", &params_of(&[("addr", self.handle.as_str())])).expect("GET thread");
+            json_body(&get)["items"]
+                .as_array()
+                .expect("items")
+                .iter()
+                .filter_map(|i| i["doc"]["body"].as_str().map(str::to_string))
+                .collect()
+        }
+    }
+
+    fn refused_code(resp: &CliResponse) -> String {
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        json_body(resp)["error"]["code"].as_str().expect("error.code").to_string()
+    }
+
+    #[test]
+    fn approved_widget_with_thread_post_posts_and_the_doc_keeps_the_label_only() {
+        let g = WidgetGarden::new(&["agents:read", "thread:read", "thread:post"]);
+        let post = g.post("from the board", Some(g.origin("b1", "board")));
+        assert_eq!(post.status, "200 OK", "{}", post.body);
+        let posted = json_body(&post);
+        assert_eq!(posted["via"], "compose", "{posted}");
+        assert_eq!(
+            posted["widget"],
+            serde_json::json!({"widget": "board", "garden": g.garden}),
+            "placement and hash are checked, never stored: {posted}"
+        );
+        assert_eq!(g.bodies(), vec!["from the board".to_string()]);
+    }
+
+    #[test]
+    fn approved_widget_without_thread_post_is_refused_widget_cap_missing() {
+        let g = WidgetGarden::new(&["agents:read", "thread:read"]);
+        assert_eq!(refused_code(&g.post("nope", Some(g.origin("b1", "board")))), "widget_cap_missing");
+        // Sources taint (GV48): asking for sources:read drops thread:post.
+        g.set_caps(&["thread:post", "sources:read"]);
+        let resp = g.post("tainted", Some(g.origin("b1", "board")));
+        assert_eq!(refused_code(&resp), "widget_cap_missing");
+        assert!(json_body(&resp)["error"]["hint"].as_str().expect("hint").contains("data sources"), "{}", resp.body);
+        assert!(g.bodies().is_empty(), "nothing refused was stored");
+        let audit = k2_core::auth_audit::tail(200).expect("audit tail");
+        assert!(
+            audit.iter().any(|e| e["event"] == "zen.widget.post_refused"
+                && e["outcome"].as_str().is_some_and(|o| o.contains(&g.handle) && o.contains("widget_cap_missing"))),
+            "a refused widget post writes an audit line: {audit:?}"
+        );
+    }
+
+    #[test]
+    fn stale_hash_unknown_placement_or_another_widget_is_refused_widget_not_approved() {
+        let g = WidgetGarden::new(&["thread:post"]);
+        let mut stale = g.origin("b1", "board");
+        stale["hash"] = serde_json::json!("0".repeat(64));
+        assert_eq!(refused_code(&g.post("stale", Some(stale))), "widget_not_approved");
+        // The widget changed after its frame loaded: the old hash is stale.
+        let old = g.origin("b1", "board");
+        let entry = g.f.widget_dir("board").join("index.html");
+        let html = std::fs::read_to_string(&entry).expect("read entry");
+        std::fs::write(&entry, format!("{html}\n<!-- changed -->\n")).expect("edit widget");
+        assert_ne!(g.hash("board"), old["hash"].as_str().expect("hash"), "editing the widget moves its hash");
+        assert_eq!(refused_code(&g.post("old frame", Some(old))), "widget_not_approved");
+        let mut unknown = g.origin("b1", "board");
+        unknown["placement"] = serde_json::json!("b9");
+        assert_eq!(refused_code(&g.post("unknown placement", Some(unknown))), "widget_not_approved");
+        let mut elsewhere = g.origin("b1", "board");
+        elsewhere["garden"] = serde_json::json!("g-nothere1");
+        assert_eq!(refused_code(&g.post("unknown garden", Some(elsewhere))), "widget_not_approved");
+        let mut other = g.origin("b1", "board");
+        other["widget"] = serde_json::json!("k2:diary@1");
+        assert_eq!(refused_code(&g.post("another widget", Some(other))), "widget_not_approved");
+        assert!(g.bodies().is_empty(), "nothing refused was stored");
+    }
+
+    #[test]
+    fn a_label_only_origin_naming_this_computers_garden_is_refused_but_another_computers_keeps_the_label() {
+        let g = WidgetGarden::new(&["thread:post"]);
+        let local_label = serde_json::json!({"widget": "board", "garden": g.garden});
+        assert_eq!(refused_code(&g.post("no claim", Some(local_label))), "widget_not_approved");
+        // A widget on another computer, checked by that computer's daemon.
+        let remote = serde_json::json!({"widget": "Agent Arcade", "garden": "g-remote01"});
+        let post = g.post("from another computer", Some(remote.clone()));
+        assert_eq!(post.status, "200 OK", "{}", post.body);
+        assert_eq!(json_body(&post)["widget"], remote);
+        assert_eq!(g.bodies(), vec!["from another computer".to_string()]);
+    }
+
+    #[test]
+    fn k2_builtin_custom_widgets_pass_on_their_own_manifest_caps() {
+        let g = WidgetGarden::new(&[]);
+        let post = g.post("dear diary", Some(g.origin("b2", "k2:diary@1")));
+        assert_eq!(post.status, "200 OK", "{}", post.body);
+        // The board asked for nothing, so it can't post.
+        assert_eq!(refused_code(&g.post("board", Some(g.origin("b1", "board")))), "widget_cap_missing");
+    }
+
+    #[test]
+    fn an_unmarked_post_is_unchanged_by_the_widget_check() {
+        let g = WidgetGarden::new(&[]);
+        let post = g.post("the person typing", None);
+        assert_eq!(post.status, "200 OK", "{}", post.body);
+        assert_eq!(json_body(&post)["widget"], serde_json::Value::Null);
+        let hist = k2_core::workspace_compose_history::list_compose_send_history(&g.project_id).expect("history");
+        assert!(hist.iter().any(|e| e.body == "the person typing"), "a person's post still fills history: {hist:?}");
+    }
+
+    #[test]
+    fn a_widget_card_answer_is_checked_and_never_answers_a_secret() {
+        let g = WidgetGarden::new(&["thread:read"]);
+        let card = ask_card(&g.handle, "Go,Stop");
+        let answer = |origin: serde_json::Value, extra: serde_json::Value| {
+            let mut body = serde_json::json!({ "addr": g.handle, "id": card, "origin": origin });
+            for (k, v) in extra.as_object().expect("extra").iter() {
+                body[k] = v.clone();
+            }
+            dispatch_post("/cli/thread/answer", &HashMap::new(), body.to_string().as_bytes())
+        };
+        let refused = answer(g.origin("b1", "board"), serde_json::json!({"answer": "Go"}));
+        assert_eq!(refused_code(&refused), "widget_cap_missing");
+        assert_eq!(card_status(&g.handle, &card), "pending", "a refused answer leaves the card open");
+        let secret = answer(g.origin("b2", "k2:diary@1"), serde_json::json!({"secret": "hunter2"}));
+        assert_eq!(secret.status, "400 Bad Request", "{}", secret.body);
+        let ok = answer(g.origin("b2", "k2:diary@1"), serde_json::json!({"answer": "Go"}));
+        assert_eq!(ok.status, "200 OK", "{}", ok.body);
+        assert_eq!(card_status(&g.handle, &card), "answered");
+    }
+
+    #[test]
+    fn zen_widget_check_route_answers_the_same_rule() {
+        let g = WidgetGarden::new(&["thread:read"]);
+        let check = |owner: bool, caller: &crate::sidecar_routes::Caller, body: serde_json::Value| {
+            let r = crate::zen_routes::handle(
+                crate::zen_routes::WIDGET_CHECK_ROUTE,
+                owner,
+                caller,
+                "local",
+                &HashMap::new(),
+                body.to_string().as_bytes(),
+            );
+            let v: serde_json::Value = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{e}: {}", r.body));
+            (r.status, v)
+        };
+        let owner = crate::sidecar_routes::Caller::Owner;
+        let req = |placement: &str, widget: &str, hash: String| {
+            serde_json::json!({"garden": g.garden, "placement": placement, "widget": widget, "hash": hash, "cap": "thread:post"})
+        };
+        let (status, v) = check(true, &owner, req("b2", "k2:diary@1", g.hash("k2:diary@1")));
+        assert_eq!((status, v["ok"].clone()), ("200 OK", serde_json::json!(true)), "{v}");
+        assert!(v["caps"].as_array().expect("caps").iter().any(|c| c == "thread:post"), "{v}");
+        let (status, v) = check(true, &owner, req("b1", "board", g.hash("board")));
+        assert_eq!((status, v["error"].as_str()), ("403 Forbidden", Some("widget_cap_missing")), "{v}");
+        let (status, v) = check(true, &owner, req("b1", "board", "f".repeat(64)));
+        assert_eq!((status, v["error"].as_str()), ("403 Forbidden", Some("widget_not_approved")), "{v}");
+        let (status, v) = check(true, &owner, req("b9", "board", g.hash("board")));
+        assert_eq!((status, v["error"].as_str()), ("403 Forbidden", Some("widget_not_approved")), "{v}");
+        let mut bad_cap = req("b2", "k2:diary@1", g.hash("k2:diary@1"));
+        bad_cap["cap"] = serde_json::json!("files:write");
+        let (status, _) = check(true, &owner, bad_cap);
+        assert_eq!(status, "400 Bad Request");
+        // Zen is this computer's person's: an agent passport gets zen_local_only.
+        let agent = crate::sidecar_routes::Caller::Agent(crate::sidecar_routes::AgentCaller {
+            project_id: "w-agent".into(),
+            map_key: None,
+            args: Vec::new(),
+            sandboxed: false,
+        });
+        let (status, v) = check(false, &agent, req("b2", "k2:diary@1", g.hash("k2:diary@1")));
+        assert_eq!((status, v["error"].as_str()), ("403 Forbidden", Some("zen_local_only")), "{v}");
     }
 
     #[test]

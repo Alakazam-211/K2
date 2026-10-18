@@ -75,6 +75,30 @@ export type SecretScope = 'workspace' | 'server' | 'session'
 /** How the agent gets a secret card's answer. */
 export type SecretDelivery = 'fetch' | 'file' | 'env'
 
+/** A custom Garden widget's mark on a post or card answer it sends for the
+ *  person (prd-zen-user-widgets-v2 UWB12a). `placement` + `hash` (0.46.1)
+ *  name the Garden slot it sits in and the bundle hash its frame runs, so
+ *  the daemon holding the Garden can check the widget's approved
+ *  `thread:post` cap. They go to this computer's daemon only; another
+ *  server gets the label (`widget`, `garden`) after this computer's daemon
+ *  checked it (`zen/widget/check`). */
+export interface ThreadWidgetOrigin {
+  widget: string
+  garden: string
+  placement?: string
+  hash?: string
+}
+
+/** The wire copy of an origin: only its known fields. */
+export function threadWidgetOriginBody(o: ThreadWidgetOrigin): ThreadWidgetOrigin {
+  const out: ThreadWidgetOrigin = { widget: o.widget, garden: o.garden }
+  if (o.placement !== undefined && o.hash !== undefined) {
+    out.placement = o.placement
+    out.hash = o.hash
+  }
+  return out
+}
+
 /** A Thread card answer. `secret` is the pasted value: it travels in the POST
  *  body only and never lands in Thread state, a store or a log. The other
  *  fields are what the person chose on a secret card (sent only when they
@@ -87,11 +111,19 @@ export interface ThreadAnswerPayload {
   hosts?: string[]
   delivery?: SecretDelivery
   confirm?: boolean
+  /** Set when a custom Garden widget answers (`thread.answer`, a choice
+   *  only): the daemon checks the widget's approved `thread:post`. */
+  origin?: ThreadWidgetOrigin
 }
 
 /** The `POST thread/answer` body for a payload (values in the body only). */
-export function threadAnswerBody(addr: string, id: string, payload: ThreadAnswerPayload): Record<string, string> {
-  const body: Record<string, string> = { addr, id }
+export function threadAnswerBody(
+  addr: string,
+  id: string,
+  payload: ThreadAnswerPayload,
+): Record<string, string | ThreadWidgetOrigin> {
+  const body: Record<string, string | ThreadWidgetOrigin> = { addr, id }
+  if (payload.origin) body.origin = threadWidgetOriginBody(payload.origin)
   if (payload.answer !== undefined) body.answer = payload.answer
   if (payload.secret !== undefined) {
     body.secret = payload.secret
@@ -301,16 +333,17 @@ export async function postThreadCompose(
   command?: string | null,
   /** prd-zen-user-widgets-v2 UWB12a: a custom Garden widget's post names
    *  its widget (shown "You · via <widget>", kept out of compose history).
-   *  Only sent to a server that reports `thread-widget-origin`. */
-  extra?: { origin?: { widget: string; garden: string } },
+   *  Only sent to a server that reports `thread-widget-origin`; its
+   *  `placement` + `hash` only to this computer's daemon (0.46.1). */
+  extra?: { origin?: ThreadWidgetOrigin },
 ): Promise<ThreadComposeResult> {
-  const body: { addr: string; text: string; via: string; command?: string; origin?: { widget: string; garden: string } } = {
+  const body: { addr: string; text: string; via: string; command?: string; origin?: ThreadWidgetOrigin } = {
     addr,
     text,
     via: 'compose',
   }
   if (command) body.command = command
-  if (extra?.origin) body.origin = { widget: extra.origin.widget, garden: extra.origin.garden }
+  if (extra?.origin) body.origin = threadWidgetOriginBody(extra.origin)
   let resp: Record<string, unknown>
   try {
     resp = await daemonCliPost<Record<string, unknown>>(scope, 'thread/post', body)

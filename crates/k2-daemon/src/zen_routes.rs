@@ -84,6 +84,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/theme/next",
     "/cli/zen/theme/prev",
     "/cli/zen/theme/set",
+    "/cli/zen/widget/check",
     "/cli/zen/widget/claim",
     "/cli/zen/widget/new",
     "/cli/zen/widget/pause",
@@ -494,6 +495,54 @@ fn find_placement(f: &ZenFiles, garden: &str, placement: &str) -> Result<(String
         .find(|p| p.garden == g.id && p.placement == placement)
         .ok_or_else(|| ZenError::NotFound(format!("Garden '{}' has no custom widget '{placement}'", g.name)))?;
     Ok((g.id, p.widget))
+}
+
+/// POST `/cli/zen/widget/check` (0.46.1): may this placement's widget make
+/// a call that needs `cap`?
+pub const WIDGET_CHECK_ROUTE: &str = "/cli/zen/widget/check";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckBody {
+    garden: String,
+    placement: String,
+    /// The folder name or `k2:<name>@<n>` the placement should hold.
+    widget: String,
+    /// The bundle hash the widget's frame runs.
+    hash: String,
+    /// A widget cap (`thread:post` today).
+    cap: String,
+}
+
+/// POST `/cli/zen/widget/check` (0.46.1): the app asks this computer's
+/// daemon, which holds the Garden, before a widget's Thread post or card
+/// answer goes to an agent on ANOTHER server (that server can't see this
+/// computer's placements). Same rule as the inline check on a post to an
+/// agent here (`overlay_routes::widget_post_gate`,
+/// `widget_access::check_placement_cap`): `{ok, caps}`, or 403
+/// `widget_not_approved` / `widget_cap_missing`. Owner token only, like
+/// every Zen route.
+fn handle_widget_check(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
+    let b: CheckBody = match parse_body(body, "widget/check takes {garden, placement, widget, hash, cap}") {
+        Ok(b) => b,
+        Err(e) => return err(e),
+    };
+    if !k2_core::zen::USER_WIDGET_CAPS.contains(&b.cap.as_str()) {
+        return err(ZenError::BadRequest(format!("'{}' isn't a widget cap", b.cap)));
+    }
+    let f = files();
+    match k2_core::zen::widget_access::check_placement_cap(&f, &b.garden, &b.placement, &b.widget, &b.hash, &b.cap) {
+        Ok(caps) => ok(json!({ "ok": true, "caps": caps })),
+        Err(r) => {
+            audit(
+                "zen.widget.check_refused",
+                caller,
+                format!("{}/{} widget={} cap={} code={}", b.garden, b.placement, b.widget, b.cap, r.code),
+                ingress,
+            );
+            resp("403 Forbidden", json!({ "ok": false, "error": r.code, "message": r.message }))
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1143,6 +1192,9 @@ pub fn handle(
                 return err(e);
             }
         }
+    }
+    if path == WIDGET_CHECK_ROUTE {
+        return handle_widget_check(body, caller, ingress);
     }
     let r = match path {
         "/cli/zen/get" => handle_get(params),

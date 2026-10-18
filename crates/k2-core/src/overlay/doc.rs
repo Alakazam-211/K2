@@ -114,6 +114,50 @@ impl WidgetOrigin {
         };
         Ok(WidgetOrigin { widget: check("widget", &o.widget)?, garden: check("garden", &o.garden)? })
     }
+
+    /// Parse a post's `origin` with the placement claim (0.46.1): the
+    /// label ([`WidgetOrigin::parse`]) plus `placement` and `hash`, both or
+    /// neither. The app sends them on a post to an agent on this computer,
+    /// so the daemon can check the placement's approved caps; a post to
+    /// another server carries the label only (its Garden's own daemon
+    /// checked it). The claim is never stored on the doc.
+    pub fn parse_claim(v: &serde_json::Value) -> Result<(Self, Option<WidgetPlacementClaim>), String> {
+        let Some(obj) = v.as_object() else {
+            return Err("origin must be {widget, garden, placement?, hash?}".into());
+        };
+        let mut label = obj.clone();
+        let placement = label.remove("placement");
+        let hash = label.remove("hash");
+        let origin = Self::parse(&serde_json::Value::Object(label))?;
+        let claim = match (placement, hash) {
+            (None, None) => None,
+            (Some(p), Some(h)) => {
+                let p = p.as_str().map(str::trim).unwrap_or_default().to_string();
+                let h = h.as_str().map(str::trim).unwrap_or_default().to_string();
+                if p.is_empty() || p.chars().count() > WIDGET_ORIGIN_MAX_CHARS || p.chars().any(char::is_control) {
+                    return Err(format!(
+                        "origin.placement must be 1-{WIDGET_ORIGIN_MAX_CHARS} characters with no control characters"
+                    ));
+                }
+                if h.is_empty() || h.len() > 128 || !h.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    return Err("origin.hash must be the widget's bundle hash (hex)".into());
+                }
+                Some(WidgetPlacementClaim { placement: p, hash: h })
+            }
+            _ => return Err("origin.placement and origin.hash go together".into()),
+        };
+        Ok((origin, claim))
+    }
+}
+
+/// The placement a widget's post claims (`origin.placement`, `origin.hash`):
+/// which slot of the Garden the widget sits in and the bundle hash its
+/// frame runs. Checked by the daemon that holds the Garden
+/// (`crate::zen::widget_access::check_placement_cap`); never stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WidgetPlacementClaim {
+    pub placement: String,
+    pub hash: String,
 }
 
 /// A Thread post a Design tab sent for the person (prd-browser-design-mode-v1
@@ -630,5 +674,28 @@ mod tests {
             assert!(WidgetOrigin::parse(&bad).is_err(), "{bad}");
         }
         assert!(WidgetOrigin::parse(&json!({"widget": "x".repeat(80), "garden": "g"})).is_ok());
+    }
+
+    #[test]
+    fn widget_origin_claim_takes_placement_and_hash_together() {
+        let (o, c) = WidgetOrigin::parse_claim(&json!({"widget": "board", "garden": "g-1"})).expect("label only");
+        assert_eq!(o, WidgetOrigin { widget: "board".into(), garden: "g-1".into() });
+        assert_eq!(c, None);
+        let (o, c) =
+            WidgetOrigin::parse_claim(&json!({"widget": "board", "garden": "g-1", "placement": " b1 ", "hash": "ab12"}))
+                .expect("with claim");
+        assert_eq!(o, WidgetOrigin { widget: "board".into(), garden: "g-1".into() });
+        assert_eq!(c, Some(WidgetPlacementClaim { placement: "b1".into(), hash: "ab12".into() }));
+        for bad in [
+            json!({"widget": "board", "garden": "g-1", "placement": "b1"}),
+            json!({"widget": "board", "garden": "g-1", "hash": "ab12"}),
+            json!({"widget": "board", "garden": "g-1", "placement": "", "hash": "ab12"}),
+            json!({"widget": "board", "garden": "g-1", "placement": "b1", "hash": "../x"}),
+            json!({"widget": "board", "garden": "g-1", "placement": 1, "hash": "ab12"}),
+            json!({"widget": "board", "garden": "g-1", "placement": "b1", "hash": "ab12", "x": 1}),
+            json!("board"),
+        ] {
+            assert!(WidgetOrigin::parse_claim(&bad).is_err(), "{bad}");
+        }
     }
 }

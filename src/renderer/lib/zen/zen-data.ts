@@ -115,8 +115,10 @@ import {
   type OverlayThreadItem,
   type ThreadAnswerPayload,
   type ThreadTurn,
+  type ThreadWidgetOrigin,
 } from '@/components/SessionView/overlayThread'
 import { registerZenVerb, type ZenVerbCtx } from './zen-bridge'
+import { checkZenWidgetCap } from './zen-widget-routes'
 import { exitZen } from './zen-view'
 import type { ZenResolvedPage, ZenWidgetDecl } from './zen-page'
 import { useZenGardenHomesStore, zenGardenHomeKey } from './zen-garden-homes'
@@ -269,11 +271,53 @@ export interface ZenThreadView {
 }
 
 /** `thread.post` options: files on this computer, or browser files. A
- *  custom widget's post carries `origin` instead (never files, UWB12a). */
+ *  custom widget's post carries `origin` instead (never files, UWB12a),
+ *  with its placement and frame hash (0.46.1). */
 export interface ZenPostOptions {
   paths?: string[]
   files?: File[]
-  origin?: { widget: string; garden: string }
+  origin?: ThreadWidgetOrigin
+}
+
+/** Read a bridge-passed origin (`{widget, garden, placement?, hash?}`). */
+function originArg(v: unknown): ThreadWidgetOrigin | undefined {
+  if (!isObj(v) || typeof v.widget !== 'string' || typeof v.garden !== 'string') return undefined
+  const o: ThreadWidgetOrigin = { widget: v.widget, garden: v.garden }
+  if (typeof v.placement === 'string' && typeof v.hash === 'string') {
+    o.placement = v.placement
+    o.hash = v.hash
+  }
+  return o
+}
+
+/**
+ * 0.46.1: the origin a custom widget's post or card answer carries to the
+ * agent's server `scope`, after the right daemon checks the widget's
+ * approved `thread:post`. Only the daemon that holds the Garden (this
+ * computer's) knows the placement:
+ * - an agent on this computer: the whole origin (placement + hash) rides
+ *   the post and the daemon checks it inline;
+ * - an agent on another server: this computer's daemon checks first
+ *   (`zen/widget/check`, throws on a refusal), then that server gets the
+ *   label only (if it stores origins; older servers get a plain post).
+ * Returns undefined for a label-less post on a server without origins.
+ */
+export async function zenWidgetPostOrigin(
+  scope: ServerScope,
+  origin: ThreadWidgetOrigin,
+): Promise<ThreadWidgetOrigin | undefined> {
+  if (!scope.isRemote) return origin
+  if (origin.placement === undefined || origin.hash === undefined) {
+    throw new Error('zen bridge: a widget’s post names its placement and hash')
+  }
+  await checkZenWidgetCap({
+    garden: origin.garden,
+    placement: origin.placement,
+    widget: origin.widget,
+    hash: origin.hash,
+    cap: 'thread:post',
+  })
+  return scope.serverSupports('thread-widget-origin') ? { widget: origin.widget, garden: origin.garden } : undefined
 }
 
 // ── Internal state ─────────────────────────────────────────────────────────
@@ -1517,8 +1561,9 @@ export async function postZenThread(
   if (!isConnectedHost(c.hostKey)) homeRooms.input(address)
   // UWB12a: a widget's post says which widget sent it ("You · via <widget>",
   // no compose history), on a server that stores it; older servers get a
-  // plain compose post.
-  const origin = opts.origin && c.scope.serverSupports('thread-widget-origin') ? opts.origin : undefined
+  // plain compose post. 0.46.1: the daemon holding the Garden checks the
+  // widget's approved `thread:post` first (`zenWidgetPostOrigin`).
+  const origin = opts.origin ? await zenWidgetPostOrigin(c.scope, opts.origin) : undefined
   const result = origin
     ? await postThreadCompose(c.scope, c.threadAddr, body, null, { origin })
     : await postThreadCompose(c.scope, c.threadAddr, body)
@@ -1677,13 +1722,10 @@ export function installZenDataVerbs(): () => void {
         Array.isArray(o.files) && typeof File !== 'undefined'
           ? o.files.filter((f): f is File => f instanceof File)
           : undefined
-      const origin =
-        isObj(o.origin) && typeof o.origin.widget === 'string' && typeof o.origin.garden === 'string'
-          ? { widget: o.origin.widget, garden: o.origin.garden }
-          : undefined
+      const origin = originArg(o.origin)
       return postZenThread(str(address, 'address'), typeof text === 'string' ? text : '', { paths, files, origin })
     }),
-    registerZenVerb('thread.answer', (_ctx, address, cardId, answer) => {
+    registerZenVerb('thread.answer', async (_ctx, address, cardId, answer) => {
       const payload: ThreadAnswerPayload | null =
         typeof answer === 'string'
           ? { answer }
@@ -1708,7 +1750,17 @@ export function installZenDataVerbs(): () => void {
       if (!payload || (payload.answer === undefined && payload.secret === undefined)) {
         throw new Error('zen bridge: thread.answer needs an answer or a secret')
       }
-      return handlersFor(str(address, 'address')).answer(str(cardId, 'cardId'), payload)
+      const a = str(address, 'address')
+      const handlers = handlersFor(a)
+      // A custom widget's answer (a choice only) carries its origin; the
+      // daemon holding the Garden checks its approved `thread:post` (0.46.1).
+      const origin = isObj(answer) ? originArg(answer.origin) : undefined
+      if (origin) {
+        if (payload.secret !== undefined) throw new Error('zen bridge: a widget answers with a choice only')
+        const sent = await zenWidgetPostOrigin(readyConversation(a).scope, origin)
+        if (sent) payload.origin = sent
+      }
+      return handlers.answer(str(cardId, 'cardId'), payload)
     }),
     registerZenVerb('thread.void', (_ctx, address, cardId) =>
       handlersFor(str(address, 'address')).voidCard(str(cardId, 'cardId')),

@@ -412,12 +412,16 @@ pub fn raise_nofile_limit() {
         let rlim = rlim.assume_init();
         let prior_soft = rlim.rlim_cur;
         let hard = rlim.rlim_max;
-        if prior_soft >= hard {
+        // K-M13 (0.46.1): macOS reports an unlimited hard limit, and
+        // setrlimit refuses a soft limit above kern.maxfilesperproc there
+        // (EINVAL) — so the old "soft = hard" left launchd's 256 in place.
+        let target = nofile_raise_target(hard);
+        if prior_soft >= target {
             // Already at hard limit (or higher — shouldn't happen).
             log_debug!("[rlimit] RLIMIT_NOFILE soft={prior_soft} already at hard={hard}");
             return;
         }
-        let new_rlim = libc::rlimit { rlim_cur: hard, rlim_max: hard };
+        let new_rlim = libc::rlimit { rlim_cur: target, rlim_max: hard };
         if libc::setrlimit(libc::RLIMIT_NOFILE, &new_rlim) != 0 {
             log_debug!(
                 "[rlimit] setrlimit RLIMIT_NOFILE failed (errno={}); leaving soft={prior_soft}",
@@ -426,8 +430,110 @@ pub fn raise_nofile_limit() {
             return;
         }
         log_debug!(
-            "[rlimit] RLIMIT_NOFILE soft raised: {prior_soft} -> {hard}",
+            "[rlimit] RLIMIT_NOFILE soft raised: {prior_soft} -> {target}",
         );
+    }
+}
+
+/// The soft limit [`raise_nofile_limit`] aims for: the hard limit, except
+/// where the kernel caps a process below an "unlimited" hard limit (macOS:
+/// `kern.maxfilesperproc`, else `OPEN_MAX` 10240).
+#[cfg(unix)]
+fn nofile_raise_target(hard: libc::rlim_t) -> libc::rlim_t {
+    #[cfg(target_os = "macos")]
+    {
+        let mut per_proc: libc::c_int = 0;
+        let mut len = std::mem::size_of::<libc::c_int>();
+        let name = b"kern.maxfilesperproc\0";
+        // SAFETY: valid NUL-terminated name, out-pointer and length.
+        let rc = unsafe {
+            libc::sysctlbyname(
+                name.as_ptr() as *const libc::c_char,
+                &mut per_proc as *mut libc::c_int as *mut libc::c_void,
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        let cap: libc::rlim_t = if rc == 0 && per_proc > 0 { per_proc as libc::rlim_t } else { 10_240 };
+        hard.min(cap)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        hard
+    }
+}
+
+/// This process's current soft `RLIMIT_NOFILE` (`None` where there is no
+/// such limit, e.g. Windows, or `getrlimit` failed). An unlimited soft
+/// limit reads as `u64::MAX`.
+pub fn nofile_soft_limit() -> Option<u64> {
+    #[cfg(unix)]
+    {
+        let mut rlim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        // SAFETY: valid out-pointer.
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) } != 0 {
+            return None;
+        }
+        if rlim.rlim_cur == libc::RLIM_INFINITY {
+            return Some(u64::MAX);
+        }
+        Some(rlim.rlim_cur as u64)
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+/// K-M13: a listener's concurrent-connection cap sized from the fd budget
+/// instead of a fixed number. Each spliced connection holds two fds (the
+/// client and its backend), and two listeners (the E2E TLS listener and
+/// the :443 front) share the process with PTYs, watchers and the DB, so
+/// each gets an eighth of the soft limit in connections — a quarter of the
+/// fds — clamped to `[floor, ceiling]`. With systemd's raised soft limit
+/// (524288) that is the ceiling; with an un-raised 1024 it is the floor
+/// (256, what the E2E listener always had).
+pub fn connection_cap_for(soft_limit: Option<u64>, floor: usize, ceiling: usize) -> usize {
+    match soft_limit {
+        Some(soft) => usize::try_from(soft / 8).unwrap_or(usize::MAX).clamp(floor, ceiling),
+        None => floor,
+    }
+}
+
+/// [`connection_cap_for`] on this process's current soft limit.
+pub fn connection_cap(floor: usize, ceiling: usize) -> usize {
+    connection_cap_for(nofile_soft_limit(), floor, ceiling)
+}
+
+#[cfg(test)]
+mod connection_cap_tests {
+    use super::connection_cap_for;
+
+    #[test]
+    fn caps_follow_the_fd_budget_within_bounds() {
+        assert_eq!(connection_cap_for(Some(1024), 256, 16_384), 256, "un-raised: the old fixed 256");
+        assert_eq!(connection_cap_for(Some(256), 256, 16_384), 256, "never below the floor");
+        assert_eq!(connection_cap_for(Some(65_536), 256, 16_384), 8_192);
+        assert_eq!(connection_cap_for(Some(524_288), 256, 16_384), 16_384, "systemd's raised limit: the ceiling");
+        assert_eq!(connection_cap_for(Some(u64::MAX), 256, 16_384), 16_384, "unlimited");
+        assert_eq!(connection_cap_for(None, 256, 16_384), 256);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn raising_reaches_the_platform_target() {
+        super::raise_nofile_limit();
+        let mut rlim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        // SAFETY: valid out-pointer.
+        assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) }, 0);
+        let want = super::nofile_raise_target(rlim.rlim_max);
+        // launchd's 256 must not survive the raise on macOS (the old code
+        // tried soft = RLIM_INFINITY there and silently kept 256).
+        // At the target, or already above it (a shell with `ulimit -n unlimited`).
+        assert!(rlim.rlim_cur >= want, "soft RLIMIT_NOFILE {} not raised to the platform target {want}", rlim.rlim_cur);
+        #[cfg(target_os = "macos")]
+        assert!(rlim.rlim_cur >= 10_240, "macOS soft limit {} after the raise", rlim.rlim_cur);
     }
 }
 

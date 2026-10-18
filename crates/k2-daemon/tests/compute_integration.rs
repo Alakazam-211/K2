@@ -1322,3 +1322,90 @@ async fn get_wait_returns_on_state_change() {
     stop_node(port, "dxa-wait", running).await;
     drop(env);
 }
+
+/// A7 (no ETAs): a queued job shows its position of how many, what is
+/// ahead (running + queued in front, other workspaces anonymous for a
+/// passport), the grant's parallel, and a resource wait carries numbers;
+/// `nodes` gives the owner a named workspace's grant and ignores one that
+/// doesn't resolve.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn queue_view_shows_whats_ahead_and_the_numbers() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let a_ws = seed_ws(&env, "dxa-qa");
+    let b_ws = seed_ws(&env, "dxa-qb");
+    let (a, _) = passport(&a_ws);
+    let (b, _) = passport(&b_ws);
+    let (running, _) = online_node_for(&env, port, "dxa-queue", &a_ws).await;
+    let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": b_ws.id, "toggle": "compute", "value": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let submit = |tok: String, argv: Vec<&'static str>, client: &'static str, cpus: Option<f64>| async move {
+        let mut body = run_body("dxa-queue", &argv, client);
+        body["noSource"] = json!(true);
+        if let Some(c) = cpus {
+            body["cpus"] = json!(c);
+        }
+        let r = post(port, "/cli/compute/run", &tok, body).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        j(&r)
+    };
+    // The node's CPU cap is 75% of 8 cores = 6. A runs a 4-CPU job ...
+    let first = submit(a.clone(), vec!["sleep", "20"], "client-dxa-queue-0001", Some(4.0)).await;
+    let first_id = first["job"]["id"].as_str().expect("id").to_string();
+    wait_state(port, &a, &first_id, "running").await;
+    wait_for("an offer with the 4 CPUs reserved", 20, || {
+        Box::pin(async move { node_row(port, "dxa-queue").await["offer"]["free"]["cpu_millis"].as_u64().is_some_and(|c| c <= 2000) })
+    })
+    .await;
+    // ... so B's 4-CPU job waits for resources, with the numbers.
+    let second = submit(b.clone(), vec!["true"], "client-dxa-queue-0002", Some(4.0)).await;
+    let second_id = second["job"]["id"].as_str().expect("id").to_string();
+    let q = &second["queue"];
+    assert_eq!((q["position"].as_u64(), q["reason"].as_str()), (Some(1), Some("local_resource_limit")), "{second}");
+    let msg = q["message"].as_str().expect("message");
+    assert!(msg.starts_with("asks 4 CPUs; ") && msg.contains("of 6 CPUs free; 1 running"), "{msg}");
+    // A's next job is behind its grant (1 parallel), second in the queue.
+    let third = submit(a.clone(), vec!["true"], "client-dxa-queue-0003", None).await;
+    let third_id = third["job"]["id"].as_str().expect("id").to_string();
+    let v = job_json(port, &a, &third_id).await;
+    let q = &v["queue"];
+    assert_eq!((q["position"].as_u64(), q["of"].as_u64(), q["parallel"].as_u64()), (Some(2), Some(2), Some(1)), "{v}");
+    let ahead = q["ahead"].as_array().expect("ahead");
+    assert_eq!(ahead.len(), 2, "{v}");
+    assert_eq!(ahead[0]["short"], &first_id[..8]);
+    assert_eq!((ahead[0]["state"].as_str(), ahead[0]["mine"].as_bool(), ahead[0]["workspace"].as_str()), (Some("running"), Some(true), Some("dxa-qa")));
+    assert_eq!(ahead[0]["argv"], "sleep 20");
+    assert!(ahead[0]["elapsedSecs"].as_i64().is_some_and(|s| s >= 0), "{v}");
+    // B's job, seen by A's agent: state and age only.
+    assert_eq!(ahead[1]["state"], "queued");
+    assert!(ahead[1]["workspace"].is_null() && ahead[1].get("short").is_none() && ahead[1].get("argv").is_none(), "{v}");
+    assert_eq!(ahead[1]["reason"], "local_resource_limit");
+    assert!(ahead[1]["ageSecs"].as_i64().is_some(), "{v}");
+    // The owner sees every id.
+    let v = job_json(port, OWNER, &third_id).await;
+    assert_eq!(v["queue"]["ahead"][1]["short"], &second_id[..8]);
+    // jobs rows carry the same view.
+    let r = get(port, "/cli/compute/jobs", &a, "state=queued").await;
+    let rows = j(&r)["jobs"].as_array().expect("jobs").clone();
+    let row = rows.iter().find(|r| r["id"] == third_id.as_str()).expect("third in jobs");
+    assert_eq!(row["queue"]["position"], 2);
+    // nodes: the owner names a workspace (path) and sees its grant.
+    let r = get(port, "/cli/compute/nodes", OWNER, &format!("workspace={}", enc(&a_ws.path.to_string_lossy()))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let row = j(&r)["nodes"].as_array().expect("nodes").iter().find(|n| n["name"] == "dxa-queue").cloned().expect("row");
+    assert_eq!(row["grant"]["maxParallel"], 1, "{row}");
+    assert!(row["offer"]["free"]["cpu_millis"].as_u64().is_some() && row["offer"]["caps"]["mem_bytes"].as_u64().is_some(), "{row}");
+    let r = get(port, "/cli/compute/nodes", OWNER, "workspace=%2Fno%2Fsuch%2Fplace").await;
+    assert_eq!(r.status, 200, "an unknown workspace is ignored: {}", r.body);
+    let row = j(&r)["nodes"].as_array().expect("nodes").iter().find(|n| n["name"] == "dxa-queue").cloned().expect("row");
+    assert!(row.get("grant").is_none(), "{row}");
+
+    for id in [&third_id, &second_id, &first_id] {
+        let r = post(port, "/cli/compute/jobs/cancel", OWNER, json!({"job": id})).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
+    stop_node(port, "dxa-queue", running).await;
+    drop(env);
+}

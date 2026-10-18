@@ -140,6 +140,10 @@ set -e
 expect_eq "owner run works before a grant" "$rc" "0"
 out="$(k2 compute grant mini --workspace "$WS" --max-parallel 2)"
 expect_has "granted" "$out" "granted mini"
+out="$(k2 compute nodes)"
+expect_has "nodes shows unreserved CPU" "$out" "unreserved"
+expect_has "nodes shows this workspace's grant in human units" "$out" "grant 2h/job 2 parallel 10 queued"
+expect_has "info shows the grant in human units" "$(k2 compute info mini)" "2h/job  2 parallel"
 set +e
 stdout="$(k2 compute run mini -- sh -c 'cat a.txt; echo to-stderr >&2; exit 7' 2>"$SANDBOX/err")"; rc=$?
 set -e

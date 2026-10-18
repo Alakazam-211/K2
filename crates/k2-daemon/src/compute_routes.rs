@@ -456,7 +456,7 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         return dark();
     }
     let r = match path {
-        "/cli/compute/nodes" => nodes_list(&who),
+        "/cli/compute/nodes" => nodes_list(&who, params),
         "/cli/compute/nodes/info" => node_info(&who, params),
         "/cli/compute/nodes/enroll-code" => enroll_code(&who, body),
         "/cli/compute/nodes/confirm" => node_confirm(&who, body),
@@ -544,7 +544,7 @@ fn granted_node_ids(ws: &str) -> Vec<String> {
     store::grants(&conn, None, Some(ws)).into_iter().map(|g| g.node_id).collect()
 }
 
-fn nodes_list(who: &Who) -> R<serde_json::Value> {
+fn nodes_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     need_credential(who)?;
     let gate = passport_gate(who)?;
     sweep_retiring();
@@ -558,7 +558,18 @@ fn nodes_list(who: &Who) -> R<serde_json::Value> {
             let ids = granted_node_ids(&ws);
             (rows.into_iter().filter(|n| n.state == "active" && ids.contains(&n.id)).collect(), Some(ws))
         }
-        None => (rows, None),
+        // The owner may name a workspace (the CLI sends its checkout) to see
+        // that workspace's grant on each node. One that doesn't resolve is
+        // ignored, never a 404, so `nodes` works from anywhere.
+        None => {
+            let ws = params
+                .get("workspace")
+                .map(String::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .and_then(ws_by_token_or_worktree)
+                .map(|w| w.id);
+            (rows, ws)
+        }
     };
     let show_sas = who.is_owner();
     let nodes: Vec<_> = rows
@@ -1295,8 +1306,8 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let mut out = serde_json::json!({ "job": job_summary(&job), "existing": false, "warnings": warnings,
         "source": source.as_ref().map(SourceInfo::json) });
     if job.state == "queued" {
-        if let Some((pos, why)) = compute_ws::decision_for(&node.id).waiting.get(&job.id) {
-            out["queue"] = serde_json::json!({"position": pos, "reason": why.code, "message": why.message});
+        if let Some(q) = queue_view(who, &job, &compute_ws::decision_for(&node.id)) {
+            out["queue"] = q;
         }
     }
     Ok(out)
@@ -1515,6 +1526,69 @@ fn job_summary(j: &store::JobRow) -> serde_json::Value {
     v
 }
 
+/// The queue view of a queued job (prd-k2-compute-dx-v1 C21, without ETAs
+/// in 0.46.1): its position of how many, why it waits, and what is ahead
+/// of it — the node's active jobs plus the queued jobs in front (FIFO by
+/// age, the scheduler's positions). A passport sees ids and commands only
+/// for its own workspace; other workspaces' entries carry state and age.
+fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Decision) -> Option<serde_json::Value> {
+    let (pos, why) = decision.waiting.get(&j.id)?;
+    let now = compute::now();
+    let viewer = who.passport();
+    let (active, queued, grant, node_offer) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        (
+            store::jobs_in_states(&conn, &j.node_id, store::ACTIVE_STATES),
+            store::jobs_in_states(&conn, &j.node_id, &["queued"]),
+            store::grant(&conn, &j.node_id, &j.workspace_id),
+            store::node_by_id(&conn, &j.node_id).and_then(|n| n.last_offer),
+        )
+    };
+    let offer = compute_ws::live_view(&j.node_id).2.or(node_offer);
+    let entry = |r: &store::JobRow| -> serde_json::Value {
+        let mut e = serde_json::json!({"state": r.state, "ageSecs": (now - r.created_at).max(0)});
+        if viewer.is_none_or(|(ws, _)| ws == r.workspace_id) {
+            let mut argv = r.argv.join(" ");
+            if argv.chars().count() > 80 {
+                argv = argv.chars().take(79).collect::<String>() + "…";
+            }
+            e["short"] = compute::message::short(&r.id).into();
+            e["workspace"] = ws_handle(&r.workspace_id).into();
+            e["mine"] = viewer.is_some_and(|(_, sid)| r.session_id.as_deref() == Some(sid)).into();
+            e["argv"] = argv.into();
+        } else {
+            e["workspace"] = serde_json::Value::Null;
+            e["mine"] = false.into();
+        }
+        if let Some(t) = r.assigned_at.or(r.started_at) {
+            e["elapsedSecs"] = (now - t).max(0).into();
+        }
+        if let Some((_, w)) = decision.waiting.get(&r.id) {
+            e["reason"] = w.code.clone().into();
+        }
+        e
+    };
+    let mut ahead: Vec<serde_json::Value> = active.iter().map(&entry).collect();
+    let mut before: Vec<(usize, &store::JobRow)> = queued
+        .iter()
+        .filter_map(|q| decision.waiting.get(&q.id).map(|(p, _)| (*p, q)))
+        .filter(|(p, _)| p < pos)
+        .collect();
+    before.sort_by_key(|(p, _)| *p);
+    ahead.extend(before.iter().map(|(_, q)| entry(q)));
+    let grant_parallel = grant.map(|g| g.max_parallel.max(1) as u32).unwrap_or(1);
+    let parallel = offer.as_ref().map(|o| o.parallel_max.min(grant_parallel)).unwrap_or(grant_parallel);
+    Some(serde_json::json!({
+        "position": pos,
+        "of": queued.len(),
+        "reason": why.code,
+        "message": why.message,
+        "ahead": ahead,
+        "parallel": parallel,
+    }))
+}
+
 fn job_for(who: &Who, token: Option<&str>) -> R<store::JobRow> {
     need_credential(who)?;
     let gate = passport_gate(who)?;
@@ -1554,7 +1628,22 @@ fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value
         let conn = db.lock();
         store::list_jobs(&conn, &store::JobFilter { node_id: node.as_deref(), workspace_id: ws.as_deref(), state, session_id: session.as_deref(), limit })
     };
-    Ok(serde_json::json!({ "jobs": rows.iter().map(job_summary).collect::<Vec<_>>() }))
+    // Queued rows carry the queue view (one scheduler pass per node).
+    let mut decisions: HashMap<String, scheduler::Decision> = HashMap::new();
+    let jobs: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let mut v = job_summary(r);
+            if r.state == "queued" {
+                let d = decisions.entry(r.node_id.clone()).or_insert_with(|| compute_ws::decision_for(&r.node_id));
+                if let Some(q) = queue_view(who, r, d) {
+                    v["queue"] = q;
+                }
+            }
+            v
+        })
+        .collect();
+    Ok(serde_json::json!({ "jobs": jobs }))
 }
 
 /// What a `get?wait=N` waiter watches: a change in any of these ends the wait.
@@ -1619,8 +1708,8 @@ fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> 
         }
     }
     if j.state == "queued" {
-        if let Some((pos, why)) = compute_ws::decision_for(&j.node_id).waiting.get(&j.id) {
-            v["queue"] = serde_json::json!({"position": pos, "reason": why.code, "message": why.message});
+        if let Some(q) = queue_view(who, &j, &compute_ws::decision_for(&j.node_id)) {
+            v["queue"] = q;
         }
     }
     v["nodeOnline"] = compute_ws::is_online(&j.node_id).into();

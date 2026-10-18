@@ -79,6 +79,42 @@ pub fn never_fits(offer: &Offer, job: &QueuedJob) -> Option<Refusal> {
     None
 }
 
+/// A `local_resource_limit` refusal with the numbers in its message
+/// (display only; the code is unchanged): what the job asks for, what is
+/// free under the node's caps, and how many jobs run. Other refusals pass
+/// through as they are.
+pub fn with_numbers(r: Refusal, offer: &Offer, job: &QueuedJob, running: u32) -> Refusal {
+    if r.code != refusal::LOCAL_RESOURCE_LIMIT {
+        return r;
+    }
+    let gb = |b: u64| b as f64 / (1u64 << 30) as f64;
+    let cpus = |m: u64| m as f64 / 1000.0;
+    let mut asks = Vec::new();
+    if let Some(m) = job.mem_bytes {
+        asks.push(format!("{:.1} GB", gb(m)));
+    }
+    if let Some(c) = job.cpu_millis {
+        asks.push(format!("{} CPUs", fmt_num(cpus(c))));
+    }
+    Refusal::new(
+        refusal::LOCAL_RESOURCE_LIMIT,
+        format!(
+            "asks {}; {:.1} GB of {:.0} GB and {} of {} CPUs free; {running} running",
+            asks.join(" and "),
+            gb(offer.free.mem_bytes),
+            gb(offer.caps.mem_bytes),
+            fmt_num(cpus(offer.free.cpu_millis)),
+            fmt_num(cpus(offer.caps.cpu_millis)),
+        ),
+    )
+}
+
+/// 3 → "3", 2.5 → "2.5" (one decimal at most).
+fn fmt_num(x: f64) -> String {
+    let s = format!("{x:.1}");
+    s.strip_suffix(".0").map(str::to_string).unwrap_or(s)
+}
+
 fn ask(j: &QueuedJob) -> JobAsk<'_> {
     JobAsk {
         workspace_id: &j.workspace_id,
@@ -161,7 +197,7 @@ pub fn decide(
                 waiting.insert(oldest.id.clone(), (1, grant_full()));
             }
             Some(r) => {
-                waiting.insert(oldest.id.clone(), (1, r));
+                waiting.insert(oldest.id.clone(), (1, with_numbers(r, offer, oldest, load.total())));
             }
         }
         for j in jobs.iter().skip(1) {
@@ -178,7 +214,7 @@ pub fn decide(
         let Some(head) = jobs.iter().find(|j| j.workspace_id == *ws) else { continue };
         let refused = refusal::offer_refusal(offer, load.total(), load.exclusive_running, &ask(head));
         let verdict = match refused {
-            Some(r) => Err(r),
+            Some(r) => Err(with_numbers(r, offer, head, load.total())),
             None if !within_grant(head, load, grant_max_parallel) => Err(grant_full()),
             None => Ok(()),
         };
@@ -334,6 +370,31 @@ mod tests {
         assert_eq!(d.place, None);
         assert_eq!(d.waiting["a1"].1.code, refusal::PARALLEL_FULL);
         assert_eq!(d.waiting["b1"].0, 2, "position is global FIFO order");
+    }
+
+    #[test]
+    fn resource_limit_message_has_numbers() {
+        let mut big = job("a1", "A", 1);
+        big.mem_bytes = Some(6 << 30);
+        big.cpu_millis = Some(4000);
+        let mut o = offer(4);
+        o.caps = Caps { cpu_millis: 6000, mem_bytes: 12 << 30, disk_budget_bytes: 100 << 30, hard: true };
+        o.free = Free { cpu_millis: 3000, mem_bytes: (42 << 30) / 10, disk_free_bytes: 500 << 30 };
+        let mut load = Load::default();
+        load.running_by_workspace.insert("B".into(), 1);
+        let d = decide(&[big.clone()], None, &load, &|_| 4, Some(&o), None);
+        assert_eq!(d.place, None);
+        let (pos, r) = &d.waiting["a1"];
+        assert_eq!((*pos, r.code.as_str()), (1, refusal::LOCAL_RESOURCE_LIMIT));
+        assert_eq!(r.message, "asks 6.0 GB and 4 CPUs; 4.2 GB of 12 GB and 3 of 6 CPUs free; 1 running");
+        // Memory only: just that in the ask.
+        let mut mem_only = job("m1", "A", 1);
+        mem_only.mem_bytes = Some(5 << 30);
+        let r = with_numbers(Refusal::new(refusal::LOCAL_RESOURCE_LIMIT, "x"), &o, &mem_only, 0);
+        assert!(r.message.starts_with("asks 5.0 GB; "), "{}", r.message);
+        // Other refusals are untouched.
+        let r = with_numbers(Refusal::new(refusal::PARALLEL_FULL, "full"), &o, &big, 1);
+        assert_eq!((r.code.as_str(), r.message.as_str()), (refusal::PARALLEL_FULL, "full"));
     }
 
     #[test]

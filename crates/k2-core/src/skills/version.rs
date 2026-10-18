@@ -200,7 +200,10 @@ pub const SKILL_VERSION_ZEN: u32 = 26;
 /// Bumped to 32 (0.45.5, Thread cards): prose never closes a card; agents
 /// void their own obsolete cards with `k2 thread void`.
 /// Bumped to 33 (0.46.1): "Your picture and color" (`k2 agent identity`).
-pub const SKILL_VERSION_WORKSPACE: u32 = 33;
+/// Bumped to 34 (0.46.1, thread-attachments-v1): `k2 thread … --file
+/// path[:line[-end]]` and the attach-the-files-you-mention rule; the
+/// AGENTS.md Tooling line names `--file`.
+pub const SKILL_VERSION_WORKSPACE: u32 = 34;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

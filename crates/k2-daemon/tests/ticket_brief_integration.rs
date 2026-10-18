@@ -867,7 +867,7 @@ fn teaching_sites_teach_the_brief() {
     assert_eq!(version::SKILL_VERSION_MANAGER, 13);
     assert_eq!(version::SKILL_VERSION_K2SO_AGENT, 13);
     assert_eq!(version::SKILL_VERSION_CUSTOM_AGENT, 13);
-    assert_eq!(version::SKILL_VERSION_WORKSPACE, 33);
+    assert_eq!(version::SKILL_VERSION_WORKSPACE, 34);
 
     // The loadable k2-cli skill the compose path writes into a workspace
     // (temp HOME so nothing lands in the real one).

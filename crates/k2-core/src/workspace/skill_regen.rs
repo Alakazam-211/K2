@@ -104,7 +104,8 @@ skill (`.k2/skills/k2-cli/SKILL.md`) for the full command reference \
 (`msg`, `inbox`, `activity`, `connections`, `heartbeat`, `thread` for the overlay \
 side channel with your human (`k2 thread <addr> \"...\"` / `ask` / `secret` — not \
 PTY inject; a message prefixed `[thread:<addr>]` is from the Thread tab — reply \
-with `k2 thread <addr> \"...\"`, do not answer in this terminal; Thread text is markdown), `feedback` to \
+with `k2 thread <addr> \"...\"`, do not answer in this terminal; Thread text is markdown; \
+`--file path` to attach workspace files you mention), `feedback` to \
 ask your human a durable question with an HTML brief (`k2 study ticket-brief`), \
 assigned to a user on this server (`--assign <user>`; required in a future update), \
 `project` for your project group's shared \
@@ -391,6 +392,7 @@ k2 thread <addr>                                # read / tail
 k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait (open 7 days; --expires 2h|3d, --no-expiry)
 k2 thread secret <addr> --name NAME             # secret field; you never see the value
 k2 thread void <addr> <card-id>                 # close your own card when it is obsolete
+k2 thread <addr> "text" --file path[:line[-end]]  # attach workspace files (repeatable, ≤10; text optional)
 ```
 
 Text and ask prompts render markdown (**bold**, lists, `code`, fences, links).
@@ -403,6 +405,11 @@ Void your own card only when the question is truly obsolete (`k2 thread void`), 
 Pick a time frame that fits the decision (`--expires`); talking never closes or shortens a card.
 
 **If a message arrives prefixed `[thread:<addr>]`, the human wrote on the Thread tab.** Reply with `k2 thread <addr> "your reply"`. Do **not** answer in this terminal — they are not looking at the TUI. Never `k2 msg` for this (that is agent-to-agent). Use the `<addr>` in the stamp (`ghostbird`, `sales`, `sales/reviewer`).
+
+**When a reply mentions a file, attach it with `--file`** so the person can tap it open (desktop and phone).
+Only files inside this workspace (copy others into it first, e.g. `out/`). Secrets are refused: they go through `k2 vault`.
+An attachment is a pointer to the workspace's copy, not a copy: it shows "changed" when the file changes and "not found" when it moves.
+`path:12` or `path:12-40` opens at that line. Plain in-workspace paths in the text are clickable too.
 
 ## View activity
 ```
@@ -1917,10 +1924,28 @@ mod tests {
             body.contains("render markdown"),
             "k2-cli skill must say Thread text renders markdown"
         );
+        // thread-attachments-v1: agents show things as a file in the Thread.
+        assert!(
+            body.contains(
+                "k2 thread <addr> \"text\" --file path[:line[-end]]  # attach workspace files (repeatable, ≤10; text optional)"
+            ),
+            "k2-cli skill must document `k2 thread --file` in the thread command block"
+        );
+        assert!(
+            body.contains("When a reply mentions a file, attach it with `--file`")
+                && body.contains("Only files inside this workspace")
+                && body.contains("Secrets are refused: they go through `k2 vault`")
+                && body.contains("\"changed\"")
+                && body.contains("\"not found\"")
+                && body.contains("`path:12-40` opens at that line")
+                && body.contains("Plain in-workspace paths in the text are clickable too"),
+            "k2-cli skill must teach the Thread attachment rule (inside workspace, secrets refused, pointer, line range)"
+        );
         assert!(
             AGENTS_MD_TOOLING_SECTION.contains("[thread:<addr>]")
                 && AGENTS_MD_TOOLING_SECTION.contains("k2 thread <addr>")
-                && AGENTS_MD_TOOLING_SECTION.contains("Thread text is markdown"),
+                && AGENTS_MD_TOOLING_SECTION.contains("Thread text is markdown")
+                && AGENTS_MD_TOOLING_SECTION.contains("`--file path` to attach workspace files"),
             "always-on AGENTS.md Tooling must teach [thread:] → k2 thread (new agents may not load k2-cli)"
         );
         assert!(

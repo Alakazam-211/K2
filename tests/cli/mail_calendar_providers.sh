@@ -38,7 +38,9 @@
 #         refused); a mail-only link upgraded in place with
 #         include_granted_scopes.
 #
-# Build first (the daemon MUST carry the test-only provider override):
+# Build first (the daemon MUST carry the test-only provider override; the
+# script refuses a daemon without it, and points the daemon's outbound
+# HTTP at a closed proxy so nothing reaches a real provider):
 #   cargo build -p k2-provider-fakes
 #   cargo build -p k2-daemon --bin k2-daemon --features provider-fakes
 # (A `cargo test -p k2-daemon --test …` build can relink target/debug/
@@ -54,6 +56,14 @@ DAEMON="$TARGET/debug/k2-daemon"
 FAKES="$TARGET/debug/k2-provider-fakes"
 [ -x "$DAEMON" ] || { echo "FAIL: $DAEMON not built (cargo build -p k2-daemon --features provider-fakes)" >&2; exit 1; }
 [ -x "$FAKES" ] || { echo "FAIL: $FAKES not built (cargo build -p k2-provider-fakes)" >&2; exit 1; }
+# Never a real provider. Only a `provider-fakes` build reads
+# K2_PROVIDER_FAKES_URL (the name is compiled in only with the feature); a
+# daemon without it would send the device-code and token calls to the real
+# Microsoft and Google endpoints. Refuse before anything starts.
+if ! LC_ALL=C grep -a -q "K2_PROVIDER_FAKES_URL" "$DAEMON"; then
+    echo "FAIL: $DAEMON was built without --features provider-fakes, so it would call the real Microsoft and Google endpoints. Rebuild: cargo build -p k2-daemon --bin k2-daemon --features provider-fakes" >&2
+    exit 1
+fi
 for tool in python3 sqlite3 curl; do
     command -v "$tool" >/dev/null || { echo "FAIL: $tool is required" >&2; exit 1; }
 done
@@ -138,6 +148,9 @@ chmod +x "$SB/shim/claude"
 TMPDIR="$SB/tmp" XDG_RUNTIME_DIR="$SB/run" K2_RUNTIME_DIR= HOME="$SB" K2_AIRGAP=1 \
     K2_PROVIDER_FAKES_URL="$FAKE" K2_TEST_AGENT_SHIM_DIR="$SB/shim" K2SO_WATCHDOG_DISABLED=1 \
     K2_HEARTBEAT_NO_SELF_HEAL=1 K2_SUBSCRIPTION_PROBE=deny \
+    HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 \
+    https_proxy=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9 all_proxy=http://127.0.0.1:9 \
+    NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
     "$DAEMON" >"$SB/daemon.log" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 200); do

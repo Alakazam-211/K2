@@ -14,14 +14,14 @@
 //   - layout-changed bumps `revision` ONLY (no list fetch — a layout
 //     save changes no list metadata);
 //   - message-created bumps `revision` and schedules the coalesced
-//     refetch (its fetchUnreadGroupIds probe reconciles the unread
-//     badge — the lean signal carries no groupId); while the user is
-//     VIEWING a group's chat (Projects page + selected + drawer
-//     expanded) the selected group is stamped seen on arrival;
-//   - selectGroup marks the group seen (clears its unread bit);
-//   - P6 (§6.4): seen semantics gate on the chat drawer being VISIBLE —
-//     a collapsed drawer accrues unread (its dot) even for the viewed
-//     group, and expanding it marks the selected group seen.
+//     refetch; unread is the DAEMON's (thread-read-v1): the store posts
+//     nothing on it (the open chat panel marks read, the daemon's
+//     `project_read` frame moves the badge);
+//   - selectGroup marks the group read: POST /cli/project-group/read,
+//     only when the daemon's unread store says it has unread;
+//   - P6 (§6.4): read semantics gate on the chat drawer being VISIBLE —
+//     a collapsed drawer keeps the unread (its dot) even for the viewed
+//     group, and expanding it marks the selected group read.
 //
 // vitest env is node — the session-events registry + the api module +
 // the connect-host store are mocked at the module boundary.
@@ -35,6 +35,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 const ev = vi.hoisted(() => ({
   handlers: [] as Array<(reason: string) => void>,
   hello: [] as Array<() => void>,
+  read: [] as Array<(e: Record<string, unknown>) => void>,
 }))
 vi.mock('@/stores/session-events', async () => {
   // Home M1: every subscription takes the server scope first; these
@@ -51,6 +52,25 @@ vi.mock('@/stores/session-events', async () => {
       ev.hello.push(fn)
       return () => void (ev.hello = ev.hello.filter((f) => f !== fn))
     }),
+    // thread-read-v1: the unread store's live frames.
+    onReadStateChanged: vi.fn((scope: unknown, fn: (e: Record<string, unknown>) => void) => {
+      expectPrimaryScope(scope)
+      ev.read.push(fn)
+      return () => undefined
+    }),
+  }
+})
+
+// thread-read-v1: the unread store (real) talks to the daemon here.
+const cli = vi.hoisted(() => ({
+  get: vi.fn(async (_path: string): Promise<unknown> => ({})),
+  post: vi.fn(async (_path: string, _body?: unknown): Promise<unknown> => ({})),
+}))
+vi.mock('@/lib/daemon-cli', async () => {
+  const { primaryOnly } = await import('@/test-utils/scope')
+  return {
+    daemonCliGet: primaryOnly((path: string) => cli.get(path)),
+    daemonCliPost: primaryOnly((path: string, body?: unknown) => cli.post(path, body)),
   }
 })
 
@@ -66,7 +86,6 @@ vi.mock('@/lib/daemon-reconnect', () => ({
 const api = vi.hoisted(() => ({
   fetchProjectGroups: vi.fn(async () => [] as unknown[]),
   fetchProjectGroupShow: vi.fn(async (_id: string) => ({ members: [] as { workspaceId: string }[] })),
-  fetchUnreadGroupIds: vi.fn(async () => [] as string[]),
 }))
 vi.mock('@/components/Projects/projects-api', async () => {
   // Home M1: the wrappers take the scope first; `primaryOnly` checks it is
@@ -75,7 +94,6 @@ vi.mock('@/components/Projects/projects-api', async () => {
   return {
     fetchProjectGroups: primaryOnly((...a: []) => api.fetchProjectGroups(...a)),
     fetchProjectGroupShow: primaryOnly((id: string) => api.fetchProjectGroupShow(id)),
-    fetchUnreadGroupIds: primaryOnly((...a: []) => api.fetchUnreadGroupIds(...a)),
   }
 })
 
@@ -88,6 +106,40 @@ vi.mock('@/stores/connect-host', () => ({
 
 import { useProjectGroupsStore, initProjectGroupEvents } from '@/stores/project-groups'
 import { usePageViewStore } from '@/stores/page-view'
+import { useUnreadStore, type UnreadEntry } from '@/stores/unread'
+
+/** The daemon's unread state for project groups (the store's shape). */
+function seedUnread(...groupIds: string[]): void {
+  const byKey: Record<string, UnreadEntry> = {}
+  for (const id of groupIds) {
+    byKey[`project:${id}`] = {
+      kind: 'project',
+      id,
+      projectId: null,
+      lastReadSeq: 1,
+      lastSeq: 4,
+      unread: 3,
+      waiting: 0,
+      muted: false,
+      mutedUntil: null,
+    }
+  }
+  useUnreadStore.setState({ byKey, total: 3 * groupIds.length, waitingTotal: 0, loaded: true })
+}
+
+/** POST /cli/project-group/read calls, by group. */
+function readPosts(): string[] {
+  return cli.post.mock.calls
+    .filter(([path]) => path === 'project-group/read')
+    .map(([, body]) => (body as { group: string }).group)
+}
+
+function unreadIds(): string[] {
+  return Object.values(useUnreadStore.getState().byKey)
+    .filter((e) => e.kind === 'project' && e.unread > 0)
+    .map((e) => e.id)
+    .sort()
+}
 
 async function flush(): Promise<void> {
   await new Promise((r) => setTimeout(r, 0))
@@ -106,14 +158,30 @@ describe('project-groups store event wiring', () => {
     api.fetchProjectGroups.mockResolvedValue([])
     api.fetchProjectGroupShow.mockReset()
     api.fetchProjectGroupShow.mockResolvedValue({ members: [] })
-    api.fetchUnreadGroupIds.mockReset()
-    api.fetchUnreadGroupIds.mockResolvedValue([])
+    cli.get.mockReset()
+    cli.get.mockResolvedValue({ ok: true, total: 0, waitingTotal: 0, byConversation: [], muted: [] })
+    cli.post.mockReset()
+    // The daemon's answer to a read: nothing unread any more.
+    cli.post.mockImplementation(async (_path: string, body?: unknown) => ({
+      ok: true,
+      changed: true,
+      kind: 'project',
+      id: (body as { group: string }).group,
+      seq: 4,
+      lastReadSeq: 4,
+      lastSeq: 4,
+      unread: 0,
+      waiting: 0,
+      muted: false,
+      total: 0,
+      waitingTotal: 0,
+    }))
+    useUnreadStore.setState({ byKey: {}, total: 0, waitingTotal: 0, loaded: true })
     usePageViewStore.setState({ page: 'agents' })
     useProjectGroupsStore.setState({
       groups: [],
       tagsByWorkspaceId: {},
       selectedGroupId: null,
-      unreadGroupIds: new Set<string>(),
       chatCollapsed: false,
     })
   })
@@ -173,45 +241,36 @@ describe('project-groups store event wiring', () => {
     }
   })
 
-  it('message-created bumps revision and reconciles unread via the coalesced probe', async () => {
+  it('message-created bumps revision + the coalesced refetch, and posts no read itself', async () => {
     vi.useFakeTimers()
     try {
-      // The lean signal carries no groupId — which group went unread is
-      // the fetchUnreadGroupIds probe's answer (messages newer than each
-      // group's last-seen cursor).
-      api.fetchUnreadGroupIds.mockResolvedValue(['g1'])
+      // Even while VIEWING the group: the open panel marks read from the
+      // message's seq (useAutoMarkRead); the store's signal handler doesn't.
+      usePageViewStore.setState({ page: 'projects' })
+      useProjectGroupsStore.setState({ selectedGroupId: 'g1', chatCollapsed: false })
+      seedUnread('g1')
       const before = useProjectGroupsStore.getState().revision
       fire('message-created')
       expect(useProjectGroupsStore.getState().revision).toBe(before + 1)
-      // Inside the window — nothing fetched yet.
       expect(api.fetchProjectGroups).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(300)
       await vi.advanceTimersByTimeAsync(0) // settle the fetch chain
       expect(api.fetchProjectGroups).toHaveBeenCalledTimes(1)
-      expect(useProjectGroupsStore.getState().unreadGroupIds.has('g1')).toBe(true)
+      expect(readPosts()).toEqual([])
+      expect(unreadIds()).toEqual(['g1'])
     } finally {
       vi.useRealTimers()
     }
   })
 
-  it('message-created while VIEWING a group stamps the selected group seen on arrival', async () => {
-    vi.useFakeTimers()
-    try {
-      usePageViewStore.setState({ page: 'projects' })
-      useProjectGroupsStore.setState({
-        selectedGroupId: 'g1',
-        unreadGroupIds: new Set(['g1']),
-        chatCollapsed: false,
-      })
-      fire('message-created')
-      // The viewed group's messages are on screen — seen the moment they
-      // land (its unread bit clears immediately, before any reconcile).
-      expect(useProjectGroupsStore.getState().unreadGroupIds.has('g1')).toBe(false)
-      // Drain the coalesce timer so it can't leak into a later test.
-      await vi.advanceTimersByTimeAsync(300)
-    } finally {
-      vi.useRealTimers()
+  it('the Projects badge follows the daemon: a project_read frame clears the group', () => {
+    seedUnread('g1', 'g2')
+    if (ev.read.length === 0) throw new Error('no read-state handler registered')
+    for (const fn of ev.read) {
+      fn({ kind: 'project_read', id: 'g1', seq: 4, lastReadSeq: 4, lastSeq: 4, unread: 0, waiting: 0, muted: false, total: 3, waitingTotal: 0 })
     }
+    expect(unreadIds()).toEqual(['g2'])
+    expect(useUnreadStore.getState().total).toBe(3)
   })
 
   it('unknown reasons (forward compat) fall back to the coalesced refetch', async () => {
@@ -227,89 +286,70 @@ describe('project-groups store event wiring', () => {
     }
   })
 
-  it('selectGroup marks the group seen (clears its unread bit)', () => {
-    useProjectGroupsStore.setState({ unreadGroupIds: new Set(['g1', 'g2']) })
+  it('selectGroup marks the group read: POST /cli/project-group/read (only it)', async () => {
+    seedUnread('g1', 'g2')
     useProjectGroupsStore.getState().selectGroup('g1')
-    const s = useProjectGroupsStore.getState()
-    expect(s.selectedGroupId).toBe('g1')
-    expect(s.unreadGroupIds.has('g1')).toBe(false)
-    expect(s.unreadGroupIds.has('g2')).toBe(true)
+    expect(useProjectGroupsStore.getState().selectedGroupId).toBe('g1')
+    // Optimistic: the dot goes at once.
+    expect(unreadIds()).toEqual(['g2'])
+    await flush()
+    expect(cli.post).toHaveBeenCalledWith('project-group/read', { group: 'g1' })
+    expect(readPosts()).toEqual(['g1'])
+    expect(unreadIds()).toEqual(['g2'])
+  })
+
+  it('selectGroup on a group with nothing unread posts nothing', async () => {
+    seedUnread('g2')
+    useProjectGroupsStore.getState().selectGroup('g1')
+    await flush()
+    expect(readPosts()).toEqual([])
   })
 
   // ── P6 (§6.4) — seen semantics gate on the chat drawer being visible ──
 
-  it('message-created for the viewed group is NOT stamped seen while the drawer is collapsed', async () => {
-    vi.useFakeTimers()
-    try {
-      usePageViewStore.setState({ page: 'projects' })
-      useProjectGroupsStore.setState({
-        selectedGroupId: 'g1',
-        unreadGroupIds: new Set(['g1']),
-        chatCollapsed: true,
-      })
-      fire('message-created')
-      // The collapsed drawer shows the unread dot — NOT seen on arrival.
-      expect(useProjectGroupsStore.getState().unreadGroupIds.has('g1')).toBe(true)
-      // Drain the coalesce timer so it can't leak into a later test.
-      await vi.advanceTimersByTimeAsync(300)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('selectGroup does NOT mark seen while the drawer is collapsed', () => {
-    useProjectGroupsStore.setState({
-      unreadGroupIds: new Set(['g1']),
-      chatCollapsed: true,
-    })
+  it('selectGroup does NOT mark read while the drawer is collapsed', async () => {
+    seedUnread('g1')
+    useProjectGroupsStore.setState({ chatCollapsed: true })
     useProjectGroupsStore.getState().selectGroup('g1')
-    const s = useProjectGroupsStore.getState()
-    expect(s.selectedGroupId).toBe('g1')
-    expect(s.unreadGroupIds.has('g1')).toBe(true)
+    await flush()
+    expect(useProjectGroupsStore.getState().selectedGroupId).toBe('g1')
+    expect(readPosts()).toEqual([])
+    expect(unreadIds()).toEqual(['g1'])
   })
 
-  it('expanding the drawer marks the selected group seen (and only it)', () => {
-    useProjectGroupsStore.setState({
-      selectedGroupId: 'g1',
-      unreadGroupIds: new Set(['g1', 'g2']),
-      chatCollapsed: true,
-    })
+  it('expanding the drawer marks the selected group read (and only it)', async () => {
+    seedUnread('g1', 'g2')
+    useProjectGroupsStore.setState({ selectedGroupId: 'g1', chatCollapsed: true })
     useProjectGroupsStore.getState().setChatCollapsed(false)
-    const s = useProjectGroupsStore.getState()
-    expect(s.chatCollapsed).toBe(false)
-    expect(s.unreadGroupIds.has('g1')).toBe(false)
-    expect(s.unreadGroupIds.has('g2')).toBe(true)
+    await flush()
+    expect(useProjectGroupsStore.getState().chatCollapsed).toBe(false)
+    expect(readPosts()).toEqual(['g1'])
+    expect(unreadIds()).toEqual(['g2'])
   })
 
-  it('collapsing the drawer never touches unread state', () => {
-    useProjectGroupsStore.setState({
-      selectedGroupId: 'g1',
-      unreadGroupIds: new Set(['g2']),
-      chatCollapsed: false,
-    })
+  it('collapsing the drawer never posts a read', async () => {
+    seedUnread('g1', 'g2')
+    useProjectGroupsStore.setState({ selectedGroupId: 'g1', chatCollapsed: false })
     useProjectGroupsStore.getState().setChatCollapsed(true)
-    const s = useProjectGroupsStore.getState()
-    expect(s.chatCollapsed).toBe(true)
-    expect(s.unreadGroupIds.has('g2')).toBe(true)
+    await flush()
+    expect(useProjectGroupsStore.getState().chatCollapsed).toBe(true)
+    expect(readPosts()).toEqual([])
+    expect(unreadIds()).toEqual(['g1', 'g2'])
   })
 
   // ── §6.7.1 — the Projects-nav collapse toggle ─────────────────────────
 
-  it('setNavCollapsed flips the per-client flag and never touches unread/seen state', () => {
-    useProjectGroupsStore.setState({
-      selectedGroupId: 'g1',
-      unreadGroupIds: new Set(['g1']),
-      navCollapsed: false,
-    })
+  it('setNavCollapsed flips the per-client flag and never posts a read', async () => {
+    seedUnread('g1')
+    useProjectGroupsStore.setState({ selectedGroupId: 'g1', navCollapsed: false, chatCollapsed: true })
     useProjectGroupsStore.getState().setNavCollapsed(true)
-    let s = useProjectGroupsStore.getState()
-    expect(s.navCollapsed).toBe(true)
-    // Unlike the chat toggle, the nav has NO seen semantics.
-    expect(s.unreadGroupIds.has('g1')).toBe(true)
+    expect(useProjectGroupsStore.getState().navCollapsed).toBe(true)
     useProjectGroupsStore.getState().setNavCollapsed(false)
-    s = useProjectGroupsStore.getState()
-    expect(s.navCollapsed).toBe(false)
-    expect(s.unreadGroupIds.has('g1')).toBe(true)
+    expect(useProjectGroupsStore.getState().navCollapsed).toBe(false)
+    await flush()
+    // Unlike the chat toggle, the nav has NO read semantics.
+    expect(readPosts()).toEqual([])
+    expect(unreadIds()).toEqual(['g1'])
   })
 
   // ── §6.7.4 — last-used pane tracking (Esc-to-pane) ────────────────────
@@ -402,8 +442,10 @@ describe('project-groups store event wiring', () => {
     api.fetchProjectGroups.mockResolvedValue([
       { id: 'g1', name: 'Alpha', color: null, memberWorkspaceIds: ['w1'] },
     ])
-    expect(ev.hello).toHaveLength(1)
-    expect(reconnect.connected).toHaveLength(1)
+    // [0] is this store's (registered at import); [1] is the unread
+    // store's (thread-read-v1, wired by initProjectGroupEvents).
+    expect(ev.hello).toHaveLength(2)
+    expect(reconnect.connected).toHaveLength(2)
     ev.hello[0]!()
     await flush()
     expect(api.fetchProjectGroups).toHaveBeenCalledTimes(1)

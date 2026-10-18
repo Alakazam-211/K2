@@ -51,6 +51,7 @@ import { ProjectNavCollapseButton } from './ProjectNav'
 import { NAV_TOGGLE_BOX } from '@/components/Layout/drawer-toggles'
 import { usePageViewStore } from '@/stores/page-view'
 import { useProjectGroupsStore } from '@/stores/project-groups'
+import { useUnreadStore } from '@/stores/unread'
 import type { ProjectGroup, ProjectGroupShow } from './projects-api'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -97,9 +98,9 @@ beforeEach(() => {
     selectedGroupId: 'g1',
     chatCollapsed: true,
     navCollapsed: false,
-    unreadGroupIds: new Set<string>(),
     fetchGroups: vi.fn(async () => {}),
   })
+  useUnreadStore.setState({ byKey: {}, total: 0, waitingTotal: 0, loaded: true })
 })
 
 afterEach(() => {
@@ -131,7 +132,14 @@ describe('Projects chat drawer toggle', () => {
   })
 
   it('closed with unread messages: the dot rides the toggle', async () => {
-    useProjectGroupsStore.setState({ unreadGroupIds: new Set(['g1']) })
+    useUnreadStore.setState({
+      byKey: {
+        'project:g1': { kind: 'project', id: 'g1', projectId: null, lastReadSeq: 1, lastSeq: 3, unread: 2, waiting: 0, muted: false, mutedUntil: null },
+      },
+      total: 2,
+      waitingTotal: 0,
+      loaded: true,
+    })
     await renderPage()
     expect(must(chatToggle(), 'chat toggle').querySelector('[data-project-chat-unread]')).not.toBeNull()
   })

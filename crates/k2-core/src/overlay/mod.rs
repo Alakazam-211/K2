@@ -17,7 +17,7 @@ use rusqlite::Connection;
 
 pub use doc::{ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin};
 pub use options::{parse_options_value, split_options_csv};
-pub use store::{ExtTxn, OverlayPage};
+pub use store::{ExtTxn, OverlayPage, SeqRemap};
 pub use transfer::IMPORTED_READ_ONLY;
 
 static WRITE: Mutex<()> = Mutex::new(());
@@ -102,7 +102,10 @@ pub fn move_conversation(
                 &project_id,
                 thread.total as i64,
                 chatter.total as i64,
-            )
+            )?;
+            // The move renumbered the Thread: every person's read cursor
+            // follows it in the same savepoint (thread-read-v1).
+            crate::read_state::remap_thread_move(conn, from, to, &thread.remap, false)
         });
         match res {
             Ok((thread, chatter)) => {
@@ -166,7 +169,9 @@ pub fn split_conversation(
             rusqlite::params![to, thread.total as i64, chatter.total as i64],
         )
         .map_err(|e| format!("overlay catalog split: {e}"))?;
-        Ok(())
+        // `to` inherits each person's read state for the rows it took
+        // (thread-read-v1); `from` keeps its seqs and cursors.
+        crate::read_state::remap_thread_move(conn, from, to, &thread.remap, true)
     });
     match res {
         Ok((thread, chatter)) => {
@@ -291,6 +296,27 @@ pub fn post_thread_design(
         id,
     }];
     Ok((item, links))
+}
+
+/// The cards waiting on a person in one conversation (or, `None`, every
+/// conversation), as `(conversation, card id)`: pending choice / secret
+/// cards whose time has not passed (`now`, unix seconds). thread-read-v1
+/// `waiting`: reading never clears it, only an answer, a dismiss/void or
+/// the card's expiry.
+pub fn waiting_cards(conversation_id: Option<&str>, now: i64) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::new();
+    for (conv, card) in store::pending_cards(conversation_id)? {
+        match store::get_doc(&card)? {
+            Some(doc) if store::is_waiting_card(&doc) && !doc.is_due(now) => out.push((conv, card)),
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// True when this Thread doc is a card waiting on a person now.
+pub fn is_waiting_now(doc: &OverlayDoc, now: i64) -> bool {
+    store::is_waiting_card(doc) && !doc.is_due(now)
 }
 
 /// One overlay document by id, whatever conversation it sits in (None when
@@ -484,7 +510,7 @@ pub fn answer_card(
     } else {
         return Err(CARD_NOT_PENDING.to_string());
     };
-    store::put_doc(&doc)?;
+    store::put_card_doc(conversation_id, &doc)?;
     Ok(CardCallback {
         conversation_id: conversation_id.to_string(),
         doc_id: doc.id.clone(),
@@ -517,7 +543,7 @@ pub fn mark_secret(
         s.answered_by = by;
         s.answered_at = Some(doc::now_secs());
     }
-    store::put_doc(&doc)?;
+    store::put_card_doc(conversation_id, &doc)?;
     Ok(CardCallback {
         conversation_id: conversation_id.to_string(),
         doc_id: doc.id.clone(),
@@ -568,7 +594,7 @@ pub fn void_card(
     } else {
         return Err(CARD_NOT_PENDING.to_string());
     };
-    store::put_doc(&doc)?;
+    store::put_card_doc(conversation_id, &doc)?;
     Ok(CardCallback {
         conversation_id: conversation_id.to_string(),
         doc_id: doc.id.clone(),
@@ -602,7 +628,7 @@ fn expire_locked(conversation_id: &str, card_id: &str) -> Result<CardCallback, S
     } else {
         return Err(CARD_NOT_PENDING.to_string());
     };
-    store::put_doc(&doc)?;
+    store::put_card_doc(conversation_id, &doc)?;
     Ok(CardCallback {
         conversation_id: conversation_id.to_string(),
         doc_id: doc.id.clone(),

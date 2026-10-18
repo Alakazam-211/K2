@@ -6,6 +6,8 @@
 //! chatter       conv/seq:020        → id
 //! chatterlog    seq:020             → id
 //! card_expiry   expires:020/id      → conv   (cards with an expiresAt)
+//! pending_cards conv/id             → ""     (cards waiting on a person)
+//! meta          key                 → value  (one-time index builds)
 //! import_ids    project/host/doc    → id     (imported lines, dedupe)
 //! ```
 //!
@@ -26,6 +28,16 @@ const CHATTERLOG: TableDefinition<&str, &str> = TableDefinition::new("chatterlog
 /// The daemon's sweep walks the due prefix only (never the docs). An entry
 /// whose card closed earlier is dropped when its time comes.
 const CARD_EXPIRY: TableDefinition<&str, &str> = TableDefinition::new("card_expiry");
+/// Pending choice / secret cards, by conversation: `{conv}/{card id}` →
+/// `""` (thread-read-v1 `waiting`). Written with the card, removed when
+/// it is answered, set, voided or expired (in the same write), moved with
+/// its conversation. A card closes in place (no new seq), so without this
+/// index "how many cards wait on a person" would mean reading every doc.
+const PENDING_CARDS: TableDefinition<&str, &str> = TableDefinition::new("pending_cards");
+/// One-time index builds: `pending_cards_v1` → `"1"` once every pending
+/// card written before the index existed was added to it.
+const META: TableDefinition<&str, &str> = TableDefinition::new("meta");
+const META_PENDING_V1: &str = "pending_cards_v1";
 
 /// Collected conversations (lines K2 gathers from an outside agent
 /// product, e.g. a local Grok Bot): `{conv}/{product entry id}` → doc id.
@@ -128,6 +140,183 @@ pub fn put_doc(doc: &OverlayDoc) -> Result<(), String> {
     Ok(())
 }
 
+/// A card whose status changed (answered, set, voided, expired): the body
+/// and its `pending_cards` entry in ONE write. A card that is no longer
+/// pending leaves the index.
+pub fn put_card_doc(conversation_id: &str, doc: &OverlayDoc) -> Result<(), String> {
+    let json = serde_json::to_vec(doc).map_err(|e| format!("overlay doc json: {e}"))?;
+    let db = db()?;
+    let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+    {
+        let mut table = txn.open_table(DOCS).map_err(|e| format!("overlay open docs: {e}"))?;
+        table
+            .insert(doc.id.as_str(), json.as_slice())
+            .map_err(|e| format!("overlay insert docs: {e}"))?;
+        let mut pending = txn
+            .open_table(PENDING_CARDS)
+            .map_err(|e| format!("overlay open pending_cards: {e}"))?;
+        let key = pending_key(conversation_id, &doc.id);
+        if is_waiting_card(doc) {
+            pending.insert(key.as_str(), "").map_err(|e| format!("overlay insert pending_cards: {e}"))?;
+        } else {
+            pending.remove(key.as_str()).map_err(|e| format!("overlay pending_cards remove: {e}"))?;
+        }
+    }
+    txn.commit().map_err(|e| format!("overlay redb commit: {e}"))
+}
+
+/// A Thread doc that is a card waiting on a person: a pending choice or
+/// secret card that is not imported history or a collected line.
+/// (Whether its time has passed is the reader's question.)
+pub fn is_waiting_card(doc: &OverlayDoc) -> bool {
+    (doc.is_pending_choice() || doc.is_pending_secret()) && doc.imported.is_none() && doc.external.is_none()
+}
+
+fn pending_key(conversation_id: &str, card_id: &str) -> String {
+    format!("{conversation_id}/{card_id}")
+}
+
+/// Exclusive end of a `{conv}/` pending-card prefix: card ids hold
+/// letters, which sort after `conv_end`'s ':', so the end is `{conv}0`
+/// ('0' is the ASCII char after '/').
+fn pending_end(conversation_id: &str) -> String {
+    format!("{conversation_id}0")
+}
+
+/// Every indexed pending card as `(conversation, card id)`, of one
+/// conversation or (`None`) of all. The first call on a store written
+/// before the index existed builds it from the Thread pointers once.
+pub fn pending_cards(conversation_id: Option<&str>) -> Result<Vec<(String, String)>, String> {
+    ensure_pending_index()?;
+    let db = db()?;
+    let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+    let table = match txn.open_table(PENDING_CARDS) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+        Err(e) => return Err(format!("overlay open pending_cards: {e}")),
+    };
+    let mut out = Vec::new();
+    match conversation_id {
+        Some(conv) => {
+            let start = format!("{conv}/");
+            let end = pending_end(conv);
+            for entry in table.range(start.as_str()..end.as_str()).map_err(|e| format!("overlay pending_cards range: {e}"))? {
+                let (k, _) = entry.map_err(|e| format!("overlay pending_cards iter: {e}"))?;
+                // Conversation ids may hold '/', card ids (uuids) never do;
+                // a longer conversation id sharing the prefix is not ours.
+                if let Some((c, card)) = k.value().rsplit_once('/') {
+                    if c == conv {
+                        out.push((c.to_string(), card.to_string()));
+                    }
+                }
+            }
+        }
+        None => {
+            for entry in table.iter().map_err(|e| format!("overlay pending_cards iter: {e}"))? {
+                let (k, _) = entry.map_err(|e| format!("overlay pending_cards iter: {e}"))?;
+                if let Some((c, card)) = k.value().rsplit_once('/') {
+                    out.push((c.to_string(), card.to_string()));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Build `pending_cards` from the Thread pointers, once per store (a
+/// store from before 0.46.1 has pending cards but no index). One write
+/// transaction, so a concurrent card write lands before or after it.
+fn ensure_pending_index() -> Result<(), String> {
+    let db = db()?;
+    {
+        let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+        match txn.open_table(META) {
+            Ok(t) => {
+                if t.get(META_PENDING_V1).map_err(|e| format!("overlay get meta: {e}"))?.is_some() {
+                    return Ok(());
+                }
+            }
+            Err(redb::TableError::TableDoesNotExist(_)) => {}
+            Err(e) => return Err(format!("overlay open meta: {e}")),
+        }
+    }
+    let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
+    {
+        let mut meta = txn.open_table(META).map_err(|e| format!("overlay open meta: {e}"))?;
+        if meta.get(META_PENDING_V1).map_err(|e| format!("overlay get meta: {e}"))?.is_none() {
+            let thread = txn.open_table(THREAD).map_err(|e| format!("overlay open thread: {e}"))?;
+            let docs = txn.open_table(DOCS).map_err(|e| format!("overlay open docs: {e}"))?;
+            let mut pending = txn
+                .open_table(PENDING_CARDS)
+                .map_err(|e| format!("overlay open pending_cards: {e}"))?;
+            let mut found: Vec<String> = Vec::new();
+            for entry in thread.iter().map_err(|e| format!("overlay thread iter: {e}"))? {
+                let (k, v) = entry.map_err(|e| format!("overlay thread iter: {e}"))?;
+                let Some((conv, _seq)) = k.value().rsplit_once('/') else {
+                    continue;
+                };
+                let Some(guard) = docs.get(v.value()).map_err(|e| format!("overlay get doc: {e}"))? else {
+                    continue;
+                };
+                // A doc that does not parse is not a card anyone can answer.
+                let Ok(doc) = serde_json::from_slice::<OverlayDoc>(guard.value()) else {
+                    continue;
+                };
+                if is_waiting_card(&doc) {
+                    found.push(pending_key(conv, &doc.id));
+                }
+            }
+            for key in found {
+                pending.insert(key.as_str(), "").map_err(|e| format!("overlay insert pending_cards: {e}"))?;
+            }
+            meta.insert(META_PENDING_V1, "1").map_err(|e| format!("overlay insert meta: {e}"))?;
+        }
+    }
+    txn.commit().map_err(|e| format!("overlay redb commit: {e}"))
+}
+
+/// Pending-card entries follow their cards to the new conversation key
+/// (in the move's own transaction). `take` limits it to the cards a split
+/// moved.
+fn retarget_pending_cards(
+    txn: &redb::WriteTransaction,
+    docs: &redb::Table<&str, &[u8]>,
+    from: &str,
+    to: &str,
+    take: Option<&dyn Fn(&OverlayDoc) -> bool>,
+) -> Result<(), String> {
+    let mut table = txn.open_table(PENDING_CARDS).map_err(|e| format!("overlay open pending_cards: {e}"))?;
+    let start = format!("{from}/");
+    let end = pending_end(from);
+    let mut hits = Vec::new();
+    for entry in table.range(start.as_str()..end.as_str()).map_err(|e| format!("overlay pending_cards range: {e}"))? {
+        let (k, _) = entry.map_err(|e| format!("overlay pending_cards iter: {e}"))?;
+        if let Some((conv, card)) = k.value().rsplit_once('/') {
+            if conv == from {
+                hits.push(card.to_string());
+            }
+        }
+    }
+    for card in hits {
+        if let Some(take) = take {
+            let moved = match docs.get(card.as_str()).map_err(|e| format!("overlay get doc: {e}"))? {
+                Some(g) => serde_json::from_slice::<OverlayDoc>(g.value()).map(|d| take(&d)).unwrap_or(false),
+                None => false,
+            };
+            if !moved {
+                continue;
+            }
+        }
+        table
+            .remove(pending_key(from, &card).as_str())
+            .map_err(|e| format!("overlay pending_cards remove: {e}"))?;
+        table
+            .insert(pending_key(to, &card).as_str(), "")
+            .map_err(|e| format!("overlay pending_cards retarget: {e}"))?;
+    }
+    Ok(())
+}
+
 pub fn get_doc(id: &str) -> Result<Option<OverlayDoc>, String> {
     let db = db()?;
     let txn = db
@@ -224,6 +413,14 @@ pub fn commit_write(
         table
             .insert(key.as_str(), doc.id.as_str())
             .map_err(|e| format!("overlay insert thread: {e}"))?;
+        if is_waiting_card(doc) {
+            let mut pending = txn
+                .open_table(PENDING_CARDS)
+                .map_err(|e| format!("overlay open pending_cards: {e}"))?;
+            pending
+                .insert(pending_key(conv, &doc.id).as_str(), "")
+                .map_err(|e| format!("overlay insert pending_cards: {e}"))?;
+        }
     }
     if !chatter.is_empty() {
         let mut table = txn
@@ -646,12 +843,27 @@ fn count_value(
 }
 
 /// One collection's pointers after a [`move_conversation`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MovedCollection {
     /// Pointers that were under the old key.
     pub moved: usize,
     /// Pointers now under the new key (old + new, deduplicated by doc id).
     pub total: usize,
+    /// Every row now under the new key, with where it was before: read
+    /// cursors are remapped through this (seqs are renumbered).
+    pub remap: Vec<SeqRemap>,
+}
+
+/// One renumbered row of a move or split.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeqRemap {
+    /// True when the row came from the old key (`from`), false when it was
+    /// already under the new key (`to`).
+    pub from_old: bool,
+    /// Its seq under that key.
+    pub old_seq: i64,
+    /// Its seq under the new key now.
+    pub new_seq: i64,
 }
 
 /// Move a conversation's `thread` and `chatter` pointers from `from` to
@@ -667,7 +879,7 @@ pub struct MovedCollection {
 pub fn move_conversation(
     from: &str,
     to: &str,
-    before_commit: impl FnOnce(MovedCollection, MovedCollection) -> Result<(), String>,
+    before_commit: impl FnOnce(&MovedCollection, &MovedCollection) -> Result<(), String>,
 ) -> Result<(MovedCollection, MovedCollection), String> {
     let db = db()?;
     let txn = db
@@ -680,9 +892,10 @@ pub fn move_conversation(
         let thread = move_collection(&txn, &docs, THREAD, "thread", from, to, None)?;
         let chatter = move_collection(&txn, &docs, CHATTER, "chatter", from, to, None)?;
         retarget_card_expiry(&txn, &docs, from, to, None)?;
+        retarget_pending_cards(&txn, &docs, from, to, None)?;
         (thread, chatter)
     };
-    before_commit(thread, chatter)?;
+    before_commit(&thread, &chatter)?;
     txn.commit()
         .map_err(|e| format!("overlay redb commit: {e}"))?;
     Ok((thread, chatter))
@@ -698,7 +911,7 @@ pub fn split_conversation(
     from: &str,
     to: &str,
     take: &dyn Fn(&OverlayDoc) -> bool,
-    before_commit: impl FnOnce(MovedCollection, MovedCollection) -> Result<(), String>,
+    before_commit: impl FnOnce(&MovedCollection, &MovedCollection) -> Result<(), String>,
 ) -> Result<(MovedCollection, MovedCollection), String> {
     let db = db()?;
     let txn = db
@@ -711,9 +924,10 @@ pub fn split_conversation(
         let thread = move_collection(&txn, &docs, THREAD, "thread", from, to, Some(take))?;
         let chatter = move_collection(&txn, &docs, CHATTER, "chatter", from, to, Some(take))?;
         retarget_card_expiry(&txn, &docs, from, to, Some(take))?;
+        retarget_pending_cards(&txn, &docs, from, to, Some(take))?;
         (thread, chatter)
     };
-    before_commit(thread, chatter)?;
+    before_commit(&thread, &chatter)?;
     txn.commit()
         .map_err(|e| format!("overlay redb commit: {e}"))?;
     Ok((thread, chatter))
@@ -769,7 +983,7 @@ fn move_collection(
     }
     let new = conv_pointers(&table, collection, to)?;
     if old.is_empty() {
-        return Ok(MovedCollection { moved: 0, total: new.len() });
+        return Ok(MovedCollection { moved: 0, total: new.len(), remap: Vec::new() });
     }
     // (created_at, source: 0 = the old key first on a tie, seq, id)
     let mut rows: Vec<(i64, u8, i64, String)> = Vec::with_capacity(old.len() + new.len());
@@ -792,15 +1006,18 @@ fn move_collection(
             .remove(conv_key(to, *seq).as_str())
             .map_err(|e| format!("overlay {collection} remove: {e}"))?;
     }
+    let mut remap = Vec::with_capacity(rows.len());
     for (i, row) in rows.iter().enumerate() {
         let key = conv_key(to, i as i64 + 1);
         table
             .insert(key.as_str(), row.3.as_str())
             .map_err(|e| format!("overlay insert {collection}: {e}"))?;
+        remap.push(SeqRemap { from_old: row.1 == 0, old_seq: row.2, new_seq: i as i64 + 1 });
     }
     Ok(MovedCollection {
         moved: old.len(),
         total: rows.len(),
+        remap,
     })
 }
 

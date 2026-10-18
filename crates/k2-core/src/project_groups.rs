@@ -61,6 +61,13 @@ pub struct ProjectGroup {
     /// Other responses omit it (`None` → field skipped on the wire).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member_workspace_ids: Option<Vec<String>>,
+    /// Cache key for the group's icon (0.46.1): changes exactly when the
+    /// stored icon changes, `None` = no icon. Clients compare it with the
+    /// key of the icon they cached and only GET `/cli/project-group/icon`
+    /// on a mismatch, so a rename, pin or chat line never refetches the
+    /// ~10-50KB dataUrl. Always serialized (`null` = no icon), so a client
+    /// can tell an older daemon (field absent) from "no icon".
+    pub icon_key: Option<String>,
 }
 
 /// One `project_group_members` row.
@@ -153,8 +160,22 @@ fn now_secs() -> i64 {
 
 const GROUP_SELECT: &str = "SELECT g.id, g.name, g.poc_workspace_id, g.pinned, \
     g.sort_order, g.created_at, g.updated_at, g.color, \
-    (SELECT COUNT(*) FROM project_group_members m WHERE m.group_id = g.id) \
+    (SELECT COUNT(*) FROM project_group_members m WHERE m.group_id = g.id), \
+    g.icon \
     FROM project_groups g";
+
+/// The icon cache key (see [`ProjectGroup::icon_key`]): FNV-1a 64 over
+/// the stored dataUrl plus its length. Content-derived, so it needs no
+/// column or migration and can't drift from the icon; hashing a 50KB
+/// dataUrl costs tens of microseconds and it never leaves the daemon.
+pub fn icon_key(icon: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in icon.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}-{}", icon.len())
+}
 
 fn row_to_group(row: &rusqlite::Row) -> rusqlite::Result<ProjectGroup> {
     Ok(ProjectGroup {
@@ -168,6 +189,11 @@ fn row_to_group(row: &rusqlite::Row) -> rusqlite::Result<ProjectGroup> {
         color: row.get(7)?,
         member_count: row.get(8)?,
         member_workspace_ids: None,
+        icon_key: row
+            .get_ref(9)?
+            .as_str_or_null()
+            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(e)))?
+            .map(icon_key),
     })
 }
 
@@ -1999,6 +2025,55 @@ mod tests {
         // Unknown group fails loudly on both fns.
         assert!(set_group_icon("nope", Some(icon)).is_err());
         assert!(get_group_icon("nope").is_err());
+    }
+
+    /// 0.46.1 icon cache key: `iconKey` rides list + show (always present,
+    /// `null` = no icon), changes when and only when the icon changes, and
+    /// matches [`icon_key`] of the stored dataUrl (what the icon GET and
+    /// set-icon routes report).
+    #[test]
+    fn icon_key_tracks_the_icon_and_only_the_icon() {
+        let g = create_group(&gname("iconkey")).expect("create");
+        let key_of = |id: &str| get_group_by_id(id).expect("get").icon_key;
+        let listed_key = |id: &str| {
+            list_groups()
+                .expect("list")
+                .into_iter()
+                .find(|x| x.id == id)
+                .expect("listed")
+                .icon_key
+        };
+
+        // No icon: null on the wire (present, so clients can tell it from
+        // an older daemon that never sends the field).
+        assert_eq!(key_of(&g.id), None);
+        let wire = serde_json::to_value(get_group_by_id(&g.id).expect("get")).expect("ser");
+        assert!(wire.get("iconKey").expect("iconKey present").is_null(), "{wire}");
+
+        let a = "data:image/png;base64,AAAA";
+        let b = "data:image/png;base64,BBBB";
+        set_group_icon(&g.id, Some(a)).expect("set a");
+        let ka = key_of(&g.id).expect("key after set");
+        assert_eq!(ka, icon_key(a));
+        assert_eq!(listed_key(&g.id).as_deref(), Some(ka.as_str()));
+
+        // A rename, pin or color change leaves the key alone.
+        rename_group(&g.id, &gname("iconkey-renamed")).expect("rename");
+        set_pinned(&g.id, true).expect("pin");
+        set_group_color(&g.id, Some("#112233")).expect("color");
+        assert_eq!(key_of(&g.id).as_deref(), Some(ka.as_str()));
+
+        // A different icon (same length) gets a different key; the same
+        // icon again gets the same key.
+        set_group_icon(&g.id, Some(b)).expect("set b");
+        let kb = key_of(&g.id).expect("key b");
+        assert_ne!(ka, kb);
+        set_group_icon(&g.id, Some(a)).expect("set a again");
+        assert_eq!(key_of(&g.id).as_deref(), Some(ka.as_str()));
+
+        set_group_icon(&g.id, None).expect("clear");
+        assert_eq!(key_of(&g.id), None);
+        assert_eq!(listed_key(&g.id), None);
     }
 
     /// §6.7.7 color: rides the group wire shape; `#rrggbb` validation;

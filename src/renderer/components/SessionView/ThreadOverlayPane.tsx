@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react'
 import { FileLinkProvider, scopeFileLinkTransport, type FileLinkOpen } from '@/components/common/file-links'
-import { openThreadFileLink } from '@/lib/thread-file-link-open'
+import { findThreadAttachment, openThreadAttachment, openThreadFileLink } from '@/lib/thread-file-link-open'
+import { ThreadFileActionsProvider, type ThreadFileActions } from '@/components/Thread/ThreadFileObjects'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
@@ -99,6 +100,19 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   // are files in this Thread's workspace; a click opens them in this room.
   const fileLinkTransport = useMemo(() => scopeFileLinkTransport(roomScope), [roomScope])
   const openFileLink = useCallback<FileLinkOpen>((link, line, col) => openThreadFileLink(room, link, line, col), [room])
+  // Thread file objects (thread-attachments-v1): the same opener, through
+  // the same server resolve; a moved file searches the Files drawer.
+  const fileActions = useMemo<ThreadFileActions>(
+    () => ({
+      open: (file) => {
+        void openThreadAttachment(room, fileLinkTransport, addr, file).catch((err: unknown) =>
+          console.warn('[thread] open attachment failed:', err),
+        )
+      },
+      find: (file) => findThreadAttachment(room, file),
+    }),
+    [room, fileLinkTransport, addr],
+  )
   // A Thread is shared: "You" only on this viewer's own posts.
   const viewer = useThreadViewer(roomScope)
   const isTabVisible = useIsTabVisible()
@@ -279,6 +293,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
             <div className="max-w-[40ch]">{zenEmptyThreadText(agentName?.trim() || 'the agent')}</div>
           </div>
         )}
+        <ThreadFileActionsProvider value={fileActions}>
         <FileLinkProvider workspace={addr} transport={fileLinkTransport} open={openFileLink}>
           <div ref={contentRef} className="flex flex-col" style={{ gap: THREAD_LIST_GAP }}>
             {hasMore && (
@@ -303,6 +318,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
             ))}
           </div>
         </FileLinkProvider>
+        </ThreadFileActionsProvider>
       </div>
       {/* TW12: live only, never stored (TW13). With a message box the
           column draws it on the box's top edge (`onTurn`). */}

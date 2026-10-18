@@ -29,6 +29,7 @@ import type { OverlayThreadItem, ThreadAnswerPayload } from '@/components/Sessio
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import { ZEN_SOLID_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
+import { ThreadFileObjects } from './ThreadFileObjects'
 
 import {
   CHAMFER_CUT,
@@ -339,6 +340,9 @@ export function ThreadBubble({
 }): JSX.Element {
   const kind = item.doc.kind
   const text = threadBubbleText(item)
+  const files = item.doc.attachments ?? []
+  // A post that is only files (`k2 thread <addr> --file …`) has no bubble.
+  const bubble = !(files.length > 0 && !text && kind === 'text')
   return (
     <div
       data-zen-message={item.id}
@@ -350,7 +354,7 @@ export function ThreadBubble({
       className="flex flex-col"
       style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: 'min(78%, 46rem)', minWidth: 0, gap: 3 }}
     >
-      <div
+      {bubble && <div
         className="selectable-copy"
         data-zen-bubble={mine ? 'me' : 'agent'}
         data-chamfer=""
@@ -421,7 +425,8 @@ export function ThreadBubble({
             />
           </div>
         )}
-      </div>
+      </div>}
+      <ThreadFileObjects files={files} mine={mine} />
       <span
         data-zen-message-meta=""
         style={{

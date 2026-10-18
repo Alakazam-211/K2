@@ -121,6 +121,25 @@ pub fn fingerprint() -> Result<String, String> {
     Ok(super::peers::fingerprint_of_spki_der(&kp.public_key_der()))
 }
 
+/// Length of a [`server_id`]: the first 16 hex chars of the fingerprint.
+pub const SERVER_ID_LEN: usize = 16;
+
+/// homes-sync-v1: this box's stable `serverId` — the first 16 lowercase hex
+/// chars of SHA-256 over its federation identity public key (SPKI DER),
+/// i.e. the start of [`fingerprint`]. It never changes while
+/// `identity.pem` lives (a restart, a tunnel key change, a subdomain move
+/// keep it); a clone onto a new box gets a new one. `/boot-status` reports
+/// it, and Home rows name agents as `handle::<serverId>`.
+pub fn server_id() -> Result<String, String> {
+    fingerprint().map(|fp| server_id_from_fingerprint(&fp))
+}
+
+/// The `serverId` for a full SHA-256 hex fingerprint (a pinned federation
+/// peer's, or this box's).
+pub fn server_id_from_fingerprint(fingerprint: &str) -> String {
+    fingerprint.trim().to_ascii_lowercase().chars().take(SERVER_ID_LEN).collect()
+}
+
 fn read_key(path: &Path) -> Result<KeyPair, String> {
     let pem = fs::read_to_string(path)
         .map_err(|e| format!("read federation identity {}: {e}", path.display()))?;
@@ -179,6 +198,29 @@ mod tests {
             let (_, again) = load_or_create_with_source().expect("second load");
             assert_eq!(again, IdentitySource::Existing);
         });
+    }
+
+    /// homes-sync-v1: `serverId` is 16 lowercase hex chars, the start of
+    /// the fingerprint, and the same on every load (a "restart") and after
+    /// the tunnel key changes; a different identity key gives another id.
+    #[test]
+    fn server_id_is_stable_16_hex_from_the_identity_key() {
+        with_temp_home(|| {
+            let id = server_id().expect("server id");
+            assert_eq!(id.len(), SERVER_ID_LEN, "{id}");
+            assert!(id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "{id}");
+            assert!(fingerprint().expect("fp").starts_with(&id), "the start of the fingerprint");
+            assert_eq!(server_id().expect("again"), id, "same key, same id");
+            // A tunnel key change never moves it.
+            crate::tunnel::tls::load_or_generate_keypair().expect("tunnel key");
+            assert_eq!(server_id().expect("after tunnel key"), id);
+            // Another box (a fresh identity, no tunnel key to copy) has another id.
+            fs::remove_file(identity_path()).expect("drop identity");
+            fs::remove_file(crate::tunnel::tls::key_path()).expect("drop tunnel key");
+            let other = server_id().expect("new box");
+            assert_ne!(other, id, "a new identity key is a new server");
+        });
+        assert_eq!(server_id_from_fingerprint("ABCDEF0123456789ffff"), "abcdef0123456789");
     }
 
     #[test]

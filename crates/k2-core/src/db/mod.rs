@@ -1411,6 +1411,12 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // of a source's bound secret (sources.secret_workspace) and the
         // Garden/widget proposal queue (zen_proposals). Additive only.
         ("0181_gardens_manage", include_str!("../../drizzle_sql/0181_gardens_manage.sql")),
+        // 0193 — Homes sync between a person's devices (homes-sync-v1,
+        // 0.46.1): `homes_items` (per-item last-writer-wins records with
+        // tombstones and merge redirects), `homes_people` (cursor + tombstone
+        // floor), `homes_devices`. New tables only. 0188–0192 belong to the
+        // other 0.46.1 lanes (0190 = unread); renumber freely on a slip.
+        ("0193_homes_sync", include_str!("../../drizzle_sql/0193_homes_sync.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2074,7 +2080,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0181_gardens_manage",
+            last_name, "0193_homes_sync",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2118,6 +2124,7 @@ mod tests {
                 "0179_workspace_design_mode",
                 "0180_clone_imports",
                 "0181_gardens_manage",
+                "0193_homes_sync",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2163,6 +2170,7 @@ mod tests {
                 "0179_workspace_design_mode",
                 "0180_clone_imports",
                 "0181_gardens_manage",
+                "0193_homes_sync",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2395,7 +2403,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0181 (Gardens manage) is the newest; roll it back first. Its
+            // 0193 (Homes sync) is the newest; its tables go first.
+            conn.execute_batch("DROP TABLE homes_items; DROP TABLE homes_people; DROP TABLE homes_devices;")
+                .unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0193_homes_sync'", []).unwrap();
+            // 0181 (Gardens manage) came before it; roll it back next. Its
             // projects column stays (re-adding it is skipped as a duplicate
             // column), its sources column went with the table.
             conn.execute_batch("DROP TABLE zen_proposals;").unwrap();

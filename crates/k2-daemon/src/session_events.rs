@@ -844,9 +844,46 @@ pub enum SessionEvent {
         #[serde(rename = "workspacePath")]
         workspace_path: String,
     },
+
+    /// homes-sync-v1 (0.46.1): one person's Homes changed on this server
+    /// (a device pushed). PERSON-SCOPED: `/cli/sessions/events` forwards it
+    /// only to sockets of that person (the owner token and every login the
+    /// owner linked are one person). A device whose cursor is behind
+    /// pulls `GET /cli/me/homes?since=`. Carries no Home names.
+    ///
+    /// Wire: `{ "kind": "homes_changed", "cursor": number }`.
+    HomesChanged {
+        #[serde(skip)]
+        person: String,
+        cursor: i64,
+    },
+
+    /// homes-sync-v1: a device was removed from this person's Homes sync
+    /// (Server settings). Person-scoped like `homes_changed`. The removed
+    /// device stops syncing (its pulls and pushes now answer 410).
+    ///
+    /// Wire: `{ "kind": "homes_device_removed", "deviceId": string }`.
+    HomesDeviceRemoved {
+        #[serde(skip)]
+        person: String,
+        #[serde(rename = "deviceId")]
+        device_id: String,
+    },
 }
 
 impl SessionEvent {
+    /// The person a person-scoped event belongs to; `None` for every other
+    /// event (they go to every socket the path filter admits). Same shape
+    /// as the 0.46.1 unread lane's `SessionEvent::person`.
+    pub fn person(&self) -> Option<&str> {
+        match self {
+            SessionEvent::HomesChanged { person, .. } | SessionEvent::HomesDeviceRemoved { person, .. } => {
+                Some(person.as_str())
+            }
+            _ => None,
+        }
+    }
+
     /// The wire `kind` tag serde writes for this variant.
     ///
     /// Home 0.43.2 (Z24): the shared registry
@@ -905,6 +942,8 @@ impl SessionEvent {
             SessionEvent::GitChanged { .. } => "git_changed",
             SessionEvent::GitNotesChanged { .. } => "git_notes_changed",
             SessionEvent::OpenChanges { .. } => "open_changes",
+            SessionEvent::HomesChanged { .. } => "homes_changed",
+            SessionEvent::HomesDeviceRemoved { .. } => "homes_device_removed",
         }
     }
 }

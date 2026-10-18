@@ -631,7 +631,7 @@ document.querySelector('#grip').addEventListener('mousedown', (e) => {\n\
 })\n\
 ```\n\n\
 ### Workflow\n\n\
-1. `k2 zen widget new <name> --from k2:diary` (or `--from hello`, `--from arcade`, `--from board-lite`) copies a\n\
+1. `k2 zen widget new <name> --from k2:diary` (or `--from hello`, `--from arcade`, `--from board-lite`, `--from source-trend`) copies a\n\
    working example into `~/.k2/zen/widgets/<name>/`.\n\
 2. Edit the folder; place it in a Garden (`kind = \"custom\"`, `widget = \"<name>\"`).\n\
 3. `k2 zen validate --widget <name>` and `k2 zen validate --garden <id>` before you say\n\
@@ -701,12 +701,24 @@ the source's **card view** from the server that runs it. Make and inspect source
   (seconds), never `Date.now()`. Unknown gets its own colour; never draw a blank card.\n\
 - Refusals: `not_bound` (not in the placement's config), `server_not_saved`,\n\
   `cap_not_granted` (the human's login there can't read it), `removed`, `no_history`,\n\
-  and `unreachable`, which carries `err.last`: the last view, phase `stale`. Draw it greyed.\n\n\
+  and `unreachable`, which carries `err.last`: the last view, phase `stale`. Draw it greyed.\n\
+- **Subscribe with a handler object** (0.46.1) and K2 keeps the subscription alive: after a\n\
+  retryable refusal (`err.retryable`: `not_bound`, `unreachable`, `rate_limited`, `busy`) it\n\
+  calls `error(err)` with `err.retrying` and subscribes again (1, 2, 4, 8, 16, then every\n\
+  30 s). `data` gets a normalised view (`items` is always a list, `fields` an object); a\n\
+  value that isn't a view reaches `error` as `bad_shape`. Nothing runs after `stop()`. Don't\n\
+  write your own retry timer. Guards for other data: `k2.shape.view/list/obj/num/str`.\n\
+  Arguments must be plain data (else `bad_args`, refused in the frame).\n\n\
 ```js\n\
 k2.connected.then(() => {\n\
-  k2.sources.subscribe(k2.config.source, draw, (err) => draw(err.last, err.code))\n\
+  const stop = k2.sources.subscribe(k2.config.source, {\n\
+    data: (view) => draw(view),\n\
+    error: (err) => err.retrying ? drawGreyed(err.last) : note(err.code),\n\
+  })\n\
 })\n\
 ```\n\n\
+Charts: name a pinned library in `requires.libs` (`uplot@1.6.32` for sparklines and\n\
+history lines; `chart.js`, `echarts`, `d3` too). They run offline; no CDN, no eval.\n\n\
 **Built-in cards** (place them with `widget = \"k2:<card>@1\"` and `config.source`):\n\n",
     );
     for (id, presets) in super::builtin_widgets::SOURCE_CARDS {
@@ -767,6 +779,8 @@ fetches and checks it, the frame never touches the network, and air-gap blocks i
 - `hello`: a clock and a greeting; the smallest widget.\n\
 - `arcade`: agents as characters; click one to talk.\n\
 - `board-lite`: sticky notes kept in the widget's data, live for you and your agents.\n\
+- `source-trend`: one data source with the resilient handler-object subscription and a\n\
+  uPlot sparkline (`config.source`, `config.series`).\n\
 - `k2:kanban` (the Kanban): columns and cards in the widget's data, pointer drag, agents too.\n\n",
         m.cdn_hosts.join(", "),
         kb(m.max_bytes_per_widget),
@@ -1003,6 +1017,17 @@ mod tests {
         ] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
+    }
+
+    /// 0.46.1 (catalog 11): the skill teaches the resilient SDK and charts.
+    #[test]
+    fn skill_documents_the_resilient_sdk_and_chart_libraries() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 23, "the 0.46.1 SDK needs a new skill version");
+        let s = generate_k2_zen_skill();
+        for needle in ["handler object", "err.retrying", "bad_shape", "bad_args", "k2.shape.view", "write your own retry timer", "`uplot@1.6.32`", "data: (view) => draw(view)"] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+        assert!(crate::zen::stdlib::zen_lib_manifest().libs.iter().any(|l| l.id == "uplot" && l.version == "1.6.32"), "uPlot is vendored");
     }
 
     /// TUW5.2 (UWB2): skill v12 documents custom widgets from the catalog.

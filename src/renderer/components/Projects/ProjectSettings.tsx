@@ -39,12 +39,30 @@
 // Permissions (§6.3b precedent): owners AND admins mutate; a resolved
 // viewer-mode window (window-mode.ts — the P5/P6 idiom) is READ-ONLY;
 // the daemon's owner-or-admin gate on the dashboard mutations
-// backstops. Live: rides the store's project-group:* revision — every
-// event refetches the selected project's show view + the docs list.
+// backstops.
+//
+// Data (0.46.1 — eval-project-settings-v1 P3/P4):
+//   - Live: refetch keys on `selectGroupRevision(id)` — only a structural
+//     change to THIS project (or a frame naming none, from an older
+//     daemon). Chat lines and other projects' changes cost nothing.
+//   - Switching never blanks: a project seen before paints at once from
+//     the store's show cache and revalidates; an unseen one keeps the
+//     previous project on screen (dimmed, inert) until its show lands.
+//   - Name / pin / point of contact are optimistic: applied at once to
+//     this view and the store's list, confirmed from the daemon's answer,
+//     rolled back with an error when it refuses.
+//   - The picture comes from the shared icon cache (`useGroupIcon`), keyed
+//     by the daemon's `iconKey`, and is requested in parallel with show.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
-import { useProjectGroupsStore } from '@/stores/project-groups'
+import {
+  getCachedShow,
+  selectGroupRevision,
+  setCachedShow,
+  useProjectGroupsStore,
+} from '@/stores/project-groups'
+import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 import { useSettingsStore } from '@/stores/settings'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
@@ -57,7 +75,6 @@ import {
   deleteProjectGroup,
   deleteProjectGroupDashboard,
   fetchProjectGroupResources,
-  fetchProjectGroupIcon,
   fetchProjectGroupShow,
   normalizeHexColor,
   pinProjectGroup,
@@ -69,13 +86,15 @@ import {
   setProjectGroupColor,
   setProjectGroupIcon,
   setProjectGroupPoc,
+  type ProjectGroup,
   type ProjectGroupDashboard,
   type ProjectGroupHtmlDoc,
   type ProjectGroupShow,
 } from './projects-api'
 import { onWorkspaceResourcesChanged } from '@/stores/session-events'
 import { pickIconImage } from '@/lib/pick-remote-image'
-import { GROUP_AVATAR_COLORS, groupAvatarColor } from './ProjectGroupAvatar'
+import { GROUP_AVATAR_COLORS, groupAvatarColor, useGroupIcon } from './ProjectGroupAvatar'
+import { loadGroupIcon, setCachedGroupIcon } from './group-icon-cache'
 import IconCropDialog from '@/components/Settings/IconCropDialog'
 import {
   addableWorkspaces,
@@ -132,12 +151,16 @@ function InlineRename({
       setError(null)
       return
     }
+    // Optimistic (0.46.1): close at once — `onSave` shows the new name
+    // straight away — and reopen with the draft + reason if refused.
     setSaving(true)
+    setEditing(false)
+    setError(null)
     try {
       await onSave(name)
-      setEditing(false)
-      setError(null)
     } catch (err) {
+      setDraft(name)
+      setEditing(true)
       setError(createErrorMessage(err))
     } finally {
       setSaving(false)
@@ -566,65 +589,40 @@ function DashboardsBlock({
 
 // ── The right panel (selected project's management) ──────────────────────
 
+/** Optimistic group edit: apply `patch` now, run the daemon call, take its
+ *  answer, or roll back and rethrow. */
+type GroupEdit = (patch: Partial<ProjectGroup>, run: () => Promise<ProjectGroup | void>) => Promise<void>
+
 function ProjectSettingsDetail({
   detail,
   readOnly,
   onDeleted,
+  edit,
+  docs,
+  docsError,
 }: {
   detail: ProjectGroupShow
   readOnly: boolean
   onDeleted: () => void
+  edit: GroupEdit
+  /** Workspace Resources (Add to dashboard is HTML-only) — fetched by the
+   *  page alongside show (0.46.1); null = not loaded yet. */
+  docs: ProjectGroupHtmlDoc[] | null
+  docsError: string | null
 }): React.JSX.Element {
   const registered = useProjectsStore((s) => s.projects)
-  const revision = useProjectGroupsStore((s) => s.revision)
-
-  // ── Workspace Resources picker (Add to dashboard is HTML-only) ─────
-  const [docs, setDocs] = useState<ProjectGroupHtmlDoc[] | null>(null)
-  const [docsError, setDocsError] = useState<string | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    const load = (): void => {
-      fetchProjectGroupResources(primaryScope(), detail.id)
-        .then((d) => {
-          if (cancelled) return
-          setDocs(d)
-          setDocsError(null)
-        })
-        .catch((e) => {
-          if (cancelled) return
-          setDocsError(errorMessage(e))
-        })
-    }
-    load()
-    const off = onWorkspaceResourcesChanged(primaryScope(), () => load())
-    return () => {
-      cancelled = true
-      off()
-    }
-  }, [detail.id, revision])
 
   // ── §6.7.7 Icon + color ──────────────────────────────────────────────
-  // The icon rides its own GET (not in show payloads); refetch on the
-  // store revision so another client's upload lands here live (set-icon
-  // emits groups-changed). null = still loading (controls suspend).
-  const [icon, setIcon] = useState<{ found: boolean; dataUrl: string | null } | null>(null)
+  // The icon rides its own GET (not in show payloads). 0.46.1: read from
+  // the shared cache, keyed by the show view's `iconKey` — fetched once
+  // per icon (another client's upload changes the key → one refetch; a
+  // rename, pin or chat line never refetches it). null = not known yet.
+  const icon = useGroupIcon(detail.id, detail.iconKey)
+  const hostKey = activeHostKey(useConnectHostStore((s) => s.activeHost))
+  const [, setIconSaves] = useState(0)
   const [iconBusy, setIconBusy] = useState(false)
   const [cropImage, setCropImage] = useState<string | null>(null)
   const iconInputRef = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    let cancelled = false
-    fetchProjectGroupIcon(primaryScope(), detail.id)
-      .then((res) => {
-        if (!cancelled) setIcon(res)
-      })
-      .catch(() => {
-        // Advisory decoration — fall back to "no icon" controls.
-        if (!cancelled) setIcon({ found: false, dataUrl: null })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [detail.id, revision])
 
   const handleIconFileSelected = (e: React.ChangeEvent<HTMLInputElement>): void => {
     const file = e.target.files?.[0]
@@ -640,16 +638,22 @@ function ProjectSettingsDetail({
     async (dataUrl: string | null): Promise<void> => {
       setIconBusy(true)
       try {
-        await setProjectGroupIcon(primaryScope(), detail.id, dataUrl)
-        // Optimistic — the groups-changed refetch confirms it.
-        setIcon({ found: dataUrl !== null, dataUrl })
+        const res = await setProjectGroupIcon(primaryScope(), detail.id, dataUrl)
+        // Cache what we just sent under the daemon's new key, so neither
+        // this preview nor the nav avatars re-GET it.
+        setCachedGroupIcon(hostKey, detail.id, {
+          found: dataUrl !== null,
+          dataUrl,
+          iconKey: dataUrl === null ? null : res.iconKey,
+        })
+        setIconSaves((n) => n + 1)
       } catch (err) {
         useToastStore.getState().addToast(`Icon save failed: ${errorMessage(err)}`, 'error')
       } finally {
         setIconBusy(false)
       }
     },
-    [detail.id],
+    [detail.id, hostKey],
   )
 
   // Custom-hex color input (§6.7.7 — the 10-swatch palette + a free
@@ -730,12 +734,14 @@ function ProjectSettingsDetail({
   const setPoc = useCallback(
     async (workspaceId: string): Promise<void> => {
       try {
-        await setProjectGroupPoc(primaryScope(), detail.id, workspaceId)
+        await edit({ pocWorkspaceId: workspaceId }, () =>
+          setProjectGroupPoc(primaryScope(), detail.id, workspaceId),
+        )
       } catch (err) {
         useToastStore.getState().addToast(`PoC change failed: ${errorMessage(err)}`, 'error')
       }
     },
-    [detail.id],
+    [detail.id, edit],
   )
 
   const deleteProject = useCallback(async (): Promise<void> => {
@@ -807,9 +813,9 @@ function ProjectSettingsDetail({
               <InlineRename
                 value={detail.name}
                 label="project"
-                onSave={async (name) => {
-                  await renameProjectGroup(primaryScope(), detail.id, name)
-                }}
+                onSave={(name) =>
+                  edit({ name }, () => renameProjectGroup(primaryScope(), detail.id, name))
+                }
               />
             )}
           </div>
@@ -852,7 +858,7 @@ function ProjectSettingsDetail({
                       setCropImage,
                     })
                   }
-                  disabled={iconBusy || icon === null}
+                  disabled={iconBusy}
                   className="px-2.5 py-1 text-xs text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   {iconBusy ? 'Working...' : 'Upload'}
@@ -952,10 +958,14 @@ function ProjectSettingsDetail({
             </span>
             <button
               type="button"
+              role="switch"
+              aria-checked={detail.pinned}
+              data-settings-id="project-pinned"
               disabled={readOnly}
               onClick={() => {
-                void pinProjectGroup(primaryScope(), detail.id, !detail.pinned).catch((err) =>
-                  useToastStore.getState().addToast(`Pin failed: ${errorMessage(err)}`, 'error'),
+                const pinned = !detail.pinned
+                void edit({ pinned }, () => pinProjectGroup(primaryScope(), detail.id, pinned)).catch(
+                  (err) => useToastStore.getState().addToast(`Pin failed: ${errorMessage(err)}`, 'error'),
                 )
               }}
               className={`w-7 h-3.5 flex items-center transition-colors no-drag flex-shrink-0 ${
@@ -1165,9 +1175,29 @@ function ProjectSettingsDetail({
 
 // ── The settings surface (master-detail) ─────────────────────────────────
 
+/** Last Workspace Resources answer per (host, project) — a revisit paints
+ *  its list at once instead of "Loading…" (0.46.1). */
+const docsCache = new Map<string, ProjectGroupHtmlDoc[]>()
+
+function docsKey(groupId: string): string {
+  return `${activeHostKey(useConnectHostStore.getState().activeHost)}:${groupId}`
+}
+
+/** Fields with an optimistic edit in flight, per project: they win over
+ *  any show answer that lands meanwhile, so a refetch can't snap them
+ *  back. `seq` lets a newer edit of the same field outlive an older one. */
+type PendingEdits = Map<string, Map<string, { value: unknown; seq: number }>>
+
+function withPending(show: ProjectGroupShow, pending: PendingEdits): ProjectGroupShow {
+  const fields = pending.get(show.id)
+  if (!fields || fields.size === 0) return show
+  const out: Record<string, unknown> = { ...show }
+  for (const [k, v] of fields) out[k] = v.value
+  return out as unknown as ProjectGroupShow
+}
+
 export default function ProjectSettings(): React.JSX.Element {
   const groups = useProjectGroupsStore((s) => s.groups)
-  const revision = useProjectGroupsStore((s) => s.revision)
   const readOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
 
   // The section's OWN selection — seeded from the deep-link preselect
@@ -1178,8 +1208,21 @@ export default function ProjectSettings(): React.JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(
     () => initialGroupId ?? useProjectGroupsStore.getState().selectedGroupId,
   )
-  const [detail, setDetail] = useState<ProjectGroupShow | null>(null)
-  const [detailError, setDetailError] = useState<string | null>(null)
+  // This project's structural revision: a chat line or another
+  // project's change never refetches the panel.
+  const revision = useProjectGroupsStore(selectGroupRevision(selectedId))
+  const pendingRef = useRef<PendingEdits>(new Map())
+  const editSeq = useRef(0)
+  const [detail, setDetail] = useState<ProjectGroupShow | null>(() => {
+    const cached = selectedId ? getCachedShow(selectedId) : undefined
+    return cached ?? null
+  })
+  const [detailError, setDetailError] = useState<{ id: string; message: string } | null>(null)
+  const [docsState, setDocsState] = useState<{
+    id: string
+    docs: ProjectGroupHtmlDoc[] | null
+    error: string | null
+  } | null>(null)
 
   // A new deep-link while Settings is already open (right-click another
   // project) re-targets the selection (the ProjectsSection
@@ -1204,8 +1247,9 @@ export default function ProjectSettings(): React.JSX.Element {
   }, [groups, selectedId])
 
   // Fetch the selected project's show view on selection change + every
-  // project-group event (the store's revision — groups/members/poc/
-  // layout changed all land here; the store already coalesces).
+  // structural change to THIS project (selectGroupRevision). The picture
+  // is requested in parallel (from the list row's iconKey), not after
+  // show lands; a cached one costs nothing.
   useEffect(() => {
     if (selectedId === null) {
       setDetail(null)
@@ -1216,17 +1260,126 @@ export default function ProjectSettings(): React.JSX.Element {
     fetchProjectGroupShow(primaryScope(), selectedId)
       .then((data) => {
         if (cancelled) return
-        setDetail(data)
+        setCachedShow(data)
+        setDetail(withPending(data, pendingRef.current))
         setDetailError(null)
       })
       .catch((e) => {
         if (cancelled) return
-        setDetailError(e instanceof Error ? e.message : String(e))
+        setDetailError({ id: selectedId, message: e instanceof Error ? e.message : String(e) })
       })
+    const row = useProjectGroupsStore.getState().groups?.find((g) => g.id === selectedId)
+    void loadGroupIcon(activeHostKey(useConnectHostStore.getState().activeHost), selectedId, row?.iconKey)
     return () => {
       cancelled = true
     }
   }, [selectedId, revision])
+
+  // Workspace Resources, fetched in parallel with show (not after the
+  // panel mounts) and on resource changes. Same project revision key.
+  useEffect(() => {
+    if (selectedId === null) return
+    let cancelled = false
+    const load = (): void => {
+      fetchProjectGroupResources(primaryScope(), selectedId)
+        .then((d) => {
+          if (cancelled) return
+          docsCache.set(docsKey(selectedId), d)
+          setDocsState({ id: selectedId, docs: d, error: null })
+        })
+        .catch((e) => {
+          if (cancelled) return
+          setDocsState({
+            id: selectedId,
+            docs: docsCache.get(docsKey(selectedId)) ?? null,
+            error: errorMessage(e),
+          })
+        })
+    }
+    load()
+    const off = onWorkspaceResourcesChanged(primaryScope(), () => load())
+    return () => {
+      cancelled = true
+      off()
+    }
+  }, [selectedId, revision])
+
+  // What the panel shows: the selected project's show view; else its
+  // cached one (painted at once, revalidating); else the PREVIOUS
+  // project's, dimmed and inert until the new one lands — never a blank
+  // "Loading…" that collapses the panel and its scroll.
+  const cachedSelected =
+    selectedId !== null && detail?.id !== selectedId ? getCachedShow(selectedId) : undefined
+  const shown =
+    detail?.id === selectedId
+      ? detail
+      : cachedSelected
+        ? withPending(cachedSelected, pendingRef.current)
+        : detail
+  const switching = shown !== null && shown.id !== selectedId
+  const shownDocs =
+    shown === null
+      ? null
+      : docsState?.id === shown.id
+        ? docsState.docs
+        : (docsCache.get(docsKey(shown.id)) ?? null)
+  const shownDocsError = shown !== null && docsState?.id === shown.id ? docsState.error : null
+  const shownRef = useRef(shown)
+  shownRef.current = shown
+
+  // Optimistic edit (rename / pin / point of contact): apply now to this
+  // view, the show cache and the store's list row; take the daemon's
+  // answer; on refusal roll the fields back and rethrow for the caller's
+  // error. Fields keep winning over refetches until their edit settles.
+  const edit = useCallback(
+    async (
+      groupId: string,
+      patch: Partial<ProjectGroup>,
+      run: () => Promise<ProjectGroup | void>,
+    ): Promise<void> => {
+      const seq = ++editSeq.current
+      const keys = Object.keys(patch) as Array<keyof ProjectGroup>
+      const base = shownRef.current?.id === groupId ? shownRef.current : getCachedShow(groupId)
+      const before: Partial<ProjectGroup> = {}
+      for (const k of keys) (before as Record<string, unknown>)[k] = base?.[k]
+      let fields = pendingRef.current.get(groupId)
+      if (!fields) {
+        fields = new Map()
+        pendingRef.current.set(groupId, fields)
+      }
+      for (const k of keys) fields.set(k, { value: patch[k], seq })
+      const pending = fields
+
+      const apply = (p: Partial<ProjectGroup>): void => {
+        if (Object.keys(p).length === 0) return
+        setDetail((d) => (d && d.id === groupId ? { ...d, ...p } : d))
+        const cached = getCachedShow(groupId)
+        if (cached) setCachedShow({ ...cached, ...p })
+        useProjectGroupsStore.getState().patchGroup(groupId, p)
+      }
+      // Only fields no newer edit has claimed since.
+      const settle = (from: Partial<ProjectGroup> | null): Partial<ProjectGroup> => {
+        const out: Record<string, unknown> = {}
+        for (const k of keys) {
+          if (pending.get(k)?.seq !== seq) continue
+          pending.delete(k)
+          if (from && k in from) out[k] = (from as Record<string, unknown>)[k]
+        }
+        return out as Partial<ProjectGroup>
+      }
+
+      apply(patch)
+      let answer: ProjectGroup | void
+      try {
+        answer = await run()
+      } catch (err) {
+        apply(settle(before))
+        throw err
+      }
+      apply(settle(answer && typeof answer === 'object' ? answer : null))
+    },
+    [],
+  )
 
   // ── Left master list: search + keyboard selection (ProjectsSection
   //    idiom) ──────────────────────────────────────────────────────────
@@ -1341,17 +1494,27 @@ export default function ProjectSettings(): React.JSX.Element {
           </p>
         ) : selectedId === null || groups === null ? (
           <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
-        ) : detailError ? (
-          <p className="text-[11px] text-[var(--color-status-error-soft)]">Failed to load project: {detailError}</p>
-        ) : detail === null || detail.id !== selectedId ? (
-          /* Selection-switch staleness guard (the page idiom): never
-             render the PREVIOUS project's data under a new title. */
+        ) : detailError && detailError.id === selectedId ? (
+          <p className="text-[11px] text-[var(--color-status-error-soft)]">Failed to load project: {detailError.message}</p>
+        ) : shown === null ? (
+          /* First load only — after that a switch keeps the previous
+             project on screen (below) instead of blanking. */
           <p className="text-xs text-[var(--color-text-muted)]">Loading…</p>
         ) : (
+          /* While switching to a project not seen yet, the PREVIOUS one
+             stays (dimmed, inert, aria-busy) so the panel never collapses
+             or loses its scroll; it can't be edited by mistake. */
+          <div
+            aria-busy={switching || undefined}
+            className={`transition-opacity ${switching ? 'opacity-50 pointer-events-none' : ''}`}
+          >
           <ProjectSettingsDetail
-            key={detail.id}
-            detail={detail}
+            key={shown.id}
+            detail={shown}
             readOnly={readOnly}
+            edit={(patch, run) => edit(shown.id, patch, run)}
+            docs={shownDocs}
+            docsError={shownDocsError}
             onDeleted={() => {
               // Select the first surviving sibling (null when none —
               // the empty state); refetch NOW so the stale row never
@@ -1364,6 +1527,7 @@ export default function ProjectSettings(): React.JSX.Element {
               void useProjectGroupsStore.getState().fetchGroups()
             }}
           />
+          </div>
         )}
       </div>
     </div>

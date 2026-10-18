@@ -133,7 +133,12 @@ async fn boot() -> (Env, test_harness::TestDaemon) {
     let env = Env::set();
     let d = test_harness::start(OWNER_TOKEN).await;
     k2_daemon::vault::boot(&k2_core::paths::k2_home());
-    chat_pass::link::set_install_id(INSTALL).expect("install id");
+    // What `hostchat enable` leaves: the supervisor row with the install id
+    // (the mint reads it live; no side file).
+    let mut row = k2_daemon::sew::store::Row::new("0.1.2", 0);
+    row.status = "running".into();
+    row.install_id = Some(INSTALL.into());
+    k2_daemon::sew::store::save(&row).expect("sew row");
     chat_pass::ratelimit::MINTS.reset();
     chat_pass::ratelimit::HANDOFFS.reset();
     chat_pass::handoff::CODES.clear();
@@ -317,7 +322,7 @@ async fn pass_route_belts_method_bearer_browser_tunnel_csrf_and_skin_host() {
     assert!(r.body["error"]["details"]["retry_after_ms"].as_i64().expect("ms") > 0);
 
     // No install id (Sew not enabled) → 503 chat_unavailable.
-    chat_pass::link::clear_install_id().expect("clear");
+    k2_daemon::sew::store::delete().expect("purge the row");
     let r = pass(d.port, Some(OWNER_TOKEN), "{}");
     assert_eq!((r.status, err_code(&r).as_str()), (503, "chat_unavailable"));
     drop(env);

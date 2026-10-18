@@ -66,7 +66,9 @@ cargo build --release -j 8 -p k2-root-helper --features test-keys --bin k2-root-
 cp "$R/target/release/k2-root-helper" "$R/it/bin/k2-root-helper-cur"
 cp "$R/target/release/examples/k2-root-helper-testsign" "$R/it/bin/testsign"
 cp crates/k2-daemon/Cargo.toml /tmp/k2-daemon-Cargo.toml.$$
-sed -i 's/^version = "[0-9.]*"$/version = "0.45.99"/' crates/k2-daemon/Cargo.toml
+# "next" = this release's x.y.99 (always newer than the current build).
+NEXT_VER="$(sed -n 's/^version = "\([0-9]*\.[0-9]*\)\.[0-9]*"$/\1.99/p' crates/k2-daemon/Cargo.toml | head -n1)"
+sed -i "s/^version = \"[0-9.]*\"\$/version = \"$NEXT_VER\"/" crates/k2-daemon/Cargo.toml
 cargo build --release -j 8 -p k2-root-helper --features test-keys --bin k2-root-helper 2>&1 | tail -n 1
 cp "$R/target/release/k2-root-helper" "$R/it/bin/k2-root-helper-next"
 mv /tmp/k2-daemon-Cargo.toml.$$ crates/k2-daemon/Cargo.toml

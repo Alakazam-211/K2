@@ -490,6 +490,22 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
         Ok(p) => p,
         Err(e) => return pipeline_fail(app_id, dep, e.code, &e.message),
     };
+    // An open-path App's extra ports sit on host loopback under their own
+    // numbers: two instances can't hold them at once, so the running one
+    // stops before the new one starts (no zero-downtime switch for an App
+    // with extra ports; its front port answers 503 in between).
+    if !spec.wall.extra_ports.is_empty() {
+        let (live, warm) = with_rt(app_id, |rt| {
+            rt.watch = None;
+            (rt.live.take(), rt.warm.take())
+        });
+        for inst in [live, warm].into_iter().flatten() {
+            let grace = Duration::from_secs(inst.drain_secs.min(t.stop_grace_secs.max(1)));
+            if let Err(e) = engine_of(&inst.handle).stop(&inst.handle, grace) {
+                k2_core::log_debug!("[apps] {app_id}: stopping {} before a restart with extra ports: {}", inst.handle.deployment_id, e.message);
+            }
+        }
+    }
     let h = match eng.start(&spec, &prepared, port) {
         Ok(h) => h,
         Err(e) => return pipeline_fail(app_id, dep, e.code, &e.message),

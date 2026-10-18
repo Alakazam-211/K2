@@ -79,7 +79,7 @@ import { zenConversationRow } from './widgets/ZenConversationWidget'
 import { ZenWidgetStyles } from './widgets/zen-widget-kit'
 import { ZenWidgetBoundary } from './ZenWidgetBoundary'
 import { useZenWidgetsRunningMarker } from '@/lib/zen/zen-custom-run'
-import { ZEN_CUSTOM_KIND } from '@/lib/zen/zen-page'
+import { ZEN_CUSTOM_KIND, zenColumnFlex } from '@/lib/zen/zen-page'
 import { ZEN_CHROME_CSS, ZenBottomBand, ZenEdgeRow, ZenTopBand, type ZenRowSource } from './ZenBands'
 import { ZenNewGardenHost } from './widgets/ZenNewGardenModal'
 import { ZenSourceAskHost, ZEN_SOURCE_ASK_CAPS, ZEN_SOURCE_ASK_ID } from './widgets/ZenSourceAsk'
@@ -356,6 +356,7 @@ export function ZenPage({
             const inCol = bodyWidgets.filter((w) => w.column === col)
             const rails = inCol.filter((w) => ZEN_RAIL_KINDS.has(w.kind))
             const boxed = inCol.filter((w) => !ZEN_RAIL_KINDS.has(w.kind))
+            const boxedFlex = zenColumnFlex(boxed)
             // K2 views that draw their own panels (Tickets' glass) get no box;
             // nor does anything on a full canvas (it draws its own surface).
             const bare = full || (boxed.length > 0 && boxed.every((w) => ZEN_UNBOXED_KINDS.has(w.kind)))
@@ -378,7 +379,19 @@ export function ZenPage({
                         : { flex: '1 1 0%', borderRadius: 'var(--zen-radius)', overflow: 'hidden' }
                     }
                   >
-                    {boxed.map(draw)}
+                    {boxedFlex === null
+                      ? boxed.map(draw)
+                      : boxed.map((w) => (
+                          // 0.46.1 (gap 6): `weight` shares the column's height.
+                          <div
+                            key={w.id}
+                            data-zen-weight={w.weight ?? 1}
+                            className="flex min-h-0 min-w-0 flex-col"
+                            style={{ flex: boxedFlex.get(w.id) }}
+                          >
+                            {draw(w)}
+                          </div>
+                        ))}
                   </div>
                 )}
               </>

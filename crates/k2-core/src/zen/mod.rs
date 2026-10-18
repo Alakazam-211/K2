@@ -362,7 +362,7 @@ pub fn custom_widget(w: J) -> J {
         "config".into(),
         w["props"].get("config").filter(|c| c.is_object()).cloned().unwrap_or_else(|| json!({})),
     );
-    json!({
+    let mut out = json!({
         "id": w["id"],
         "kind": schema::CUSTOM_KIND,
         "widget": w["widget"],
@@ -371,7 +371,12 @@ pub fn custom_widget(w: J) -> J {
         "caps": [],
         "requested": [],
         "source": "user",
-    })
+    });
+    // 0.46.1 (gap 6): its share of the column's height, when the file set it.
+    if let Some(n) = w.get("weight").and_then(J::as_i64) {
+        out["weight"] = json!(n);
+    }
+    out
 }
 
 /// A content widget as the renderer reads it: a custom placement

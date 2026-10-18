@@ -149,6 +149,9 @@ export interface ZenWidgetDecl {
   edge?: ZenEdge
   /** Where in its band or edge (only when the file set it, FC28). */
   align?: ZenAlign
+  /** 0.46.1 (gap 6): its share of its column's height when several widgets
+   *  stack in the column's body (1–12; absent = 1, equal shares). */
+  weight?: number
   props: Record<string, unknown>
   caps: string[]
   /** `builtin` in v1 (granted by K2); `user` for a custom widget. */
@@ -387,6 +390,21 @@ function parseLayout(raw: unknown, builtin: ZenResolvedPage): ZenLayout {
   return { kind: 'columns', split: cols, minWidths: mins.slice(0, cols.length), ...full }
 }
 
+/** `[[widget]] weight` (0.46.1): a whole number 1–12, else none. */
+export const ZEN_MAX_WIDGET_WEIGHT = 12
+
+function weightOf(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= ZEN_MAX_WIDGET_WEIGHT ? v : undefined
+}
+
+/** The CSS `flex` for each widget stacked in one column's body, by id, or
+ *  null when none of them has a `weight` (the column then draws as it always
+ *  has: each widget takes an equal share). */
+export function zenColumnFlex(widgets: readonly ZenWidgetDecl[]): Map<string, string> | null {
+  if (!widgets.some((w) => w.weight !== undefined)) return null
+  return new Map(widgets.map((w) => [w.id, `${w.weight ?? 1} 1 0%`]))
+}
+
 function parseWidgets(raw: unknown, columns: number, builtin: ZenResolvedPage): ZenWidgetDecl[] {
   if (!Array.isArray(raw)) return builtin.widgets.map((w) => ({ ...w, props: { ...w.props }, caps: [...w.caps] }))
   const out: ZenWidgetDecl[] = []
@@ -404,11 +422,12 @@ function parseWidgets(raw: unknown, columns: number, builtin: ZenResolvedPage): 
     const a = align(w.align)
     const column = band ? 0 : col !== null && col >= 0 && col < columns ? Math.floor(col) : Math.min(idx, columns - 1)
     const props = isObj(w.props) ? w.props : {}
+    const weight = band || e ? undefined : weightOf(w.weight)
     if (kind === ZEN_CUSTOM_KIND) {
       // UW6, UWA14: column-only content; the renderer forces `source: user`
       // and the effective caps whatever the body says (UW26).
       const custom = parseZenCustomWidget(w, { id, column, props })
-      out.push({ id, kind, column, props, caps: [...custom.caps], source: 'user', custom })
+      out.push({ id, kind, column, ...(weight !== undefined ? { weight } : {}), props, caps: [...custom.caps], source: 'user', custom })
       return
     }
     out.push({
@@ -417,6 +436,7 @@ function parseWidgets(raw: unknown, columns: number, builtin: ZenResolvedPage): 
       ...(band ? { slot: band } : {}),
       ...(e ? { edge: e } : {}),
       ...(a ? { align: a } : {}),
+      ...(weight !== undefined ? { weight } : {}),
       column,
       props,
       caps: Array.isArray(w.caps) ? w.caps.filter((c): c is string => typeof c === 'string') : [],

@@ -97,6 +97,17 @@ class H(BaseHTTPRequestHandler):
         elif parsed.path == "/cli/agent/conf":
             out = {"ok": True, "path": "/w/scout", "name": "scout", "mode": "custom",
                    "enabled": True, "projects": []}
+        elif parsed.path == "/cli/project-group/rename":
+            out = {"ok": True, "id": "g-1", "name": b.get("name")}
+        elif parsed.path == "/cli/project-group/pin":
+            out = {"ok": True, "id": "g-1", "name": "Atlas", "pinned": b.get("pinned")}
+        elif parsed.path == "/cli/project-group/delete":
+            if os.path.exists(os.path.join(work, "deny-delete")):
+                status = 403
+                out = {"ok": False, "error": {"code": "forbidden",
+                       "hint": "only the owner or an admin can delete a project"}}
+            else:
+                out = {"ok": True, "id": b.get("group")}
         elif parsed.path == "/cli/project-group/list":
             out = {"ok": True, "groups": [{"id": "g-1", "name": "Atlas", "memberCount": 1}]}
         data = json.dumps(out).encode()
@@ -207,6 +218,39 @@ set +e
 outside project access maybe >/dev/null 2>&1; rc=$?
 set -e
 assert_eq "access with a bad state exits 2" "$rc" "2"
+
+echo "== k2 project rename / pin / delete =="
+reset
+out="$(outside project rename Atlas "Atlas Two")"
+assert_contains "rename output" "$out" "Renamed to Atlas Two."
+assert_contains "rename posts the new name" "$(reqs)" '\"name\":\"Atlas Two\"'
+reset
+json_out="$(outside project pin Atlas off --json)"
+python3 -c 'import json,sys; v=json.loads(sys.argv[1]); assert v["pinned"] is False, v' "$json_out" \
+    && ok "pin off --json" || bad "pin off --json ($json_out)"
+assert_contains "pin posts pinned=false" "$(reqs)" '\"pinned\":false'
+reset
+outside project pin Atlas >/dev/null
+assert_contains "pin defaults to on" "$(reqs)" '\"pinned\":true'
+set +e
+outside project pin Atlas maybe >/dev/null 2>&1; rc=$?
+set -e
+assert_eq "pin with a bad state exits 2" "$rc" "2"
+reset
+set +e
+outside project delete Atlas >/dev/null 2>"$WORK/err"; rc=$?
+set -e
+assert_eq "delete without --yes exits 2" "$rc" "2"
+assert_absent "delete without --yes sends nothing" "$(reqs)" "/cli/project-group/delete"
+out="$(outside project delete Atlas --yes)"
+assert_contains "delete output" "$out" "Deleted project Atlas"
+assert_contains "delete posts the resolved id" "$(reqs)" '\"group\":\"g-1\"'
+touch "$WORK/deny-delete"
+set +e
+cell project delete Atlas --yes >/dev/null 2>"$WORK/err"; rc=$?
+set -e
+assert_eq "a refused delete exits 1" "$rc" "1"
+assert_contains "refused delete names the code" "$(cat "$WORK/err")" '"code":"forbidden"'
 
 echo ""
 echo "Results: $pass passed, $fail failed"

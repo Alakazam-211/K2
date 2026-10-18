@@ -39838,6 +39838,34 @@ elif verb == "read":
             print("(more messages remain — continue with: k2 project read %s --after %s)"
                   % (name, msgs[-1].get("createdAt")))
 
+elif verb == "rename":
+    d = call("POST", "/cli/project-group/rename",
+             body={"group": os.environ["P_ARG_PROJECT"], "name": os.environ["P_NAME"]})
+    if as_json:
+        print(dumps({"ok": True, "id": d.get("id"), "name": d.get("name")}))
+    else:
+        print("Renamed to %s." % d.get("name"))
+
+elif verb == "delete":
+    show = fetch_show(os.environ["P_ARG_PROJECT"])
+    d = call("POST", "/cli/project-group/delete", body={"group": show.get("id")})
+    if as_json:
+        print(dumps({"ok": True, "id": d.get("id"), "name": show.get("name")}))
+    else:
+        print("Deleted project %s, its dashboards and its chat. Its agents and their folders are untouched."
+              % show.get("name"))
+
+elif verb == "pin":
+    pinned = os.environ["P_NAME"] != "off"
+    d = call("POST", "/cli/project-group/pin",
+             body={"group": os.environ["P_ARG_PROJECT"], "pinned": pinned})
+    if as_json:
+        print(dumps({"ok": True, "id": d.get("id"), "name": d.get("name"),
+                     "pinned": bool(d.get("pinned"))}))
+    else:
+        print("%s %s for everyone on this server." % (
+            d.get("name"), "is pinned" if d.get("pinned") else "is no longer pinned"))
+
 elif verb == "access":
     # The per-agent "Manage K2 projects" switch (0162). Owner/Admin only:
     # inside a K2 terminal this sends the session passport, which the
@@ -39886,6 +39914,94 @@ cmd_project_access() {
         exit 2
     fi
     local P_VERB="access" P_JSON="$as_json" P_NAME="$state" P_ARG_WORKSPACE="$workspace"
+    _project_py
+}
+
+cmd_project_rename() {
+    if _wants_help "$@"; then cmd_help_project_rename; exit 0; fi
+    local project="" name="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _project_err "usage" "unknown flag '$1' — usage: k2 project rename <project> <new-name> [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$project" ]; then project="$1"
+                elif [ -z "$name" ]; then name="$1"
+                else
+                    _project_err "usage" "unexpected extra argument '$1' — quote names containing spaces"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$project" ] || [ -z "$name" ]; then
+        _project_err "usage" "rename requires <project> and <new-name>"
+        exit 2
+    fi
+    local P_VERB="rename" P_JSON="$as_json" P_ARG_PROJECT="$project" P_NAME="$name"
+    _project_py
+}
+
+cmd_project_delete() {
+    if _wants_help "$@"; then cmd_help_project_delete; exit 0; fi
+    local project="" yes=false as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --yes|-y) yes=true; shift ;;
+            -*)
+                _project_err "usage" "unknown flag '$1' — usage: k2 project delete <project> --yes [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$project" ]; then project="$1"; else
+                    _project_err "usage" "unexpected extra argument '$1' — quote names containing spaces"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$project" ]; then
+        _project_err "usage" "delete requires a <project>"
+        exit 2
+    fi
+    if [ "$yes" != true ]; then
+        _project_err "usage" "delete removes the project, its dashboards and its whole chat; pass --yes to confirm"
+        exit 2
+    fi
+    local P_VERB="delete" P_JSON="$as_json" P_ARG_PROJECT="$project"
+    _project_py
+}
+
+cmd_project_pin() {
+    if _wants_help "$@"; then cmd_help_project_pin; exit 0; fi
+    local project="" state="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            -*)
+                _project_err "usage" "unknown flag '$1' — usage: k2 project pin <project> [on|off] [--json]"
+                exit 2 ;;
+            *)
+                if [ -z "$project" ]; then project="$1"
+                elif [ -z "$state" ]; then
+                    case "$1" in
+                        on|off) state="$1" ;;
+                        *) _project_err "usage" "pin takes on or off, not '$1'"; exit 2 ;;
+                    esac
+                else
+                    _project_err "usage" "unexpected extra argument '$1' — quote names containing spaces"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$project" ]; then
+        _project_err "usage" "pin requires a <project>"
+        exit 2
+    fi
+    local P_VERB="pin" P_JSON="$as_json" P_ARG_PROJECT="$project" P_NAME="${state:-on}"
     _project_py
 }
 
@@ -40121,6 +40237,10 @@ USAGE
 
 COMMANDS
   create <name>                  Create an empty project
+  rename <project> <new-name>    Rename a project
+  pin <project> [on|off]         Show it in everyone's Pinned section (default on)
+  delete <project> --yes         Delete a project with its dashboards and chat
+                                 (owner or admin only; agents can't)
   list                           List this server's projects (members, PoC, pinned)
   show <project>                 One project: members, PoC, last few messages
   add <project> <workspace>      Add a member workspace (the FIRST member added
@@ -40139,8 +40259,10 @@ COMMANDS
                                  K2 projects" switch on or off
 
 WHO MAY CHANGE PROJECTS
-  Projects are open by default: any agent may create, rename and delete
-  projects and add or remove members. Each workspace has a per-agent switch,
+  Projects are open by default: any agent may create, rename and pin
+  projects and add or remove members. Deleting a project (and its chat) is
+  for the owner or an admin only: an agent or a Member login gets exit 1
+  with code forbidden. Each workspace has a per-agent switch,
   "Manage K2 projects" (Settings → Workspaces → <ws> → Agent, or
   `k2 project access`). Off: that agent gets exit 1 with code
   agent_permission_off on every change, but `list`, `show`, `read` and `msg`
@@ -40207,6 +40329,47 @@ FLAGS
 EXAMPLES
   k2 project access off --workspace scout
   k2 project access on --workspace ~/agents/scout
+EOF
+}
+
+cmd_help_project_rename() {
+    cat <<'EOF'
+Rename a project. Names are unique per server, case-insensitively.
+
+USAGE
+  k2 project rename <project> <new-name> [--json]
+
+EXAMPLES
+  k2 project rename 0.41-release 0.42-release
+EOF
+}
+
+cmd_help_project_delete() {
+    cat <<'EOF'
+Delete a project: its member list, dashboards and its whole chat. The agents
+and their folders are never touched. Only the owner or an admin can delete a
+project; an agent or a Member login is refused (exit 1, code forbidden).
+
+USAGE
+  k2 project delete <project> --yes [--json]
+
+FLAGS
+  --yes, -y              Required: confirms you mean it
+  --json                 JSON output
+EOF
+}
+
+cmd_help_project_pin() {
+    cat <<'EOF'
+Pin a project so it shows in the Pinned section of the Projects nav for
+everyone on this server, or unpin it with off.
+
+USAGE
+  k2 project pin <project> [on|off] [--json]
+
+EXAMPLES
+  k2 project pin 0.46.1
+  k2 project pin 0.46.1 off
 EOF
 }
 
@@ -58584,6 +58747,9 @@ case "${1:-help}" in
         # registry (`/cli/projects/*`).
         case "${2:-}" in
             create) shift 2; cmd_project_create "$@" ;;
+            rename) shift 2; cmd_project_rename "$@" ;;
+            delete) shift 2; cmd_project_delete "$@" ;;
+            pin)    shift 2; cmd_project_pin "$@" ;;
             list)   shift 2; cmd_project_list "$@" ;;
             show)   shift 2; cmd_project_show "$@" ;;
             add)    shift 2; cmd_project_add "$@" ;;

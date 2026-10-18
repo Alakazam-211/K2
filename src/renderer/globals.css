@@ -543,6 +543,32 @@ html[data-os]:not([data-os="mac"]) select optgroup {
   text-decoration: underline;
 }
 
+/* Thread file links (components/common/file-links.tsx): a path the daemon
+   says is in this workspace. Link colour from the Style (inside a Thread
+   bubble the shield points --color-accent at a readable colour per side);
+   a dotted underline at rest says it is clickable, solid on hover. */
+.markdown-content .k2-file-link {
+  color: var(--color-accent);
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  border-radius: var(--radius-box);
+}
+
+.markdown-content .k2-file-link:hover {
+  text-decoration-style: solid;
+}
+
+.markdown-content .k2-file-link:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.markdown-content .k2-file-link code {
+  color: inherit;
+}
+
 .markdown-content strong {
   color: var(--color-text-primary);
   font-weight: 600;

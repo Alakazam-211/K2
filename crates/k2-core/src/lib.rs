@@ -186,6 +186,7 @@ pub mod remote_sessions;
 pub mod fs_abstract;
 pub mod fs_atomic;
 pub mod fs_commands;
+pub mod file_links;
 pub mod fs_compress;
 pub mod fs_extract;
 /// Resumable chunked upload for app guests (part bound to the guest).

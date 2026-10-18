@@ -78,6 +78,7 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'fs/extract': 'extract in B’s workspace',
   'fs/extract-cancel': 'cancel an extract on B',
   'fs/search-tree': 'file search in B’s workspace (a read sent as POST)',
+  'fs/resolve-links': 'Thread file links: which paths in a message are files in B’s workspace (a read sent as POST)',
   'workspace/resources/add': 'add a Workspace Resource in B’s Files drawer',
   'workspace/resources/remove': 'remove a Workspace Resource in B’s Files drawer',
 

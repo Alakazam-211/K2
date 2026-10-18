@@ -5,6 +5,7 @@
 import {
   memo,
   useCallback,
+  useMemo,
   type CSSProperties,
   type JSX,
   type MouseEvent,
@@ -12,12 +13,13 @@ import {
   type ReactNode,
 } from 'react'
 import remarkGfm from 'remark-gfm'
-import type { Components } from 'react-markdown'
+import type { Components, Options } from 'react-markdown'
 import Markdown from '@/components/Markdown/Markdown'
 import {
   SELECTABLE_TEXT_STYLE,
   clearStuckBodyUserSelect,
 } from './SelectableText'
+import { MarkdownSpan, rehypeFileLinks, useFileLinkPrefixes } from './file-links'
 
 const CHAT_REMARK = [remarkGfm]
 
@@ -30,6 +32,12 @@ const CHAT_COMPONENTS: Components = {
       <table {...props} />
     </div>
   ),
+}
+
+/** Under a `FileLinkProvider` (the Thread): workspace paths become links. */
+const CHAT_COMPONENTS_WITH_FILE_LINKS: Components = {
+  ...CHAT_COMPONENTS,
+  span: MarkdownSpan as Components['span'],
 }
 
 /** GFM treats a single \n as a space. Chat Shift+Enter is a hard break
@@ -61,6 +69,11 @@ export const ChatMessageBody = memo(function ChatMessageBody({
     node.style.setProperty('-webkit-app-region', 'no-drag')
     node.style.cursor = 'text'
   }, [])
+  const fileLinks = useFileLinkPrefixes()
+  const rehypePlugins = useMemo<Options['rehypePlugins']>(
+    () => (fileLinks.enabled ? [[rehypeFileLinks, { prefixes: fileLinks.prefixes }]] : undefined),
+    [fileLinks.enabled, fileLinks.prefixes],
+  )
 
   return (
     <div
@@ -70,7 +83,13 @@ export const ChatMessageBody = memo(function ChatMessageBody({
       onPointerDown={onBodyPointerDown}
       onMouseDown={onBodyPointerDown}
     >
-      <Markdown remarkPlugins={CHAT_REMARK} components={CHAT_COMPONENTS}>{chatHardBreaks(text)}</Markdown>
+      <Markdown
+        remarkPlugins={CHAT_REMARK}
+        rehypePlugins={rehypePlugins}
+        components={fileLinks.enabled ? CHAT_COMPONENTS_WITH_FILE_LINKS : CHAT_COMPONENTS}
+      >
+        {chatHardBreaks(text)}
+      </Markdown>
     </div>
   )
 })

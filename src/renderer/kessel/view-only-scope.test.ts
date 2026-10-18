@@ -66,7 +66,7 @@ describe('view-only scope', () => {
     }
     expect(fetchSpy).not.toHaveBeenCalled()
     // The keep-alive, and file search (a read the daemon takes as POST).
-    expect([...VIEW_ONLY_POST_ROUTES]).toEqual(['projects/activate', 'fs/search-tree'])
+    expect([...VIEW_ONLY_POST_ROUTES]).toEqual(['projects/activate', 'fs/search-tree', 'fs/resolve-links'])
     fetchSpy.mockRestore()
   })
 })

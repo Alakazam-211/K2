@@ -165,6 +165,52 @@ pub fn handle_search_tree(body: &[u8]) -> CliResponse {
 }
 
 #[derive(Deserialize)]
+struct ResolveLinksBody {
+    /// The message's workspace: a Thread address (`k2`, `k2/reviewer`),
+    /// a registered workspace path, or a project id. The daemon resolves
+    /// the root; the caller never supplies it.
+    workspace: String,
+    #[serde(default)]
+    paths: Vec<String>,
+}
+
+/// `POST /cli/fs/resolve-links` (Thread file links, 0.46.1): which of the
+/// path-shaped strings in a Thread message lead to a file or folder inside
+/// the message's workspace. Read-only; POST because the batch is a body.
+/// Symlinks are followed and anything whose real path leaves the workspace
+/// (or is missing) answers a bare `linkable: false`
+/// (`k2_core::file_links`). `prefixes` are the root's spellings the
+/// renderer may use to tokenize a path with spaces in it.
+pub fn handle_resolve_links(body: &[u8]) -> CliResponse {
+    let parsed: ResolveLinksBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let token = parsed.workspace.trim();
+    if token.is_empty() {
+        return CliResponse::bad_request("missing 'workspace'");
+    }
+    let Some(root) = crate::workspace_msg::resolve_workspace_allowing_handle(token) else {
+        return CliResponse {
+            status: "404 Not Found",
+            content_type: "application/json",
+            body: r#"{"error":"workspace not found"}"#.to_string(),
+        };
+    };
+    let root = PathBuf::from(root);
+    let home = dirs::home_dir();
+    let links = k2_core::file_links::resolve_links(&root, home.as_deref(), &parsed.paths);
+    CliResponse::ok_json(
+        serde_json::json!({
+            "root": root.to_string_lossy(),
+            "prefixes": k2_core::file_links::root_prefixes(&root, home.as_deref()),
+            "links": links,
+        })
+        .to_string(),
+    )
+}
+
+#[derive(Deserialize)]
 struct WriteFileBody {
     path: String,
     content: String,

@@ -140,7 +140,7 @@ impl Owner {
         match conn.recv()?.body {
             Reply::Attached { start, end } => {
                 let pending = conn.take_rest();
-                conn.set_timeout(None)?;
+                k2_ptyd::client::clear_timeout_after_attach(&conn)?;
                 Ok(DataStream::from_parts(conn.stream, start, end, pending))
             }
             Reply::Error { code, .. } => Err(io::Error::other(format!("attach refused: {code}"))),

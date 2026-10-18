@@ -1053,6 +1053,9 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Clone proposals (prd-clone-carries-threads-and-vault-v1 CL14):
     // approving an agent's clone proposal (`secretId` = the proposal id).
     "clone-approve",
+    // RS-A15 (0.46.1): a Garden widget's `guests.setRooms`, confirmed on
+    // K2's sheet outside the frame (`secretId` = the change's hash).
+    crate::garden_data::guest_rooms::CONFIRM_ACTION,
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

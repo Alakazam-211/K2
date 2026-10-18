@@ -17,8 +17,9 @@ type Step = { step: 'starting' } | { step: 'mac' } | { step: 'password'; method:
 
 export interface ConfirmStepProps {
   scope: ServerScope
-  action: 'source-secret' | 'source-batch'
-  /** The source id, or the batch hash. */
+  /** `garden-guests`: a Garden widget's guest-rooms change (RS-A15). */
+  action: 'source-secret' | 'source-batch' | 'garden-guests'
+  /** The source id, the batch hash, or the guest-rooms change's id. */
   secretId: string
   /** Shown in the Mac's sheet ("source secret deploys"). */
   label: string

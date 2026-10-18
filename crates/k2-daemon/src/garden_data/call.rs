@@ -48,6 +48,11 @@ pub struct CallBody {
     pub verb: String,
     #[serde(default)]
     pub args: Vec<serde_json::Value>,
+    /// RS-A15: the person's vault confirm for a `guests.setRooms` write,
+    /// added by K2's renderer after its sheet (never by widget code; the
+    /// frame never sees it). Every other verb ignores it.
+    #[serde(default, rename = "confirmToken", skip_serializing_if = "Option::is_none")]
+    pub confirm_token: Option<String>,
 }
 
 /// Origins the app's renderer calls from (`routes::http::TAURI_ORIGINS`),
@@ -117,6 +122,11 @@ pub fn handle(who: &DataWho, headers: &str, body: &[u8]) -> CliResponse {
     if ingress == Ingress::LocalProcess {
         audit::line("zen.data.call", "local-process", &format!("{}/{} verb={}", b.garden, b.placement, b.verb));
     }
+    // RS-A15: `guests.*` run as the owner with a confirm sheet on every
+    // write (its refusals carry the change the sheet shows).
+    if crate::garden_data::guest_rooms::is_verb(&b.verb) {
+        return crate::garden_data::guest_rooms::handle(&b);
+    }
     match run(&b) {
         Ok(v) => crate::garden_data::ok(json!({ "ok": true, "result": v })),
         Err(e) => response(&e),
@@ -124,13 +134,13 @@ pub fn handle(who: &DataWho, headers: &str, body: &[u8]) -> CliResponse {
 }
 
 /// The placement as the daemon resolved it.
-struct Placed {
-    garden: String,
-    placement: String,
+pub(crate) struct Placed {
+    pub(crate) garden: String,
+    pub(crate) placement: String,
     /// Folder name or `k2:<name>@<n>`.
-    widget: String,
-    hash: String,
-    caps: Vec<String>,
+    pub(crate) widget: String,
+    pub(crate) hash: String,
+    pub(crate) caps: Vec<String>,
 }
 
 impl Placed {
@@ -153,7 +163,7 @@ fn stale(why: &str) -> DataError {
 }
 
 /// Placement → widget → live hash (a locked Garden's frozen copy) → caps.
-fn resolve(b: &CallBody) -> Result<Placed, DataError> {
+pub(crate) fn resolve(b: &CallBody) -> Result<Placed, DataError> {
     let f = ZenFiles::local();
     if !f.is_set_up() {
         return Err(DataError::NotFound("widget_not_found"));
@@ -564,7 +574,7 @@ pub fn made_by_wire(m: &MadeBy) -> J {
 }
 
 /// `owner` | `k2` | `unclaimed` | `agent:<handle>` for the counted audit.
-fn made_by_label(m: &MadeBy) -> String {
+pub(crate) fn made_by_label(m: &MadeBy) -> String {
     match m {
         MadeBy::Owner => "owner".into(),
         MadeBy::K2 => "k2".into(),

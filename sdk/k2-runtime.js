@@ -653,8 +653,9 @@
 
   if (groups.store) {
     var store = groups.store
-    // k2.store.subscribe(prefix | {prefix, since}, cb, onError?): whole revs
-    // from any writer; K2 pages store.changes on each change.
+    // k2.store.subscribe(prefix | {prefix, since, from}, cb, onError?): whole revs
+    // from any writer; K2 pages store.changes on each change. `from` (0.46.1)
+    // follows a neighbour widget named in the manifest's reads.
     store.subscribe = function () {
       return subscribe('store.changes', Array.prototype.slice.call(arguments))
     }

@@ -642,6 +642,42 @@ pub fn set_job_state(
     .map(|_| ())
 }
 
+/// Compare-and-set: like [`set_job_state`], but only while the row is still
+/// in state `from`. `Ok(true)` when it moved. The controller's placement
+/// (`kick`) and the cancel route both write a queued row; neither may
+/// overwrite the other's decision.
+pub fn set_job_state_if(
+    conn: &Connection,
+    id: &str,
+    from: &str,
+    state: JobState,
+    reason: Option<&str>,
+    detail: Option<&str>,
+    at: i64,
+) -> Result<bool, String> {
+    let terminal = state.is_terminal();
+    conn.execute(
+        "UPDATE compute_jobs SET state = ?2, reason = ?3, detail = ?4, \
+         assigned_at = CASE WHEN ?2 = 'assigned' THEN ?5 ELSE assigned_at END, \
+         started_at = CASE WHEN ?2 = 'running' AND started_at IS NULL THEN ?5 ELSE started_at END, \
+         ended_at = CASE WHEN ?6 THEN COALESCE(ended_at, ?5) ELSE ended_at END WHERE id = ?1 AND state = ?7",
+        params![id, state.as_str(), reason, detail, at, terminal, from],
+    )
+    .map_err(|e| e.to_string())
+    .map(|n| n == 1)
+}
+
+/// Cancel a job only while it is still queued (never an assigned or
+/// running one: those need a `Cancel` frame to the node).
+pub fn cancel_if_queued(conn: &Connection, id: &str, at: i64) -> Result<bool, String> {
+    set_job_state_if(conn, id, "queued", JobState::Cancelled, Some("cancelled"), None, at)
+}
+
+/// Assign a job only while it is still queued (a cancel that landed first wins).
+pub fn assign_if_queued(conn: &Connection, id: &str, at: i64) -> Result<bool, String> {
+    set_job_state_if(conn, id, "queued", JobState::Assigned, None, None, at)
+}
+
 pub fn set_job_reason(conn: &Connection, id: &str, reason: Option<&str>, detail: Option<&str>) {
     let _ = conn.execute(
         "UPDATE compute_jobs SET reason = ?2, detail = ?3 WHERE id = ?1",
@@ -940,5 +976,40 @@ mod tests {
         assert!(agents_can_use_compute(&c, "p1"));
         assert!(set_agents_can_use_compute(&c, "nope", true).is_err());
         assert!(!agents_can_use_compute(&c, "nope"));
+    }
+
+    fn queued_job(c: &Connection, id: &str, client: &str) -> JobRow {
+        insert_job(
+            c,
+            &NewJob { plan: &plan(id, "n1", "ws"), client_job_id: client, session_id: None, request_sha256: "h", detach: false, retry_interrupted: false },
+        )
+        .expect("insert job")
+    }
+
+    #[test]
+    fn cancel_if_queued_does_not_touch_an_assigned_job() {
+        let c = conn();
+        let a = queued_job(&c, "aaaaaaaa0123456789abcdef01234567", "client-000000000a");
+        assert!(assign_if_queued(&c, &a.id, 20).expect("assign"));
+        assert!(!cancel_if_queued(&c, &a.id, 21).expect("cancel"), "an assigned job is not cancelled by the queued-only path");
+        let row = job_by_id(&c, &a.id).expect("row");
+        assert_eq!((row.state.as_str(), row.assigned_at, row.ended_at), ("assigned", Some(20), None));
+        // A queued one is cancelled once, with an end time.
+        let b = queued_job(&c, "bbbbbbbb0123456789abcdef01234567", "client-000000000b");
+        assert!(cancel_if_queued(&c, &b.id, 30).expect("cancel"));
+        assert!(!cancel_if_queued(&c, &b.id, 31).expect("cancel again"));
+        let row = job_by_id(&c, &b.id).expect("row");
+        assert_eq!((row.state.as_str(), row.reason.as_deref(), row.ended_at), ("cancelled", Some("cancelled"), Some(30)));
+    }
+
+    #[test]
+    fn assign_if_queued_never_revives_a_cancelled_job() {
+        let c = conn();
+        let a = queued_job(&c, "cccccccc0123456789abcdef01234567", "client-000000000c");
+        assert!(cancel_if_queued(&c, &a.id, 20).expect("cancel"));
+        assert!(!assign_if_queued(&c, &a.id, 21).expect("assign"), "kick must not assign a job a cancel already ended");
+        assert_eq!(job_by_id(&c, &a.id).expect("row").state, "cancelled");
+        assert!(!set_job_state_if(&c, &a.id, "queued", JobState::Failed, Some("x"), None, 22).expect("fail"));
+        assert_eq!(job_by_id(&c, &a.id).expect("row").state, "cancelled");
     }
 }

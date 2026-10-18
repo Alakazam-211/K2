@@ -307,11 +307,16 @@ pub fn apply(cmd: &mut Command, service_id: &str, workspace_id: &str, cwd: &Path
 pub fn apply_service(cmd: &mut Command, service_id: &str, name: &str, workspace_id: &str, cwd: &Path, port: u16) -> Applied {
     let se = get(service_id);
     let identity = service_identity_env(service_id, name, crate::publish_runtime::loopback_port());
+    // 0.46.1: the service's public https origins (unset when it has none).
+    let origins = crate::apps::origins::env_pairs(&crate::apps::origins::for_service(service_id, name));
     if se.mode == "legacy" && !se.clean_mode {
         let mut names: Vec<String> = std::env::vars().map(|(k, _)| k).collect();
         names.sort();
         record_inherited(service_id, names);
         cmd.envs(identity);
+        cmd.env_remove(crate::apps::origins::ORIGIN_ENV);
+        cmd.env_remove(crate::apps::origins::ORIGINS_ENV);
+        cmd.envs(origins);
         let secrets_dir = apply_granted(cmd, service_id, workspace_id, cwd);
         return Applied { secrets_dir, fixed_path: false };
     }
@@ -323,6 +328,7 @@ pub fn apply_service(cmd: &mut Command, service_id: &str, name: &str, workspace_
     }
     cmd.env("PORT", port.to_string());
     cmd.envs(identity);
+    cmd.envs(origins);
     let secrets_dir = apply_granted(cmd, service_id, workspace_id, cwd);
     Applied { secrets_dir, fixed_path: se.clean_mode }
 }
@@ -339,6 +345,8 @@ pub fn clean_mode_names() -> Vec<&'static str> {
         "K2_PORT",
         crate::apps::process_engine::APP_NAME_ENV,
         "K2_GATEWAY_URL",
+        crate::apps::origins::ORIGIN_ENV,
+        crate::apps::origins::ORIGINS_ENV,
         super::spawn::SECRETS_DIR_ENV,
     ]);
     v

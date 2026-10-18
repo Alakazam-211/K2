@@ -104,6 +104,9 @@ fn clean_env_with_daemon_port(spec: &AppSpec, port: u16, daemon_port: u16) -> Ve
     out.push(("K2_APP_DEPLOYMENT".into(), spec.deployment_id.clone()));
     out.push(("K2_APP_DATA".into(), spec.data_dir.to_string_lossy().to_string()));
     out.push(("K2_APP_CACHE".into(), spec.cache_dir.to_string_lossy().to_string()));
+    for (k, v) in super::origins::env_pairs(&spec.public_origins) {
+        out.push((k.into(), v));
+    }
     out
 }
 
@@ -400,6 +403,7 @@ mod tests {
             drain_secs: 30,
             io_max_json: None,
             devices: vec![],
+            public_origins: vec![],
             data_dir: app.join("data"),
             cache_dir: app.join("cache"),
             home_dir: app.join("home"),
@@ -422,6 +426,12 @@ mod tests {
         assert_eq!(env.get("K2_HOST").map(String::as_str), Some("127.0.0.1"));
         assert_eq!(env.get("K2_PORT").map(String::as_str), Some("7777"));
         assert!(!env.contains_key("K2_HOOK_TOKEN"), "never the daemon's K2_* (nor a declared one)");
+        assert!(!env.contains_key("K2_APP_ORIGIN") && !env.contains_key("K2_APP_ORIGINS"), "no public URL: unset");
+        let mut with = spec(h.path(), &["true"]);
+        with.public_origins = vec!["https://hearth.example.com".into(), "https://pe-test.sewlab.k2.dev".into()];
+        let env: BTreeMap<String, String> = clean_env_with_daemon_port(&with, 4321, 7777).into_iter().collect();
+        assert_eq!(env.get("K2_APP_ORIGIN").map(String::as_str), Some("https://hearth.example.com"));
+        assert_eq!(env.get("K2_APP_ORIGINS").map(String::as_str), Some("https://hearth.example.com,https://pe-test.sewlab.k2.dev"));
         for k in env.keys() {
             assert!(
                 ["PATH", "HOME", "PORT", "NODE_ENV", "TMPDIR", "LANG", "TZ", "GREETING", "K2_HOST", "K2_PORT"].contains(&k.as_str())

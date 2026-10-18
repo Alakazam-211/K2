@@ -199,6 +199,11 @@ pub fn guarded_env(spec: &AppSpec, host_lang: Option<String>, host_tz: Option<St
     env.insert("K2_HOST".into(), "127.0.0.1".into());
     env.insert("K2_PORT".into(), wire::IN_WALL_GATEWAY_PORT.to_string());
     env.insert("K2_GATEWAY_URL".into(), super::gateway::in_wall_url());
+    for (k, v) in super::origins::env_pairs(&spec.public_origins) {
+        if wire::value_ok(&v, 32 * 1024) {
+            env.insert(k.into(), v);
+        }
+    }
     env
 }
 
@@ -830,6 +835,7 @@ mod tests {
             drain_secs: 30,
             io_max_json: None,
             devices: vec![],
+            public_origins: vec![],
             data_dir: "/x/data".into(),
             cache_dir: "/x/cache".into(),
             home_dir: "/x/home".into(),
@@ -852,6 +858,23 @@ mod tests {
         assert!(!e.contains_key("K2_PASS_FILE"), "the engine sets the pass file variable");
         assert_eq!(e["LANG"], "C.UTF-8");
         assert_eq!(e["NODE_ENV"], "production");
+        assert!(!e.contains_key("K2_APP_ORIGIN") && !e.contains_key("K2_APP_ORIGINS"), "no public URL: unset");
+    }
+
+    #[test]
+    fn env_carries_the_public_origins() {
+        let mut s = spec();
+        s.env.insert("K2_APP_ORIGIN".into(), "https://forged.example".into());
+        // Only the label.
+        s.public_origins = vec!["https://nsi-skin.sewlab.k2.dev".into()];
+        let e = guarded_env(&s, None, None);
+        assert_eq!(e["K2_APP_ORIGIN"], "https://nsi-skin.sewlab.k2.dev", "a manifest can't set it");
+        assert_eq!(e["K2_APP_ORIGINS"], "https://nsi-skin.sewlab.k2.dev");
+        // A custom domain first, then the label.
+        s.public_origins = vec!["https://jobs.example.com".into(), "https://nsi-skin.sewlab.k2.dev".into()];
+        let e = guarded_env(&s, None, None);
+        assert_eq!(e["K2_APP_ORIGIN"], "https://jobs.example.com");
+        assert_eq!(e["K2_APP_ORIGINS"], "https://jobs.example.com,https://nsi-skin.sewlab.k2.dev");
     }
 
     #[test]

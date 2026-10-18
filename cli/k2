@@ -8394,6 +8394,19 @@ MANIFEST (manifest.json at the folder root, schema 1)
   Unknown keys are errors. net and secrets are refused: secrets come from
   the vault. dataRevision + dataDown guard rollbacks across migrations.
 
+PUBLIC ORIGINS (CSRF and WebSocket Origin checks)
+  Every App process gets the https origins people reach it on:
+    K2_APP_ORIGIN    the primary one: a bound custom domain, else
+                     https://<app-id>.<sub>.k2.dev
+    K2_APP_ORIGINS   all of them, comma-separated, primary first
+  A custom domain counts once it is bound to the App:
+    k2 domain name add app.example.com --role app:<app-id>
+  K2 reads them at every start, so a changed binding reaches the App on
+  its next deploy or restart (k2 app restart <app-id>). No public URL
+  (a local-only App, no K2 Connect subdomain, no custom domain): neither
+  is set. Treat unset as "loopback only", never as "allow any Origin".
+  A manifest can't set them. --cmd services get them too.
+
 READING WHAT WENT WRONG
   k2 app errors <app-id>    failed deploys + error lines (framed)
   k2 app logs <app-id>      one deployment's log (framed)
@@ -26466,11 +26479,11 @@ cmd_schema() {
     },
     {
       "name": "domain name add",
-      "usage": "k2 domain name add <hostname> [--role mail|publish|direct|other] [--json]",
+      "usage": "k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--json]",
       "description": "Add a hostname under an attached apex. dns_manage (same as k2 cert issue). Apex add stays owner.",
       "args": [{"name": "hostname", "required": true}],
       "flags": [
-        {"name": "--role", "arg": "mail|publish|direct|other", "description": "Informational role (default other)."},
+        {"name": "--role", "arg": "mail|publish|direct|other|app:<name>", "description": "Role (default other). app:<name> binds the hostname to that App or published service: it gets it in K2_APP_ORIGIN/K2_APP_ORIGINS on its next start."},
         {"name": "--json", "arg": null, "description": "JSON response."}
       ]
     },
@@ -29711,6 +29724,10 @@ PER-APP LOGINS (0.45.5)
     K2_PORT (the daemon's loopback address). Send {"app": $K2_APP_ID} on
     POST /cli/skin/login to make logins per App. Before you switch, give
     people the App: `k2 app grant copy-host <workspace>/<name>`.
+    K2_APP_ORIGIN / K2_APP_ORIGINS are its public https origin(s) (a
+    custom domain bound with --role app:<name>, then the nested label):
+    check Origin against them on POSTs and WebSocket upgrades. Unset =
+    no public URL (k2 study app-deploys, PUBLIC ORIGINS).
   New Apps start with NOBODY. Owner adds people:
     k2 app grant copy-host <app>               everyone with the box login
     k2 app user add <u> --app <app> [--role R]  a guest of this App only
@@ -49818,11 +49835,11 @@ cmd_domain_name_add() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --role)
-                [ $# -ge 2 ] || { _dom_err "usage" "--role requires mail|publish|direct|other"; exit 2; }
+                [ $# -ge 2 ] || { _dom_err "usage" "--role requires mail|publish|direct|other|app:<name>"; exit 2; }
                 role="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _dom_err "usage" "unknown flag '$1' — usage: k2 domain name add <hostname> [--role mail|publish|direct|other] [--json]"
+                _dom_err "usage" "unknown flag '$1' — usage: k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$hostname" ]; then hostname="$1"; else
@@ -50003,7 +50020,7 @@ USAGE
   k2 domain add <apex> [--json]
   k2 domain remove <apex> [--json]
   k2 domain refresh [<apex>] [--json]
-  k2 domain name add <hostname> [--role mail|publish|direct|other] [--json]
+  k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--json]
   k2 domain name remove <hostname> [--json]
 
 A domain k2.dev holds but whose nameservers don't point at k2.dev yet
@@ -50071,7 +50088,7 @@ cmd_help_domain_name() {
 Add or remove a hostname under an attached apex.
 
 USAGE
-  k2 domain name add <hostname> [--role mail|publish|direct|other]
+  k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>]
   k2 domain name remove <hostname>
 EOF
 }
@@ -50082,7 +50099,7 @@ Add a hostname under an attached apex (dns_manage). Apex must already
 be on this server (`k2 domain add` is owner). Then `k2 cert issue`.
 
 USAGE
-  k2 domain name add <hostname> [--role mail|publish|direct|other] [--json]
+  k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--json]
 EOF
 }
 

@@ -119,6 +119,12 @@ pub fn bundle_json(arch: Option<&str>, k2app_uid: Option<u32>, userns_restricted
         // K2 downloads only from its own mirror (Rosson 2026-10-17); the
         // mirror copied the bytes from here (the sha256 pin is the same).
         "mirror": pb::MIRROR_BASE,
+        "mirrors": pb::MIRROR_BASES,
+        "urls": art.map(pb::download_urls),
+        // The host isn't trusted: the sha256 pin and a K2 release-key
+        // signature over this comment are.
+        "signature": art.map(pb::signature_name),
+        "trustedComment": art.map(pb::bundle_trusted_comment),
         "upstream": art.map(pb::upstream_url),
         "sha256": art.map(|a| a.sha256),
         "size": art.map(|a| a.size),
@@ -178,30 +184,66 @@ fn fetch(url: &str) -> Result<Vec<u8>, String> {
     r.bytes().map(|b| b.to_vec()).map_err(|e| format!("{url}: {e}"))
 }
 
-/// The pinned tarball: from `from` (a folder holding the asset) or the
-/// pinned URL; checked before it is returned.
-pub fn obtain(from: Option<&str>, art: &pb::PodmanArtifact) -> Result<Vec<u8>, String> {
-    let bytes = match from {
+/// Keys a mirror tarball's `.minisig` may be signed with: the release keys
+/// (primary, and the backup, flagged); debug builds also the TEST key.
+pub fn keys() -> Vec<k2_root_proto::keys::TrustedKey> {
+    k2_root_proto::keys::trusted_keys(cfg!(debug_assertions))
+}
+
+/// A tarball that passed both checks, and where it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Obtained {
+    pub bytes: Vec<u8>,
+    pub signer: pb::BundleSigner,
+    pub from: String,
+}
+
+/// Both checks: the sha256 pin, then the K2 signature over the trusted
+/// comment that names this tarball (the mirror host is not trusted).
+pub fn verify(bytes: &[u8], sig: &str, art: &pb::PodmanArtifact, keys: &[k2_root_proto::keys::TrustedKey]) -> Result<pb::BundleSigner, String> {
+    check(bytes, art)?;
+    pb::verify_bundle_sig(bytes, sig, keys, art).map_err(|e| format!("{}.minisig: {e} (refusing before any root call)", art.asset))
+}
+
+/// The pinned tarball: from `from` (a folder holding the asset and its
+/// `.minisig`) or K2's mirrors in order; checked (sha256 + signature)
+/// before it is returned.
+pub fn obtain(from: Option<&str>, art: &pb::PodmanArtifact, keys: &[k2_root_proto::keys::TrustedKey]) -> Result<Obtained, String> {
+    match from {
         Some(dir) => {
             let d = Path::new(dir);
             if !d.is_absolute() {
                 return Err("give podmanFrom as an absolute folder".into());
             }
-            std::fs::read(d.join(art.asset)).map_err(|e| format!("{}: {e}", d.join(art.asset).display()))?
+            let bytes = std::fs::read(d.join(art.asset)).map_err(|e| format!("{}: {e}", d.join(art.asset).display()))?;
+            let sig_path = d.join(pb::signature_name(art));
+            let sig = std::fs::read_to_string(&sig_path).map_err(|e| format!("{}: {e} (the tarball's K2 signature goes beside it)", sig_path.display()))?;
+            let signer = verify(&bytes, &sig, art, keys)?;
+            Ok(Obtained { bytes, signer, from: d.display().to_string() })
         }
-        None if k2_core::airgap::enabled() => {
-            return Err(format!(
-                "air-gapped: copy {} (sha256 {}) from K2's mirror {} (the same bytes as {}) into a folder and prepare with --podman-from <folder>",
-                art.asset,
-                art.sha256,
-                pb::download_url(art),
-                pb::upstream_url(art)
-            ))
+        None if k2_core::airgap::enabled() => Err(format!(
+            "air-gapped: copy {} (sha256 {}) and {} from K2's mirror {} into a folder and prepare with --podman-from <folder>",
+            art.asset,
+            art.sha256,
+            pb::signature_name(art),
+            pb::download_url(art)
+        )),
+        None => {
+            let mut why = Vec::new();
+            for url in pb::download_urls(art) {
+                let got = fetch(&url).and_then(|bytes| {
+                    let sig = fetch(&format!("{url}.minisig")).and_then(|b| String::from_utf8(b).map_err(|_| format!("{url}.minisig: not text")))?;
+                    let signer = verify(&bytes, &sig, art, keys)?;
+                    Ok(Obtained { bytes, signer, from: url.clone() })
+                });
+                match got {
+                    Ok(o) => return Ok(o),
+                    Err(e) => why.push(e),
+                }
+            }
+            Err(format!("no K2 mirror gave a good {}: {}", art.asset, why.join("; ")))
         }
-        None => fetch(&pb::download_url(art))?,
-    };
-    check(&bytes, art)?;
-    Ok(bytes)
+    }
 }
 
 /// The refusal that offers the install (prepare without `installPodman`).
@@ -224,7 +266,7 @@ fn offer_refusal(have: Option<&str>, os: &str, uid: Option<u32>) -> Refusal {
 /// box the bundle isn't for); `Ok(Some(tarball))` = install it (the owner
 /// opted in, the helper speaks 7, the download checked out); `Err` = stop
 /// (not opted in, an old helper, a bad download).
-pub(crate) fn prepare_step(o: &PodmanOpts, d: &Decision, st: &root_helper::RootHelperState, uid: Option<u32>) -> R<Option<Vec<u8>>> {
+pub(crate) fn prepare_step(o: &PodmanOpts, d: &Decision, st: &root_helper::RootHelperState, uid: Option<u32>) -> R<Option<Obtained>> {
     let (have, os) = match d {
         Decision::Keep { .. } | Decision::Distro { .. } => return Ok(None),
         Decision::Offer { have, os } => (have.as_deref(), os.as_str()),
@@ -241,8 +283,15 @@ pub(crate) fn prepare_step(o: &PodmanOpts, d: &Decision, st: &root_helper::RootH
     }
     let a = arch().ok_or_else(|| no("unsupported", 409, "no K2 Podman bundle for this CPU (x86_64, aarch64)"))?;
     let art = pb::artifact_for_arch(a).map_err(|e| no("unsupported", 409, e))?;
-    let bytes = obtain(o.from.as_deref(), art).map_err(|e| no("podman_download_failed", 409, e))?;
-    Ok(Some(bytes))
+    let got = obtain(o.from.as_deref(), art, &keys()).map_err(|e| no("podman_download_failed", 409, e))?;
+    if got.signer.flagged {
+        k2_core::log_debug!(
+            "[apps] K2's Podman bundle from {} is signed with the BACKUP key {} (accepted; the primary key should sign the mirror)",
+            got.from,
+            got.signer.key_id
+        );
+    }
+    Ok(Some(got))
 }
 
 /// The dry run: what prepare would do, with no mutating root call.
@@ -308,6 +357,7 @@ pub(crate) fn uninstall_route(who: &Who, _body: &J) -> R<J> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::Scratch;
     use crate::root_helper::{Kind, RootHelperState};
 
     const NOBLE: &str = "ID=ubuntu\nVERSION_ID=\"24.04\"\n";
@@ -377,6 +427,45 @@ mod tests {
         }
     }
 
+    /// The mirror host isn't trusted: the pinned bytes also need a K2
+    /// signature naming them; a missing or foreign signature is refused
+    /// before any root call; the backup key is accepted and flagged.
+    #[test]
+    fn a_pinned_tarball_needs_its_k2_signature() {
+        use k2_root_proto::testsign::{public_key_b64, sign, sign_with_test_key};
+        // A fake artifact whose pin is these bytes' sha256 (the real
+        // tarball isn't in the tree).
+        let bytes = b"pretend podman tarball".to_vec();
+        let pin: &'static str = Box::leak(sha256_hex(&bytes).into_boxed_str());
+        let art: &'static pb::PodmanArtifact = Box::leak(Box::new(pb::PodmanArtifact { arch: "x86_64", asset: "podman-linux-amd64.tar.gz", top: "podman-linux-amd64", sha256: pin, size: bytes.len() as u64 }));
+        let k = [k2_root_proto::keys::TEST_KEY];
+        let good = sign_with_test_key(&bytes, &pb::bundle_trusted_comment(art));
+        assert_eq!(verify(&bytes, &good, art, &k).unwrap().role, "test");
+        let e = verify(&bytes, &good, art, k2_root_proto::keys::RELEASE_KEYS).unwrap_err();
+        assert!(e.contains("not valid for any trusted key") && e.contains("before any root call"), "{e}");
+        let wrong = sign_with_test_key(&bytes, "file:podman-linux-amd64.tar.gz version:5.8.7");
+        assert!(verify(&bytes, &wrong, art, &k).unwrap_err().contains("trusted comment"));
+        // From a folder: the signature goes beside the tarball.
+        let d = Scratch::new();
+        std::fs::write(d.path().join(art.asset), &bytes).unwrap();
+        let e = obtain(Some(d.path().to_str().unwrap()), art, &k).unwrap_err();
+        assert!(e.contains(".minisig") && e.contains("signature goes beside it"), "{e}");
+        std::fs::write(d.path().join(pb::signature_name(art)), &good).unwrap();
+        let o = obtain(Some(d.path().to_str().unwrap()), art, &k).unwrap();
+        assert_eq!((o.bytes, o.signer.flagged), (bytes.clone(), false));
+        // The backup key: taken, flagged.
+        let seed = [9u8; 32];
+        let id = [8, 7, 6, 5, 4, 3, 2, 1];
+        let pk: &'static str = Box::leak(public_key_b64(&seed, id).into_boxed_str());
+        let backup = k2_root_proto::keys::TrustedKey { role: "backup", key_id: "0102030405060708", public_key_b64: pk };
+        let sig = sign(&seed, id, &bytes, &pb::bundle_trusted_comment(art));
+        let s = verify(&bytes, &sig, art, &[backup]).unwrap();
+        assert!(s.flagged && s.role == "backup");
+        // The production key list is the release keys (and TEST in debug).
+        assert!(keys().iter().any(|k| k.key_id == "18DB69584200F795"));
+        assert!(keys().iter().any(|k| k.key_id == "E9C2D2CAD052297A"));
+    }
+
     #[test]
     fn sha256_mismatch_is_refused_before_any_root_call() {
         let art = pb::artifact_for_arch("x86_64").unwrap();
@@ -386,10 +475,12 @@ mod tests {
         let d = std::env::temp_dir().join(format!("k2-podman-from-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
-        assert!(obtain(Some(d.to_str().unwrap()), art).unwrap_err().contains(art.asset), "missing file named");
+        let k = [k2_root_proto::keys::TEST_KEY];
+        assert!(obtain(Some(d.to_str().unwrap()), art, &k).unwrap_err().contains(art.asset), "missing file named");
         std::fs::write(d.join(art.asset), b"tampered").unwrap();
-        assert!(obtain(Some(d.to_str().unwrap()), art).unwrap_err().contains("sha256"));
-        assert!(obtain(Some("relative/dir"), art).unwrap_err().contains("absolute"));
+        std::fs::write(d.join(pb::signature_name(art)), "x").unwrap();
+        assert!(obtain(Some(d.to_str().unwrap()), art, &k).unwrap_err().contains("sha256"));
+        assert!(obtain(Some("relative/dir"), art, &k).unwrap_err().contains("absolute"));
         std::fs::remove_dir_all(&d).unwrap();
         // The opted-in step surfaces the same refusal (no download: a
         // folder that holds the wrong bytes).

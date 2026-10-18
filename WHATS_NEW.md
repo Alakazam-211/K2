@@ -12,7 +12,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Memory is yours to decide.** Apps have no memory limit unless you set one (`k2 app config <app> --memory 1G`); with a limit, Node's heap gets half of it. An App that runs out of memory stops whole and restarts, it never swaps, and each deployment's log is capped at 50 MB (`k2 app logs`).
 - **Agents can't starve the server.** On a prepared server, agent sessions get their own memory budget (75% of the server by default), so a runaway one slows down instead of crowding out K2, Postgres and mail. `k2 app doctor` shows it.
 - **Box services answer at once.** A box service that's waiting for you or was revoked now refuses straight away instead of hanging, and revoking one cuts the connections it had open.
-- **Podman from K2's own mirror.** `k2 app box prepare --install-podman` downloads K2's Podman bundle from K2's mirror (the same pinned, checksummed files), with the source code of its GPL parts beside it.
+- **Podman from K2's own mirror.** `k2 app box prepare --install-podman` downloads K2's Podman bundle from K2's mirror (mirror.alakazamlabs.com, with a second way in) and installs it only when it matches the pinned checksum and carries K2's signature; the source code of its GPL parts sits beside it. Offline, `--podman-from <folder>` takes the tarball and its `.minisig`.
 - After updating, reinstall the App engine (`k2 app engine install`): this release speaks a new engine protocol, and `k2 app doctor` says so until you do.
 
 ### Door (lane 2)

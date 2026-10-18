@@ -11,10 +11,18 @@ import { parseThreadAuthor, type ThreadAuthor } from '@/lib/thread-viewer'
 
 export const OVERLAY_PAGE_SIZE = 25
 
-/** `widget` / `author` when the daemon sent them (left off otherwise, so a
- *  coerced doc stays equal to the socket's). */
-function docExtras(src: Record<string, unknown>): Pick<OverlayDoc, 'widget' | 'author'> {
-  const out: Pick<OverlayDoc, 'widget' | 'author'> = {}
+/** `widget` / `author` / `design` / `attachments` when the daemon sent
+ *  them (left off otherwise, so a coerced doc stays equal to the socket's).
+ *
+ *  Every doc field a renderer reads must be carried here. The socket hands
+ *  its doc through whole, but a `GET /cli/thread` page (`coerceItem`) and a
+ *  `thread/post` answer (`overlayItemFromThreadPost`) are rebuilt field by
+ *  field, so a field left out here vanishes on load (0.46.1 RC: file chips
+ *  never drew from a loaded Thread, and a files-only post was an empty
+ *  bubble). */
+type DocExtras = Pick<OverlayDoc, 'widget' | 'author' | 'design' | 'attachments'>
+function docExtras(src: Record<string, unknown>): DocExtras {
+  const out: DocExtras = {}
   const w = src.widget
   if (w && typeof w === 'object' && !Array.isArray(w)) {
     const o = w as Record<string, unknown>
@@ -24,6 +32,44 @@ function docExtras(src: Record<string, unknown>): Pick<OverlayDoc, 'widget' | 'a
   }
   const author = parseThreadAuthor(src.author)
   if (author) out.author = author
+  const design = coerceDesign(src.design)
+  if (design) out.design = design
+  const attachments = coerceThreadFileObjects(src.attachments)
+  if (attachments.length > 0) out.attachments = attachments
+  return out
+}
+
+function coerceDesign(raw: unknown): OverlayDoc['design'] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const d = raw as Record<string, unknown>
+  if (typeof d.url !== 'string' || typeof d.notes !== 'number') return null
+  return { ...(typeof d.itemId === 'string' ? { itemId: d.itemId } : {}), url: d.url, notes: d.notes }
+}
+
+const THREAD_FILE_STATES: ReadonlySet<string> = new Set(['ok', 'changed', 'gone', 'hidden'])
+
+/** The daemon's `attachments` list (`k2_core::overlay::attachments`, plus
+ *  the per-read `state`) as file objects: unknown fields dropped, a
+ *  wrong-typed field left off, a row without a `kind` skipped. */
+export function coerceThreadFileObjects(raw: unknown): ThreadFileObject[] {
+  if (!Array.isArray(raw)) return []
+  const out: ThreadFileObject[] = []
+  for (const row of raw) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue
+    const r = row as Record<string, unknown>
+    if (typeof r.kind !== 'string' || !r.kind) continue
+    const f: ThreadFileObject = { kind: r.kind }
+    if (typeof r.state === 'string' && THREAD_FILE_STATES.has(r.state)) f.state = r.state as ThreadFileState
+    if (typeof r.path === 'string') f.path = r.path
+    if (typeof r.name === 'string') f.name = r.name
+    if (typeof r.size === 'number') f.size = r.size
+    if (typeof r.mime === 'string') f.mime = r.mime
+    if (typeof r.modifiedAt === 'number') f.modifiedAt = r.modifiedAt
+    if (typeof r.sha256 === 'string' || r.sha256 === null) f.sha256 = r.sha256 as string | null
+    if (typeof r.line === 'number') f.line = r.line
+    if (typeof r.lineEnd === 'number') f.lineEnd = r.lineEnd
+    out.push(f)
+  }
   return out
 }
 

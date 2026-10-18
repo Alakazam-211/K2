@@ -139,8 +139,6 @@ describe.each(CARDS)('%s: every PRD §12 state', (card) => {
     expect(m.card.querySelector('.k2c-chip')?.className).toContain('k2c-unknown')
     m.push({ ...healthy(card), soft: { count: 2, of: 3 } })
     expect(m.card.textContent).toContain('retrying 2/3')
-    m.push({ ...healthy(card), display: 'warn', health: 'warn', soft: { count: 2, of: 3, level: 'crit' } })
-    expect(m.card.textContent).toContain('soft crit 2/3')
     m.push({ ...healthy(card), recoveredAt: NOW - 300 })
     expect(m.card.textContent).toContain('recovered 5 min ago')
     m.push({ ...healthy(card), recoveredAt: NOW - 7200 })

@@ -341,9 +341,18 @@ fn ring_wrap_past_an_unread_stream_is_an_overrun() {
     assert!(lost > 0);
     let mut sink = Vec::new();
     s2.read_to_end(&mut sink).unwrap(); // stream was closed by ptyd
-    // Re-attach recovers from ring_start.
-    let Reply::Sessions { sessions } = c.request(Request::List).unwrap() else { panic!() };
-    let info = sessions.iter().find(|x| x.sid == "ov2").unwrap();
+    // Re-attach recovers from ring_start (once the burst is over, so the
+    // ring stops moving between `list` and `attach`).
+    let t = Instant::now();
+    let info = loop {
+        let Reply::Sessions { sessions } = c.request(Request::List).unwrap() else { panic!() };
+        let info = sessions.into_iter().find(|x| x.sid == "ov2").unwrap();
+        if matches!(info.state, SessionState::Exited { .. }) {
+            break info;
+        }
+        assert!(t.elapsed() < Duration::from_secs(30), "burst never finished");
+        std::thread::sleep(Duration::from_millis(50));
+    };
     let r = c.attach("ov2", 0).unwrap();
     assert_eq!(r.start, info.ring_start);
 }

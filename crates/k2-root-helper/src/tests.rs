@@ -1647,3 +1647,7 @@ mod apps_tests;
 // The `engine sew` namespace (protocol 7) lives in its own file, same fakes.
 #[path = "sew_tests.rs"]
 mod sew_tests;
+
+// The `front` namespace (protocol 8, front443) lives in its own file, same fakes.
+#[path = "front_tests.rs"]
+mod front_tests;

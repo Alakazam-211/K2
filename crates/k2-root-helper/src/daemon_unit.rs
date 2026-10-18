@@ -12,6 +12,9 @@
 //! daemon writes its own user-unit drop-in under `~/.config` without root.
 //! Every path component is opened without following links; a symlinked or
 //! non-directory `.d` refuses with nothing written.
+//!
+//! [`set_dropin`] is shared with the `front` namespace (front443's
+//! `k2-front.conf`, protocol 8).
 
 use std::ffi::OsStr;
 
@@ -33,6 +36,84 @@ pub(crate) fn caller_entry(ctx: &Ctx, who: &Caller) -> HResult<DaemonEntry> {
         .ok_or_else(Fail::not_daemon)
 }
 
+/// Write (`Some(bytes)`) or remove (`None`) one canned drop-in file
+/// `/etc/systemd/system/<unit>.d/<file>`. `unit` comes from `daemon.toml`
+/// (already validated by `unit_ok`: no `/`, no `..`, ends in `.service`);
+/// `file` is a fixed name from `k2_root_proto::paths`. No link is ever
+/// followed: a symlinked or non-directory `.d`, or a non-regular file,
+/// refuses with nothing written. `Ok(changed)`; never reloads systemd
+/// (the caller does, once).
+pub(crate) fn set_dropin(
+    ctx: &Ctx,
+    unit: &str,
+    file: &'static str,
+    bytes: Option<&[u8]>,
+    what: &str,
+) -> HResult<bool> {
+    let base = ctx
+        .dir(SYSTEMD_SYSTEM_DIR)
+        .map_err(|e| Fail::io_err("open /etc/systemd/system", e))?;
+    let dname = format!("{unit}.d");
+    let dname = OsStr::new(&dname);
+    let fname = OsStr::new(file);
+    let not_dir = || Fail::state(format!("{what} refused: the unit's drop-in dir is not a directory"));
+    let not_file = || Fail::state(format!("{what} refused: {file} is not a regular file"));
+    match bytes {
+        Some(want) => {
+            match base.kind(dname).map_err(|e| Fail::io_err("stat", e))? {
+                Kind::Missing => base
+                    .mkdir(dname, 0o755)
+                    .map_err(|e| Fail::io_err("mkdir drop-in dir", e))?,
+                Kind::Dir => {}
+                _ => return Err(not_dir()),
+            }
+            let dir = base
+                .sub(dname)
+                .map_err(|e| Fail::io_err("open drop-in dir", e))?;
+            match dir.kind(fname).map_err(|e| Fail::io_err("stat", e))? {
+                Kind::Missing | Kind::File => {}
+                _ => return Err(not_file()),
+            }
+            let same = dir
+                .read_file(fname, 64 * 1024)
+                .map_err(|e| Fail::io_err("read drop-in", e))?
+                .is_some_and(|b| b == want);
+            if !same {
+                dir.write_atomic(fname, want, 0o644, ctx.root_owner())
+                    .map_err(|e| Fail::io_err("write drop-in", e))?;
+            }
+            Ok(!same)
+        }
+        None => match base.kind(dname).map_err(|e| Fail::io_err("stat", e))? {
+            Kind::Missing => Ok(false),
+            Kind::Dir => {
+                let dir = base
+                    .sub(dname)
+                    .map_err(|e| Fail::io_err("open drop-in dir", e))?;
+                match dir.kind(fname).map_err(|e| Fail::io_err("stat", e))? {
+                    Kind::Missing => Ok(false),
+                    Kind::File | Kind::Symlink => {
+                        dir.unlink(fname).map_err(|e| Fail::io_err("remove drop-in", e))?;
+                        Ok(true)
+                    }
+                    _ => Err(not_file()),
+                }
+            }
+            _ => Err(not_dir()),
+        },
+    }
+}
+
+/// Read one drop-in for status: `Some(true)` = the canned bytes,
+/// `Some(false)` = something else, `None` = absent (or unreadable).
+pub(crate) fn dropin_matches(ctx: &Ctx, unit: &str, file: &'static str, want: &[u8]) -> Option<bool> {
+    let base = ctx.dir(SYSTEMD_SYSTEM_DIR).ok()?;
+    let dname = format!("{unit}.d");
+    let dir = base.sub(OsStr::new(&dname)).ok()?;
+    let b = dir.read_file(OsStr::new(file), 64 * 1024).ok()??;
+    Some(b == want)
+}
+
 pub fn handoff_dropin_set(ctx: &Ctx, who: &Caller, install: bool) -> HResult<serde_json::Value> {
     let d = caller_entry(ctx, who)?;
     if d.scope != "system" {
@@ -40,73 +121,8 @@ pub fn handoff_dropin_set(ctx: &Ctx, who: &Caller, install: bool) -> HResult<ser
             "user-scope unit: the daemon writes its own drop-in (no root needed)",
         ));
     }
-    let base = ctx
-        .dir(SYSTEMD_SYSTEM_DIR)
-        .map_err(|e| Fail::io_err("open /etc/systemd/system", e))?;
-    // `daemon.toml` already validated the unit name (`unit_ok`): no `/`,
-    // no `..`, ends in `.service`.
-    let dname = format!("{}.d", d.unit);
-    let dname = OsStr::new(&dname);
-    let file = OsStr::new(HANDOFF_DROPIN_FILE);
-    let changed = if install {
-        match base.kind(dname).map_err(|e| Fail::io_err("stat", e))? {
-            Kind::Missing => base
-                .mkdir(dname, 0o755)
-                .map_err(|e| Fail::io_err("mkdir drop-in dir", e))?,
-            Kind::Dir => {}
-            _ => {
-                return Err(Fail::state(
-                    "handoff-dropin refused: the unit's drop-in dir is not a directory",
-                ))
-            }
-        }
-        let dir = base
-            .sub(dname)
-            .map_err(|e| Fail::io_err("open drop-in dir", e))?;
-        match dir.kind(file).map_err(|e| Fail::io_err("stat", e))? {
-            Kind::Missing | Kind::File => {}
-            _ => {
-                return Err(Fail::state(
-                    "handoff-dropin refused: k2-handoff.conf is not a regular file",
-                ))
-            }
-        }
-        let same = dir
-            .read_file(file, 64 * 1024)
-            .map_err(|e| Fail::io_err("read drop-in", e))?
-            .is_some_and(|b| b == handoff_dropin().as_bytes());
-        if !same {
-            dir.write_atomic(file, handoff_dropin().as_bytes(), 0o644, ctx.root_owner())
-                .map_err(|e| Fail::io_err("write drop-in", e))?;
-        }
-        !same
-    } else {
-        match base.kind(dname).map_err(|e| Fail::io_err("stat", e))? {
-            Kind::Missing => false,
-            Kind::Dir => {
-                let dir = base
-                    .sub(dname)
-                    .map_err(|e| Fail::io_err("open drop-in dir", e))?;
-                match dir.kind(file).map_err(|e| Fail::io_err("stat", e))? {
-                    Kind::Missing => false,
-                    Kind::File | Kind::Symlink => {
-                        dir.unlink(file).map_err(|e| Fail::io_err("remove drop-in", e))?;
-                        true
-                    }
-                    _ => {
-                        return Err(Fail::state(
-                            "handoff-dropin refused: k2-handoff.conf is not a regular file",
-                        ))
-                    }
-                }
-            }
-            _ => {
-                return Err(Fail::state(
-                    "handoff-dropin refused: the unit's drop-in dir is not a directory",
-                ))
-            }
-        }
-    };
+    let bytes = install.then(|| handoff_dropin().as_bytes());
+    let changed = set_dropin(ctx, &d.unit, HANDOFF_DROPIN_FILE, bytes, "handoff-dropin")?;
     if changed {
         ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
     }

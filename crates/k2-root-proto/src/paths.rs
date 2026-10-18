@@ -105,6 +105,17 @@ pub const SYSTEMD_SYSTEM_DIR: &str = "/etc/systemd/system";
 /// The hand-off drop-in's file name, inside that unit's `.d` dir.
 pub const HANDOFF_DROPIN_FILE: &str = "k2-handoff.conf";
 
+// ── front443: the box :443 socket held for the daemon (protocol 8) ──────
+
+/// The socket unit `front install` writes (fixed name, fixed template).
+pub const FRONT_SOCKET_UNIT: &str = "k2-front-443.socket";
+/// Its file name inside [`SYSTEMD_SYSTEM_DIR`].
+pub const FRONT_SOCKET_FILE: &str = "k2-front-443.socket";
+/// The daemon drop-in (`Sockets=`) inside `<unit>.d`.
+pub const FRONT_DROPIN_FILE: &str = "k2-front.conf";
+/// `FileDescriptorName=`: how the daemon finds the fd in `LISTEN_FDNAMES`.
+pub const FRONT_FD_NAME: &str = "k2-front-443";
+
 // ── Postgres sidecar ────────────────────────────────────────────────────
 
 /// Distro-owned unit — K2 drops in, never rewrites postgresql.service.

@@ -21,8 +21,11 @@
 //!   licence notices (`engine sew install-bin`, `upgrade` and
 //!   `media-install` also put the pinned tarball's `LICENSE`, `NOTICE` and
 //!   `THIRD_PARTY_NOTICES.md` under [`crate::sew::SEW_DOC_DIR`] /
-//!   [`crate::sew::SEW_MEDIA_DOC_DIR`]). Anything after an 8 build ships
-//!   needs 9.
+//!   [`crate::sew::SEW_MEDIA_DOC_DIR`]), the `front` namespace (front443:
+//!   `front install|remove|status`, the box :443 socket held for the
+//!   daemon, gated on `namespaces.front`, [`FRONT_MIN_PROTOCOL`]) and
+//!   `turn_tls: "passthrough"` in the Sew media requests. Anything after
+//!   an 8 build ships needs 9.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -58,6 +61,9 @@ pub const APPS_MIN_PROTOCOL: u32 = 6;
 /// `namespaces.sew` flag in `helper version` (protocol numbers on other
 /// branches have collided before; the flag keeps them apart).
 pub const SEW_MIN_PROTOCOL: u32 = 7;
+/// front443's `front install|remove|status` (0.46.1). Gated on this AND
+/// `namespaces.front == true` in `helper version`, the way Sew is.
+pub const FRONT_MIN_PROTOCOL: u32 = 8;
 
 pub const HELPER_NAME: &str = "k2-root-helper";
 
@@ -218,6 +224,12 @@ mod tests {
             .filter(|v| v.namespace() == "sew")
             .collect();
         assert!(!sew.is_empty(), "protocol 8 without any engine sew verb");
+        assert_eq!(FRONT_MIN_PROTOCOL, 8, "front joins 0.46.1's protocol 8; never its own bump");
+        let front: Vec<_> = crate::verbs::catalog()
+            .into_iter()
+            .filter(|v| v.namespace() == "front")
+            .collect();
+        assert_eq!(front.len(), 3, "front install|remove|status");
         let apps: Vec<_> = crate::verbs::catalog()
             .into_iter()
             .filter(|v| v.namespace() == "apps")

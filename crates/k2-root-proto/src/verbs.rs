@@ -547,6 +547,19 @@ pub enum Verb {
     AppsUnprep,
     // engine sew (protocol 7, Sew S29 K11; see `crate::sew`)
     Sew(SewVerb),
+    // front (protocol 8, 0.46.1 front443; see `crate::templates::front_socket_unit`)
+    /// `front status` (open, read-only): whether the fixed
+    /// `k2-front-443.socket` unit and each system daemon's `k2-front.conf`
+    /// drop-in hold the canned bytes, and whether the socket is active.
+    FrontStatus,
+    /// `front install` (daemon): write the canned socket unit
+    /// (`ListenStream=[::]:443`, `Service=` the caller's own unit from
+    /// `daemon.toml`) and the daemon drop-in (`Sockets=`), `daemon-reload`,
+    /// start the socket. The unit never comes from argv.
+    FrontInstall,
+    /// `front remove` (daemon): stop the socket, remove both files,
+    /// `daemon-reload`.
+    FrontRemove,
 }
 
 use crate::apps::{bounded, AppId, IoMax, OciRuntime, PortRange, BUDGET_MEM_MIB, BUDGET_TASKS, CORES_MIN_MIB};
@@ -823,6 +836,9 @@ impl Verb {
             ))),
             ["apps", "unprep"] => Verb::AppsUnprep,
             ["engine", "sew", rest @ ..] => Verb::Sew(SewVerb::parse(rest).ok_or(REFUSED)?),
+            ["front", "status"] => Verb::FrontStatus,
+            ["front", "install"] => Verb::FrontInstall,
+            ["front", "remove"] => Verb::FrontRemove,
             _ => return Err(REFUSED),
         };
         Ok(v)
@@ -976,6 +992,9 @@ impl Verb {
                 a.extend(v.tail());
                 a
             }
+            Verb::FrontStatus => s(&["front", "status"]),
+            Verb::FrontInstall => s(&["front", "install"]),
+            Verb::FrontRemove => s(&["front", "remove"]),
         }
     }
 
@@ -1067,6 +1086,10 @@ impl Verb {
             | Verb::AppsBudget(_)
             | Verb::AppsUnprep => Daemon,
             Verb::Sew(v) => v.class(),
+            Verb::FrontStatus => Open,
+            // Moves who owns the box's :443 onto the daemon's own unit (and
+            // back): only the daemon itself may ask.
+            Verb::FrontInstall | Verb::FrontRemove => Daemon,
             // Re-applying the canonical ranges is a tightening anyone may
             // ask for (boot, drift). Other ranges could open more loopback
             // ports to Apps: the daemon's call.
@@ -1118,6 +1141,7 @@ impl Verb {
                 | Verb::KeepGenGet
                 | Verb::AppsStatus
                 | Verb::AppsLogs { .. }
+                | Verb::FrontStatus
         )
     }
 
@@ -1147,6 +1171,7 @@ impl Verb {
             "daemon" => "daemon",
             "apps" => "apps",
             "engine" => "sew",
+            "front" => "front",
             _ => "keep",
         }
     }
@@ -1262,6 +1287,7 @@ pub fn catalog() -> Vec<Verb> {
         Verb::AppsUnprep,
     ];
     v.extend(SewVerb::catalog().into_iter().map(Verb::Sew));
+    v.extend([Verb::FrontStatus, Verb::FrontInstall, Verb::FrontRemove]);
     for on in [true, false] {
         v.push(Verb::AppsLinger(on));
         v.push(Verb::AppsDelegate(on));
@@ -1370,8 +1396,11 @@ mod tests {
             &["keep", "gen", "bump"],
             &["daemon", "handoff-dropin", "install"],
             &["daemon", "handoff-dropin", "remove"],
+            &["front", "install"],
+            &["front", "remove"],
         ];
         let open: &[&[&str]] = &[
+            &["front", "status"],
             &["helper", "version"],
             &["helper", "self-update"],
             &["helper", "audit-tail"],
@@ -1496,6 +1525,19 @@ mod tests {
             &["daemon", "handoff-dropin", "/etc/systemd/system/x.service.d"],
             &["daemon", "handoff-dropin", "KillMode=none"],
             &["daemon", "systemctl", "restart"],
+            // front: no unit, port, path or address from argv, ever.
+            &["front"],
+            &["front", "install", "k2-daemon.service"],
+            &["front", "install", "443"],
+            &["front", "install", "8443"],
+            &["front", "install", "/etc/systemd/system/k2-front-443.socket"],
+            &["front", "install", "ListenStream=0.0.0.0:22"],
+            &["front", "remove", "k2-daemon.service"],
+            &["front", "status", "--all"],
+            &["front", "enable"],
+            &["front", "socket", "install"],
+            &["front", "install\n"],
+            &["front", "Install"],
         ];
         for r in rejects {
             assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");

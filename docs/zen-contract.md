@@ -189,6 +189,7 @@ default on its own Garden).
   "column": 0,                     // absent for a band widget
   "edge": "bottom",                // only when the file set it: a row item at that column edge
   "align": "end",                  // only when the file set it: start | center | end
+  "weight": 3,                     // only when the file set it (0.46.1): 1–12, its share of the column's height
   "props": { … },                  // EVERY prop is present: the daemon fills K2's defaults
   "caps": ["agents:read", "agents:add", "presence:read"],   // K2's, by kind; a file can't name caps
   "source": "builtin"
@@ -280,6 +281,13 @@ column = 0
 home = "Work"
 agent = "cortana"                  # one agent → mode "agent"
 ```
+
+**Weight (0.46.1).** Widgets stacked in one column's body share its height
+equally. `weight = 1..12` on a `[[widget]]` gives it that share instead
+(`weight = 3` above `weight = 1`: three quarters and one quarter). Only a
+widget in a column's body takes it; a band widget, a menu item, a Zen
+control or a row at a column edge with `weight` is an error. A column whose
+widgets set no weight draws exactly as before.
 
 A widget may sit in the **top band** instead of a column (Rosson,
 2026-10-06):
@@ -674,6 +682,17 @@ A custom placement is a content widget in `page.widgets`
   widget caps: a widget in your own Garden gets every Garden-safe cap it
   asks for, with no review card, grant, scope picker or Sending switch. The
   renderer intersects again and forces `source: "user"`.
+- **Sources widgets (0.46.1, Rosson 2026-10-17).** A widget that asks for
+  `sources:read` keeps `thread:post` and `store:write` when it asks for them
+  too (Garden v3's GV48 dropped them). `k2 zen validate` notes the reach
+  (`sources_reach_thread`, `sources_reach_store`) and `k2 zen widget show`
+  prints it (`reach`). A cap it didn't ask for is still `cap_not_granted`.
+- **`reads` (0.46.1).** A manifest may list up to 8 other widgets
+  (`"reads": ["fleet-ops-lists"]`, needs `store:read`) whose Garden data it
+  reads with `{from}` on `store.get` / `store.list` / `store.changes` (and
+  `k2.store.subscribe({prefix, from}, cb)`). Read-only; the other widget
+  must be placed on the same Garden; otherwise `not_bound`. The reader's
+  maker's rights apply on that widget's data.
 - `origin`: `local` (a folder under `~/.k2/zen/widgets/` or a built-in
   `k2:`). The seam for v4's widgets imported from other people: any other
   origin gets no caps and never runs until a review exists
@@ -794,7 +813,8 @@ strip back to the widget (`src/renderer/lib/zen/zen-canvas.ts`):
 
 Code (HTML + JS + CSS after inlining) 256 KB; each asset 1 MB, all assets
 2 MB; the bundle 3 MB; libraries (`requires.libs`, inlined after `k2.js`) up
-to 8 MB per widget, outside those. 6 custom widgets per page. Per widget: 60
+to 8 MB per widget, outside those. 10 custom widgets per page (6 before
+0.46.1). Per widget: 60
 calls a second (burst 120), 16 live subscriptions, 64 KB per message, 8 live
 servers. Posts are text only, up to 4,000 characters, never files or
 secrets; the runaway guard (more than 120 posts in 10 minutes, or 20

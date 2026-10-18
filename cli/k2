@@ -53157,6 +53157,18 @@ LOCK AND SOURCES
   data when it asks for store:write (0.46.1); agents granted that data can
   then read what it saves, so don't save values from sources that hide them.
 
+YOUR OWN WIDGET (0.46.1)
+  With the person's "Manage Gardens and data sources" switch, the agent that
+  signed a widget's newest version reads and writes its data with no grant
+  (seed what you built). One Access Audit line per widget. Without the
+  switch, ask for a grant as before.
+
+READING ANOTHER WIDGET (0.46.1)
+  A widget lists the widgets it reads in manifest.json: "reads": ["lists"]
+  (needs store:read, both placed on one Garden). It reads with
+  k2.store.get(key, {from: "lists"}), list({prefix, from}),
+  subscribe({prefix, from}, cb). Read-only; else not_bound.
+
 LIMITS
   20 MiB / 100,000 keys per widget; 60 writes/s (burst 120) per agent per
   space (429 rate_limited, retryAfterSecs). Exits: 3 not_granted,
@@ -54289,9 +54301,9 @@ sources:read (Read data sources)
   k2.sources.refresh(address)                        portable sources-v1       await k2.sources.refresh(k2.config.source)  [not_bound server_not_saved unreachable removed rate_limited]
   k2.sources.ask(address, itemKey?)                  local    sources-v1       await k2.sources.ask(k2.config.source, tile.key)  [not_bound]
 store:read (Read the workspace store)
-  k2.store.get(key)                                  local    garden-data-v1   const e = await k2.store.get('obj/7')  [not_granted author_unknown stale_widget rate_limited bad_key]
-  k2.store.list({after, limit, prefix})              local    garden-data-v1   const {items, next} = await k2.store.list({prefix: 'obj/'})  [not_granted author_unknown stale_widget rate_limited bad_key]
-  k2.store.changes({after, prefix, since})           local    garden-data-v1   const page = await k2.store.changes({since: 41})  [not_granted author_unknown stale_widget rate_limited resync bad_key]
+  k2.store.get(key, {from})                          local    garden-data-v1  const e = await k2.store.get('obj/7')  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
+  k2.store.list({after, from, limit, prefix})        local    garden-data-v1  const {items, next} = await k2.store.list({prefix: 'obj/'})  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
+  k2.store.changes({after, from, prefix, since})     local    garden-data-v1  const page = await k2.store.changes({since: 41})  [not_bound not_granted author_unknown stale_widget rate_limited resync bad_key]
 store:write (Change dump-table rows)
   k2.store.put(key, value, {ifRev})                  local    garden-data-v1   const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})  [not_granted author_unknown stale_widget rate_limited bad_key conflict value_too_large space_full store_full paused]
   k2.store.delete(key, {ifRev})                      local    garden-data-v1   await k2.store.delete('obj/7')  [not_granted author_unknown stale_widget rate_limited bad_key conflict paused]
@@ -55348,6 +55360,8 @@ if d.get("reach"):
 src = d.get("sources")
 if src is not None:
     print("  sources: %s" % (src if isinstance(src, str) else ", ".join(src)))
+if d.get("reads"):
+    print("  reads data of: %s (read-only)" % ", ".join(d["reads"]))
 rt = d.get("runtime")
 if isinstance(rt, dict):
     print("  this version: %s, %s runtime error(s) since saved" % ("has run" if rt.get("ran") else "not run yet", rt.get("errorsSinceSave", 0)))

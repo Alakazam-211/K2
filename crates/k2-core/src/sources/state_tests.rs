@@ -156,9 +156,44 @@ fn a_never_reached_source_shows_stale_not_pending_after_fail_after() {
 }
 
 #[test]
-fn rule_readings_go_hard_at_once_by_default_and_failafter_never_delays_them() {
-    // 0.46.1: failAfter (3 here) is for fetch failures only.
-    let mut r = Run::new(single());
+fn a_source_without_thresholds_keeps_the_failafter_delay_on_rule_readings() {
+    // Coordinator ruling 2026-10-17: nobody's live source changes on
+    // upgrade. No rule sets warnAfter/critAfter, so rule readings wait
+    // failAfter (3) exactly as before 0.46.1.
+    let spec = single();
+    assert!(!spec.uses_rule_thresholds());
+    let mut r = Run::new(spec);
+    let body = |s: &str| ok(json!({"status": {"indicator": "x"}, "open": 2, "components": [{"name": "api", "status": s}]}));
+    r.poll(vec![(None, body("operational"))]);
+    assert_eq!(r.st.items["api"].health, Health::Ok);
+    for n in 1..=2 {
+        assert!(hard(&r.poll(vec![(None, body("degraded"))])).is_empty(), "warn is soft {n}/3");
+        assert_eq!(r.st.items["api"].soft_health, Some(Health::Warn));
+    }
+    let ts = r.poll(vec![(None, body("degraded"))]);
+    assert!(hard(&ts).contains(&(Some("api"), TransitionKind::WentWarn)), "hard on the 3rd check");
+    // Crit waits failAfter too (the streak keeps counting from warn).
+    let ts = r.poll(vec![(None, body("major_outage"))]);
+    assert!(hard(&ts).contains(&(Some("api"), TransitionKind::WentCrit)), "4 not-ok checks in a row ≥ failAfter");
+    r.poll(vec![(None, body("operational"))]);
+    assert!(hard(&r.poll(vec![(None, body("major_outage"))])).is_empty(), "a fresh crit waits failAfter");
+    // failAfter = 1: readings apply at once, as before.
+    let mut s = single();
+    s.fail_after = 1;
+    let mut r = Run::new(s);
+    r.poll(vec![(None, body("operational"))]);
+    assert!(hard(&r.poll(vec![(None, body("degraded"))])).contains(&(Some("api"), TransitionKind::WentWarn)));
+}
+
+#[test]
+fn an_opted_in_source_goes_hard_at_once_and_failafter_never_delays_its_rules() {
+    // Any rule with warnAfter/critAfter opts the source in: failAfter (3)
+    // is then for fetch failures only, and rules without thresholds go
+    // hard at once.
+    let mut spec = single();
+    spec.rules[0].warn_after = Some(1);
+    assert!(spec.uses_rule_thresholds());
+    let mut r = Run::new(spec);
     let body = |s: &str| ok(json!({"status": {"indicator": "x"}, "open": 2, "components": [{"name": "api", "status": s}]}));
     r.poll(vec![(None, body("operational"))]);
     assert_eq!(r.st.items["api"].health, Health::Ok);

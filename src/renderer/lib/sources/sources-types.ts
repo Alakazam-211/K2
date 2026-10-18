@@ -185,7 +185,10 @@ export interface Rule {
   crit?: Cond | null
   warn?: Cond | null
   ok?: Cond | null
-  /** Checks in a row before warn goes hard (1-20, default 1), 0.46.1. */
+  /** Checks in a row before warn goes hard (1-20, default 1), 0.46.1.
+   *  Setting this or critAfter on any rule opts the source in to per-rule
+   *  thresholds (failAfter then counts fetch failures only); without them
+   *  every rule reading waits failAfter, as before. */
   warnAfter?: number
   /** Checks in a row, the last crit, before crit goes hard (default warnAfter). */
   critAfter?: number

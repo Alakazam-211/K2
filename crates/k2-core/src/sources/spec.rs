@@ -961,6 +961,29 @@ mod tests {
     }
 
     #[test]
+    fn thresholds_are_opt_in_and_opting_in_changes_the_hash() {
+        let legacy = sample();
+        assert!(!legacy.uses_rule_thresholds(), "a pre-0.46.1 spec keeps the failAfter delay");
+        let legacy_hash = legacy.hash();
+        // The new rule types alone don't opt in.
+        let mut aged = legacy.clone();
+        aged.rules[0].warn = Some(Cond::AgeGt(300.0));
+        assert!(!aged.uses_rule_thresholds());
+        for (warn, crit) in [(Some(1), None), (None, Some(3)), (Some(1), Some(3))] {
+            let mut on = legacy.clone();
+            on.rules[0].warn_after = warn;
+            on.rules[0].crit_after = crit;
+            assert!(on.uses_rule_thresholds());
+            assert_ne!(on.hash(), legacy_hash, "opting in is a change a person approves");
+            assert!(on.stored_json().contains("After\":"), "stored with the spec");
+        }
+        let mut off = legacy.clone();
+        off.rules[0].warn_after = None;
+        off.rules[0].crit_after = None;
+        assert_eq!(off.hash(), legacy_hash, "an untouched source keeps its hash");
+    }
+
+    #[test]
     fn new_rule_shapes_validate_and_refuse_with_codes() {
         let base = || serde_json::json!({
             "name": "ops", "label": "Ops", "fetch": {"url": "https://k2.dev/api/ops/fleet"}, "everySecs": 60,

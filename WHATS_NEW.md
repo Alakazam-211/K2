@@ -43,8 +43,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Sew chat and calls
 - **K2 sign-in for Sew chat.** Hearth and Meet sign people in with K2: a login with a chat grant (`k2 app grant <app> --kind chat`) gets a short-lived chat pass, on each App's own link, several Apps per box. Removing a grant or a login ends its Sew sessions, and Connect logins can sign in to Sew too.
 - **Sew 0.2.1.** K2 pins Sew 0.2.1 with its voice engine, transcriber and recorder, installs their licence notices beside them, and `k2 hostchat upgrade` and `rollback` move the voice engine with the core; a refused upgrade now says why.
-- **Calls on port 443.** `k2 front enable` puts a small router on the box's port 443 so people on networks that only allow 443 can join calls (TURN over TLS), with Caddy behind it and hosted mail optional (`--mail`).
-- Sew 0.2.1: voice calls can relay through port 443 (TURN passthrough behind K2's :443 front), for networks that block everything else.
+- **Calls on port 443.** `k2 front enable` puts a small router on the box's port 443 so people on networks that only allow 443 can join calls (Sew 0.2.1's TURN passthrough behind the :443 front), with Caddy behind it and hosted mail optional (`--mail`).
 - **Meet gets its address.** `k2 hostchat meet bind <app>` points `meet.<you>.k2.dev` at your Meet App; `unbind` takes it back.
 - **Sew reminds you to set its public URL.** `k2 hostchat status` (and `enable`) warn until Sew's public URL is set, and show the command that sets it, so password setup links and invites open from outside the box.
 - **Chat hints point at real commands.** Switching sign-in type points at `k2 hostchat purge`, rollback and restore hints point at `k2 hostchat backups` and `k2 hostchat restore`, and the PostgreSQL hint no longer names a setup flag that doesn't exist.

@@ -212,6 +212,14 @@ pub(crate) mod util {
 }
 
 pub fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, String>) -> Result<Value, SourceErr> {
+    // 0.46.1: any agent may list its OWN pending proposals; the rest of
+    // this file needs a person or the switch.
+    if path == "/cli/sources/pending" && !is_person(who) && !is_manager(who) {
+        return match own_project(who) {
+            Some(p) => pending_scoped(who, params, Some(p)),
+            None => Err(person_only()),
+        };
+    }
     need_person_or_manager(who)?;
     match path {
         "/cli/sources/pending" => pending(who, params),
@@ -227,14 +235,21 @@ pub fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, Strin
 // ── pending ──────────────────────────────────────────────────────────
 
 fn pending(who: &Who, params: &HashMap<String, String>) -> Result<Value, SourceErr> {
+    pending_scoped(who, params, None)
+}
+
+/// Proposals waiting for approval. `own`: only those this project made
+/// (an agent without the switch); the answer then says `"scope": "own"`.
+fn pending_scoped(who: &Who, params: &HashMap<String, String>, own: Option<&str>) -> Result<Value, SourceErr> {
     let names: Option<Vec<&str>> =
         params.get("names").filter(|s| !s.is_empty()).map(|s| s.split(',').map(str::trim).filter(|n| !n.is_empty()).collect());
     let db = k2_core::db::shared();
     let conn = db.lock();
     let rows = store::list_live(&conn).map_err(db_err)?;
     let wanted = |name: &str| names.as_ref().is_none_or(|n| n.contains(&name));
+    let mine = |made_by_project: Option<&str>| own.is_none_or(|p| made_by_project == Some(p));
     let mut sources = Vec::new();
-    for r in rows.iter().filter(|r| r.status == SourceStatus::Proposed && wanted(&r.name)) {
+    for r in rows.iter().filter(|r| r.status == SourceStatus::Proposed && wanted(&r.name) && mine(r.made_by_project.as_deref())) {
         sources.push(json!({
             "id": r.id,
             "name": r.name,
@@ -258,7 +273,7 @@ fn pending(who: &Who, params: &HashMap<String, String>) -> Result<Value, SourceE
     let mut triggers = Vec::new();
     for t in ts::list_by_status(&conn, TriggerStatus::Proposed).map_err(db_err)? {
         let Some(src) = by_id.get(t.source_id.as_str()) else { continue };
-        if !wanted(&src.name) {
+        if !wanted(&src.name) || !mine(t.made_by_project.as_deref()) {
             continue;
         }
         let ws = crate::compute_routes::ws_by_id(&t.target_project_id);
@@ -272,7 +287,7 @@ fn pending(who: &Who, params: &HashMap<String, String>) -> Result<Value, SourceE
         }));
     }
     let _ = who;
-    Ok(json!({"sources": sources, "triggers": triggers}))
+    Ok(json!({"sources": sources, "triggers": triggers, "scope": if own.is_some() { "own" } else { "all" }}))
 }
 
 /// `{"kind": "agent", "handle": …}` for an agent maker, so Settings can say
@@ -1029,8 +1044,14 @@ pub(crate) mod tests {
         let _e = env();
         insert_source("fleet", "proposed", None, false, "member");
         let shell = Who::Shell { project_id: "p1".into(), session_id: "s".into() };
+        // 0.46.1: pending answers an agent with its own proposals only.
+        for who in [agent("p1"), shell.clone()] {
+            let v = call("/cli/sources/pending", &who, json!({})).expect("own pending");
+            assert_eq!(v["scope"], "own");
+        }
+        let v = call("/cli/sources/pending", &agent("p9"), json!({})).expect("own pending");
+        assert_eq!(v["sources"].as_array().map(Vec::len), Some(0), "another agent's proposal is not listed");
         for path in [
-            "/cli/sources/pending",
             "/cli/sources/approve",
             "/cli/sources/batch-approve",
             "/cli/sources/secret",

@@ -243,6 +243,39 @@ pub fn mask_query(raw: &str) -> String {
     }
 }
 
+/// A query value that looks like a secret: its key is secret-shaped
+/// (token, key, sig, …) or the value itself is token-shaped (24+ base64url
+/// characters mixing letters and digits).
+fn secret_query_value(k: &str, v: &str) -> bool {
+    secret_query_key(k)
+        || (v.len() >= 24
+            && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            && v.bytes().any(|b| b.is_ascii_digit())
+            && v.bytes().any(|b| b.is_ascii_alphabetic()))
+}
+
+/// Mask only query values that look secret (0.46.1), so an export feeds
+/// back into `propose --from` as is. Plain values (`?part=boxes`) stay.
+pub fn mask_secret_query(raw: &str) -> String {
+    match url::Url::parse(raw) {
+        Ok(mut u) => {
+            let pairs: Vec<(String, String)> = u.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+            if !pairs.iter().any(|(k, v)| secret_query_value(k, v)) {
+                return raw.to_string();
+            }
+            u.set_query(None);
+            {
+                let mut q = u.query_pairs_mut();
+                for (k, v) in &pairs {
+                    q.append_pair(k, if secret_query_value(k, v) { "•••" } else { v });
+                }
+            }
+            u.to_string()
+        }
+        Err(_) => "(invalid url)".into(),
+    }
+}
+
 /// A root-level key that should be a narrower one (GV17). Reads the value
 /// inside the daemon only; returns fixed text.
 pub fn root_key_hint(value: &str) -> Option<(&'static str, &'static str)> {
@@ -332,6 +365,16 @@ mod tests {
         assert_eq!(path_token_warning(&u, "url").unwrap().code, "token_in_path");
         let u = url::Url::parse("https://api.github.com/repos/Alakazam-211/K2/releases/latest").unwrap();
         assert!(path_token_warning(&u, "url").is_none());
+    }
+
+    #[test]
+    fn secret_masks_keep_plain_query_values() {
+        assert_eq!(mask_secret_query("https://k2.dev/api/ops/fleet?part=boxes"), "https://k2.dev/api/ops/fleet?part=boxes");
+        assert_eq!(mask_secret_query("https://a.example/x"), "https://a.example/x");
+        let m = mask_secret_query("https://a.example/x?part=boxes&id=AbCdEf0123456789AbCdEf0123");
+        assert!(m.contains("part=boxes") && !m.contains("AbCdEf"), "{m}");
+        let m = mask_secret_query("https://a.example/x?sig=1&limit=5");
+        assert!(m.contains("limit=5") && !m.contains("sig=1"), "{m}");
     }
 
     #[test]

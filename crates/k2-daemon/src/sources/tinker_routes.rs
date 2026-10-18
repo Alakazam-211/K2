@@ -48,8 +48,9 @@ pub fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, Strin
     }
 }
 
-/// Targets a fan-out Try fetches.
-pub const TRY_TARGETS: usize = 3;
+/// Targets a fan-out Try fetches by default: all of them (0.46.1; was 3).
+/// `tryTargets: N` in the body asks for fewer.
+pub const TRY_TARGETS: usize = k2_core::sources::MAX_TARGETS_PER_SOURCE;
 
 fn spec_err(e: SpecError) -> SourceErr {
     match e.code {
@@ -75,6 +76,8 @@ struct Subject {
     row: SourceRow,
     warnings: Vec<k2_core::sources::SpecWarning>,
     saved: bool,
+    /// Fan-out targets to fetch (`tryTargets`, default all).
+    try_targets: usize,
 }
 
 /// A draft's stand-in row (never stored).
@@ -135,7 +138,15 @@ fn subject(who: &Who, body: &[u8], now: i64) -> Result<Subject, SourceErr> {
     } else {
         serde_json::from_slice(body).map_err(|e| bad_request(format!("bad JSON body: {e}")))?
     };
-    let obj = v.as_object().ok_or_else(|| bad_request("the body is a JSON object"))?;
+    let mut v = v;
+    let obj = v.as_object_mut().ok_or_else(|| bad_request("the body is a JSON object"))?;
+    let try_targets = match obj.remove("tryTargets") {
+        None | Some(Value::Null) => TRY_TARGETS,
+        Some(n) => match n.as_u64() {
+            Some(n) if (1..=TRY_TARGETS as u64).contains(&n) => n as usize,
+            _ => return Err(bad_request(format!("tryTargets is 1-{TRY_TARGETS}"))),
+        },
+    };
     // `{"name": "fleet"}` alone: try the saved source.
     if obj.len() == 1 {
         if let Some(name) = obj.get("name").and_then(Value::as_str) {
@@ -144,7 +155,7 @@ fn subject(who: &Who, body: &[u8], now: i64) -> Result<Subject, SourceErr> {
             let row = source_by_name(&conn, name)?;
             check_viewers(who, &row)?;
             let spec = store::spec_of(&row).map_err(|e| SourceErr::new("db_error", 500, e))?;
-            return Ok(Subject { spec, row, warnings: Vec::new(), saved: true });
+            return Ok(Subject { spec, row, warnings: Vec::new(), saved: true, try_targets });
         }
     }
     let mut draft = v.clone();
@@ -156,10 +167,11 @@ fn subject(who: &Who, body: &[u8], now: i64) -> Result<Subject, SourceErr> {
     let spec = presets::expand(&draft).map_err(spec_err)?;
     let validated = spec.validate(who.is_owner()).map_err(spec_err)?;
     let row = draft_row(&validated, now);
-    Ok(Subject { spec: validated.spec, row, warnings: validated.warnings, saved: false })
+    Ok(Subject { spec: validated.spec, row, warnings: validated.warnings, saved: false, try_targets })
 }
 
-/// The requests a Try makes: one, or the first 3 fan-out targets.
+/// The requests a Try makes: one, or the fan-out targets (all, or the first
+/// `tryTargets`).
 fn plans(s: &Subject) -> Result<Vec<(Option<String>, FetchPlan)>, SourceErr> {
     let spec = &s.spec;
     let plan = |url: UrlRef, origin: String, key: Option<String>| FetchPlan {
@@ -173,6 +185,7 @@ fn plans(s: &Subject) -> Result<Vec<(Option<String>, FetchPlan)>, SourceErr> {
         secret_workspace: None,
         timeout_secs: spec.timeout_secs,
         max_bytes: spec.max_bytes,
+        expect_status: spec.expect.as_ref().map(|x| x.status.clone()),
     };
     let origin = |u: &str| lint::origin_of(u, "fetch", true).map(|p| p.origin).map_err(spec_err);
     Ok(match &spec.fetch {
@@ -183,7 +196,7 @@ fn plans(s: &Subject) -> Result<Vec<(Option<String>, FetchPlan)>, SourceErr> {
         }
         FetchTargets::Targets(ts) => ts
             .iter()
-            .take(TRY_TARGETS)
+            .take(s.try_targets)
             .map(|t| Ok((Some(t.key.clone()), plan(UrlRef::Plain(t.url.clone()), origin(&t.url)?, Some(t.key.clone())))))
             .collect::<Result<Vec<_>, SourceErr>>()?,
     })
@@ -268,7 +281,8 @@ fn try_route(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
         origins.sort();
         origins.dedup();
         take_budget(&origins)?;
-        for (key, plan) in &plans {
+        // Up to MAX_CONCURRENT_FETCHES at a time, results in target order.
+        let one = |plan: &FetchPlan| {
             let started = Instant::now();
             let out = fetch(plan);
             let ms = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
@@ -276,8 +290,34 @@ fn try_route(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
                 FetchOutcome::Ok { elapsed_ms, .. } => *elapsed_ms,
                 _ => ms,
             };
-            elapsed_total = elapsed_total.saturating_add(ms);
-            outcomes.push((key.clone(), out));
+            (out, ms)
+        };
+        for chunk in plans.chunks(k2_core::sources::MAX_CONCURRENT_FETCHES) {
+            let results: Vec<(FetchOutcome, u32)> = if chunk.len() == 1 {
+                vec![one(&chunk[0].1)]
+            } else {
+                #[cfg(test)]
+                let seam = test_seams::fetcher();
+                std::thread::scope(|sc| {
+                    let hs: Vec<_> = chunk
+                        .iter()
+                        .map(|(_, plan)| {
+                            #[cfg(test)]
+                            let seam = seam.clone();
+                            sc.spawn(move || {
+                                #[cfg(test)]
+                                let _g = test_seams::adopt_fetcher(seam);
+                                one(plan)
+                            })
+                        })
+                        .collect();
+                    hs.into_iter().map(|h| h.join().expect("a Try fetch thread panicked")).collect()
+                })
+            };
+            for ((key, _), (out, ms)) in chunk.iter().zip(results) {
+                elapsed_total = elapsed_total.saturating_add(ms);
+                outcomes.push((key.clone(), out));
+            }
         }
     }
     let fanout = matches!(s.spec.fetch, FetchTargets::Targets(_));
@@ -306,9 +346,14 @@ fn try_route(who: &Who, body: &[u8]) -> Result<Value, SourceErr> {
         Some((_, body)) => try_tree::build(body),
         None => (Vec::new(), false),
     };
-    // The card view this one answer makes (hard at once: one answer).
+    // The card view this one answer makes (hard at once: one answer, so no
+    // failAfter and no per-rule warnAfter/critAfter either).
     let mut once = s.spec.clone();
     once.fail_after = 1;
+    for r in &mut once.rules {
+        r.warn_after = None;
+        r.crit_after = None;
+    }
     let applied = apply_poll(
         &SourceState::new(&s.row.id),
         PollInput { spec: &once, outcomes, now, simulated: false, prev_projection: None },
@@ -438,6 +483,12 @@ pub mod test_seams {
         FETCH.with(|c| *c.borrow())
     }
 
+    /// Carry the test fetcher onto a Try worker thread (fresh thread, so
+    /// nothing to restore).
+    pub(super) fn adopt_fetcher(f: Option<Fetch>) {
+        set_fetcher(f);
+    }
+
     pub fn set_no_budget(on: bool) {
         NO_BUDGET.with(|c| c.set(on));
     }
@@ -527,25 +578,47 @@ mod tests {
     }
 
     #[test]
-    fn fan_out_tries_the_first_three_targets() {
+    fn fan_out_tries_every_target_or_the_first_n() {
         let _g = setup();
-        let targets: Vec<Value> = (0..5)
+        let targets: Vec<Value> = (0..12)
             .map(|i| {
-                let host = if i == 1 { "down.example.com".to_string() } else { format!("box{i}.example.com") };
+                let host = if i == 1 || i == 10 { format!("down.box{i}.example.com") } else { format!("box{i}.example.com") };
                 json!({"key": format!("box{i}"), "url": format!("https://{host}/boot-status")})
             })
             .collect();
+        let draft = json!({"fetch": {"targets": targets}, "extract": {"items": {"itemFields": {"version": "/version"}}}});
+        let r = call("/cli/sources/try", &admin(), draft.clone()).unwrap();
+        let t = r["targets"].as_array().unwrap();
+        assert_eq!(t.len(), 12, "every target, across more than one parallel batch");
+        let keys: Vec<&str> = t.iter().map(|x| x["key"].as_str().unwrap()).collect();
+        assert_eq!(keys, (0..12).map(|i| format!("box{i}")).collect::<Vec<_>>(), "results stay in target order");
+        assert_eq!((t[1]["reason"].as_str(), t[10]["reason"].as_str()), (Some("timeout"), Some("timeout")));
+        assert_eq!(r["view"]["items"].as_array().unwrap().iter().filter(|i| i["health"] == "crit").count(), 2);
+        assert_eq!(r["view"]["phase"], "live", "down boxes are red items, not a stale source");
+
+        let mut first3 = draft.clone();
+        first3["tryTargets"] = 3.into();
+        let r = call("/cli/sources/try", &admin(), first3).unwrap();
+        assert_eq!(r["targets"].as_array().unwrap().len(), 3);
+        let mut bad = draft;
+        bad["tryTargets"] = 0.into();
+        assert_eq!(call("/cli/sources/try", &admin(), bad).unwrap_err().code, "bad_request");
+    }
+
+    #[test]
+    fn try_reads_one_answer_hard_even_with_crit_after() {
+        let _g = setup();
         let r = call(
             "/cli/sources/try",
-            &admin(),
-            json!({"fetch": {"targets": targets}, "extract": {"items": {"itemFields": {"version": "/version"}}}}),
+            &agent("p1"),
+            json!({
+                "fetch": {"url": "https://api.example.com/v6/deployments?limit=5"},
+                "extract": {"items": {"pointer": "/deployments", "itemKey": "/uid", "itemFields": {"state": "/state"}}},
+                "rules": [{"field": "state", "crit": {"eq": "ERROR"}, "ok": {"eq": "READY"}, "warnAfter": 2, "critAfter": 5}]
+            }),
         )
         .unwrap();
-        let t = r["targets"].as_array().unwrap();
-        assert_eq!(t.len(), 3);
-        assert_eq!(t[1]["reason"], "timeout");
-        assert_eq!(r["view"]["items"].as_array().unwrap().iter().filter(|i| i["health"] == "crit").count(), 1);
-        assert_eq!(r["view"]["phase"], "live", "one down box is a red item, not a stale source");
+        assert_eq!(r["view"]["health"], "crit", "Try shows what the rule says, not the soft wait");
     }
 
     #[test]

@@ -14621,9 +14621,9 @@ k2 sources — data sources: HTTP JSON checks this server runs for Garden cards 
   k2 sources list [--all] [--json]          every source with its state
   k2 sources show <name> [--json]           definition + current state
   k2 sources read <name> [--json]           current state (the card view)
-  k2 sources history <name> <field> [--from <dur|epoch>] [--to …] [--json]
+  k2 sources history <name> health|<series> [--item K] [--from <dur|epoch>] [--to …]
   k2 sources status [--json]                the poller: in flight, behind, parked sites
-  k2 sources export <name>                  definition as JSON (secret names only)
+  k2 sources export <name>                  definition as JSON (feeds propose --from)
   k2 sources propose --from <file.json> | --name N --label L --url URL [flags…]
   k2 sources add …                          like propose; people only (Settings or outside K2)
   k2 sources edit <name> [flags…]           change a source (agents: only their own)
@@ -14632,9 +14632,9 @@ k2 sources — data sources: HTTP JSON checks this server runs for Garden cards 
   k2 sources mute <name> --for 30m [--reason "…"]   agents: up to 2 h, reason required
   k2 sources unmute <name>
   k2 sources refresh <name> [--wait]        check now (at most once per 15 s)
-  k2 sources try [propose flags] | --name <saved>   fetch once, show the shape
+  k2 sources try [propose flags] | --name <saved> [--targets N]   fetch once (every target)
   k2 sources simulate <name> ok|warn|crit|stale|unknown|slow|off [--for 1h]
-  k2 sources pending [--names a,b]          proposals waiting for approval
+  k2 sources pending [--names a,b]          proposals waiting (agents: their own)
   k2 sources approve <name>… [--secret NAME]        one secret for every name: ONE confirm
   k2 sources secret <name> NAME|--none      bind (or unbind) a vault secret
   k2 sources pin|unpin <name>               pinned: agents without the switch can't change it
@@ -14655,9 +14655,139 @@ AGENTS AND "MANAGE GARDENS AND DATA SOURCES"
   logged with the agent and its session (Settings → Logs → Access Audit).
   Only the owner or an admin flips the switch; an agent never can.
 
+RULES AND THRESHOLDS (k2 sources propose --help has every flag)
+  --rule 'field:crit:op:v,warn:op:v,ok:op:v' with eq ne in lt lte gt gte exists, ageGt/ageLt
+  (a timestamp's age), versionBehind/versionAtLeast (semver), and @field to compare two
+  fields (box version vs target_version). warnAfter:N / critAfter:N per rule: warn after 1,
+  crit after N checks in a row. failAfter (--fail-after, default 3) is for FETCH failures
+  only; it never delays a rule's warn. --expect-status 200,401 makes a status-only check.
+  More lists: --list / --list-field; an array's length: --count.
+
 Exit codes: 0 ok, 1 failure, 2 usage, 3 needs a person, 4 not found.
 --json prints the daemon's answer as is (also on errors).
-More: k2 study data-sources
+Each verb has its own page: k2 sources <verb> --help. More: k2 study data-sources
+EOF
+}
+
+# Per-verb help (0.46.1): `k2 sources <verb> --help`. Returns 1 for a verb
+# with no page of its own (the caller then prints the noun help).
+_sources_verb_help() {
+    case "$1" in
+        propose|add|edit|try) _sources_flags_help "$1" ;;
+        history) cat <<'EOF'
+k2 sources history <name> health|<series> [--item <key>] [--from 6h|epoch] [--to 1h|epoch] [--json]
+
+  health          the source's state changes, oldest first (went_warn, recovered, …);
+                  with --item <key>, that item's (a box, a cert). Kept: the newest 200.
+  <series>        a trend, count or aggregate of the source (extract.trend, counts,
+                  aggregates): points (t, v). Raw points 48 h, hourly 35 days.
+                  An item field has no series; aggregate it (--agg) instead.
+
+  Values are hidden from agents on an agentAccess "shape" source (0s), and a
+  keep "states" source has no series (409 no_history); health still reads.
+EOF
+        ;;
+        export) cat <<'EOF'
+k2 sources export <name>
+
+  The definition as JSON: the shape `propose --from` takes, so
+    k2 sources export fleet > fleet.json && $EDITOR fleet.json && k2 sources propose --from fleet.json
+  round-trips. Secret NAMES only, never values. For agents, query values that
+  look secret (token/key/sig keys, or 24+ character token-shaped values) show
+  as •••; plain ones (?part=boxes) stay as they are.
+EOF
+        ;;
+        pending) cat <<'EOF'
+k2 sources pending [--names a,b] [--json]
+
+  Proposals (sources and triggers) waiting for approval.
+  A person, or an agent with "Manage Gardens and data sources": every proposal.
+  Any other agent: only its own (the answer says "scope": "own"); a person
+  approves them.
+EOF
+        ;;
+        read|show|list) cat <<'EOF'
+k2 sources list [--all] [--json]    every source with its state
+k2 sources show <name> [--json]     definition + current state
+k2 sources read <name> [--json]     the card view (what sources.read gives a widget)
+
+  The card view: health ok|warn|crit|unknown, phase pending|live|stale|paused,
+  display, reason (a fixed code), fields, items[] (each with health, reason,
+  soft, list for a named list), counts, soft, serverNow, updatedAt.
+  soft {count, of, level}: a reading waiting to go hard, e.g. "soft crit 2/3"
+  (a rule's critAfter) or "soft crit 1/3" for a fetch failure (failAfter).
+EOF
+        ;;
+        *) return 1 ;;
+    esac
+}
+
+_sources_flags_help() {
+    case "$1" in
+        propose) echo "k2 sources propose --from <file.json> | --name N --label L <fetch> [flags…]  (agents: it waits for approval)" ;;
+        add) echo "k2 sources add --from <file.json> | --name N --label L <fetch> [flags…]  (people only; active at once without a secret)" ;;
+        edit) echo "k2 sources edit <name> [flags…]  (agents: only their own; a changed definition needs approving again)" ;;
+        try) echo "k2 sources try --from <file.json> | --url URL [flags…] | --name <saved> [--targets N] [--tree-depth N] [--json]
+  Fetch once and show the shape (pointer · type · sample) and the card it would make. Saves nothing.
+  A fan-out source fetches every target (or the first N with --targets N)." ;;
+    esac
+    cat <<'EOF'
+
+FETCH (one of)
+  --url URL                       one HTTPS JSON address
+  --target key=URL                one fan-out target (repeat, up to 50); each answer is one item
+  --url-secret NAME --origin https://host   the whole URL lives in the vault
+  --secret NAME                   a vault secret sent as the auth header (bound by a person,
+                                  or an agent with the switch)
+  --header 'Name: value'          a plain header (no secrets: those are refused)
+  --expect-status 200,401         status-only check: these statuses are healthy answers,
+                                  whatever the body (HTML, 401). JSON is still read if it parses.
+
+SCHEDULE
+  --every 60s|5m|1h               how often (30 s to 1 day; default 60 s)
+  --timeout 10s                   1-30 s (fan-out default 5 s)
+  --max-bytes 1M                  1 KiB to 5 MiB
+  --fail-after N                  fetch failures in a row before red (1-10, default 3).
+                                  Fetch failures only: rule readings use warnAfter/critAfter.
+  --on-target-error crit|unknown  what a failed fan-out target reads as
+
+WHAT TO KEEP
+  --field name=/pointer           a value from the answer
+  --count name=/pointer           the length of an array or object (e.g. past_due)
+  --items /pointer                the item list (array, or object keyed by name)
+  --item-key /pointer             each item's key (default: index or property name)
+  --item-field name=/pointer      a value from each item
+  --list name=/pointer            another item list next to --items (single URL only)
+  --list-key name=/pointer        that list's item key
+  --list-field list.field=/pointer   a value from each of that list's items
+                                  (item field names are unique across all lists; list
+                                  items have the key <list>/<key> and "list": "<list>")
+  --agg name=count[:list] | count-where:field:op:value | sum:f | min:f | max:f | distinct:f
+  --trend name                    chart a field/count/aggregate (up to 8; history also
+                                  keeps every count and aggregate)
+
+RULES  --rule 'field:level:op:value[,level:op:value…][,warnAfter:N][,critAfter:N]'
+  level: crit, warn, ok (checked in that order; none matching = unknown)
+  op:    eq ne in lt lte gt gte exists
+         ageGt ageLt           the value is a time (epoch s/ms, RFC 3339) older/newer than
+                               a duration:  --rule 'ts:warn:ageGt:5m,crit:ageGt:15m'
+         versionBehind         older than a version or @field, optionally by a distance:
+                               --rule 'version:warn:versionBehind:@target_version,crit:versionBehind:@target_version~minor=1'
+         versionAtLeast        at or past:  ok:versionAtLeast:@target_version
+  value: a literal, a|b|c for in, or @name: another field (the item's own, else the
+         source's), e.g. 'used:warn:gt:@quota'
+  warnAfter:N  checks in a row before this rule's warn goes hard (1-20, default 1: at once)
+  critAfter:N  checks in a row (not ok, the last one crit) before crit; until then it
+               shows as warn ("soft crit 2/3"). Default: warnAfter.
+  A field rule colours the source; an item field rule colours each item of its list.
+
+WHO SEES WHAT
+  --viewers member|admin  --agent-access values|shape  --keep values|states   (people only)
+  --link https://…        where the card's title goes
+  --preset NAME --preset-arg k=v   start from a preset (k2 study data-sources)
+
+THE FILE FORM (--from) is the export shape; see k2 sources export <name> and
+k2 study data-sources for a full example. Flags given with --from override it.
 EOF
 }
 
@@ -14743,7 +14873,7 @@ cmd_sources() {
     esac
     shift
     if _wants_help "$@"; then
-        _sources_usage
+        _sources_verb_help "$sub" || _sources_usage
         return 0
     fi
     _SRC_JSON=0
@@ -14815,18 +14945,39 @@ def val(s):
         return s
 
 def cond(op, value):
-    ops = {"eq", "ne", "in", "lt", "lte", "gt", "gte", "exists"}
+    # 0.46.1: @name is a field reference (the item's own field, else a
+    # source field); ageGt/ageLt take a duration; versionBehind takes a
+    # version or @field, with an optional ~minor=N / ~patch=N / ~major=N.
+    ops = {"eq", "ne", "in", "lt", "lte", "gt", "gte", "exists", "ageGt", "ageLt", "versionBehind", "versionAtLeast"}
     if op not in ops:
-        die("unknown operator %r (eq ne in lt lte gt gte exists)" % op)
+        die("unknown operator %r (eq ne in lt lte gt gte exists ageGt ageLt versionBehind versionAtLeast)" % op)
+    ref = value.startswith("@")
     if op == "in":
         return {"in": [val(x) for x in value.split("|")]}
+    if op in ("ageGt", "ageLt"):
+        return {op: dur(value, op)}
+    if op in ("versionBehind", "versionAtLeast"):
+        target, _, dist = value.partition("~")
+        v = {"field": target[1:]} if target.startswith("@") else {"value": target}
+        if dist:
+            lvl, _, n = dist.partition("=")
+            if lvl not in ("major", "minor", "patch") or not n.isdigit():
+                die("%s distance is ~major=N, ~minor=N or ~patch=N" % op)
+            v[lvl] = int(n)
+        if list(v) == ["value"]:
+            return {op: v["value"]}
+        return {op: v}
     if op in ("lt", "lte", "gt", "gte"):
+        if ref:
+            return {op: {"field": value[1:]}}
         try:
             return {op: float(value) if "." in value else int(value)}
         except ValueError:
-            die("%s needs a number" % op)
+            die("%s needs a number or @field" % op)
     if op == "exists":
         return {"exists": value.strip().lower() not in ("false", "0", "no")}
+    if ref:
+        return {op: {"field": value[1:]}}
     return {op: val(value)}
 
 def kv(v, flag, sep="="):
@@ -14844,7 +14995,10 @@ rules = []
 aggs = {}
 fields = {}
 item_fields = {}
+lists = {}
+counts = {}
 trend = []
+try_targets = None
 preset_args = {}
 from_file = None
 i = 0
@@ -14905,14 +15059,16 @@ while i < len(args):
         k, spec = kv(nxt(a), a)
         parts = spec.split(":")
         op = parts[0]
-        if op == "count":
+        if op == "count" and len(parts) == 1:
             aggs[k] = {"op": "count"}
+        elif op == "count" and len(parts) == 2:
+            aggs[k] = {"op": "count", "list": parts[1]}
         elif op == "count-where" and len(parts) >= 4:
             aggs[k] = {"op": "countWhere", "field": parts[1], "cond": cond(parts[2], ":".join(parts[3:]))}
         elif op in ("sum", "min", "max", "distinct") and len(parts) == 2:
             aggs[k] = {"op": op, "field": parts[1]}
         else:
-            die("--agg takes name=count | count-where:field:op:value | sum:f | min:f | max:f | distinct:f")
+            die("--agg takes name=count[:list] | count-where:field:op:value | sum:f | min:f | max:f | distinct:f")
     elif a == "--rule":
         r = nxt(a)
         head, _, rest = r.partition(":")
@@ -14921,10 +15077,41 @@ while i < len(args):
         rule = {"field": head}
         for part in rest.split(","):
             bits = part.split(":", 2)
+            if len(bits) == 2 and bits[0] in ("warnAfter", "critAfter"):
+                if not bits[1].isdigit():
+                    die("--rule %s takes a number of checks (1-20)" % bits[0])
+                rule[bits[0]] = int(bits[1])
+                continue
             if len(bits) != 3 or bits[0] not in ("crit", "warn", "ok"):
-                die("--rule parts are level:op:value with level crit, warn or ok")
+                die("--rule parts are level:op:value with level crit, warn or ok, or warnAfter:N / critAfter:N")
             rule[bits[0]] = cond(bits[1], bits[2])
         rules.append(rule)
+    elif a == "--list":
+        k, p = kv(nxt(a), a)
+        lists.setdefault(k, {})["pointer"] = p
+    elif a == "--list-key":
+        k, p = kv(nxt(a), a)
+        lists.setdefault(k, {})["itemKey"] = p
+    elif a == "--list-field":
+        k, p = kv(nxt(a), a)
+        if "." not in k:
+            die("--list-field takes list.field=/pointer")
+        ln, fn = k.split(".", 1)
+        lists.setdefault(ln, {}).setdefault("itemFields", {})[fn] = p
+    elif a == "--count":
+        k, p = kv(nxt(a), a)
+        counts[k] = p
+    elif a == "--expect-status":
+        v = nxt(a)
+        try:
+            out["expect"] = {"status": [int(x) for x in v.split(",") if x.strip()]}
+        except ValueError:
+            die("--expect-status takes statuses like 200,401")
+    elif a == "--targets":
+        v = nxt(a)
+        if not v.isdigit():
+            die("--targets takes a number")
+        try_targets = int(v)
     elif a == "--trend":
         trend.append(nxt(a))
     elif a == "--fail-after":
@@ -14969,6 +15156,13 @@ if items or item_fields:
     if "pointer" not in items and "targets" not in out.get("fetch", {}):
         items["pointer"] = ""
     extract["items"] = items
+if lists:
+    for ln, l in lists.items():
+        if "pointer" not in l:
+            die("--list %s=/pointer says where the list %r is" % (ln, ln))
+    extract["lists"] = lists
+if counts:
+    extract["counts"] = counts
 if aggs:
     extract["aggregates"] = aggs
 if trend:
@@ -14979,6 +15173,10 @@ if rules:
     out["rules"] = rules
 if preset_args:
     out["presetArgs"] = preset_args
+if try_targets is not None:
+    if mode != "draft":
+        die("--targets is for k2 sources try")
+    out["tryTargets"] = try_targets
 if mode == "full":
     if "preset" not in out:
         for need in ("name", "label"):
@@ -15030,6 +15228,15 @@ def ago(now, t):
 
 DOT = {"ok": "●", "warn": "▲", "crit": "✖", "unknown": "?", "pending": "○", "paused": "‖", "stale": "◌"}
 
+def soft_hint(s):
+    # 0.46.1: "soft crit 2/3" names the reading waiting to go hard.
+    s = s or {}
+    if not s.get("count"):
+        return ""
+    if s.get("level"):
+        return "soft %s %d/%d" % (s["level"], s["count"], s["of"])
+    return "retrying %d/%d" % (s["count"], s["of"])
+
 def line(v):
     c = v.get("counts") or {}
     counts = ", ".join("%d %s" % (c[k], k) for k in ("ok", "warn", "crit", "unknown") if c.get(k))
@@ -15039,8 +15246,8 @@ def line(v):
     bits.append("updated " + ago(v["serverNow"], v.get("updatedAt")))
     if v.get("reason"):
         bits.append(v["reason"])
-    if (v.get("soft") or {}).get("count"):
-        bits.append("retrying %d/%d" % (v["soft"]["count"], v["soft"]["of"]))
+    if soft_hint(v.get("soft")):
+        bits.append(soft_hint(v.get("soft")))
     if v.get("muted"):
         bits.append("muted by %s" % v["muted"]["by"])
     if v.get("simulated"):
@@ -15062,7 +15269,8 @@ def card(v):
     for it in v.get("items") or []:
         f = " ".join("%s=%s" % (k, json.dumps(x)) for k, x in sorted((it.get("fields") or {}).items()))
         r = (" (" + it["reason"] + ")") if it.get("reason") else ""
-        print("  %s %-24s %s%s %s" % (DOT.get(it["health"], "?"), it["key"], it["health"], r, f))
+        sh = (" [" + soft_hint(it.get("soft")) + "]") if soft_hint(it.get("soft")) else ""
+        print("  %s %-24s %s%s%s %s" % (DOT.get(it["health"], "?"), it["key"], it["health"], r, sh, f))
     if v.get("masked"):
         print("  (values hidden from agents on this source)")
 
@@ -15112,8 +15320,17 @@ elif kind == "status":
     if d.get("airgap"):
         print("  air-gap is on: only exact-IP sources run")
 elif kind == "history":
-    for p in d.get("points") or []:
-        print("%d\t%s" % (p["t"], "gap" if p["v"] is None else p["v"]))
+    if d.get("field") == "health":
+        evs = d.get("events") or []
+        if not evs:
+            print("No state changes in this window.")
+        for e in evs:
+            who = (" " + e["item"]) if e.get("item") else ""
+            why = (" (" + e["reason"] + ")") if e.get("reason") else ""
+            print("%d\t%s%s\t%s → %s%s" % (e["t"], e["kind"], who, e.get("from") or "-", e.get("to") or "-", why))
+    else:
+        for p in d.get("points") or []:
+            print("%d\t%s" % (p["t"], "gap" if p["v"] is None else p["v"]))
 ' "$kind"
 }
 
@@ -15158,18 +15375,20 @@ cmd_sources_read() {
 }
 
 cmd_sources_history() {
-    local name="" field="" from="" to=""
+    local name="" field="" from="" to="" item=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --from) from="${2:-}"; shift 2 ;;
             --to) to="${2:-}"; shift 2 ;;
+            --item) item="${2:-}"; shift 2 ;;
             --json) shift ;;
             --*) echo "Error: unknown flag $1" >&2; exit 2 ;;
             *) if [ -z "$name" ]; then name="$1"; elif [ -z "$field" ]; then field="$1"; fi; shift ;;
         esac
     done
-    [ -n "$name" ] && [ -n "$field" ] || { echo "Error: usage: k2 sources history <name> <field> [--from 6h|epoch] [--to …]" >&2; exit 2; }
+    [ -n "$name" ] && [ -n "$field" ] || { echo "Error: usage: k2 sources history <name> health|<trend|count|aggregate> [--item <key>] [--from 6h|epoch] [--to …]" >&2; exit 2; }
     local q="name=$(urlencode "$name")&field=$(urlencode "$field")" t now
+    [ -n "$item" ] && q="$q&item=$(urlencode "$item")"
     now="$(date +%s)"
     for t in from to; do
         local v; if [ "$t" = from ]; then v="$from"; else v="$to"; fi
@@ -15370,101 +15589,9 @@ print(urllib.parse.urlencode([(k, v) for k, v in pairs if v != ""]))
 }
 
 # A draft source (export shape) from propose-style flags, or a file. Used by
-# Try. Prints JSON.
+# Try. Prints JSON. 0.46.1: the same parser as propose (every flag).
 _sources_b2_draft() {
-    local from="" args=()
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --from) [ -n "${2:-}" ] || { echo "usage: --from <file.json>" >&2; exit 2; }; from="$2"; shift 2 ;;
-            --every|--timeout) [ -n "${2:-}" ] || { echo "usage: $1 <duration>" >&2; exit 2; }; args+=("$1" "$(_sources_b2_secs "$2")"); shift 2 ;;
-            --name|--label|--url|--target|--url-secret|--header|--secret|--max-bytes|--field|--items|--item-key|--item-field|--agg|--rule|--trend|--fail-after|--on-target-error|--link|--preset|--preset-arg)
-                [ $# -ge 2 ] || { echo "usage: $1 <value>" >&2; exit 2; }
-                args+=("$1" "$2"); shift 2 ;;
-            *) echo "Error: unknown flag '$1' (k2 sources --help)" >&2; exit 2 ;;
-        esac
-    done
-    python3 - "$from" "${args[@]}" <<'PY'
-import json, sys
-from_file, rest = sys.argv[1], sys.argv[2:]
-d = {}
-if from_file:
-    try:
-        with open(from_file) as f:
-            d = json.load(f)
-    except Exception as e:
-        print("Error: can't read %s: %s" % (from_file, e), file=sys.stderr); sys.exit(2)
-    if not isinstance(d, dict):
-        print("Error: %s is not a JSON object" % from_file, file=sys.stderr); sys.exit(2)
-def size(v):
-    v = v.strip(); m = 1
-    if v[-1:] in "Kk": m, v = 1024, v[:-1]
-    elif v[-1:] in "Mm": m, v = 1048576, v[:-1]
-    return int(v) * m
-def value(s):
-    try:
-        return json.loads(s)
-    except Exception:
-        return s
-def cond(op, val):
-    op = op.strip()
-    if op == "in":
-        return {"in": [value(x) for x in val.split("|")]}
-    if op in ("lt", "lte", "gt", "gte"):
-        return {op: float(val)}
-    if op == "exists":
-        return {"exists": val.strip().lower() != "false"}
-    return {op: value(val)}
-ex = d.setdefault("extract", {}) if any(a in rest for a in ("--field", "--items", "--item-key", "--item-field", "--agg", "--trend")) else d.get("extract")
-i = 0
-while i < len(rest):
-    k, v = rest[i], rest[i + 1]; i += 2
-    if k == "--name": d["name"] = v
-    elif k == "--label": d["label"] = v
-    elif k == "--url": d["fetch"] = {"url": v}
-    elif k == "--url-secret": d["fetch"] = {"urlSecret": {"name": v, "origin": ""}}
-    elif k == "--target":
-        key, _, url = v.partition("=")
-        if not url: print("usage: --target key=https://…", file=sys.stderr); sys.exit(2)
-        t = d.get("fetch", {}).get("targets") if isinstance(d.get("fetch"), dict) else None
-        if t is None:
-            t = []; d["fetch"] = {"targets": t}
-        t.append({"key": key, "url": url})
-    elif k == "--header":
-        name, _, val = v.partition(":")
-        d.setdefault("headers", []).append([name.strip(), val.strip()])
-    elif k == "--secret": d["secret"] = v
-    elif k == "--every": d["everySecs"] = int(v)
-    elif k == "--timeout": d["timeoutSecs"] = int(v)
-    elif k == "--max-bytes": d["maxBytes"] = size(v)
-    elif k == "--field":
-        n, _, p = v.partition("="); ex.setdefault("fields", {})[n] = p
-    elif k == "--items": ex.setdefault("items", {})["pointer"] = v
-    elif k == "--item-key": ex.setdefault("items", {})["itemKey"] = v
-    elif k == "--item-field":
-        n, _, p = v.partition("="); ex.setdefault("items", {}).setdefault("itemFields", {})[n] = p
-    elif k == "--agg":
-        n, _, spec = v.partition("="); parts = spec.split(":")
-        op = parts[0]
-        if op == "count": a = {"op": "count"}
-        elif op == "count-where": a = {"op": "countWhere", "field": parts[1], "cond": cond(parts[2], ":".join(parts[3:]))}
-        else: a = {"op": op, "field": parts[1]}
-        ex.setdefault("aggregates", {})[n] = a
-    elif k == "--trend": ex.setdefault("trend", []).append(v)
-    elif k == "--rule":
-        field, _, body = v.partition(":")
-        r = {"field": field}
-        for part in body.split(","):
-            lvl, op, val = (part.split(":", 2) + ["", ""])[:3]
-            r[lvl] = cond(op, val)
-        d.setdefault("rules", []).append(r)
-    elif k == "--fail-after": d["failAfter"] = int(v)
-    elif k == "--on-target-error": d["onTargetError"] = v
-    elif k == "--link": d["link"] = v
-    elif k == "--preset": d["preset"] = v
-    elif k == "--preset-arg":
-        n, _, val = v.partition("="); d.setdefault("presetArgs", {})[n] = val
-print(json.dumps(d))
-PY
+    _sources_spec_json draft "$@"
 }
 
 cmd_sources_try() {
@@ -15575,8 +15702,11 @@ cmd_sources_pending() {
 import json, sys
 v = json.load(sys.stdin)
 src, trg = v.get("sources") or [], v.get("triggers") or []
+own = v.get("scope") == "own"
 if not src and not trg:
-    print("Nothing is waiting for approval."); sys.exit(0)
+    print("None of your proposals is waiting." if own else "Nothing is waiting for approval."); sys.exit(0)
+if own:
+    print("Your proposals waiting for a person (or an agent with the switch):")
 for s in src:
     m = s.get("maker") or {}
     by = m.get("handle") or m.get("user") or s.get("madeBy")
@@ -15586,7 +15716,10 @@ for t in trg:
     on = t["on"]["kind"] + ((":%ss" % t["on"]["secs"]) if t["on"].get("secs") else "")
     print("trigger %s  %s on %s → %s (by %s)" % (t["id"][:8], t["source"], on, t["agent"].get("handle"), t.get("madeBy")))
 print()
-print("Approve: k2 sources approve <name>… · k2 sources trigger approve <id>")
+if own:
+    print("A person approves them in Settings → Gardens → External Data (or k2 sources approve outside K2).")
+else:
+    print("Approve: k2 sources approve <name>… · k2 sources trigger approve <id>")
 '
 }
 
@@ -16028,6 +16161,43 @@ LIMITS
   logged with you, your session, the target and the secret's NAME (Access
   Audit).
 
+RULES (0.46.1)
+  A rule rates one field: crit → warn → ok, else unknown. Operators: eq ne
+  in lt lte gt gte exists, and:
+    ageGt / ageLt  N     the value is a time (epoch s or ms, RFC 3339) more /
+                         less than N seconds old: stale data that is still served
+    versionBehind  V     older than a version, or {"field": "target_version"};
+                         a distance: {"field": …, "minor": 1} (or major/patch)
+    versionAtLeast V     at or past it
+    {"field": "name"}    in eq/ne/lt/lte/gt/gte: compare to another field (the
+                         item's own first, then the source's)
+  Thresholds per rule: "warnAfter": 1 (default, at once) and "critAfter": N
+  (checks in a row that aren't ok, the last one crit; until then it shows warn
+  with soft {count, of, level}). failAfter is for fetch failures only.
+  Status-only checks: "expect": {"status": [200, 401]} (k2.dev HTML, a 401 login
+  page); any listed status is healthy, JSON is read if it parses.
+  More lists: "extract.lists": {"certs": {"pointer": "/certs", "itemKey": "/host",
+  "itemFields": {"cert_days": "/days_left"}}} (single URL; item field names unique
+  across lists; keys "certs/<host>"). An array's length: "extract.counts":
+  {"past_due_n": "/past_due"}. Count one list: {"op": "count", "list": "certs"}.
+
+  Example (a fleet summary with a target version):
+    {"name": "k2-ops-boxes", "label": "K2 boxes", "everySecs": 60,
+     "fetch": {"url": "https://k2.dev/api/ops/fleet?part=boxes"}, "secret": "K2_OPS_READ_TOKEN",
+     "extract": {"fields": {"target_version": "/target_version", "ts": "/ts"},
+       "items": {"pointer": "/boxes", "itemKey": "/name", "itemFields": {"version": "/version"}},
+       "aggregates": {"behind": {"op": "countWhere", "field": "version",
+         "cond": {"versionBehind": {"field": "target_version"}}}}},
+     "rules": [
+       {"field": "ts", "warn": {"ageGt": 300}, "crit": {"ageGt": 900}, "ok": {"exists": true}},
+       {"field": "version", "ok": {"versionAtLeast": {"field": "target_version"}},
+        "warn": {"versionBehind": {"field": "target_version"}},
+        "crit": {"versionBehind": {"field": "target_version", "minor": 1}}, "critAfter": 3}]}
+
+HISTORY
+  k2 sources history <name> health [--item <key>]   when the state changed
+  k2 sources history <name> <trend|count|aggregate> the numbers over time
+
 GOTCHAS
   Redirects must stay on the same origin (a GitHub release ASSET redirects
   elsewhere and fails; read the API). Timeouts 10 s (fan-out 5 s), 1 MiB.
@@ -16038,8 +16208,8 @@ GOTCHAS
 CARDS
   Built-in: k2:fleet-grid@1, k2:version-spread@1, k2:relays-dns@1,
   k2:deploys@1, k2:money-alerts@1 (config.source = "name" or
-  "name::host"). A custom widget asks for cap sources:read (it then can't
-  post to the Thread). Its errors: k2 zen widget errors <name>.
+  "name::host"). A custom widget asks for cap sources:read. Its errors:
+  k2 zen widget errors <name>.
 EOF
 }
 # END_SOURCES_B2
@@ -23727,21 +23897,21 @@ cmd_schema() {
     },
     {"name": "sources list", "usage": "k2 sources list [--all] [--json]", "description": "This server's data sources with their state (ok/warn/crit/unknown; pending/live/stale/paused).", "args": [], "flags": [{"name": "--all", "arg": null, "description": "Include proposed and paused (the default shows all, by status)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources show", "usage": "k2 sources show <name> [--json]", "description": "One source: its definition and current card view. Agents see masked values on shape-only sources.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
-    {"name": "sources read", "usage": "k2 sources read <name> [--json]", "description": "One source's card view (what Garden cards show).", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
-    {"name": "sources history", "usage": "k2 sources history <name> <field> [--from <dur|epoch>] [--to <dur|epoch>] [--json]", "description": "Trend points for a field (raw for 48 h, hourly for 35 days).", "args": [{"name": "name", "required": true}, {"name": "field", "required": true}], "flags": [{"name": "--from", "arg": "dur|epoch", "description": "Start (default 48h ago)."}, {"name": "--to", "arg": "dur|epoch", "description": "End (default now)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources read", "usage": "k2 sources read <name> [--json]", "description": "One source's card view (what Garden cards and sources.read get): health, phase, fields, items[] (with list for named lists), counts, and soft {count, of, level} for a reading waiting to go hard (\"soft crit 2/3\").", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources history", "usage": "k2 sources history <name> health|<series> [--item <key>] [--from <dur|epoch>] [--to <dur|epoch>] [--json]", "description": "health: the source's (or one item's, --item) state changes, oldest first. Otherwise a trend, count or aggregate as points (raw for 48 h, hourly for 35 days).", "args": [{"name": "name", "required": true}, {"name": "field", "required": true}], "flags": [{"name": "--item", "arg": "key", "description": "With health: one item's changes (a box, a cert)."}, {"name": "--from", "arg": "dur|epoch", "description": "Start (default 48h ago)."}, {"name": "--to", "arg": "dur|epoch", "description": "End (default now)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources status", "usage": "k2 sources status [--json]", "description": "The poller: sources, targets, in flight, behind by, parked sites, air-gap.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
-    {"name": "sources export", "usage": "k2 sources export <name>", "description": "A source's definition as JSON (secret names only), ready for propose --from.", "args": [{"name": "name", "required": true}], "flags": []},
-    {"name": "sources propose", "usage": "k2 sources propose --from <file.json> | --name <n> --label <l> --url <url> [flags]", "description": "Propose a source; a person approves it (one click when it needs no secret).", "args": [], "flags": [{"name": "--from", "arg": "file.json", "description": "The export shape from a file."}, {"name": "--name", "arg": "name", "description": "a-z, 0-9, - (1-40)."}, {"name": "--label", "arg": "label", "description": "Shown on cards."}, {"name": "--url", "arg": "url", "description": "One https URL (http and IPs: the owner only)."}, {"name": "--target", "arg": "key=url", "description": "A fan-out target (repeatable, up to 50)."}, {"name": "--url-secret", "arg": "NAME", "description": "A vault secret holding the whole URL."}, {"name": "--header", "arg": "K:V", "description": "A request header (never a secret; use --secret)."}, {"name": "--secret", "arg": "NAME", "description": "A vault secret sent as the auth header; a person approves it."}, {"name": "--every", "arg": "dur", "description": "Check interval (30s or more)."}, {"name": "--field", "arg": "name=/ptr", "description": "A JSON Pointer field (repeatable)."}, {"name": "--items", "arg": "/ptr", "description": "Pointer to the item list."}, {"name": "--item-key", "arg": "/ptr", "description": "Item key, relative to the item."}, {"name": "--item-field", "arg": "name=/ptr", "description": "A per-item field (repeatable)."}, {"name": "--agg", "arg": "name=op", "description": "count | count-where:field:op:value | sum:f | min:f | max:f | distinct:f."}, {"name": "--rule", "arg": "field:crit:op:value[,warn:op:value][,ok:op:value]", "description": "How a field rates (repeatable)."}, {"name": "--trend", "arg": "name", "description": "Keep history for this field (up to 8)."}, {"name": "--preset", "arg": "NAME", "description": "Fill the spec from a preset (k2-fleet, statuspage, gatus, ...)."}, {"name": "--preset-arg", "arg": "k=v", "description": "A preset argument (repeatable)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
-    {"name": "sources add", "usage": "k2 sources add [propose flags] [--viewers member|admin] [--agent-access values|shape] [--keep values|states]", "description": "People only: add a source (active at once when it needs no secret).", "args": [], "flags": [{"name": "--from", "arg": "file.json", "description": "The export shape from a file."}, {"name": "--name", "arg": "name", "description": "a-z, 0-9, - (1-40)."}, {"name": "--label", "arg": "label", "description": "Shown on cards."}, {"name": "--url", "arg": "url", "description": "One https URL (http and IPs: the owner only)."}, {"name": "--target", "arg": "key=url", "description": "A fan-out target (repeatable, up to 50)."}, {"name": "--url-secret", "arg": "NAME", "description": "A vault secret holding the whole URL."}, {"name": "--header", "arg": "K:V", "description": "A request header (never a secret; use --secret)."}, {"name": "--secret", "arg": "NAME", "description": "A vault secret sent as the auth header; a person approves it."}, {"name": "--every", "arg": "dur", "description": "Check interval (30s or more)."}, {"name": "--field", "arg": "name=/ptr", "description": "A JSON Pointer field (repeatable)."}, {"name": "--items", "arg": "/ptr", "description": "Pointer to the item list."}, {"name": "--item-key", "arg": "/ptr", "description": "Item key, relative to the item."}, {"name": "--item-field", "arg": "name=/ptr", "description": "A per-item field (repeatable)."}, {"name": "--agg", "arg": "name=op", "description": "count | count-where:field:op:value | sum:f | min:f | max:f | distinct:f."}, {"name": "--rule", "arg": "field:crit:op:value[,warn:op:value][,ok:op:value]", "description": "How a field rates (repeatable)."}, {"name": "--trend", "arg": "name", "description": "Keep history for this field (up to 8)."}, {"name": "--preset", "arg": "NAME", "description": "Fill the spec from a preset (k2-fleet, statuspage, gatus, ...)."}, {"name": "--preset-arg", "arg": "k=v", "description": "A preset argument (repeatable)."}, {"name": "--viewers", "arg": "member|admin", "description": "Who may read it."}, {"name": "--agent-access", "arg": "values|shape", "description": "Agents see values, or only the shape."}, {"name": "--keep", "arg": "values|states", "description": "Keep values, or only states."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources export", "usage": "k2 sources export <name>", "description": "A source's definition as JSON (secret names only), ready for propose --from. For agents only secret-looking query values are masked.", "args": [{"name": "name", "required": true}], "flags": []},
+    {"name": "sources propose", "usage": "k2 sources propose --from <file.json> | --name <n> --label <l> --url <url> [flags]   (k2 sources propose --help: every flag)", "description": "Propose a source; a person approves it (one click when it needs no secret).", "args": [], "flags": [{"name": "--from", "arg": "file.json", "description": "The export shape from a file."}, {"name": "--name", "arg": "name", "description": "a-z, 0-9, - (1-40)."}, {"name": "--label", "arg": "label", "description": "Shown on cards."}, {"name": "--url", "arg": "url", "description": "One https URL (http and IPs: the owner only)."}, {"name": "--target", "arg": "key=url", "description": "A fan-out target (repeatable, up to 50)."}, {"name": "--url-secret", "arg": "NAME", "description": "A vault secret holding the whole URL."}, {"name": "--header", "arg": "K:V", "description": "A request header (never a secret; use --secret)."}, {"name": "--secret", "arg": "NAME", "description": "A vault secret sent as the auth header; a person approves it."}, {"name": "--every", "arg": "dur", "description": "Check interval (30s or more)."}, {"name": "--field", "arg": "name=/ptr", "description": "A JSON Pointer field (repeatable)."}, {"name": "--items", "arg": "/ptr", "description": "Pointer to the item list."}, {"name": "--item-key", "arg": "/ptr", "description": "Item key, relative to the item."}, {"name": "--item-field", "arg": "name=/ptr", "description": "A per-item field (repeatable)."}, {"name": "--agg", "arg": "name=op", "description": "count[:list] | count-where:field:op:value | sum:f | min:f | max:f | distinct:f."}, {"name": "--rule", "arg": "field:level:op:value[,level:op:value…][,warnAfter:N][,critAfter:N]", "description": "How a field rates (repeatable). level crit|warn|ok; op eq ne in lt lte gt gte exists ageGt ageLt versionBehind versionAtLeast; value a literal, a|b for in, a duration for ageGt/ageLt, or @field (another field; versionBehind takes @field~minor=N). warnAfter/critAfter: checks in a row before warn/crit go hard (default 1; crit defaults to warnAfter)."}, {"name": "--trend", "arg": "name", "description": "Chart this field/count/aggregate (up to 8). History also keeps every count and aggregate."}, {"name": "--preset", "arg": "NAME", "description": "Fill the spec from a preset (k2-fleet, statuspage, gatus, ...)."}, {"name": "--preset-arg", "arg": "k=v", "description": "A preset argument (repeatable)."}, {"name": "--expect-status", "arg": "200,401", "description": "Status-only check: these HTTP statuses are healthy answers, whatever the body (HTML, a 401 login page). JSON is still read when it parses."}, {"name": "--timeout", "arg": "dur", "description": "1-30 s (fan-out default 5 s)."}, {"name": "--max-bytes", "arg": "size", "description": "1K to 5M (default 1M)."}, {"name": "--fail-after", "arg": "N", "description": "FETCH failures in a row before red (1-10, default 3). Never delays a rule's warn: rules use warnAfter/critAfter."}, {"name": "--on-target-error", "arg": "crit|unknown", "description": "What a failed fan-out target reads as."}, {"name": "--count", "arg": "name=/ptr", "description": "Keep the length of an array or object (repeatable)."}, {"name": "--list", "arg": "name=/ptr", "description": "Another item list next to --items (single URL; repeatable). Its items' keys are <list>/<key>."}, {"name": "--list-key", "arg": "name=/ptr", "description": "That list's item key."}, {"name": "--list-field", "arg": "list.field=/ptr", "description": "A field of each item of that list (item field names are unique across lists)."}, {"name": "--link", "arg": "url", "description": "Where the card's title links."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources add", "usage": "k2 sources add [propose flags] [--viewers member|admin] [--agent-access values|shape] [--keep values|states]", "description": "People only: add a source (active at once when it needs no secret).", "args": [], "flags": [{"name": "--from", "arg": "file.json", "description": "The export shape from a file."}, {"name": "--name", "arg": "name", "description": "a-z, 0-9, - (1-40)."}, {"name": "--label", "arg": "label", "description": "Shown on cards."}, {"name": "--url", "arg": "url", "description": "One https URL (http and IPs: the owner only)."}, {"name": "--target", "arg": "key=url", "description": "A fan-out target (repeatable, up to 50)."}, {"name": "--url-secret", "arg": "NAME", "description": "A vault secret holding the whole URL."}, {"name": "--header", "arg": "K:V", "description": "A request header (never a secret; use --secret)."}, {"name": "--secret", "arg": "NAME", "description": "A vault secret sent as the auth header; a person approves it."}, {"name": "--every", "arg": "dur", "description": "Check interval (30s or more)."}, {"name": "--field", "arg": "name=/ptr", "description": "A JSON Pointer field (repeatable)."}, {"name": "--items", "arg": "/ptr", "description": "Pointer to the item list."}, {"name": "--item-key", "arg": "/ptr", "description": "Item key, relative to the item."}, {"name": "--item-field", "arg": "name=/ptr", "description": "A per-item field (repeatable)."}, {"name": "--agg", "arg": "name=op", "description": "count[:list] | count-where:field:op:value | sum:f | min:f | max:f | distinct:f."}, {"name": "--rule", "arg": "field:level:op:value[,level:op:value…][,warnAfter:N][,critAfter:N]", "description": "How a field rates (repeatable). level crit|warn|ok; op eq ne in lt lte gt gte exists ageGt ageLt versionBehind versionAtLeast; value a literal, a|b for in, a duration for ageGt/ageLt, or @field (another field; versionBehind takes @field~minor=N). warnAfter/critAfter: checks in a row before warn/crit go hard (default 1; crit defaults to warnAfter)."}, {"name": "--trend", "arg": "name", "description": "Chart this field/count/aggregate (up to 8). History also keeps every count and aggregate."}, {"name": "--preset", "arg": "NAME", "description": "Fill the spec from a preset (k2-fleet, statuspage, gatus, ...)."}, {"name": "--preset-arg", "arg": "k=v", "description": "A preset argument (repeatable)."}, {"name": "--viewers", "arg": "member|admin", "description": "Who may read it."}, {"name": "--agent-access", "arg": "values|shape", "description": "Agents see values, or only the shape."}, {"name": "--keep", "arg": "values|states", "description": "Keep values, or only states."}, {"name": "--expect-status", "arg": "200,401", "description": "Status-only check: these HTTP statuses are healthy answers, whatever the body (HTML, a 401 login page). JSON is still read when it parses."}, {"name": "--timeout", "arg": "dur", "description": "1-30 s (fan-out default 5 s)."}, {"name": "--max-bytes", "arg": "size", "description": "1K to 5M (default 1M)."}, {"name": "--fail-after", "arg": "N", "description": "FETCH failures in a row before red (1-10, default 3). Never delays a rule's warn: rules use warnAfter/critAfter."}, {"name": "--on-target-error", "arg": "crit|unknown", "description": "What a failed fan-out target reads as."}, {"name": "--count", "arg": "name=/ptr", "description": "Keep the length of an array or object (repeatable)."}, {"name": "--list", "arg": "name=/ptr", "description": "Another item list next to --items (single URL; repeatable). Its items' keys are <list>/<key>."}, {"name": "--list-key", "arg": "name=/ptr", "description": "That list's item key."}, {"name": "--list-field", "arg": "list.field=/ptr", "description": "A field of each item of that list (item field names are unique across lists)."}, {"name": "--link", "arg": "url", "description": "Where the card's title links."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources edit", "usage": "k2 sources edit <name> [propose/add flags] [--label <l>] [--from <file.json>]", "description": "Change a source. Agents: only their own; changing a secret-bound source's fetch sends it back for approval.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources remove", "usage": "k2 sources remove <name> --yes", "description": "Remove a source and its triggers; the name is held for 7 days.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--yes", "arg": null, "description": "Required for agents and scripts."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources pause", "usage": "k2 sources pause|resume <name>", "description": "People only: stop or restart a source's checks.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources mute", "usage": "k2 sources mute <name> --for <dur> [--reason \"...\"]", "description": "Silence a source's triggers for a while (agents: up to 2h, reason required).", "args": [{"name": "name", "required": true}], "flags": [{"name": "--for", "arg": "dur", "description": "30m, 2h, 1d (required)."}, {"name": "--reason", "arg": "text", "description": "Why (required for agents)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources unmute", "usage": "k2 sources unmute <name>", "description": "End a mute (agents: only one they set).", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources refresh", "usage": "k2 sources refresh <name> [--wait]", "description": "Check now (at most once per 15 s).", "args": [{"name": "name", "required": true}], "flags": [{"name": "--wait", "arg": null, "description": "Wait (up to 30 s) for the new result."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
-    {"name": "sources try", "usage": "k2 sources try [propose flags] | --name <saved>", "description": "Fetch once and show the response's shape and the card view; nothing is saved. Agents: secretless only.", "args": [], "flags": [{"name": "--name", "arg": "saved", "description": "Try a saved source."}, {"name": "--tree-depth", "arg": "N", "description": "Display depth."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources try", "usage": "k2 sources try [propose flags] [--targets N] | --name <saved> [--targets N]", "description": "Fetch once and show the response's shape and the card view (one answer, so hard at once); nothing is saved. A fan-out source fetches every target. Agents: secretless only.", "args": [], "flags": [{"name": "--name", "arg": "saved", "description": "Try a saved source."}, {"name": "--targets", "arg": "N", "description": "Fetch only the first N fan-out targets (default all)."}, {"name": "--tree-depth", "arg": "N", "description": "Display depth."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources simulate", "usage": "k2 sources simulate <name> ok|warn|crit|stale|unknown|slow|off [--for <dur>]", "description": "Show a TEST state on cards without firing triggers (agents: up to 1h).", "args": [{"name": "name", "required": true}, {"name": "state", "required": true}], "flags": [{"name": "--for", "arg": "dur", "description": "Default 1h."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
-    {"name": "sources pending", "usage": "k2 sources pending [--names a,b]", "description": "Proposed sources and triggers waiting for a person.", "args": [], "flags": [{"name": "--names", "arg": "a,b", "description": "Only these."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
+    {"name": "sources pending", "usage": "k2 sources pending [--names a,b]", "description": "Proposed sources and triggers waiting for approval. Agents without the switch see only their own (\"scope\": \"own\").", "args": [], "flags": [{"name": "--names", "arg": "a,b", "description": "Only these."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources approve", "usage": "k2 sources approve <name>... [--secret NAME] [--viewers ...] [--agent-access ...] [--keep ...] [--use-anyway]", "description": "People only: approve proposals (a secret needs a confirm: Touch ID, login or vault password).", "args": [{"name": "name", "required": true}], "flags": [{"name": "--secret", "arg": "NAME", "description": "Bind this vault secret."}, {"name": "--use-anyway", "arg": null, "description": "Accept a root-key warning."}, {"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources secret", "usage": "k2 sources secret <name> NAME|--none [--use-anyway]", "description": "People only: bind or unbind a source's vault secret.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},
     {"name": "sources pin", "usage": "k2 sources pin|unpin <name>", "description": "People only: a pinned source can't be edited or removed by agents.", "args": [{"name": "name", "required": true}], "flags": [{"name": "--json", "arg": null, "description": "The daemon's JSON answer as is (also on errors)."}]},

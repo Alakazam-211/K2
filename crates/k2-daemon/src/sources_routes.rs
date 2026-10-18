@@ -397,18 +397,20 @@ fn audit_unmasked(conn: &Connection, who: &Who, row: &SourceRow, v: &SourceResul
     audit(conn, who, "unmasked_read", Some(&row.id), serde_json::json!({"name": row.name}));
 }
 
-/// The export shape (secret names only; query values masked for agents).
+/// The export shape (secret names only). For agents, query values that
+/// look secret are masked; plain ones (`?part=boxes`) stay, so the export
+/// feeds back into `propose --from` as is (0.46.1).
 fn export_of(who: &Who, row: &SourceRow) -> R<J> {
     let spec = store::spec_of(row).map_err(|_| SourceErr::new("db_error", 500, "this source's definition can't be read"))?;
     let mut v = serde_json::to_value(&spec).unwrap_or(J::Null);
     if viewer(who) == Viewer::Agent {
         if let Some(u) = v.pointer_mut("/fetch/url") {
-            *u = J::String(lint::mask_query(u.as_str().unwrap_or_default()));
+            *u = J::String(lint::mask_secret_query(u.as_str().unwrap_or_default()));
         }
         if let Some(J::Array(ts)) = v.pointer_mut("/fetch/targets") {
             for t in ts {
                 if let Some(u) = t.get_mut("url") {
-                    *u = J::String(lint::mask_query(u.as_str().unwrap_or_default()));
+                    *u = J::String(lint::mask_secret_query(u.as_str().unwrap_or_default()));
                 }
             }
         }
@@ -527,13 +529,35 @@ fn history_route(who: &Who, params: &HashMap<String, String>) -> R<J> {
     }
     let field = param(params, "field")?;
     let spec = store::spec_of(&row).map_err(|_| SourceErr::new("db_error", 500, "this source's definition can't be read"))?;
-    if !spec.extract.trend.iter().any(|t| t == field) {
-        return Err(bad("bad_request", format!("{field} isn't a trend of this source (extract.trend)")));
-    }
     let t = now();
     let num = |k: &str| params.get(k).and_then(|v| v.parse::<i64>().ok());
     let from = num("from").unwrap_or(t - history::RAW_KEEP_SECS);
     let to = num("to").unwrap_or(t);
+    // 0.46.1: `health` is the state changes (source_events), for the source
+    // or one item (`item=`); no values, so no masking.
+    if field == "health" {
+        let item = params.get("item").map(String::as_str).filter(|s| !s.is_empty());
+        let evs: Vec<J> = store::events(&conn, &row.id, 200)?
+            .into_iter()
+            .rev()
+            .filter(|e| e.at >= from && e.at <= to)
+            .filter(|e| match item {
+                Some(k) => e.item_key.as_deref() == Some(k),
+                None => e.scope == "source",
+            })
+            .map(|e| {
+                serde_json::json!({"t": e.at, "kind": e.kind, "from": e.from_health, "to": e.to_health,
+                                   "reason": e.reason, "item": e.item_key, "incident": e.incident_id})
+            })
+            .collect();
+        return Ok(serde_json::json!({"field": "health", "item": item, "events": evs}));
+    }
+    if !k2_core::sources::state::history_series(&spec).iter().any(|s| s == field) {
+        return Err(bad(
+            "bad_request",
+            format!("{field} has no history: name health, or a trend, count or aggregate of this source"),
+        ));
+    }
     let res = history::resolution(from, t);
     let pts = store::points(&conn, &row.id, field, res, from, to)?;
     let pts = history::downsample(&pts, history::MAX_POINTS);

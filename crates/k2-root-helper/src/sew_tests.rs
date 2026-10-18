@@ -1007,6 +1007,149 @@ fn media_upgrade_runs_only_on_the_pin_core_with_the_staged_media_pin() {
     }
 }
 
+// ── rollback mirrors the upgrade: the OLD core reinstalls its engine ─────
+
+fn old_media_tarball() -> Vec<u8> {
+    fixture("sew-media-0.0.1-x86_64-unknown-linux-gnu.tar.gz")
+}
+
+/// A fake `/usr/local/bin/sew` for the rollback path. Records, per call,
+/// the argv and WHICH core ran it (the version whose binary is at
+/// /usr/local/bin/sew at that moment). `upgrade --rollback` swaps the old
+/// core back, as Sew swaps sew and sew.prev.
+fn sew_cores(t: &T) -> std::rc::Rc<std::cell::RefCell<Vec<(String, String)>>> {
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (log, bin) = (seen.clone(), t.p(SEW_BIN));
+    let old = member(&old_tarball(), "sew");
+    let program: super::Program = std::rc::Rc::new(move |args: &[String]| {
+        let core = known_binary(&crate::sew::sha256_hex(&std::fs::read(&bin).unwrap()), "x86_64").unwrap_or("?").to_string();
+        log.borrow_mut().push((core.clone(), args.join(" ")));
+        match args.first().map(String::as_str) {
+            Some("upgrade") if args.iter().any(|a| a == "--rollback") => {
+                std::fs::write(&bin, &old).unwrap();
+                out(0, r#"{"state":"rolled_back","from":"0.0.2","to":"0.0.1"}"#, "")
+            }
+            Some("media") => out(0, &format!(r#"{{"changed":["/usr/local/lib/sew-media/sew-media"],"core":"{core}"}}"#), ""),
+            _ => out(0, "{}", ""),
+        }
+    });
+    t.exec.0.borrow_mut().programs.insert(SEW_BIN.into(), program);
+    seen
+}
+
+/// Sew 2026-10-17: upgrade = core → check → engine with the NEW core;
+/// rollback = core → check → engine with the OLD core, from the previous
+/// pin's engine tarball the helper kept (never sew-media.prev). The media
+/// notices become the reinstalled engine's set.
+#[test]
+fn rollback_has_the_old_core_reinstall_the_kept_previous_engine_in_order() {
+    let t = box_root();
+    std::fs::create_dir_all(t.p("/usr/share")).unwrap();
+    with_pin_installed(&t);
+    let seen = sew_cores(&t);
+    // The upgrade's engine step (new core): the pin's engine is kept.
+    ok(&t.call_in(&["engine", "sew", "stage-media"], &media_tarball()));
+    let v = json(&t.call(&["engine", "sew", "media", "upgrade"]));
+    assert_eq!(v["sewExit"], 0, "{v}");
+    assert_eq!(v["kept"]["media"], "0.0.2", "{v}");
+    assert_eq!(std::fs::read(t.p(&kept_media_path("0.0.2").unwrap())).unwrap(), media_tarball());
+    assert_eq!(licence_in(&t, SEW_MEDIA_DOC_DIR).as_deref(), Some("test\n"));
+
+    // Before the core is rolled back, the engine rollback refuses, runs nothing.
+    let o = t.call(&["engine", "sew", "media", "rollback"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.contains("the core is rolled back first"), "{}", o.stderr);
+    assert_eq!(seen.borrow().len(), 1);
+
+    // The daemon stages the previous pin's engine: kept, not staged.
+    let o = t.call_in(&["engine", "sew", "stage-media"], &old_media_tarball());
+    ok(&o);
+    assert_eq!(json(&o)["kept"], "0.0.1");
+    let st = json(&t.call(&["engine", "sew", "status"]));
+    assert_eq!(st["staged"]["keptMedia"], serde_json::json!(["0.0.1", "0.0.2"]));
+    assert_eq!(st["staged"]["media"], "0.0.2", "the staged slot still holds only the pin");
+    let o = t.call_in(&["engine", "sew", "stage-media"], b"not a release");
+    assert_eq!(o.code, exit::ARGV, "an unknown tarball is neither staged nor kept");
+
+    // Rollback: the core first, then the OLD core reinstalls its engine.
+    ok(&t.call(&["engine", "sew", "rollback"]));
+    let v = json(&t.call(&["engine", "sew", "media", "rollback"]));
+    assert_eq!((v["sewExit"].as_i64(), v["to"].as_str()), (Some(0), Some("0.0.1")), "{v}");
+    let kept = t.p(&kept_media_path("0.0.1").unwrap()).display().to_string();
+    let staged = t.p(SEW_STAGE_MEDIA_TARBALL).display().to_string();
+    assert_eq!(
+        *seen.borrow(),
+        vec![
+            ("0.0.2".to_string(), format!("media upgrade --tarball {staged} --now --json")),
+            ("0.0.2".to_string(), "upgrade --rollback --json".to_string()),
+            ("0.0.1".to_string(), format!("media upgrade --tarball {kept} --now --json")),
+        ],
+        "new core upgrades the engine; the core rolls back; the OLD core reinstalls its engine from the kept tarball"
+    );
+    assert!(!seen.borrow().iter().any(|(_, a)| a.contains("sew-media.prev") || a.contains("--force")));
+    // The engine's notices are now 0.0.1's set.
+    assert_eq!(licence_in(&t, SEW_MEDIA_DOC_DIR).as_deref(), Some("old1\n"));
+}
+
+/// The previous pin's engine tarball is not kept: refused with the fix in
+/// the words, nothing run.
+#[test]
+fn media_rollback_without_the_kept_previous_engine_refuses_and_runs_nothing() {
+    let t = box_root();
+    install_binary(&t, &member(&old_tarball(), "sew"));
+    let o = t.call(&["engine", "sew", "media", "rollback"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.contains("the sew-media 0.0.1 tarball (Sew 0.0.1's engine) is not kept on this box"), "{}", o.stderr);
+    assert!(o.stderr.contains("--media-tarball sew-media-0.0.1-x86_64-unknown-linux-gnu.tar.gz"), "{}", o.stderr);
+    assert!(sew_calls(&t).is_empty());
+    // A kept file that is not the release's tarball is refused too.
+    std::fs::create_dir_all(t.p(SEW_KEEP_DIR)).unwrap();
+    std::fs::write(t.p(&kept_media_path("0.0.1").unwrap()), b"tampered").unwrap();
+    let o = t.call(&["engine", "sew", "media", "rollback"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.contains("is not Sew 0.0.1's pin"), "{}", o.stderr);
+    assert!(sew_calls(&t).is_empty());
+}
+
+/// Rolling back to a release that shipped no notices leaves NONE, never
+/// the newer release's files (Sew 2026-10-17: after a rollback to 0.1.2,
+/// /usr/share/doc/sew and sew-media hold what 0.1.2 had). The core's sets
+/// swap (an empty previous set removes the current files); the engine's
+/// are replaced by the reinstalled tarball's set.
+#[test]
+fn a_rollback_to_a_release_without_notices_leaves_none() {
+    let t = box_root();
+    std::fs::create_dir_all(t.p("/usr/share")).unwrap();
+    // Core: upgrade from a release without notices, then roll back.
+    crate::sew::upgrade_notices(&t.ctx, &pin_tarball()).unwrap();
+    assert_eq!(licence_in(&t, SEW_DOC_DIR).as_deref(), Some("lic\n"));
+    crate::sew::rollback_notices(&t.ctx).unwrap();
+    for name in NOTICE_MEMBERS {
+        assert!(!t.p(&format!("{SEW_DOC_DIR}/{name}")).exists(), "{name} left behind");
+    }
+    // Engine: the reinstalled tarball has no notices → the current set goes.
+    crate::sew::install_notices(&t.ctx, &media_tarball(), SEW_MEDIA_DOC_DIR).unwrap();
+    let no_notices = tarball_of(&[("sew-media", b"bin", false)]);
+    let v = crate::sew::replace_notices(&t.ctx, &no_notices, SEW_MEDIA_DOC_DIR).unwrap();
+    assert_eq!(v["removed"], serde_json::json!(NOTICE_MEMBERS));
+    assert!(!t.p(SEW_MEDIA_DOC_DIR).exists(), "the emptied directory goes too");
+}
+
+/// The kept set is bounded, and a purge takes it.
+#[test]
+fn kept_engine_tarballs_are_bounded_and_purged() {
+    let t = box_root();
+    with_pin_installed(&t);
+    ok(&t.call_in(&["engine", "sew", "stage-media"], &old_media_tarball()));
+    assert!(t.p(&kept_media_path("0.0.1").unwrap()).exists());
+    let mode = std::fs::metadata(t.p(&kept_media_path("0.0.1").unwrap())).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    sew_answers(&t, 0, r#"{"purged":true}"#);
+    let v = json(&t.call(&["engine", "sew", "purge", "none"]));
+    assert_eq!(v["keptRemoved"]["media"], serde_json::json!(["0.0.1"]), "{v}");
+    assert!(!t.p(&kept_media_path("0.0.1").unwrap()).exists());
+}
+
 // ── media ────────────────────────────────────────────────────────────────
 
 #[test]

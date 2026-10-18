@@ -612,6 +612,9 @@ pub mod fake {
         pub last_leaf: Mutex<Option<String>>,
         /// `engine sew stage-media` happened (status reports it staged).
         pub media_staged: Mutex<bool>,
+        /// sew-media versions the helper keeps (an older release's engine
+        /// staged for a rollback, the pin's after a media install/upgrade).
+        pub kept_media: Mutex<Vec<String>>,
         pub media_state: Mutex<Value>,
         /// [`SewOps::sew_released`] (true: the test-signer fixture pin).
         pub released: Mutex<bool>,
@@ -697,6 +700,7 @@ pub mod fake {
                 voice: Mutex::new(None),
                 last_leaf: Mutex::new(None),
                 media_staged: Mutex::new(false),
+                kept_media: Mutex::new(Vec::new()),
                 media_state: Mutex::new(json!({"installed": true, "enabled": true, "state": "running", "alarms": ["port_443_unavailable"]})),
                 released: Mutex::new(true),
                 mgmt_socket: Mutex::new(k2_root_proto::sew::SEW_MGMT_SOCKET.to_string()),
@@ -792,7 +796,7 @@ pub mod fake {
         }
 
         /// What a real box answers, and the systemd state it leaves.
-        fn default_answer(&self, argv: &str) -> Result<Value, String> {
+        fn default_answer(&self, argv: &str, stdin: Option<&[u8]>) -> Result<Value, String> {
             use k2_root_proto::sew::*;
             let pin = pinned().version;
             let active = |u: &str| self.set_unit(u, "active", 0);
@@ -813,7 +817,7 @@ pub mod fake {
                                 "error": "sew helper: /usr/local/bin/sew is not root-owned or is writable by others"}),
                             Some(v) => json!({"present": true, "known": true, "version": v}),
                         },
-                        "staged": {"core": null, "media": if *self.media_staged.lock().unwrap() {
+                        "staged": {"keptMedia": self.kept_media.lock().unwrap().clone(), "core": null, "media": if *self.media_staged.lock().unwrap() {
                             k2_root_proto::sew::pinned().media.as_ref().map(|m| json!(m.version)).unwrap_or(Value::Null)
                         } else { Value::Null }},
                         "units": {"sewDb": st(UNIT_DB), "sew": st(UNIT_SEW)},
@@ -821,6 +825,18 @@ pub mod fake {
                 }
                 "engine sew stage" => json!({"staged": pin}),
                 "engine sew stage-media" => {
+                    // An older release's engine is kept, as the real helper does.
+                    let bytes = stdin.unwrap_or_default();
+                    let older = releases()
+                        .iter()
+                        .filter(|r| r.version != pin)
+                        .filter_map(|r| r.media.as_ref())
+                        .find(|m| m.artifacts.iter().any(|a| crate::update_routes::verify_sha256(bytes, a.tarball_sha256)))
+                        .map(|m| m.version);
+                    if let Some(v) = older {
+                        self.kept_media.lock().unwrap().push(v.to_string());
+                        return Ok(json!({"kept": v, "kind": "media-previous"}));
+                    }
                     *self.media_staged.lock().unwrap() = true;
                     json!({"staged": pin, "kind": "media"})
                 }
@@ -833,6 +849,17 @@ pub mod fake {
                 }
                 "engine sew media turn-cert" => Self::sew_exit(0, json!({"changed": ["turn-tls/fullchain.pem"]})),
                 "engine sew media status" => Self::sew_exit(0, self.media_state.lock().unwrap().clone()),
+                "engine sew media rollback" => {
+                    let core = self.on_disk.lock().unwrap().clone().unwrap_or_default();
+                    match media_artifact_of(&core, "x86_64") {
+                        Ok((mv, _)) if self.kept_media.lock().unwrap().iter().any(|k| k == mv) => {
+                            let mut v = Self::sew_exit(0, json!({"changed": ["/usr/local/lib/sew-media/sew-media"]}));
+                            v["to"] = json!(mv);
+                            v
+                        }
+                        _ => return Err(format!("root helper engine sew media rollback: exit 4: media rollback refused: not kept (core {core})")),
+                    }
+                }
                 "engine sew media upgrade" => {
                     let to = pinned().media.as_ref().map(|m| m.version).unwrap_or(pin);
                     Self::sew_exit(0, json!({"changed": ["/usr/local/lib/sew-media/sew-media"], "to": to, "mode": "now"}))
@@ -893,7 +920,15 @@ pub mod fake {
                     let kept = a.ends_with(" keep-backups").then_some("/var/lib/sew-backups-20260103T000000Z");
                     Self::sew_exit(0, json!({"purged": true, "kept_backups": kept}))
                 }
-                "engine sew doctor" => Self::sew_exit(0, json!({"ok": true, "checks": []})),
+                "engine sew doctor" => {
+                    // Sew's media checks: the engine matches the installed core.
+                    let core = self.on_disk.lock().unwrap().clone().unwrap_or_default();
+                    let mv = media_artifact_of(&core, "x86_64").map(|(v, _)| v).unwrap_or("?");
+                    Self::sew_exit(0, json!({"ok": true, "checks": [
+                        {"id": "media.binary", "status": "ok", "detail": "matches the pin", "hint": ""},
+                        {"id": "media.version", "status": "ok", "detail": format!("sew-media {mv}"), "hint": ""},
+                    ]}))
+                }
                 "engine sew rotate-master" => Self::sew_exit(0, json!({"restarted": true})),
                 "engine sew drop-prev" => Self::sew_exit(0, json!({"dropped": true})),
                 a if a.starts_with("engine sew restore ") => {
@@ -958,7 +993,7 @@ pub mod fake {
             let queued = self.answers.lock().unwrap().get_mut(&joined).and_then(VecDeque::pop_front);
             match queued {
                 Some(a) => a,
-                None => self.default_answer(&joined),
+                None => self.default_answer(&joined, stdin),
             }
         }
         fn unit(&self, unit: &str) -> UnitInfo {

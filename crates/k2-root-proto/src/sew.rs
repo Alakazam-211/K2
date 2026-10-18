@@ -56,6 +56,23 @@ pub const SEW_STAGE_MEDIA_TARBALL: &str = "/var/lib/k2-root-helper/sew/sew-media
 /// 0.2.0 on ship `LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES.md` beside
 /// `sew`. Removed after the call.
 pub const SEW_STAGE_UPGRADE_BIN: &str = "/var/lib/k2-root-helper/sew/sew.new";
+/// The voice-engine tarballs the helper KEEPS (root 0700 dir, 0600 files,
+/// `sew-media-<version>.tar.gz`), as `/usr/share/doc/sew/previous` keeps the
+/// old notices: the pin's, after a successful `media install` / `media
+/// upgrade`, and an older release's when the daemon stages it for a
+/// rollback. A rollback has the OLD core reinstall the previous pin's
+/// engine from here (`media rollback`): sidecar pins are baked into `sew`,
+/// so only that core accepts it. Never Sew's `sew-media.prev` (that is
+/// Sew's own undo for an engine that won't start). Removed by a purge.
+pub const SEW_KEEP_DIR: &str = "/var/lib/k2-root-helper/sew/kept";
+/// At most this many kept engine tarballs (oldest dropped first).
+pub const SEW_KEEP_MAX: usize = 3;
+
+/// The kept engine tarball of sew-media `version` (a validated x.y.z).
+pub fn kept_media_path(version: &str) -> Option<String> {
+    crate::version::Semver::parse(version)?;
+    Some(format!("{SEW_KEEP_DIR}/sew-media-{version}.tar.gz"))
+}
 pub const SEW_STAGE_INSTALL_JSON: &str = "/var/lib/k2-root-helper/sew/install.json";
 pub const SEW_STAGE_MEDIA_JSON: &str = "/var/lib/k2-root-helper/sew/media.json";
 /// The TURN TLS chain and key the daemon hands over (K13), written 0600
@@ -263,7 +280,16 @@ pub const TEST_RELEASES: &[SewRelease] = &[
             tarball_sha256: "e70d86ef976c4f8e3d6e3975c1f8c53147184448290d3f7701748aa7ce213c22",
             binary_sha256: "c3d34485f7489c54cfe0ca1698be054ddc46ff9988e03c569a745182b8f59522",
         }],
-        media: None,
+        // The previous pin's voice engine: what a rollback to 0.0.1 puts back.
+        media: Some(SewSidecar {
+            version: "0.0.1",
+            artifacts: &[SewArtifact {
+                arch: "x86_64",
+                triple: "x86_64-unknown-linux-gnu",
+                tarball_sha256: "19b51c285aae8c5d2b7f58df9a1d3c8e41290f2c7e361c0e2d764a094f710a3e",
+                binary_sha256: "331e90e8cab2d96ee91928ae6a348201b52ff6440d6af56fbbdcef1bb7b62e27",
+            }],
+        }),
         transcriber: None,
         recorder: None,
     },
@@ -489,6 +515,36 @@ pub fn pinned_media_artifact(arch: &str) -> Result<(&'static str, &'static SewAr
         return Err("refusing to install: this build has no sew-media pin (placeholder checksum)".into());
     }
     Ok((m.version, a))
+}
+
+/// The release `version` of this build's table (old or current).
+pub fn release(version: &str) -> Option<&'static SewRelease> {
+    releases().iter().find(|r| r.version == version)
+}
+
+/// The `sew-media` (version, artifact) that Sew release `core_version`
+/// pins for `arch`: what a rollback to that core reinstalls.
+pub fn media_artifact_of(core_version: &str, arch: &str) -> Result<(&'static str, &'static SewArtifact), String> {
+    let rel = release(core_version).ok_or_else(|| format!("Sew {core_version} is not a release this K2 knows"))?;
+    let m = rel.media.as_ref().ok_or_else(|| format!("Sew {core_version} pins no sew-media (voice) release"))?;
+    let a = m
+        .artifacts
+        .iter()
+        .find(|a| a.arch == arch && !checksum_is_placeholder(a))
+        .ok_or_else(|| format!("Sew {core_version} pins no sew-media for '{arch}'"))?;
+    Ok((m.version, a))
+}
+
+/// The sew-media version whose release tarball has this sha256 on `arch`
+/// (any release of this build's table).
+pub fn known_media_tarball(sha256_hex: &str, arch: &str) -> Option<&'static str> {
+    releases().iter().find_map(|r| {
+        let m = r.media.as_ref()?;
+        m.artifacts
+            .iter()
+            .find(|a| a.arch == arch && !checksum_is_placeholder(a) && a.tarball_sha256.eq_ignore_ascii_case(sha256_hex))
+            .map(|_| m.version)
+    })
 }
 
 /// The release whose `sew` binary has this sha256 on `arch` (any pinned
@@ -1117,6 +1173,10 @@ mod tests {
             (
                 "sew-media-0.0.2-x86_64-unknown-linux-gnu.tar.gz",
                 TEST_RELEASES[1].media.as_ref().unwrap().artifacts[0].tarball_sha256,
+            ),
+            (
+                "sew-media-0.0.1-x86_64-unknown-linux-gnu.tar.gz",
+                TEST_RELEASES[0].media.as_ref().unwrap().artifacts[0].tarball_sha256,
             ),
         ] {
             let b = std::fs::read(dir.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));

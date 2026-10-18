@@ -49,6 +49,9 @@
 #                      root:root 0755, its sudoers file 0440, daemon.toml
 #                      0644, and `visudo -c` must pass. The step never
 #                      enables mail, touches DNS, or edits other sudoers.
+#   K2_MAIL_DOMAIN     optional customer agents domain → step 9c sets up
+#                      hosted mail (K2_MAIL_HOSTNAME, K2_MAIL_SKIP=1,
+#                      K2_PROVIDER). Never fails provisioning.
 #   FRP_VERSION        frpc version (default 0.61.1 — MUST match the relay)
 #
 # Idempotent: re-running converges; existing users/units are updated,
@@ -568,6 +571,98 @@ if [ -n "${K2_OPS_USER:-}" ]; then
 		|| die "ops set-role owner failed"
 fi
 
+# ── 9c. hosted mail on the customer's domain (optional) ─────────────
+# PRD prd-hostmail-on-by-default-v1 (0.45.7). Runs only in the
+# per-customer setup (never --bake: that exits above) and only when
+# K2_MAIL_DOMAIN is set: no domain = no mail. The daemon's resumable
+# `k2 hostmail setup` does the work (zone bind, records, cert, PTR,
+# first mailbox) and calls k2.dev back by itself when a wait clears
+# later (NS flip, first agent workspace). Mail NEVER fails provisioning:
+# every path below ends in a logged phase, never `die`.
+#   K2_MAIL_DOMAIN    the customer's agents domain (e.g. agents.client.com)
+#   K2_MAIL_HOSTNAME  optional; the daemon defaults to mail.<domain>
+#   K2_MAIL_SKIP=1    kill switch
+#   K2_PROVIDER       ovh|hetzner|… from the control plane (Hetzner has no
+#                     PTR route and no mail by default → skipped)
+# The control plane only sets K2_MAIL_DOMAIN for a customer account (it
+# refuses internal/pool accounts); this step also requires the
+# customer's tunnel token, so a pool bootstrap can never bind a zone.
+MAIL_JSON=""
+MAIL_LINE="off (no mail domain)"
+if [ "${K2_MAIL_SKIP:-}" = "1" ]; then
+	MAIL_LINE="skipped (K2_MAIL_SKIP=1)"
+elif [ -z "${K2_MAIL_DOMAIN:-}" ]; then
+	:
+elif [ -z "${K2_TUNNEL_TOKEN:-}" ]; then
+	MAIL_LINE="skipped (no customer tunnel token: per-customer setup only)"
+elif [ "$(printf '%s' "${K2_PROVIDER:-}" | tr 'A-Z' 'a-z')" = "hetzner" ] \
+	|| curl -fsS -m 2 http://169.254.169.254/hetzner/v1/metadata/instance-id >/dev/null 2>&1; then
+	MAIL_LINE="skipped (Hetzner: no mail by default)"
+else
+	log "mail: setting up ${K2_MAIL_DOMAIN} (never fails provisioning)"
+	export K2_MAIL_DOMAIN K2_MAIL_HOSTNAME="${K2_MAIL_HOSTNAME:-}" MAIL_BASE="$BASE" MAIL_TOKEN="$TOKEN"
+	export MAIL_POLL_S="${K2_MAIL_POLL_S:-5}" MAIL_WAIT_S="${K2_MAIL_WAIT_S:-900}"
+	# Python, not curl: the owner token stays off every argv. Prints one
+	# JSON line: the callback's `mail` block.
+	MAIL_JSON="$(python3 - <<'PY' 2>/dev/null || true
+import json, os, re, time, urllib.request, urllib.error
+dom = os.environ["K2_MAIL_DOMAIN"].strip().lower().rstrip(".")
+host = os.environ.get("K2_MAIL_HOSTNAME", "").strip().lower().rstrip(".")
+base, tok = os.environ["MAIL_BASE"], os.environ["MAIL_TOKEN"]
+out = {"domain": dom, "hostname": host or ("mail." + dom), "phase": "error", "setupId": None, "lastError": None}
+NAME = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+def k2dev(n): return n == "k2.dev" or n.endswith(".k2.dev")
+def call(method, body=None):
+    req = urllib.request.Request(f"{base}/cli/mail/setup?token={tok}", method=method,
+                                 data=None if body is None else json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try: return e.code, json.loads(e.read() or b"{}")
+        except Exception: return e.code, {}
+def err(code, msg): out["lastError"] = {"code": code, "message": msg[:300]}
+try:
+    if not NAME.match(dom) or k2dev(dom) or (host and (not NAME.match(host) or k2dev(host))):
+        err("invalid_domain", "mail domain/hostname must be the customer's own domain, never k2.dev")
+    else:
+        body = {"domain": dom, "portPlan": "auto"}
+        if host: body["hostname"] = host
+        code, res = call("POST", body)
+        if code == 404:
+            out["phase"] = "unsupported"
+            err("daemon_no_mail_setup", "this daemon has no /cli/mail/setup (needs 0.45.7+)")
+        elif code >= 300 or not res.get("ok"):
+            le = res.get("lastError") or res.get("error") or {}
+            err(le.get("code", f"http_{code}") if isinstance(le, dict) else f"http_{code}",
+                le.get("message", str(le)) if isinstance(le, dict) else str(le))
+        else:
+            out["setupId"], out["phase"] = res.get("setupId"), res.get("phase", "started")
+            TERMINAL = {"done", "waiting_delegation", "waiting_workspace", "waiting_ptr_provider", "error"}
+            end = time.time() + int(os.environ["MAIL_WAIT_S"])
+            while out["phase"] not in TERMINAL and time.time() < end:
+                time.sleep(int(os.environ["MAIL_POLL_S"]))
+                code, st = call("GET")
+                if code == 200 and st.get("phase"):
+                    out["phase"] = st["phase"]
+                    out["lastError"] = st.get("lastError")
+                    out["hostname"] = st.get("hostname") or out["hostname"]
+            if out["phase"] not in TERMINAL:
+                out["timedOut"] = True  # still running in the daemon; it calls k2.dev back itself
+except Exception as e:
+    err("provision_exception", f"{type(e).__name__}: {e}")
+print(json.dumps(out))
+PY
+)"
+	if [ -z "$MAIL_JSON" ]; then
+		MAIL_JSON="$(python3 -c 'import json,os;print(json.dumps({"domain":os.environ["K2_MAIL_DOMAIN"],"phase":"error","lastError":{"code":"provision_exception","message":"mail step crashed"}}))')"
+	fi
+	MAIL_LINE="$(printf '%s' "$MAIL_JSON" | python3 -c 'import json,sys;m=json.load(sys.stdin);e=m.get("lastError") or {};print(m["domain"]+": "+m["phase"]+(" (still running in the daemon)" if m.get("timedOut") else "")+((" — "+str(e.get("code"))) if e else ""))' 2>/dev/null || echo "error")"
+	log "mail: ${MAIL_LINE}"
+fi
+export MAIL_JSON
+
 # ── 10. control-plane callback ───────────────────────────────────────
 if [ -n "${K2_CALLBACK_URL:-}" ]; then
 	log "posting provisioning callback"
@@ -578,6 +673,7 @@ if [ -n "${K2_CALLBACK_URL:-}" ]; then
 		"ownerUser":os.environ.get("K2_OWNER_USER",""),
 		"opsUser":os.environ.get("K2_OPS_USER",""),
 		"opsPassword":os.environ.get("CB_OPS_PASSWORD",""),
+		**({"mail":json.loads(os.environ["MAIL_JSON"])} if os.environ.get("MAIL_JSON") else {}),
 	}))')
 	curl -fsS -X POST "$K2_CALLBACK_URL" \
 		${K2_CALLBACK_TOKEN:+-H "Authorization: Bearer $K2_CALLBACK_TOKEN"} \
@@ -596,6 +692,7 @@ if [ -n "${K2_OWNER_USER:-}" ]; then
 	fi
 fi
 echo "  mail:      helper ${MAIL_HELPER_LINE}"
+echo "  mail:      ${MAIL_LINE}"
 echo "  sandboxes: OFF (Standard-tier host — the Dedicated bootstrap adds them)"
 if [ -z "${K2_TUNNEL_TOKEN:-}" ] || [ -z "${K2_OWNER_USER:-}" ]; then
 echo ""

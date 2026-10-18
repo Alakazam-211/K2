@@ -36,6 +36,7 @@
 # Environment contract — passed through to provision-k2-server.sh (Standard):
 #   K2_TUNNEL_TOKEN K2_SUBDOMAIN K2_OWNER_USER K2_OWNER_PASSWORD K2_OPS_USER
 #   K2_CALLBACK_URL K2_CALLBACK_TOKEN K2_VERSION
+#   K2_MAIL_DOMAIN K2_MAIL_HOSTNAME K2_MAIL_SKIP K2_PROVIDER (step 9c, optional)
 #   K2_RUN_USER            daemon service account              (default: k2)
 #   K2_UNIT_NAME           systemd unit name                   (default: k2-daemon)
 #

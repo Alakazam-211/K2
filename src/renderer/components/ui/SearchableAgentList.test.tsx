@@ -25,6 +25,7 @@ vi.mock('@/lib/daemon-cli', () => ({
 import {
   SearchableAgentList,
   matchesAgentRow,
+  tokenAndMatch,
   pickableAgentValues,
   visibleAgentSections,
   type AgentListRow,
@@ -208,5 +209,55 @@ describe('SearchableAgentList (T2.2)', () => {
     )
     expect(screen.getByTestId('glyph')).toBeTruthy()
     expect(cli.daemonCliGet).not.toHaveBeenCalled()
+  })
+})
+
+describe('SearchableAgentList: the Connections picker additions (0.46.1)', () => {
+  it('tokenAndMatch needs every token somewhere, in any order, ignoring case', () => {
+    const r = row('cortana', 'pickable', { label: 'Cortana', keywords: ['cortana', 'RPM', 'rpm.k2.dev'] })
+    expect(tokenAndMatch(r, '')).toBe(true)
+    expect(tokenAndMatch(r, 'rpm cort')).toBe(true)
+    expect(tokenAndMatch(r, '  CORT   rpm.K2 ')).toBe(true)
+    expect(tokenAndMatch(r, 'rpm argus')).toBe(false)
+    // The old whole-string match would miss a two-word query across fields.
+    expect(matchesAgentRow(r, 'rpm cort')).toBe(false)
+  })
+
+  it('a dim section greys its header and rows but not its status; sub and headerExtra sit in the header', () => {
+    render(
+      <Harness
+        sections={[
+          {
+            key: 'off',
+            label: 'Old laptop',
+            sub: '192.168.1.50:38471',
+            headerExtra: <span data-testid="extra">re-pair</span>,
+            dim: true,
+            status: <p data-testid="status">Offline</p>,
+            rows: [row('x')],
+          },
+          { key: 'on', label: 'RPM', rows: [row('y')] },
+        ]}
+      />,
+    )
+    const off = document.querySelector('[data-agent-list-section="off"]') as HTMLElement
+    expect(off.hasAttribute('data-dim')).toBe(true)
+    expect(within(off).getByText('· 192.168.1.50:38471')).toBeTruthy()
+    expect(within(off).getByTestId('extra')).toBeTruthy()
+    expect((off.firstElementChild as HTMLElement).className).toContain('opacity-50')
+    expect(within(off).getByRole('option').className).toContain('opacity-50')
+    expect(within(off).getByTestId('status').closest('.opacity-50')).toBeNull()
+    const on = document.querySelector('[data-agent-list-section="on"]') as HTMLElement
+    expect(on.hasAttribute('data-dim')).toBe(false)
+    expect(within(on).getByRole('option').className).not.toContain('opacity-50')
+  })
+
+  it('row washes are theme tokens, not white, so they show on light palettes', () => {
+    render(<Harness />)
+    fireEvent.keyDown(search(), { key: 'ArrowDown' })
+    const options = screen.getAllByRole('option')
+    expect(options[0].className).toContain('bg-[var(--color-wash-2)]')
+    expect(options[2].className).toContain('hover:bg-[var(--color-wash-1)]')
+    for (const o of options) expect(o.className).not.toContain('white/')
   })
 })

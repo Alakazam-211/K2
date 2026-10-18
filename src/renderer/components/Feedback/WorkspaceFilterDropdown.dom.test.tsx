@@ -269,7 +269,7 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
     // All (plain), Unlinked, Projects (keyboard row), selected workspace,
     // and a plain workspace with the letter.
     expect(classTree(rowFor('all'))).toMatchInlineSnapshot(`
-      "button .flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]
+      "button .flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]
         span .flex-shrink-0 w-5 h-5 flex items-center justify-center border border-[var(--color-border)] text-[var(--color-text-muted)]
           svg .
             rect .
@@ -279,12 +279,12 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
         span .text-xs truncate flex-1"
     `)
     expect(classTree(rowFor(UNLINKED_FILTER_VALUE))).toMatchInlineSnapshot(`
-      "button .flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]
+      "button .flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]
         span .flex-shrink-0 w-5 h-5 flex items-center justify-center border border-dashed border-[var(--color-border)] text-[var(--color-text-muted)]
         span .text-xs truncate flex-1 italic"
     `)
     expect(classTree(rowFor('project:pg1'))).toMatchInlineSnapshot(`
-      "button .flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left bg-white/[0.06] text-[var(--color-text-primary)]
+      "button .flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left bg-[var(--color-wash-2)] text-[var(--color-text-primary)]
         span .flex-shrink-0 flex items-center justify-center border border-[var(--color-accent)]/40 text-[var(--color-accent)] {width: 20px; height: 20px;}
           svg .
             polygon .
@@ -300,7 +300,7 @@ describe('Tickets "All workspaces" dropdown — DOM (T2.1)', () => {
         span .text-xs truncate flex-1"
     `)
     expect(classTree(rowFor('w-beta'))).toMatchInlineSnapshot(`
-      "button .flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]
+      "button .flex items-center gap-2 px-2 py-1.5 cursor-pointer transition-colors w-full text-left text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]
         span .flex-shrink-0 {width: 20px; height: 20px;}
           span .flex items-center justify-center {width: 20px; height: 20px; background-color: rgb(97, 175, 239); color: var(--color-on-accent); font-size: 10px; font-weight: 700; line-height: 1; font-family: inherit; display: flex;}
         span .text-xs truncate flex-1"

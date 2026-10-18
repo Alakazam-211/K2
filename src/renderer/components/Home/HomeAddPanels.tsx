@@ -44,10 +44,11 @@ import { hostDisplayAddress } from '@/components/TopBar/ServerSwitcher'
 import { groupWorkspacesForFilter } from '@/components/Feedback/WorkspaceFilterDropdown'
 import {
   SearchableAgentList,
-  matchesAgentRow,
+  tokenAndMatch,
   type AgentListRow,
   type AgentListSection,
 } from '@/components/ui/SearchableAgentList'
+import { AgentListStatus, agentListStatusClass } from '@/components/ui/AgentListStatus'
 import { isWebClient } from '@/lib/is-web'
 import { addWorkspaceToHome, type ListedWorkspace } from '@/lib/add-to-home'
 
@@ -108,12 +109,10 @@ function pickerRow(
 const panelClass =
   'absolute bottom-full left-3 right-3 z-50 mb-0.5 max-h-[60vh] flex flex-col bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl py-0.5'
 const itemClass =
-  'no-drag w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors cursor-pointer text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
+  'no-drag w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors cursor-pointer text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]'
 const headClass = 'px-3 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]'
 const listClass = 'flex-1 min-h-0 overflow-y-auto py-1'
-const statusClass = 'px-2 py-1.5 text-[11px] text-[var(--color-text-muted)]'
-const statusButtonClass =
-  'no-drag px-2 py-0.5 text-[11px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.06] cursor-pointer flex-shrink-0'
+const statusClass = agentListStatusClass
 
 export function connectedServerLabel(active: 'local' | ConnectHost): string {
   return active === 'local' ? 'This computer' : active.label
@@ -191,7 +190,7 @@ function ThisServerList({
         query={query}
         onQuery={setQuery}
         onPick={onPick}
-        matches={matchesAgentRow}
+        matches={tokenAndMatch}
         placeholder="Search agents..."
         emptyText={query.trim() ? 'No agents match' : 'No agents on this server'}
         ariaLabel={`Agents on ${connectedServerLabel(activeHost)}`}
@@ -319,45 +318,32 @@ function SectionStatus({
 }): React.JSX.Element | null {
   switch (listing.kind) {
     case 'loading':
-      return <p className={statusClass}>Loading agents…</p>
+      return <AgentListStatus text="Loading agents…" />
     case 'signin':
       return (
-        <div className="flex items-center gap-2 px-2 py-1.5" data-listing="signin">
-          <p className="flex-1 text-[11px] text-[var(--color-text-secondary)]">Sign in to {label} to list its agents.</p>
-          <button
-            type="button"
-            className="no-drag px-2 py-0.5 text-[11px] bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:opacity-90 cursor-pointer flex-shrink-0"
-            onClick={() => useConnectHostStore.getState().signInForManagement(listing.host)}
-          >
-            Sign in
-          </button>
-        </div>
+        <AgentListStatus
+          marker="signin"
+          tone="secondary"
+          text={`Sign in to ${label} to list its agents.`}
+          action={{
+            label: 'Sign in',
+            primary: true,
+            onClick: () => useConnectHostStore.getState().signInForManagement(listing.host),
+          }}
+        />
       )
     case 'offline':
-      return (
-        <div className="flex items-center gap-2 px-2 py-1.5" data-listing="offline">
-          <p className="flex-1 text-[11px] text-[var(--color-text-muted)]">Offline</p>
-          <button type="button" className={statusButtonClass} onClick={onRetry}>
-            Retry
-          </button>
-        </div>
-      )
+      return <AgentListStatus marker="offline" text="Offline" action={{ label: 'Retry', onClick: onRetry }} />
     case 'no-access':
-      return (
-        <p className={statusClass} data-listing="no-access">
-          Your login can’t list agents here
-        </p>
-      )
+      return <AgentListStatus marker="no-access" text="Your login can’t list agents here" />
     case 'error':
       return (
-        <div className="flex items-center gap-2 px-2 py-1.5" data-listing="error">
-          <p className="flex-1 min-w-0 break-words text-[11px] text-[var(--color-status-error-soft)]">
-            Couldn’t list agents: {listing.message}
-          </p>
-          <button type="button" className={statusButtonClass} onClick={onRetry}>
-            Retry
-          </button>
-        </div>
+        <AgentListStatus
+          marker="error"
+          tone="error"
+          text={`Couldn’t list agents: ${listing.message}`}
+          action={{ label: 'Retry', onClick: onRetry }}
+        />
       )
     case 'ok':
       return null
@@ -552,7 +538,7 @@ function FromServerList({
           query={query}
           onQuery={setQuery}
           onPick={onPick}
-          matches={matchesAgentRow}
+          matches={tokenAndMatch}
           placeholder="Search agents on saved servers..."
           emptyText="No agents match"
           ariaLabel="Agents on saved servers"

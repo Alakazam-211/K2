@@ -38,9 +38,20 @@ use std::path::Path;
 /// by podman-static v5.8.8, released 2026-09-30). The 5.x line: the
 /// engine was proven on 5.4 (Debian 13); Podman 6 is not adopted yet.
 pub const BUNDLE_VERSION: &str = "5.8.8";
-/// Where the tarballs come from (the release's own download path).
-pub const BUNDLE_URL_BASE: &str =
-    "https://github.com/mgoltzsche/podman-static/releases/download";
+/// K2's own download mirror (Rosson, 2026-10-17: "our own mirror from the
+/// start"): pinned, checksummed and signed copies of every third-party
+/// binary K2 installs, with the source tarballs for the GPL parts beside
+/// them. The **one** place the base lives; nothing downloads from
+/// upstream. The bytes are upstream's (the sha256 pins below are the trust
+/// root, checked by the daemon and again by the signed root helper), so a
+/// mirror outage can't change what installs, only whether it can.
+/// Air-gapped boxes skip it: `k2 app box prepare --podman-from <folder>`.
+pub const MIRROR_BASE: &str = "https://mirror.k2.dev";
+/// The bundle's folder on the mirror: `<MIRROR_BASE>/podman/v<version>/`.
+pub const MIRROR_PODMAN_DIR: &str = "podman";
+/// Where the tarballs were taken from (upstream's release; for docs, the
+/// doctor and the mirror's own refresh, never downloaded by K2).
+pub const UPSTREAM_URL_BASE: &str = "https://github.com/mgoltzsche/podman-static/releases/download";
 /// The upstream project (for docs and the doctor).
 pub const BUNDLE_SOURCE: &str = "mgoltzsche/podman-static";
 
@@ -97,10 +108,71 @@ pub fn artifact_for_arch(arch: &str) -> Result<&'static PodmanArtifact, String> 
     Ok(a)
 }
 
-/// The download URL for a pinned tarball (`v<version>/<asset>`).
+/// The download URL for a pinned tarball: K2's mirror
+/// (`<MIRROR_BASE>/podman/v<version>/<asset>`).
 pub fn download_url(a: &PodmanArtifact) -> String {
-    format!("{BUNDLE_URL_BASE}/v{BUNDLE_VERSION}/{}", a.asset)
+    mirror_url(&format!("{MIRROR_PODMAN_DIR}/v{BUNDLE_VERSION}/{}", a.asset))
 }
+
+/// A file on K2's mirror.
+pub fn mirror_url(rel: &str) -> String {
+    format!("{MIRROR_BASE}/{}", rel.trim_start_matches('/'))
+}
+
+/// Where the mirror copied a tarball from (upstream's release asset).
+pub fn upstream_url(a: &PodmanArtifact) -> String {
+    format!("{UPSTREAM_URL_BASE}/v{BUNDLE_VERSION}/{}", a.asset)
+}
+
+/// Every file the mirror must hold for this bundle, relative to
+/// [`MIRROR_BASE`]: per arch the tarball, its `.sha256` and its K2
+/// `.minisig` (the release key, trusted comment naming the file), then
+/// `SHA256SUMS`, upstream's signature over the release, and the sources of
+/// the GPL/LGPL parts K2 ships out of the tarball ([`GPL_SOURCES`]).
+pub fn mirror_assets() -> Vec<String> {
+    let dir = format!("{MIRROR_PODMAN_DIR}/v{BUNDLE_VERSION}");
+    let mut v = Vec::new();
+    for a in BUNDLE {
+        v.push(format!("{dir}/{}", a.asset));
+        v.push(format!("{dir}/{}.sha256", a.asset));
+        v.push(format!("{dir}/{}.minisig", a.asset));
+    }
+    v.push(format!("{dir}/SHA256SUMS"));
+    v.push(format!("{dir}/UPSTREAM-SIGNATURES.asc"));
+    for s in GPL_SOURCES {
+        v.push(format!("{dir}/sources/{}", s.tarball));
+    }
+    v
+}
+
+/// A copyleft component inside the bundle that K2 installs (passt/pasta,
+/// crun, catatonit, and the static libraries linked into them): its
+/// licence and the source tarball the mirror keeps beside the binaries
+/// (GPL §3 / LGPL §6: the source from the same place as the object code).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GplSource {
+    pub component: &'static str,
+    pub licence: &'static str,
+    pub tarball: &'static str,
+}
+
+/// The copyleft parts of the members K2 takes ([`MEMBERS`]): pasta (passt,
+/// GPL-2.0-or-later), crun (GPL-2.0-or-later; libcrun LGPL-2.1-or-later),
+/// catatonit (GPL-2.0-or-later), libseccomp (LGPL-2.1, linked statically
+/// into crun and podman), and podman-static's own build recipe at the tag
+/// (how the static binaries were made). Versions are the ones in the
+/// pinned tarball, read from each binary's `--version` on 2026-10-17
+/// (podman 5.8.8, crun 1.28, pasta 2026_06_11.a9c61ff, catatonit 0.2.1,
+/// conmon 2.2.1, netavark 1.17.2, aardvark-dns 1.17.1; static, musl).
+/// libseccomp's version is the Alpine package podman-static's recipe
+/// pinned at the tag: the mirror records it in the file's name.
+pub const GPL_SOURCES: &[GplSource] = &[
+    GplSource { component: "passt (pasta)", licence: "GPL-2.0-or-later", tarball: "passt-2026_06_11.a9c61ff.tar.xz" },
+    GplSource { component: "crun", licence: "GPL-2.0-or-later (libcrun LGPL-2.1-or-later)", tarball: "crun-1.28.tar.gz" },
+    GplSource { component: "catatonit", licence: "GPL-2.0-or-later", tarball: "catatonit-0.2.1.tar.gz" },
+    GplSource { component: "libseccomp", licence: "LGPL-2.1-only", tarball: "libseccomp-source.tar.gz" },
+    GplSource { component: "podman-static build recipe", licence: "Apache-2.0", tarball: "podman-static-v5.8.8-source.tar.gz" },
+];
 
 /// Largest tarball the helper takes on stdin.
 pub const CAP_BUNDLE: usize = 128 * 1024 * 1024;
@@ -353,13 +425,16 @@ mod tests {
             let a = artifact_for_arch(arch).expect("pinned");
             assert!(!checksum_is_placeholder(a), "{arch}");
             assert!(a.asset.starts_with(a.top), "{arch}");
-            assert!(download_url(a).starts_with(
-                "https://github.com/mgoltzsche/podman-static/releases/download/v5.8.8/podman-linux-"
-            ));
+            // Rosson 2026-10-17: K2's own mirror, never upstream.
+            assert!(download_url(a).starts_with("https://mirror.k2.dev/podman/v5.8.8/podman-linux-"), "{}", download_url(a));
+            assert!(!download_url(a).contains("github.com"));
+            assert!(upstream_url(a).starts_with("https://github.com/mgoltzsche/podman-static/releases/download/v5.8.8/podman-linux-"));
             assert!(a.size > 1_000_000 && (a.size as usize) < CAP_BUNDLE, "{arch}");
         }
         assert!(artifact_for_arch("riscv64").is_err());
-        assert!(!BUNDLE_URL_BASE.contains("latest"), "never latest");
+        assert!(!MIRROR_BASE.contains("latest") && !UPSTREAM_URL_BASE.contains("latest"), "never latest");
+        assert!(MIRROR_BASE.starts_with("https://") && !MIRROR_BASE.ends_with('/'));
+        assert_eq!(mirror_url("/x/y"), "https://mirror.k2.dev/x/y");
         for bad in [
             "TODO",
             "e0e12f9de61bdb054d19a77df0e84ddd51cadfee13688e0fb607d61b6833e8c",
@@ -368,6 +443,40 @@ mod tests {
         ] {
             let a = PodmanArtifact { arch: "x86_64", asset: "a", top: "a", sha256: bad, size: 1 };
             assert!(checksum_is_placeholder(&a), "{bad}");
+        }
+    }
+
+    /// What K2's mirror must hold for the bundle (the list the mirror
+    /// host is set up from).
+    #[test]
+    fn the_mirror_holds_binaries_checksums_signatures_and_gpl_sources() {
+        let a = mirror_assets();
+        for want in [
+            "podman/v5.8.8/podman-linux-amd64.tar.gz",
+            "podman/v5.8.8/podman-linux-amd64.tar.gz.sha256",
+            "podman/v5.8.8/podman-linux-amd64.tar.gz.minisig",
+            "podman/v5.8.8/podman-linux-arm64.tar.gz",
+            "podman/v5.8.8/podman-linux-arm64.tar.gz.sha256",
+            "podman/v5.8.8/podman-linux-arm64.tar.gz.minisig",
+            "podman/v5.8.8/SHA256SUMS",
+            "podman/v5.8.8/UPSTREAM-SIGNATURES.asc",
+            "podman/v5.8.8/sources/passt-2026_06_11.a9c61ff.tar.xz",
+            "podman/v5.8.8/sources/crun-1.28.tar.gz",
+            "podman/v5.8.8/sources/catatonit-0.2.1.tar.gz",
+            "podman/v5.8.8/sources/libseccomp-source.tar.gz",
+            "podman/v5.8.8/sources/podman-static-v5.8.8-source.tar.gz",
+        ] {
+            assert!(a.iter().any(|x| x == want), "missing {want}: {a:?}");
+        }
+        assert_eq!(a.len(), 2 * 3 + 2 + GPL_SOURCES.len());
+        // Every binary K2 takes that is copyleft has its source listed.
+        for m in MEMBERS {
+            let name = m.dest.rsplit('/').next().unwrap();
+            let copyleft = matches!(name, "pasta" | "pasta.avx2" | "crun" | "catatonit");
+            if copyleft {
+                let comp = if name.starts_with("pasta") { "passt" } else { name };
+                assert!(GPL_SOURCES.iter().any(|s| s.component.starts_with(comp)), "{name} needs its source on the mirror");
+            }
         }
     }
 

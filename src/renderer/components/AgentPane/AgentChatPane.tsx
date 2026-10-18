@@ -333,6 +333,8 @@ function ChatHeader({
         onChange={onViewTabChange}
         onSplitLeft={onSplitLeft}
         onSplitRight={onSplitRight}
+        threadConversationId={currentSessionId}
+        threadScope={room.scope}
       />
       </div>
       <span className="pt-2 pb-[7px] text-xs font-semibold text-[var(--color-text-primary)] truncate min-w-0 flex items-center justify-center text-center">

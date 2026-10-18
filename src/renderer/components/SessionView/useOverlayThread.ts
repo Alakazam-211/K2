@@ -46,6 +46,10 @@
 //      the window is visible and focused, every 30 s, and `false` on blur,
 //      hide or unmount (`threadViewing.ts`). Only to servers reporting
 //      `thread-push-v1`.
+//   8. Read while looking (thread-read-v1, 0.46.1): under the same rule
+//      (`viewing`, the window visible and focused), the newest seq this
+//      view holds past the person's read cursor is posted as read
+//      (`useAutoMarkRead`, `stores/unread.ts`). Window's server only.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -73,6 +77,7 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 import { openQueuedWebSocket } from '@/lib/grid-dial-queue'
 import { createViewingSender, windowIsLookedAt, type ViewingSender } from './threadViewing'
+import { useAutoMarkRead } from '@/stores/unread'
 import {
   isThreadAddressMiss,
   publishThreadAddress,
@@ -679,6 +684,15 @@ export function useOverlayThread(opts: {
     },
     [scope, addr],
   )
+
+  // §8: read while looking (thread-read-v1). An effect, never render.
+  useAutoMarkRead({
+    kind: 'thread',
+    id: resolvedConv || conversationId,
+    newestSeq: newestSeq(items),
+    visible: viewing && enabled,
+    scope,
+  })
 
   return {
     items,

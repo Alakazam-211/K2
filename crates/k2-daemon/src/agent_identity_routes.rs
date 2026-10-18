@@ -46,8 +46,10 @@
 //!   is one 403 `not_your_agent`, no oracle) and for **color and picture
 //!   only**: a name (or handle) is 403 `agent_cannot_rename`. Same checks,
 //!   same writes, same `agent_identity_changed` event; audit actor
-//!   `agent:<workspace>/<session>`. Sandboxed (microVM) sessions, API cells
-//!   and passports this daemon did not mint are refused. A K2 shell tab's
+//!   `agent:<workspace>/<session>`. Sandboxed (microVM) sessions, API cells,
+//!   passports this daemon did not mint, and passports that arrive from off
+//!   this machine (LAN, tunnel, App link, a local proxy) are refused (403
+//!   `remote_passport`; the cell socket is local by nature). A K2 shell tab's
 //!   passport is a person (noun tiers NT5): owner rules, actor
 //!   `shell:<workspace>/<session>`.
 
@@ -156,6 +158,15 @@ pub fn agent_cannot_rename() -> CliResponse {
     forbidden(
         "agent_cannot_rename",
         "agents can't rename themselves; ask your owner (k2 agent identity --name, from their terminal or Settings)",
+    )
+}
+
+/// A passport that did not arrive from this machine (LAN, tunnel, App
+/// link): never an agent of this server acting on itself.
+pub fn remote_passport() -> CliResponse {
+    forbidden(
+        "remote_passport",
+        "an agent passport works only from its own session on this server",
     )
 }
 

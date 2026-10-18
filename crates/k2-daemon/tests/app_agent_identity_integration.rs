@@ -48,17 +48,22 @@ impl Resp {
 }
 
 fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Resp {
+    http_h(port, method, path_and_query, "", body)
+}
+
+/// [`http`] with extra header lines (each ending in `\r\n`).
+fn http_h(port: u16, method: &str, path_and_query: &str, extra: &str, body: Option<&str>) -> Resp {
     let mut stream = StdTcpStream::connect(("127.0.0.1", port)).expect("connect");
     stream
         .set_read_timeout(Some(Duration::from_secs(20)))
         .expect("read timeout");
     let req = match body {
         Some(b) => format!(
-            "{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}",
+            "{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}",
             b.len()
         ),
         None => format!(
-            "{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+            "{method} {path_and_query} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra}Connection: close\r\n\r\n"
         ),
     };
     stream.write_all(req.as_bytes()).expect("write");
@@ -735,6 +740,15 @@ async fn agent_passport_sets_own_color_and_picture_only() {
             serde_json::json!({"color": "#222222"}),
         );
         assert_eq!(r.status, 403, "foreign passport; {}", r.body);
+        // A passport relayed through a proxy is not from this machine.
+        let r = http_h(
+            port,
+            "POST",
+            &format!("/cli/agent/identity?token={pa}"),
+            "X-Forwarded-For: 203.0.113.9\r\n",
+            Some(&serde_json::json!({"color": "#222222"}).to_string()),
+        );
+        assert_status(&r, 403, "remote_passport", "relayed passport");
         let api = mint_passport_as(&a, "api-cell-7");
         let r = agent_post(port, &api, serde_json::json!({"color": "#222222"}));
         assert_status(&r, 403, "wrong_credential", "api cell");

@@ -202,6 +202,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                         "ok": true,
                         "groupId": group_id,
                         "found": icon.is_some(),
+                        // 0.46.1: the same key list/show carry, so the
+                        // client caches the blob under it.
+                        "iconKey": icon.as_deref().map(project_groups::icon_key),
                         "dataUrl": icon,
                     })
                     .to_string(),
@@ -1016,6 +1019,9 @@ pub fn handle_set_icon(body: &[u8]) -> CliResponse {
                     "ok": true,
                     "groupId": group_id,
                     "found": b.data_url.is_some(),
+                    // 0.46.1: the new icon's cache key, so the uploader
+                    // caches what it just sent and never re-GETs it.
+                    "iconKey": b.data_url.as_deref().map(project_groups::icon_key),
                 })
                 .to_string(),
             )

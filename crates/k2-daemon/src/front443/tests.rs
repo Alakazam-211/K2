@@ -345,13 +345,25 @@ fn the_table_takes_only_loopback_backends_and_valid_names() {
     assert!(t.insert("turn-box.k2.dev", be(Kind::Turn, lo, true)).is_ok(), "the same route again is fine");
     assert_eq!(t.len(), 2);
 
-    // The persisted copy is re-validated: a doctored entry pointing off the
-    // box is dropped on load.
-    let mut text = serde_json::to_value(&t).unwrap();
-    text["hosts"]["evil.example"] = serde_json::json!({"kind": "caddy", "addr": "192.0.2.1:443", "proxy": false, "refuseLoopbackClients": false});
-    let back = super::routes::parse_persisted(&text.to_string()).unwrap();
-    assert_eq!(back, t);
-    assert!(super::routes::parse_persisted("not json").is_none());
+    // A handed-over table keeps only each kind's fixed backend: an entry
+    // pointing at any other loopback port (an agent's listener) or with a
+    // loosened loopback rule is dropped.
+    use super::routes::fixed_backend;
+    let mut handed = RouteTable::default();
+    handed.insert("turn-box.k2.dev", fixed_backend(Kind::Turn)).unwrap();
+    handed.insert("mail.acme.dev", fixed_backend(Kind::Stalwart)).unwrap();
+    handed.insert("skin.acme.dev", Backend { proxy: true, ..fixed_backend(Kind::Caddy) }).unwrap();
+    let mut evil = handed.clone();
+    evil.insert("agent.example", be(Kind::Caddy, "127.0.0.1:40000".parse().unwrap(), false)).unwrap();
+    evil.insert("mail2.acme.dev", Backend { refuse_loopback_clients: false, ..fixed_backend(Kind::Stalwart) }).unwrap();
+    evil.insert("turn2.k2.dev", Backend { proxy: false, ..fixed_backend(Kind::Turn) }).unwrap();
+    assert_eq!(evil.fixed_backends_only(), handed);
+    assert_eq!(fixed_backend(Kind::Turn).addr, super::TURN_BACKEND);
+    assert_eq!(fixed_backend(Kind::Stalwart).addr, super::STALWART_BACKEND);
+    assert!(fixed_backend(Kind::Stalwart).refuse_loopback_clients && fixed_backend(Kind::Stalwart).proxy);
+    // It travels in the hand-off message as JSON.
+    let back: RouteTable = serde_json::from_value(serde_json::to_value(&handed).unwrap()).unwrap();
+    assert_eq!(back, handed);
 }
 
 // ── the front on loopback ───────────────────────────────────────────────
@@ -369,8 +381,13 @@ impl Drop for Rig {
 }
 
 async fn rig(cap: usize, hello: Duration, table: RouteTable) -> Rig {
+    // Every test client is 127.0.0.1: no per-source budget unless a test asks.
+    rig_per_ip(cap, hello, u32::MAX, table).await
+}
+
+async fn rig_per_ip(cap: usize, hello: Duration, per_ip: u32, table: RouteTable) -> Rig {
     let table = Arc::new(table);
-    let front = Front::with_timeouts(cap, hello, Duration::from_secs(2), Box::new(move || Arc::clone(&table)));
+    let front = Front::with_limits(cap, hello, Duration::from_secs(2), per_ip, Box::new(move || Arc::clone(&table)));
     let l = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
     let addr = l.local_addr().unwrap();
     let task = tokio::spawn(accept_loop(l, Arc::clone(&front), tokio::runtime::Handle::current()));
@@ -615,4 +632,41 @@ async fn the_turn_route_probe_proves_the_front_reaches_the_backend() {
     let (front, addr) = (Arc::clone(&r.front), r.addr);
     let dead = tokio::task::spawn_blocking(move || super::probe_through(&front, addr, "turn-dead.k2.dev")).await.unwrap();
     assert!(dead.unwrap_err().contains("nothing answers"), "a dead backend is named");
+}
+
+/// One source address can't hold more than its ClientHello budget of
+/// connections that haven't finished their hello; a finished hello frees
+/// the slot (spliced connections don't count).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_source_cannot_hold_more_than_its_hello_budget() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let (be_addr, mut rx) = backend().await;
+    let mut t = RouteTable::default();
+    t.insert("turn-box.k2.dev", be(Kind::Turn, be_addr, true)).unwrap();
+    let r = rig_per_ip(16, Duration::from_secs(5), 2, t).await;
+    let hello = fixture("chrome-pq.bin");
+    let mut stalled = Vec::new();
+    for _ in 0..2 {
+        let mut c = TcpStream::connect(r.addr).await.unwrap();
+        c.write_all(&hello[..10]).await.unwrap();
+        stalled.push(c);
+    }
+    for _ in 0..50 {
+        if r.front.counters.accepted.load(Relaxed) == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let mut third = TcpStream::connect(r.addr).await.unwrap();
+    let _ = third.write_all(&hello).await;
+    assert!(drain(&mut third).await.is_empty(), "over the per-source hello budget: closed");
+    assert_eq!(r.front.counters.per_ip_refused.load(Relaxed), 1);
+    // Finishing a stalled hello frees its slot; the spliced connection
+    // stays up and the next client gets through.
+    stalled[0].write_all(&hello[10..]).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap();
+    let mut fourth = TcpStream::connect(r.addr).await.unwrap();
+    fourth.write_all(&hello).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.expect("a freed slot is usable").unwrap();
+    assert_eq!(r.front.counters.per_ip_refused.load(Relaxed), 1);
 }

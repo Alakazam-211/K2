@@ -224,3 +224,31 @@ fn argv_beyond_the_verb_is_refused_before_anything_runs() {
     assert!(t.non_query_calls().is_empty());
     assert!(!t.p(SOCKET).exists());
 }
+
+#[test]
+fn another_daemons_leftover_drop_in_blocks_install() {
+    let t = box_root();
+    let toml = "[[daemon]]\nuser = \"k2\"\nunit = \"k2-daemon.service\"\nscope = \"system\"\n\
+                [[daemon]]\nuser = \"k2b\"\nunit = \"k2-daemon-b.service\"\nscope = \"system\"\n";
+    std::fs::write(t.p(DAEMON_TOML), toml).unwrap();
+    std::fs::create_dir_all(t.p("/etc/systemd/system/k2-daemon-b.service.d")).unwrap();
+    std::fs::write(t.p("/etc/systemd/system/k2-daemon-b.service.d/k2-front.conf"), k2_root_proto::templates::front_dropin()).unwrap();
+    let o = t.call(&["front", "install"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains("another K2 daemon"), "{}", o.stderr);
+    assert!(!t.p(SOCKET).exists() && !t.p(DROPIN).exists());
+}
+
+#[test]
+fn a_failed_reload_takes_the_new_files_back_out() {
+    let t = box_root();
+    t.exec.0.borrow_mut().rules.push((
+        SYSTEMCTL.into(),
+        "daemon-reload".into(),
+        crate::ctx::ExecOut { status: 1, stdout: vec![], stderr: b"Failed to reload daemon".to_vec() },
+    ));
+    let o = t.call(&["front", "install"]);
+    assert_ne!(o.code, exit::OK);
+    assert!(!t.p(SOCKET).exists() && !t.p(DROPIN).exists(), "nothing left half-installed");
+    assert_eq!(count(&t, "start k2-front-443.socket"), 0);
+}

@@ -21,7 +21,7 @@
 //!   Caddy on 127.0.0.1:38473 (PROXY v2 only on Caddy ≥ 2.7);
 //! - opt-in, the mail host and its extra names → Stalwart's HTTPS on
 //!   127.0.0.1:8443 with `overrideProxyTrustedNetworks` (PROXY v2; loopback
-//!   clients refused so a ban can never land on 127.0.0.1).
+//!   clients refused, so no failed login through the front lands on 127.0.0.1).
 //!
 //! Owner surface: `GET /cli/front/status`, `POST /cli/front/enable`
 //! (`{"mail": bool}`), `POST /cli/front/disable`; CLI `k2 front …`.
@@ -101,9 +101,10 @@ pub async fn start() {
     };
     crate::handoff::register(crate::handoff::Role::Front443, &l);
     let local = l.local_addr().ok();
-    // Route from the first connection with the last table built (a
-    // hand-off successor boots this before its DB is open).
-    if let Some(t) = routes::load_persisted() {
+    // A hand-off successor routes from its first connection with the
+    // table its predecessor passed (fixed backends only); a cold start
+    // routes once its own state is up (the DB, a few seconds in).
+    if let Some(t) = routes::take_handed() {
         routes::install(t);
     }
     let front = server::Front::new(cap(), Box::new(routes::current));
@@ -113,7 +114,7 @@ pub async fn start() {
     // Routes now, then on a timer; converge voice onto the passthrough tier.
     tokio::spawn(async {
         // The live table needs the DB (hosted mail's names): wait for boot
-        // to open it, at most a minute; the persisted table serves meanwhile.
+        // to open it, at most a minute; a handed-over table serves meanwhile.
         for _ in 0..120 {
             if k2_core::db::try_shared().is_some() {
                 break;
@@ -171,13 +172,6 @@ pub fn rebuild() -> (Arc<RouteTable>, Vec<String>) {
         stalwart_routes(&cfg, &mut add);
         caddy_routes(&mut add);
     }
-    // Persisted only while the front is on (a box without it never gets
-    // the file).
-    if cfg.enabled {
-        if let Err(e) = routes::save_persisted(&t) {
-            warnings.push(format!("route table not persisted: {e}"));
-        }
-    }
     routes::install(t);
     (routes::current(), warnings)
 }
@@ -190,7 +184,7 @@ fn turn_routes(add: &mut Add) {
     let host = crate::sew::voice::front_route_host(&crate::sew::supervisor::live())
         .or_else(|| TURN_PENDING.lock().unwrap_or_else(|p| p.into_inner()).clone());
     if let Some(h) = host {
-        add(&h, Backend { kind: Kind::Turn, addr: TURN_BACKEND, proxy: true, refuse_loopback_clients: false });
+        add(&h, routes::fixed_backend(Kind::Turn));
     }
 }
 
@@ -309,7 +303,7 @@ fn voice_to_passthrough() -> Result<Value, Refusal> {
 fn stalwart_routes(cfg: &k2_core::front443::FrontConfig, add: &mut Add) {
     if cfg.mail_behind_front() {
         for h in mail_names() {
-            add(&h, Backend { kind: Kind::Stalwart, addr: STALWART_BACKEND, proxy: true, refuse_loopback_clients: true });
+            add(&h, routes::fixed_backend(Kind::Stalwart));
         }
     }
 }

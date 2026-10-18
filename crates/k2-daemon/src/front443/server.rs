@@ -13,9 +13,10 @@
 //! no-downtime restart: the old daemon drains them) and hold a splice
 //! guard for their whole life.
 
-use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -37,6 +38,10 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The front's cap bounds: [`k2_core::connection_cap`] of the fd budget.
 pub const CAP_FLOOR: usize = 256;
 pub const CAP_CEILING: usize = 16_384;
+/// Most connections one source address may hold while still sending its
+/// ClientHello: a slow-hello flood from one address can't take the whole
+/// cap (TURN, Skin and mail share it).
+pub const HELLO_PER_IP: u32 = 32;
 
 /// Per-outcome counters (since boot; a successor starts at zero).
 #[derive(Default)]
@@ -55,6 +60,7 @@ pub struct Counters {
     pub closed_early: AtomicU64,
     pub loopback_refused: AtomicU64,
     pub backend_failed: AtomicU64,
+    pub per_ip_refused: AtomicU64,
 }
 
 impl Counters {
@@ -66,6 +72,7 @@ impl Counters {
         json!({
             "accepted": g(&self.accepted),
             "overCap": g(&self.over_cap),
+            "perIpRefused": g(&self.per_ip_refused),
             "live": g(&self.live),
             "routed": {"turn": g(&self.turn), "caddy": g(&self.caddy), "stalwart": g(&self.stalwart)},
             "closed": {
@@ -89,9 +96,42 @@ pub struct Front {
     pub cap: usize,
     pub hello_timeout: Duration,
     pub connect_timeout: Duration,
+    pub hello_per_ip: u32,
     sem: Arc<Semaphore>,
     pub counters: Counters,
     table: Box<TableFn>,
+    /// Connections still in the ClientHello phase, per source address.
+    hellos: Mutex<HashMap<IpAddr, u32>>,
+}
+
+/// One connection's place in its source's ClientHello budget.
+struct HelloSlot {
+    front: Arc<Front>,
+    ip: IpAddr,
+}
+
+impl Drop for HelloSlot {
+    fn drop(&mut self) {
+        let mut m = self.front.hellos.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(n) = m.get_mut(&self.ip) {
+            *n -= 1;
+            if *n == 0 {
+                m.remove(&self.ip);
+            }
+        }
+    }
+}
+
+impl Front {
+    fn hello_slot(self: &Arc<Self>, ip: IpAddr) -> Option<HelloSlot> {
+        let mut m = self.hellos.lock().unwrap_or_else(|p| p.into_inner());
+        let n = m.entry(ip).or_insert(0);
+        if *n >= self.hello_per_ip {
+            return None;
+        }
+        *n += 1;
+        Some(HelloSlot { front: Arc::clone(self), ip })
+    }
 }
 
 impl Front {
@@ -100,21 +140,30 @@ impl Front {
             cap,
             hello_timeout: HELLO_TIMEOUT,
             connect_timeout: CONNECT_TIMEOUT,
+            hello_per_ip: HELLO_PER_IP,
             sem: Arc::new(Semaphore::new(cap)),
             counters: Counters::default(),
             table,
+            hellos: Mutex::new(HashMap::new()),
         })
     }
 
     /// Test knob: shorter deadlines.
     pub fn with_timeouts(cap: usize, hello: Duration, connect: Duration, table: Box<TableFn>) -> Arc<Front> {
+        Self::with_limits(cap, hello, connect, HELLO_PER_IP, table)
+    }
+
+    /// Test knob: deadlines and the per-source ClientHello budget.
+    pub fn with_limits(cap: usize, hello: Duration, connect: Duration, hello_per_ip: u32, table: Box<TableFn>) -> Arc<Front> {
         Arc::new(Front {
             cap,
             hello_timeout: hello,
             connect_timeout: connect,
+            hello_per_ip,
             sem: Arc::new(Semaphore::new(cap)),
             counters: Counters::default(),
             table,
+            hellos: Mutex::new(HashMap::new()),
         })
     }
 }
@@ -151,6 +200,11 @@ pub async fn accept_loop(listener: Arc<TcpListener>, front: Arc<Front>, rt: toki
             drop(tcp);
             continue;
         };
+        let Some(slot) = front.hello_slot(proxy_v2::canonical(peer.ip())) else {
+            Counters::bump(&front.counters.per_ip_refused);
+            drop(tcp);
+            continue;
+        };
         let std_tcp = match tcp.into_std() {
             Ok(s) => s,
             Err(e) => {
@@ -164,11 +218,34 @@ pub async fn accept_loop(listener: Arc<TcpListener>, front: Arc<Front>, rt: toki
             let _splice = crate::handoff::splice_guard();
             f.counters.live.fetch_add(1, Ordering::Relaxed);
             if let Ok(tcp) = TcpStream::from_std(std_tcp) {
-                serve(&f, tcp, peer).await;
+                serve(&f, tcp, peer, slot).await;
             }
             f.counters.live.fetch_sub(1, Ordering::Relaxed);
         });
     }
+}
+
+/// Where the complete TLS records of `buf` end, walked on from `from`
+/// (a record boundary). `None` when a header can't be a handshake record
+/// (the full peek then says why). Lets [`read_hello`] re-parse only when a
+/// record completed, not after every byte of a dribbled hello.
+fn complete_records(buf: &[u8], from: usize) -> Option<usize> {
+    if buf.first().is_some_and(|b| *b != 0x16) {
+        return None;
+    }
+    let mut pos = from;
+    while buf.len() >= pos + 5 {
+        let h = &buf[pos..pos + 5];
+        let len = usize::from(u16::from_be_bytes([h[3], h[4]]));
+        if h[0] != 0x16 || len == 0 || len > 16 * 1024 {
+            return None;
+        }
+        if buf.len() < pos + 5 + len {
+            break;
+        }
+        pos += 5 + len;
+    }
+    Some(pos)
 }
 
 /// Read until the ClientHello is complete. `None` = closed (counted).
@@ -176,8 +253,23 @@ async fn read_hello(f: &Front, tcp: &mut TcpStream) -> Option<(Vec<u8>, super::c
     let deadline = tokio::time::Instant::now() + f.hello_timeout;
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
+    let mut walked = 0usize; // complete records found so far
+    let mut peeked = 0usize; // ... when the full parse last ran
     loop {
-        match peek(&buf) {
+        let full = match complete_records(&buf, walked) {
+            Some(end) => {
+                walked = end;
+                end > peeked || buf.len() >= super::client_hello::MAX_HELLO_BYTES
+            }
+            None => true,
+        };
+        let verdict = if full {
+            peeked = walked;
+            peek(&buf)
+        } else {
+            Peek::NeedMore
+        };
+        match verdict {
             Peek::Done(h) => return Some((buf, h)),
             Peek::NotTls => {
                 Counters::bump(&f.counters.not_tls);
@@ -203,8 +295,10 @@ async fn read_hello(f: &Front, tcp: &mut TcpStream) -> Option<(Vec<u8>, super::c
     }
 }
 
-async fn serve(f: &Front, mut tcp: TcpStream, peer: SocketAddr) {
-    let Some((head, hello)) = read_hello(f, &mut tcp).await else {
+async fn serve(f: &Front, mut tcp: TcpStream, peer: SocketAddr, slot: HelloSlot) {
+    let hello = read_hello(f, &mut tcp).await;
+    drop(slot);
+    let Some((head, hello)) = hello else {
         return;
     };
     let Some(sni) = hello.sni else {

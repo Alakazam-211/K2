@@ -121,6 +121,16 @@ pub fn install(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
     let want = front_socket_unit(&d.unit).ok_or_else(|| Fail::state("daemon.toml unit invalid"))?;
     let cur = read_socket_file(ctx)?;
     refuse_foreign(ctx, &cur, &d.unit)?;
+    // Another configured daemon's `Sockets=` drop-in still pulls the socket
+    // in (its socket file gone, say): two daemons would accept on :443.
+    let others = caller::load_daemons(ctx).map_err(Fail::state)?;
+    if others
+        .iter()
+        .filter(|o| o.scope == "system" && o.unit != d.unit)
+        .any(|o| dropin_matches(ctx, &o.unit, FRONT_DROPIN_FILE, front_dropin().as_bytes()).is_some())
+    {
+        return Err(Fail::state("front refused: another K2 daemon's unit still carries the front drop-in"));
+    }
     let socket_changed = match &cur {
         SocketFile::File { bytes, .. } if bytes == want.as_bytes() => false,
         _ => {
@@ -143,7 +153,16 @@ pub fn install(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
     };
     let changed = socket_changed || dropin_changed;
     if changed {
-        reload(ctx)?;
+        if let Err(f) = reload(ctx) {
+            if socket_changed {
+                let _ = remove_socket_file(ctx);
+            }
+            if dropin_changed {
+                let _ = set_dropin(ctx, &d.unit, FRONT_DROPIN_FILE, None, "front");
+            }
+            let _ = reload(ctx);
+            return Err(f);
+        }
     }
     // Listen now. Something else on :443 (Stalwart's tls-alpn listener, a
     // Caddy, nginx) makes this fail: undo the files so a half-installed

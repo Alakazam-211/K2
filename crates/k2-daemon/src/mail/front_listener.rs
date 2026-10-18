@@ -24,8 +24,16 @@
 //! - The listener override (unlike the global `proxyTrustedNetworks`)
 //!   does NOT add loopback to the allowed (never-banned) list. So the
 //!   front refuses clients whose own address is loopback on this route:
-//!   no failed login can ever be attributed to 127.0.0.1, whose ban would
-//!   also lock K2 out of Stalwart's management listener (127.0.0.1:8180).
+//!   no failed login that came THROUGH THE FRONT is attributed to
+//!   127.0.0.1, whose ban would also lock K2 out of Stalwart's management
+//!   listener (127.0.0.1:8180).
+//! - What this does not stop: a process ON the box can connect to
+//!   127.0.0.1:8443 itself and send a PROXY header naming any source
+//!   (loopback trust has no uid check). That is no new door for loopback
+//!   lockout — the same process can already fail logins on IMAP/SMTP from
+//!   127.0.0.1 today — but it can make Stalwart ban an outside address it
+//!   names. Narrowing it needs an nft `meta skuid` rule or a unix socket
+//!   (later work).
 //! - Only the `https` listener changes; SMTP/IMAP/submission keep their
 //!   public binds and see real IPs as before.
 //!

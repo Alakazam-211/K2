@@ -834,6 +834,7 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/skin/roles/assign",
         "/cli/skin/roles/unassign",
         "/cli/skin/roles/room",
+        "/cli/skin/roles/paths",
         // `/cli/skin/grants`, `/cli/skin/grants/delete`, `/cli/skin/grants/enabled`,
         // `/cli/skin/grants/host`, and `/cli/skin/templates*` stay off this list
         // (owner-only). Do not add `/cli/people`.

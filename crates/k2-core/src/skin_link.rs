@@ -158,6 +158,7 @@ pub fn resolve_link_pass(raw: &str, link_id: &str, app_service_id: &str) -> Opti
                     session: false,
                     room_policy: RoomPolicy::new(),
                     app: app_service_id.to_string(),
+                    room_paths: Default::default(),
                 })
             },
         )

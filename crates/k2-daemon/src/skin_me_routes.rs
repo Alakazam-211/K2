@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! { ok, kind: guest|app|token, username, app, principalId,
-//!   rooms: [{room, handle, caps}], features: [...], catalogVersion }
+//!   rooms: [{room, handle, caps, folders?}], features: [...], catalogVersion }
 //! ```
 //!
 //! - `kind`: `guest` for a login session; `app` for this App's pass on its
@@ -55,7 +55,14 @@ pub fn view(pass: &SkinPass, on_link: bool) -> serde_json::Value {
             } else {
                 pass.caps.clone()
             };
-            json!({ "room": a.project_id, "handle": a.handle, "caps": caps })
+            let mut row = json!({ "room": a.project_id, "handle": a.handle, "caps": caps });
+            // R3: a login's room line folders (absent = the whole room).
+            if let Ok(scope) = pass.path_scope(&a.project_id) {
+                if !scope.is_empty() {
+                    row["folders"] = serde_json::to_value(&scope).unwrap_or_default();
+                }
+            }
+            row
         })
         .collect();
     json!({
@@ -102,6 +109,7 @@ mod tests {
             session,
             room_policy: Default::default(),
             app: if session { "host".into() } else { String::new() },
+            room_paths: Default::default(),
         }
     }
 

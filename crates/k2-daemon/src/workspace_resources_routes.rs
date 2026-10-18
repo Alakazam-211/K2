@@ -11,7 +11,7 @@ use k2_core::workspace_resources::{self, ResourceError};
 
 use crate::cli::str_param;
 use crate::cli_response::CliResponse;
-use crate::fs_routes::{jail_rel_path, resolve_skin_workspace};
+use crate::fs_routes::{resolve_skin_workspace, PathNeed};
 use crate::workspace_routes::workspace_not_found_response;
 
 fn error_response(status: &'static str, code: &str, hint: impl std::fmt::Display) -> CliResponse {
@@ -248,6 +248,11 @@ fn handle_skin_list(params: &HashMap<String, String>, pass: &SkinPass) -> CliRes
     if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_READ) {
         return crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_READ);
     }
+    // R3: a scoped room line lists only resources inside its folders.
+    let scope = match crate::fs_routes::room_scope(pass, &resolved, PathNeed::Read) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
     let rows = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -260,6 +265,9 @@ fn handle_skin_list(params: &HashMap<String, String>, pass: &SkinPass) -> CliRes
         .iter()
         .filter_map(|r| {
             let rel = guest_file_path(&resolved.path, &r.file_path)?;
+            if !k2_core::skin::paths::allows_rel(&scope, &rel, PathNeed::Read).unwrap_or(false) {
+                return None;
+            }
             Some(serde_json::json!({
                 "filePath": rel,
                 "fileName": file_name(&r.file_path),
@@ -294,10 +302,11 @@ fn handle_skin_add(params: &HashMap<String, String>, pass: &SkinPass) -> CliResp
     if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_WRITE) {
         return crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_WRITE);
     }
-    // Jail first. `confine_path` resolves a relative string against the daemon cwd.
-    let jailed = match jail_rel_path(&resolved.path, &rel, false) {
+    // Jail first (R3: inside the line's folders, checked before the disk).
+    // `confine_path` resolves a relative string against the daemon cwd.
+    let jailed = match crate::fs_routes::skin_jail_need(pass, &resolved, &rel, PathNeed::Read) {
         Ok(p) => p,
-        Err(e) => return CliResponse::bad_request(e),
+        Err(r) => return r,
     };
     let abs = jailed.to_string_lossy().to_string();
     let stored = {
@@ -339,9 +348,9 @@ fn handle_skin_remove(params: &HashMap<String, String>, pass: &SkinPass) -> CliR
     if !pass.has_cap_in_room(&resolved.project_id, crate::skin_routes::FILES_WRITE) {
         return crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_WRITE);
     }
-    let jailed = match jail_rel_path(&resolved.path, &rel, false) {
+    let jailed = match crate::fs_routes::skin_jail_need(pass, &resolved, &rel, PathNeed::Read) {
         Ok(p) => p,
-        Err(e) => return CliResponse::bad_request(e),
+        Err(r) => return r,
     };
     let abs = jailed.to_string_lossy().to_string();
     {
@@ -592,6 +601,7 @@ mod tests {
             session: true,
             room_policy,
             app: "host".to_string(),
+            room_paths: Default::default(),
         }
     }
 

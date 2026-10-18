@@ -51,6 +51,21 @@ pub fn subscriber_frame(
     wire_workspace: &str,
     event: &SessionEvent,
 ) -> Option<String> {
+    subscriber_frame_scoped(project_id, root, wire_workspace, event, None)
+}
+
+/// [`subscriber_frame`] for a login whose room line lists folders
+/// (room-scope R3): an `fs_changed` frame keeps only the paths inside the
+/// line's read or write folders and is dropped when none are left. A
+/// folder on the way to a granted one is not named either (a sibling
+/// job's change must not show as activity on `jobs/`).
+pub fn subscriber_frame_scoped(
+    project_id: &str,
+    root: &str,
+    wire_workspace: &str,
+    event: &SessionEvent,
+    scope: Option<&k2_core::skin::RoomPathScope>,
+) -> Option<String> {
     match event {
         SessionEvent::FsChanged {
             workspace_path,
@@ -59,7 +74,13 @@ pub fn subscriber_frame(
             if !same_root(workspace_path, root) {
                 return None;
             }
-            let rel = map_changed_paths(root, paths);
+            let mut rel = map_changed_paths(root, paths);
+            if let Some(scope) = scope.filter(|s| s.is_scoped()) {
+                rel.retain(|p| {
+                    k2_core::skin::paths::allows_rel(scope, p, k2_core::skin::paths::PathNeed::Read)
+                        .unwrap_or(false)
+                });
+            }
             if rel.is_empty() {
                 return None;
             }
@@ -200,6 +221,21 @@ pub async fn serve_fs_events_connection(
     };
     let root = resolved.path.clone();
     let project_id = resolved.project_id.clone();
+    // R3: the login's folders on this room line, from the pass resolved at
+    // the upgrade (like its caps). An unreadable scope refuses the socket
+    // with the missing-cap 403 (fail closed).
+    let scope = match &skin_pass {
+        Some(pass) => match pass.path_scope(&project_id) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                log_debug!("[daemon/fs_events_ws] path scope unreadable: {e}");
+                let r = crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_READ);
+                write_http(stream, r.status, &r.body).await;
+                return;
+            }
+        },
+        None => None,
+    };
 
     let ws = match tokio_tungstenite::accept_async(&mut *stream).await {
         Ok(ws) => ws,
@@ -228,7 +264,9 @@ pub async fn serve_fs_events_connection(
             event = rx.recv() => {
                 match event {
                     Ok(event) => {
-                        let Some(frame) = subscriber_frame(&project_id, &root, &wire_workspace, &event) else {
+                        let Some(frame) =
+                            subscriber_frame_scoped(&project_id, &root, &wire_workspace, &event, scope.as_ref())
+                        else {
                             continue;
                         };
                         if write.send(Message::Text(frame)).await.is_err() {
@@ -291,6 +329,42 @@ mod tests {
         );
         assert_eq!(mapped, vec!["a.md".to_string(), "src/x.ts".to_string()]);
     }
+    /// Room-scope R3: a scoped login's frame keeps only paths inside its
+    /// folders (never a sibling job, never the parent), and a frame left
+    /// empty is not sent at all.
+    #[test]
+    fn scoped_frames_keep_only_the_logins_folders() {
+        let scope = k2_core::skin::paths::normalize_scope(&k2_core::skin::RoomPathScope {
+            read: vec!["jobs/J1".into()],
+            write: vec!["jobs/J3/in".into()],
+            upload_dir: None,
+        })
+        .expect("scope");
+        let ev = |paths: &[&str]| crate::session_events::SessionEvent::FsChanged {
+            workspace_path: "/tmp/docs".into(),
+            paths: paths.iter().map(|p| format!("/tmp/docs/{p}")).collect(),
+        };
+        let frame = subscriber_frame_scoped(
+            "p",
+            "/tmp/docs",
+            "docs",
+            &ev(&["jobs/J1/a.pdf", "jobs/J2/b.pdf", "jobs", "jobs/J3/in/c.jpg", "top.txt"]),
+            Some(&scope),
+        )
+        .expect("a frame with the J1 and J3/in paths");
+        let v: serde_json::Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(v["paths"], serde_json::json!(["jobs/J1/a.pdf", "jobs/J3/in/c.jpg"]));
+        assert!(
+            subscriber_frame_scoped("p", "/tmp/docs", "docs", &ev(&["jobs/J2/b.pdf", "jobs"]), Some(&scope)).is_none(),
+            "nothing of this login's left: no frame"
+        );
+        // Unscoped (or no pass): every path, as before.
+        let all = subscriber_frame("p", "/tmp/docs", "docs", &ev(&["jobs/J2/b.pdf"])).expect("unscoped frame");
+        assert!(all.contains("jobs/J2/b.pdf"));
+        let open = k2_core::skin::RoomPathScope::default();
+        assert!(subscriber_frame_scoped("p", "/tmp/docs", "docs", &ev(&["top.txt"]), Some(&open)).is_some());
+    }
+
     #[test]
     fn resources_frame_is_project_id_and_has_no_file_list() {
         let ev = crate::session_events::SessionEvent::WorkspaceResourcesChanged {
@@ -337,6 +411,7 @@ mod tests {
             session: true,
             room_policy,
             app: "host".to_string(),
+            room_paths: Default::default(),
         }
     }
 

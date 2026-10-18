@@ -67,9 +67,9 @@ pub const HOST_LOGIN_DENIED: &str = "invalid username or password";
 ///   4 = `tokens.link_id` (+ index): App link passes (runtime S14, 0.46.0,
 ///       [`link`]). A K2 older than this refuses the file, so a downgrade
 ///       can never accept a link pass on its main port.
-///   5 = RESERVED for room-scope R3 path scope (RS-A1..A3; it was 4 until
-///       the link landed first, AR39). Not built here.
-pub const SKIN_SCHEMA_VERSION: i64 = 4;
+///   5 = `roles.room_paths`: folder path scope per room line (room-scope
+///       R3, RS-A1..A3, 0.46.1, [`paths`]). `{}` = every line unscoped.
+pub const SKIN_SCHEMA_VERSION: i64 = 5;
 
 #[path = "skin_link.rs"]
 pub mod link;
@@ -79,6 +79,9 @@ pub mod link;
 pub mod guest_rooms;
 #[path = "skin_members.rs"]
 pub mod members;
+#[path = "skin_paths.rs"]
+pub mod paths;
+pub use paths::{RoomPathScope, RoomPaths};
 
 /// `grants.created_by` on rows the 0.45.5 upgrade wrote (S24-10 backfill).
 pub const UPGRADE_CREATED_BY: &str = "upgrade:0.45.5";
@@ -585,11 +588,12 @@ fn interpret_token_policy(
     }
 }
 
-fn room_access_from_policy(policy: &RoomPolicy) -> Vec<SkinRoomAccess> {
+fn room_access_from_policy(policy: &RoomPolicy, paths: Option<&RoomPaths>) -> Vec<SkinRoomAccess> {
     let ids = rooms_from_policy(policy);
     live_agents(&ids)
         .into_iter()
         .map(|a| SkinRoomAccess {
+            folders: paths.and_then(|p| p.get(&a.project_id)).filter(|s| !s.is_empty()).cloned(),
             handle: a.handle,
             caps: policy.get(&a.project_id).cloned().unwrap_or_default(),
         })
@@ -858,12 +862,15 @@ pub struct SkinPrincipal {
     pub agent_handle: Option<String>,
 }
 
-/// Per-room functions on the wire: `{handle, caps}`.
+/// Per-room functions on the wire: `{handle, caps, folders?}`. `folders`
+/// is the role line's path scope (room-scope R3); absent = the whole room.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SkinRoomAccess {
     pub handle: String,
     pub caps: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folders: Option<RoomPathScope>,
 }
 
 /// Named bundle of per-room functions for Skin Access guests (not Connect roles).
@@ -890,6 +897,10 @@ pub struct SkinRole {
     /// SSOT map `project_id → caps[]`. Not on the wire.
     #[serde(skip)]
     pub room_policy: RoomPolicy,
+    /// `project_id → folders` (room-scope R3). Not on the wire as a map:
+    /// each `room_access` line carries its own `folders`.
+    #[serde(skip)]
+    pub room_paths: RoomPaths,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -954,9 +965,25 @@ pub struct SkinPass {
     /// (`session=0`) are not App-bound yet (S14) and carry `""`. For logs and
     /// later S14/S43 checks; no handler authorizes on it in 0.45.5.
     pub app: String,
+    /// Folder path scope per room line (room-scope R3), read at resolve
+    /// time from the session's own grant → role (an edit applies from the
+    /// session's next request). Platform and link passes: `Whole`.
+    pub room_paths: paths::PassPaths,
 }
 
 impl SkinPass {
+    /// This pass's folders on one room line (R3). An unscoped line (or a
+    /// platform/link pass) is `RoomPathScope::default()`, the whole room.
+    /// `Err` = the scope couldn't be read: callers fail closed with the
+    /// missing-cap 403.
+    pub fn path_scope(&self, project_id: &str) -> Result<RoomPathScope, String> {
+        match &self.room_paths {
+            paths::PassPaths::Whole => Ok(RoomPathScope::default()),
+            paths::PassPaths::Lines(lines) => Ok(lines.get(project_id.trim()).cloned().unwrap_or_default()),
+            paths::PassPaths::Unreadable(e) => Err(e.clone()),
+        }
+    }
+
     pub fn has_cap(&self, cap: &str) -> bool {
         self.caps.iter().any(|c| c == cap)
     }
@@ -1613,6 +1640,10 @@ fn run_schema_steps(conn: &mut Connection) -> Result<(), String> {
             }
             4 => {
                 step4_link_column(&tx)?;
+                Vec::new()
+            }
+            5 => {
+                paths::step5_room_paths_column(&tx)?;
                 Vec::new()
             }
             other => return Err(format!("skin.db: no schema step {other}")),
@@ -2393,7 +2424,7 @@ pub fn create_app_session_token(username: &str, app: &str) -> Result<SkinAppSess
                 caps,
                 rooms,
                 room_handles: Vec::new(),
-                room_access: room_access_from_policy(&policy),
+                room_access: room_access_from_policy(&policy, None),
                 created_at,
                 revoked_at: None,
             },
@@ -3558,7 +3589,7 @@ pub fn set_principal_default_rooms(
 // ── Roles ────────────────────────────────────────────────────────────
 
 const ROLE_SELECT: &str =
-    "SELECT id, name, caps, rooms, created_at, COALESCE(room_policy, '{}'), app_id FROM roles";
+    "SELECT id, name, caps, rooms, created_at, COALESCE(room_policy, '{}'), app_id, room_paths FROM roles";
 
 fn blank_to_none(raw: Option<String>) -> Option<String> {
     raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
@@ -3569,6 +3600,7 @@ fn map_role_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinRole> {
     let rooms_raw: String = r.get(3)?;
     let policy_raw: String = r.get(5)?;
     let app_id: Option<String> = r.get(6)?;
+    let paths_raw: Option<String> = r.get(7)?;
     let caps = caps_from_json(&caps_raw);
     let rooms = rooms_from_json(&rooms_raw);
     let room_policy = policy_or_cartesian(&caps, &rooms, Some(&policy_raw))
@@ -3583,12 +3615,15 @@ fn map_role_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<SkinRole> {
         created_at: r.get(4)?,
         app_id: blank_to_none(app_id),
         room_policy,
+        // Display and editing only. Enforcement re-reads the column
+        // strictly and fails closed ([`paths::session_paths`]).
+        room_paths: paths::parse_room_paths(paths_raw.as_deref()).unwrap_or_default(),
     })
 }
 
 fn attach_role_handles(mut role: SkinRole) -> SkinRole {
     role.room_handles = handles_for_project_ids(&role.rooms);
-    role.room_access = room_access_from_policy(&role.room_policy);
+    role.room_access = room_access_from_policy(&role.room_policy, Some(&role.room_paths));
     role.caps = union_caps(&role.room_policy);
     role.rooms = rooms_from_policy(&role.room_policy);
     role
@@ -3624,6 +3659,7 @@ fn role_from_policy(id: String, name: String, created_at: i64, policy: RoomPolic
         created_at,
         app_id: None,
         room_policy: policy,
+        room_paths: RoomPaths::new(),
     }
 }
 
@@ -3879,6 +3915,8 @@ pub fn update_role(id_or_name: &str, policy: Option<&RoomPolicy>) -> Result<Skin
             role.room_policy = p;
         }
         persist_role_policy(conn, &role.id, &role.room_policy)?;
+        paths::prune_role_paths(conn, &role)?;
+        role.room_paths = paths::role_room_paths(conn, &role.id).unwrap_or_default();
         rewrite_sessions_for_role(conn, &role.id, &role.room_policy)?;
         Ok(role)
     })?;
@@ -3922,6 +3960,10 @@ pub fn clear_role_room(id_or_name: &str, project_id: &str) -> Result<SkinRole, S
         };
         role.room_policy.remove(project_id);
         persist_role_policy(conn, &role.id, &role.room_policy)?;
+        // The room's folders go with its line: re-adding the room later
+        // starts unscoped, never with a stale scope.
+        paths::prune_role_paths(conn, &role)?;
+        role.room_paths.remove(project_id);
         rewrite_sessions_for_role(conn, &role.id, &role.room_policy)?;
         Ok(role)
     })?;
@@ -6032,12 +6074,20 @@ pub fn resolve_skin_token(presented_raw: &str) -> Option<SkinPass> {
                         session: session_b,
                         room_policy,
                         app,
+                        room_paths: Default::default(),
                     }))
                 },
             )
             .optional()
             .map_err(|e| format!("skin token resolve: {e}"))?
             .flatten();
+        // R3: a login's folders come from its own grant → role, now.
+        let row = row.map(|mut pass| {
+            if pass.session {
+                pass.room_paths = paths::session_paths(conn, &pass);
+            }
+            pass
+        });
         Ok(row)
     })
     .ok()
@@ -6557,6 +6607,7 @@ mod tests {
                 session: true,
                 room_policy,
                 app: "host".to_string(),
+                room_paths: Default::default(),
             }
         };
         let ident = pass_with(&[CAP_AGENT_IDENTITY]);
@@ -6633,6 +6684,7 @@ mod tests {
                 session: true,
                 room_policy,
                 app: "host".to_string(),
+                room_paths: Default::default(),
             }
         };
         for caps in [
@@ -6663,6 +6715,7 @@ mod tests {
             session: false,
             room_policy: RoomPolicy::new(),
             app: String::new(),
+            room_paths: Default::default(),
         };
         assert!(platform.dispatcher_admits_any(&[CAP_ACTIVITY_READ, CAP_HEARTBEATS_READ]));
         assert!(!platform.dispatcher_admits_cap(CAP_ACTIVITY_READ));
@@ -10318,6 +10371,46 @@ mod tests {
             let conn = Connection::open(&path).unwrap();
             conn.execute_batch(&format!("PRAGMA user_version = {SKIN_SCHEMA_VERSION};"))
                 .unwrap();
+        });
+    }
+
+    /// R3 step 5: a version-4 file (0.46.0) gains `roles.room_paths`
+    /// (`{}`: every existing line stays the whole room), its roles and live
+    /// sessions survive untouched, and the version reads 5.
+    #[test]
+    fn r3_step5_adds_room_paths_to_a_v4_file() {
+        with_temp_home(|| {
+            assert_eq!(SKIN_SCHEMA_VERSION, 5);
+            let room = uuid::Uuid::new_v4().to_string();
+            create_role("staff", &one_room_policy(&room, &[CAP_FILES_READ])).unwrap();
+            add_principal("ada").unwrap();
+            assign_role("ada", "staff").unwrap();
+            let (_, raw) = create_session_token("ada").unwrap();
+            // Wind the file back to what 0.46.0 wrote: no column, version 4.
+            let path = store_path();
+            *db().lock() = None;
+            {
+                let conn = Connection::open(&path).unwrap();
+                conn.execute_batch("ALTER TABLE roles DROP COLUMN room_paths; PRAGMA user_version = 4;")
+                    .unwrap();
+                assert!(!table_columns(&conn, "roles").split(',').any(|c| c == "room_paths"));
+            }
+            // The next open runs step 5.
+            let pass = resolve_skin_token(&raw).expect("a 0.46.0 session still resolves after the upgrade");
+            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), 5);
+            let cols = with_conn(|c| Ok(table_columns(c, "roles"))).unwrap();
+            assert!(cols.split(',').any(|c| c == "room_paths"), "{cols}");
+            let stored: String = with_conn(|c| {
+                c.query_row("SELECT room_paths FROM roles WHERE name = 'staff'", [], |r| r.get(0))
+                    .map_err(|e| e.to_string())
+            })
+            .unwrap();
+            assert_eq!(stored, "{}");
+            assert!(pass.has_cap_in_room(&room, CAP_FILES_READ));
+            assert_eq!(pass.path_scope(&room).unwrap(), RoomPathScope::default());
+            assert_eq!(pass.room_paths, paths::PassPaths::Lines(RoomPaths::new()));
+            // And a 0.46.0 binary would refuse the new file (S24-1 guard).
+            assert!(schema_newer_error(5).contains("newer"));
         });
     }
 

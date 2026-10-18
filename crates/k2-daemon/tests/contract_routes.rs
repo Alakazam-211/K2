@@ -105,12 +105,13 @@ fn exposure_counts_are_pinned() {
     // RS-A15 (0.46.1): + guests.rooms / guests.setRooms on both transports
     // (app + garden-local). Room-scope 0.46.1: + room.members, app.self and
     // app.usage on both transports and the Garden's widget.self (garden-local).
+    // Room-scope R3: + files.stat (GET /cli/fs/stat).
     let garden_local = c.verbs_exposed_to(Exposure::GardenLocal).len();
-    assert_eq!((widget, app, garden_local), (24, 65, 21), "per-exposure verb counts (widget, app, garden-local)");
+    assert_eq!((widget, app, garden_local), (24, 66, 21), "per-exposure verb counts (widget, app, garden-local)");
     assert_eq!(
         c.verbs.len(),
-        127,
-        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 65 app rows (5 on both transports) and widget.self"
+        128,
+        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 66 app rows (5 on both transports) and widget.self"
     );
 }
 

@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 12,
+  "catalogVersion": 13,
   "caps": [
     {
       "name": "agents:read",
@@ -3649,6 +3649,33 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "folders": {
+                  "title": "AppMeFolders",
+                  "type": "object",
+                  "description": "This login's folders in the room (room-scope R3). Absent: the whole room.",
+                  "properties": {
+                    "read": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Room-relative folders it may list and read."
+                    },
+                    "write": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Room-relative folders it may also write."
+                    },
+                    "uploadDir": {
+                      "type": "string",
+                      "description": "Where an upload lands when it names no folder."
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false
                 }
               },
               "required": [
@@ -5757,6 +5784,107 @@
       ],
       "doc": "A byte range of a file, as base64.",
       "example": "const r = await k2.files.readRange({workspace, relPath, offset: 0})"
+    },
+    {
+      "verb": "files.stat",
+      "cap": "files:read",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "files-path-scope-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/fs/stat",
+          "params": {
+            "relPath": "path"
+          },
+          "responseNames": {
+            "relPath": "path"
+          }
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "relPath": {
+              "type": "string",
+              "description": "Room-relative path (never a host path); '.' is the room's root."
+            }
+          },
+          "required": [
+            "workspace",
+            "relPath"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppFileStat",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "relPath": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "file",
+              "directory",
+              "other"
+            ],
+            "description": "Symlinks are followed."
+          },
+          "size": {
+            "type": "integer",
+            "description": "Bytes (0 for a folder)."
+          },
+          "modifiedAt": {
+            "type": "number",
+            "description": "Milliseconds since the epoch."
+          },
+          "ext": {
+            "type": "string",
+            "description": "Lower-case extension without the dot ('' for none or a folder)."
+          },
+          "mime": {
+            "type": "string",
+            "description": "A content type from the extension (application/octet-stream when unknown, inode/directory for a folder)."
+          }
+        },
+        "required": [
+          "name",
+          "relPath",
+          "kind",
+          "size",
+          "modifiedAt",
+          "ext",
+          "mime"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "usage",
+        "failed"
+      ],
+      "doc": "One file's or folder's kind, size, modified time and content type, under the room's folder scope.",
+      "example": "const {kind, size, mime} = await k2.files.stat({workspace, relPath: 'jobs/J1/plans.pdf'})"
     },
     {
       "verb": "files.write",

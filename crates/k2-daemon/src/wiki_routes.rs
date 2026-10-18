@@ -2851,6 +2851,7 @@ mod tests {
             session: true,
             room_policy: policy,
             app: "host".to_string(),
+            room_paths: Default::default(),
         }
     }
 

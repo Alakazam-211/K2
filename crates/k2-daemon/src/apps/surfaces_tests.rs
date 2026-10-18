@@ -119,6 +119,7 @@ fn guest(app: &str, rooms: &[(&str, &[&str])]) -> SkinPass {
         session: true,
         room_policy,
         app: app.into(),
+        room_paths: Default::default(),
     }
 }
 

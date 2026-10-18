@@ -17,7 +17,7 @@
 //! test fails a hand edit).
 
 /// The catalog version this table was generated from.
-pub const CATALOG_VERSION: u32 = 12;
+pub const CATALOG_VERSION: u32 = 13;
 
 /// Every `(method, path)` the browser helper forwards with a guest's
 /// pass (rows for both doors and helper-only rows; a GET row also opens
@@ -44,6 +44,8 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("HEAD", "/cli/fs/read-binary"),
     ("GET", "/cli/fs/read-range"),
     ("HEAD", "/cli/fs/read-range"),
+    ("GET", "/cli/fs/stat"),
+    ("HEAD", "/cli/fs/stat"),
     ("POST", "/cli/fs/write-file"),
     ("POST", "/cli/fs/upload-binary"),
     ("POST", "/cli/fs/upload-chunk"),
@@ -130,6 +132,8 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("HEAD", "/cli/fs/read-binary"),
     ("GET", "/cli/fs/read-range"),
     ("HEAD", "/cli/fs/read-range"),
+    ("GET", "/cli/fs/stat"),
+    ("HEAD", "/cli/fs/stat"),
     ("POST", "/cli/fs/write-file"),
     ("POST", "/cli/fs/upload-binary"),
     ("POST", "/cli/fs/upload-chunk"),
@@ -230,6 +234,7 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("GET", "/cli/fs/read-file", "files.read", "both"),
     ("GET", "/cli/fs/read-binary", "files.readBinary", "both"),
     ("GET", "/cli/fs/read-range", "files.readRange", "both"),
+    ("GET", "/cli/fs/stat", "files.stat", "both"),
     ("POST", "/cli/fs/write-file", "files.write", "both"),
     ("POST", "/cli/fs/upload-binary", "files.uploadBinary", "both"),
     ("POST", "/cli/fs/upload-chunk", "files.uploadChunk", "both"),

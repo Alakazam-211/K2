@@ -348,6 +348,12 @@ pub const FEATURE_ROOM_MEMBERS: &str = crate::apps::surfaces::FEATURE_ROOM_MEMBE
 /// Room-scope R16 (0.46.1): `app.self` / `app.usage` on the App's link and
 /// the Garden bridge, and the Garden's `widget.self`.
 pub const FEATURE_APP_SELF: &str = crate::apps::surfaces::FEATURE_APP_SELF;
+/// Folder path scope per room line (room-scope R3, RS-A1..A3, 0.46.1):
+/// a role's room line may list read/write folders and an `uploadDir`
+/// (`k2 app role paths`), every guest file door and `fs/events` honour it,
+/// `skin/me` rooms carry `folders`, and `GET /cli/fs/stat` (`files.stat`)
+/// answers.
+pub const FEATURE_FILES_PATH_SCOPE: &str = "files-path-scope-v1";
 
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
@@ -385,6 +391,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_GUESTS_ROOMS);
     out.push(FEATURE_ROOM_MEMBERS);
     out.push(FEATURE_APP_SELF);
+    out.push(FEATURE_FILES_PATH_SCOPE);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
     }
@@ -436,6 +443,7 @@ mod tests {
                 "guests-rooms-v1",
                 "room-members-v1",
                 "app-self-v1",
+                "files-path-scope-v1",
                 "thread-push-v1"
             ]
         );

@@ -1,17 +1,17 @@
 {
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
-  "catalogVersion": 12,
-  "catalogSha256": "4799feb9683c1581c8fa8595cf7258d58ee271ed75eb280e2cad4a76934474ba",
+  "catalogVersion": 13,
+  "catalogSha256": "6ba6a96fcbd36a312f5c08b7f48bf0956a991fad1cd1f0c7b11e2d44aba60a28",
   "runtimeSha256": "3e88aa597b5040456a01604dda00602c4f647ea41b496363cbed06075fba0887",
   "files": {
-    "cli/k2": "4ff30d1e365067d20fbd22e00ee7283d02302dfea0630a53d3ee768103c3105c",
-    "cli/k2#study app-api": "9ed71b64b69f69aa3e9abdb8aa8771593490b750e67d6d7be37a720c64aba5ca",
-    "crates/k2-core/src/app_surface.rs": "54ce73f0ba159b25eab8e65264a4f02274eba4f21b40e37c7fef21fae5d9b09e",
-    "sdk/generated/k2-frame.js": "c5ecb1118bf2054881f36da1bb8279bb841dbd13c00b1013157df5b47c282e42",
+    "cli/k2": "9f1ecc3a4b68d24768ab44906f392de014c3969cd3d07bed65b265b31f6ecd5b",
+    "cli/k2#study app-api": "de114d4ed149757eb6a523577d37b529c7f77a312c88e03d45068f5ee3965597",
+    "crates/k2-core/src/app_surface.rs": "993348304451a3e00628c347460093972a4622a7922b895a57464a3cd383c210",
+    "sdk/generated/k2-frame.js": "713fd2a891659ff491e9e501be7758af0e0200fe6365750383e1358fc893d255",
     "sdk/generated/k2.d.ts": "99045f880ec7f9c5eded1bb5ef89c4c503b44079285203c3e545113ccaf2e010",
-    "sdk/server/src/generated/verbs.ts": "91867cf870e2ffad5481a8609ee85b7e9a3170405fcfc05dafeb5b14e334e363",
+    "sdk/server/src/generated/verbs.ts": "80fc62c7d6d7f0e9e82b97da5e50c4073000d76cc27361e7316f8781fef20997",
     "src/renderer/lib/k2-caps.generated.ts": "1fd6dc2724637c7b0774184ab3522e03bb8ee8ed09ba39cd17f3df344c558bfd",
-    "src/renderer/lib/zen/zen-verbs.generated.ts": "1ec4d1f436fd4589ba3d1bf7cd0d16f004bdbb74c5b27e0d3ff398d2658700dc"
+    "src/renderer/lib/zen/zen-verbs.generated.ts": "b68059c652e8df666edf0bd7188bd2adb53f89d063ba5f137740a14e72a24d05"
   }
 }

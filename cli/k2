@@ -13930,13 +13930,16 @@ Agents:
   k2 compute run <node>|--any [--os linux] [--arch x86_64] [--label k=v]
                  [--detach] [--dirty] [--sha REV] [--no-source]
                  [--env K=V]... [--cpus N] [--mem 16G] [--timeout 2h]
-                 [--exclusive] [--retry-interrupted|--no-retry] [--raw]
+                 [--exclusive] [--retry-interrupted|--no-retry] [--raw] [--workspace WS]
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
                  (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
                   rust@<ch>, cargo-nextest, sys:<pkg>, or aqua:owner/repo@v;
                   anything else is refused: tool_unsupported, exit 2)
                  -- <command…>
-  k2 compute jobs [--node N] [--mine] [--state S] [--limit N] [--json]
+  k2 compute jobs [--node N] [--mine] [--state S] [--limit N] [--workspace WS] [--json]
+                 From a git worktree inside the workspace (.claude/worktrees/x) the
+                 workspace is found for you, and run takes HEAD and --dirty from
+                 that worktree; from anywhere else pass --workspace <handle>.
   k2 compute get <job> [--json]
   k2 compute attach <job> [--since SEQ] [--raw]
   k2 compute logs <job> [--tail N] [--failures] [--raw]
@@ -14448,6 +14451,15 @@ line += " · " + j["state"]
 if q: line += " (position %s: %s)" % (q.get("position"), q.get("reason"))
 for w in v.get("warnings") or []:
     sys.stderr.write("[k2 compute] note: %s\n" % w)
+src = v.get("source")
+if isinstance(src, dict):
+    where = src.get("checkout") or "workspace"
+    if src.get("path"): where += " " + src["path"]
+    s = "[k2 compute] source: %s @ %s" % (where, (src.get("commit") or "")[:8])
+    d = src.get("dirty")
+    if isinstance(d, dict):
+        s += " +dirty (%s changed, %s untracked)" % (d.get("changed"), d.get("untracked"))
+    sys.stderr.write(s + "\n")
 print(j["id"] + "\t" + line)')"
     local job_id="${info%%$'\t'*}" line="${info#*$'\t'}"
     echo "$line" >&2

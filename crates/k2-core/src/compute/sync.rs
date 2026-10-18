@@ -101,6 +101,30 @@ pub fn is_dirty(root: &Path) -> Result<bool, String> {
     run(c, "read status").map(|s| !s.is_empty())
 }
 
+/// What `--dirty` sends from `root`: (tracked files changed against HEAD,
+/// untracked files not ignored). The same lists [`create_dirty_blob`] reads.
+pub fn dirty_counts(root: &Path) -> Result<(usize, usize), String> {
+    let mut c = git(root);
+    c.args(["diff", "--name-only", "HEAD"]);
+    let changed = run(c, "list changed files")?.lines().filter(|l| !l.is_empty()).count();
+    let mut c = git(root);
+    c.args(["ls-files", "--others", "--exclude-standard"]);
+    let untracked = run(c, "list untracked files")?.lines().filter(|l| !l.is_empty()).count();
+    Ok((changed, untracked))
+}
+
+/// The main checkout of the repo `dir` belongs to, when `dir` is (inside)
+/// a git worktree or the main checkout itself: the parent of the shared
+/// git dir when that is a `.git` folder. `None` outside a repo, or for a
+/// bare / separate-git-dir layout.
+pub fn main_checkout_of(dir: &Path) -> Option<PathBuf> {
+    let common = common_dir(dir).ok()?;
+    if common.file_name().is_some_and(|n| n == ".git") {
+        return common.parent().map(Path::to_path_buf);
+    }
+    None
+}
+
 /// A remote URL the node may fetch from WITHOUT credentials: `https://`
 /// with any userinfo stripped, or a `git@host:org/repo` / `ssh://` form
 /// rewritten to `https://host/org/repo`. `None` for local paths and

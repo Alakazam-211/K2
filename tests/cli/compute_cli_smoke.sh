@@ -175,6 +175,54 @@ st="$(k2 compute local status --json)"
 expect_has "local status reports the home check" "$st" '"homeCheck"'
 expect_has "local status reports where k2-node comes from" "$st" '"binary"'
 
+echo "== run from a git worktree: K2_* unset, no --workspace (A1 + A3) =="
+# Worktrees carry tracked .k2/ files, so the CLI's walk-up stops at the
+# worktree root and sends ITS path as the workspace: the daemon must map
+# it back to the workspace (it used to answer workspace_not_found).
+mkdir -p "$WS/.k2/notes"
+echo note > "$WS/.k2/notes/n.md"
+g add -f .k2/notes/n.md
+g commit -q -m notes
+WT="$WS/.claude/worktrees/x"
+g worktree add -q -b wt "$WT"
+echo "from the worktree" > "$WT/wt.txt"
+git -C "$WT" -c user.name=t -c user.email=t@t -c commit.gpgsign=false add wt.txt
+git -C "$WT" -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -q -m wt
+WT_HEAD="$(git -C "$WT" rev-parse HEAD)"
+[ -d "$WT/.k2" ] && ok "the worktree has its own .k2 (walk-up stops there)" || bad "the worktree has its own .k2"
+echo "dirty main checkout" > "$WS/main-untracked.txt"
+wt_k2() { (cd "$WT" && unset K2_PROJECT_PATH && HOME="$DHOME" "$K2" "$@"); }
+jfield() { python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get(sys.argv[1]) if v.get(sys.argv[1]) is not None else "")' "$1"; }
+set +e
+wt_k2 compute run mini --no-source -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "run --no-source from the worktree works (no workspace_not_found)" "$rc" "0"
+set +e
+stdout="$(wt_k2 compute run mini -- cat wt.txt 2>"$SANDBOX/err")"; rc=$?
+set -e
+expect_eq "attached run from the worktree exits 0" "$rc" "0"
+expect_eq "the job ran the worktree's HEAD (its file is there)" "$stdout" "from the worktree"
+expect_has "the source line names the worktree" "$(cat "$SANDBOX/err")" "source: worktree .claude/worktrees/x @ ${WT_HEAD:0:8}"
+case "$(cat "$SANDBOX/err")" in *"uncommitted changes"*) bad "no false uncommitted-changes note from a clean worktree" ;; *) ok "no false uncommitted-changes note from a clean worktree" ;; esac
+JOBW="$(wt_k2 compute run mini --detach -- true 2>/dev/null)"
+for _ in $(seq 1 100); do
+    wt_k2 compute get "$JOBW" | grep -q ": done" && break
+    sleep 0.2
+done
+expect_eq "job.srcCommit is the worktree HEAD" "$(wt_k2 compute get "$JOBW" --json | jfield srcCommit)" "$WT_HEAD"
+echo 'echo dirty-ok' > "$WT/untracked.sh"
+set +e
+stdout="$(wt_k2 compute run mini --dirty -- sh untracked.sh 2>"$SANDBOX/err")"; rc=$?
+set -e
+expect_eq "--dirty from the worktree sends its untracked script" "$stdout" "dirty-ok"
+expect_has "the source line counts the worktree's changes" "$(cat "$SANDBOX/err")" "+dirty (0 changed, 1 untracked)"
+set +e
+wt_k2 compute run mini --dirty --sha HEAD~1 -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "--dirty --sha <not HEAD> is a bad request" "$rc" "2"
+expect_has "dirty_needs_head" "$(cat "$SANDBOX/err")" "dirty_needs_head"
+rm -f "$WT/untracked.sh" "$WS/main-untracked.txt"
+
 echo "== detach, jobs, logs, receipt =="
 JOB="$(k2 compute run mini --detach -- sh -c 'echo test result: FAILED. 1 passed; 2 failed; echo detached-done')"
 for _ in $(seq 1 100); do

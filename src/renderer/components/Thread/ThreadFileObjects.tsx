@@ -24,6 +24,7 @@ import type { ThreadFileObject } from '@/components/SessionView/overlayThread'
 import { SetiFileIcon } from '@/lib/seti-file-icons/SetiFileIcon'
 import { ZEN_SOLID_PROPS } from '@/lib/zen/zen-materials'
 import { chamferCutFor, chamferVars } from './chamfer'
+import { useThreadColumnNarrow } from './ThreadColumn'
 
 /** Three or more files draw as a list card. */
 export const FILE_LIST_CARD_AT = 3
@@ -147,8 +148,10 @@ export function ThreadFileChip({ file }: { file: ThreadFileObject }): JSX.Elemen
   const gone = file.state === 'gone'
   const canOpen = !!actions && !hidden && !gone
   const where = hidden ? '' : `${file.path}${fileLineLabel(file)}`
+  // A narrow column: a long name may use the message's width.
+  const narrow = useThreadColumnNarrow()
   const style: CSSProperties = {
-    maxWidth: '17rem',
+    maxWidth: narrow ? '100%' : '17rem',
     minWidth: 0,
     padding: '4px 10px 4px 7px',
     borderRadius: 999,

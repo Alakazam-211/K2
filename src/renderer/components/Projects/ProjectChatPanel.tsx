@@ -72,6 +72,7 @@ import {
   ThreadChatScope,
 } from '@/components/Thread/ThreadChat'
 import { THREAD_LIST_GAP, THREAD_LIST_PADDING, ThreadLoadOlder } from '@/components/Thread/ThreadZenKit'
+import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { useChatSessionTurn, type ChatSessionTarget } from '@/components/Thread/sessionTurn'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { useIsYouAuthor } from '@/components/Settings/sections/useNotifyPrefs'
@@ -374,7 +375,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
               No messages yet — everything posted here also lands in the PoC&rsquo;s session.
             </ThreadChatEmpty>
           ) : (
-            <div className="flex flex-col" style={{ gap: THREAD_LIST_GAP }}>
+            <ThreadMessageColumn gap={THREAD_LIST_GAP} testId="project-chat-column">
               {showEarlier && (
                 <ThreadLoadOlder
                   loading={loadingEarlier}
@@ -409,7 +410,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                   />
                 )
               })}
-            </div>
+            </ThreadMessageColumn>
           )}
         </div>
         </SelectableRegion>

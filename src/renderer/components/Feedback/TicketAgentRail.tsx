@@ -47,6 +47,7 @@ import {
   ThreadChatScope,
 } from '@/components/Thread/ThreadChat'
 import { THREAD_LIST_GAP, THREAD_LIST_PADDING } from '@/components/Thread/ThreadZenKit'
+import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { useChatSessionTurn, type ChatSessionTarget } from '@/components/Thread/sessionTurn'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { useIsYouAuthor } from '@/components/Settings/sections/useNotifyPrefs'
@@ -447,7 +448,7 @@ export function ThreadTab({
           data-zen-conversation-body=""
           style={{ padding: THREAD_LIST_PADDING }}
         >
-          <div className="flex flex-col" style={{ gap: THREAD_LIST_GAP }}>
+          <ThreadMessageColumn gap={THREAD_LIST_GAP} testId="ticket-rail-column">
             {item.comments.map((c, i) => (
               <ThreadChatBubble
                 key={`${c.at}-${i}`}
@@ -459,7 +460,7 @@ export function ThreadTab({
                 timeLabel={formatRelativeTime(c.at, nowSec)}
               />
             ))}
-          </div>
+          </ThreadMessageColumn>
         </div>
       </SelectableRegion>
 

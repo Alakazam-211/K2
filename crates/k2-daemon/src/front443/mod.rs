@@ -102,19 +102,33 @@ pub async fn start() {
     crate::handoff::register(crate::handoff::Role::Front443, &l);
     let local = l.local_addr().ok();
     // A hand-off successor routes from its first connection with the
-    // table its predecessor passed (fixed backends only); a cold start
-    // routes once its own state is up (the DB, a few seconds in).
-    if let Some(t) = routes::take_handed() {
+    // table its predecessor passed (fixed backends only). A cold start
+    // (systemd's fd) accepts only once its own table is built — the DB is
+    // open a few seconds in — and the kernel queues connections meanwhile
+    // (backlog 4096), so nothing that arrives during boot is closed for a
+    // route that simply isn't loaded yet.
+    let handed = routes::take_handed();
+    let (ready_tx, mut ready_rx) = tokio::sync::watch::channel(handed.is_some());
+    if let Some(t) = handed {
         routes::install(t);
     }
     let front = server::Front::new(cap(), Box::new(routes::current));
-    let accept = tokio::spawn(server::accept_loop(l, Arc::clone(&front), crate::handoff::splice_handle()));
+    let accept = {
+        let front = Arc::clone(&front);
+        tokio::spawn(async move {
+            tokio::select! {
+                r = ready_rx.wait_for(|r| *r) => { if r.is_err() { return; } }
+                _ = crate::handoff::quiesced() => return,
+            }
+            server::accept_loop(l, front, crate::handoff::splice_handle()).await
+        })
+    };
     *live().lock().unwrap_or_else(|p| p.into_inner()) = Some(Live { front, local, source, accept });
-    log_debug!("[front443] serving {local:?} (socket from {source}; cap {})", cap());
+    log_debug!("[front443] holding {local:?} (socket from {source}; cap {})", cap());
     // Routes now, then on a timer; converge voice onto the passthrough tier.
-    tokio::spawn(async {
+    tokio::spawn(async move {
         // The live table needs the DB (hosted mail's names): wait for boot
-        // to open it, at most a minute; a handed-over table serves meanwhile.
+        // to open it, at most a minute.
         for _ in 0..120 {
             if k2_core::db::try_shared().is_some() {
                 break;
@@ -123,15 +137,14 @@ pub async fn start() {
         }
         let mut first = true;
         loop {
-            let converge = first;
-            let _ = tokio::task::spawn_blocking(move || {
-                rebuild_logged();
-                if converge {
-                    converge_voice(true);
-                }
-            })
-            .await;
-            first = false;
+            let _ = tokio::task::spawn_blocking(rebuild_logged).await;
+            if first {
+                let _ = ready_tx.send(true);
+                log_debug!("[front443] serving {local:?}");
+                // Sew's order: the front accepts and routes before TURN moves.
+                let _ = tokio::task::spawn_blocking(|| converge_voice(true)).await;
+                first = false;
+            }
             if !serving() {
                 return;
             }

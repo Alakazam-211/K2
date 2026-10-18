@@ -116,6 +116,9 @@ export interface MemberPaneRequest {
 interface ProjectGroupsState {
   /** null = not fetched yet (the page shows a loading state). */
   groups: ProjectGroup[] | null
+  /** The last list fetch's failure (null after a success). Lets a view
+   *  show the error with Retry instead of an endless "Loading…". */
+  groupsError: string | null
   /** workspace registry id → project-group chips for the main nav. */
   tagsByWorkspaceId: Record<string, ProjectNavTag[]>
   /** The nav's selected project (drives the main area + member drawer). */
@@ -185,6 +188,7 @@ interface ProjectGroupsState {
 
 export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   groups: null,
+  groupsError: null,
   tagsByWorkspaceId: {},
   selectedGroupId: null,
   revision: 0,
@@ -204,7 +208,7 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
     try {
       const groups = await fetchProjectGroups(primaryScope())
       if (activeHostKey(useConnectHostStore.getState().activeHost) !== hostKey) return
-      set({ groups })
+      set({ groups, groupsError: null })
       const membersByGroupId: Record<string, string[]> = {}
       const listCarriesMembers = groups.every((g) => Array.isArray(g.memberWorkspaceIds))
       if (listCarriesMembers) {
@@ -231,6 +235,9 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
       if (sel && !groups.some((g) => g.id === sel)) set({ selectedGroupId: null })
     } catch (err) {
       console.warn('[project-groups] list fetch failed:', err)
+      if (activeHostKey(useConnectHostStore.getState().activeHost) === hostKey) {
+        set({ groupsError: err instanceof Error ? err.message : String(err) })
+      }
       // Leave `groups` as-is. First load stays `null` (loading) so
       // onDaemonConnected / onAppHello can retry; a successful empty
       // list is the only path that writes `[]`.
@@ -407,6 +414,7 @@ onActiveHostChange(() => {
   clearCachedShows()
   useProjectGroupsStore.setState((s) => ({
     groups: null,
+    groupsError: null,
     tagsByWorkspaceId: {},
     selectedGroupId: null,
     revision: s.revision + 1,

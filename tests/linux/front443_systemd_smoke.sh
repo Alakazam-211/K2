@@ -39,6 +39,9 @@ HOME_D="$W/home"; RUN="$W/run"
 mkdir -p "$HOME_D/.k2/sew" "$RUN" "$W/shim"; chmod 700 "$RUN"
 BACKEND_PID=""; HOLD_PID=""
 cleanup() {
+	# KillMode=process leaves anything else in the unit's cgroup (a hand-off
+	# predecessor still draining): kill the whole cgroup first.
+	systemctl kill --kill-whom=all --signal=KILL "$U.service" >/dev/null 2>&1 || true
 	systemctl stop "$U.service" "$U.socket" >/dev/null 2>&1 || true
 	rm -f "/run/systemd/system/$U.socket" "/run/systemd/system/$U.service"
 	systemctl daemon-reload || true

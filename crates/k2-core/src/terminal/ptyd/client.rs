@@ -106,6 +106,19 @@ impl Owner {
         }
     }
 
+    /// Fire-and-forget request (the response is discarded by the reader).
+    /// For updates nobody waits on, e.g. `update_meta` (P28).
+    pub fn send_nowait(&self, body: Request) {
+        if self.is_dead() {
+            return;
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        if let Ok(bytes) = proto::encode(&Frame::new(Some(id), body)) {
+            use std::io::Write;
+            let _ = lock(&self.writer).write_all(&bytes);
+        }
+    }
+
     /// Register for a session's events. Call before `spawn` so an instant
     /// exit can't be missed.
     pub fn watch(&self, sid: &str) -> mpsc::Receiver<SessionEvent> {

@@ -137,21 +137,34 @@ export function trustedPeers(peers: FederationPeer[]): FederationPeer[] {
   return peers.filter((p) => p.trust === 'trusted')
 }
 
-/** Picker order (0.46.1): by the name shown, case-insensitively, then by
- *  the address. The daemon sends pairing order (servers) and the other
- *  server's sidebar order (agents). */
-function byShownName<T>(items: T[], key: (t: T) => [string, string]): T[] {
-  const cmp = (a: string, b: string): number => a.localeCompare(b, undefined, { sensitivity: 'base' })
+/** Picker order (0.46.1): case-insensitive A to Z, key by key. The daemon
+ *  sorts too (`federation_rosters.rs`, same keys); this is the fallback for
+ *  an older active daemon, which sends pairing order (servers) and the
+ *  other server's sidebar order (agents). */
+export function compareShown(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { sensitivity: 'base' })
+}
+
+function byKeys<T>(items: T[], key: (t: T) => string[]): T[] {
   return [...items].sort((x, y) => {
-    const [nx, ax] = key(x)
-    const [ny, ay] = key(y)
-    return cmp(nx, ny) || cmp(ax, ay)
+    const kx = key(x)
+    const ky = key(y)
+    for (let i = 0; i < kx.length; i++) {
+      const c = compareShown(kx[i] ?? '', ky[i] ?? '')
+      if (c !== 0) return c
+    }
+    return 0
   })
 }
 
-/** Paired servers for a picker, A to Z by label (as the picker shows it). */
+/** The name a picker shows for a paired server (daemon `peer_shown_label`). */
+export function peerShownLabel(p: Pick<FederationPeer, 'label' | 'subdomain' | 'fingerprint'>): string {
+  return p.label?.trim() || p.subdomain?.trim() || p.fingerprint.slice(0, 12)
+}
+
+/** Paired servers A to Z: name shown, then host, then fingerprint. */
 export function sortPeersForPicker(peers: FederationPeer[]): FederationPeer[] {
-  return byShownName(peers, (p) => [p.label || p.subdomain || p.fingerprint.slice(0, 12), federatedPeerHost(p) || p.fingerprint])
+  return byKeys(peers, (p) => [peerShownLabel(p), federatedPeerHost(p), p.fingerprint])
 }
 
 /** What the federated agent picker says when it has no agents to show.
@@ -165,9 +178,162 @@ export function emptyRosterNote(answered: boolean, server: string): string {
   return 'No connectable agents on this server. On their side, turn on "Let agents on other servers message this agent" for an agent, or "Let agents on other servers message every agent" in Settings → K2 Connect.'
 }
 
-/** A server's agents for a picker, A to Z by handle, then address. */
+/** A server's agents A to Z: name shown (workspace name, else handle),
+ *  then handle, then address. */
 export function sortRosterForPicker(agents: RosterAgent[]): RosterAgent[] {
-  return byShownName(agents, (a) => [a.agent, a.address])
+  return byKeys(agents, (a) => [a.workspace_name?.trim() || a.agent, a.agent, a.address])
+}
+
+// ── One Connections picker (0.46.1, eval-connections-pickers-v1 b2) ──────
+
+/** How one server answered `peer-rosters`. `loading` is the picker's own
+ *  state while a Retry is in flight; the daemon never sends it. */
+export type ConnectionServerStatus = 'ok' | 'offline' | 'rejected' | 'error' | 'loading'
+
+/** One server in `GET /cli/federation/peer-rosters`: This server (`local`)
+ *  first, then each trusted paired server A to Z. */
+export interface ConnectionServer {
+  kind: 'local' | 'peer'
+  /** `local`, or the peer's fingerprint. */
+  key: string
+  /** The name shown (This server / label / subdomain). */
+  label: string
+  /** The paired server's host (`rpm.k2.dev`, `192.168.1.50:38471`); empty for local. */
+  host: string
+  fingerprint?: string
+  subdomain?: string
+  base_url?: string
+  repair_recommended?: boolean
+  status: ConnectionServerStatus
+  error: string | null
+  /** A to Z. For `local`, `agent` and `address` are the handle. */
+  agents: RosterAgent[]
+}
+
+export type ConnectionServersResult =
+  /** `legacy`: an older daemon without `peer-rosters`; the paired servers
+   *  were asked one by one here and This server is not in the list. */
+  | { kind: 'ok'; servers: ConnectionServer[]; legacy: boolean }
+  /** Federation is off on this server (every `/cli/federation/*` 404s). */
+  | { kind: 'federation-off' }
+  /** This login can't list paired servers (owner / Admin only). */
+  | { kind: 'denied' }
+  | { kind: 'error'; message: string }
+
+const statusOf = (e: unknown): number | null => {
+  const s = (e as { status?: unknown } | null)?.status
+  return typeof s === 'number' ? s : null
+}
+const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+/** A raw `peer-rosters` server, checked; null when it is not one. */
+function asConnectionServer(v: unknown): ConnectionServer | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  if ((o.kind !== 'local' && o.kind !== 'peer') || typeof o.key !== 'string' || typeof o.label !== 'string') return null
+  const status = o.status
+  return {
+    kind: o.kind,
+    key: o.key,
+    label: o.label,
+    host: typeof o.host === 'string' ? o.host : '',
+    fingerprint: typeof o.fingerprint === 'string' ? o.fingerprint : undefined,
+    subdomain: typeof o.subdomain === 'string' ? o.subdomain : undefined,
+    base_url: typeof o.base_url === 'string' ? o.base_url : undefined,
+    repair_recommended: o.repair_recommended === true,
+    status: status === 'ok' || status === 'offline' || status === 'rejected' ? status : 'error',
+    error: typeof o.error === 'string' ? o.error : null,
+    agents: Array.isArray(o.agents) ? (o.agents as RosterAgent[]) : [],
+  }
+}
+
+/** Paired servers asked at once on an older daemon (no `peer-rosters`). */
+const LEGACY_ROSTER_CONCURRENCY = 4
+
+/** An older daemon: list the trusted pins, then ask each one's roster
+ *  (at most 4 at a time), sorted here with the daemon's keys. */
+async function legacyConnectionServers(peerSelector?: string): Promise<ConnectionServersResult> {
+  let peers: FederationPeer[]
+  try {
+    const body = await daemonCliGet<{ peers?: FederationPeer[] }>(primaryScope(), 'federation/peers')
+    peers = Array.isArray(body?.peers) ? body.peers : []
+  } catch (e) {
+    const status = statusOf(e)
+    if (status === 404) return { kind: 'federation-off' }
+    if (status === 401 || status === 403) return { kind: 'denied' }
+    return { kind: 'error', message: messageOf(e) }
+  }
+  let trusted = sortPeersForPicker(trustedPeers(peers))
+  if (peerSelector) trusted = trusted.filter((p) => p.fingerprint === peerSelector)
+  const servers: ConnectionServer[] = new Array(trusted.length)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < trusted.length) {
+      const i = next++
+      const p = trusted[i]
+      const base: ConnectionServer = {
+        kind: 'peer',
+        key: p.fingerprint,
+        label: peerShownLabel(p),
+        host: federatedPeerHost(p),
+        fingerprint: p.fingerprint,
+        subdomain: p.subdomain,
+        base_url: p.base_url ?? p.baseUrl,
+        repair_recommended: p.repair_recommended === true,
+        status: 'ok',
+        error: null,
+        agents: [],
+      }
+      try {
+        const body = await daemonCliGet<{ roster?: { agents?: RosterAgent[] } }>(
+          primaryScope(),
+          'federation/peer-roster',
+          { peer: p.fingerprint },
+        )
+        const agents = body?.roster?.agents
+        servers[i] = { ...base, agents: sortRosterForPicker(Array.isArray(agents) ? agents : []) }
+      } catch (e) {
+        const status = statusOf(e)
+        // The old route answers 502 for "no answer / refused there".
+        servers[i] = {
+          ...base,
+          status: status === 502 ? 'offline' : status === 403 ? 'rejected' : 'error',
+          error: messageOf(e),
+        }
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(LEGACY_ROSTER_CONCURRENCY, trusted.length) }, worker))
+  return { kind: 'ok', servers, legacy: true }
+}
+
+/**
+ * Everything a workspace can connect to, from the ACTIVE daemon's
+ * `GET /cli/federation/peer-rosters` (This server first, then each trusted
+ * paired server A to Z, each with its status; the daemon caps each server
+ * at 5 s). `peerSelector` asks one paired server only (Retry).
+ *
+ * An older daemon (no such route) falls back to `peers` + one
+ * `peer-roster` per server. Never throws.
+ */
+export async function fetchConnectionServers(peerSelector?: string): Promise<ConnectionServersResult> {
+  try {
+    const body = await daemonCliGet<{ servers?: unknown[] }>(
+      primaryScope(),
+      'federation/peer-rosters',
+      peerSelector ? { peer: peerSelector } : undefined,
+    )
+    const raw = Array.isArray(body?.servers) ? body.servers : []
+    const servers = raw.map(asConnectionServer).filter((s): s is ConnectionServer => s !== null)
+    return { kind: 'ok', servers, legacy: false }
+  } catch (e) {
+    const status = statusOf(e)
+    if (status === 401 || status === 403) return { kind: 'denied' }
+    // 404: federation is off, or the daemon predates the route. The
+    // legacy path tells them apart (its `peers` 404s only when off).
+    if (status === 404) return legacyConnectionServers(peerSelector)
+    return { kind: 'error', message: messageOf(e) }
+  }
 }
 
 /**

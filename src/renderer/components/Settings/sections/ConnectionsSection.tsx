@@ -62,6 +62,7 @@ import {
   listFederationPeers,
   REPAIR_RECOMMENDED_HINT,
   savedHostBaseUrl,
+  sortPeersForPicker,
   type FederationPeer,
 } from '@/lib/federation'
 import { isAirgap } from '@/lib/airgap'
@@ -595,17 +596,9 @@ function ActiveHostPeersPanel({
       setPeers([])
     } else {
       setAvailable(true)
-      setPeers(
-        res.data
-          .slice()
-          .sort((a, b) =>
-            (a.label || a.subdomain || a.fingerprint).localeCompare(
-              b.label || b.subdomain || b.fingerprint,
-              undefined,
-              { sensitivity: 'base' },
-            ),
-          ),
-      )
+      // The daemon sends them A to Z (0.46.1); the same keys here keep an
+      // older server's pairing order from leaking through.
+      setPeers(sortPeersForPicker(res.data))
     }
     setLoading(false)
   }, [])

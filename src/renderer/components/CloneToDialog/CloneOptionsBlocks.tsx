@@ -52,6 +52,11 @@ function Tick({ checked, onChange, children, testId, disabled }: {
 
 const muted = 'text-[11px] text-[var(--color-text-muted)] leading-relaxed'
 
+// A store selector must return a stable value: a fresh `[]` on every call
+// (while `preview` is still null) loops useSyncExternalStore into React
+// #185 "Maximum update depth exceeded" (0.46.0 Clone dialog crash).
+const NO_ENV_FILES: readonly string[] = []
+
 export function ThreadBlock(): React.JSX.Element {
   const bring = useCloneToDialogStore((s) => s.bringThread)
   const setBring = useCloneToDialogStore((s) => s.setBringThread)
@@ -162,7 +167,7 @@ export function SecretsBlock({ pull }: { pull: boolean }): React.JSX.Element | n
 export function EnvFilesBlock({ pull }: { pull: boolean }): React.JSX.Element {
   const carrySecrets = useCloneToDialogStore((s) => s.carrySecrets)
   const setCarrySecrets = useCloneToDialogStore((s) => s.setCarrySecrets)
-  const envFiles = useCloneToDialogStore((s) => s.preview?.envFiles ?? [])
+  const envFiles = useCloneToDialogStore((s) => s.preview?.envFiles) ?? NO_ENV_FILES
   return (
     <div className="space-y-1" data-testid="clone-env-block">
       <Tick checked={carrySecrets} onChange={setCarrySecrets} testId="clone-env-files">

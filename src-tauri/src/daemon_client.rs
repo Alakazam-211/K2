@@ -157,6 +157,13 @@ impl DaemonClient {
         serde_json::from_str(&resp).map_err(|e| format!("decode {path}: {e}: body={resp}"))
     }
 
+    /// Scheme + authority this client talks to (`http://127.0.0.1:<port>`
+    /// for [`DaemonClient::try_connect`]).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
     /// Hit `GET /status?token=<t>` and decode the JSON body.
     pub fn status(&self) -> Result<DaemonStatus, String> {
         let url = format!("{}/status?token={}", self.base, self.token);

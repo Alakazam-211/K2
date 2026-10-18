@@ -108,7 +108,7 @@ fn os_release_is_arch(text: &str) -> bool {
     false
 }
 
-fn detect_install_kind() -> &'static str {
+pub(crate) fn detect_install_kind() -> &'static str {
     // Before any Arch file: an AppImage on Arch must stay on check().
     if std::env::var_os("APPIMAGE").is_some() {
         return "appimage";
@@ -166,6 +166,10 @@ pub struct InstallUpdateProbe {
     pub version: Option<String>,
     pub has_update: bool,
     pub download_url: Option<String>,
+    /// True when this install can take the in-app download, verify and
+    /// pkexec install (commands::linux_pkg_update). False keeps the old
+    /// "open the download" offer.
+    pub can_install: bool,
 }
 
 fn non_arch_probe(kind: &str) -> InstallUpdateProbe {
@@ -174,6 +178,7 @@ fn non_arch_probe(kind: &str) -> InstallUpdateProbe {
         version: None,
         has_update: false,
         download_url: None,
+        can_install: false,
     }
 }
 
@@ -200,6 +205,7 @@ fn decide_install_update(
             version: Some(version),
             has_update: true,
             download_url: Some(download_url),
+            can_install: false,
         })
     } else {
         Ok(InstallUpdateProbe {
@@ -207,6 +213,7 @@ fn decide_install_update(
             version: None,
             has_update: false,
             download_url: None,
+            can_install: false,
         })
     }
 }
@@ -293,7 +300,9 @@ pub async fn probe_install_update() -> Result<InstallUpdateProbe, String> {
     let body = tokio::task::spawn_blocking(fetch_latest_manifest)
         .await
         .map_err(|e| e.to_string())??;
-    decide_install_update(kind, CURRENT_VERSION, &body)
+    let mut probe = decide_install_update(kind, CURRENT_VERSION, &body)?;
+    probe.can_install = probe.has_update && super::linux_pkg_update::this_install().is_ok();
+    Ok(probe)
 }
 
 /// Broadcast an event from one window to all windows (used for tab sync etc.)
@@ -345,6 +354,7 @@ mod tests {
                 version: None,
                 has_update: false,
                 download_url: None,
+                can_install: false,
             }
         );
     }
@@ -386,6 +396,7 @@ mod tests {
                 version: Some("0.41.2".into()),
                 has_update: true,
                 download_url: Some("https://github.com/Alakazam-211/K2/releases/tag/v0.41.2".into()),
+                can_install: false,
             }
         );
         let same = r#"{"version":"0.41.1","platforms":{"darwin-aarch64":{}}}"#;

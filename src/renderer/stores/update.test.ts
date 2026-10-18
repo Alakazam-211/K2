@@ -20,6 +20,7 @@ interface Probe {
   version: string | null
   has_update: boolean
   download_url: string | null
+  can_install?: boolean
 }
 
 function resetStores(): void {
@@ -31,6 +32,9 @@ function resetStores(): void {
     progress: 0,
     error: null,
     archDownloadUrl: null,
+    linuxCanInstall: false,
+    linuxInstalling: false,
+    linuxManualCommand: null,
   })
   useToastStore.setState({ toasts: [] })
   vi.mocked(invoke).mockReset()
@@ -198,6 +202,16 @@ describe('checkForUpdate install kind', () => {
     expect(check).not.toHaveBeenCalled()
   })
 
+  it('can_install false keeps the open-the-download path', async () => {
+    mockProbe({ kind: 'arch', version: '9.9.9', has_update: true, download_url: ZST, can_install: false })
+    await useUpdateStore.getState().checkForUpdate()
+    expect(useUpdateStore.getState().linuxCanInstall).toBe(false)
+    await useUpdateStore.getState().openAvailableDownload()
+    const cmds = vi.mocked(invoke).mock.calls.map((call) => call[0])
+    expect(cmds).toContain('plugin:opener|open_url')
+    expect(cmds).not.toContain('install_linux_package_update')
+  })
+
   it('toasts up to date when Arch is current', async () => {
     mockProbe({
       kind: 'arch',
@@ -211,5 +225,91 @@ describe('checkForUpdate install kind', () => {
     expect(useToastStore.getState().toasts.map((t) => t.message)).toContain(
       'K2 is up to date',
     )
+  })
+})
+
+describe('Linux package in-app install (pkexec)', () => {
+  const MANUAL =
+    "sudo pacman -U --noconfirm '/tmp/k2-update-AbC123/k2-9.9.9-x86_64.pkg.tar.zst' && systemctl --user restart k2-daemon"
+
+  beforeEach(() => {
+    resetStores()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  function mockInstall(install: unknown | Error, relaunch: unknown | Error = null): void {
+    vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === 'probe_install_update') {
+        return { kind: 'arch', version: '9.9.9', has_update: true, download_url: ZST, can_install: true }
+      }
+      if (cmd === 'install_linux_package_update') {
+        expect(args).toEqual({ version: '9.9.9' })
+        if (install instanceof Error) throw install.message
+        return install
+      }
+      if (cmd === 'relaunch_after_linux_package_update') {
+        if (relaunch instanceof Error) throw relaunch.message
+        return relaunch
+      }
+      throw new Error(`unexpected invoke ${cmd}`)
+    })
+  }
+
+  it('installed: relaunches through the Linux helper, never the Tauri updater', async () => {
+    mockInstall({ status: 'installed', message: 'K2 v9.9.9 is installed.', manual_command: null, daemon: { outcome: 'restarted', message: null } })
+    await useUpdateStore.getState().checkForUpdate()
+    expect(useUpdateStore.getState().linuxCanInstall).toBe(true)
+    await useUpdateStore.getState().openAvailableDownload()
+    const cmds = vi.mocked(invoke).mock.calls.map((call) => call[0])
+    expect(cmds).toEqual(['probe_install_update', 'install_linux_package_update', 'relaunch_after_linux_package_update'])
+    expect(cmds).not.toContain('plugin:opener|open_url')
+    expect(cmds).not.toContain('relaunch_via_open')
+    expect(check).not.toHaveBeenCalled()
+    expect(useUpdateStore.getState().status).toBe('ready')
+  })
+
+  it('manual (pkexec missing or cancelled): shows the message and the exact command', async () => {
+    mockInstall({
+      status: 'manual',
+      message: '/usr/bin/pkexec was not found. The package is downloaded and verified. Run this in a terminal, then reopen K2:',
+      manual_command: MANUAL,
+      daemon: null,
+    })
+    await useUpdateStore.getState().checkForUpdate()
+    await useUpdateStore.getState().openAvailableDownload()
+    const state = useUpdateStore.getState()
+    expect(state.status).toBe('error')
+    expect(state.error).toContain('/usr/bin/pkexec was not found')
+    expect(state.linuxManualCommand).toBe(MANUAL)
+    expect(state.linuxInstalling).toBe(false)
+    const cmds = vi.mocked(invoke).mock.calls.map((call) => call[0])
+    expect(cmds).not.toContain('relaunch_after_linux_package_update')
+  })
+
+  it('refused (hash mismatch / no SUMS line): error, no relaunch', async () => {
+    const refusal =
+      'Refusing to install v9.9.9: SHA256SUMS-linux-x86_64.txt has no line for k2-9.9.9-x86_64.pkg.tar.zst'
+    mockInstall(new Error(refusal))
+    await useUpdateStore.getState().checkForUpdate()
+    await useUpdateStore.getState().openAvailableDownload()
+    const state = useUpdateStore.getState()
+    expect(state.status).toBe('error')
+    expect(state.error).toBe(refusal)
+    expect(state.linuxManualCommand).toBeNull()
+    const cmds = vi.mocked(invoke).mock.calls.map((call) => call[0])
+    expect(cmds).not.toContain('relaunch_after_linux_package_update')
+  })
+
+  it('relaunch failure after install tells the user to reopen K2', async () => {
+    mockInstall(
+      { status: 'installed', message: 'K2 v9.9.9 is installed.', manual_command: null, daemon: null },
+      new Error('/usr/bin/k2-gui is missing after the install'),
+    )
+    await useUpdateStore.getState().checkForUpdate()
+    await useUpdateStore.getState().openAvailableDownload()
+    const state = useUpdateStore.getState()
+    expect(state.status).toBe('error')
+    expect(state.error).toContain('K2 v9.9.9 is installed. Please reopen K2')
+    expect(state.error).toContain('/usr/bin/k2-gui is missing after the install')
   })
 })

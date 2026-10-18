@@ -318,101 +318,162 @@ pub const TEST_RELEASES: &[SewRelease] = &[
     },
 ];
 
-/// Sew's TEST builds (`/Users/Shared/sew-test-builds/<v>/K2-PIN.txt`, Sew
-/// main `901b20c7` = 0.1.0 and `aa355dbe` = 0.1.1, aarch64 only), for the
-/// S29 cycle in a throwaway VM before SW1 publishes a release. Compiled
-/// ONLY with the `sew-test-pins` feature, which release builds never enable
-/// (`sign-root-helper.sh` refuses a helper carrying [`SEW_TEST_PINS_FLAG`];
-/// `k2-root-helper/tests/binary.rs` proves a default build carries neither
-/// these hashes nor the flag). Generated from each release's
-/// `release.json` (Sew's contract; K2-PIN.txt is not authoritative) by
-/// `scripts/sew-pins-from-release.sh <dir> --const <NAME>`, which also
-/// checks SHA256SUMS and the tarballs; the output is byte-equal to these.
+/// DEMO (k2-sewlab-0461e, pool-09 acceptance; not for main): Sew 0.2.0
+/// (the SW1 release the box runs) and Sew 0.2.1 (TURN-PT, the passthrough
+/// tier; `/Users/Shared/sew-releases/0.2.1`, git 13842109cfc9, SHA256SUMS
+/// sha256 21f12773…4bb55), both triples, printed by
+/// `scripts/sew-pins-from-release.sh <dir> --const <NAME>` (which checked
+/// SHA256SUMS, every tarball and binary member). Compiled ONLY with
+/// `sew-test-pins`; release signing refuses such a helper.
 ///
-/// Two tables, like two K2 releases: `sew-test-pins` pins 0.1.0 (enable),
-/// `sew-test-pins-upgrade` appends 0.1.1 as the pin (the upgrade source
-/// 0.1.0 stays known, as a real pin bump keeps it).
+/// Two tables, like two K2 releases: `sew-test-pins` pins 0.2.0 (build A),
+/// `sew-test-pins-upgrade` appends 0.2.1 as the pin (build B; 0.2.0 stays
+/// known, so the box upgrades from it and can roll back to it).
 #[cfg(feature = "sew-test-pins")]
-const SEW_TEST_0_1_0: SewRelease = SewRelease {
-    version: "0.1.0",
-    artifacts: &[SewArtifact {
-        arch: "aarch64",
-        triple: "aarch64-unknown-linux-gnu",
-        tarball_sha256: "922f8f285a87bd22309eab916d000874004c02765a77d8abc7a74349a99b9006",
-        binary_sha256: "4dfe51382507e748830a0e008fb96a19cecc7c6d2adb9063c0b2dc533f669837",
-    }],
-    media: Some(SewSidecar {
-        version: "0.1.0",
-        artifacts: &[SewArtifact {
+const SEW_TEST_0_2_0: SewRelease = SewRelease {
+    version: "0.2.0",
+    artifacts: &[
+        SewArtifact {
             arch: "aarch64",
             triple: "aarch64-unknown-linux-gnu",
-            tarball_sha256: "2ebb00641837b17a7253d7984656c62a4c102705a0002cc18a8645f827d596a6",
-            binary_sha256: "5edf44e592c28ec3831b495434b98323133ab6438cd5ed74e43e84cea10883d6",
-        }],
+            tarball_sha256: "f8b51c780eb1d89775d55bb3756d192b8d488f142394fb59918e00d080abf16b",
+            binary_sha256: "8cafa9da19756720f329038806b2e396f5ef24ecd6233f0a82f2db7f37ea4c96",
+        },
+        SewArtifact {
+            arch: "x86_64",
+            triple: "x86_64-unknown-linux-gnu",
+            tarball_sha256: "908dd7d8a5026022b76595091f8e21af6c8fb37f7486ecd13149e52173f42229",
+            binary_sha256: "ef20c6ebb7c253c48fbf64e8372f58c596ce33bbbfe12d6dc9183005b66f9262",
+        },
+    ],
+    media: Some(SewSidecar {
+        version: "0.2.0",
+        artifacts: &[
+            SewArtifact {
+                arch: "aarch64",
+                triple: "aarch64-unknown-linux-gnu",
+                tarball_sha256: "545a81f91a4fb3816bfa4fa64aa9e475e088155f415fbf9eae4597d0ab39bab1",
+                binary_sha256: "44404a5fabd72e1cdb2488c746289d01fb1f34d46aeb767c8a13ddb8288ce71a",
+            },
+            SewArtifact {
+                arch: "x86_64",
+                triple: "x86_64-unknown-linux-gnu",
+                tarball_sha256: "6d5c64c2263d7eca0b465d69c114996da42676e38afa9505c6c441dd5797473d",
+                binary_sha256: "195564b6cab0170bc1d823c26c8b06d364ab5c28bf14f695af1595127a4124a6",
+            },
+        ],
     }),
     transcriber: Some(SewSidecar {
-        version: "0.1.0",
-        artifacts: &[SewArtifact {
-            arch: "aarch64",
-            triple: "aarch64-unknown-linux-gnu",
-            tarball_sha256: "62630e62965cf3aa46d923a934a2a1bde2920b4ecff7b4cdb29dcf25922aff29",
-            binary_sha256: "e54b37f67dd701f4eed85a6a124c3f7be12ccc77a33a4fe2dd616804973fc919",
-        }],
+        version: "0.2.0",
+        artifacts: &[
+            SewArtifact {
+                arch: "aarch64",
+                triple: "aarch64-unknown-linux-gnu",
+                tarball_sha256: "0d42a591eb792952e77f23cc5ecb00a1ddbca622365d56b4383f608ffce42edf",
+                binary_sha256: "a312abd60383dd3a015279fcc4294d76f1b93b528c198100b2584bbf7dba2d80",
+            },
+            SewArtifact {
+                arch: "x86_64",
+                triple: "x86_64-unknown-linux-gnu",
+                tarball_sha256: "d438161714ff901449a442afd412d0583ed06aa8d596aa8af8d6afaf1c8b0a86",
+                binary_sha256: "719de7f8ced63a5344eb76b064df7d7a17e9140791c44da1649642fe899ecfaa",
+            },
+        ],
     }),
     recorder: Some(SewSidecar {
-        version: "0.1.0",
-        artifacts: &[SewArtifact {
-            arch: "aarch64",
-            triple: "aarch64-unknown-linux-gnu",
-            tarball_sha256: "9370335de788e47e4be40aca4c9a8907bfc5112a708962146c594380b7260308",
-            binary_sha256: "110ebcaa87bf55283b0197dfdd8b209d73ac32d4eb164de3193409a594a05be1",
-        }],
+        version: "0.2.0",
+        artifacts: &[
+            SewArtifact {
+                arch: "aarch64",
+                triple: "aarch64-unknown-linux-gnu",
+                tarball_sha256: "8bfbdc2c324c0fafcb5ce9e5ef0f5c702df1f1652d298133e0c89a1d585182ab",
+                binary_sha256: "11ae0573d30a54ba0ac725f5b04f6492e140c63062923d8f195992257c260a2a",
+            },
+            SewArtifact {
+                arch: "x86_64",
+                triple: "x86_64-unknown-linux-gnu",
+                tarball_sha256: "4b2c956bceec832b66342aa2bd8db6f95c09384db6dceeb5e2b0b7774cb51a4c",
+                binary_sha256: "ea5e9cad87d232edf9599ca3947950e7b2ddf7f468d7b816322e2f55d019a7d2",
+            },
+        ],
     }),
 };
 
 #[cfg(feature = "sew-test-pins-upgrade")]
-const SEW_TEST_0_1_1: SewRelease = SewRelease {
-    version: "0.1.1",
-    artifacts: &[SewArtifact {
-        arch: "aarch64",
-        triple: "aarch64-unknown-linux-gnu",
-        tarball_sha256: "82fe9e196887b9cfa34528275e535df1b82f7f26309c97025767ee6821e189ba",
-        binary_sha256: "35d334be98c5610d45f72c3d19e82eaca02ea3b17ecc37910532f26f9f3f0ade",
-    }],
-    media: Some(SewSidecar {
-        version: "0.1.1",
-        artifacts: &[SewArtifact {
+const SEW_TEST_0_2_1: SewRelease = SewRelease {
+    version: "0.2.1",
+    artifacts: &[
+        SewArtifact {
             arch: "aarch64",
             triple: "aarch64-unknown-linux-gnu",
-            tarball_sha256: "a7d01cae2b5da55b0dfd5541a61833a03a175ccdc408dbe78f3ea6d8f187c328",
-            binary_sha256: "35958529b04ccf31a70bfbf147ee64f9803c44fb935c2523c76cc69030423355",
-        }],
+            tarball_sha256: "8116e64ae13d43da196b77fbe1ff02ef81d9860212de3f7585094ed83b606ee2",
+            binary_sha256: "f909915d05886752f5a496c895b7ad248f79e1f5d32a95a3ef1c65f578be3cd7",
+        },
+        SewArtifact {
+            arch: "x86_64",
+            triple: "x86_64-unknown-linux-gnu",
+            tarball_sha256: "6cad696d906b250301fe34e44c080bc127025012257a562622ee85d1488cafcc",
+            binary_sha256: "cf456d16f2031b7b2b952ab10c333bdaea8a421aed435dfce6ae033f500a8a6e",
+        },
+    ],
+    media: Some(SewSidecar {
+        version: "0.2.1",
+        artifacts: &[
+            SewArtifact {
+                arch: "aarch64",
+                triple: "aarch64-unknown-linux-gnu",
+                tarball_sha256: "cfac4231e141ab0678778c40787c2186c13a43c2cefe7c6a1399b2bd0fabe401",
+                binary_sha256: "e806246429f954899630158d0da11e5ed6caaa7157d18cbd24599493f202456c",
+            },
+            SewArtifact {
+                arch: "x86_64",
+                triple: "x86_64-unknown-linux-gnu",
+                tarball_sha256: "abcecd1e5e6523e2a8cc6549beb299ffab28d3fa8960eb0dbda91287bbcfbed4",
+                binary_sha256: "7fbbbb9a6b46d9e76b4c2911eaa90715d61bcb8c8a8078d6a78201c46d1f7884",
+            },
+        ],
     }),
     transcriber: Some(SewSidecar {
-        version: "0.1.1",
-        artifacts: &[SewArtifact {
-            arch: "aarch64",
-            triple: "aarch64-unknown-linux-gnu",
-            tarball_sha256: "95a4260fe6297e4fa95bb8f68b40d52145530151b91e160cb8ffe56a70f15660",
-            binary_sha256: "13e1301969d726652c40f81a5aaac9b2cb45b9ef15aee003aebd3a7ca299460b",
-        }],
+        version: "0.2.1",
+        artifacts: &[
+            SewArtifact {
+                arch: "aarch64",
+                triple: "aarch64-unknown-linux-gnu",
+                tarball_sha256: "d3671fd457d2cfcbedab9f8b9376840f1a3a530addfcb5bbf0b4b6a8300b108f",
+                binary_sha256: "1ca098c50c82975bdb6acf9e635caeb5b17245625ed0aaaf8ef9f3d81ce8acf5",
+            },
+            SewArtifact {
+                arch: "x86_64",
+                triple: "x86_64-unknown-linux-gnu",
+                tarball_sha256: "f840a861c9e4536e5777698f2c24475dc5bfa688a16f5223fec9c5e5e036675b",
+                binary_sha256: "b20b1684abdf8add1bf63b84bfa747b91dba4650c0dce9c1ef04ce12714434ce",
+            },
+        ],
     }),
     recorder: Some(SewSidecar {
-        version: "0.1.1",
-        artifacts: &[SewArtifact {
-            arch: "aarch64",
-            triple: "aarch64-unknown-linux-gnu",
-            tarball_sha256: "231e744a1f824a918b898d9b5c2107a68a028fea6bd9ad2af63dbecfe7a4f3fa",
-            binary_sha256: "dd113b1d5844098b5cc92d04849291b6a5a9c678f064d6fbb270da214f5a284a",
-        }],
+        version: "0.2.1",
+        artifacts: &[
+            SewArtifact {
+                arch: "aarch64",
+                triple: "aarch64-unknown-linux-gnu",
+                tarball_sha256: "79db2e6348bcbb64c4dd0b6bfb947882110f4e334020bcf61e52783a599dbcd1",
+                binary_sha256: "6c62db7d4fad906c6b22cf6b7175257f9f50fd0af5f5d127841f0b3bd5470dda",
+            },
+            SewArtifact {
+                arch: "x86_64",
+                triple: "x86_64-unknown-linux-gnu",
+                tarball_sha256: "c45032512d75347603712369980197f9b92fb346a3d59c985b6739fb0615fd0b",
+                binary_sha256: "ad50834969fc941951b5b2fb0b122118d6572b6391bf0b72fb6c51cb92f1ef04",
+            },
+        ],
     }),
 };
 
 /// The test pin table this build uses (the last entry is the pin).
 #[cfg(all(feature = "sew-test-pins", not(feature = "sew-test-pins-upgrade")))]
-pub const SEW_TEST_PINS: &[SewRelease] = &[SEW_TEST_0_1_0];
+pub const SEW_TEST_PINS: &[SewRelease] = &[SEW_TEST_0_2_0];
 #[cfg(feature = "sew-test-pins-upgrade")]
-pub const SEW_TEST_PINS: &[SewRelease] = &[SEW_TEST_0_1_0, SEW_TEST_0_1_1];
+pub const SEW_TEST_PINS: &[SewRelease] = &[SEW_TEST_0_2_0, SEW_TEST_0_2_1];
 
 /// Present only in a `sew-test-pins` build; release signing refuses it.
 #[cfg(feature = "sew-test-pins")]
@@ -1173,27 +1234,25 @@ mod tests {
 
     #[cfg(all(feature = "sew-test-pins", not(feature = "test-signer")))]
     #[test]
-    fn sew_test_pins_are_aarch64_only_and_the_upgrade_table_keeps_0_1_0() {
+    fn sew_test_pins_demo_0461e_pin_0_2_0_then_0_2_1() {
         assert_eq!(test_pins_flag(), Some("K2_SEW_TEST_PINS_ENABLED"));
         let (pin, tar) = if cfg!(feature = "sew-test-pins-upgrade") {
-            ("0.1.1", "82fe9e196887b9cfa34528275e535df1b82f7f26309c97025767ee6821e189ba")
+            ("0.2.1", "6cad696d906b250301fe34e44c080bc127025012257a562622ee85d1488cafcc")
         } else {
-            ("0.1.0", "922f8f285a87bd22309eab916d000874004c02765a77d8abc7a74349a99b9006")
+            ("0.2.0", "908dd7d8a5026022b76595091f8e21af6c8fb37f7486ecd13149e52173f42229")
         };
         assert_eq!(pinned().version, pin);
-        assert_eq!(pinned_artifact("aarch64").unwrap().tarball_sha256, tar);
-        assert!(pinned_artifact("x86_64").unwrap_err().contains("unsupported"));
-        assert_eq!(known_binary("4dfe51382507e748830a0e008fb96a19cecc7c6d2adb9063c0b2dc533f669837", "aarch64"), Some("0.1.0"));
-        let v011 = known_binary("35d334be98c5610d45f72c3d19e82eaca02ea3b17ecc37910532f26f9f3f0ade", "aarch64");
-        assert_eq!(v011, cfg!(feature = "sew-test-pins-upgrade").then_some("0.1.1"));
-        assert_eq!(pinned_media_artifact("aarch64").unwrap().0, pin);
+        assert_eq!(pinned_artifact("x86_64").unwrap().tarball_sha256, tar);
+        assert_eq!(known_binary("ef20c6ebb7c253c48fbf64e8372f58c596ce33bbbfe12d6dc9183005b66f9262", "x86_64"), Some("0.2.0"));
+        let v021 = known_binary("cf456d16f2031b7b2b952ab10c333bdaea8a421aed435dfce6ae033f500a8a6e", "x86_64");
+        assert_eq!(v021, cfg!(feature = "sew-test-pins-upgrade").then_some("0.2.1"));
+        assert_eq!(pinned_media_artifact("x86_64").unwrap().0, pin);
+        assert_eq!(pinned_media_supports_passthrough(), cfg!(feature = "sew-test-pins-upgrade"));
         for r in SEW_TEST_PINS {
             for a in all_artifacts(r) {
                 assert!(!checksum_is_placeholder(a), "{a:?}");
             }
         }
-        // The real pin (0.2.0) is never selected in a test-pins build.
-        assert_ne!(pinned().version, "0.2.0");
     }
 
     #[test]

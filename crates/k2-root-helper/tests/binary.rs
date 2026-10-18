@@ -56,6 +56,23 @@ fn a_default_build_carries_no_sew_test_pins() {
         "13e1301969d726652c40f81a5aaac9b2cb45b9ef15aee003aebd3a7ca299460b",
         "231e744a1f824a918b898d9b5c2107a68a028fea6bd9ad2af63dbecfe7a4f3fa",
         "dd113b1d5844098b5cc92d04849291b6a5a9c678f064d6fbb270da214f5a284a",
+        // Sew 0.2.1 (demo 0461e test pins), both triples.
+        "8116e64ae13d43da196b77fbe1ff02ef81d9860212de3f7585094ed83b606ee2",
+        "f909915d05886752f5a496c895b7ad248f79e1f5d32a95a3ef1c65f578be3cd7",
+        "6cad696d906b250301fe34e44c080bc127025012257a562622ee85d1488cafcc",
+        "cf456d16f2031b7b2b952ab10c333bdaea8a421aed435dfce6ae033f500a8a6e",
+        "cfac4231e141ab0678778c40787c2186c13a43c2cefe7c6a1399b2bd0fabe401",
+        "e806246429f954899630158d0da11e5ed6caaa7157d18cbd24599493f202456c",
+        "abcecd1e5e6523e2a8cc6549beb299ffab28d3fa8960eb0dbda91287bbcfbed4",
+        "7fbbbb9a6b46d9e76b4c2911eaa90715d61bcb8c8a8078d6a78201c46d1f7884",
+        "d3671fd457d2cfcbedab9f8b9376840f1a3a530addfcb5bbf0b4b6a8300b108f",
+        "1ca098c50c82975bdb6acf9e635caeb5b17245625ed0aaaf8ef9f3d81ce8acf5",
+        "f840a861c9e4536e5777698f2c24475dc5bfa688a16f5223fec9c5e5e036675b",
+        "b20b1684abdf8add1bf63b84bfa747b91dba4650c0dce9c1ef04ce12714434ce",
+        "79db2e6348bcbb64c4dd0b6bfb947882110f4e334020bcf61e52783a599dbcd1",
+        "6c62db7d4fad906c6b22cf6b7175257f9f50fd0af5f5d127841f0b3bd5470dda",
+        "c45032512d75347603712369980197f9b92fb346a3d59c985b6739fb0615fd0b",
+        "ad50834969fc941951b5b2fb0b122118d6572b6391bf0b72fb6c51cb92f1ef04",
     ];
     let bytes = std::fs::read(bin()).expect("read built helper");
     let text = String::from_utf8_lossy(&bytes);

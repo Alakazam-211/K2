@@ -237,6 +237,59 @@ pub fn reload(app: &str) {
     }
 }
 
+// ── builds (S16) ─────────────────────────────────────────────────────
+
+/// The package registries an in-wall build may reach (HTTPS only),
+/// through the App's own proxy, while the build runs: registry-only
+/// egress (S16). Everything else stays the App's policy.
+pub const BUILD_REGISTRIES: &[&str] = &["registry.npmjs.org", "registry.yarnpkg.com", "pypi.org", "files.pythonhosted.org"];
+
+fn build_windows() -> &'static Mutex<HashMap<String, usize>> {
+    static W: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
+    W.get_or_init(Default::default)
+}
+
+/// While this lives, `app`'s proxy also lets the package registries
+/// through (a build in the App's slot). Dropping it closes the window and
+/// cuts open registry tunnels the App's own policy doesn't allow.
+pub struct BuildWindow {
+    app: String,
+}
+
+pub fn build_window(app: &str) -> BuildWindow {
+    *build_windows().lock().unwrap_or_else(|e| e.into_inner()).entry(app.to_string()).or_insert(0) += 1;
+    BuildWindow { app: app.to_string() }
+}
+
+impl Drop for BuildWindow {
+    fn drop(&mut self) {
+        let closed = {
+            let mut w = build_windows().lock().unwrap_or_else(|e| e.into_inner());
+            match w.get_mut(&self.app) {
+                Some(n) if *n > 1 => {
+                    *n -= 1;
+                    false
+                }
+                _ => {
+                    w.remove(&self.app);
+                    true
+                }
+            }
+        };
+        if closed {
+            if let Some(p) = policy_of(&self.app) {
+                cut_unlisted(&self.app, &p);
+            }
+        }
+    }
+}
+
+/// A registry the open build window lets through (`registry.npmjs.org:443`).
+fn build_allows(app: &str, host: &str, port: u16) -> Option<HostSpec> {
+    let open = build_windows().lock().unwrap_or_else(|e| e.into_inner()).get(app).is_some_and(|n| *n > 0);
+    (open && port == 443 && BUILD_REGISTRIES.contains(&host)).then(|| HostSpec { host: host.into(), port })
+}
+
 // ── the decision ─────────────────────────────────────────────────────
 
 /// The policy part of a decision (no DNS): may `app` go to `host:port`?
@@ -252,6 +305,9 @@ pub fn check(app: &str, host: &str, port: u16) -> Result<Verdict, Refused> {
             codes::SELF,
             format!("{host} is this box: an App reaches K2 through its gateway (K2_GATEWAY_URL), never through the egress proxy"),
         ));
+    }
+    if let Some(r) = build_allows(app, host, port) {
+        return Ok(Verdict::Listed(r));
     }
     let p = policy_of(app).ok_or_else(|| refused(403, codes::DENIED, format!("App {app} has no egress policy loaded")))?;
     match p.verdict(host, port) {

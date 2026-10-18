@@ -245,6 +245,40 @@ fn policy_check_refuses_own_local_and_unlisted_names() {
     stop("chk");
 }
 
+/// S16: while a build runs in an App's slot its proxy lets the package
+/// registries through (HTTPS only), and nothing else beyond the App's own
+/// policy; the window closes when the build's guard drops, and windows
+/// nest (two builds of one App).
+#[test]
+fn a_build_window_lets_only_the_registries_through_while_it_lasts() {
+    let _home = crate::test_support::TempHome::new();
+    seams();
+    set_policy("bw", allow(&["api.example.com"]));
+    assert_eq!(check("bw", "registry.npmjs.org", 443).unwrap_err().code, codes::DENIED, "no build: the App's allowlist only");
+    {
+        let _w = build_window("bw");
+        assert!(matches!(check("bw", "registry.npmjs.org", 443).unwrap(), Verdict::Listed(_)));
+        assert!(matches!(check("bw", "files.pythonhosted.org", 443).unwrap(), Verdict::Listed(_)));
+        assert_eq!(check("bw", "registry.npmjs.org", 80).unwrap_err().code, codes::DENIED, "HTTPS only");
+        assert_eq!(check("bw", "evil.example.com", 443).unwrap_err().code, codes::DENIED, "registry-only egress");
+        assert_eq!(check("bw", "rosson.k2.dev", 443).unwrap_err().code, codes::SELF, "never this box");
+        assert!(matches!(check("bw", "api.example.com", 443).unwrap(), Verdict::Listed(_)), "the App's own list still applies");
+        assert_eq!(check("other", "registry.npmjs.org", 443).unwrap_err().code, codes::DENIED, "only the building App's slot");
+        let inner = build_window("bw");
+        drop(inner);
+        assert!(matches!(check("bw", "registry.npmjs.org", 443).unwrap(), Verdict::Listed(_)), "the outer build's window stays open");
+    }
+    assert_eq!(check("bw", "registry.npmjs.org", 443).unwrap_err().code, codes::DENIED, "closed with the last build");
+    // The `build` slot has no App policy at all: registries during a build,
+    // nothing ever otherwise.
+    let w = build_window("build");
+    assert!(matches!(check("build", "registry.yarnpkg.com", 443).unwrap(), Verdict::Listed(_)));
+    assert_eq!(check("build", "api.example.com", 443).unwrap_err().code, codes::DENIED);
+    drop(w);
+    assert_eq!(check("build", "registry.yarnpkg.com", 443).unwrap_err().code, codes::DENIED);
+    stop("bw");
+}
+
 #[test]
 fn connect_tunnels_allowed_hosts_and_refuses_the_rest() {
     let _home = crate::test_support::TempHome::new();

@@ -32,6 +32,7 @@ pub mod routes;
 pub mod supervisor;
 pub mod surfaces;
 pub mod suspend;
+pub mod wall_build;
 
 /// The 0.46.1 door's route tests (lane 2: S19, S20, S42, AR10).
 #[cfg(test)]

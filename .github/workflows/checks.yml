@@ -46,6 +46,10 @@ jobs:
       - name: Arch build gate script (stubbed)
         run: bash tests/packaging/arch-build-gate.sh
 
+      # Linux SHA256SUMS merge + release.sh Step 10.6 check, with a stub gh.
+      - name: Linux SHA256SUMS merge and check (stubbed)
+        run: bash tests/packaging/linux-sums.sh
+
       - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies

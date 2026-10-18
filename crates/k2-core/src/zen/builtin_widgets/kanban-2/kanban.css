@@ -490,8 +490,11 @@ body.card-dragging, body.card-dragging * { cursor: grabbing !important; user-sel
 /* Messages: K2's Thread bubbles (ThreadZenKit ThreadBubble). Yours on the
    right in the accent, the agent's on the left; the corner by the sender
    stays tighter; "author · time" under each, on its side. */
-.msgs { display: flex; flex-direction: column; gap: 10px; }
+.msgs { display: flex; flex-direction: column; gap: 10px; container-type: inline-size; }
 .msg { display: flex; flex-direction: column; gap: 3px; min-width: 0; max-width: min(82%, 46rem); }
+/* A narrow column (under 480px, as K2's Thread): a message may use the whole
+   column but a 12px inset on the far side, so yours still reads as right. */
+@container (max-width: 479.98px) { .msg { max-width: calc(100% - 12px); } }
 .msg.mine { align-self: flex-end; align-items: flex-end; }
 .msg.theirs { align-self: flex-start; align-items: flex-start; }
 .bubble {

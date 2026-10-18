@@ -267,7 +267,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:relays-dns@2", "ba1c6b83f7ae7f5d0b3cc37ef9d363dbf207ff7ce614fba195712a78beda0f78"),
     ("k2:deploys@2", "77bdf1a576a2a3b10acd7337d179200ffdf0bab81fe8f7a8666bbf5147c2a640"),
     ("k2:money-alerts@2", "aff2ee34006f71436793145e1989623349a82b6d538beb34d51e94074b69a5c7"),
-    ("k2:kanban@2", "4c7502e0b47e94deb375c9075b5d6bbe666890d37b0098056881ee2f4a167b8d"),
+    ("k2:kanban@2", "c1dcf94935df4260e43cd76df6890506d7049fbb9535136a09bfb7564462ffc0"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.

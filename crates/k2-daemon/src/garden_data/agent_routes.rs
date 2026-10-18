@@ -52,7 +52,10 @@ pub(crate) fn int_param(params: &HashMap<String, String>, k: &str) -> Result<Opt
         .transpose()
 }
 
-/// The caller's access to `space`, read now.
+/// The caller's access to `space`, read now. An agent with the
+/// `gardens_manage` switch that made the widget's newest version reaches its
+/// own widget's data in full (0.46.1, gap 7; `rights::maker_owns_widget_data`),
+/// with one Access Audit line per agent and space per daemon run.
 pub(crate) fn access(who: &DataWho, space: &Space) -> Result<Access, DataError> {
     match who.project_id() {
         None if who.is_owner() => Ok(Access::Full),
@@ -60,8 +63,33 @@ pub(crate) fn access(who: &DataWho, space: &Space) -> Result<Access, DataError> 
         Some(p) => {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            grants::access_for_agent(&conn, space, p)
+            let acc = grants::access_for_agent(&conn, space, p)?;
+            if acc != Access::Full && k2_core::garden_data::rights::maker_owns_widget_data(&conn, space, p)? {
+                drop(conn);
+                audit_maker_access(p, space);
+                return Ok(Access::Full);
+            }
+            Ok(acc)
         }
+    }
+}
+
+/// One Access Audit line the first time (per daemon run) an agent reaches
+/// its own widget's data under the `gardens_manage` switch.
+fn audit_maker_access(project_id: &str, space: &Space) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SEEN: Mutex<Option<HashSet<(String, String)>>> = Mutex::new(None);
+    let first = {
+        let mut g = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+        g.get_or_insert_with(HashSet::new).insert((project_id.to_string(), space.as_str().to_string()))
+    };
+    if first {
+        let user = match crate::compute_routes::ws_by_id(project_id) {
+            Some(ws) => format!("agent:{}", ws.handle),
+            None => format!("agent:{project_id}"),
+        };
+        crate::gardens_manage::audit("zen-data-maker", &user, space.as_str(), None, None);
     }
 }
 

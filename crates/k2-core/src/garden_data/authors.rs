@@ -212,6 +212,26 @@ pub fn maker_of(conn: &Connection, widget: &str, hash: &str) -> Result<MadeBy, D
     })
 }
 
+/// The maker of the newest stamped version of `widget` (the most recent
+/// `signed_at`), with the same "workspace gone → Unclaimed" rule as
+/// [`maker_of`]. `None` when no version was ever stamped. A built-in is K2's.
+pub fn newest_maker(conn: &Connection, widget: &str) -> Result<Option<MadeBy>, DataError> {
+    if is_builtin(widget) {
+        return Ok(Some(MadeBy::K2));
+    }
+    let hash: Option<String> = conn
+        .query_row(
+            "SELECT hash FROM zen_widget_authors WHERE widget = ?1 ORDER BY signed_at DESC, hash DESC LIMIT 1",
+            params![widget],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match hash {
+        None => Ok(None),
+        Some(h) => maker_of(conn, widget, &h).map(Some),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

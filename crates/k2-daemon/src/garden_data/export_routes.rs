@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use k2_core::garden_data::export::{self, ExportPage, ImportItem, ImportMode};
 use k2_core::garden_data::snapshots::{self, PreOp};
-use k2_core::garden_data::{grants, Actor, DataError, Space, StoreBackend};
+use k2_core::garden_data::{Actor, DataError, Space, StoreBackend};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -69,16 +69,13 @@ fn live_ctx() -> Ctx<'static> {
 }
 
 /// The person reads everything; an agent or shell tab reads its current
-/// read prefixes (re-read on every call, contract §3.4).
+/// read prefixes (re-read on every call, contract §3.4), or everything for
+/// its own widget under the `gardens_manage` switch (0.46.1, gap 7).
 fn grant_filter(who: &DataWho, space: &Space) -> Result<Option<Vec<String>>, DataError> {
     match who.project_id() {
         None if who.is_owner() => Ok(None),
         None => Err(DataError::NotGranted { key: None }),
-        Some(pid) => {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            Ok(grants::access_for_agent(&conn, space, pid)?.read_prefixes())
-        }
+        Some(_) => Ok(crate::garden_data::agent_routes::access(who, space)?.read_prefixes()),
     }
 }
 

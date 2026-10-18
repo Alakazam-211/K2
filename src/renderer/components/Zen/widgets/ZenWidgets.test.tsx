@@ -2626,6 +2626,21 @@ describe('Zen Add agent', () => {
     return b
   }
 
+  // K2 Companion `c29b6db` (Rosson 2026-10-18): the bottom-bar "+" is at
+  // full ink at rest, like the header pills' text; the words stay muted.
+  it('its "+" is the header pills’ ink (--zen-text) at rest; the words stay muted', async () => {
+    await mountZen()
+    const add = addButton()
+    const plus = add.querySelector('[data-zen-add-agent-plus]')
+    if (!(plus instanceof HTMLElement)) throw new Error('no "+" in Add agent')
+    expect(plus.style.color).toBe('var(--zen-text)')
+    expect(plus.querySelector('svg path')?.getAttribute('stroke')).toBe('currentColor')
+    expect(add.style.color).toBe('var(--zen-text-muted)')
+    const pill = document.querySelector('[data-zen-garden-pill]')
+    if (!(pill instanceof HTMLElement)) throw new Error('no Garden pill in the header')
+    expect(pill.style.color).toBe(plus.style.color)
+  })
+
   it('opens the Home’s shared picker, adds to the Home the widget shows, and the row shows in the Agents widget', async () => {
     act(() => {
       useProjectsStore.setState({

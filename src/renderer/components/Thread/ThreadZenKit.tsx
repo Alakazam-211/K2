@@ -15,6 +15,7 @@
 // (`THREAD_ZEN_DESKTOP_TOKENS` on a `[data-k2-thread-zen]` box), so the
 // shapes are Zen's and the colours are the window's.
 
+import { useCallback, useState } from 'react'
 import type { CSSProperties, JSX, ReactNode, Ref } from 'react'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { ChoiceCard } from '@/components/SessionView/ChoiceCard'
@@ -615,12 +616,51 @@ export function ThreadComposeBox({
   )
 }
 
+// ── The "+" lit while held or while its menu is open ──────────────────────
+// K2 Companion `c29b6db` (Rosson 2026-10-18): the composer's "+" shows it's
+// selected while pressed and while its attach menu is open, a soft glass
+// fill with the glyph at full ink. The phone's fill is white at 20% and its
+// glyph white, on a dark canvas. Here the same is the theme's text colour
+// (`--zen-text`): white glass and a white glyph on dark Styles and Gardens,
+// a soft dark wash and a dark glyph on light ones (no white on white).
+
+/** The lit "+"'s fill: the text colour at 20% (white at 20% on dark). */
+export const THREAD_PLUS_LIT_FILL = 'color-mix(in srgb, var(--zen-text) 20%, transparent)'
+/** The lit "+"'s glyph: the text colour (white on dark), from muted. */
+export const THREAD_PLUS_LIT_INK = 'var(--zen-text)'
+/** The phone's 90ms ease-out (the hover fill keeps its own timing). */
+export const THREAD_PLUS_LIT_TRANSITION = 'background-color 90ms ease-out, color 90ms ease-out, opacity 140ms ease'
+
+/** Held between pointerdown and pointerup / cancel / leave (never while
+ *  `disabled`). Mouse, pen and touch alike. */
+export function usePointerHeld(disabled = false): {
+  held: boolean
+  handlers: {
+    onPointerDown: () => void
+    onPointerUp: () => void
+    onPointerCancel: () => void
+    onPointerLeave: () => void
+  }
+} {
+  const [down, setDown] = useState(false)
+  const release = useCallback(() => setDown(false), [])
+  const press = useCallback(() => {
+    if (!disabled) setDown(true)
+  }, [disabled])
+  return {
+    held: down && !disabled,
+    handlers: { onPointerDown: press, onPointerUp: release, onPointerCancel: release, onPointerLeave: release },
+  }
+}
+
 /** A round soft button in the box ("+", the desktop's "/"). */
 export function ThreadRoundButton({
   label,
   title,
   disabled,
   pressed,
+  lightable = false,
+  menuOpen = false,
   onClick,
   children,
   buttonRef,
@@ -632,6 +672,11 @@ export function ThreadRoundButton({
   disabled?: boolean
   /** On (a selected slash command): the accent fill. */
   pressed?: boolean
+  /** The composer's "+": lit (THREAD_PLUS_LIT_*) while held, and while
+   *  `menuOpen`. */
+  lightable?: boolean
+  /** Its menu is open (a "+" whose click opens one); lit while it is. */
+  menuOpen?: boolean
   onClick: () => void
   children: ReactNode
   buttonRef?: Ref<HTMLButtonElement>
@@ -639,6 +684,8 @@ export function ThreadRoundButton({
   data?: Record<string, string | boolean | undefined>
   style?: CSSProperties
 }): JSX.Element {
+  const { held, handlers } = usePointerHeld(!!disabled || !lightable)
+  const lit = lightable && !pressed && !disabled && (held || menuOpen)
   return (
     <button
       ref={buttonRef}
@@ -646,16 +693,19 @@ export function ThreadRoundButton({
       aria-label={label}
       title={title ?? label}
       data-zen-soft-button={pressed ? undefined : ''}
+      data-zen-lit={lit ? 'true' : undefined}
       disabled={disabled}
       onClick={onClick}
+      {...(lightable ? handlers : {})}
       {...data}
       className="flex flex-shrink-0 items-center justify-center cursor-pointer disabled:cursor-default"
       style={{
         width: 32,
         height: 32,
         borderRadius: 999,
-        color: pressed ? 'var(--zen-accent-text)' : 'var(--zen-text-muted)',
-        background: pressed ? 'var(--zen-accent)' : undefined,
+        color: pressed ? 'var(--zen-accent-text)' : lit ? THREAD_PLUS_LIT_INK : 'var(--zen-text-muted)',
+        background: pressed ? 'var(--zen-accent)' : lit ? THREAD_PLUS_LIT_FILL : undefined,
+        ...(lightable ? { transition: THREAD_PLUS_LIT_TRANSITION } : {}),
         fontSize: 20,
         lineHeight: 1,
         ...style,
@@ -665,6 +715,9 @@ export function ThreadRoundButton({
     </button>
   )
 }
+
+/** Send while pressed (K2 Companion `c29b6db`): a little brighter. */
+export const THREAD_SEND_PRESSED_FILTER = 'brightness(1.5)'
 
 /** The round Send with the up arrow; the accent while there is something to send. */
 export function ThreadSendButton({
@@ -685,17 +738,23 @@ export function ThreadSendButton({
 }): JSX.Element {
   // The square Style cut keeps the proportion of 5px at 32px (to 0.5px).
   const cut = chamferCutFor(size)
+  // Pressed: brighter, only while it can send. Tracked in JS like the
+  // phone's (a press that keeps the caret in the box skips `:active`).
+  const { held, handlers } = usePointerHeld(!canSend)
+  const lit = held && canSend
   return (
     <button
       type="button"
       aria-label={label}
       title={title}
       data-zen-send=""
+      data-zen-pressed={lit ? 'true' : undefined}
       data-testid={testId}
       {...ZEN_TILE_RAISED_PROPS}
       data-chamfer=""
       disabled={!canSend}
       onClick={onClick}
+      {...handlers}
       className="flex flex-shrink-0 items-center justify-center cursor-pointer disabled:cursor-default"
       style={{
         width: size,
@@ -703,7 +762,8 @@ export function ThreadSendButton({
         borderRadius: 999,
         background: canSend ? 'var(--zen-accent)' : 'var(--zen-surface)',
         color: canSend ? 'var(--zen-accent-text)' : 'var(--zen-text-muted)',
-        transition: 'background-color 140ms ease',
+        filter: lit ? THREAD_SEND_PRESSED_FILTER : undefined,
+        transition: 'background-color 140ms ease, filter 90ms ease-out',
         ...chamferVars({ cut, fill: canSend ? 'var(--zen-accent)' : 'var(--zen-surface)' }),
       }}
     >

@@ -267,7 +267,7 @@ export function ZenCompose({
         }
       >
         {allowAttachments && (
-          <ThreadRoundButton label="Attach files" disabled={disabled} onClick={pick} data={{ 'data-zen-attach': '' }}>
+          <ThreadRoundButton label="Attach files" disabled={disabled} lightable onClick={pick} data={{ 'data-zen-attach': '' }}>
             +
           </ThreadRoundButton>
         )}

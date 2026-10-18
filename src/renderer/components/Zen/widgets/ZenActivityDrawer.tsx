@@ -44,6 +44,7 @@ import {
   threadStripView,
   type StripCounter,
   type StripCounterKey,
+  type StripDetailItem,
   type ThreadDrawerLine,
   type ThreadStripStep,
   type ThreadStripTone,
@@ -314,6 +315,27 @@ function CounterGlyphs({ c }: { c: StripCounter }): React.JSX.Element {
   )
 }
 
+/** Expanded detail bits, each led by its collapsed counter's icon (same
+ *  size, same baseline) so the words map to the icons (K2 Companion
+ *  `c29b6db`, Rosson 2026-10-18). The words and the " · " between them
+ *  are unchanged; no items: the plain words. */
+function DetailBits({ items, fallback }: { items: StripDetailItem[]; fallback: string }): React.JSX.Element {
+  if (!items.length) return <>{fallback}</>
+  return (
+    <>
+      {items.map((it, i) => (
+        <span key={it.key} data-zen-drawer-detail-bit={it.key}>
+          {i > 0 ? ' · ' : null}
+          <span data-zen-drawer-detail-icon={it.key} style={{ whiteSpace: 'nowrap' }}>
+            {ICON[it.key](COUNTER_ICON_PX)}
+          </span>
+          {it.text}
+        </span>
+      ))}
+    </>
+  )
+}
+
 /** A tool line: backtick spans become code tags. */
 function StepBody({ step }: { step: ThreadStripStep }): React.JSX.Element {
   if (step.kind !== 'line') return <>{step.text}</>
@@ -574,12 +596,12 @@ export function ZenActivityDrawer({
               ) : null}
               {d.tally ? (
                 <span data-zen-drawer-tally="" className="min-w-0 break-words" style={{ fontSize: 12, lineHeight: '18px', color: 'var(--zen-text-muted)' }}>
-                  {d.tally}
+                  <DetailBits items={d.tallyItems} fallback={d.tally} />
                 </span>
               ) : null}
               {d.children ? (
                 <span data-zen-drawer-children="" className="min-w-0 break-words" style={{ fontSize: 12, lineHeight: '18px', color: 'var(--zen-text-muted)' }}>
-                  {d.children}
+                  <DetailBits items={d.childItems} fallback={d.children} />
                 </span>
               ) : null}
             </span>

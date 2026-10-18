@@ -991,7 +991,13 @@ export function TerminalComposeBar({
             className="flex flex-shrink-0 items-end"
             style={{ gap: toolLayout.boxGap, marginLeft: toolLayout.marginLeft }}
           >
-          <ThreadRoundButton label="Attach file" title="Attach a file or image" onClick={handleAttachClick} style={tool}>
+          <ThreadRoundButton
+            label="Attach file"
+            title="Attach a file or image"
+            lightable
+            onClick={handleAttachClick}
+            style={tool}
+          >
             <ComposePlusGlyph />
           </ThreadRoundButton>
           <ThreadRoundButton

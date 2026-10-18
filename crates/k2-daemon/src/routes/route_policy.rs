@@ -865,7 +865,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/project-group/dashboard/rename", Admin),
     post("/cli/project-group/dashboard/reorder", Admin),
     post("/cli/project-group/dashboard/save-layout", Admin),
-    // Deleting a project removes its chat: owner or admin (Rosson 2026-10-18).
+    // Deleting a project removes its chat: owner or admin among logins; an
+    // agent passes to the handler, which follows its 'Manage K2 projects'
+    // switch (Rosson 2026-10-18).
     post("/cli/project-group/delete", Admin),
     get("/cli/project-group/html-docs", Member),
     get("/cli/project-group/icon", Member),

@@ -105,7 +105,7 @@ class H(BaseHTTPRequestHandler):
             if os.path.exists(os.path.join(work, "deny-delete")):
                 status = 403
                 out = {"ok": False, "error": {"code": "forbidden",
-                       "hint": "only the owner or an admin can delete a project"}}
+                       "hint": "only the owner, an admin, or an agent with 'Manage K2 projects' can delete a project"}}
             else:
                 out = {"ok": True, "id": b.get("group")}
         elif parsed.path == "/cli/project-group/list":

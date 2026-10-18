@@ -327,8 +327,10 @@ pub fn is_gated_mutation(path: &str) -> bool {
 }
 
 /// Dashboards and project appearance (PRD §6.3 Q2, §6.7.7), and
-/// deleting a project with its chat (Rosson 2026-10-18): owner or
-/// admin. A Member login sees them but cannot change them.
+/// deleting a project with its chat (Rosson 2026-10-18): owner or admin
+/// among logins. A Member login sees them but cannot change them. An
+/// agent follows its 'Manage K2 projects' switch (delete included,
+/// Rosson 2026-10-18).
 fn is_admin_only(path: &str) -> bool {
     path.starts_with("/cli/project-group/dashboard/")
         || path == "/cli/project-group/set-icon"
@@ -336,12 +338,13 @@ fn is_admin_only(path: &str) -> bool {
         || path == "/cli/project-group/delete"
 }
 
-/// The refusal a Member login or an agent gets for deleting a project.
+/// The refusal a Member login gets for deleting a project.
 fn delete_needs_admin() -> CliResponse {
     error_response(
         "403 Forbidden",
         "forbidden",
-        "only the owner or an admin can delete a project (it removes the project's chat too)",
+        "only the owner, an admin, or an agent with 'Manage K2 projects' can delete a project \
+         (it removes the project's chat too)",
     )
 }
 
@@ -529,11 +532,8 @@ pub fn dispatch_post_as(
             }
         }
     }
-    // Deleting a project and its chat is a person's call (owner or
-    // admin), never an agent's, whatever its "Manage K2 projects" switch.
-    if path == "/cli/project-group/delete" && matches!(caller, Caller::Agent(_)) {
-        return refuse(delete_needs_admin());
-    }
+    // An agent may delete a project when its 'Manage K2 projects' switch
+    // is on (checked above with every gated mutation; Rosson 2026-10-18).
     // Delete: the name is gone afterwards, so read it first.
     let pre_name = (path == "/cli/project-group/delete")
         .then(|| {
@@ -3767,12 +3767,13 @@ mod agent_switch_tests {
         assert!(r.body.contains("owner or an admin"), "{}", r.body);
     }
 
-    /// Deleting a project (and its chat) is owner or admin only (Rosson
-    /// 2026-10-18): a Member login and an agent are refused and the
-    /// project survives; an admin login, a person in a shell tab and the
-    /// owner token may delete. Renaming stays open to a Member.
+    /// Deleting a project (and its chat), Rosson 2026-10-18: a Member
+    /// login is refused and the project survives; an agent without 'Manage
+    /// K2 projects' is refused; an agent with it, an admin login, a person
+    /// in a shell tab and the owner token may delete. Renaming stays open
+    /// to a Member.
     #[test]
-    fn members_and_agents_cannot_delete_a_project_but_admins_can() {
+    fn members_cannot_delete_a_project_but_admins_and_managing_agents_can() {
         let _home = crate::test_support::TempHome::new();
         use k2_core::connect_users::{add_user, role_for_user, set_role, Role};
         let member = format!("pgdm{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
@@ -3785,7 +3786,7 @@ mod agent_switch_tests {
         assert!(k2_core::workspace::settings::agents_can_manage_projects(&a_id));
 
         let mut gids = Vec::new();
-        for i in 0..3 {
+        for i in 0..4 {
             let name = format!("pgs-del-{i}-{}", uuid::Uuid::new_v4());
             let c = ok(post("/cli/project-group/create", serde_json::json!({ "name": name }), &Caller::Owner));
             gids.push(c["id"].as_str().expect("id").to_string());
@@ -3794,11 +3795,16 @@ mod agent_switch_tests {
         let as_member = Caller::Login { username: member.clone() };
         let r = post("/cli/project-group/delete", serde_json::json!({ "group": gids[0] }), &as_member);
         assert_eq!(r.status, "403 Forbidden", "{}", r.body);
-        assert!(r.body.contains("owner or an admin"), "{}", r.body);
-        let r = post("/cli/project-group/delete", serde_json::json!({ "group": gids[0] }), &agent(&a_id));
-        assert_eq!(r.status, "403 Forbidden", "agent with the switch on: {}", r.body);
-        assert!(r.body.contains("owner or an admin"), "{}", r.body);
+        assert!(r.body.contains("owner, an admin, or an agent with 'Manage K2 projects'"), "{}", r.body);
+        // An agent without the switch is refused (agent_permission_off).
+        let (off_id, _, _) = insert_workspace("del-agent-off");
+        k2_core::workspace::settings::set_agents_can_manage_projects(&off_id, false).expect("switch off");
+        let r = post("/cli/project-group/delete", serde_json::json!({ "group": gids[0] }), &agent(&off_id));
+        assert_eq!(r.status, "403 Forbidden", "agent with the switch off: {}", r.body);
+        assert!(r.body.contains("agent_permission_off"), "{}", r.body);
         assert!(project_groups::get_group_by_id(&gids[0]).is_some(), "refusals delete nothing");
+        // An agent with the switch on may delete.
+        ok(post("/cli/project-group/delete", serde_json::json!({ "group": gids[3] }), &agent(&a_id)));
         // A Member may still rename.
         ok(post(
             "/cli/project-group/rename",

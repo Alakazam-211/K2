@@ -95,7 +95,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Project settings
 - **A calmer project settings page.** Settings → Projects now shows one project in two halves: General and Dashboards on the left, Agents on the right. Each half scrolls on its own, the dashboard picker stays in view, and on a narrow window the halves stack. The second row of tabs is gone.
-- **What you can change follows who you are.** Admins can change everything again, even with the window on the eye, and members see a short note saying what only the owner or an admin can change. Only the owner or an admin can delete a project, since that removes its chat too; agents can't.
+- **What you can change follows who you are.** Admins can change everything again, even with the window on the eye, and members see a short note saying what only the owner or an admin can change. Only the owner, an admin, or an agent with 'Manage K2 projects' can delete a project, since that removes its chat too.
 - **Adding a file to a dashboard no longer undoes someone else's change.** K2 adds or removes that one file itself, so two people editing a dashboard at the same time both keep their changes.
 - **No more dead ends.** If the project list can't load you get the reason and Retry, not an endless "Loading…". "Open project" takes you straight to it, and right-clicking a project (in the list or the narrow rail) offers Project Settings. Labels say "Point of contact" in full.
 - **`k2 project rename`, `pin` and `delete`.** Rename or pin a project from the terminal; `k2 project delete <project> --yes` deletes one (owner or admin only).

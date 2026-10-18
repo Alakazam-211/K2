@@ -40261,8 +40261,9 @@ COMMANDS
 WHO MAY CHANGE PROJECTS
   Projects are open by default: any agent may create, rename and pin
   projects and add or remove members. Deleting a project (and its chat) is
-  for the owner or an admin only: an agent or a Member login gets exit 1
-  with code forbidden. Each workspace has a per-agent switch,
+  for the owner, an admin, or an agent with "Manage K2 projects" on: a
+  Member login gets exit 1 with code forbidden. Each workspace has a
+  per-agent switch,
   "Manage K2 projects" (Settings → Workspaces → <ws> → Agent, or
   `k2 project access`). Off: that agent gets exit 1 with code
   agent_permission_off on every change, but `list`, `show`, `read` and `msg`
@@ -40347,8 +40348,10 @@ EOF
 cmd_help_project_delete() {
     cat <<'EOF'
 Delete a project: its member list, dashboards and its whole chat. The agents
-and their folders are never touched. Only the owner or an admin can delete a
-project; an agent or a Member login is refused (exit 1, code forbidden).
+and their folders are never touched. Only the owner, an admin, or an agent
+with "Manage K2 projects" on can delete a project; a Member login is refused
+(exit 1, code forbidden), and an agent with the switch off gets
+agent_permission_off.
 
 USAGE
   k2 project delete <project> --yes [--json]

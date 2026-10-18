@@ -117,7 +117,14 @@ class H(BaseHTTPRequestHandler):
             state["upolls"] = state.get("upolls", 0) + 1
             busy = state["upolls"] < 2
             why = None if mode == "done" else "upgrade to 0.2.0 refused by Sew (exit 3): the tarball must hold exactly one regular file named sew"
-            steps = {"stage": {"at": 1}} if busy else {"stage": {"at": 1}, "upgrade": {"at": 2}, "health": {"at": 3}, "media": {"at": 4}}
+            # Key-sorted like the daemon's JSON, several steps in one second.
+            if busy:
+                steps = {"stage": {"at": 1, "seq": 1}}
+            elif mode == "done":
+                steps = {"health": {"at": 2, "seq": 3}, "media": {"at": 2, "seq": 4}, "stage": {"at": 2, "seq": 1}, "upgrade": {"at": 2, "seq": 2}}
+            else:
+                # An older daemon: no seq, ties on whole seconds.
+                steps = {"health": {"at": 2}, "media": {"at": 2}, "stage": {"at": 1}, "upgrade": {"at": 2}}
             out = {"ok": True, "supported": True, "state": "upgrading" if busy else "running", "lastError": why,
                    "upgradeProgress": {"from": "0.1.2", "to": "0.2.0", "current": "upgrade" if busy else None, "steps": steps,
                                        "result": None if busy else mode, "lastError": None if busy else why}}
@@ -354,10 +361,12 @@ assert_contains "upgrade refused: result on stderr" "$err" '"error": "upgrade_re
 assert_contains "upgrade refused: Sew's reason on stderr" "$err" "the tarball must hold exactly one regular file named sew"
 assert_contains "upgrade: completed steps are shown" "$err" "… upgrade: done"
 assert_contains "upgrade: the media step is shown" "$err" "… media: done"
+assert_eq "upgrade (no seq, ties): steps in execution order" "$(printf '%s\n' "$err" | grep -o '^… [a-z]*: done' | tr '\n' ' ')" "… stage: done … upgrade: done … health: done … media: done "
 echo done > "$WORK/upgrade"
 run owner hostchat upgrade --tarball sew.tar.gz
 assert_eq "upgrade done → exit 0" "$rc" "0"
 assert_contains "upgrade done: from → to" "$out" "upgraded: 0.1.2 -> 0.2.0"
+assert_eq "upgrade (seq): steps in execution order" "$(printf '%s\n' "$err" | grep -o '^… [a-z]*: done' | tr '\n' ' ')" "… stage: done … upgrade: done … health: done … media: done "
 assert_absent "upgrade done: no media path sent" "$(req_where /cli/sew/server/upgrade body)" "mediaTarballPath"
 rm -f "$WORK/upgrade"
 

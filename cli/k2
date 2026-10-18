@@ -42017,7 +42017,13 @@ print(("busy " if busy else "done ") + str(p.get("current") or "-"))
 import json, sys
 p = json.load(sys.stdin).get("upgradeProgress") or {}
 st = p.get("steps") or {}
-print(" ".join(k for k, _ in sorted(st.items(), key=lambda kv: (kv[1] or {}).get("at") or 0)))
+# Execution order: seq from the daemon; an older daemon has only whole-second
+# `at` (ties) and a key-sorted object, so ties fall back to the machine order.
+order = ["stage", "upgrade", "health", "rollback", "media"]
+def key(kv):
+    k, v = kv[0], kv[1] or {}
+    return (v.get("seq") or 0, v.get("at") or 0, order.index(k) if k in order else len(order))
+print(" ".join(k for k, _ in sorted(st.items(), key=key)))
 ')"
         if [ "$as_json" != "1" ]; then
             local s

@@ -1537,7 +1537,10 @@ fn upgrade_note(env: &Env, step: Option<&str>, result: Option<&str>) {
         let p = r.upgrade_progress.get_or_insert_with(|| json!({"steps": {}}));
         if let Some(cur) = p.get("current").and_then(Value::as_str).map(str::to_string) {
             if step != Some(cur.as_str()) {
-                p["steps"][cur] = json!({"at": now});
+                // `at` is whole seconds (several steps share one) and the
+                // JSON object is key-sorted: `seq` is the execution order.
+                let seq = p["steps"].as_object().map_or(0, |m| m.len()) + 1;
+                p["steps"][cur] = json!({"at": now, "seq": seq});
             }
         }
         p["current"] = json!(step);

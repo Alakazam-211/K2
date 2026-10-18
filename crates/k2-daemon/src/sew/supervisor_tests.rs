@@ -1211,6 +1211,10 @@ fn upgrade_with_voice_upgrades_the_engine_through_the_new_core_after_its_health_
         vec!["engine sew stage", "engine sew stage-media", "engine sew upgrade", "engine sew token", "engine sew media upgrade", "engine sew unstage"]
     );
     assert!(p["steps"].get("media").is_some(), "{p}");
+    // The steps carry their execution order (`at` is whole seconds and the
+    // object is key-sorted): the core swap before K2's health check of it.
+    let seq = |s: &str| p["steps"][s]["seq"].as_u64().unwrap_or_else(|| panic!("{s}: no seq in {p}"));
+    assert_eq!([seq("stage"), seq("upgrade"), seq("health"), seq("media")], [1, 2, 3, 4], "{p}");
     let row = t.row();
     assert_eq!((row.installed_version.as_deref(), row.previous_version.as_deref()), (Some(pinned().version), Some("0.0.1")));
 }

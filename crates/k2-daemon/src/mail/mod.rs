@@ -122,6 +122,9 @@ pub mod calendar_share;
 pub mod catchall;
 pub mod cert_names;
 pub mod cert_owner;
+// 0.46.1: re-order the mail certificate when the live one is self-signed,
+// expired or does not cover the mail host (backoff in renewal.json).
+pub mod cert_trigger;
 pub mod autoconfig;
 // S8 B1: backup mode choice + churn observer + plan (no backups run yet).
 pub mod backup;

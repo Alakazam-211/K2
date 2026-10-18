@@ -29128,10 +29128,22 @@ WHO OWNS THE MAIL CERTIFICATE
   helper allow it in sudoers). Never the helper by hand.
   Never fix a certificate with `k2 hostmail disable/enable`.
   Since 0.45.1 the boot reconcile locks a stalwart-acme box's names to
-  the mail host and queues at most ONE order, only when no real
+  the mail host and queues at most ONE order, only when no good
   certificate is served, the mail host's A points here and no ACME task
   is pending. status cert.acme shows the real order names and the last
   ACME task; lastError reads "acme: <reason>" while the order fails.
+  Since 0.46.1 the daemon also checks the LIVE certificate hourly (465
+  and 993, SNI = the mail host; 443 alone never counts) and re-orders
+  when it is self-signed, expired or does not cover the mail host — k2
+  box: K2's issuer (re-plants a still-good certificate, orders only near
+  expiry); stalwart-acme box (tls-alpn): ONE Stalwart ACME task, same
+  guards as above. Never when the owner is unknown or Stalwart ACME is
+  Manual, never for `unknown` or no answer, never under air-gap. Backoff:
+  one order per hour at most; an order that fails or does not fix it
+  doubles the wait (2h, 4h … 24h); a good certificate resets it. The
+  state survives restarts (~/.k2/certs/renewal.json, mailLiveReorder).
+  Don't loop `k2 hostmail cert renew` while it backs off — fix the cause
+  (DNS, the tunnel token) first.
 
 OUTBOUND + SPAM RULES (0.45.1, `k2 hostmail outbound`)
   mx route  K2 sets Stalwart's default v4ThenV6 to v4Only once (PTR and

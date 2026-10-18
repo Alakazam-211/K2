@@ -19,6 +19,12 @@
 //! reached Stalwart) and whose backoff has elapsed. Skipped entirely
 //! under air-gap.
 //!
+//! After each scan the renewer runs the mail live-cert check
+//! ([`crate::mail::cert_trigger`], 0.46.1): the mail certificate is
+//! re-ordered — by K2's issuer on a k2 box, as ONE Stalwart task on a
+//! stalwart-acme box — when the live one is self-signed, expired or does
+//! not cover the mail host, under its own backoff (`mailLiveReorder`).
+//!
 //! State: `~/.k2/certs/renewal.json` (0600). No migration.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -168,6 +174,10 @@ pub struct RenewFile {
     pub names: BTreeMap<String, RenewRecord>,
     pub last_scan: Option<i64>,
     pub last_scan_note: Option<String>,
+    /// 0.46.1: the live-cert re-order's backoff for the mail host
+    /// ([`crate::mail::cert_trigger`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mail_live_reorder: Option<crate::mail::cert_trigger::ReorderState>,
 }
 
 pub fn state_path() -> PathBuf {
@@ -744,6 +754,16 @@ pub fn spawn() {
                 let r = std::panic::catch_unwind(|| scan(&mut LiveScan));
                 if r.is_err() {
                     log_debug!("[domains/renew] scan panicked — retrying next scan");
+                }
+                // 0.46.1: re-order the mail certificate when the LIVE one
+                // is self-signed, expired or does not cover the mail host.
+                let report = r.as_ref().ok();
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::mail::cert_trigger::check_live(report)
+                }))
+                .is_err()
+                {
+                    log_debug!("[domains/renew] mail live-cert check panicked — next scan");
                 }
                 if sleep_or_wake(std::time::Duration::from_secs(SCAN_EVERY_SECS)) {
                     log_debug!("[domains/renew] woken early (a domain changed) — scanning now");

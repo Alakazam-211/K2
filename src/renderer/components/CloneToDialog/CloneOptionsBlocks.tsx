@@ -49,6 +49,7 @@ const muted = 'text-[11px] text-[var(--color-text-muted)] leading-relaxed'
 // (while `preview` is still null) loops useSyncExternalStore into React
 // #185 "Maximum update depth exceeded" (0.46.0 Clone dialog crash).
 const NO_ENV_FILES: readonly string[] = []
+
 /** The dropdown's string value for a Thread window (null = all). */
 function sinceValue(days: number | null): string {
   return days === null ? 'all' : String(days)

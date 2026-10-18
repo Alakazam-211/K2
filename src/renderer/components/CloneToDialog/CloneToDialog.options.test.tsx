@@ -188,3 +188,22 @@ describe('CloneToDialog uses the app\'s shared form controls', () => {
     expect(hits).toEqual([])
   })
 })
+
+describe('CloneToDialog while the preview loads', () => {
+  it('renders (no endless re-render) before the preview arrives', () => {
+    useCloneToDialogStore.getState().start({
+      projectPath: '/w',
+      projectName: 'sales',
+      host: null,
+      pull: true,
+      onConfirm: vi.fn(),
+      // Never answers: the dialog stays on "Checking what travels…".
+      optionDeps: { lookupTarget: () => new Promise(() => {}), fetchPreview: async () => preview(true), carryConfirm: async () => 'c' },
+    })
+    render(<CloneToDialog />)
+    expect(useCloneToDialogStore.getState().preview).toBeNull()
+    expect(screen.getByText('Checking what travels…')).toBeTruthy()
+    expect(screen.getByTestId('clone-env-block')).toBeTruthy()
+    expect(screen.getByTestId('clone-confirm-button').textContent).toBe('Clone')
+  })
+})

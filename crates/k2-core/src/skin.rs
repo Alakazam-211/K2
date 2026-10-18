@@ -74,6 +74,10 @@ pub const SKIN_SCHEMA_VERSION: i64 = 4;
 #[path = "skin_link.rs"]
 pub mod link;
 
+/// RS-A15 `guests:rooms` (0.46.1): an App sets its own guests' rooms.
+#[path = "skin_guest_rooms.rs"]
+pub mod guest_rooms;
+
 /// `grants.created_by` on rows the 0.45.5 upgrade wrote (S24-10 backfill).
 pub const UPGRADE_CREATED_BY: &str = "upgrade:0.45.5";
 
@@ -1330,6 +1334,9 @@ fn open_db(path: &Path) -> Result<Connection, String> {
          );",
     )
     .map_err(|e| format!("skin.db schema: {e}"))?;
+    // RS-A15 (0.46.1): the owner's per-App grants (`guests-rooms`).
+    // Additive, so no numbered step: an older K2 ignores the table.
+    guest_rooms::ensure_schema(&conn)?;
     // Copy existing guests once. A deleted host row stays deleted.
     ensure_host_grant_backfill(&mut conn)?;
     rebuild_tokens_table_if_needed(&mut conn)?;

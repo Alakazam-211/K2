@@ -416,18 +416,41 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
 }
 
 /// POST `/cli/app/build {folder, types?}` → the Seed (S6). Deploys nothing.
+/// A manifest `build` runs inside the wall where the box has one (S16,
+/// guarded: install scripts off), in the reserved `build` slot.
 fn build(who: &Who, body: &[u8]) -> R<J> {
     need_manage(who)?;
     let v = json_body(body)?;
     let folder = resolve_folder(who, s(&v, "folder").ok_or_else(|| no(codes::BAD_REQUEST, 400, "folder is required"))?)?;
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    match deploy::build::build_folder(&conn, &folder, &signer(who), &validate_opts(&v)) {
-        Ok(built) => Ok(json!({ "ok": true, "seed": built.seed, "reused": built.reused, "entries": built.entries })),
-        Err(f) => {
-            let mut r = no(f.code, 422, f.message);
-            r.extra = f.report.map(|rep| json!({ "report": rep }));
-            Err(r)
+    let (built, wall) = build_seed(who, &folder, &v, super::wall_build::BUILD_SLOT, false)?;
+    Ok(json!({ "ok": true, "seed": built.seed, "reused": built.reused, "entries": built.entries, "build": wall }))
+}
+
+/// The Seed for a folder: built in the wall when the manifest declares a
+/// build and the box has the wall (S16), else the folder as it is (stage
+/// 1; `build.inWall: false` says why).
+fn build_seed(who: &Who, folder: &Path, v: &J, slot: &str, scripts: bool) -> R<(deploy::build::Built, J)> {
+    match super::wall_build::build_and_store(slot, folder, &signer(who), &validate_opts(v), scripts)? {
+        Ok(done) => Ok(done),
+        Err(why) => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            match deploy::build::build_folder(&conn, folder, &signer(who), &validate_opts(v)) {
+                Ok(b) => {
+                    let declared = !b.seed.manifest["build"].as_array().map(Vec::is_empty).unwrap_or(true);
+                    let wall = if declared {
+                        json!({ "inWall": false, "why": why, "note": "the manifest's build did not run here: the Seed is the folder as it was built outside the wall" })
+                    } else {
+                        json!({ "inWall": false, "why": why })
+                    };
+                    Ok((b, wall))
+                }
+                Err(f) => {
+                    let mut r = no(f.code, 422, f.message);
+                    r.extra = f.report.map(|rep| json!({ "report": rep }));
+                    Err(r)
+                }
+            }
         }
     }
 }
@@ -623,20 +646,15 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
     Ok(out)
 }
 
-/// The Seed a deploy names: a stored one, or a folder built now.
-fn seed_for_deploy(who: &Who, v: &J) -> R<String> {
+/// The Seed a deploy names: a stored one, or a folder built now (in the
+/// App's own wall when its manifest declares a build, S16; install
+/// scripts only on the open path).
+fn seed_for_deploy(who: &Who, app: &AppRow, v: &J) -> R<String> {
     if let Some(f) = s(v, "folder") {
         let folder = resolve_folder(who, f)?;
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        return match deploy::build::build_folder(&conn, &folder, &signer(who), &validate_opts(v)) {
-            Ok(b) => Ok(b.seed.hash),
-            Err(f) => {
-                let mut r = no(f.code, 422, f.message);
-                r.extra = f.report.map(|rep| json!({ "report": rep }));
-                Err(r)
-            }
-        };
+        let scripts = app.path == "open";
+        let slot = if k2_root_proto::apps::AppId::parse(&app.app_id).is_some() { app.app_id.as_str() } else { super::wall_build::BUILD_SLOT };
+        return build_seed(who, &folder, v, slot, scripts).map(|(b, _)| b.seed.hash);
     }
     let t = s(v, "seed").ok_or_else(|| no(codes::BAD_REQUEST, 400, "give a seed (hash) or a folder"))?;
     let row = {
@@ -731,7 +749,7 @@ fn deploy_inner(who: &Who, v: &J) -> R<J> {
     let app = app_for(who, s(v, "app"))?;
     super::suspend::refuse_if_suspended(&app.app_id)?;
     let app = apply_engine(who, app, v)?;
-    let seed = seed_for_deploy(who, v)?;
+    let seed = seed_for_deploy(who, &app, v)?;
     // S20: caps past the App's approved set (or a first install) are held
     // for the owner, whoever deploys; the live Seed keeps serving.
     if let Some(held) = hold_new_caps(who, &app, &seed, v)? {

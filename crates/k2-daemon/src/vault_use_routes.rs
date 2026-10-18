@@ -432,9 +432,10 @@ fn may_carry(c: &VaultCaller) -> Result<(), VaultError> {
 /// H21 (Rosson 2026-10-16): an agent with "Allow managing server-wide
 /// secrets" may carry with no person, so every export is made visible,
 /// never blocked: the vault's own audit (one row per secret plus a summary,
-/// tamper-evident; `k2 vault audit`), the auth audit (Settings → Access),
-/// and, for an agent, an owner notice. Names and fingerprints only, never
-/// values.
+/// tamper-evident; `k2 vault audit`), the auth audit (Settings → Logs →
+/// Access Audit, which highlights an agent's export), and, for an agent,
+/// an owner notice on the Tickets board ([`agent_export_notice`]). Names
+/// and fingerprints only, never values.
 fn record_carry_export(
     vault: &Arc<LocalVault>,
     c: &VaultCaller,
@@ -459,7 +460,13 @@ fn record_carry_export(
         ),
         "-",
     );
-    if c.actor.agent().is_some() {
+    if let Some(a) = c.actor.agent() {
+        let label = crate::vault::workspace_label(&a.workspace_id);
+        let (title, body) = agent_export_notice(&label, c.session_id.as_deref(), names, workspaces, target_fp, target_vault_id);
+        if let Err(e) = crate::feedback_routes::file_owner_notice(&a.workspace_id, &label, &title, &body) {
+            // The audit rows above stand; the notice is best effort.
+            k2_core::log_debug!("[vault] carry export notice for {label}: {e}");
+        }
         k2_core::agent_hooks::emit(
             k2_core::agent_hooks::HookEvent::SyncProjects,
             json!({ "vaultNotice": {
@@ -476,6 +483,32 @@ fn record_carry_export(
             } }),
         );
     }
+}
+
+/// The owner notice for an agent's carry export: who, which secrets (names
+/// only), where to, and what to do if it wasn't expected.
+pub(crate) fn agent_export_notice(
+    agent: &str,
+    session: Option<&str>,
+    names: &[String],
+    workspaces: &[String],
+    target_fp: &str,
+    target_vault_id: &str,
+) -> (String, String) {
+    let n = names.len();
+    let title = format!("{agent} exported {n} secret{} to another vault", if n == 1 { "" } else { "s" });
+    let list = if names.is_empty() { "- (none)".to_string() } else { names.iter().map(|x| format!("- {x}")).collect::<Vec<_>>().join("\n") };
+    let from = if workspaces.is_empty() { "server secrets only".to_string() } else { workspaces.join(", ") };
+    let body = format!(
+        "Agent {agent}{} ran `k2 vault carry export`. It may, because \"Allow managing server-wide secrets\" is on for it.\n\n\
+         Secrets (names only, never values):\n{list}\n\n\
+         From: {from}\n\
+         To: vault {target_vault_id} (key {target_fp})\n\n\
+         It is also in Settings → Logs → Access Audit and in `k2 vault audit`. \
+         Didn't expect it? Turn that switch off for {agent} (Settings → Workspaces → {agent} → Agent) and rotate these secrets.",
+        session.map(|s| format!(" (session {s})")).unwrap_or_default(),
+    );
+    (title, body)
 }
 
 fn recipient(vault: &Arc<LocalVault>, c: &VaultCaller) -> Result<Value, VaultError> {

@@ -13,6 +13,7 @@ import {
   fetchUsersAudit,
   fetchWhoamiRole,
   formatAuditTimeUtc,
+  isAgentVaultExport,
   isSuccessLogin,
   newestFirst,
   type AuthAuditEvent,
@@ -120,11 +121,17 @@ export function AccessAuditSection(): React.JSX.Element {
     if (view.kind !== 'table') return []
     const q = userFilter.trim().toLowerCase()
     return view.events.filter((ev) => {
-      if (filter === 'successes' && !isSuccessLogin(ev)) return false
+      // An agent's vault export always shows: it is why this page is open.
+      if (filter === 'successes' && !isSuccessLogin(ev) && !isAgentVaultExport(ev)) return false
       if (q && !ev.user.toLowerCase().includes(q)) return false
       return true
     })
   }, [view, filter, userFilter])
+
+  const agentExports = useMemo(
+    () => (view.kind === 'table' ? view.events.filter(isAgentVaultExport).length : 0),
+    [view],
+  )
 
   return (
     <div data-settings-id="access-audit">
@@ -226,6 +233,17 @@ export function AccessAuditSection(): React.JSX.Element {
             </div>
           </div>
 
+          {agentExports > 0 && (
+            <p
+              role="status"
+              data-testid="agent-vault-export-banner"
+              className="text-xs mb-3 px-2 py-1.5 border border-[var(--color-warning,#c98a1b)] text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]"
+            >
+              {agentExports === 1
+                ? 'An agent exported secrets from this box’s vault in this window. It is marked below; names only, never values.'
+                : `Agents exported secrets from this box’s vault ${agentExports} times in this window. They are marked below; names only, never values.`}
+            </p>
+          )}
           {view.kind === 'empty' ? (
             <p className="text-xs text-[var(--color-text-muted)]">{EMPTY_COPY}</p>
           ) : (
@@ -252,15 +270,27 @@ export function AccessAuditSection(): React.JSX.Element {
                       </td>
                     </tr>
                   ) : (
-                    rows.map((ev, i) => (
+                    rows.map((ev, i) => {
+                      const flagged = isAgentVaultExport(ev)
+                      return (
                       <tr
                         key={`${ev.ts}-${ev.user}-${ev.outcome}-${i}`}
-                        className="border-b border-[var(--color-border)] text-[var(--color-text-primary)]"
+                        data-agent-vault-export={flagged ? 'true' : undefined}
+                        className={`border-b border-[var(--color-border)] text-[var(--color-text-primary)] ${
+                          flagged ? 'bg-[var(--color-warning-bg,rgba(201,138,27,0.14))] border-l-2 border-l-[var(--color-warning,#c98a1b)]' : ''
+                        }`}
                       >
                         <td className="py-1.5 pr-3 font-mono whitespace-nowrap">
                           {formatAuditTimeUtc(ev.ts)}
                         </td>
-                        <td className="py-1.5 pr-3">{ev.event || '—'}</td>
+                        <td className="py-1.5 pr-3">
+                          {ev.event || '—'}
+                          {flagged && (
+                            <span className="ml-1 text-[10px] px-1 border border-[var(--color-warning,#c98a1b)] text-[var(--color-warning,#c98a1b)]">
+                              agent export
+                            </span>
+                          )}
+                        </td>
                         <td className={`py-1.5 pr-3 font-mono ${outcomeClass(ev.outcome)}`}>
                           {ev.outcome || '—'}
                         </td>
@@ -268,7 +298,8 @@ export function AccessAuditSection(): React.JSX.Element {
                         <td className="py-1.5 pr-3 font-mono">{ev.ingress || '—'}</td>
                         <td className="py-1.5 font-mono">{ev.ip || '—'}</td>
                       </tr>
-                    ))
+                      )
+                    })
                   )}
                 </tbody>
               </table>

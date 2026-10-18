@@ -794,6 +794,17 @@ pub fn record_event(
     );
 }
 
+/// Who did `kind` to `job_id` last, and when (the audit line `get` shows
+/// for a cancel).
+pub fn last_job_event(conn: &Connection, job_id: &str, kind: &str) -> Option<(String, i64)> {
+    conn.query_row(
+        "SELECT actor, at FROM compute_events WHERE job_id = ?1 AND kind = ?2 ORDER BY id DESC LIMIT 1",
+        params![job_id, kind],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .ok()
+}
+
 pub fn events(conn: &Connection, limit: i64) -> Vec<EventRow> {
     let Ok(mut stmt) = conn.prepare(
         "SELECT id, at, actor, kind, node_id, workspace_id, job_id, detail_json FROM compute_events \

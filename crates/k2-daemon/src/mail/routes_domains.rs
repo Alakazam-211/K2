@@ -172,7 +172,7 @@ pub fn handle_domain_check(body: &[u8]) -> CliResponse {
 /// - **Owner table** (no `project` param): every domain + status chip
 ///   + send mode + per-record state summary + the DMARC nag.
 /// - **Agent view** (`?project=<name|path|uuid>` — how `k2 mail
-///   domains` calls it): ONLY Verified domains (what `k2 mail create`
+///   domains` calls it): ONLY Verified domains (what `k2 hostmail create`
 ///   can mint on) with the workspace default marked. Default-domain
 ///   resolution: the global `mail_default_domain` setting when it is
 ///   currently Verified, else the first Verified domain (empty setting

@@ -862,7 +862,7 @@ pub fn handle_wait(params: &HashMap<String, String>) -> CliResponse {
         return error_response(
             "404 Not Found",
             "not_found",
-            "this workspace has no active mail addresses — mint one with 'k2 mail create' \
+            "this workspace has no active mail addresses — mint one with 'k2 hostmail create' \
              before waiting",
         );
     }
@@ -1804,7 +1804,7 @@ mod tests {
         assert!(body_json(&resp)["error"]["hint"]
             .as_str()
             .unwrap()
-            .contains("k2 mail create"));
+            .contains("k2 hostmail create"));
 
         // Foreign `to` → masked not_found.
         let (name2, path2) = unique("wait-foreign");

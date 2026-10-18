@@ -4051,7 +4051,7 @@ pub struct MailRelayConfig {
 /// One `mail_addresses` row — the binding of a Stalwart account to its
 /// OWNING workspace (PRD §7.1). `owner_project_id` = `projects.id`,
 /// resolved server-side from the calling token, never from a body.
-/// `client_id` powers idempotent minting (`k2 mail create --id`).
+/// `client_id` powers idempotent minting (`k2 hostmail create --id`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MailAddress {

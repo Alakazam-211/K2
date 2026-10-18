@@ -473,7 +473,7 @@ Settings → Email). You mint addresses on verified domains, read what arrives,
 block on `wait` for verification codes, and send/reply under your human's
 governance.
 ```
-k2 mail create <local>[@<domain>] [--id <key>]  # mint (--id = idempotency key: same --id returns the existing address)
+k2 hostmail create <local>[@<domain>] [--id <key>]  # mint (--id = idempotency key: same --id returns the existing address)
 k2 mail addresses                               # your ACTIVE addresses + cap usage (incoming mail is `messages`)
 k2 mail domains                                 # verified domains you can mint on (workspace default marked)
 k2 mail messages [<address>] [--unread]         # newest-first summaries
@@ -1958,7 +1958,7 @@ mod tests {
         // K2 Mail S8: the `k2 mail` surface + its guardrails
         // (SKILL_VERSION_WORKSPACE bumped 9→11 for this section; 10 taken on main).
         assert!(
-            body.contains("k2 mail create") && body.contains("--id = idempotency key"),
+            body.contains("k2 hostmail create") && body.contains("--id = idempotency key"),
             "k2-cli skill must teach idempotent minting",
         );
         assert!(

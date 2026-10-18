@@ -63,6 +63,14 @@ export const REPORTED_FEATURES = {
    *  keeps its own live-session set and reads working from
    *  `counts.working`; a missing `live` is unknown, never 0. */
   'activity-live-busy': 'activity-live-busy',
+  /** thread-read-v1 (0.46.1): per-person unread counts for Threads and
+   *  project chats. `GET /cli/thread/unread`, `POST /cli/thread/read`,
+   *  `POST /cli/project-group/read`, `POST /cli/thread/mute`, the
+   *  `thread_read` / `project_read` frames, and `unread` / `waiting` /
+   *  `muted` on `thread/latest` and `project-group/list` rows. Without it
+   *  the client shows no unread dots and never posts a read
+   *  (`stores/unread.ts`). */
+  'thread-read-v1': 'thread-read-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

@@ -218,6 +218,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'stores/subscription-usage.ts',
   'stores/tabs.ts',
   'stores/timer.ts',
+  // thread-read-v1: the window server's per-person unread counts; a server
+  // switch resets and refetches (another server's rows read their own).
+  'stores/unread.ts',
   // Usage v2: a server switch drops the window's limits doc.
   'stores/usage-limits.ts',
 ]

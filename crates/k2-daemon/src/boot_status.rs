@@ -388,6 +388,13 @@ pub const FEATURE_APP_SELF: &str = crate::apps::surfaces::FEATURE_APP_SELF;
 /// `skin/me` rooms carry `folders`, and `GET /cli/fs/stat` (`files.stat`)
 /// answers.
 pub const FEATURE_FILES_PATH_SCOPE: &str = "files-path-scope-v1";
+/// Delta reads for an on-device chat cache (thread-delta-v1, 0.46.1):
+/// `GET /cli/thread?after_seq=N` and `GET /cli/project-group/messages?
+/// after_seq=N` return items with `seq > N` OLDEST first, `has_more` when
+/// newer ones remain past `limit`; the Thread one also returns `changed`
+/// (items at or below N rewritten in place since: card answers, voids,
+/// expiries, handoffs) and `removed` (items that left the Thread).
+pub const FEATURE_THREAD_DELTA: &str = "thread-delta-v1";
 /// Thread push message previews (0.46.1): `POST /cli/push/register-device`
 /// takes `previews` (absent = keep the stored value), its reply and
 /// `GET /cli/push/device` carry `previews` + `previewsAllowed`, and a
@@ -471,6 +478,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_APP_SELF);
     out.push(FEATURE_FILES_PATH_SCOPE);
     out.push(FEATURE_THREAD_ATTACHMENTS);
+    out.push(FEATURE_THREAD_DELTA);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
         // Same DB as 0157: migration 0189 (push_devices.previews) ran with it.
@@ -532,6 +540,7 @@ mod tests {
                 "app-self-v1",
                 "files-path-scope-v1",
                 "thread-attachments-v1",
+                "thread-delta-v1",
                 "thread-push-v1",
                 "push-previews-v1",
                 "thread-read-v1",

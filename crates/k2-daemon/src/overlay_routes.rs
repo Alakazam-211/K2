@@ -488,6 +488,46 @@ fn parse_since_opt(params: &HashMap<String, String>) -> Option<i64> {
     opt_param(params, "since_seq").and_then(|s| s.parse::<i64>().ok())
 }
 
+/// thread-delta-v1 `after_seq=N`: absent = the old paging; present must be
+/// a whole number `>= 0` (400 `usage` otherwise, never silently ignored:
+/// a client that asked for a delta must not get a newest-N page).
+pub(crate) fn parse_after_seq(params: &HashMap<String, String>) -> Result<Option<i64>, CliResponse> {
+    match params.get("after_seq") {
+        None => Ok(None),
+        Some(raw) => match raw.trim().parse::<i64>() {
+            Ok(n) if n >= 0 => Ok(Some(n)),
+            _ => Err(usage(format!("invalid after_seq '{raw}': expected a whole number >= 0"))),
+        },
+    }
+}
+
+/// The `after_seq` response (thread-delta-v1): the snapshot shape with
+/// `items` OLDEST first after N and `has_more` meaning NEWER items remain,
+/// plus `after_seq`, `changed` (items at or below N in their current
+/// state) and `removed` (`{id, seq}` of items that left this Thread).
+fn thread_delta_json(resolved: &ResolvedOverlay, after_seq: i64, delta: overlay::ThreadDelta) -> String {
+    let body = serde_json::json!({
+        "ok": true,
+        "collection": "thread",
+        "addr": resolved.addr,
+        "conversation_id": resolved.conversation_id,
+        "after_seq": after_seq,
+        "items": delta.items,
+        "has_more": delta.has_more,
+        "changed": delta.changed,
+        "removed": removed_json(&delta.removed),
+        "pastAddresses": past_addresses(resolved),
+    });
+    with_moved_from(body, resolved)
+}
+
+/// `removed` rows of a delta as `[{id, seq}]`.
+pub fn removed_json(removed: &[(i64, String)]) -> serde_json::Value {
+    serde_json::Value::Array(
+        removed.iter().map(|(seq, id)| serde_json::json!({ "id": id, "seq": seq })).collect(),
+    )
+}
+
 fn parse_before_seq(params: &HashMap<String, String>) -> Option<i64> {
     opt_param(params, "before_seq").and_then(|s| s.parse::<i64>().ok())
 }
@@ -524,6 +564,19 @@ fn handle_get_thread(params: &HashMap<String, String>) -> CliResponse {
     let since = parse_since_opt(params);
     let before = parse_before_seq(params);
     let limit = parse_overlay_limit(params);
+    match parse_after_seq(params) {
+        Err(e) => return e,
+        Ok(Some(after)) => {
+            if opt_param(params, "since_seq").is_some() || opt_param(params, "before_seq").is_some() {
+                return usage("after_seq cannot be combined with since_seq or before_seq");
+            }
+            return match overlay::read_thread_delta(&resolved.conversation_id, after, limit) {
+                Ok(delta) => CliResponse::ok_json(thread_delta_json(&resolved, after, delta)),
+                Err(e) => error_json("500 Internal Server Error", "store", e),
+            };
+        }
+        Ok(None) => {}
+    }
     match overlay::read_thread_page(&resolved.conversation_id, since, before, limit) {
         Ok(page) => CliResponse::ok_json(snapshot_json("thread", &resolved, page)),
         Err(e) => error_json("500 Internal Server Error", "store", e),

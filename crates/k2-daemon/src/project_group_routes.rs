@@ -150,6 +150,38 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 },
                 None => None,
             };
+            // thread-delta-v1: `after_seq=N` → seq > N, oldest first,
+            // `has_more` when newer messages remain. Messages never change
+            // after posting, so `changed` / `removed` are always empty.
+            if let Some(raw) = params.get("after_seq") {
+                let after_seq = match raw.trim().parse::<i64>() {
+                    Ok(n) if n >= 0 => n,
+                    _ => {
+                        return Some(usage_error(format!(
+                            "invalid after_seq '{raw}' — expected a whole number >= 0"
+                        )))
+                    }
+                };
+                if after.is_some() {
+                    return Some(usage_error("after_seq cannot be combined with after"));
+                }
+                return Some(match project_groups::list_messages_after_seq(&group_id, after_seq, limit) {
+                    Ok(page) => CliResponse::ok_json(
+                        serde_json::json!({
+                            "ok": true,
+                            "groupId": group_id,
+                            "after_seq": after_seq,
+                            "messages": page.messages,
+                            "has_more": page.truncated,
+                            "truncated": page.truncated,
+                            "changed": [],
+                            "removed": [],
+                        })
+                        .to_string(),
+                    ),
+                    Err(e) => core_error(e),
+                });
+            }
             match project_groups::list_messages(&group_id, after, limit) {
                 Ok(page) => CliResponse::ok_json(
                     serde_json::json!({

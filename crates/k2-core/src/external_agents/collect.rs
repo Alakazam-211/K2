@@ -713,6 +713,12 @@ pub fn page(agent_id: &str, since: Option<i64>, before: Option<i64>, limit: usiz
     overlay::read_thread_page(&conversation_id(agent_id), since, before, limit)
 }
 
+/// thread-delta-v1 on a collected Thread: the lines after `after_seq`,
+/// oldest first, plus lines at or below it updated in place since.
+pub fn delta(agent_id: &str, after_seq: i64, limit: usize) -> Result<overlay::ThreadDelta, String> {
+    overlay::read_thread_delta(&conversation_id(agent_id), after_seq, limit)
+}
+
 /// Whether K2 has started collecting this bot.
 pub fn started(agent_id: &str) -> Result<bool, String> {
     Ok(read_state(&conversation_id(agent_id))?.is_some())

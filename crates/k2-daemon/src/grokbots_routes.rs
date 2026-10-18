@@ -516,6 +516,34 @@ pub fn thread_by_addr(who: Who, params: &HashMap<String, String>) -> CliResponse
         Some(n) if n < 0 => 25,
         Some(n) => (n as usize).clamp(1, 500),
     };
+    // thread-delta-v1: `after_seq=N`, same shape as the workspace Thread's.
+    match crate::overlay_routes::parse_after_seq(params) {
+        Err(r) => return r,
+        Ok(Some(after)) => {
+            if params.contains_key("since_seq") || params.contains_key("before_seq") {
+                return refuse("400 Bad Request", "usage", "after_seq cannot be combined with since_seq or before_seq");
+            }
+            return match collect::delta(&id, after, limit) {
+                Ok(d) => resp(
+                    "200 OK",
+                    json!({
+                        "ok": true,
+                        "collection": "thread",
+                        "addr": collect::address(&bot.name),
+                        "conversation_id": collect::conversation_id(&id),
+                        "after_seq": after,
+                        "items": d.items,
+                        "has_more": d.has_more,
+                        "changed": d.changed,
+                        "removed": crate::overlay_routes::removed_json(&d.removed),
+                        "pastAddresses": [],
+                    }),
+                ),
+                Err(e) => CliResponse::internal_error(format!("read Thread: {e}")),
+            };
+        }
+        Ok(None) => {}
+    }
     match collect::page(&id, num("since_seq"), num("before_seq"), limit) {
         Ok(page) => resp(
             "200 OK",

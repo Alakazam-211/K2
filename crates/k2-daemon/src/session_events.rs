@@ -860,6 +860,31 @@ pub enum SessionEvent {
     /// thread-read-v1: the same for one project chat (`id` = group id,
     /// no `projectId`; `waiting` is always 0). Person-scoped.
     ProjectRead(ReadFrame),
+
+    /// homes-sync-v1 (0.46.1): one person's Homes changed on this server
+    /// (a device pushed). PERSON-SCOPED: `/cli/sessions/events` forwards it
+    /// only to sockets of that person (the owner token and every login the
+    /// owner linked are one person). A device whose cursor is behind
+    /// pulls `GET /cli/me/homes?since=`. Carries no Home names.
+    ///
+    /// Wire: `{ "kind": "homes_changed", "cursor": number }`.
+    HomesChanged {
+        #[serde(skip)]
+        person: String,
+        cursor: i64,
+    },
+
+    /// homes-sync-v1: a device was removed from this person's Homes sync
+    /// (Server settings). Person-scoped like `homes_changed`. The removed
+    /// device stops syncing (its pulls and pushes now answer 410).
+    ///
+    /// Wire: `{ "kind": "homes_device_removed", "deviceId": string }`.
+    HomesDeviceRemoved {
+        #[serde(skip)]
+        person: String,
+        #[serde(rename = "deviceId")]
+        device_id: String,
+    },
 }
 
 /// The body of a `thread_read` / `project_read` frame (thread-read-v1).
@@ -908,11 +933,15 @@ impl ReadFrame {
 }
 
 impl SessionEvent {
-    /// The person a person-scoped event belongs to (thread-read-v1);
+    /// The person a person-scoped event belongs to (thread-read-v1,
+    /// homes-sync-v1);
     /// `None` for every other event.
     pub fn person(&self) -> Option<&str> {
         match self {
             SessionEvent::ThreadRead(f) | SessionEvent::ProjectRead(f) => Some(f.person.as_str()),
+            SessionEvent::HomesChanged { person, .. } | SessionEvent::HomesDeviceRemoved { person, .. } => {
+                Some(person.as_str())
+            }
             _ => None,
         }
     }
@@ -977,6 +1006,8 @@ impl SessionEvent {
             SessionEvent::OpenChanges { .. } => "open_changes",
             SessionEvent::ThreadRead(_) => "thread_read",
             SessionEvent::ProjectRead(_) => "project_read",
+            SessionEvent::HomesChanged { .. } => "homes_changed",
+            SessionEvent::HomesDeviceRemoved { .. } => "homes_device_removed",
         }
     }
 }

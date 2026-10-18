@@ -193,6 +193,8 @@ pub mod heartbeats;
 pub mod hire;
 /// Home avatar cache: `~/.k2/cache/agent-avatars/` (prd-home-picker-and-remote-avatars-v1 S3).
 pub mod home_avatars;
+/// homes-sync-v1 (0.46.1): a person's Homes synced between their devices.
+pub mod homes_sync;
 // Phase 2.5c: workspace lifecycle + state + identity + launch helpers.
 // Post-Phase-2.1 "workspace == agent" 1:1 means these are
 // workspace-scoped concerns; was scattered under `agents/`.

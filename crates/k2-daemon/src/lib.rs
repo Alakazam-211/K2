@@ -123,6 +123,8 @@ pub mod publish_runtime;
 pub mod push_routes;
 // Thread push prefs routes (prd-thread-push-notifications-v1 S2).
 pub mod notify_routes;
+/// homes-sync-v1 (0.46.1): `/cli/me/homes*`, a person's Homes between devices.
+pub mod homes_routes;
 // Thread push trigger + per-(Thread, person) coalescer (S3).
 pub mod thread_push;
 // `viewing` frames from the overlay WS: who looks at which Thread (S4).

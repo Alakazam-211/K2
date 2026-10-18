@@ -1421,6 +1421,12 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // `author_kind`, `project_groups.last_msg_seq`; the owner starts
         // fully read. Additive only.
         ("0190_thread_read", include_str!("../../drizzle_sql/0190_thread_read.sql")),
+        // 0193 — Homes sync between a person's devices (homes-sync-v1,
+        // 0.46.1): `homes_items` (per-item last-writer-wins records with
+        // tombstones and merge redirects), `homes_people` (cursor + tombstone
+        // floor), `homes_devices`. New tables only. 0188–0192 belong to the
+        // other 0.46.1 lanes (0190 = unread); renumber freely on a slip.
+        ("0193_homes_sync", include_str!("../../drizzle_sql/0193_homes_sync.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2084,7 +2090,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0190_thread_read",
+            last_name, "0193_homes_sync",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2130,6 +2136,7 @@ mod tests {
                 "0181_gardens_manage",
                 "0189_push_device_previews",
                 "0190_thread_read",
+                "0193_homes_sync",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2177,6 +2184,7 @@ mod tests {
                 "0181_gardens_manage",
                 "0189_push_device_previews",
                 "0190_thread_read",
+                "0193_homes_sync",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2515,7 +2523,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0190 (thread read) is the newest: forget it (its tables and
+            // 0193 (Homes sync) is the newest; its tables go first.
+            conn.execute_batch("DROP TABLE homes_items; DROP TABLE homes_people; DROP TABLE homes_devices;")
+                .unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0193_homes_sync'", []).unwrap();
+            // 0190 (thread read) came before it: forget it (its tables and
             // columns stay; re-running it is idempotent).
             conn.execute("DELETE FROM _migrations WHERE name = '0190_thread_read'", []).unwrap();
             // 0189 (push previews) came before it: forget it (its column

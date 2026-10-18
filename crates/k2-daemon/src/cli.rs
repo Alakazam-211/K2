@@ -172,6 +172,12 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     if let Some(resp) = crate::notify_routes::dispatch(path, params) {
         return resp;
     }
+    // homes-sync-v1: served only by the dispatcher's person arm. Anything
+    // reaching this chain (an agent's cell socket, the UDS) is not a
+    // person: GET on a POST route 405, the rest 403 `homes_person_only`.
+    if let Some(resp) = crate::homes_routes::refuse_outside_person_arm(path, false) {
+        return resp;
+    }
     if let Some(resp) = crate::push_routes::dispatch(path, params) {
         return resp;
     }

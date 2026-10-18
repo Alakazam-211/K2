@@ -36,6 +36,12 @@ pub const DIARY_WIDGET_LATEST: &str = "k2:diary@2";
 /// `kanban-1.toml` fills the window with it.
 pub const KANBAN_WIDGET: &str = "k2:kanban@1";
 
+/// The Kanban every new Kanban Garden uses (Rosson 2026-10-18, for 0.46.1):
+/// @1's board with the Thread panel in K2's Thread look (bubbles, "author ·
+/// time", round Send, the working ear) and K2 Companion's colours as its
+/// default. `kanban-2.toml` moves the template to it; an own copy keeps @1.
+pub const KANBAN_WIDGET_LATEST: &str = "k2:kanban@2";
+
 /// The prefix every built-in widget name starts with.
 pub const BUILTIN_PREFIX: &str = "k2:";
 
@@ -154,6 +160,23 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("dock.js", include_str!("kanban-1/dock.js")),
         ],
     },
+    // The Kanban's second version (0.46.1, Rosson 2026-10-18): the Thread
+    // panel wears K2's Thread look in K2 Companion's colours. Its board
+    // code (md.js, kanban.js, picker.js) is @1's; dock.js, kanban.css and
+    // index.html are new. `kanban-1/` stays as shipped.
+    BuiltinWidget {
+        name: "kanban",
+        version: 2,
+        files: &[
+            ("manifest.json", include_str!("kanban-2/manifest.json")),
+            ("index.html", include_str!("kanban-2/index.html")),
+            ("kanban.css", include_str!("kanban-2/kanban.css")),
+            ("md.js", include_str!("kanban-2/md.js")),
+            ("kanban.js", include_str!("kanban-2/kanban.js")),
+            ("picker.js", include_str!("kanban-2/picker.js")),
+            ("dock.js", include_str!("kanban-2/dock.js")),
+        ],
+    },
     // The data-source cards' second version (0.46.1): several sources per
     // card (config.source + config.sources, merged by item key), "soft crit
     // 2/3", named lists, K2 Web's ops shapes, and a refused subscription
@@ -244,6 +267,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:relays-dns@2", "ba1c6b83f7ae7f5d0b3cc37ef9d363dbf207ff7ce614fba195712a78beda0f78"),
     ("k2:deploys@2", "77bdf1a576a2a3b10acd7337d179200ffdf0bab81fe8f7a8666bbf5147c2a640"),
     ("k2:money-alerts@2", "aff2ee34006f71436793145e1989623349a82b6d538beb34d51e94074b69a5c7"),
+    ("k2:kanban@2", "4c7502e0b47e94deb375c9075b5d6bbe666890d37b0098056881ee2f4a167b8d"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -574,12 +598,99 @@ mod tests {
     #[test]
     fn the_kanban_is_a_clean_custom_widget_with_a_generic_board() {
         let w = builtin_widget(&parse_widget_ref(KANBAN_WIDGET).expect("parses")).expect("k2:kanban@1 ships");
-        assert_eq!(builtin_widget(&parse_widget_ref("k2:kanban").expect("parses")).map(|w| w.id()).as_deref(), Some(KANBAN_WIDGET));
+        clean_kanban(w);
+        // Theme: colours come from K2's --zen-* variables, not a fixed dark palette.
+        let css = file(w, "kanban.css");
+        for token in ["--zen-surface", "--zen-text", "--zen-border", "--zen-accent", "--zen-font-family", "--zen-radius"] {
+            assert!(css.contains(token), "kanban.css ignores {token}");
+        }
+        for dark in ["#0d1117", "#161b22", "#1c2330", "padding-top:56px", "padding-top: 56px"] {
+            assert!(!css.contains(dark), "kanban.css still has {dark}");
+        }
+    }
+
+    /// k2:kanban@2 (Rosson 2026-10-18, for 0.46.1): @1's board, clean the
+    /// same way, with the Thread panel in K2's Thread look (ThreadZenKit:
+    /// bubbles yours right / the agent's left, "author · time" under each,
+    /// markdown, a round Send, Enter sends and Shift+Enter is a new line, the
+    /// working ear with its counters and clock) and K2 Companion's colours by
+    /// default, light and dark from the Garden's scheme; `look = "garden"`
+    /// still follows the Garden theme's --zen-* tokens. The bare
+    /// `k2:kanban` is @2 now; @1 still resolves for own copies.
+    #[test]
+    fn the_kanban_2_wears_the_thread_look_in_k2_companion_colours() {
+        assert_eq!(builtin_widget(&parse_widget_ref("k2:kanban").expect("parses")).map(|w| w.id()).as_deref(), Some(KANBAN_WIDGET_LATEST));
+        let w = builtin_widget(&parse_widget_ref(KANBAN_WIDGET_LATEST).expect("parses")).expect("k2:kanban@2 ships");
+        clean_kanban(w);
+        let one = builtin_widget(&parse_widget_ref(KANBAN_WIDGET).expect("parses")).expect("k2:kanban@1 ships");
+        // The board itself is @1's, byte for byte; the panel is new.
+        for f in ["manifest.json", "md.js", "picker.js"] {
+            assert_eq!(file(w, f), file(one, f), "{f} is @1's");
+        }
+        assert_eq!(file(w, "kanban.js").replacen("k2:kanban@2", "k2:kanban@1", 1), file(one, "kanban.js"), "kanban.js is @1's");
+        let html = file(w, "index.html");
+        for needle in ["class=\"send-round\"", "title=\"Send (Enter)\"", "aria-label=\"Send\"", "class=\"dock-turn thread-ear\"", "class=\"compose-box\""] {
+            assert!(html.contains(needle), "index.html lost {needle}");
+        }
+        let js = file(w, "dock.js");
+        for needle in [
+            "doc.via === 'compose'",
+            "'msg ' + (mine ? 'mine' : 'theirs')",
+            "'bubble ' + (mine ? 'bubble-me' : 'bubble-agent')",
+            "authorOf(doc, mine)",
+            "' · '",
+            "fillMarkdown(body, doc.body || '')",
+            "e.key !== 'Enter' || e.shiftKey",
+            "k2.thread.post(to, text)",
+            "k2.thread.subscribe(row.address, drawView",
+            "countTags(t.counts)",
+            "stripClock(now - since)",
+            "look === 'garden'",
+            "seenLabels = labels",
+        ] {
+            assert!(js.contains(needle), "dock.js lost {needle}");
+        }
+        let css = file(w, "kanban.css");
+        // K2 Companion's palette (dark: the phone app's; light: iOS's).
+        for c in ["#0a0a0a", "#1c1c1e", "#0a84ff", "#3a3a3c", "#e4e4e7", "#007aff", "#e9e9eb", "#f2f2f7", "-apple-system"] {
+            assert!(css.contains(c), "kanban.css lost Companion's {c}");
+        }
+        for rule in [
+            ":root[data-zen-scheme=\"dark\"]",
+            ":root.look-garden",
+            "--kb-bubble-radius: 18px",
+            "--kb-field-radius: 20px",
+            ".bubble-me {",
+            ".bubble-agent {",
+            ".msg.mine { align-self: flex-end",
+            ".msg.theirs { align-self: flex-start",
+            ".send-round {",
+            "border-radius: 50%",
+            ".thread-ear {",
+            ".ear-tag {",
+            ".ear-clock {",
+        ] {
+            assert!(css.contains(rule), "kanban.css lost {rule}");
+        }
+        // The Garden look still reads K2's tokens.
+        for token in ["--zen-surface", "--zen-text", "--zen-border", "--zen-accent", "--zen-font-family", "--zen-radius", "--zen-bubble-me"] {
+            assert!(css.contains(token), "look = garden ignores {token}");
+        }
+        // No chamfers or square Style: K2 Companion is round.
+        assert!(!css.contains("clip-path") && !css.contains("chamfer"), "no chamfered corners");
+    }
+
+    /// What every Kanban version keeps: a clean custom widget that keeps its
+    /// board in Garden data, renders notes with the bundled marked +
+    /// DOMPurify, drags with pointer events, and ships none of the Roadmap
+    /// board's K2-internal cards or hints.
+    fn clean_kanban(w: &'static BuiltinWidget) {
+        let id = w.id();
         let files: std::collections::BTreeMap<String, Vec<u8>> =
             w.files.iter().map(|(n, b)| (n.to_string(), b.as_bytes().to_vec())).collect();
-        let c = crate::zen::widgets::check_files("k2", "kanban-1", &files);
-        assert!(c.errors.is_empty(), "{:?}", c.errors);
-        assert!(c.bundle.is_some(), "k2:kanban@1 bundles");
+        let c = crate::zen::widgets::check_files("k2", &format!("kanban-{}", w.version), &files);
+        assert!(c.errors.is_empty(), "{id}: {:?}", c.errors);
+        assert!(c.bundle.is_some(), "{id} bundles");
         let m = c.manifest.as_ref().expect("a manifest");
         assert_eq!(m.caps, ["agents:read", "thread:read", "thread:post", "store:read", "store:write"]);
         for cap in &m.caps {
@@ -642,17 +753,10 @@ mod tests {
             assert!(js.contains(needle), "kanban.js lost {needle}");
         }
         assert!(!js.contains("dataTransfer") && !js.contains("draggable"), "no HTML5 drag and drop");
-        // Theme: colours come from K2's --zen-* variables, not a fixed dark palette.
         let css = file(w, "kanban.css");
-        for token in ["--zen-surface", "--zen-text", "--zen-border", "--zen-accent", "--zen-font-family", "--zen-radius"] {
-            assert!(css.contains(token), "kanban.css ignores {token}");
-        }
-        for dark in ["#0d1117", "#161b22", "#1c2330", "padding-top:56px", "padding-top: 56px"] {
-            assert!(!css.contains(dark), "kanban.css still has {dark}");
-        }
         assert!(css.contains("@media (prefers-reduced-motion: reduce)"));
         let code: usize = w.files.iter().filter(|(f, _)| *f != "manifest.json").map(|(_, b)| b.len()).sum();
-        assert!(code <= 256 * 1024, "UW8: k2:kanban@1 is {code} bytes of code");
+        assert!(code <= 256 * 1024, "UW8: {id} is {code} bytes of code");
     }
 
     /// Garden v3 (contract-sources-v1 §11.4, §12.3): each data-source card

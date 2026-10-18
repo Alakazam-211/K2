@@ -139,6 +139,7 @@ fn unreleased_pin_refuses_every_install_verb_before_any_effect() {
         (vec!["engine", "sew", "install"], install_body().into_bytes()),
         (vec!["engine", "sew", "upgrade"], vec![]),
         (vec!["engine", "sew", "media", "install"], br#"{"public_url":"wss://voice.box.k2.dev"}"#.to_vec()),
+        (vec!["engine", "sew", "media", "upgrade"], vec![]),
     ];
     for (argv, stdin) in cases {
         let o = t.call_in(&argv, &stdin);
@@ -239,6 +240,7 @@ fn member_extraction_refuses_nested_dotted_linked_missing_and_empty_members() {
 #[test]
 fn install_bin_installs_the_pin_once_and_never_replaces_another_version() {
     let t = box_root();
+    std::fs::create_dir_all(t.p("/usr/share")).unwrap();
     let o = t.call(&["engine", "sew", "install-bin"]);
     assert_eq!(o.code, exit::STATE, "nothing staged: {}", o.stderr);
     ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
@@ -314,8 +316,10 @@ fn notices_extract_only_top_level_regular_licence_files() {
     assert_eq!(got[1].1, b"Sew notice");
     // The binary member is still found the same way beside them.
     assert_eq!(member(&sew_0_2_0_shape(), "sew"), b"\x7fELF fake sew");
-    // Pre-0.2.0 tarballs (K2's fixtures) carry none.
-    assert!(crate::sew::extract_notices(&pin_tarball()).expect("fixture").is_empty());
+    // Pre-0.2.0 tarballs (K2's 0.0.1 fixture) carry none; the 0.0.2 pin
+    // fixture is 0.2.0-shaped.
+    assert!(crate::sew::extract_notices(&old_tarball()).expect("fixture").is_empty());
+    assert_eq!(crate::sew::extract_notices(&pin_tarball()).expect("fixture").len(), 3);
     // Nested copies are not top-level notices.
     let nested = tarball_of(&[("doc/LICENSE", b"x", false), ("sew", b"bin", false)]);
     assert!(crate::sew::extract_notices(&nested).expect("nested").is_empty());
@@ -331,7 +335,7 @@ fn notices_install_beside_the_binary_and_go_with_it() {
     let t = box_root();
     std::fs::create_dir_all(t.p("/usr/share")).unwrap();
     // No notices in the tarball: nothing written, no directory made.
-    let v = crate::sew::install_notices(&t.ctx, &pin_tarball(), SEW_DOC_DIR).expect("fixture");
+    let v = crate::sew::install_notices(&t.ctx, &old_tarball(), SEW_DOC_DIR).expect("fixture");
     assert_eq!(v, serde_json::json!({"dir": null, "files": []}));
     assert!(!t.p(DOC_ROOT).exists());
 
@@ -430,17 +434,27 @@ fn notices_follow_the_binary_through_upgrade_and_rollback() {
     assert_eq!(licence_in(&t, SEW_DOC_PREV_DIR).as_deref(), Some("LICENSE v2"));
 }
 
+/// The fixture pin is shaped like Sew 0.2.0 (notices beside `sew`):
+/// install-bin puts them in place; a tarball from before 0.2.0 (the 0.0.1
+/// fixture, one member) writes none.
 #[test]
-fn install_bin_with_a_pre_0_2_0_pin_writes_no_notices() {
+fn install_bin_writes_the_pins_notices_and_an_older_tarball_writes_none() {
     let t = box_root();
+    std::fs::create_dir_all(t.p("/usr/share")).unwrap();
     ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
     let o = t.call(&["engine", "sew", "install-bin"]);
     ok(&o);
-    assert_eq!(json(&o)["notices"], serde_json::json!({"dir": null, "files": []}));
-    assert!(!t.p(SEW_DOC_DIR).exists());
+    assert_eq!(json(&o)["notices"]["files"], serde_json::json!(NOTICE_MEMBERS));
+    assert_eq!(licence_in(&t, SEW_DOC_DIR).as_deref(), Some("lic\n"));
     // The same-version re-run answers notices too.
     let o = t.call(&["engine", "sew", "install-bin"]);
-    assert_eq!(json(&o)["notices"]["files"], serde_json::json!([]));
+    assert_eq!(json(&o)["notices"]["files"], serde_json::json!(NOTICE_MEMBERS));
+
+    let t = box_root();
+    std::fs::create_dir_all(t.p("/usr/share")).unwrap();
+    let v = crate::sew::install_notices(&t.ctx, &old_tarball(), SEW_DOC_DIR).unwrap();
+    assert_eq!(v, serde_json::json!({"dir": null, "files": []}));
+    assert!(!t.p(SEW_DOC_DIR).exists());
 }
 
 // ── known-binary rule ────────────────────────────────────────────────────
@@ -470,6 +484,7 @@ fn every_root_exec_verb_refuses_an_unknown_or_missing_binary_and_runs_nothing() 
             (vec!["engine", "sew", "restore", "20260927T031512Z"], vec![]),
             (vec!["engine", "sew", "media", "install"], br#"{"public_url":"wss://voice.box.k2.dev"}"#.to_vec()),
             (vec!["engine", "sew", "media", "uninstall"], vec![]),
+            (vec!["engine", "sew", "media", "upgrade"], vec![]),
             (vec!["engine", "sew", "media", "reconfigure"], br#"{"public_url":"wss://hearth.box.k2.dev"}"#.to_vec()),
             (vec!["engine", "sew", "media", "turn-cert"], turn_cert_body().into_bytes()),
             (vec!["engine", "sew", "media", "status"], vec![]),
@@ -728,9 +743,14 @@ fn upgrade_runs_the_installed_binary_on_the_staged_pin_and_returns_sews_exit() {
     let v = json(&o);
     assert_eq!(v["sewExit"], 1, "Sew's rollback is data, not a helper failure");
     assert_eq!(v["stderrTail"], "sew: canned stderr");
-    let staged = t.p(SEW_STAGE_TARBALL).display().to_string();
-    let pin = pinned_artifact("x86_64").unwrap().tarball_sha256;
-    assert_eq!(sew_calls(&t)[0].0, vec!["upgrade", "--tarball", staged.as_str(), "--sha256", pin, "--json"]);
+    assert_eq!(v["reason"], "health failed; rolled back");
+    // Sew's contract (2026-10-17): the bare binary, and the sha256 of THAT
+    // file (the pin's binary_sha256), never the tarball and its sha.
+    let staged = t.p(SEW_STAGE_UPGRADE_BIN).display().to_string();
+    let pin = pinned_artifact("x86_64").unwrap().binary_sha256;
+    assert_eq!(sew_calls(&t)[0].0, vec!["upgrade", "--binary", staged.as_str(), "--sha256", pin, "--json"]);
+    assert!(!t.p(SEW_STAGE_UPGRADE_BIN).exists(), "the staged binary never outlives the call");
+    assert!(t.p(SEW_STAGE_TARBALL).exists(), "the staged tarball stays for the daemon's unstage");
 
     // Already the pin: no exec.
     let t = box_root();
@@ -789,6 +809,202 @@ fn backups_are_not_root_verbs_since_sw15() {
         assert_eq!(t.call(argv).code, exit::ARGV, "{argv:?}");
     }
     assert!(sew_calls(&t).is_empty());
+}
+
+// ── upgrade: Sew 0.1.2's contract, refusal reasons ───────────────────────
+
+/// `--flag <value>` in a fake program's argv.
+fn arg_of<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str)
+}
+
+fn out(status: i32, stdout: &str, stderr: &str) -> ExecOut {
+    ExecOut { status, stdout: stdout.as_bytes().to_vec(), stderr: stderr.as_bytes().to_vec() }
+}
+
+fn sew_err(exit: i32, message: &str) -> ExecOut {
+    out(exit, &serde_json::json!({"ok": false, "error": {"exit": exit, "message": message}}).to_string(), "")
+}
+
+/// A fake `/usr/local/bin/sew` that behaves like Sew 0.1.2's `sew upgrade`
+/// (sew-ops upgrade.rs before Sew e96c76d0): `--tarball` holds exactly one
+/// regular member `sew` or exit 3 with the reason in its `--json` error;
+/// `--binary` must hash to `--sha256` (exit 3) and be executable (Sew runs
+/// its `version --json`; exit 1), then it is swapped in. Records whether
+/// the staged binary was there, root-executable, when Sew ran.
+fn sew_0_1_2(t: &T) -> std::rc::Rc<std::cell::RefCell<Vec<String>>> {
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (log, bin) = (seen.clone(), t.p(SEW_BIN));
+    let program: super::Program = std::rc::Rc::new(move |args: &[String]| {
+        if args.first().map(String::as_str) != Some("upgrade") {
+            return out(0, "{}", "");
+        }
+        let want = arg_of(args, "--sha256").unwrap_or("").to_string();
+        if let Some(tb) = arg_of(args, "--tarball") {
+            let bytes = std::fs::read(tb).unwrap();
+            let gz = flate2::read::GzDecoder::new(&bytes[..]);
+            let mut a = tar::Archive::new(gz);
+            for e in a.entries().unwrap() {
+                let e = e.unwrap();
+                let name = e.path().unwrap().to_string_lossy().into_owned();
+                if name != "sew" {
+                    log.borrow_mut().push(format!("refused tarball member {name}"));
+                    return sew_err(3, &format!("the tarball must hold exactly one regular file named sew; found {name:?}"));
+                }
+            }
+            return sew_err(3, "test fake: a one-member tarball is not exercised here");
+        }
+        let Some(p) = arg_of(args, "--binary") else {
+            return out(2, "", "error: give --tarball <file> or --binary <file>, with --sha256");
+        };
+        let Ok(bytes) = std::fs::read(p) else {
+            return sew_err(1, &format!("read {p}: No such file or directory"));
+        };
+        let got = crate::sew::sha256_hex(&bytes);
+        if got != want {
+            return sew_err(3, &format!("sha256 of {p} is {got}, not {want}; refusing"));
+        }
+        let mode = std::fs::metadata(p).unwrap().permissions().mode();
+        log.borrow_mut().push(format!("binary mode {:o}", mode & 0o777));
+        if mode & 0o100 == 0 {
+            return sew_err(1, &format!("{p} version --json: Permission denied"));
+        }
+        std::fs::write(&bin, &bytes).unwrap();
+        out(0, r#"{"state":"upgraded","from":"0.0.1","to":"0.0.2","pre_bundle":"20261017T000000Z-pre-upgrade"}"#, "")
+    });
+    t.exec.0.borrow_mut().programs.insert(SEW_BIN.into(), program);
+    seen
+}
+
+/// The box test of 2026-10-17: Sew 0.1.2 installed, a 0.2.0-shaped pin
+/// (LICENSE, NOTICE, THIRD_PARTY_NOTICES.md, sew). Handing 0.1.2 the
+/// tarball was refused (exit 3) and the reason was lost; the helper now
+/// hands it the extracted binary, which it takes.
+#[test]
+fn upgrade_hands_an_older_sew_the_binary_it_accepts_not_the_multi_member_tarball() {
+    let t = box_root();
+    std::fs::create_dir_all(t.p("/usr/share")).unwrap();
+    install_binary(&t, &member(&old_tarball(), "sew"));
+    ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+    let seen = sew_0_1_2(&t);
+
+    // What the 0.46.1 helper did: the tarball → refused, with Sew's words.
+    let staged = t.p(SEW_STAGE_TARBALL).display().to_string();
+    let pin = pinned_artifact("x86_64").unwrap();
+    let old_way = super::Program::clone(&t.exec.0.borrow().programs[SEW_BIN]);
+    let refused = old_way(&["upgrade".into(), "--tarball".into(), staged, "--sha256".into(), pin.tarball_sha256.into(), "--json".into()]);
+    assert_eq!(refused.status, 3, "Sew 0.1.2 refuses the 0.2.0-shaped tarball");
+    assert!(seen.borrow()[0].starts_with("refused tarball member LICENSE"), "{:?}", seen.borrow());
+
+    // The fixed verb.
+    let o = t.call(&["engine", "sew", "upgrade"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["sewExit"], 0, "{v}");
+    assert!(v.get("reason").is_none(), "{v}");
+    assert_eq!((v["from"].as_str(), v["to"].as_str()), (Some("0.0.1"), Some("0.0.2")));
+    assert_eq!(seen.borrow().last().map(String::as_str), Some("binary mode 700"), "root 0700: Sew can run its version");
+    assert_eq!(std::fs::read(t.p(SEW_BIN)).unwrap(), member(&pin_tarball(), "sew"), "the pin is in place");
+    assert!(!t.p(SEW_STAGE_UPGRADE_BIN).exists());
+    // The notices followed the binary; the old (none) are the previous set.
+    assert_eq!(v["notices"]["files"], serde_json::json!(NOTICE_MEMBERS), "{v}");
+    assert_eq!(licence_in(&t, SEW_DOC_DIR).as_deref(), Some("lic\n"));
+    // ... and a rollback swaps them back, as Sew swaps sew and sew.prev.
+    t.exec.0.borrow_mut().programs.clear();
+    sew_answers(&t, 0, r#"{"state":"rolled_back","from":"0.0.2","to":"0.0.1"}"#);
+    let o = t.call(&["engine", "sew", "rollback"]);
+    ok(&o);
+    assert_eq!(licence_in(&t, SEW_DOC_DIR), None, "0.0.1 had no notices");
+    assert_eq!(licence_in(&t, SEW_DOC_PREV_DIR).as_deref(), Some("lic\n"));
+}
+
+/// A refusal reaches the daemon with Sew's words, whichever stream Sew
+/// used, bounded and without control characters; the helper journal says
+/// what Sew exited with (helper code 0 is not "Sew said yes").
+#[test]
+fn a_sew_refusal_answers_its_reason_from_json_stderr_or_stdout() {
+    let refusal = "the tarball must hold exactly one regular file named sew; found \"LICENSE\"";
+    let cases: Vec<(ExecOut, String)> = vec![
+        // 0.1.2 / 0.2.0 with --json: the error body on stdout.
+        (sew_err(3, refusal), refusal.to_string()),
+        // The reason on stderr only (Sew's own words, 2026-10-17).
+        (out(3, "", &format!("sew upgrade: {refusal}\n")), format!("sew upgrade: {refusal}")),
+        // Not JSON on stdout, nothing on stderr (a panic message).
+        (out(101, "thread 'main' panicked at upgrade.rs:42", ""), "thread 'main' panicked at upgrade.rs:42".to_string()),
+        // Control characters never pass.
+        (out(3, "", "\u{1b}[31mrefused\u{1b}[0m\r\u{0}"), "[31mrefused [0m".to_string()),
+        // Nothing at all: still a reason.
+        (out(3, "", ""), "sew exited 3 and printed nothing".to_string()),
+    ];
+    for (answer, want) in cases {
+        let t = box_root();
+        install_binary(&t, &member(&old_tarball(), "sew"));
+        ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+        let status = answer.status;
+        t.exec.0.borrow_mut().answers.insert(SEW_BIN.into(), answer);
+        let o = t.call(&["engine", "sew", "upgrade"]);
+        ok(&o);
+        let v = json(&o);
+        assert_eq!(v["sewExit"], status);
+        assert_eq!(v["reason"].as_str(), Some(want.as_str()), "{v}");
+        assert!(v.get("notices").is_none(), "a refused upgrade moves no notices");
+        let line = t.audit.0.borrow().last().cloned().expect("audited");
+        let j: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!((j["code"].as_i64(), j["sewExit"].as_i64()), (Some(0), Some(i64::from(status))), "{line}");
+        assert_eq!(j["sewReason"].as_str(), Some(want.as_str()), "{line}");
+    }
+    // Bounded.
+    let t = box_root();
+    install_binary(&t, &member(&old_tarball(), "sew"));
+    ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+    t.exec.0.borrow_mut().answers.insert(SEW_BIN.into(), out(3, "", &"x".repeat(10_000)));
+    let v = json(&t.call(&["engine", "sew", "upgrade"]));
+    assert_eq!(v["reason"].as_str().map(str::len), Some(600));
+    // Exit 0 carries no reason.
+    let t = box_root();
+    install_binary(&t, &member(&old_tarball(), "sew"));
+    ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+    sew_answers(&t, 0, r#"{"state":"upgraded"}"#);
+    let v = json(&t.call(&["engine", "sew", "upgrade"]));
+    assert!(v.get("reason").is_none(), "{v}");
+}
+
+/// The voice engine upgrades through the NEW core only (its baked sidecar
+/// pins check the media tarball): refused before anything runs while the
+/// core is older; then `sew media upgrade --tarball <staged pin> --now`,
+/// and the media notices follow a success only.
+#[test]
+fn media_upgrade_runs_only_on_the_pin_core_with_the_staged_media_pin() {
+    let t = box_root();
+    std::fs::create_dir_all(t.p("/usr/share")).unwrap();
+    install_binary(&t, &member(&old_tarball(), "sew"));
+    ok(&t.call_in(&["engine", "sew", "stage-media"], &media_tarball()));
+    let o = t.call(&["engine", "sew", "media", "upgrade"]);
+    assert_eq!(o.code, exit::STATE);
+    assert!(o.stderr.contains("the installed Sew is 0.0.1, the pin is 0.0.2"), "{}", o.stderr);
+    assert!(sew_calls(&t).is_empty());
+
+    with_pin_installed(&t);
+    ok(&t.call(&["engine", "sew", "unstage"]));
+    let o = t.call(&["engine", "sew", "media", "upgrade"]);
+    assert_eq!(o.code, exit::STATE, "nothing staged");
+    assert!(sew_calls(&t).is_empty());
+
+    ok(&t.call_in(&["engine", "sew", "stage-media"], &media_tarball()));
+    sew_answers(&t, 3, r#"{"ok":false,"error":{"exit":3,"message":"voice is not installed"}}"#);
+    let v = json(&t.call(&["engine", "sew", "media", "upgrade"]));
+    assert_eq!((v["sewExit"].as_i64(), v["reason"].as_str()), (Some(3), Some("voice is not installed")));
+    assert!(v.get("notices").is_none());
+    assert!(!t.p(SEW_MEDIA_DOC_DIR).exists());
+
+    sew_answers(&t, 0, r#"{"changed":["/usr/local/lib/sew-media/sew-media"],"from":"0.0.1","to":"0.0.2","mode":"now"}"#);
+    let v = json(&t.call(&["engine", "sew", "media", "upgrade"]));
+    assert_eq!(v["sewExit"], 0);
+    assert_eq!(v["notices"]["files"], serde_json::json!(NOTICE_MEMBERS), "{v}");
+    let staged = t.p(SEW_STAGE_MEDIA_TARBALL).display().to_string();
+    for (argv, _) in sew_calls(&t) {
+        assert_eq!(argv, vec!["media", "upgrade", "--tarball", staged.as_str(), "--now", "--json"]);
+    }
 }
 
 // ── media ────────────────────────────────────────────────────────────────

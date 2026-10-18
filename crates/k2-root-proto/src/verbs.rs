@@ -224,9 +224,12 @@ pub enum SewVerb {
     /// Stdin: [`crate::sew::ConfigRequest`] → `sew config set` per key.
     Config,
     Systemctl(SewSystemctl),
-    /// `sew upgrade --tarball <staged pin tarball> --sha256 <pin>` run by
-    /// the known installed binary. Sew backs up, swaps, migrates, checks
-    /// health and rolls back by itself; its exit code comes back as data.
+    /// `sew upgrade --binary <the staged pin tarball's sew member>
+    /// --sha256 <pin binary_sha256>` run by the known installed binary
+    /// (protocol 8: `--binary`, never `--tarball`: Sew 0.1.x takes only a
+    /// one-member tarball, and 0.2.0 on ship the notices beside `sew`).
+    /// Sew backs up, swaps, migrates, checks health and rolls back by
+    /// itself; its exit code comes back as data, a refusal with its reason.
     Upgrade,
     /// `sew upgrade --rollback` (never `--accept-data-loss-since`).
     Rollback,
@@ -255,6 +258,12 @@ pub enum SewVerb {
     /// request is written to the helper's fixed staging files (K13).
     MediaInstall,
     MediaUninstall,
+    /// `sew media upgrade --tarball <staged pin media tarball> --now`, run
+    /// by the installed core once it IS the pin (protocol 8): the sidecar
+    /// pins are baked into the `sew` binary, so the daemon upgrades the core
+    /// first, checks it, and only then the voice engine. Sew swaps, drains,
+    /// restarts and rolls back the engine by itself; exit code as data.
+    MediaUpgrade,
     /// Stdin: [`crate::sew::MediaRequest`] (no tarball) → `sew media install
     /// --reconfigure --config-json`: a new `voice.public_url`, node IP or
     /// TURN material on an installed engine (K13). `restart_now` adds
@@ -301,6 +310,7 @@ impl SewVerb {
             ["token"] => Self::Token,
             ["media", "install"] => Self::MediaInstall,
             ["media", "uninstall"] => Self::MediaUninstall,
+            ["media", "upgrade"] => Self::MediaUpgrade,
             ["media", "reconfigure"] => Self::MediaReconfigure { restart_now: false },
             ["media", "reconfigure", "restart-now"] => Self::MediaReconfigure { restart_now: true },
             ["media", "turn-cert"] => Self::MediaTurnCert,
@@ -339,6 +349,7 @@ impl SewVerb {
             Self::Token => s(&["token"]),
             Self::MediaInstall => s(&["media", "install"]),
             Self::MediaUninstall => s(&["media", "uninstall"]),
+            Self::MediaUpgrade => s(&["media", "upgrade"]),
             Self::MediaReconfigure { restart_now: false } => s(&["media", "reconfigure"]),
             Self::MediaReconfigure { restart_now: true } => s(&["media", "reconfigure", "restart-now"]),
             Self::MediaTurnCert => s(&["media", "turn-cert"]),
@@ -380,6 +391,7 @@ impl SewVerb {
             | Self::Token
             | Self::MediaInstall
             | Self::MediaUninstall
+            | Self::MediaUpgrade
             | Self::MediaReconfigure { .. }
             | Self::MediaTurnCert
             | Self::MediaEnable
@@ -425,6 +437,7 @@ impl SewVerb {
             Self::Token,
             Self::MediaInstall,
             Self::MediaUninstall,
+            Self::MediaUpgrade,
             Self::MediaReconfigure { restart_now: false },
             Self::MediaReconfigure { restart_now: true },
             Self::MediaTurnCert,
@@ -1802,6 +1815,7 @@ mod tests {
             &["engine", "sew", "token"],
             &["engine", "sew", "media", "install"],
             &["engine", "sew", "media", "uninstall"],
+            &["engine", "sew", "media", "upgrade"],
             &["engine", "sew", "media", "reconfigure"],
             &["engine", "sew", "media", "reconfigure", "restart-now"],
             &["engine", "sew", "media", "turn-cert"],
@@ -1870,7 +1884,12 @@ mod tests {
             &["engine", "sew", "media", "install", "wss://x.y"],
             &["engine", "sew", "media", "install", "--turn-cert", "/etc/shadow"],
             &["engine", "sew", "media"],
-            &["engine", "sew", "media", "upgrade"],
+            // `media upgrade` takes no argv: the tarball is the staged pin,
+            // the mode is fixed (`--now`).
+            &["engine", "sew", "media", "upgrade", "--tarball", "/tmp/evil.tar.gz"],
+            &["engine", "sew", "media", "upgrade", "--when-idle"],
+            &["engine", "sew", "media", "upgrade", "--force"],
+            &["engine", "sew", "upgrade", "--binary", "/tmp/evil"],
             &["engine", "sew", "media", "reconfigure", "wss://hearth.box.k2.dev"],
             &["engine", "sew", "media", "reconfigure", "--restart", "--now"],
             &["engine", "sew", "media", "reconfigure", "restart-now", "x"],

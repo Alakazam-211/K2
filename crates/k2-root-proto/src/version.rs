@@ -21,8 +21,12 @@
 //!   licence notices (`engine sew install-bin`, `upgrade` and
 //!   `media-install` also put the pinned tarball's `LICENSE`, `NOTICE` and
 //!   `THIRD_PARTY_NOTICES.md` under [`crate::sew::SEW_DOC_DIR`] /
-//!   [`crate::sew::SEW_MEDIA_DOC_DIR`]). Anything after an 8 build ships
-//!   needs 9.
+//!   [`crate::sew::SEW_MEDIA_DOC_DIR`]), plus Sew's upgrade contract
+//!   (2026-10-17): `engine sew upgrade` hands the installed Sew the pinned
+//!   tarball's extracted `sew` member (`--binary`, sha256 = the pin's
+//!   `binary_sha256`) instead of the tarball, a non-zero Sew exit answers a
+//!   `reason`, and `engine sew media upgrade` (new) upgrades the voice
+//!   engine through the NEW core. Anything after an 8 build ships needs 9.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.

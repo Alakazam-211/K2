@@ -453,7 +453,7 @@ mod live_row {
         store::update(1, |row| row.installed_version = Some("0.0.1".into())).expect("old release");
         b.ops.clear();
         let env = b.env();
-        let ureq = UpgradeRequest { tarball_path: Some(TARBALL.into()), dry_run: false };
+        let ureq = UpgradeRequest { tarball_path: Some(TARBALL.into()), ..Default::default() };
         let (l, from) = sup::upgrade_begin(&env, &ureq).expect("upgrade begin").expect("not current");
         assert_eq!(sup::upgrade_machine(&env, &ureq, &from)["result"], "done");
         drop(l);

@@ -1,0 +1,344 @@
+//! The daemon's connection to k2-ptyd (PRD §7.5 `ptyd_client`).
+//!
+//! One process-global [`Ptyd`] per K2 home. On first use it finds the
+//! `k2-ptyd` binary, places a versioned copy under `<home>/bin/ptyd/`
+//! (P3), launches it through the double-fork launcher if no ptyd is
+//! listening (P6), and connects as the **owner** with `takeover:true`.
+//! A reader thread routes responses to waiting callers and `exited` /
+//! `overrun` events to the session that registered for them.
+
+use std::collections::HashMap;
+use std::io;
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use k2_ptyd::auth;
+use k2_ptyd::client::{Conn, DataStream};
+use k2_ptyd::paths::Paths;
+use k2_ptyd::proto::{self, Frame, Reply, Request, Role};
+
+/// What a session hears from ptyd besides its byte stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionEvent {
+    Exited { code: Option<i32>, signal: Option<i32> },
+    Overrun { lost_bytes: u64 },
+    /// The owner connection to ptyd is gone (ptyd died or evicted us).
+    OwnerLost,
+}
+
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const CONNECT_WAIT: Duration = Duration::from_secs(5);
+
+/// The live owner connection.
+pub struct Owner {
+    writer: Mutex<UnixStream>,
+    next_id: AtomicU64,
+    pending: Mutex<HashMap<u64, mpsc::SyncSender<Reply>>>,
+    watchers: Mutex<HashMap<String, mpsc::Sender<SessionEvent>>>,
+    dead: AtomicBool,
+    key: [u8; auth::KEY_LEN],
+    sock: PathBuf,
+    client_version: String,
+    pub ptyd_version: String,
+    pub boot_id: String,
+}
+
+impl Owner {
+    fn connect(paths: &Paths, client_version: &str) -> Result<Arc<Owner>, String> {
+        let key = auth::read_key(&paths.key).map_err(|e| format!("key:{}", e.kind()))?;
+        let sock = paths.client_sock();
+        let mut conn = Conn::connect(&sock).map_err(|e| format!("connect:{}", e.kind()))?;
+        conn.set_timeout(Some(REQUEST_TIMEOUT)).map_err(|e| format!("timeout:{}", e.kind()))?;
+        let hello = conn.handshake(&key, client_version, Role::Owner, true).map_err(|e| format!("handshake:{e}"))?;
+        conn.set_timeout(None).map_err(|e| format!("timeout:{}", e.kind()))?;
+        let writer = conn.stream.try_clone().map_err(|e| format!("clone:{}", e.kind()))?;
+        let owner = Arc::new(Owner {
+            writer: Mutex::new(writer),
+            next_id: AtomicU64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            watchers: Mutex::new(HashMap::new()),
+            dead: AtomicBool::new(false),
+            key,
+            sock,
+            client_version: client_version.to_string(),
+            ptyd_version: hello.ptyd_version,
+            boot_id: hello.boot_id,
+        });
+        let weak = Arc::downgrade(&owner);
+        std::thread::Builder::new()
+            .name("k2-ptyd-owner".into())
+            .spawn(move || reader_loop(conn, weak))
+            .map_err(|e| format!("thread:{}", e.kind()))?;
+        Ok(owner)
+    }
+
+    pub fn is_dead(&self) -> bool {
+        self.dead.load(Ordering::Acquire)
+    }
+
+    /// Send a request and wait for its response.
+    pub fn request(&self, body: Request) -> io::Result<Reply> {
+        if self.is_dead() {
+            return Err(io::Error::new(io::ErrorKind::NotConnected, "ptyd owner connection lost"));
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = mpsc::sync_channel(1);
+        lock(&self.pending).insert(id, tx);
+        let bytes = proto::encode(&Frame::new(Some(id), body))?;
+        {
+            use std::io::Write;
+            let mut w = lock(&self.writer);
+            if let Err(e) = w.write_all(&bytes) {
+                lock(&self.pending).remove(&id);
+                return Err(e);
+            }
+        }
+        match rx.recv_timeout(REQUEST_TIMEOUT) {
+            Ok(r) => Ok(r),
+            Err(_) => {
+                lock(&self.pending).remove(&id);
+                Err(io::Error::new(io::ErrorKind::TimedOut, "ptyd did not answer"))
+            }
+        }
+    }
+
+    /// Register for a session's events. Call before `spawn` so an instant
+    /// exit can't be missed.
+    pub fn watch(&self, sid: &str) -> mpsc::Receiver<SessionEvent> {
+        let (tx, rx) = mpsc::channel();
+        lock(&self.watchers).insert(sid.to_string(), tx);
+        rx
+    }
+
+    pub fn unwatch(&self, sid: &str) {
+        lock(&self.watchers).remove(sid);
+    }
+
+    /// Open a data stream for `sid` from `from`.
+    pub fn attach(&self, sid: &str, from: u64) -> io::Result<DataStream> {
+        let mut conn = Conn::connect(&self.sock)?;
+        conn.set_timeout(Some(REQUEST_TIMEOUT))?;
+        conn.handshake(&self.key, &self.client_version, Role::Data, false).map_err(io::Error::other)?;
+        conn.send(&Frame::new(Some(1), Request::Attach { sid: sid.into(), from }))?;
+        match conn.recv()?.body {
+            Reply::Attached { start, end } => {
+                let pending = conn.take_rest();
+                conn.set_timeout(None)?;
+                Ok(DataStream::from_parts(conn.stream, start, end, pending))
+            }
+            Reply::Error { code, .. } => Err(io::Error::other(format!("attach refused: {code}"))),
+            other => Err(io::Error::other(format!("expected attached, got {other:?}"))),
+        }
+    }
+
+    fn mark_dead(&self) {
+        if self.dead.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        lock(&self.pending).clear(); // waiters see a disconnected channel
+        for (_, w) in lock(&self.watchers).drain() {
+            let _ = w.send(SessionEvent::OwnerLost);
+        }
+    }
+}
+
+fn reader_loop(mut conn: Conn, owner: std::sync::Weak<Owner>) {
+    loop {
+        let frame = conn.recv();
+        let Some(o) = owner.upgrade() else { return };
+        let frame = match frame {
+            Ok(f) => f,
+            Err(_) => {
+                crate::log_debug!("[ptyd] owner connection closed");
+                o.mark_dead();
+                return;
+            }
+        };
+        match (frame.id, frame.body) {
+            (Some(id), body) => {
+                if let Some(tx) = lock(&o.pending).remove(&id) {
+                    let _ = tx.send(body);
+                }
+            }
+            (None, Reply::Exited { sid, code, signal, .. }) => {
+                if let Some(w) = lock(&o.watchers).get(&sid) {
+                    let _ = w.send(SessionEvent::Exited { code, signal });
+                }
+            }
+            (None, Reply::Overrun { sid, lost_bytes }) => {
+                crate::log_debug!("[ptyd] overrun session={} lost={}", sid, lost_bytes);
+                if let Some(w) = lock(&o.watchers).get(&sid) {
+                    let _ = w.send(SessionEvent::Overrun { lost_bytes });
+                }
+            }
+            (None, Reply::Evicted) => {
+                crate::log_debug!("[ptyd] evicted by a newer owner");
+                o.mark_dead();
+                return;
+            }
+            (None, Reply::OrphanWarning { seconds_left }) => {
+                crate::log_debug!("[ptyd] orphan warning: {}s left", seconds_left);
+            }
+            (None, _) => {}
+        }
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match m.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    }
+}
+
+/// Per-K2-home ptyd handle.
+pub struct Ptyd {
+    paths: Paths,
+    owner: Mutex<Option<Arc<Owner>>>,
+}
+
+static HOME_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+static GLOBAL: OnceLock<Ptyd> = OnceLock::new();
+
+/// Tests: point the global handle at a temp K2 home. Must run before the
+/// first [`global`] call in the process.
+pub fn set_home_for_tests(home: &Path) {
+    let _ = HOME_OVERRIDE.set(home.to_path_buf());
+}
+
+/// The process-global handle for this daemon's K2 home.
+pub fn global() -> &'static Ptyd {
+    GLOBAL.get_or_init(|| {
+        let home = HOME_OVERRIDE.get().cloned().unwrap_or_else(crate::paths::k2_home);
+        Ptyd { paths: Paths::from_home(&home), owner: Mutex::new(None) }
+    })
+}
+
+/// The K2 version the daemon presents in `hello` (bound into the mac).
+pub fn client_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+impl Ptyd {
+    pub fn paths(&self) -> &Paths {
+        &self.paths
+    }
+
+    /// A live owner connection, connecting (and launching ptyd) if needed.
+    pub fn owner(&self) -> Result<Arc<Owner>, String> {
+        let mut g = lock(&self.owner);
+        if let Some(o) = g.as_ref() {
+            if !o.is_dead() {
+                return Ok(Arc::clone(o));
+            }
+        }
+        let o = match Owner::connect(&self.paths, client_version()) {
+            Ok(o) => o,
+            Err(first) => {
+                let exe = run_location(&self.paths.home)?;
+                k2_ptyd::launch::spawn_detached(&exe, &self.paths.home, &[]).map_err(|e| {
+                    crate::log_debug!("[ptyd] launch failed: {} (connect said {})", e, first);
+                    "launch_failed".to_string()
+                })?;
+                let t = Instant::now();
+                loop {
+                    match Owner::connect(&self.paths, client_version()) {
+                        Ok(o) => break o,
+                        Err(e) if t.elapsed() > CONNECT_WAIT => return Err(e),
+                        Err(_) => std::thread::sleep(Duration::from_millis(25)),
+                    }
+                }
+            }
+        };
+        crate::log_debug!("[ptyd] owner connected (ptyd v{}, boot {})", o.ptyd_version, &o.boot_id[..8.min(o.boot_id.len())]);
+        *g = Some(Arc::clone(&o));
+        Ok(o)
+    }
+
+    /// `Ok(())` when ptyd can host sessions now (connects/launches).
+    pub fn is_available(&self) -> Result<(), String> {
+        self.owner().map(|_| ())
+    }
+
+    /// ptyd's pid from its lock file (P74's vault ancestry check, later).
+    pub fn ptyd_pid(&self) -> Option<i32> {
+        std::fs::read_to_string(&self.paths.lock).ok()?.trim().parse().ok()
+    }
+}
+
+/// The shipped binary: `K2_PTYD_BIN` (dev/tests) or `k2-ptyd` beside the
+/// daemon executable (the macOS bundle nests it beside `k2-daemon`).
+/// Linux's embedded copy (P84) is S6.
+pub fn shipped_binary() -> Result<PathBuf, String> {
+    if let Some(p) = std::env::var_os("K2_PTYD_BIN").filter(|p| !p.is_empty()) {
+        let p = PathBuf::from(p);
+        return if p.is_file() { Ok(p) } else { Err("bin_env_missing".into()) };
+    }
+    let exe = std::env::current_exe().map_err(|_| "no_current_exe".to_string())?;
+    let sib = exe.parent().map(|d| d.join("k2-ptyd")).ok_or("no_exe_dir")?;
+    if sib.is_file() {
+        Ok(sib)
+    } else {
+        Err("no_binary".into())
+    }
+}
+
+/// P3: run from `<home>/bin/ptyd/<ptyd_version>-<sha256[0..12]>/k2-ptyd`
+/// (0700), reused on a hash match. S0 showed the location doesn't affect
+/// macOS TCC, and nothing ever overwrites this copy in place.
+pub fn run_location(home: &Path) -> Result<PathBuf, String> {
+    let src = shipped_binary()?;
+    let bytes = std::fs::read(&src).map_err(|e| format!("read_bin:{}", e.kind()))?;
+    let hash = auth::sha256_hex(&bytes);
+    versioned_copy(home, &bytes, &hash).map_err(|e| format!("copy_bin:{}", e.kind()))
+}
+
+pub fn versioned_copy(home: &Path, bytes: &[u8], hash: &str) -> io::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let dir = home.join("bin").join("ptyd").join(format!("{}-{}", proto::PTYD_VERSION, &hash[..12]));
+    let target = dir.join("k2-ptyd");
+    if let Ok(existing) = std::fs::read(&target) {
+        if auth::sha256_hex(&existing) == hash {
+            return Ok(target);
+        }
+    }
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
+    let tmp = dir.join(format!(".k2-ptyd.{}.tmp", std::process::id()));
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o700).open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, &target)?;
+    Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn versioned_copy_is_reused_on_a_hash_match_and_replaced_otherwise() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = std::env::temp_dir().join(format!("k2-ptyd-vc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let a = b"binary-a".to_vec();
+        let ha = auth::sha256_hex(&a);
+        let p = versioned_copy(&home, &a, &ha).unwrap();
+        assert!(p.to_string_lossy().contains(&format!("{}-{}", proto::PTYD_VERSION, &ha[..12])));
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o700);
+        let mtime = std::fs::metadata(&p).unwrap().modified().unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(versioned_copy(&home, &a, &ha).unwrap(), p);
+        assert_eq!(std::fs::metadata(&p).unwrap().modified().unwrap(), mtime, "reused, not rewritten");
+        std::fs::write(&p, b"tampered").unwrap();
+        versioned_copy(&home, &a, &ha).unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), a, "a hash mismatch is rewritten");
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+}

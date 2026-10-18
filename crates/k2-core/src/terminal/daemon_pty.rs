@@ -180,10 +180,33 @@ pub struct DaemonEventListener {
     /// begins after the IO thread spawns). `OnceLock` keeps reads on
     /// the hot event path lock-free.
     reply_tx: Arc<std::sync::OnceLock<QueryReplySink>>,
+    /// k2-ptyd P75 (V1): while true, terminal-query answers are dropped
+    /// and window-system queries are not broadcast. Set only while bytes
+    /// that were already answered once (adoption replay) go through the
+    /// Term. Always false on the live path, so behaviour is unchanged.
+    muted: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl DaemonEventListener {
+    /// P75: mute (or unmute) query replies for a replay.
+    pub fn set_replies_muted(&self, on: bool) {
+        self.muted.store(on, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 impl EventListener for DaemonEventListener {
     fn send_event(&self, event: AlacEvent) {
+        if self.muted.load(std::sync::atomic::Ordering::SeqCst)
+            && matches!(
+                event,
+                AlacEvent::PtyWrite(_)
+                    | AlacEvent::ColorRequest(..)
+                    | AlacEvent::TextAreaSizeRequest(..)
+                    | AlacEvent::ClipboardLoad(..)
+            )
+        {
+            return;
+        }
         // Terminal-query ANSWERS (DA `\x1b[c`, DSR/CPR `\x1b[6n`, DECRQM,
         // kitty-keyboard negotiation, XTWINOPS…) arrive as `PtyWrite` and
         // flow INTO the PTY on the same channel as user keystrokes — the
@@ -304,6 +327,14 @@ pub struct DaemonPtyConfig {
     /// single-dir RW mount) and hands this spec through instead. (Field name kept
     /// as `overlay` for plumbing stability.)
     pub overlay: Option<WorkspaceMountSpec>,
+    /// k2-ptyd (PRD prd-k2-ptyd-v1 §7.5, P76): this session MAY be hosted
+    /// by k2-ptyd so it can outlive the daemon. Set only by the two
+    /// production spawn sites that register into `v2_session_map`
+    /// (`v2_spawn.rs`, `spawn.rs`), never for `/v1` host sessions (N8),
+    /// the LLM login PTY, tests or other owners (N9). Even when true the
+    /// session stays in-process unless the switch is on (0.46.2: dev-only
+    /// `K2_PTYD=1`) and ptyd is usable — see `terminal::ptyd`.
+    pub survive: bool,
 }
 
 impl Default for DaemonPtyConfig {
@@ -323,8 +354,26 @@ impl Default for DaemonPtyConfig {
             sandbox: SandboxSpec::default(),
             cell_uid: None,
             overlay: None,
+            survive: false,
         }
     }
+}
+
+/// How a session's PTY bytes move. `Alac` is alacritty's own `EventLoop`
+/// (every session before k2-ptyd, and every session with the switch off).
+/// `Ptyd` is a k2-ptyd-hosted session driven by K2's own IO loop
+/// (`terminal::ptyd::io`, S0 decision A1).
+enum PtyIo {
+    Alac(Mutex<Notifier>),
+    #[cfg(unix)]
+    Ptyd(PtydSession),
+}
+
+#[cfg(unix)]
+struct PtydSession {
+    sid: String,
+    io: crate::terminal::ptyd::io::PtydIo,
+    owner: Arc<crate::terminal::ptyd::client::Owner>,
 }
 
 /// Trailing-debounce window for [`DaemonPtySession::request_resize`].
@@ -471,7 +520,10 @@ pub struct DaemonPtySession {
     /// Guarded by a `Mutex` so concurrent `write()` + `resize()`
     /// calls serialize (Notifier::notify needs `&self` but
     /// on_resize needs `&mut self`).
-    pty_notifier: Mutex<Notifier>,
+    ///
+    /// k2-ptyd: a ptyd-hosted session holds `PtyIo::Ptyd` instead (its
+    /// "Shutdown" is stopping K2's IO loop; the child belongs to ptyd).
+    pty_io: PtyIo,
 
     /// Broadcast sender for alacritty lifecycle events (Wakeup,
     /// Title, Bell, ChildExit, etc.). Subscribers call
@@ -872,6 +924,35 @@ impl DaemonPtySession {
             // SLICE 3: the microVM backend consumes it; Passthrough ignores it.
             overlay: cfg.overlay.clone(),
         };
+        // k2-ptyd backend selection (PRD §7.5). With the switch off (the
+        // default) this returns InProcess before evaluating anything else —
+        // ptyd is never contacted — and the code below is the unchanged
+        // in-process path.
+        {
+            use crate::terminal::ptyd::{select_backend, Backend, Switch};
+            let choice = select_backend(
+                cfg.survive,
+                Switch::resolve(),
+                matches!(cfg.sandbox, SandboxSpec::Passthrough),
+                crate::terminal::ptyd::current_killmode,
+                || {
+                    #[cfg(unix)]
+                    {
+                        crate::terminal::ptyd::client::global().is_available()
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        Err("unsupported_os".to_string())
+                    }
+                },
+            );
+            crate::terminal::ptyd::note_selection(&choice);
+            #[cfg(unix)]
+            if choice == Backend::Ptyd {
+                return Self::spawn_ptyd(cfg, req, store_args);
+            }
+        }
+
         let backend = cfg.sandbox.backend();
 
         // Window ID is used on macOS/Windows to associate the PTY
@@ -916,6 +997,7 @@ impl DaemonPtySession {
         let listener = DaemonEventListener {
             tx: events_tx.clone(),
             reply_tx: Arc::clone(&query_reply),
+            muted: Default::default(),
         };
 
         // Term config — scrollback + cursor + colors. Start from
@@ -1006,7 +1088,139 @@ impl DaemonPtySession {
             killed: std::sync::atomic::AtomicBool::new(false),
             args: store_args,
             term,
-            pty_notifier: Mutex::new(Notifier(pty_sender)),
+            pty_io: PtyIo::Alac(Mutex::new(Notifier(pty_sender))),
+            events_tx,
+            child_exited: std::sync::atomic::AtomicBool::new(false),
+            active_subscriber: std::sync::atomic::AtomicU64::new(0),
+            ever_attached: std::sync::atomic::AtomicBool::new(false),
+            viewer_count: std::sync::atomic::AtomicUsize::new(0),
+            active_cols: std::sync::atomic::AtomicU16::new(0),
+            active_rows: std::sync::atomic::AtomicU16::new(0),
+            pinned_cols: std::sync::atomic::AtomicU16::new(0),
+            pinned_rows: std::sync::atomic::AtomicU16::new(0),
+            pinned_set_by: Mutex::new(None),
+            pin_tx,
+            ephemeral_pin_owner: std::sync::atomic::AtomicU64::new(0),
+            viewports: Mutex::new(HashMap::new()),
+            viewport_clock: std::sync::atomic::AtomicU64::new(0),
+            resize_gate: Mutex::new(ResizeGate {
+                pending: None,
+                deadline: Instant::now(),
+                flusher_live: false,
+                last_applied: None,
+            }),
+            resizes_applied: std::sync::atomic::AtomicU64::new(0),
+            resize_generation: std::sync::atomic::AtomicU64::new(0),
+            label: std::sync::RwLock::new(cfg.label),
+            label_source: std::sync::RwLock::new(cfg.label_source),
+            label_tx,
+        }))
+    }
+
+    /// k2-ptyd path of [`Self::spawn`] (PRD §7.5). Everything up to the PTY
+    /// open — env enrichment, the agent-spawn guard, codex `--no-daemon`,
+    /// TERM/locale/browser shim — already ran in `spawn` and is in `req`.
+    /// Here ptyd opens the PTY and forks the child instead of alacritty,
+    /// and K2's own IO loop replaces alacritty's `EventLoop`. The Term,
+    /// listener, broadcast channels and every other field are built
+    /// exactly as on the in-process path.
+    #[cfg(unix)]
+    fn spawn_ptyd(cfg: DaemonPtyConfig, req: SpawnRequest, store_args: Vec<String>) -> Result<Arc<Self>, io::Error> {
+        use crate::terminal::ptyd::{client, env as penv, io as pio};
+        use k2_ptyd::proto::{Reply, Request};
+
+        let owner = client::global().owner().map_err(io::Error::other)?;
+        let user = penv::ShellUser::from_env()?;
+        let argv = match &req.shell {
+            Some(s) => std::iter::once(s.program.clone()).chain(s.args.iter().cloned()).collect(),
+            None => penv::default_shell_argv(&user),
+        };
+        // P15: the same env set alacritty's Command would give the child.
+        let child_env = penv::child_env(std::env::vars_os(), &user, &req.env);
+        // alacritty ignores an invalid working directory; so do we.
+        let cwd = req.cwd.as_ref().filter(|p| p.is_dir()).map(|p| p.to_string_lossy().into_owned());
+        let sid = cfg.session_id.to_string();
+        // P28/P72: identity only — never env values, tokens or keys.
+        let meta = serde_json::json!({
+            "session_id": sid,
+            "cwd": cfg.cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
+            "program": cfg.program,
+            "durable_args": store_args,
+            "label": cfg.label,
+            "label_source": format!("{:?}", cfg.label_source),
+            "sandbox": "passthrough",
+            "spawned_at": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+        });
+        let events = owner.watch(&sid);
+        let pid = match owner.request(Request::Spawn {
+            sid: sid.clone(),
+            argv,
+            env: child_env,
+            cwd,
+            cols: req.window_size.num_cols,
+            rows: req.window_size.num_lines,
+            ring_bytes: None,
+            meta,
+        }) {
+            Ok(Reply::Spawned { pid, .. }) => pid,
+            Ok(Reply::Error { code, detail }) => {
+                owner.unwatch(&sid);
+                log_debug!("[daemon_pty] ptyd spawn failed session={} code={}", cfg.session_id, code);
+                let kind = if code == "enoent" { io::ErrorKind::NotFound } else { io::ErrorKind::Other };
+                return Err(io::Error::new(kind, format!("ptyd spawn: {code}: {detail}")));
+            }
+            Ok(other) => {
+                owner.unwatch(&sid);
+                return Err(io::Error::other(format!("ptyd spawn: unexpected {other:?}")));
+            }
+            Err(e) => {
+                owner.unwatch(&sid);
+                return Err(e);
+            }
+        };
+        let stream = match owner.attach(&sid, 0) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = owner.request(Request::Kill { sid: sid.clone(), grace_ms: Some(100) });
+                let _ = owner.request(Request::AckExit { sid: sid.clone() });
+                owner.unwatch(&sid);
+                return Err(e);
+            }
+        };
+
+        let (events_tx, _initial_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+        drop(_initial_rx);
+        let query_reply = Arc::new(std::sync::OnceLock::new());
+        let listener = DaemonEventListener { tx: events_tx.clone(), reply_tx: Arc::clone(&query_reply), muted: Default::default() };
+        let term_config = TermConfig { scrolling_history: SCROLLBACK_CAP, ..TermConfig::default() };
+        let term_size = TermSize { cols: cfg.cols.max(1) as usize, rows: cfg.rows.max(1) as usize };
+        let term = Arc::new(FairMutex::new(Term::new(term_config, &term_size, listener.clone())));
+
+        let io = pio::start(sid.clone(), stream, Arc::clone(&term), listener, Arc::clone(&owner), events, |sender| {
+            assert!(
+                query_reply
+                    .set(Box::new(move |text: String| sender.send(pio::IoMsg::Input(text.into_bytes().into()))) as QueryReplySink)
+                    .is_ok(),
+                "query-reply sink is set exactly once, here"
+            );
+        })?;
+        log_debug!("[daemon_pty] ptyd session={} pid={}", cfg.session_id, pid);
+
+        let (label_tx, _label_rx_drop) = broadcast::channel::<String>(16);
+        drop(_label_rx_drop);
+        let (pin_tx, _pin_rx_drop) = broadcast::channel::<Option<(u16, u16)>>(16);
+        drop(_pin_rx_drop);
+
+        Ok(Arc::new(Self {
+            session_id: cfg.session_id,
+            cwd: cfg.cwd,
+            program: cfg.program,
+            sandbox: cfg.sandbox,
+            pid: Some(pid),
+            killed: std::sync::atomic::AtomicBool::new(false),
+            args: store_args,
+            term,
+            pty_io: PtyIo::Ptyd(PtydSession { sid, io, owner }),
             events_tx,
             child_exited: std::sync::atomic::AtomicBool::new(false),
             active_subscriber: std::sync::atomic::AtomicU64::new(0),
@@ -1317,7 +1531,20 @@ impl DaemonPtySession {
     /// Write input bytes to the child's stdin. Used for user
     /// keystrokes AND heartbeat-injected signals. Non-blocking.
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
-        self.pty_notifier.lock().notify(bytes);
+        match &self.pty_io {
+            PtyIo::Alac(n) => n.lock().notify(bytes),
+            #[cfg(unix)]
+            PtyIo::Ptyd(p) => p.io.write(bytes.into()),
+        }
+    }
+
+    /// `"in-process"` or `"ptyd"` (diagnostics, tests, `/boot-status`).
+    pub fn backend_name(&self) -> &'static str {
+        match &self.pty_io {
+            PtyIo::Alac(_) => "in-process",
+            #[cfg(unix)]
+            PtyIo::Ptyd(_) => "ptyd",
+        }
     }
 
     /// Resize the PTY (which SIGWINCHes the child) and the local
@@ -1359,12 +1586,21 @@ impl DaemonPtySession {
 
         // SIGWINCH the PTY. The child process will re-query
         // TIOCGWINSZ and repaint for the new dimensions.
-        self.pty_notifier.lock().on_resize(WindowSize {
-            num_cols: cols,
-            num_lines: rows,
-            cell_width: 10,
-            cell_height: 20,
-        });
+        match &self.pty_io {
+            PtyIo::Alac(n) => n.lock().on_resize(WindowSize {
+                num_cols: cols,
+                num_lines: rows,
+                cell_width: 10,
+                cell_height: 20,
+            }),
+            #[cfg(unix)]
+            PtyIo::Ptyd(p) => {
+                // TIOCSWINSZ happens in ptyd (it holds the master).
+                if let Err(e) = p.owner.request(k2_ptyd::proto::Request::Resize { sid: p.sid.clone(), cols, rows }) {
+                    log_debug!("[ptyd] resize failed session={} err={}", self.session_id, e);
+                }
+            }
+        }
 
         let mut term = self.term.lock();
 
@@ -1832,6 +2068,23 @@ impl DaemonPtySession {
             return;
         }
 
+        // k2-ptyd session: ptyd is the child's parent, so it signals and
+        // reaps (same SIGHUP → 100 ms → SIGKILL → reap sequence, P18). Stop
+        // K2's IO loop first, mirroring the in-process path where the reap
+        // wins and the IO thread exits without a ChildExit.
+        #[cfg(unix)]
+        if let PtyIo::Ptyd(p) = &self.pty_io {
+            p.io.stop();
+            match p.owner.request(k2_ptyd::proto::Request::Kill { sid: p.sid.clone(), grace_ms: Some(100) }) {
+                Ok(k2_ptyd::proto::Reply::Ok) => {}
+                other => log_debug!("[ptyd] kill session={} -> {:?}", self.session_id, other),
+            }
+            let _ = p.owner.request(k2_ptyd::proto::Request::AckExit { sid: p.sid.clone() });
+            p.owner.unwatch(&p.sid);
+            log_debug!("[v2-kill] session={} ptyd reaped child pid={:?}", self.session_id, self.pid);
+            return;
+        }
+
         let pid = match self.pid {
             Some(p) if p > 0 => p,
             _ => {
@@ -1929,7 +2182,16 @@ impl DaemonPtySession {
     /// untouched: exited-session UX reads the Term, never the fd.
     fn release_pty_master(&self) {
         use alacritty_terminal::event_loop::Msg;
-        let _ = self.pty_notifier.lock().0.send(Msg::Shutdown);
+        match &self.pty_io {
+            PtyIo::Alac(n) => {
+                let _ = n.lock().0.send(Msg::Shutdown);
+            }
+            #[cfg(unix)]
+            PtyIo::Ptyd(p) => {
+                // Closing our data stream; ptyd keeps the master.
+                p.io.stop();
+            }
+        }
     }
 
     /// PID of the direct child process, if captured. Exposed for
@@ -2188,6 +2450,7 @@ mod tests {
         let mut env = HashMap::new();
         env.insert("PATH".to_string(), format!("{junk}:/usr/bin:/bin"));
         let cfg = DaemonPtyConfig {
+            survive: false,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,
@@ -2332,6 +2595,7 @@ mod tests {
     fn label_starts_with_seed_and_source() {
         use std::path::PathBuf;
         let cfg = DaemonPtyConfig {
+            survive: false,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,
@@ -2357,6 +2621,7 @@ mod tests {
     fn try_set_label_from_pty_drops_locked() {
         use std::path::PathBuf;
         let cfg = DaemonPtyConfig {
+            survive: false,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,
@@ -2384,6 +2649,7 @@ mod tests {
     fn try_set_label_from_pty_accepts_pty_source() {
         use std::path::PathBuf;
         let cfg = DaemonPtyConfig {
+            survive: false,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,
@@ -2443,6 +2709,7 @@ mod tests {
     fn set_label_without_lock_keeps_source() {
         use std::path::PathBuf;
         let cfg = DaemonPtyConfig {
+            survive: false,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,
@@ -2480,6 +2747,7 @@ mod tests {
         use std::path::PathBuf;
 
         let cfg = DaemonPtyConfig {
+            survive: false,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,
@@ -3233,6 +3501,7 @@ mod tests {
         let listener = DaemonEventListener {
             tx,
             reply_tx: reply_slot,
+            muted: Default::default(),
         };
 
         let size = TermSize { cols: 80, rows: 24 };
@@ -3252,6 +3521,96 @@ mod tests {
                 "PtyWrite must not reach the viewer broadcast, got {other:?}"
             ),
         }
+    }
+
+    /// k2-ptyd P75 (V1): while muted, replaying old bytes that contain
+    /// terminal queries produces ZERO input for the child and broadcasts
+    /// no window-system query; the first live query after unmute is
+    /// answered normally.
+    #[test]
+    fn muted_listener_drops_replayed_query_answers_and_unmutes_cleanly() {
+        use alacritty_terminal::vte::ansi::Processor;
+
+        let (tx, mut events_rx) = broadcast::channel::<AlacEvent>(64);
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel::<String>();
+        let reply_slot = Arc::new(std::sync::OnceLock::new());
+        assert!(reply_slot
+            .set(Box::new(move |text: String| {
+                reply_tx.send(text).expect("capture query reply");
+            }) as QueryReplySink)
+            .is_ok());
+        let listener = DaemonEventListener { tx, reply_tx: reply_slot, muted: Default::default() };
+        let size = TermSize { cols: 80, rows: 24 };
+        let mut term = Term::new(TermConfig::default(), &size, listener.clone());
+        let mut parser: Processor = Processor::new();
+
+        listener.set_replies_muted(true);
+        parser.advance(
+            &mut term,
+            b"old\x1b[6n\x1b[c\x1b[>c\x1b[5n\x1b[?2004$p\x1b[?u\x1b[18t\x1b[14t\x1b]10;?\x07\x1b]11;?\x1b\\",
+        );
+        assert!(reply_rx.try_recv().is_err(), "no query answer may reach the child during replay");
+        while let Ok(ev) = events_rx.try_recv() {
+            assert!(
+                !matches!(ev, AlacEvent::ColorRequest(..) | AlacEvent::TextAreaSizeRequest(..) | AlacEvent::PtyWrite(_)),
+                "window-system queries must not be broadcast during replay: {ev:?}"
+            );
+        }
+
+        listener.set_replies_muted(false);
+        parser.advance(&mut term, b"\x1b[6n");
+        assert_eq!(reply_rx.try_recv().expect("live query answered"), "\x1b[1;4R");
+        assert!(reply_rx.try_recv().is_err(), "exactly one answer");
+    }
+
+    /// k2-ptyd default-off proof (P67/P76): a `survive` session with the
+    /// switch off is an ordinary in-process session — alacritty's
+    /// EventLoop, the agent is OUR child — and the env its child sees is
+    /// byte-identical to a non-survive spawn's.
+    #[cfg(unix)]
+    #[test]
+    fn survive_with_switch_off_is_the_unchanged_in_process_path() {
+        assert!(
+            std::env::var_os("K2_PTYD").is_none(),
+            "unset K2_PTYD before running k2-core tests (CLAUDE.md test rule)"
+        );
+        assert!(!DaemonPtyConfig::default().survive, "survive defaults to false");
+        let dir = std::env::temp_dir().join(format!("k2-survive-off-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut dumps = Vec::new();
+        for survive in [false, true] {
+            let out = dir.join(format!("env-{survive}"));
+            let cfg = DaemonPtyConfig {
+                program: Some("/bin/sh".into()),
+                args: vec!["-c".into(), format!("env | sort > '{}'; sleep 30", out.display())],
+                cwd: Some(dir.clone()),
+                survive,
+                ..DaemonPtyConfig::default()
+            };
+            let s = DaemonPtySession::spawn(cfg).expect("spawn");
+            assert_eq!(s.backend_name(), "in-process");
+            let pid = s.child_pid().expect("pid captured");
+            // SAFETY: getpid has no preconditions.
+            let me = unsafe { libc::getpid() };
+            assert_eq!(parent_pid(pid), me, "in-process: the agent is the daemon's own child");
+            let t = std::time::Instant::now();
+            while !(out.exists() && std::fs::metadata(&out).unwrap().len() > 0) {
+                assert!(t.elapsed() < Duration::from_secs(10), "child never wrote its env");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            dumps.push(std::fs::read_to_string(&out).unwrap());
+            s.kill();
+        }
+        assert_eq!(dumps[0], dumps[1], "survive=true with the switch off changes nothing the child sees");
+        assert_eq!(crate::terminal::ptyd::status_line(), "off (switch_off)");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    fn parent_pid(pid: i32) -> i32 {
+        let out = std::process::Command::new("ps").args(["-o", "ppid=", "-p", &pid.to_string()]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().parse().expect("ppid")
     }
 
     /// Slice 5 — the grok DCS gotcha, pinned. Grok echoes unconsumed
@@ -3279,6 +3638,7 @@ mod tests {
         let listener = DaemonEventListener {
             tx,
             reply_tx: reply_slot,
+            muted: Default::default(),
         };
 
         let size = TermSize { cols: 80, rows: 24 };
@@ -3509,6 +3869,7 @@ mod tests {
         use std::path::PathBuf;
 
         let cfg = DaemonPtyConfig {
+            survive: false,
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,

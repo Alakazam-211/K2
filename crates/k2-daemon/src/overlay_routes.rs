@@ -3975,6 +3975,7 @@ mod tests {
             sandbox: k2_core::terminal::SandboxSpec::Passthrough,
             cell_uid: None,
             overlay: None,
+            survive: false,
         })
         .expect("spawn cat");
         crate::v2_session_map::register(agent_name.clone(), session.clone());

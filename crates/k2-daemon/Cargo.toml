@@ -284,6 +284,10 @@ nix = { version = "0.29", default-features = false, features = [
 ], optional = true }
 seccompiler = { version = "0.4", optional = true }
 
+[build-dependencies]
+# k2-ptyd P84: build.rs hashes the embedded k2-ptyd binary.
+sha2 = "0.10"
+
 [dev-dependencies]
 # Enable k2so-core's `test-util` feature for integration tests that
 # need the in-memory DB helper (`db::init_for_tests`). Production

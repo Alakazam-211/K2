@@ -17,6 +17,7 @@ pub mod agent_name_repair_migrate;
 pub mod agent_retire;
 pub mod awareness_ws;
 pub mod boot_status;
+pub mod ptyd_status;
 pub mod browser_routes;
 pub mod canonical_session;
 pub mod chat_routes;

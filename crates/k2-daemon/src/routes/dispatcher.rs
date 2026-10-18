@@ -1540,8 +1540,11 @@ async fn handle_one_request(
                         .connect_login_ingress()
                         .as_wire(),
                 },
-            })
-            .to_string();
+            });
+            // k2-ptyd P27: `ptyd: on | off (<reason>)`. 0.46.2 is dev-only,
+            // so the field appears only with the switch on and the default
+            // response stays byte-identical.
+            let body = crate::ptyd_status::decorate_boot_status(body).to_string();
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
         }
         // GET / and GET /account — the ONLY browser-facing HTML the daemon

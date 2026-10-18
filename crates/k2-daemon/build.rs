@@ -1,6 +1,8 @@
 //! Build script for `k2-daemon`.
 //!
-//! Its ONLY job is to link libkrun for the `k2-vmm-worker` binary — and only
+//! Two jobs. (1) k2-ptyd P84: generate `ptyd_embed.rs` — the embedded
+//! k2-ptyd binary when `K2_PTYD_EMBED` is set, `None` otherwise (see
+//! `embed_ptyd`). (2) Link libkrun for the `k2-vmm-worker` binary — and only
 //! on a Linux build with the `sandbox-microvm` feature on. On every other
 //! build (the default daemon, any macOS build, feature-off) it emits nothing,
 //! so the normal build is completely unaffected and no libkrun is required.
@@ -23,6 +25,8 @@ fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let feature_on = std::env::var("CARGO_FEATURE_SANDBOX_MICROVM").is_ok();
 
+    embed_ptyd();
+
     // Link libkrun ONLY for linux + sandbox-microvm. Anywhere else: do nothing.
     if target_os != "linux" || !feature_on {
         return;
@@ -39,4 +43,32 @@ fn main() {
     println!("cargo:rustc-link-search=native={LIBKRUN_LIBDIR}");
     // rpath so the worker resolves libkrun.so at runtime without env wiring.
     println!("cargo:rustc-link-arg=-Wl,-rpath,{LIBKRUN_LIBDIR}");
+}
+
+/// k2-ptyd P84: embed the release-built `k2-ptyd` (path in `K2_PTYD_EMBED`)
+/// and its sha256 so the Linux self-update and headless installers deliver
+/// ptyd with no new asset. Without the env var the daemon embeds nothing
+/// (dev builds use `K2_PTYD_BIN` or the binary beside the daemon).
+/// `K2_REQUIRE_PTYD_EMBED=1` (release builds) makes a missing or unreadable
+/// binary a build failure.
+fn embed_ptyd() {
+    use sha2::{Digest, Sha256};
+    println!("cargo:rerun-if-env-changed=K2_PTYD_EMBED");
+    println!("cargo:rerun-if-env-changed=K2_REQUIRE_PTYD_EMBED");
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR")).join("ptyd_embed.rs");
+    let required = std::env::var("K2_REQUIRE_PTYD_EMBED").map(|v| v == "1").unwrap_or(false);
+    let code = match std::env::var("K2_PTYD_EMBED").ok().filter(|p| !p.is_empty()) {
+        Some(path) => {
+            println!("cargo:rerun-if-changed={path}");
+            let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("K2_PTYD_EMBED={path}: {e}"));
+            assert!(bytes.len() > 4096, "K2_PTYD_EMBED={path} is too small to be k2-ptyd");
+            let sha = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>();
+            format!("pub static PTYD_EMBED: Option<(&[u8], &str)> = Some((include_bytes!({path:?}), {sha:?}));\n")
+        }
+        None => {
+            assert!(!required, "K2_REQUIRE_PTYD_EMBED=1 but K2_PTYD_EMBED is not set (P84)");
+            "pub static PTYD_EMBED: Option<(&[u8], &str)> = None;\n".to_string()
+        }
+    };
+    std::fs::write(&out, code).expect("write ptyd_embed.rs");
 }

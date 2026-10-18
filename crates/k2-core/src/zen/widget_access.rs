@@ -190,11 +190,9 @@ pub fn check_placement_cap(
     }
     let caps = effective_caps(WidgetOrigin::of(&p.widget), &st.requested());
     if !caps.iter().any(|c| c == cap) {
-        let why = if cap == TAINTED_BY_SOURCES && st.requested().iter().any(|r| r == SOURCES_READ) {
-            format!("'{widget}' reads data sources, so it runs without {cap}")
-        } else {
-            format!("'{widget}' needs {cap} in its manifest caps")
-        };
+        // A sources widget keeps the thread:post it asks for (0.46.1), so a
+        // missing cap is always one its manifest didn't ask for.
+        let why = format!("'{widget}' needs {cap} in its manifest caps");
         return Err(PlacementRefusal { code: WIDGET_CAP_MISSING, message: why });
     }
     Ok(caps)

@@ -1446,8 +1446,8 @@ pub(crate) fn post_handoff_card(
         overlay::post_handoff(&conn, &resolved.conversation_id, &resolved.project_id, from, &resolved.addr, body, card)?;
     drop(conn);
     crate::overlay_ws::emit_links(&links, &item.doc);
-    // Name-only push, like a secret card (§7).
-    push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret);
+    // Name-only push, like a secret card (§7): never a preview.
+    push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret, "");
     Ok(format!("{}/{}", resolved.conversation_id, item.id))
 }
 

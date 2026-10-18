@@ -13,8 +13,10 @@
 //! floor), resolved to the person key (`owner` for the owner token and
 //! every login the owner linked, else the login's own name). The person
 //! comes from the credential, never the body. Agent passports, app passes
-//! (`k2skn_`), API keys and the agent cell socket get 403
-//! `homes_person_only`.
+//! (`k2skn_`) and API keys get 403 `homes_person_only` on TCP. The agent
+//! cell socket never reaches a handler: the paths are not on the scoped
+//! token allowlist (`session_token::require_hook`), so it answers 403 too;
+//! the GET chain (`cli::dispatch`) refuses them as a belt.
 //!
 //! **Devices.** A device registers before it pushes (409
 //! `device_not_registered` otherwise). Once removed, its pull and push
@@ -76,7 +78,7 @@ pub fn not_a_person() -> CliResponse {
     )
 }
 
-/// GET chain / cell socket door: never served there.
+/// GET chain door (`cli::dispatch`): never served there.
 pub fn refuse_outside_person_arm(path: &str, is_post: bool) -> Option<CliResponse> {
     if !is_homes_route(path) {
         return None;

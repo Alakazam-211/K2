@@ -644,10 +644,6 @@ mod unix_impl {
             );
         }
         match path {
-            // homes-sync-v1: Homes belong to a person, never an agent: the
-            // cell socket answers 403 `homes_person_only` (GETs on the
-            // POST-only paths were 405 above), not "route not served".
-            p if crate::homes_routes::is_homes_route(p) => from_cli(crate::homes_routes::not_a_person()),
             // 0.44.4: formerly GET-shaped agent verbs (heartbeat CRUD/fire,
             // connections add/remove, mail attachment write) arrive as POST
             // with query/form params — same handler, same stamped params as

@@ -199,6 +199,29 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub struct Ptyd {
     paths: Paths,
     owner: Mutex<Option<Arc<Owner>>>,
+    /// The leftover sweep runs once, on this process's first owner
+    /// connection.
+    swept: AtomicBool,
+}
+
+/// 0.46.2 has no adoption (that is S3), so sessions a PREVIOUS daemon left
+/// in ptyd can't be taken over: end them, keeping today's semantics (a
+/// restart ends agents) and avoiding a second `--resume` of the same
+/// conversation. Returns how many were ended.
+pub fn end_leftover_sessions(owner: &Owner) -> usize {
+    let sessions = match owner.request(Request::List) {
+        Ok(Reply::Sessions { sessions }) => sessions,
+        _ => return 0,
+    };
+    let mut ended = 0;
+    for s in sessions {
+        if matches!(s.state, proto::SessionState::Running) {
+            let _ = owner.request(Request::Kill { sid: s.sid.clone(), grace_ms: Some(100) });
+            ended += 1;
+        }
+        let _ = owner.request(Request::AckExit { sid: s.sid });
+    }
+    ended
 }
 
 static HOME_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
@@ -214,7 +237,7 @@ pub fn set_home_for_tests(home: &Path) {
 pub fn global() -> &'static Ptyd {
     GLOBAL.get_or_init(|| {
         let home = HOME_OVERRIDE.get().cloned().unwrap_or_else(crate::paths::k2_home);
-        Ptyd { paths: Paths::from_home(&home), owner: Mutex::new(None) }
+        Ptyd::for_home(&home)
     })
 }
 
@@ -224,6 +247,11 @@ pub fn client_version() -> &'static str {
 }
 
 impl Ptyd {
+    /// A handle for an explicit K2 home (the global one uses the daemon's).
+    pub fn for_home(home: &Path) -> Ptyd {
+        Ptyd { paths: Paths::from_home(home), owner: Mutex::new(None), swept: AtomicBool::new(false) }
+    }
+
     pub fn paths(&self) -> &Paths {
         &self.paths
     }
@@ -255,6 +283,12 @@ impl Ptyd {
             }
         };
         crate::log_debug!("[ptyd] owner connected (ptyd v{}, boot {})", o.ptyd_version, &o.boot_id[..8.min(o.boot_id.len())]);
+        if !self.swept.swap(true, Ordering::AcqRel) {
+            let n = end_leftover_sessions(&o);
+            if n > 0 {
+                crate::log_debug!("[ptyd] ended {} session(s) left by a previous daemon (no adoption before S3)", n);
+            }
+        }
         *g = Some(Arc::clone(&o));
         Ok(o)
     }
@@ -287,10 +321,35 @@ pub fn shipped_binary() -> Result<PathBuf, String> {
     }
 }
 
+static EMBEDDED: OnceLock<(&'static [u8], &'static str)> = OnceLock::new();
+
+/// P84: the daemon registers the k2-ptyd bytes its build embedded (Linux
+/// release builds) with their sha256.
+pub fn set_embedded(bytes: &'static [u8], sha256: &'static str) {
+    let _ = EMBEDDED.set((bytes, sha256));
+}
+
 /// P3: run from `<home>/bin/ptyd/<ptyd_version>-<sha256[0..12]>/k2-ptyd`
 /// (0700), reused on a hash match. S0 showed the location doesn't affect
 /// macOS TCC, and nothing ever overwrites this copy in place.
+///
+/// Source order: `K2_PTYD_BIN` (dev/tests), then the embedded copy (P84:
+/// authoritative when present, hash-checked), then the binary beside the
+/// daemon (macOS bundle, packages).
 pub fn run_location(home: &Path) -> Result<PathBuf, String> {
+    let from_env = std::env::var_os("K2_PTYD_BIN").filter(|p| !p.is_empty()).is_some();
+    place_binary(home, from_env, EMBEDDED.get().copied())
+}
+
+fn place_binary(home: &Path, from_env: bool, embedded: Option<(&[u8], &str)>) -> Result<PathBuf, String> {
+    if !from_env {
+        if let Some((bytes, sha)) = embedded {
+            if auth::sha256_hex(bytes) != sha {
+                return Err("embed_hash_mismatch".into());
+            }
+            return versioned_copy(home, bytes, sha).map_err(|e| format!("copy_bin:{}", e.kind()));
+        }
+    }
     let src = shipped_binary()?;
     let bytes = std::fs::read(&src).map_err(|e| format!("read_bin:{}", e.kind()))?;
     let hash = auth::sha256_hex(&bytes);
@@ -339,6 +398,21 @@ mod tests {
         std::fs::write(&p, b"tampered").unwrap();
         versioned_copy(&home, &a, &ha).unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), a, "a hash mismatch is rewritten");
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn embedded_binary_is_placed_verified_and_authoritative() {
+        let home = std::env::temp_dir().join(format!("k2-ptyd-embed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let bytes: &[u8] = b"embedded-ptyd-image";
+        let sha = auth::sha256_hex(bytes);
+        let p = place_binary(&home, false, Some((bytes, sha.as_str()))).unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), bytes);
+        assert_eq!(
+            place_binary(&home, false, Some((bytes, "0000000000000000000000000000000000000000000000000000000000000000"))).unwrap_err(),
+            "embed_hash_mismatch"
+        );
         std::fs::remove_dir_all(&home).unwrap();
     }
 }

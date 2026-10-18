@@ -319,6 +319,9 @@ async fn async_main() {
     // Force a reference to k2so-core so the crate boundary is exercised
     // at build-time until we actually use it for real work.
     k2_core::__scaffolding_marker();
+    // k2-ptyd P84: hand an embedded ptyd (Linux release builds) to k2-core.
+    // A no-op on builds without one; nothing runs ptyd until the switch is on.
+    crate::ptyd_status::register_embedded();
 
     // 0.40.0 rebrand — one-time ~/.k2so → ~/.k2 home migration. MUST
     // run before db::shared(), the port claim, or anything else that

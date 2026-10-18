@@ -13,7 +13,9 @@
 //!   after; app passes 403; POST 405.
 //! - T-S6e: an app guest on the same conversation receives zero activity
 //!   frames.
-//! - T-S6f: a second compose supersedes the first turn.
+//! - T-S6f (0.46.1): a second compose while the agent works joins the
+//!   running turn: same `turnId` and `startedAt`, `messages` 2, no end
+//!   and no frame under the second message's id.
 //! - An early reply while the lead keeps working ends nothing (the old Q7
 //!   end-then-reopen is gone); the lead's Stop ends it.
 //! - Q8 / T-S6h: a turn that ends with no reply (the lead's Stop on the
@@ -505,7 +507,7 @@ async fn a_compose_turn_streams_its_steps_and_ends_on_the_reply() {
 
 /// Q7, T-S6f, Q8 + T-S6h, T-S6b.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn early_replies_supersedes_silent_ends_and_foreign_stamps() {
+async fn early_replies_joined_composes_silent_ends_and_foreign_stamps() {
     with_temp_home(|home| {
         let daemon = futures_block(test_harness::start(OWNER_TOKEN));
         let port = daemon.port;
@@ -552,16 +554,23 @@ async fn early_replies_supersedes_silent_ends_and_foreign_stamps() {
             assert_eq!(end["end"]["reason"], "done", "{end}");
             assert_eq!(end["end"]["detail"], J::Null, "bound, not unbound: {end}");
 
-            // T-S6f: a second compose supersedes the first.
+            // T-S6f (0.46.1): a second compose while the agent works joins
+            // the running turn: same id, same clock, `messages` 2, no end.
             hook(port, &agent.sid, agent.pid, serde_json::json!({
                 "hook_event_name": "UserPromptSubmit", "session_id": agent.conv,
                 "prompt_id": "q8", "prompt": "Synthetic prompt."
             }));
             let old = compose("first thought");
+            let first = activity_until(&mut a, &old, "the running turn", |_| true).await;
+            assert_eq!(first["messages"], 1, "{first}");
+            let started = first["startedAt"].as_i64().expect("startedAt");
             let new = compose("actually, run the linter");
-            let gone = activity_until(&mut a, &old, "the superseded end", |a| !a["end"].is_null()).await;
-            assert_eq!(gone["end"]["reason"], "superseded");
-            assert_eq!(gone["state"], "stopped");
+            let joined = open_until(&mut a, &old, "the joined message", |a| a["messages"] == 2).await;
+            assert_eq!(joined["startedAt"], started, "the clock keeps running: {joined}");
+            assert!(joined["lastComposeAt"].as_i64().expect("lastComposeAt") >= started, "{joined}");
+            let live = catch_up(port, OWNER_TOKEN, &room.handle).json();
+            assert_eq!(live["turn"]["turnId"], old.as_str(), "{live}");
+            assert_eq!(live["turn"]["messages"], 2, "{live}");
 
             // Q8 + T-S6h: folded into the running turn, ended by its Stop,
             // no reply: an end frame and then nothing.
@@ -569,11 +578,20 @@ async fn early_replies_supersedes_silent_ends_and_foreign_stamps() {
             append(&file, &[&queued_line(&room.handle, "actually, run the linter")]);
             tokio::time::sleep(Duration::from_millis(500)).await;
             owner_stop(port, &agent, "q8");
-            let end = activity_until(&mut a, &new, "the silent end", |a| !a["end"].is_null()).await;
+            let end = activity_until(&mut a, &old, "the silent end", |a| !a["end"].is_null()).await;
             assert_eq!(end["end"]["reason"], "done", "{end}");
             assert_eq!(end["end"]["detail"], J::Null, "bound by the queued command: {end}");
+            assert_eq!((end["startedAt"].as_i64(), end["messages"].as_u64()), (Some(started), Some(2)), "{end}");
             assert!(catch_up(port, OWNER_TOKEN, &room.handle).json()["turn"].is_null());
-            no_activity(&mut a, &new, 3_500, "after a silent end").await;
+            let deadline = tokio::time::Instant::now() + Duration::from_millis(3_500);
+            loop {
+                let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+                let Some(f) = next_frame_within(&mut a, left.as_millis() as u64).await else { break };
+                assert!(
+                    !(f["collection"] == "activity" && (f["id"] == old.as_str() || f["id"] == new.as_str())),
+                    "after a silent end (and never a turn of the joined message's own): {f}"
+                );
+            }
             assert_eq!(thread_len(&agent.conv), before, "Q8: no trace in the Thread");
 
             // T-S6b: a nested `claude -p` (not the pane's owner) with a

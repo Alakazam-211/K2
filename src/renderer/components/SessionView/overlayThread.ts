@@ -521,7 +521,11 @@ export interface ThreadTurnTally {
 }
 
 export interface ThreadTurnEnd {
-  /** reply | done | interrupted | failed | session_gone | delivery_failed | superseded | stale */
+  /** reply | done | interrupted | failed | session_gone | delivery_failed | superseded | stale.
+   *  `superseded`: a message sent while the turn wasn't running (or, from a
+   *  server before 0.46.1, any message sent mid-turn). From 0.46.1 a message
+   *  sent while the agent works joins the running turn instead (same
+   *  `turnId`, `messages` + 1): no end at all. */
   reason: string
   detail: string | null
   /** Server ms. */
@@ -532,8 +536,14 @@ export interface ThreadTurn {
   turnId: string
   state: ThreadTurnState
   phase: ThreadTurnPhase
-  /** Server ms: the user's message. */
+  /** Server ms: the user's message (the first one, when more joined it). */
   startedAt: number
+  /** The person's messages in this turn: a message sent while the agent
+   *  works joins its running turn (0.46.1). 1 from an older server. */
+  messages?: number
+  /** Server ms: the newest of those messages. `startedAt` from an older
+   *  server. */
+  lastComposeAt?: number
   /** Server ms: the current phase. */
   phaseSince: number
   /** The redacted tool line (TW8) while `phase` is `tool`, else null. */
@@ -591,6 +601,8 @@ export function coerceThreadTurn(raw: unknown, receivedAt: number): ThreadTurn |
     state,
     phase,
     startedAt,
+    messages: Math.max(1, count(a.messages)),
+    lastComposeAt: finite(a.lastComposeAt) ?? startedAt,
     phaseSince: finite(a.phaseSince) ?? startedAt,
     line: typeof a.line === 'string' && a.line.trim() ? a.line : null,
     subagents: count(a.subagents),
@@ -605,7 +617,9 @@ export function coerceThreadTurn(raw: unknown, receivedAt: number): ThreadTurn |
 }
 
 /** A newer state of the turn wins: another turn replaces it (a new message
- *  supersedes the old turn), the same turn moves only forward by `rev`. */
+ *  after the old turn, or one that superseded it), the same turn moves only
+ *  forward by `rev` (a message that joined the running turn is one more
+ *  frame of the same turn). */
 function nextTurn(current: ThreadTurn | null, incoming: ThreadTurn): ThreadTurn {
   if (current && current.turnId === incoming.turnId && incoming.rev < current.rev) return current
   return incoming

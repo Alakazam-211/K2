@@ -2939,6 +2939,13 @@ mod tests {
         let shown = ok_json(show(&name));
         assert!(shown.get("icon").is_none(), "icon must not ride show: {shown}");
 
+        // 0.46.1 iconKey: set-icon's answer, the icon GET and show all
+        // report the same key for the stored icon.
+        let want_key = k2_core::project_groups::icon_key(icon);
+        assert_eq!(set["iconKey"], want_key.as_str(), "set-icon answer: {set}");
+        assert_eq!(v["iconKey"], want_key.as_str(), "icon GET: {v}");
+        assert_eq!(shown["iconKey"], want_key.as_str(), "show: {shown}");
+
         // set-color: rides the returned group + show; groups-changed.
         let mark = event_mark();
         let colored = ok_json(post_json(
@@ -2980,7 +2987,9 @@ mod tests {
             serde_json::json!({ "group": gid, "dataUrl": null }),
         ));
         assert_eq!(cleared["found"], false);
+        assert!(cleared["iconKey"].is_null(), "cleared icon has no key: {cleared}");
         assert_eq!(ok_json(icon_get(&gid))["found"], false);
+        assert!(ok_json(show(&gid))["iconKey"].is_null(), "show after clear");
         let cleared = ok_json(post_json(
             "/cli/project-group/set-color",
             serde_json::json!({ "group": gid, "color": null }),

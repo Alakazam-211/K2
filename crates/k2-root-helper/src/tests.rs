@@ -1661,3 +1661,7 @@ mod sew_tests;
 // K2's Podman bundle (protocol 8, lane P), same fakes.
 #[path = "podman_tests.rs"]
 mod podman_tests;
+
+// The `front` namespace (protocol 8, front443) lives in its own file, same fakes.
+#[path = "front_tests.rs"]
+mod front_tests;

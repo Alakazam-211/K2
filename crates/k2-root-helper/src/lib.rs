@@ -21,6 +21,7 @@ pub mod caller;
 pub mod core;
 pub mod ctx;
 pub mod daemon_unit;
+pub mod front;
 pub mod fsx;
 pub mod keep;
 pub mod mail;
@@ -231,6 +232,10 @@ fn dispatch(
         Verb::Sew(v) => Some(sew::run(ctx, v, stdin, who)?),
         Verb::AppsPodmanInstall => Some(podman::install(ctx, stdin)?),
         Verb::AppsPodmanUninstall => Some(podman::uninstall(ctx)?),
+
+        Verb::FrontStatus => Some(front::status(ctx)?),
+        Verb::FrontInstall => Some(front::install(ctx, who)?),
+        Verb::FrontRemove => Some(front::remove(ctx, who)?),
     })
 }
 

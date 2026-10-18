@@ -86,6 +86,59 @@ pub fn handoff_dropin() -> &'static str {
      ExecReload=/bin/kill -USR2 $MAINPID\n"
 }
 
+/// front443's socket unit (`/etc/systemd/system/k2-front-443.socket`,
+/// helper `front install`, protocol 8). systemd owns the box's :443 and
+/// hands the listening socket to the daemon (`LISTEN_FDS`, named
+/// [`crate::paths::FRONT_FD_NAME`]); the daemon holds no capability, and
+/// agent PTYs never inherit one (ambient capabilities were rejected for
+/// exactly that).
+///
+/// - `ListenStream=[::]:443` + `BindIPv6Only=both`: one dual-stack socket.
+/// - `Service=`: the daemon's own unit, from `daemon.toml` (never argv).
+///   Required: without it systemd pairs the socket with a
+///   `k2-front-443.service` that does not exist and refuses to start it.
+///   A connection while the daemon is down starts the daemon (`kill -9`
+///   leaves systemd holding :443 and the queue).
+/// - No `[Install]`: the daemon drop-in's `Wants=` pulls the socket in at
+///   boot, so `front remove` leaves no enablement symlink behind.
+///
+/// `None` when `service_unit` is not a valid unit name
+/// ([`crate::caller::unit_ok`]): the template never carries anything else.
+pub fn front_socket_unit(service_unit: &str) -> Option<String> {
+    if !crate::caller::unit_ok(service_unit) {
+        return None;
+    }
+    Some(format!(
+        "# K2 front443: the box :443 SNI router's socket. Written by k2-root-helper\n\
+         # `front install`; remove with `front remove`.\n\
+         [Unit]\n\
+         Description=K2 box :443 front (SNI pass-through router in the K2 daemon)\n\
+         \n\
+         [Socket]\n\
+         ListenStream=[::]:443\n\
+         BindIPv6Only=both\n\
+         FileDescriptorName={fd}\n\
+         Service={service_unit}\n\
+         NoDelay=true\n\
+         Backlog=4096\n",
+        fd = crate::paths::FRONT_FD_NAME,
+    ))
+}
+
+/// The daemon unit's front443 drop-in (`<unit>.d/k2-front.conf`): the
+/// daemon inherits the socket's fd on every start, and the socket is
+/// listening before the daemon starts.
+pub fn front_dropin() -> &'static str {
+    "# K2 front443. Written by k2-root-helper `front install`; remove with\n\
+     # `front remove`.\n\
+     [Unit]\n\
+     Wants=k2-front-443.socket\n\
+     After=k2-front-443.socket\n\
+     \n\
+     [Service]\n\
+     Sockets=k2-front-443.socket\n"
+}
+
 /// The recovery admin password the daemon may send to `mail render-unit`:
 /// exactly 64 lowercase hex characters.
 pub fn recovery_pw_ok(pw: &str) -> bool {
@@ -127,6 +180,46 @@ mod tests {
         assert!(
             with.contains("ExecStart=/usr/local/bin/stalwart --config /etc/stalwart/config.json\n")
         );
+    }
+
+    #[test]
+    fn front_templates_are_fixed_and_carry_only_a_valid_unit() {
+        let u = front_socket_unit("k2-daemon.service").unwrap();
+        assert!(u.contains("\n[Socket]\nListenStream=[::]:443\nBindIPv6Only=both\n"), "{u}");
+        assert!(u.contains("\nFileDescriptorName=k2-front-443\n"), "{u}");
+        assert!(u.contains("\nService=k2-daemon.service\n"), "{u}");
+        assert!(!u.contains("[Install]"), "no enablement symlink: {u}");
+        assert_eq!(u.matches("ListenStream=").count(), 1);
+        // Exactly the canned lines: every line is a comment, a section or
+        // one of the fixed keys.
+        for line in u.lines() {
+            let fixed = line.is_empty()
+                || line.starts_with('#')
+                || matches!(line, "[Unit]" | "[Socket]")
+                || ["Description=", "ListenStream=", "BindIPv6Only=", "FileDescriptorName=", "Service=", "NoDelay=", "Backlog="]
+                    .iter()
+                    .any(|k| line.starts_with(k));
+            assert!(fixed, "unexpected line {line:?}");
+        }
+        assert_eq!(
+            front_socket_unit("k2-daemon-std.service").unwrap().replace("k2-daemon-std.service", "k2-daemon.service"),
+            u
+        );
+        for bad in [
+            "",
+            "k2-daemon",
+            "k2-daemon.service\nExecStartPre=/bin/sh",
+            "../x.service",
+            "x.service\n[Socket]\nListenStream=0.0.0.0:22",
+            "a b.service",
+            "x.socket",
+        ] {
+            assert!(front_socket_unit(bad).is_none(), "{bad:?}");
+        }
+        let d = front_dropin();
+        assert!(d.contains("\n[Service]\nSockets=k2-front-443.socket\n"), "{d}");
+        assert!(d.contains("\nWants=k2-front-443.socket\nAfter=k2-front-443.socket\n"), "{d}");
+        assert!(!d.contains("Ambient") && !d.contains("Capabilit"), "no capability, ever: {d}");
     }
 
     #[test]

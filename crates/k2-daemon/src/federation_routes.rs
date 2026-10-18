@@ -38,6 +38,28 @@ use k2_core::workspace::handle::{roster_display_matches, HealReport, RosterEntry
 /// Default hop budget stamped on outbound envelopes (Risk M2).
 const OUTBOUND_TTL: u8 = 8;
 
+/// Body cap on `/cli/federation/inbound` (H0 / H8 of
+/// prd-agent-secret-handoff-v1): the largest tray package (1 MiB of
+/// files, base64 in a signed envelope) fits with room to spare.
+pub const INBOUND_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+/// `Custom` signal kinds that belong to the vault handoff routes. `/inbound`
+/// refuses them (H4): a handoff must never be rendered as chat text.
+pub const VAULT_KIND_PREFIX: &str = "vault-";
+
+/// 400 `wrong_route` for a vault kind on `/inbound`.
+pub(crate) fn wrong_route_response() -> CliResponse {
+    CliResponse {
+        status: "400 Bad Request",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": "wrong_route: vault handoffs go to /cli/federation/vault-handoff, never to a chat",
+            "code": "wrong_route",
+        })
+        .to_string(),
+    }
+}
+
 fn json_err(status: &'static str, msg: impl std::fmt::Display) -> CliResponse {
     CliResponse {
         status,
@@ -445,6 +467,15 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
             return json_err(status, e);
         }
     };
+
+    // H4 (prd-agent-secret-handoff-v1): a vault kind never reaches a chat.
+    // A buggy or hostile sender that posts one here gets 400 `wrong_route`
+    // and nothing is injected or recorded.
+    if let SignalKind::Custom { kind, .. } = &ingested.signal.kind {
+        if kind.starts_with(VAULT_KIND_PREFIX) {
+            return wrong_route_response();
+        }
+    }
 
     // The sender just proved it is online (the envelope verified against its
     // pinned key) — kick a background drain of anything WE have queued for
@@ -2351,6 +2382,40 @@ mod tests {
             // The LIVE path was taken — nothing was written to the inbox.
             let items = k2_core::inbox::list_root(Path::new(&ws_path));
             assert!(items.is_empty(), "opt-in ON must NOT write an inbox file");
+        });
+    }
+
+    // ── H0 / H4 (prd-agent-secret-handoff-v1 test 11): a `vault-*` kind on
+    //    `/inbound` is refused with 400 `wrong_route`, even to an opted-in
+    //    workspace, and nothing is injected, inboxed or marked seen.
+    #[test]
+    fn inbound_refuses_vault_kinds_with_wrong_route() {
+        with_temp_home(|| {
+            k2_core::db::init_for_tests();
+            let ws_path = temp_ws_path();
+            let ws_id = register_project(&ws_path);
+            k2_core::workspace::settings::update_project_setting(&ws_path, "allow_remote_instruct", "1")
+                .expect("opt in");
+            let key = pin_trusted_peer("peer");
+            for kind in ["vault-handoff/1", "vault-recipient/1", "vault-anything"] {
+                let signal = AgentSignal::new(
+                    AgentAddress::Agent { workspace: WorkspaceId("src".into()), name: "cortana".into() },
+                    AgentAddress::Agent { workspace: WorkspaceId(ws_id.clone()), name: "bob".into() },
+                    SignalKind::Custom {
+                        kind: kind.to_string(),
+                        payload: serde_json::json!({ "sealedB64": "AAAA", "deliveryId": "hd_x" }),
+                    },
+                );
+                let bytes = federation::seal(&signal, &key, "peer", 8).unwrap();
+                let msg_uuid = serde_json::from_slice::<federation::FederationEnvelope>(&bytes).unwrap().payload.msg_uuid;
+                let resp = handle_inbound(&bytes);
+                assert_eq!(resp.status, "400 Bad Request", "{kind}: {}", resp.body);
+                let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+                assert_eq!(v["code"], "wrong_route", "{kind}");
+                let fp = k2_core::federation::peers::fingerprint_of_spki_pem(&key.public_key_pem()).unwrap();
+                assert!(!k2_core::federation::seen::already_seen(&fp, &msg_uuid), "a refused vault kind is not recorded");
+            }
+            assert!(k2_core::inbox::list_root(Path::new(&ws_path)).is_empty(), "nothing inboxed");
         });
     }
 

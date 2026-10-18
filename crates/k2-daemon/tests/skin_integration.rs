@@ -2040,6 +2040,8 @@ async fn skin_login_empty_rooms_thread_403_connect_cookie_not_a_pass() {
             skin_host: None,
             mail_host: None,
             bind_http80: false,
+            front_port: None,
+            proxy_protocol: false,
         });
         assert!(caddy.contains("handle /cli/skin/login"), "{caddy}");
         assert!(caddy.contains("/login*"), "{caddy}");

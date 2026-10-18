@@ -22,7 +22,7 @@ use crate::contract::{self, Exposure, VerbKind};
 /// Members of the frame's `k2` object that aren't verb surfaces
 /// (`sdk/k2-runtime.js`, "The k2 object").
 const K2_RUNTIME_MEMBERS: &[&str] =
-    &["call", "subscribe", "on", "can", "connected", "ready", "asset", "config", "widget", "motion"];
+    &["call", "subscribe", "on", "can", "connected", "ready", "asset", "config", "widget", "motion", "shape", "K2Error", "retryable"];
 
 /// Hand-written frame-runtime helpers on a generated surface (no catalog
 /// row of their own, so no arity check; `contract::gen::SDK_SURFACE_EXTRAS`

@@ -77,6 +77,11 @@ fn no_new_raw_env_mutation_in_k2_daemon() {
         // NOTIFY_SOCKET and K2_HANDOFF_FD at process start, single-threaded,
         // so no child inherits the unit's notify socket or the hand-off fd.
         ("handoff/mod.rs", 2, 0),
+        // Production (front443, 0.46.1): systemd_fds::capture, called from
+        // capture_process_context at process start (single-threaded), drops
+        // LISTEN_PID / LISTEN_FDS / LISTEN_FDNAMES (one loop) so no child
+        // inherits a claim to the :443 socket.
+        ("front443/systemd_fds.rs", 1, 0),
     ];
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let violations = k2_core::test_env::env_mutation_violations(&src, BASELINE);

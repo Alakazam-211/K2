@@ -684,10 +684,15 @@ function AddAgentRow({ bridge }: { bridge: ZenWidgetBridge }): React.JSX.Element
           background: 'transparent',
         }}
       >
+        {/* The "+" at full ink at rest, like the header pills' text
+            (`--zen-text`): K2 Companion's Agents bottom-bar plus is white
+            like its header bubbles' icons (Rosson 2026-10-18). The words
+            stay muted. */}
         <span
           aria-hidden
+          data-zen-add-agent-plus=""
           className="flex flex-shrink-0 items-center justify-center"
-          style={{ width: 28, height: 28, borderRadius: 999, border: '1.5px dashed var(--zen-border)' }}
+          style={{ width: 28, height: 28, borderRadius: 999, border: '1.5px dashed var(--zen-border)', color: 'var(--zen-text)' }}
         >
           <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
             <path d="M6 1.5v9M1.5 6h9" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />

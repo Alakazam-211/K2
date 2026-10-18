@@ -5,7 +5,11 @@
 import { describe, expect, it } from 'vitest'
 import type { ThreadTurn } from './overlayThread'
 import {
+  childBits,
+  childItems,
   counterSpoken,
+  tallyBits,
+  tallyItems,
   counterWidthPx,
   fitStripCounters,
   stripClockShort,
@@ -140,5 +144,65 @@ describe('counters', () => {
     expect(stripClockShort(8_000)).toBe('0:08')
     expect(stripClockShort(72_000)).toBe('1:12')
     expect(stripClockShort(3_723_000)).toBe('1:02:03')
+  })
+})
+
+// K2 Companion `c29b6db` (Rosson 2026-10-18): each expanded bit carries
+// the counter key it explains, so the drawer can lead it with that
+// counter's icon. The text-only wrappers stay for existing callers.
+describe('detail items', () => {
+  it('tallyItems: one keyed bit per non-zero tally, the first capitalised', () => {
+    expect(tallyItems({ read: 3, search: 1, cmd: 2, edit: 1 })).toEqual([
+      { key: 'read', text: 'Read 3 files' },
+      { key: 'search', text: 'searched 1 time' },
+      { key: 'cmd', text: 'ran 2 commands' },
+      { key: 'edit', text: 'edited 1 file' },
+    ])
+    expect(tallyItems({ read: 0, search: 0, cmd: 1, edit: 2 })).toEqual([
+      { key: 'cmd', text: 'Ran 1 command' },
+      { key: 'edit', text: 'edited 2 files' },
+    ])
+    expect(tallyItems({ read: 0, search: 0, cmd: 0, edit: 0 })).toEqual([])
+  })
+
+  it('childItems: subagents then background, counts only', () => {
+    expect(childItems(turn({ subagents: 2, subagentsDone: 1, background: 1 }))).toEqual([
+      { key: 'subagents', text: '2 subagents running, 1 done' },
+      { key: 'background', text: '1 background task' },
+    ])
+    expect(childItems(turn({ subagents: 0, subagentsDone: 3, background: 0 }))).toEqual([
+      { key: 'subagents', text: '3 subagents done' },
+    ])
+    expect(childItems(turn({ subagents: 0, subagentsDone: 0, background: 2 }))).toEqual([
+      { key: 'background', text: '2 background tasks' },
+    ])
+    expect(childItems(turn())).toEqual([])
+  })
+
+  it('tallyBits / childBits are the items text, in order', () => {
+    const tallies = [
+      { read: 3, search: 1, cmd: 2, edit: 1 },
+      { read: 0, search: 4, cmd: 0, edit: 0 },
+      { read: 1, search: 0, cmd: 0, edit: 0 },
+      { read: 0, search: 0, cmd: 0, edit: 0 },
+    ]
+    for (const t of tallies) expect(tallyBits(t)).toEqual(tallyItems(t).map((i) => i.text))
+    const turns = [turn({ subagents: 2, subagentsDone: 1, background: 1 }), turn({ subagentsDone: 1 }), turn({ background: 3 }), turn()]
+    for (const t of turns) expect(childBits(t)).toEqual(childItems(t).map((i) => i.text))
+    expect(tallyBits({ read: 3, search: 1, cmd: 2, edit: 0 })).toEqual(['Read 3 files', 'searched 1 time', 'ran 2 commands'])
+    expect(childBits(turn({ subagents: 1, background: 2 }))).toEqual(['1 subagent running', '2 background tasks'])
+  })
+
+  it('the drawer detail carries the items, and its words are the items joined', () => {
+    const d = threadDrawerLine(turn({ subagents: 2, subagentsDone: 1, background: 1 }), NOW)
+    if (!d) throw new Error('a working turn draws a drawer')
+    expect(d.detail.tallyItems.map((i) => i.key)).toEqual(['read', 'search', 'cmd'])
+    expect(d.detail.childItems.map((i) => i.key)).toEqual(['subagents', 'background'])
+    expect(d.detail.tally).toBe(d.detail.tallyItems.map((i) => i.text).join(' · '))
+    expect(d.detail.children).toBe(d.detail.childItems.map((i) => i.text).join(' · '))
+    const stopped = threadDrawerLine(turn({ end: { reason: 'interrupted', detail: null, at: NOW - 1_000 } }), NOW)
+    if (!stopped) throw new Error('Stopped lingers')
+    expect(stopped.detail.tallyItems.map((i) => i.key)).toEqual(['read', 'search', 'cmd'])
+    expect(stopped.detail.tally).toBe('Read 3 files · searched 1 time · ran 2 commands')
   })
 })

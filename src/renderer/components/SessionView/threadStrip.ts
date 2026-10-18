@@ -78,28 +78,46 @@ function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`
 }
 
+/** One expanded-detail bit with the counter it explains: the key picks
+ *  the same icon its collapsed counter shows (K2 Companion `c29b6db`,
+ *  Rosson 2026-10-18). */
+export interface StripDetailItem {
+  key: StripCounterKey
+  text: string
+}
+
 /** "Read 3 files", "searched 1 time", "ran 2 commands", "edited 1 file". */
-export function tallyBits(t: ThreadTurnTally): string[] {
-  const out: string[] = []
-  if (t.read) out.push(`read ${plural(t.read, 'file', 'files')}`)
-  if (t.search) out.push(`searched ${plural(t.search, 'time', 'times')}`)
-  if (t.cmd) out.push(`ran ${plural(t.cmd, 'command', 'commands')}`)
-  if (t.edit) out.push(`edited ${plural(t.edit, 'file', 'files')}`)
-  if (out.length) out[0] = out[0].charAt(0).toUpperCase() + out[0].slice(1)
+export function tallyItems(t: ThreadTurnTally): StripDetailItem[] {
+  const out: StripDetailItem[] = []
+  if (t.read) out.push({ key: 'read', text: `read ${plural(t.read, 'file', 'files')}` })
+  if (t.search) out.push({ key: 'search', text: `searched ${plural(t.search, 'time', 'times')}` })
+  if (t.cmd) out.push({ key: 'cmd', text: `ran ${plural(t.cmd, 'command', 'commands')}` })
+  if (t.edit) out.push({ key: 'edit', text: `edited ${plural(t.edit, 'file', 'files')}` })
+  if (out.length) out[0] = { ...out[0], text: out[0].text.charAt(0).toUpperCase() + out[0].text.slice(1) }
   return out
 }
 
+/** The tally in words only (`tallyItems` without the keys). */
+export function tallyBits(t: ThreadTurnTally): string[] {
+  return tallyItems(t).map((i) => i.text)
+}
+
 /** TW7: counts only, never labels. */
-export function childBits(turn: ThreadTurn): string[] {
-  const out: string[] = []
+export function childItems(turn: ThreadTurn): StripDetailItem[] {
+  const out: StripDetailItem[] = []
   if (turn.subagents > 0) {
     const done = turn.subagentsDone > 0 ? `, ${turn.subagentsDone} done` : ''
-    out.push(`${plural(turn.subagents, 'subagent', 'subagents')} running${done}`)
+    out.push({ key: 'subagents', text: `${plural(turn.subagents, 'subagent', 'subagents')} running${done}` })
   } else if (turn.subagentsDone > 0) {
-    out.push(`${plural(turn.subagentsDone, 'subagent', 'subagents')} done`)
+    out.push({ key: 'subagents', text: `${plural(turn.subagentsDone, 'subagent', 'subagents')} done` })
   }
-  if (turn.background > 0) out.push(plural(turn.background, 'background task', 'background tasks'))
+  if (turn.background > 0) out.push({ key: 'background', text: plural(turn.background, 'background task', 'background tasks') })
   return out
+}
+
+/** The children in words only (`childItems` without the keys). */
+export function childBits(turn: ThreadTurn): string[] {
+  return childItems(turn).map((i) => i.text)
 }
 
 /** The step line, or null when the step is unknown (the header then says
@@ -388,6 +406,9 @@ export interface ThreadDrawerLine {
     tally: string
     /** "2 subagents running, 1 done · 1 background task". */
     children: string
+    /** The same bits with their counter keys, so each shows its icon. */
+    tallyItems: StripDetailItem[]
+    childItems: StripDetailItem[]
   }
 }
 
@@ -396,8 +417,10 @@ export interface ThreadDrawerLine {
 export function threadDrawerLine(turn: ThreadTurn, now: number): ThreadDrawerLine | null {
   const view = threadStripView(turn, now)
   if (!view) return null
-  const tally = tallyBits(turn.tally).join(' · ')
-  const children = childBits(turn).join(' · ')
+  const tallyList = tallyItems(turn.tally)
+  const childList = childItems(turn)
+  const tally = tallyList.map((i) => i.text).join(' · ')
+  const children = childList.map((i) => i.text).join(' · ')
   if (turn.end) {
     return {
       tone: view.tone,
@@ -405,7 +428,14 @@ export function threadDrawerLine(turn: ThreadTurn, now: number): ThreadDrawerLin
       step: { kind: 'plain', text: 'Stopped', elapsed: null },
       counters: [],
       clock: stripClockShort(turn.end.at - turn.startedAt),
-      detail: { head: `Stopped after ${stripClock(turn.end.at - turn.startedAt)}`, step: null, tally, children },
+      detail: {
+        head: `Stopped after ${stripClock(turn.end.at - turn.startedAt)}`,
+        step: null,
+        tally,
+        children,
+        tallyItems: tallyList,
+        childItems: childList,
+      },
     }
   }
   const serverNow = now + turn.skewMs
@@ -434,6 +464,8 @@ export function threadDrawerLine(turn: ThreadTurn, now: number): ThreadDrawerLin
       step: replied || view.tone === 'unverifiable' ? null : view.step,
       tally,
       children,
+      tallyItems: tallyList,
+      childItems: childList,
     },
   }
 }

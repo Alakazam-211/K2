@@ -271,6 +271,13 @@ expect_has "controller sees the pause" "$(k2 compute nodes)" "paused"
 JOB2="$(k2 compute run mini --detach -- echo after-resume 2>/dev/null)"
 sleep 1.5
 expect_has "paused node holds the job" "$(k2 compute get "$JOB2")" "local_paused"
+st="$(k2 compute status)"
+expect_has "status shows the paused node" "$st" "mini"
+expect_has "status lists the queued job" "$st" "queued  $JOB2"
+expect_has "status has the controller row" "$st" "controller "
+expect_has "status says what needs node reporting" "$st" "not yet: hand-run lock files"
+expect_has "status --json carries the controller machine" "$(k2 compute status --json)" '"controllerMachine"'
+expect_has "status <job> is still get" "$(k2 compute status "$JOB2")" "job $JOB2 on mini"
 JOB3="$(k2 compute run mini --detach -- echo never-runs 2>/dev/null)"
 expect_eq "cancel of a queued job needs no --force" "$(k2 compute cancel "$JOB3")" "cancelled $JOB3 (was queued on mini)"
 expect_has "get names who cancelled" "$(k2 compute get "$JOB3")" "cancel asked by owner"
@@ -295,6 +302,7 @@ expect_eq "cancel of a started job without --force exits 3" "$rc" "3"
 expect_has "job_started" "$(cat "$SANDBOX/err")" "job_started"
 expect_has "the refusal teaches --force" "$(cat "$SANDBOX/err")" "k2 compute cancel $JOBC --force"
 expect_has "it kept running" "$(k2 compute get "$JOBC")" ": running"
+expect_has "status lists the running job" "$(k2 compute status)" "running $JOBC"
 set +e
 k2 compute cancel "$JOBC" --bogus >/dev/null 2>&1; rc=$?
 set -e

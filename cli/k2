@@ -38149,6 +38149,19 @@ if isinstance(d, dict) and d.get('error'):
         sys.stderr.write('k2 fed peers: %s\n' % err)
     sys.exit(1)
 peers = d.get('peers', []) if isinstance(d, dict) else []
+# 0.46.1: A to Z by the name shown, then host. A 0.46.1+ daemon already
+# sends this order (the picker and Settings use it too); this keeps an
+# older daemon's pairing order from leaking through.
+def _shown(p):
+    return ((p.get('label') or '').strip() or (p.get('subdomain') or '').strip()
+            or (p.get('fingerprint') or '')[:12])
+def _host(p):
+    b = (p.get('base_url') or p.get('baseUrl') or '').strip()
+    for pre in ('http://', 'https://'):
+        if b.lower().startswith(pre):
+            b = b[len(pre):]
+    return b.split('/')[0] or (p.get('subdomain') or '').strip()
+peers = sorted(peers, key=lambda p: (_shown(p).casefold(), _host(p).casefold(), p.get('fingerprint') or ''))
 if not peers:
     print('No federation peers pinned on this server.')
     print('Pair with: k2 fed pair-start / k2 fed confirm (or Settings → Connections auto-pair).')

@@ -306,7 +306,13 @@ fn voice_to_passthrough() -> Result<Value, Refusal> {
 
 /// S5 (opt-in): the mail names → Stalwart's HTTPS on 127.0.0.1:8443, with
 /// PROXY v2, loopback clients refused.
-fn stalwart_routes(_cfg: &k2_core::front443::FrontConfig, _add: &mut Add) {}
+fn stalwart_routes(cfg: &k2_core::front443::FrontConfig, add: &mut Add) {
+    if cfg.mail_behind_front() {
+        for h in mail_names() {
+            add(&h, Backend { kind: Kind::Stalwart, addr: STALWART_BACKEND, proxy: true, refuse_loopback_clients: true });
+        }
+    }
+}
 
 /// S4: Skin Direct's host (and the mail host while Caddy fronts mail) →
 /// Caddy on its loopback port; PROXY v2 only when that Caddy reads it.
@@ -345,7 +351,16 @@ fn rebuild_logged() {
 /// Stalwart's names behind the front: the mail host and the extra
 /// mail-family names K2 issued certificates for.
 fn mail_names() -> Vec<String> {
-    Vec::new()
+    if k2_core::db::try_shared().is_none() {
+        return Vec::new();
+    }
+    let status = crate::mail::supervisor::row_field("status");
+    if !matches!(status.as_deref(), Some("running" | "degraded" | "stopped")) {
+        return Vec::new();
+    }
+    let mut v: Vec<String> = crate::mail::supervisor::row_field("hostname").into_iter().collect();
+    v.extend(crate::mail::cert_names::load_state().into_keys());
+    v
 }
 
 /// S3: move voice to `passthrough` (behind the serving front) or back to
@@ -357,12 +372,12 @@ fn voice_tier(passthrough: bool) -> Result<Value, Refusal> {
 
 /// S5: may Stalwart move behind the front?
 fn mail_check() -> Result<(), String> {
-    Err("Stalwart behind the front is not in this build".into())
+    crate::mail::front_listener::check_can_move()
 }
 
 /// S5: move Stalwart's HTTPS listener behind the front (or back).
-fn mail_move(_on: bool) -> Result<Value, String> {
-    Err("Stalwart behind the front is not in this build".into())
+fn mail_move(on: bool) -> Result<Value, String> {
+    crate::mail::front_listener::move_behind_front(on)
 }
 
 /// Voice follows the front: `passthrough` while the front serves (in Sew's

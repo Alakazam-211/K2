@@ -21,6 +21,8 @@ import {
   type ThreadViewer,
 } from '@/lib/thread-viewer'
 import {
+  THREAD_LIST_GAP,
+  THREAD_LIST_PADDING,
   THREAD_ZEN_DESKTOP_TOKENS,
   THREAD_ZEN_SCOPE_ATTR,
   ThreadBubble,
@@ -237,7 +239,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         data-zen-conversation-body=""
         className="relative flex-1 min-h-0 overflow-y-auto overflow-x-hidden"
         // The browser's own scroll anchoring would fight the pin.
-        style={{ padding: '14px var(--zen-gap) 8px', paddingBottom: 8 + bottomInset, overflowAnchor: 'none' }}
+        style={{ padding: THREAD_LIST_PADDING, paddingBottom: 8 + bottomInset, overflowAnchor: 'none' }}
         onScroll={(e) => {
           const el = e.currentTarget
           if (!listScrollLive(el)) return
@@ -270,7 +272,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
             <div className="max-w-[40ch]">{zenEmptyThreadText(agentName?.trim() || 'the agent')}</div>
           </div>
         )}
-        <div ref={contentRef} className="flex flex-col" style={{ gap: 10 }}>
+        <div ref={contentRef} className="flex flex-col" style={{ gap: THREAD_LIST_GAP }}>
           {hasMore && (
             <ThreadLoadOlder loading={loadingOlder} onClick={() => requestOlder()} testId="overlay-load-older" />
           )}

@@ -430,7 +430,9 @@ describe('ticket detail', () => {
     const input = within(rail).getByTestId('ticket-compose-input') as HTMLTextAreaElement
     const send = within(rail).getByTestId('ticket-compose-send') as HTMLButtonElement
     expect(input.tagName).toBe('TEXTAREA')
-    expect(send.textContent).toContain('Send')
+    // The Thread's round Send (an arrow; its name is the label).
+    expect(send.getAttribute('aria-label')).toBe('Send message')
+    expect(send.hasAttribute('data-zen-send')).toBe(true)
     expect(send.disabled).toBe(true)
     fireEvent.change(input, { target: { value: 'what about both?' } })
     expect(send.disabled).toBe(false)
@@ -448,6 +450,17 @@ describe('ticket detail', () => {
     await waitFor(() =>
       expect(api.commentFeedback).toHaveBeenLastCalledWith(row.id, 'and one more', { optionPick: false }),
     )
+    await waitFor(() => expect(input.value).toBe(''))
+
+    // The Thread's keys: Enter sends, Shift+Enter does not.
+    fireEvent.change(input, { target: { value: 'two\nlines' } })
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+    expect(api.commentFeedback).toHaveBeenCalledTimes(2)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() =>
+      expect(api.commentFeedback).toHaveBeenLastCalledWith(row.id, 'two\nlines', { optionPick: false }),
+    )
+    expect(api.commentFeedback).toHaveBeenCalledTimes(3)
   })
 
   it('the brief Options render above the text area and a pick sends optionPick', async () => {

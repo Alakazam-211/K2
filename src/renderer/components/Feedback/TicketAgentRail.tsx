@@ -29,18 +29,26 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { useSettingsStore } from '@/stores/settings'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
 import { PageLiveContext } from '@/contexts/TabVisibilityContext'
 import { formatRelativeTime } from '@/lib/format-relative-time'
-import { KeyCombo } from '@/components/KeySymbol'
 import { activateProject } from '@/stores/projects'
 import {
   activateOnLiveSessionAttach,
   wakeCanonicalMemberSession,
 } from '@/components/Projects/wake-member-session'
 import { SelectableRegion, clearStuckBodyUserSelect } from '@/components/common/SelectableText'
-import { ChatMessage } from '@/components/common/ChatMessage'
+import {
+  ThreadChatBubble,
+  ThreadChatChip,
+  ThreadChatChips,
+  ThreadChatComposer,
+  ThreadChatNote,
+  ThreadChatScope,
+} from '@/components/Thread/ThreadChat'
+import { THREAD_LIST_GAP, THREAD_LIST_PADDING } from '@/components/Thread/ThreadZenKit'
+import { useChatSessionTurn, type ChatSessionTarget } from '@/components/Thread/sessionTurn'
+import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { useIsYouAuthor } from '@/components/Settings/sections/useNotifyPrefs'
 import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import { clearTicketDraft, getTicketDraft, setTicketDraft } from '@/lib/composer-drafts'
@@ -54,6 +62,15 @@ import {
 } from './feedback-api'
 
 export type RailTab = 'thread' | 'agent'
+
+/** The one session a ticket's reply lands in. The daemon delivers every
+ *  human message on a ticket to the WORKSPACE agent (feedback_routes
+ *  `deliver_to_asker`, D5: `k2 msg <workspace>`, wake=true), whatever
+ *  session asked: the workspace's pinned Chat, whose v2 agent name is the
+ *  project id (A36). An unlinked ticket (no workspace) has none. */
+export function ticketChatTarget(projectId: string, projectPath: string | null): ChatSessionTarget | null {
+  return projectPath && projectId ? { agentName: projectId } : null
+}
 
 /** May the rail offer the asking session's terminal (the Agent tab)?
  *  True in the app; Zen's Tickets view sets false (chat only). */
@@ -260,6 +277,7 @@ export function TicketAgentRail({
           options={options}
           optionsLive={optionsLive}
           onChanged={onChanged}
+          sessionTarget={ticketChatTarget(projectId, projectPath)}
         />
       ) : (
         <AgentTab
@@ -276,6 +294,12 @@ export function TicketAgentRail({
 }
 
 // ── Thread tab (the restored ThreadTab) ──────────────────────────────────
+//
+// Rosson 2026-10-18: it wears the Thread's look in every Style
+// (`components/Thread/ThreadChat`): the Thread's bubbles and "author ·
+// time", its message box and round Send (Enter sends, Shift+Enter is a new
+// line, ⌘/Ctrl+Enter still sends), the quick answers as soft pills above
+// the box. The data and routes are the ticket's own.
 
 export function ThreadTab({
   item,
@@ -285,6 +309,7 @@ export function ThreadTab({
   options,
   optionsLive,
   onChanged,
+  sessionTarget = null,
 }: {
   item: FeedbackShow | null
   error: string | null
@@ -293,7 +318,13 @@ export function ThreadTab({
   options: QuickAnswerOption[]
   optionsLive: boolean
   onChanged: () => void
+  /** The session a reply lands in (`ticketChatTarget`): its activity
+   *  drawer rides on the message box. Null: no drawer. */
+  sessionTarget?: ChatSessionTarget | null
 }): React.JSX.Element {
+  // The working strip of the agent session the reply lands in, from the
+  // daemon's activity rows (never decided here).
+  const turn = useChatSessionTurn(primaryScope(), sessionTarget)
   // "You": `owner`, plus the owner-linked logins when this viewer is the owner.
   const isYou = useIsYouAuthor()
   // Drafts survive unmount (leave ticket / switch tabs or pages).
@@ -303,9 +334,6 @@ export function ThreadTab({
   const [deliveryMiss, setDeliveryMiss] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  // Match Code Editor → Appearance → Font Size (default 12).
-  const editorFontSize = useSettingsStore((s) => s.editor.fontSize) || 13
-
   // Focus the reply box ONCE per ticket id when the thread first becomes
   // ready — not on every live `item` refetch. Re-focus steals the caret
   // and kills drag-selection on message bodies.
@@ -336,14 +364,6 @@ export function ThreadTab({
       window.clearTimeout(t)
     }
   }, [ticketId, item, error])
-
-  // Auto-grow the reply field with content.
-  useEffect(() => {
-    const el = textareaRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 240)}px`
-  }, [reply])
 
   const setReplyAndDraft = (text: string): void => {
     setReply(text)
@@ -418,101 +438,70 @@ export function ThreadTab({
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0" data-testid="ticket-rail-thread">
-      <SelectableRegion className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 px-4 py-3">
-        <div ref={scrollRef} className="min-h-full" data-ticket-thread={ticketId}>
-          <div className="flex flex-col gap-2.5">
-            {item.comments.map((c, i) => {
-              const isOwner = isYou(c.author)
-              return (
-                <ChatMessage
-                  key={`${c.at}-${i}`}
-                  author={isOwner ? 'You' : c.author}
-                  isOwner={isOwner}
-                  timeLabel={formatRelativeTime(c.at, nowSec)}
-                  body={c.body}
-                  fontSize={editorFontSize}
-                />
-              )
-            })}
+    <ThreadChatScope className="flex-1 flex flex-col min-h-0" testId="ticket-rail-thread">
+      <SelectableRegion className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">
+        <div
+          ref={scrollRef}
+          className="min-h-full"
+          data-ticket-thread={ticketId}
+          data-zen-conversation-body=""
+          style={{ padding: THREAD_LIST_PADDING }}
+        >
+          <div className="flex flex-col" style={{ gap: THREAD_LIST_GAP }}>
+            {item.comments.map((c, i) => (
+              <ThreadChatBubble
+                key={`${c.at}-${i}`}
+                id={`${ticketId}:${i}`}
+                author={c.author}
+                mine={isYou(c.author)}
+                body={c.body}
+                createdAt={c.at}
+                timeLabel={formatRelativeTime(c.at, nowSec)}
+              />
+            ))}
           </div>
         </div>
       </SelectableRegion>
 
-      <div data-testid="ticket-compose" className="border-t border-[var(--color-border)] px-4 py-3 flex-shrink-0">
-        {actionError && (
-          <div className="mb-2 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">{actionError}</div>
-        )}
-        {deliveryMiss && (
-          <p className="mb-2 text-[10px] text-[var(--color-text-muted)] selectable-copy">
-            Saved. The agent did not receive it ({deliveryMiss}).
-          </p>
-        )}
-
-        {options.length > 0 && (
-          <div data-testid="ticket-quick-answers" className="mb-2 flex flex-wrap gap-2">
-            {options.map((opt) => {
-              const accepted = item.answer === opt.answer
-              return (
-                <button
-                  key={opt.answer}
-                  type="button"
-                  data-testid="ticket-quick-answer"
-                  disabled={!optionsLive || busy}
-                  title={opt.detail === opt.label ? 'Send this as the answer' : opt.detail}
-                  onClick={() => void submit(() => send(opt.answer, true))}
-                  className={`max-w-full truncate px-3 py-1.5 text-[11px] font-medium border transition-colors ${
-                    accepted
-                      ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                      : optionsLive
-                        ? 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] cursor-pointer'
-                        : 'border-[var(--color-border)] text-[var(--color-text-muted)] opacity-50'
-                  } disabled:cursor-not-allowed`}
-                >
-                  {opt.label}
-                </button>
-              )
-            })}
-          </div>
-        )}
-
-        <textarea
-          ref={textareaRef}
-          data-testid="ticket-compose-input"
-          value={reply}
-          onChange={(e) => setReplyAndDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault()
-              sendReply()
-            }
-          }}
-          placeholder={
-            options.length > 0
-              ? 'Pick an option above to answer, or write a message — it starts a discussion'
-              : 'Write a message — it lands in the agent’s session'
-          }
-          rows={2}
-          className="min-w-0 w-full max-w-full px-2.5 py-2 bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] resize-none overflow-x-hidden overflow-y-auto break-words placeholder:text-[var(--color-text-muted)] selectable-copy"
-          style={{ fontSize: editorFontSize }}
-        />
-        <div className="flex items-center gap-2 mt-2">
-          <div className="flex-1" />
-          <button
-            type="button"
-            data-testid="ticket-compose-send"
-            disabled={busy || reply.trim().length === 0}
-            onClick={sendReply}
-            className="px-3 py-1.5 text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer flex items-center gap-1.5"
-          >
-            Send
-            <span className="text-[9px] font-mono text-[var(--color-text-muted)]">
-              <KeyCombo combo="⌘⏎" />
-            </span>
-          </button>
-        </div>
-      </div>
-    </div>
+      <ThreadChatComposer
+        testId="ticket-compose"
+        inputTestId="ticket-compose-input"
+        sendTestId="ticket-compose-send"
+        inputRef={textareaRef}
+        value={reply}
+        onChange={setReplyAndDraft}
+        onSend={sendReply}
+        busy={busy}
+        drawer={<ZenActivityDrawer turn={turn} />}
+        // One line, as the Thread's "Message <agent>" (an empty box stays
+        // one line tall, so a longer hint would be cut off).
+        placeholder={
+          options.length > 0 ? `Pick an option above, or message ${item.agentName}` : `Message ${item.agentName}`
+        }
+        above={
+          <>
+            {actionError && <ThreadChatNote error>{actionError}</ThreadChatNote>}
+            {deliveryMiss && <ThreadChatNote>Saved. The agent did not receive it ({deliveryMiss}).</ThreadChatNote>}
+            {options.length > 0 && (
+              <ThreadChatChips testId="ticket-quick-answers">
+                {options.map((opt) => (
+                  <ThreadChatChip
+                    key={opt.answer}
+                    testId="ticket-quick-answer"
+                    on={item.answer === opt.answer}
+                    disabled={!optionsLive || busy}
+                    title={opt.detail === opt.label ? 'Send this as the answer' : opt.detail}
+                    onClick={() => void submit(() => send(opt.answer, true))}
+                  >
+                    {opt.label}
+                  </ThreadChatChip>
+                ))}
+              </ThreadChatChips>
+            )}
+          </>
+        }
+      />
+    </ThreadChatScope>
   )
 }
 

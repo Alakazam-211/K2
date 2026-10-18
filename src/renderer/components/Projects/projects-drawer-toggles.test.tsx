@@ -150,17 +150,22 @@ describe('Projects chat drawer toggle', () => {
     expect(useProjectGroupsStore.getState().chatCollapsed).toBe(false)
     expect(document.querySelector('[data-project-chat-toggle-slot]')).toBeNull()
     // The composer shows once the member role resolves.
-    await waitFor(() => expect(screen.getByText('Send')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('project-chat-send')).toBeTruthy())
     const hide = must(screen.queryByRole('button', { name: 'Hide chat' }), 'hide toggle')
     expect(hide.getAttribute('title')).toBe('Hide chat')
     expect(hide.getAttribute('data-placement')).toBe('drawer')
     expect(hide.querySelector('svg')!.getAttribute('data-double-chevron')).toBe('right')
-    // Same row as Send: Hide first (left), Send last (right).
-    const row = must(hide.closest('[data-project-chat-actions]') as HTMLElement | null, 'composer action row')
-    expect(row.firstElementChild).toBe(hide)
-    expect(row.lastElementChild!.textContent).toContain('Send')
-    expect(row.className).toContain('justify-between')
-    // Same 32×32 box as the nav's » / « by New Project; Send stretches to it.
+    // The Thread's message box (2026-10-18): Hide first (left, beside the
+    // box), Send last (right, in the box).
+    const row = must(hide.closest('[data-thread-chat-compose]') as HTMLElement | null, 'the message box')
+    expect(row.hasAttribute('data-zen-compose')).toBe(true)
+    const hideSlot = must(hide.closest('[data-project-chat-hide-slot]') as HTMLElement | null, 'hide slot')
+    const line = must(hideSlot.parentElement, 'compose line')
+    expect(line.firstElementChild).toBe(hideSlot)
+    const send = screen.getByTestId('project-chat-send')
+    expect(line.lastElementChild!.contains(send)).toBe(true)
+    expect(send.getAttribute('aria-label')).toBe('Send message')
+    // Same 32×32 box as the nav's » / « by New Project.
     const navToggle = must(document.querySelector('[data-projects-nav-toggle]') as HTMLElement | null, 'nav toggle')
     for (const cls of NAV_TOGGLE_BOX.split(' ')) {
       expect([cls, hide.classList.contains(cls)]).toEqual([cls, true])
@@ -169,7 +174,8 @@ describe('Projects chat drawer toggle', () => {
     expect(NAV_TOGGLE_BOX).toBe('h-8 w-8')
     expect(hide.getAttribute('data-size')).toBe('square')
     expect(hide.classList.contains('h-full')).toBe(false)
-    expect(row.className).toContain('items-stretch')
+    // Level with a one-line field: the line sits on the box's bottom edge.
+    expect(line.className).toContain('items-end')
     // Not in the chat header any more.
     const header = must(screen.getByText('Project chat').parentElement, 'chat header')
     expect(header.querySelector('[data-drawer-tabbar-toggle]')).toBeNull()
@@ -198,7 +204,7 @@ describe('Projects chat drawer toggle', () => {
       useProjectGroupsStore.setState({ chatCollapsed: false })
       await renderPage()
       // The composer row (and its Hide chat button) settles once the member role resolves.
-      await waitFor(() => expect(screen.getByText('Send')).toBeTruthy())
+      await waitFor(() => expect(screen.getByTestId('project-chat-send')).toBeTruthy())
       const hide = must(screen.queryByRole('button', { name: 'Hide chat' }), 'hide toggle')
       const el = must(hide.closest('[data-drawer-side="right"]') as HTMLElement | null, 'chat drawer')
       fireEvent.click(hide)

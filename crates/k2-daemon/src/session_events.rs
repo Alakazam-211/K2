@@ -679,7 +679,17 @@ pub enum SessionEvent {
     /// otherwise: it's a refetch signal, consumers re-fetch canonical
     /// truth rather than patching from a diff (the ProjectsChanged
     /// convention).
-    ProjectGroupsChanged { reason: String },
+    ///
+    /// 0.46.1: `groupId` names the project the change is about, so an
+    /// open view refetches only when it's ITS project (Settings →
+    /// Projects used to refetch show + resources + the icon on every
+    /// chat line in any project). Omitted when the hook payload carried
+    /// none; consumers then treat it as "any project may have changed".
+    ProjectGroupsChanged {
+        reason: String,
+        #[serde(rename = "groupId", skip_serializing_if = "Option::is_none")]
+        group_id: Option<String>,
+    },
 
     /// Remote live-update fix — the feedback set changed (item created /
     /// answered / status flipped / comment stored). APP-LEVEL twin of the
@@ -2147,7 +2157,7 @@ mod tests {
     }
 
     /// Remote live-update FROZEN WIRE CONTRACT: `{ "kind":
-    /// "project_groups_changed", "reason": string }`. The renderer's
+    /// "project_groups_changed", "reason": string, "groupId"?: string }`. The renderer's
     /// `stores/project-groups.ts` consumer switches on `reason` (the
     /// legacy hook name minus its `project-group:` prefix); a tag/field
     /// drift fails CI loudly (the open_url discipline).
@@ -2155,10 +2165,21 @@ mod tests {
     fn project_groups_changed_frozen_contract() {
         let json = as_json(&SessionEvent::ProjectGroupsChanged {
             reason: "members-changed".into(),
+            group_id: None,
         });
         assert_eq!(json["kind"], "project_groups_changed");
         assert_eq!(json["reason"], "members-changed");
         assert_keys(&json, &["kind", "reason"]);
+
+        // 0.46.1 — with a project id the frame names it as `groupId`.
+        let json = as_json(&SessionEvent::ProjectGroupsChanged {
+            reason: "message-created".into(),
+            group_id: Some("g-1".into()),
+        });
+        assert_eq!(json["kind"], "project_groups_changed");
+        assert_eq!(json["reason"], "message-created");
+        assert_eq!(json["groupId"], "g-1");
+        assert_keys(&json, &["kind", "reason", "groupId"]);
     }
 
     /// Remote live-update FROZEN WIRE CONTRACT: `{ "kind":

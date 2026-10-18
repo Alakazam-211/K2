@@ -279,13 +279,14 @@ describe('the message box', () => {
 
 describe('the activity drawer of the chat’s target session', () => {
   it('reads the daemon row as the drawer’s turn (working, needs you, children, stale, idle)', () => {
-    const working = must(sessionTurnFromRow(row(), 250), 'working turn')
+    // One row: its clock-based times read once (two rows can differ by 1 ms).
+    const r = row()
+    const working = must(sessionTurnFromRow(r, 250), 'working turn')
     expect(working.state).toBe('working')
     expect(working.phase).toBe('working')
     expect(working.end).toBeNull()
     expect(working.tally).toEqual({ read: 0, search: 0, cmd: 2, edit: 0 })
     expect(working.skewMs).toBe(250)
-    const r = row()
     expect(working.turnId).toBe(`s-1:${r.turnStartedAt}`)
     expect(must(sessionTurnFromRow(row({ reason: 'thinking' }), 0), 'thinking').phase).toBe('thinking')
 

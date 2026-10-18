@@ -86,7 +86,18 @@ pub struct ProjectGroupMessage {
     pub author: String,
     pub body: String,
     pub created_at: i64,
+    /// Per-group position, 1..n in read order (migration 0190): the
+    /// thread-read-v1 cursor a client sends back to mark read.
+    pub seq: i64,
+    /// [`AUTHOR_KIND_PERSON`] (owner token / a Connect login) or
+    /// [`AUTHOR_KIND_AGENT`]. Own posts never count as unread.
+    pub author_kind: String,
 }
+
+/// `project_group_messages.author_kind` of a person's post.
+pub const AUTHOR_KIND_PERSON: &str = "person";
+/// `project_group_messages.author_kind` of an agent's post.
+pub const AUTHOR_KIND_AGENT: &str = "agent";
 
 /// One `project_group_dashboards` row.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -183,6 +194,8 @@ fn row_to_message(row: &rusqlite::Row) -> rusqlite::Result<ProjectGroupMessage> 
         author: row.get(2)?,
         body: row.get(3)?,
         created_at: row.get(4)?,
+        seq: row.get(5)?,
+        author_kind: row.get(6)?,
     })
 }
 
@@ -517,6 +530,8 @@ pub fn delete_group(id: &str) -> Result<(), String> {
     if deleted == 0 {
         return Err(format!("no project group with id {id}"));
     }
+    // Its read cursors and mutes go with it (thread-read-v1; no FK).
+    crate::read_state::delete_conversation(&conn, crate::read_state::KIND_PROJECT, id)?;
     Ok(())
 }
 
@@ -841,6 +856,22 @@ pub fn post_message(
     author: &str,
     body: &str,
 ) -> Result<ProjectGroupMessage, String> {
+    let kind = if author.trim() == "owner" { AUTHOR_KIND_PERSON } else { AUTHOR_KIND_AGENT };
+    post_message_as(group_id, author, kind, body)
+}
+
+/// [`post_message`] with the author's kind said by the caller (the route
+/// knows whether the credential was a person or an agent). Takes the next
+/// per-group `seq` in the same transaction as the insert.
+pub fn post_message_as(
+    group_id: &str,
+    author: &str,
+    author_kind: &str,
+    body: &str,
+) -> Result<ProjectGroupMessage, String> {
+    if author_kind != AUTHOR_KIND_PERSON && author_kind != AUTHOR_KIND_AGENT {
+        return Err(format!("usage: author kind must be '{AUTHOR_KIND_PERSON}' or '{AUTHOR_KIND_AGENT}'"));
+    }
     let author = author.trim();
     let body_t = body.trim();
     if author.is_empty() {
@@ -865,18 +896,42 @@ pub fn post_message(
     if !group_exists {
         return Err(format!("no project group with id {group_id}"));
     }
-    conn.execute(
-        "INSERT INTO project_group_messages (id, group_id, author, body, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, group_id, author, body_t, now],
-    )
-    .map_err(|e| format!("message insert failed: {e}"))?;
+    conn.execute_batch("SAVEPOINT pg_post").map_err(|e| format!("message insert failed: {e}"))?;
+    let inserted = (|| -> Result<i64, String> {
+        conn.execute(
+            "UPDATE project_groups SET last_msg_seq = last_msg_seq + 1 WHERE id = ?1",
+            params![group_id],
+        )
+        .map_err(|e| format!("message seq failed: {e}"))?;
+        let seq: i64 = conn
+            .query_row("SELECT last_msg_seq FROM project_groups WHERE id = ?1", params![group_id], |r| r.get(0))
+            .map_err(|e| format!("message seq failed: {e}"))?;
+        conn.execute(
+            "INSERT INTO project_group_messages (id, group_id, author, body, created_at, seq, author_kind) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, group_id, author, body_t, now, seq, author_kind],
+        )
+        .map_err(|e| format!("message insert failed: {e}"))?;
+        Ok(seq)
+    })();
+    let seq = match inserted {
+        Ok(seq) => {
+            conn.execute_batch("RELEASE pg_post").map_err(|e| format!("message insert failed: {e}"))?;
+            seq
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO pg_post; RELEASE pg_post");
+            return Err(e);
+        }
+    };
     Ok(ProjectGroupMessage {
         id,
         group_id: group_id.to_string(),
         author: author.to_string(),
         body: body_t.to_string(),
         created_at: now,
+        seq,
+        author_kind: author_kind.to_string(),
     })
 }
 
@@ -908,7 +963,7 @@ pub fn list_messages(
     }
     let db = crate::db::shared();
     let conn = db.lock();
-    const MSG_COLS: &str = "id, group_id, author, body, created_at";
+    const MSG_COLS: &str = "id, group_id, author, body, created_at, seq, author_kind";
     match after {
         Some(ts) => {
             let eff = limit.unwrap_or(MESSAGES_AFTER_LIMIT).min(MESSAGES_AFTER_LIMIT);

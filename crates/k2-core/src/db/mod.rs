@@ -1429,6 +1429,11 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // additive only, renumber freely on a slip (and edit the
         // migration-order tests below).
         ("0189_push_device_previews", include_str!("../../drizzle_sql/0189_push_device_previews.sql")),
+        // 0190 — thread-read-v1 (0.46.1): per-person read cursors and
+        // mutes (`read_cursors`, `read_people`), project chat `seq` +
+        // `author_kind`, `project_groups.last_msg_seq`; the owner starts
+        // fully read. Additive only.
+        ("0190_thread_read", include_str!("../../drizzle_sql/0190_thread_read.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2092,7 +2097,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0189_push_device_previews",
+            last_name, "0190_thread_read",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2139,6 +2144,7 @@ mod tests {
                 "0183_app_door",
                 "0188_mail_oauth_v2",
                 "0189_push_device_previews",
+                "0190_thread_read",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2189,6 +2195,7 @@ mod tests {
                 // 0.46.1+: OAuth v2 for linked inboxes (MCS1).
                 "0188_mail_oauth_v2",
                 "0189_push_device_previews",
+                "0190_thread_read",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2247,6 +2254,74 @@ mod tests {
         run_migrations(&conn).unwrap();
         let n: i64 = conn
             .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0189_push_device_previews'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "recorded once");
+    }
+
+    /// A 0.46.0-era database (last migration 0189) with project chat lines
+    /// and Thread conversations upgrades through 0190: lines are numbered
+    /// 1..n per group in read order, owner lines are `person`, each group's
+    /// `last_msg_seq` is its newest line, and the owner starts fully read
+    /// (a cursor at every head). A second run changes nothing.
+    #[test]
+    fn a_0189_database_upgrades_through_0190_thread_read() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0189_push_device_previews")).unwrap();
+        conn.execute_batch(
+            "INSERT INTO projects (id, name, path, handle) VALUES ('p1', 'alpha', '/tmp/alpha-0190', 'alpha');
+             INSERT INTO project_groups (id, name, created_at, updated_at) VALUES ('g1', 'Launch', 1, 1), ('g2', 'Empty', 1, 1);
+             INSERT INTO project_group_messages (id, group_id, author, body, created_at) VALUES
+                ('m-b', 'g1', 'scout', 'second', 20),
+                ('m-a', 'g1', 'owner', 'first', 10),
+                ('m-c', 'g1', 'alice', 'same second, later row', 20);
+             INSERT INTO overlay_conversations (conversation_id, project_id, last_thread_seq, last_chatter_seq)
+                VALUES ('conv-1', 'p1', 7, 2);",
+        )
+        .unwrap();
+        run_migrations(&conn).unwrap();
+        let seqs: Vec<(String, i64, String)> = conn
+            .prepare("SELECT id, seq, author_kind FROM project_group_messages ORDER BY seq")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            seqs,
+            vec![
+                ("m-a".to_string(), 1, "person".to_string()),
+                ("m-b".to_string(), 2, "agent".to_string()),
+                ("m-c".to_string(), 3, "agent".to_string()),
+            ],
+            "numbered by (created_at, rowid); only `owner` is known to be a person"
+        );
+        let heads: Vec<(String, i64)> = conn
+            .prepare("SELECT id, last_msg_seq FROM project_groups ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(heads, vec![("g1".to_string(), 3), ("g2".to_string(), 0)]);
+        let cursors: Vec<(String, String, i64)> = conn
+            .prepare("SELECT kind, conv_id, last_read_seq FROM read_cursors WHERE person = 'owner' ORDER BY kind, conv_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            cursors,
+            vec![
+                ("project".to_string(), "g1".to_string(), 3),
+                ("project".to_string(), "g2".to_string(), 0),
+                ("thread".to_string(), "conv-1".to_string(), 7),
+            ],
+            "the owner starts read at every head"
+        );
+        run_migrations(&conn).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0190_thread_read'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "recorded once");
     }
@@ -2610,9 +2685,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0188 (OAuth v2 for linked inboxes) and 0189 (push previews) are
-            // newer: forget them (their columns stay; re-adding them is
+            // 0190 (thread read), 0189 (push previews) and 0188 (OAuth v2 for
+            // linked inboxes) are newer: forget them (their tables and columns
+            // stay; re-running 0190 is idempotent, re-adding the columns is
             // skipped as duplicate columns).
+            conn.execute("DELETE FROM _migrations WHERE name = '0190_thread_read'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0188_mail_oauth_v2'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0189_push_device_previews'", []).unwrap();
             // 0181 (Gardens manage) came before it; roll it back next. Its

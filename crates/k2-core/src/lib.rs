@@ -267,6 +267,9 @@ pub mod push;
 // Thread push prefs + recipients (prd-thread-push-notifications-v1,
 // migration 0157): person keys, effective switches, recipients.
 pub mod notify_prefs;
+// Unread counts for Threads and project chats (thread-read-v1, migration
+// 0190): per-person read cursors, mutes, derived counts.
+pub mod read_state;
 pub mod person_color;
 pub mod owner_account_prompt;
 pub mod person_name;

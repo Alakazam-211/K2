@@ -663,7 +663,7 @@ fn on_old_release(t: &T) {
 }
 
 fn upgrade(t: &T) -> Value {
-    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), dry_run: false };
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), ..Default::default() };
     let env = t.env();
     let (l, from) = upgrade_begin(&env, &req).unwrap().unwrap();
     let p = upgrade_machine(&env, &req, &from);
@@ -675,7 +675,7 @@ fn upgrade(t: &T) -> Value {
 fn upgrade_preconditions_refuse_without_effects() {
     let t = t();
     t.enabled();
-    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), dry_run: false };
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), ..Default::default() };
     match upgrade_begin(&t.env(), &req).unwrap() {
         Err(v) => assert_eq!(v["alreadyCurrent"], true),
         Ok(_) => panic!("same version must be a no-op"),
@@ -713,7 +713,7 @@ fn upgrade_rolls_back_automatically_when_k2s_health_check_fails() {
     // Sew says upgraded, but the new binary never gets healthy; the
     // rollback brings the old one back healthy.
     *t.ops.mgmt_health_ok.lock().unwrap() = false;
-    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), dry_run: false };
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), ..Default::default() };
     let env = t.env();
     let (l, from) = upgrade_begin(&env, &req).unwrap().unwrap();
     let p = upgrade_machine_with_flip(&env, &req, &from, &t.ops);
@@ -1099,4 +1099,166 @@ fn a_stale_mgmt_token_is_refetched_once() {
     t.ops.clear();
     mgmt(&t.env(), "GET", "/mgmt/v1/health", None).unwrap();
     assert_eq!(t.ops.effects(), vec!["engine sew token"]);
+}
+
+// ── upgrade: refusal reasons end to end, voice after the core ────────────
+
+/// The box test of 2026-10-17 (Sew 0.1.2 refused a multi-member tarball,
+/// helper code 0): every way the helper can answer maps to a result whose
+/// reason is in the row's `lastError`, in `upgradeProgress.lastError` and
+/// in `k2 hostchat status`. A reasonless "refused" is impossible.
+#[test]
+fn upgrade_result_mapping_always_carries_the_reason() {
+    let refusal = "the tarball must hold exactly one regular file named sew; found \"LICENSE\"";
+    let cases: Vec<(Result<Value, String>, &str, &str)> = vec![
+        // Protocol 8 helper: `reason` (from Sew's JSON, stderr or stdout).
+        (Ok(json!({"sewExit": 3, "sew": {"ok": false, "error": {"exit": 3, "message": refusal}}, "stderrTail": "", "reason": refusal})), "refused", refusal),
+        // An older helper: no `reason`; Sew's JSON error.
+        (Ok(json!({"sewExit": 3, "sew": {"ok": false, "error": {"exit": 3, "message": refusal}}, "stderrTail": ""})), "refused", refusal),
+        // An older helper: the words only on stderr.
+        (Ok(json!({"sewExit": 3, "sew": null, "stderrTail": "sew upgrade: refusing"})), "refused", "sew upgrade: refusing"),
+        // Nothing anywhere: still a reason, never null.
+        (Ok(json!({"sewExit": 3, "sew": null, "stderrTail": ""})), "refused", "Sew exited 3 and gave no reason"),
+        // A helper answer without Sew's exit (a broken helper): loud, not "done".
+        (Ok(json!({"installed": "0.0.2"})), "refused", "the helper answered without Sew's exit code"),
+        // The helper itself refused (never ran Sew).
+        (Err("root helper refused `engine sew upgrade`: busy".into()), "refused", "root helper refused `engine sew upgrade`: busy"),
+        // Sew failed and rolled back itself.
+        (Ok(json!({"sewExit": 1, "sew": null, "stderrTail": "", "reason": "health check failed"})), "rolled_back", "health check failed"),
+    ];
+    for (answer, want_result, want_reason) in cases {
+        let t = t2_old();
+        t.ops.queue("engine sew upgrade", answer.clone());
+        let p = upgrade(&t);
+        assert_eq!(p["result"], want_result, "{answer:?} → {p}");
+        let row = t.row();
+        let last = row.last_error.clone().unwrap_or_else(|| panic!("{answer:?}: lastError is null"));
+        assert!(last.contains(want_reason), "{answer:?}: {last}");
+        assert_eq!(p["lastError"].as_str(), Some(last.as_str()), "upgradeProgress.lastError = the row's");
+        assert_eq!(row.installed_version.as_deref(), Some("0.0.1"), "{answer:?}");
+        assert_eq!(row.status, "running", "{answer:?}: the prior state comes back");
+        let s = status(&t.env(), false);
+        assert_eq!(s["lastError"].as_str(), Some(last.as_str()));
+        assert_eq!(s["upgradeProgress"]["lastError"].as_str(), Some(last.as_str()));
+        assert_eq!(t.ops.effects().last().map(String::as_str), Some("engine sew unstage"), "{answer:?}");
+    }
+    // Success: no reason anywhere.
+    let t = t2_old();
+    let p = upgrade(&t);
+    assert_eq!(p["result"], "done");
+    assert!(p["lastError"].is_null(), "{p}");
+    assert!(t.row().last_error.is_none());
+}
+
+/// A non-`done` end that somehow reached `upgrade_note` without a reason is
+/// recorded as a K2 bug, never left null.
+#[test]
+fn an_upgrade_end_without_a_reason_is_recorded_as_a_k2_bug() {
+    let t = t2_old();
+    store::update(1, |r| {
+        r.upgrade_progress = Some(json!({"from": "0.0.1", "to": pinned().version, "steps": {}, "current": "upgrade"}));
+        r.last_error = None;
+    })
+    .unwrap();
+    upgrade_note(&t.env(), None, Some("refused"));
+    let row = t.row();
+    let last = row.last_error.expect("never null");
+    assert!(last.contains("no reason was recorded (a K2 bug"), "{last}");
+    assert_eq!(row.upgrade_progress.unwrap()["lastError"].as_str(), Some(last.as_str()));
+}
+
+const MEDIA_TARBALL: &str = "/home/k2/sew-media-0.0.2-x86_64-unknown-linux-gnu.tar.gz";
+
+fn with_voice(t: &T) {
+    t.ops.voice_save(Some(&json!({"installed": true, "publicUrl": "wss://voice.box.k2.dev"}))).unwrap();
+    t.ops.files.lock().unwrap().insert(MEDIA_TARBALL.into(), fixture("sew-media-0.0.2-x86_64-unknown-linux-gnu.tar.gz"));
+}
+
+fn voice_upgrade(t: &T) -> Value {
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), media_tarball_path: Some(MEDIA_TARBALL.into()), dry_run: false };
+    let env = t.env();
+    let (l, from) = upgrade_begin(&env, &req).unwrap().unwrap();
+    let p = upgrade_machine(&env, &req, &from);
+    drop(l);
+    p
+}
+
+/// With voice installed (Sew 2026-10-17): the sew-media pin must be in hand
+/// before anything moves; it is staged with the core; the NEW core
+/// upgrades the engine only after K2's own health check of the core.
+#[test]
+fn upgrade_with_voice_upgrades_the_engine_through_the_new_core_after_its_health_check() {
+    let t = t2_old();
+    with_voice(&t);
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), ..Default::default() };
+    let f = upgrade_begin(&t.env(), &req).err().expect("refused");
+    assert_eq!(f.code, "media_tarball_needed", "{}", f.hint);
+    assert!(f.hint.contains("--media-tarball"), "{}", f.hint);
+    let dry = upgrade_begin(&t.env(), &UpgradeRequest { dry_run: true, media_tarball_path: Some(MEDIA_TARBALL.into()), ..req.clone() })
+        .unwrap()
+        .err()
+        .unwrap();
+    assert_eq!(dry["voice"], true);
+    assert!(dry["steps"].as_array().unwrap().iter().any(|s| s.as_str().unwrap().contains("sew media upgrade")), "{dry}");
+    assert!(t.ops.effects().is_empty(), "nothing moved: {:?}", t.ops.effects());
+    assert_eq!(t.row().status, "running");
+
+    let p = voice_upgrade(&t);
+    assert_eq!(p["result"], "done", "{p}");
+    assert!(p["lastError"].is_null());
+    assert_eq!(
+        t.ops.effects(),
+        vec!["engine sew stage", "engine sew stage-media", "engine sew upgrade", "engine sew token", "engine sew media upgrade", "engine sew unstage"]
+    );
+    assert!(p["steps"].get("media").is_some(), "{p}");
+    let row = t.row();
+    assert_eq!((row.installed_version.as_deref(), row.previous_version.as_deref()), (Some(pinned().version), Some("0.0.1")));
+}
+
+/// The engine upgrade fails: the core stays upgraded (it passed K2's
+/// check), the result says so, and the reason is recorded. A core that
+/// fails K2's check is rolled back before the engine is ever touched.
+#[test]
+fn upgrade_with_voice_keeps_the_core_and_records_why_when_the_engine_upgrade_fails() {
+    let t = t2_old();
+    with_voice(&t);
+    t.ops.queue(
+        "engine sew media upgrade",
+        Ok(json!({"sewExit": 75, "sew": {"ok": false, "error": {"exit": 75, "message": "media_not_idle"}}, "reason": "media_not_idle"})),
+    );
+    let p = voice_upgrade(&t);
+    assert_eq!(p["result"], "media_failed", "{p}");
+    let row = t.row();
+    assert_eq!(row.installed_version.as_deref(), Some(pinned().version));
+    let last = row.last_error.expect("reason");
+    assert!(last.contains("the voice engine was not") && last.contains("exit 75") && last.contains("media_not_idle"), "{last}");
+    assert_eq!(p["lastError"].as_str(), Some(last.as_str()));
+
+    // K2's health check of the core fails: rolled back, engine never run.
+    let t = t2_old();
+    with_voice(&t);
+    *t.ops.mgmt_health_ok.lock().unwrap() = false;
+    let req = UpgradeRequest { tarball_path: Some(TARBALL.into()), media_tarball_path: Some(MEDIA_TARBALL.into()), dry_run: false };
+    let env = t.env();
+    let (l, from) = upgrade_begin(&env, &req).unwrap().unwrap();
+    let p = upgrade_machine_with_flip(&env, &req, &from, &t.ops);
+    drop(l);
+    assert_eq!(p["result"], "rolled_back", "{p}");
+    let eff = t.ops.effects();
+    assert!(eff.iter().any(|e| e == "engine sew rollback"), "{eff:?}");
+    assert!(!eff.iter().any(|e| e == "engine sew media upgrade"), "the engine never moves before the core is good: {eff:?}");
+}
+
+/// A bad sew-media tarball aborts before the core moves.
+#[test]
+fn upgrade_with_voice_aborts_before_any_change_on_a_wrong_media_tarball() {
+    let t = t2_old();
+    with_voice(&t);
+    t.ops.files.lock().unwrap().insert(MEDIA_TARBALL.into(), b"not the pin".to_vec());
+    let p = voice_upgrade(&t);
+    assert_eq!(p["result"], "aborted", "{p}");
+    assert!(!t.ops.effects().iter().any(|e| e == "engine sew upgrade"), "{:?}", t.ops.effects());
+    let last = t.row().last_error.expect("reason");
+    assert!(last.contains("aborted before any change") && last.contains("sew-media"), "{last}");
+    assert_eq!(p["lastError"].as_str(), Some(last.as_str()));
 }

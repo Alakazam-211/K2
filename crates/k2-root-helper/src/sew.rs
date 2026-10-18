@@ -25,6 +25,17 @@
 //! - **Sew's exit codes are data.** `install`, `upgrade`, `rollback`,
 //!   `purge`, `restore`, … answer `{"sewExit": n, "sew": <Sew's JSON>,
 //!   "stderrTail": "…"}` with helper exit 0; the daemon maps them (S29 §7.5).
+//!   A non-zero exit always carries a non-empty `reason` (Sew's `--json`
+//!   error message, else its stderr, else its stdout, else the bare exit),
+//!   bounded and stripped of control characters, so a refusal never reaches
+//!   the daemon without its words.
+//! - **Upgrade = `--binary`** (Sew's contract, 2026-10-17). The INSTALLED
+//!   Sew runs `sew upgrade --binary <staged sew member> --sha256 <pin
+//!   binary_sha256>`: Sew 0.1.x refuses a tarball with more than one member
+//!   and 0.2.0's carries the notices. The staged copy is root 0700 (Sew runs
+//!   its `version`) and is removed after the call. The voice engine follows
+//!   in a separate verb, `media upgrade`, run by the NEW core once the
+//!   daemon has checked it (the sidecar pins are baked into `sew`).
 //! - **No groups, no firewall, no edits of Sew's files.** The daemon user
 //!   never joins `sew-mgmt`: its uid rides `sew install`'s JSON as
 //!   `mgmt_allow_uids` and Sew writes `[mgmt] allow_uids` (SW5 + SW7); the
@@ -103,6 +114,7 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
         SewVerb::Restore(id) => restore(ctx, id),
         SewVerb::Token => token(ctx),
         SewVerb::MediaInstall => media_install(ctx, stdin),
+        SewVerb::MediaUpgrade => media_upgrade(ctx),
         SewVerb::MediaUninstall => {
             require_known(ctx)?;
             let mut out = run_sew(ctx, &["media", "uninstall"], None)?;
@@ -143,7 +155,13 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
 fn installs(verb: &SewVerb) -> bool {
     matches!(
         verb,
-        SewVerb::Stage | SewVerb::StageMedia | SewVerb::InstallBin | SewVerb::Install | SewVerb::Upgrade | SewVerb::MediaInstall
+        SewVerb::Stage
+            | SewVerb::StageMedia
+            | SewVerb::InstallBin
+            | SewVerb::Install
+            | SewVerb::Upgrade
+            | SewVerb::MediaInstall
+            | SewVerb::MediaUpgrade
     )
 }
 
@@ -472,7 +490,34 @@ fn require_known(ctx: &Ctx) -> HResult<&'static str> {
     }
 }
 
-/// Run `/usr/local/bin/sew <args> --json`. A non-zero exit is data.
+/// The last `n` characters of `text`, trimmed, every control character
+/// (ANSI escapes, CR, NUL, …) but newline and tab turned into a space.
+pub(crate) fn tail_clean(text: &str, n: usize) -> String {
+    let t: String = text.trim().chars().rev().take(n).collect::<Vec<_>>().into_iter().rev().collect();
+    t.chars().map(|c| if c.is_control() && c != '\n' && c != '\t' { ' ' } else { c }).collect::<String>().trim().to_string()
+}
+
+/// Why Sew exited non-zero, never empty: its `--json` error message
+/// (`{"ok":false,"error":{"exit":n,"message":"…"}}`), else its stderr,
+/// else its stdout, else the bare exit code.
+pub(crate) fn sew_reason(status: i32, parsed: &J, stderr: &str, stdout: &str) -> String {
+    let from_json = parsed
+        .pointer("/error/message")
+        .or_else(|| parsed.get("message"))
+        .and_then(J::as_str)
+        .map(|m| tail_clean(m, REASON_MAX))
+        .filter(|m| !m.is_empty());
+    from_json
+        .or_else(|| Some(tail_clean(stderr, REASON_MAX)).filter(|m| !m.is_empty()))
+        .or_else(|| Some(tail_clean(stdout, REASON_MAX)).filter(|m| !m.is_empty()))
+        .unwrap_or_else(|| format!("sew exited {status} and printed nothing"))
+}
+
+/// The longest `reason` an answer carries.
+const REASON_MAX: usize = 600;
+
+/// Run `/usr/local/bin/sew <args> --json`. A non-zero exit is data, with
+/// its `reason`.
 fn run_sew(ctx: &Ctx, args: &[&str], stdin: Option<&[u8]>) -> HResult<J> {
     let mut a: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     a.push("--json".into());
@@ -483,9 +528,15 @@ fn run_sew(ctx: &Ctx, args: &[&str], stdin: Option<&[u8]>) -> HResult<J> {
     let text = String::from_utf8_lossy(&out.stdout);
     let parsed: J = serde_json::from_str(text.trim()).unwrap_or(J::Null);
     let err = String::from_utf8_lossy(&out.stderr);
-    let err = err.trim();
-    let tail: String = err.chars().rev().take(STDERR_TAIL).collect::<Vec<_>>().into_iter().rev().collect();
-    Ok(json!({"sewExit": out.status, "sew": parsed, "stderrTail": tail}))
+    let mut v = json!({"sewExit": out.status, "sew": parsed, "stderrTail": tail_clean(&err, STDERR_TAIL)});
+    if parsed.is_null() && !text.trim().is_empty() {
+        // Not JSON (a panic, a usage error): keep its words too.
+        v["stdoutTail"] = json!(tail_clean(&text, STDERR_TAIL));
+    }
+    if out.status != 0 {
+        v["reason"] = json!(sew_reason(out.status, &parsed, &err, &text));
+    }
+    Ok(v)
 }
 
 fn unit_state(ctx: &Ctx, unit: &str) -> String {
@@ -576,7 +627,7 @@ fn stage(ctx: &Ctx, tarball: &[u8], media: bool) -> HResult<J> {
 
 fn unstage(ctx: &Ctx) -> HResult<J> {
     let mut removed = Vec::new();
-    for abs in [SEW_STAGE_TARBALL, SEW_STAGE_MEDIA_TARBALL, SEW_STAGE_INSTALL_JSON, SEW_STAGE_MEDIA_JSON] {
+    for abs in [SEW_STAGE_TARBALL, SEW_STAGE_MEDIA_TARBALL, SEW_STAGE_INSTALL_JSON, SEW_STAGE_MEDIA_JSON, SEW_STAGE_UPGRADE_BIN] {
         if remove_file(ctx, abs)? {
             removed.push(abs);
         }
@@ -712,11 +763,12 @@ fn config(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
     let mut results = Vec::new();
     for (k, v) in req.pairs() {
         let r = run_sew(ctx, &["config", "set", k, v], None)?;
-        let failed = r["sewExit"] != 0;
-        results.push(json!({"key": k, "result": r}));
-        if failed {
-            return Ok(json!({"sewExit": results.last().unwrap()["result"]["sewExit"].clone(), "results": results}));
+        if r["sewExit"] != 0 {
+            let (exit, reason) = (r["sewExit"].clone(), format!("sew config set {k}: {}", r["reason"].as_str().unwrap_or("")));
+            results.push(json!({"key": k, "result": r}));
+            return Ok(json!({"sewExit": exit, "reason": reason, "results": results}));
         }
+        results.push(json!({"key": k, "result": r}));
     }
     Ok(json!({"sewExit": 0, "results": results}))
 }
@@ -776,12 +828,62 @@ fn upgrade(ctx: &Ctx) -> HResult<J> {
     if version_cmp(from, pinned().version) != Some(std::cmp::Ordering::Less) {
         return Err(Fail::state("upgrade refused: the installed Sew is newer than the pin (a downgrade is a restore)"));
     }
-    let tarball = ctx.p(SEW_STAGE_TARBALL).display().to_string();
-    let mut out = run_sew(ctx, &["upgrade", "--tarball", &tarball, "--sha256", art.tarball_sha256], None)?;
+    // Sew's contract: the installed (older) Sew gets the bare binary, and
+    // `--sha256` is the sha256 of THAT file (the pin's binary_sha256).
+    let bin = extract_member(&bytes, "sew")?;
+    if !sha256_hex(&bin).eq_ignore_ascii_case(art.binary_sha256) {
+        return Err(Fail::argv("upgrade: the staged tarball's sew member does not match the pin's binary sha256"));
+    }
+    let staged_bin = put_upgrade_bin(ctx, &bin)?;
+    let res = run_sew(ctx, &["upgrade", "--binary", &staged_bin, "--sha256", art.binary_sha256], None);
+    // Sew copied it (or refused): the staged copy never outlives the call.
+    let _ = remove_file(ctx, SEW_STAGE_UPGRADE_BIN);
+    let mut out = res?;
+    out["from"] = json!(from);
+    out["to"] = json!(pinned().version);
     // The new binary is in place: its notices follow it. Sew's upgrade
     // already happened, so a notice failure is reported, not an exit.
     if out["sewExit"] == 0 {
         out["notices"] = notices_or_error(upgrade_notices(ctx, &bytes));
+    }
+    Ok(out)
+}
+
+/// Write the pin's `sew` member to [`SEW_STAGE_UPGRADE_BIN`], root 0700
+/// (the installed Sew runs its `version` before it swaps), and return its
+/// real path.
+fn put_upgrade_bin(ctx: &Ctx, bin: &[u8]) -> HResult<String> {
+    let d = stage_dir(ctx)?;
+    let (_, name) = split(SEW_STAGE_UPGRADE_BIN);
+    d.write_atomic(OsStr::new(name), bin, 0o700, ctx.root_owner())
+        .map_err(|e| Fail::io_err("write staged sew binary", e))?;
+    Ok(ctx.p(SEW_STAGE_UPGRADE_BIN).display().to_string())
+}
+
+/// `sew media upgrade --tarball <staged media pin> --now`, run by the
+/// installed core, which must already BE the pin (its baked sidecar pins
+/// are the ones the media tarball is checked against). `--now`: the person
+/// asked for the upgrade and the core upgrade just restarted chat; calls
+/// drain with a reconnect. On success the media notices are replaced from
+/// the same tarball (Sew SW1 B1).
+fn media_upgrade(ctx: &Ctx) -> HResult<J> {
+    let installed = require_known(ctx)?;
+    if installed != pinned().version {
+        return Err(Fail::state(format!(
+            "media upgrade refused: the installed Sew is {installed}, the pin is {}; the core is upgraded first (engine sew upgrade)",
+            pinned().version
+        )));
+    }
+    let (_, art) = pinned_media_artifact(ctx.arch).map_err(Fail::state)?;
+    let bytes = read_staged(ctx, SEW_STAGE_MEDIA_TARBALL)?
+        .ok_or_else(|| Fail::state("no staged sew-media tarball (engine sew stage-media first)"))?;
+    if !sha256_hex(&bytes).eq_ignore_ascii_case(art.tarball_sha256) {
+        return Err(Fail::state("the staged sew-media tarball is not this build's pin"));
+    }
+    let tarball = ctx.p(SEW_STAGE_MEDIA_TARBALL).display().to_string();
+    let mut out = run_sew(ctx, &["media", "upgrade", "--tarball", &tarball, "--now"], None)?;
+    if out["sewExit"] == 0 {
+        out["notices"] = notices_or_error(install_notices(ctx, &bytes, SEW_MEDIA_DOC_DIR));
     }
     Ok(out)
 }

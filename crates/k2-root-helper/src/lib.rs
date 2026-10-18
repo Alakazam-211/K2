@@ -268,6 +268,16 @@ fn audit(
             line["apparmorInstalled"] = p.clone();
         }
     }
+    // A Sew run answers helper code 0 whatever Sew did: the journal says
+    // what Sew exited with, and why when it was not 0 (bounded, cleaned).
+    if let (Some(Verb::Sew(_)), Some(x)) = (verb, extra) {
+        if let Some(e) = x.get("sewExit") {
+            line["sewExit"] = e.clone();
+            if let Some(r) = x.get("reason") {
+                line["sewReason"] = r.clone();
+            }
+        }
+    }
     if let Some(Verb::PgPsql { db, .. }) = verb {
         line["db"] = serde_json::json!(db.as_str());
     }

@@ -140,15 +140,25 @@ fn sew_exit(v: &Value) -> Option<i64> {
     v.get("sewExit").and_then(Value::as_i64)
 }
 
-/// Sew's own error words (its `--json` error body), else the stderr tail.
+/// Why Sew said no, never empty: the helper's `reason` (protocol 8: Sew's
+/// `--json` error message, else its stderr, else its stdout), else the
+/// same fields read here (an older helper), else the bare exit code.
 fn sew_message(v: &Value) -> String {
-    let m = v
-        .pointer("/sew/error/message")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| v.get("stderrTail").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string))
-        .unwrap_or_else(|| "no detail".into());
-    m.chars().take(400).collect()
+    let field = |p: &str| v.pointer(p).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let m = field("/reason")
+        .or_else(|| field("/sew/error/message"))
+        .or_else(|| field("/stderrTail"))
+        .or_else(|| field("/stdoutTail"))
+        .unwrap_or_else(|| match sew_exit(v) {
+            Some(n) => format!("Sew exited {n} and gave no reason (helper answer: {})", short(v)),
+            None => format!("the helper answered no Sew exit code: {}", short(v)),
+        });
+    m.chars().take(600).collect()
+}
+
+/// A bounded rendering of a helper answer for an error message.
+fn short(v: &Value) -> String {
+    v.to_string().chars().take(200).collect()
 }
 
 /// A Sew run that must exit 0.
@@ -1427,6 +1437,9 @@ pub fn server_config(env: &Env, public_url: &str) -> R<Value> {
 #[derive(Debug, Clone, Default)]
 pub struct UpgradeRequest {
     pub tarball_path: Option<std::path::PathBuf>,
+    /// The pinned sew-media tarball: required when voice is installed (the
+    /// NEW core upgrades the engine right after the core, Sew 2026-10-17).
+    pub media_tarball_path: Option<std::path::PathBuf>,
     pub dry_run: bool,
 }
 
@@ -1463,12 +1476,22 @@ pub fn upgrade_begin<'a>(env: &Env<'a>, req: &UpgradeRequest) -> R<Result<(Latch
             format!("no Sew release source: k2 hostchat upgrade --tarball <sew-{to}-<triple>.tar.gz> (Sew SW1 is not published)"),
         ));
     }
+    let voice = super::voice::load(env).installed;
+    if voice {
+        upgrade_media_source(env, req)?;
+    }
     if req.dry_run {
-        return Ok(Err(json!({
-            "ok": true, "dryRun": true, "from": from, "to": to,
-            "steps": ["stage the pinned tarball", "sew upgrade (backs up, swaps, migrates, checks health, rolls back on failure)",
-                      "K2 health check: units active, mgmt healthy, version = pin", "on a failed K2 health check: automatic rollback"],
-        })));
+        let mut steps = vec![
+            "stage the pinned tarball",
+            "sew upgrade --binary (the installed Sew backs up, swaps, migrates, checks health, rolls back on failure)",
+            "K2 health check: units active, mgmt healthy, version = pin",
+            "on a failed K2 health check: automatic rollback",
+        ];
+        if voice {
+            steps.insert(1, "stage the pinned sew-media tarball");
+            steps.push("voice: the NEW sew runs sew media upgrade --now (Sew rolls the engine back itself on failure)");
+        }
+        return Ok(Err(json!({"ok": true, "dryRun": true, "from": from, "to": to, "voice": voice, "steps": steps})));
     }
     let latch = begin(env)?;
     let now = env.ops.now();
@@ -1482,6 +1505,32 @@ pub fn upgrade_begin<'a>(env: &Env<'a>, req: &UpgradeRequest) -> R<Result<(Latch
     Ok(Ok((latch, from)))
 }
 
+/// With voice installed, a sew-media source must be in hand before the
+/// core moves: a tarball path now, or the media pin already staged.
+fn upgrade_media_source(env: &Env, req: &UpgradeRequest) -> R<()> {
+    if req.media_tarball_path.is_some() {
+        return Ok(());
+    }
+    let (v, art) = k2_root_proto::sew::pinned_media_artifact(&env.ops.arch()).map_err(|e| no("media_unpinned", 409, e))?;
+    let staged = helper(env, &["status"], None).ok().and_then(|s| s.pointer("/staged/media").and_then(Value::as_str).map(str::to_string));
+    if staged.as_deref() == Some(v) {
+        return Ok(());
+    }
+    Err(no(
+        "media_tarball_needed",
+        409,
+        format!(
+            "voice is installed: the voice engine is upgraded right after the core, so name the sew-media {v} release tarball \
+             for {} too (k2 hostchat upgrade --tarball <sew> --media-tarball <sew-media>); nothing was changed",
+            art.triple
+        ),
+    ))
+}
+
+/// Record a step change; with `result`, the end of the upgrade. A result
+/// other than `done` ALWAYS has its reason in the row's `last_error` and
+/// in `upgradeProgress.lastError`: one that reached here without one is a
+/// K2 bug, recorded and logged as such, never a silent null.
 fn upgrade_note(env: &Env, step: Option<&str>, result: Option<&str>) {
     let now = env.ops.now();
     save_enable(env, |r| {
@@ -1495,8 +1544,35 @@ fn upgrade_note(env: &Env, step: Option<&str>, result: Option<&str>) {
         if let Some(res) = result {
             p["result"] = json!(res);
             p["finishedAt"] = json!(now);
+            if res != "done" && r.last_error.as_deref().is_none_or(|e| e.trim().is_empty()) {
+                let m = format!("the upgrade ended '{res}' but no reason was recorded (a K2 bug: report it with the k2-daemon log)");
+                k2_core::log_debug!("[sew] upgrade: {m}");
+                r.last_error = Some(m);
+            }
+            p["lastError"] = json!(if res == "done" { None } else { r.last_error.clone() });
+            k2_core::log_debug!("[sew] upgrade to {}: result {res}; lastError: {}", p["to"].as_str().unwrap_or("?"), r.last_error.as_deref().unwrap_or("none"));
         }
     });
+}
+
+/// Upgrade the voice engine through the NEW core (Sew 2026-10-17: the
+/// sidecar pins are baked into `sew`, so only the pin core accepts the pin
+/// media tarball). Runs only after K2's own health check of the core
+/// passed, so a core rollback never strands a new engine. `Err(why)` = the
+/// core stays upgraded and the engine did not move (Sew rolls a failed
+/// engine restart back itself).
+fn upgrade_media(env: &Env, to: &str) -> Result<Value, String> {
+    let v = helper(env, &["media", "upgrade"], None).map_err(|e| format!("the helper refused the voice engine upgrade: {e}"))?;
+    match sew_exit(&v) {
+        Some(0) => Ok(v),
+        Some(1) => Err(format!("sew media upgrade failed and Sew rolled the voice engine back: {}", sew_message(&v))),
+        Some(2) => Err(format!(
+            "sew media upgrade failed AND Sew's engine rollback failed: {}. A person must act (journalctl -u sew-media.service)",
+            sew_message(&v)
+        )),
+        Some(n) => Err(format!("sew media upgrade refused (exit {n}): {}", sew_message(&v))),
+        None => Err(format!("the helper answered the voice engine upgrade to {to} without a Sew exit: {}", short(&v))),
+    }
 }
 
 /// The upgrade machine (Sew does backup, swap, migrate and its own
@@ -1508,13 +1584,22 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
         .and_then(|r| r.upgrade_progress)
         .and_then(|p| p.get("prior").and_then(Value::as_str).map(str::to_string))
         .unwrap_or_else(|| "running".into());
-    if let Err(e) = stage_tarball(env, req.tarball_path.as_deref()) {
-        upgrade_note(env, None, Some("aborted"));
+    let voice = super::voice::load(env).installed;
+    let staged = stage_tarball(env, req.tarball_path.as_deref()).and_then(|_| {
+        if voice {
+            super::voice::stage_media_bytes(env, req.media_tarball_path.as_deref()).map_err(|f| format!("sew-media: {}", f.hint))
+        } else {
+            Ok(())
+        }
+    });
+    if let Err(e) = staged {
         let m = format!("upgrade to {to} aborted before any change: {e}");
         save_enable(env, |r| {
             r.status = prior.clone();
             r.last_error = Some(m);
         });
+        let _ = helper(env, &["unstage"], None);
+        upgrade_note(env, None, Some("aborted"));
         return store::load().and_then(|r| r.upgrade_progress).unwrap_or_default();
     }
     upgrade_note(env, Some("upgrade"), None);
@@ -1528,8 +1613,18 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
             });
             "refused"
         }
-        Ok(v) => match sew_exit(&v).unwrap_or(0) {
-            0 => {
+        Ok(v) => match sew_exit(&v) {
+            // A Sew verb always answers Sew's exit: an answer without one is
+            // a broken helper, never a silent success or a reasonless refusal.
+            None => {
+                let m = format!("upgrade to {to}: the helper answered without Sew's exit code: {}", short(&v));
+                save_enable(env, |r| {
+                    r.status = prior.clone();
+                    r.last_error = Some(m);
+                });
+                "refused"
+            }
+            Some(0) => {
                 upgrade_note(env, Some("health"), None);
                 match health_check(env, to) {
                     Ok(_) => {
@@ -1543,7 +1638,19 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
                         if let Some(row) = store::load() {
                             grant_hook_on(env, &row);
                         }
-                        "done"
+                        if voice {
+                            upgrade_note(env, Some("media"), None);
+                            match upgrade_media(env, to) {
+                                Ok(_) => "done",
+                                Err(why) => {
+                                    let m = format!("Sew is upgraded to {to}, but the voice engine was not: {why}");
+                                    save_enable(env, |r| r.last_error = Some(m));
+                                    "media_failed"
+                                }
+                            }
+                        } else {
+                            "done"
+                        }
                     }
                     Err(health) => {
                         // K2's own check failed after Sew said yes: roll back.
@@ -1552,7 +1659,7 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
                     }
                 }
             }
-            1 => {
+            Some(1) => {
                 let m = format!("upgrade to {to} failed; Sew rolled back to {from}: {}", sew_message(&v));
                 let healthy = health_check(env, from).is_ok();
                 save_enable(env, |r| {
@@ -1561,7 +1668,7 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
                 });
                 "rolled_back"
             }
-            2 => {
+            Some(2) => {
                 let m = format!(
                     "upgrade to {to} failed AND Sew's rollback failed: {}. A person must act: read {SEW_UPGRADE_STATE} \
                      and the sew journal (journalctl -u sew.service); K2 will not retry",
@@ -1573,7 +1680,7 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
                 });
                 "rollback_failed"
             }
-            n => {
+            Some(n) => {
                 let m = format!("upgrade to {to} refused by Sew (exit {n}): {}", sew_message(&v));
                 save_enable(env, |r| {
                     r.status = prior.clone();
@@ -1691,7 +1798,15 @@ pub fn rollback(env: &Env) -> R<Value> {
         r.previous_version = None;
         r.last_error = health_err.clone().map(|e| format!("rolled back, but Sew is unhealthy: {e}"));
     });
-    Ok(json!({"ok": ok, "state": if ok { "running" } else { "error" }, "version": to, "sew": v["sew"], "error": health_err}))
+    let mut body = json!({"ok": ok, "state": if ok { "running" } else { "error" }, "version": to, "sew": v["sew"], "error": health_err});
+    if super::voice::load(env).installed {
+        // Sew has no engine rollback verb: an engine an upgrade moved stays.
+        body["warning"] = json!(
+            "the voice engine (sew-media) is not rolled back: Sew has no engine rollback, so it stays on the version the \
+             upgrade put in place; if calls fail, check k2 hostchat media status"
+        );
+    }
+    Ok(body)
 }
 
 // ── backups / restore ────────────────────────────────────────────────────

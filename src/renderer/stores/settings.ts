@@ -85,6 +85,9 @@ export type SettingsSection =
   | 'agent-skills'
   | 'heartbeats'
   | 'companion'
+  /** Settings → Network → Homes Sync (homes-sync-v1, 0.46.1): this
+   *  computer's Homes sync and the devices syncing from this server. */
+  | 'homes-sync'
   | 'wake-scheduler'
   /** Settings → Logs → Access Audit (GET /cli/users/audit). */
   | 'access-audit'

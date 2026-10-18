@@ -99,8 +99,8 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
       expect(group(nav, 'Access').items.map((i) => i.id)).toEqual(['k2-access', 'people', 'user-templates', 'api-tokens', 'vault'])
       expect(group(nav, 'Network').items.map((i) => i.id)).toEqual(
         zenGardens
-          ? ['k2-connect', 'domains', 'connections', 'companion']
-          : ['k2-connect', 'domains', 'connections', 'companion', 'data-sources'],
+          ? ['k2-connect', 'domains', 'connections', 'companion', 'homes-sync']
+          : ['k2-connect', 'domains', 'connections', 'companion', 'homes-sync', 'data-sources'],
       )
       const ids = leafIds(nav)
       for (const id of [

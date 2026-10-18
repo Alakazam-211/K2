@@ -18,6 +18,15 @@
 // reload, never piles up per window label) holds this window's pick, and
 // `k2.homes.lastSelected` in localStorage is what a NEW window opens on.
 //
+// homes-sync-v1 (0.46.1): this copy is still the working copy — the UI
+// only ever reads it, so an offline home server never blocks the Home
+// screen. The sync runner (`lib/homes-sync/runner.ts`) watches it, queues
+// changes for the person's home server and writes merged results back
+// through `applySynced`. Selection and expanded state never sync. A Home
+// merged into another on a first sync keeps its id as a redirect
+// (`redirects`, from `k2.homes.sync.v1`), so a window's selection, the
+// last-selected id and a Garden's `seedHome` still resolve.
+//
 // Storage can throw (private mode, quota, a locked-down webview). Every
 // read and write goes through `safeGet` / `safeSet`; a storage ERROR falls
 // back to an in-memory seed. Data that parses but is not ours (a future
@@ -34,6 +43,8 @@ export const HOMES_STORAGE_KEY = 'k2.homes.v1'
 export const HOMES_LAST_SELECTED_KEY = 'k2.homes.lastSelected'
 /** sessionStorage — this window's selected Home. */
 export const HOMES_WINDOW_SELECTED_KEY = 'k2.homes.windowSelected'
+/** homes-sync-v1: the sync runner's state (cursor, outbox, redirects). */
+export const HOMES_SYNC_STORAGE_KEY = 'k2.homes.sync.v1'
 
 export const DEFAULT_HOME_NAME = 'Home'
 export const HOME_NAME_MAX = 60
@@ -146,6 +157,8 @@ export interface HomesState {
   storageOk: boolean
   /** This window's selected Home id (always one of `homes`). */
   selectedId: string
+  /** homes-sync-v1: merged-away Home id → the Home it went into. */
+  redirects: Record<string, string>
   selectHome: (id: string) => void
   /** Create an empty Home and select it. Null when the name is empty. */
   createHome: (name: string) => string | null
@@ -166,6 +179,12 @@ export interface HomesState {
   repairRows: (resolve: (row: HomeRow) => HomeRow | null) => void
   /** Another window wrote `k2.homes.v1` (the `storage` event). */
   applyExternal: (raw: string | null) => void
+  /** homes-sync-v1: the sync runner merged server changes. Saves them
+   *  (other windows follow through `storage`); keeps this window's
+   *  selection, following a redirect when its Home was merged away. */
+  applySynced: (homes: Home[], redirects: Record<string, string>) => void
+  /** homes-sync-v1: redirects changed in another window. */
+  setRedirects: (redirects: Record<string, string>) => void
 }
 
 export interface HomesEnv {
@@ -211,12 +230,53 @@ function seedHomes(newId: () => string): Home[] {
   return [{ id: newId(), name: DEFAULT_HOME_NAME, rows: [] }]
 }
 
-function pickSelected(homes: Home[], env: HomesEnv): string {
-  const has = (id: string | null): id is string => !!id && homes.some((h) => h.id === id)
+/** Follow merge redirects (A → B → C), stopping on a loop. */
+export function followHomeRedirects(redirects: Readonly<Record<string, string>>, id: string): string {
+  let at = id
+  const seen = new Set<string>([at])
+  while (Object.prototype.hasOwnProperty.call(redirects, at)) {
+    at = redirects[at]
+    if (seen.has(at)) break
+    seen.add(at)
+  }
+  return at
+}
+
+/** A Home id as it is now: itself when it exists, else where its merge
+ *  redirect leads, else null. */
+export function resolveHomeId(
+  s: Pick<HomesState, 'homes' | 'redirects'>,
+  id: string | null | undefined,
+): string | null {
+  if (!id) return null
+  if (s.homes.some((h) => h.id === id)) return id
+  const to = followHomeRedirects(s.redirects, id)
+  return s.homes.some((h) => h.id === to) ? to : null
+}
+
+/** Redirects stored in the sync state (`k2.homes.sync.v1`). */
+export function parseHomeRedirects(raw: string | null): Record<string, string> {
+  if (!raw) return {}
+  try {
+    const v = JSON.parse(raw) as { redirects?: unknown }
+    const out: Record<string, string> = {}
+    if (v && v.redirects && typeof v.redirects === 'object') {
+      for (const [k, val] of Object.entries(v.redirects as Record<string, unknown>)) if (typeof val === 'string') out[k] = val
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function pickSelected(homes: Home[], env: HomesEnv, redirects: Record<string, string> = {}): string {
+  const resolve = (id: string | null): string | null => resolveHomeId({ homes, redirects }, id)
   const win = safeGet(env.session, HOMES_WINDOW_SELECTED_KEY)
-  if (win.ok && has(win.value)) return win.value
+  const w = win.ok ? resolve(win.value) : null
+  if (w) return w
   const last = safeGet(env.local, HOMES_LAST_SELECTED_KEY)
-  if (last.ok && has(last.value)) return last.value
+  const l = last.ok ? resolve(last.value) : null
+  if (l) return l
   return homes[0].id
 }
 
@@ -247,6 +307,9 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
     }
   }
 
+  const syncRead = safeGet(env.local, HOMES_SYNC_STORAGE_KEY)
+  const initialRedirects = syncRead.ok ? parseHomeRedirects(syncRead.value) : {}
+
   const persist = (homes: Home[]): void => {
     safeSet(env.local, HOMES_STORAGE_KEY, JSON.stringify({ version: 1, homes } satisfies HomesDoc))
   }
@@ -269,7 +332,8 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
     return {
       homes: initial,
       storageOk,
-      selectedId: pickSelected(initial, env),
+      selectedId: pickSelected(initial, env, initialRedirects),
+      redirects: initialRedirects,
 
       selectHome: (id) => {
         if (!get().homes.some((h) => h.id === id)) return
@@ -371,10 +435,26 @@ export function createHomesStore(env: HomesEnv): UseBoundStore<StoreApi<HomesSta
       applyExternal: (raw) => {
         const doc = parseHomesDoc(raw)
         if (!doc) return
-        const { selectedId } = get()
-        const sel = doc.homes.some((h) => h.id === selectedId) ? selectedId : pickSelected(doc.homes, env)
+        const { selectedId, redirects } = get()
+        const sel =
+          resolveHomeId({ homes: doc.homes, redirects }, selectedId) ?? pickSelected(doc.homes, env, redirects)
         // No write-back: the other window already saved this exact doc.
         set({ homes: doc.homes, selectedId: sel, storageOk: true })
+      },
+
+      applySynced: (homes, redirects) => {
+        if (homes.length === 0) return
+        const { selectedId } = get()
+        const sel = resolveHomeId({ homes, redirects }, selectedId) ?? pickSelected(homes, env, redirects)
+        set({ homes, redirects, selectedId: sel, storageOk: true })
+        persist(homes)
+        if (sel !== selectedId) safeSet(env.session, HOMES_WINDOW_SELECTED_KEY, sel)
+      },
+
+      setRedirects: (redirects) => {
+        const { homes, selectedId } = get()
+        const sel = resolveHomeId({ homes, redirects }, selectedId) ?? selectedId
+        set({ redirects, selectedId: sel })
       },
     }
   })
@@ -427,6 +507,8 @@ export function attachHomesStorageSync(
     const se = e as Event & { key?: string | null; newValue?: string | null }
     if (se.key === HOMES_STORAGE_KEY) {
       store.getState().applyExternal(se.newValue ?? null)
+    } else if (se.key === HOMES_SYNC_STORAGE_KEY) {
+      store.getState().setRedirects(parseHomeRedirects(se.newValue ?? null))
     } else if (se.key === null) {
       // storage.clear() in another window — re-read what is there now.
       const r = safeGet(local, HOMES_STORAGE_KEY)

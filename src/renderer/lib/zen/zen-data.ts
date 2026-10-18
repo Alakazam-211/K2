@@ -63,7 +63,7 @@
 // server).
 
 import { createStore } from 'zustand/vanilla'
-import { useHomesStore, selectedHome, type Home, type HomeRow } from '@/stores/homes'
+import { useHomesStore, selectedHome, resolveHomeId, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { useFocusGroupsStore } from '@/stores/focus-groups'
@@ -576,11 +576,14 @@ export function firstAgentsWidget(page: ZenResolvedPage): ZenWidgetDecl | null {
   return best
 }
 
-/** A Home by id, or by name (case-insensitive). */
+/** A Home by id (following a homes-sync merge redirect: a Home merged into
+ *  another on a first sync keeps its old id), or by name (case-insensitive). */
 function findHome(homes: readonly Home[], ref: string | null): Home | null {
   if (!ref) return null
   const byId = homes.find((h) => h.id === ref)
   if (byId) return byId
+  const redirected = resolveHomeId({ homes: [...homes], redirects: useHomesStore.getState().redirects }, ref)
+  if (redirected) return homes.find((h) => h.id === redirected) ?? null
   const lower = ref.toLocaleLowerCase()
   return homes.find((h) => h.name.toLocaleLowerCase() === lower) ?? null
 }

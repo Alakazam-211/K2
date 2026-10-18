@@ -22,6 +22,7 @@ import { createHostSessionSync, type HostSessionEvent } from '@/lib/host-session
 import { isWebClient } from '@/lib/is-web'
 import { onLoginLanded, onSavedHostRekey } from '@/lib/connect-host-hooks'
 import { CLI_CONNECTED_RETRY_DELAYS_MS, withRemoteRetry } from '@/lib/remote-retry'
+import { noteServerId } from '@/lib/server-ids'
 import {
   forgetToken,
   hostBaseUrl,
@@ -64,7 +65,11 @@ export const hostPool: HostPool = createHostPool({
               signal: AbortSignal.timeout(4_000),
             })
             if (!res.ok) return null
-            return (await res.json()) as BootBody
+            const body = (await res.json()) as BootBody & { serverId?: unknown }
+            // homes-sync-v1: remember which box this host is (Home rows
+            // sync as `handle::<serverId>`).
+            noteServerId(hostKey, body?.serverId)
+            return body
           },
           { delaysMs: CLI_CONNECTED_RETRY_DELAYS_MS },
         ),

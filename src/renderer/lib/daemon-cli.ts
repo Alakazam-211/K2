@@ -569,6 +569,11 @@ function httpError(res: Response, text: string): DaemonHttpError {
     const parsed = JSON.parse(text)
     if (parsed && typeof parsed.error === 'string') msg = parsed.error
     if (parsed && typeof parsed.code === 'string' && parsed.code !== '') code = parsed.code
+    // The `{ok:false, error:{code, hint}}` shape (notify, homes-sync routes).
+    if (parsed && parsed.error && typeof parsed.error === 'object') {
+      if (typeof parsed.error.hint === 'string' && parsed.error.hint !== '') msg = parsed.error.hint
+      if (typeof parsed.error.code === 'string' && parsed.error.code !== '') code = code ?? parsed.error.code
+    }
   } catch {
     /* fall through with raw text */
   }

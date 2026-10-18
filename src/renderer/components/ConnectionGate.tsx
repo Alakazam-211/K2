@@ -70,6 +70,7 @@ import { RemoteSignIn } from './RemoteSignIn'
 import { AppErrorBoundary } from './AppErrorBoundary'
 import GateChrome from './TopBar/GateChrome'
 import { noteServerVersion, primaryScope } from '@/kessel/server-scope'
+import { noteServerId } from '@/lib/server-ids'
 import { homeHostKey } from '@/lib/host-key'
 
 /** Shape of the daemon's GET /boot-status response. `detail` is free-text
@@ -87,6 +88,8 @@ interface DaemonBootStatus {
   listen?: { lan: boolean }
   /** Reported feature keys (`boot_status::features`); absent on old daemons. */
   features?: unknown
+  /** homes-sync-v1: the box's stable id; absent on old daemons. */
+  serverId?: unknown
 }
 
 /** `/boot-status` `features` as strings; a body without the list (an
@@ -1126,6 +1129,8 @@ export function ConnectionGate(): React.ReactElement {
           status?.version ?? null,
           reportedFeatureList(status?.features),
         )
+        // homes-sync-v1: which box this host is (`local` for this computer).
+        noteServerId(homeHostKey(useConnectHostStore.getState().activeHost), status?.serverId)
         // Remember this host reached 'accept' at least once → a later
         // drop becomes a SOFT reconnect (overlay) instead of a blank.
         acceptedOnce = true

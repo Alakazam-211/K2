@@ -59,6 +59,7 @@ import WikiPage from './components/Wiki/WikiPage'
 import { usePageViewStore, isRoomPage, primaryRoomPageLive } from './stores/page-view'
 import { initFeedbackEvents } from './stores/feedback'
 import { initProjectGroupEvents } from './stores/project-groups'
+import { startHomesSync } from './lib/homes-sync'
 import { PageLiveContext } from './contexts/TabVisibilityContext'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
@@ -416,6 +417,10 @@ function AppRoot(): React.JSX.Element {
     initFeedbackEvents(notify)
     initProjectGroupEvents()
   }, [])
+
+  // homes-sync-v1 (0.46.1): sync this computer's Homes with its own daemon
+  // (local-first; one runner per app via a Web Lock, every window follows).
+  useEffect(() => startHomesSync(), [])
 
   // #672 — open the single app-level Active-state subscription once at
   // boot, and re-run the snapshot + re-subscribe on a real host switch so

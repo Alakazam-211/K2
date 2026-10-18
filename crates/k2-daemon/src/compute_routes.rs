@@ -1215,6 +1215,25 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             format!("'{}' isn't granted to workspace {}: ask your owner (k2 compute grant {} --workspace {})", node.name, ws.handle, node.name, ws.handle),
         ));
     }
+    // Limits first, before any source is read or bundled (A8): each
+    // refusal names the whole grant and the owner's command.
+    let max_secs = grant.as_ref().map(|g| g.max_job_secs).unwrap_or(compute::DEFAULT_MAX_JOB_SECS);
+    let timeout = n(&v, "timeoutSecs").unwrap_or(max_secs);
+    if timeout < 1 || timeout > max_secs {
+        let asked = human_secs(timeout.max(0));
+        let hint = match &grant {
+            Some(g) => format!(
+                "--timeout {asked} is over this grant's {} per job on {} ({}). Ask your owner: k2 compute grant {} --workspace {} --max-time {asked}",
+                human_secs(max_secs),
+                node.name,
+                grant_line(g),
+                node.name,
+                ws.handle
+            ),
+            None => format!("--timeout {asked} is over the default {} per job (no grant on {})", human_secs(max_secs), node.name),
+        };
+        return Err(no(TIMEOUT_OVER_GRANT, 400, hint));
+    }
     if let Some(g) = &grant {
         let queued = {
             let db = k2_core::db::shared();
@@ -1222,7 +1241,19 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             store::queued_count(&conn, &node.id, &ws.id)
         };
         if queued >= g.max_queued {
-            return Err(no(codes::QUEUE_FULL, 409, format!("{queued} jobs from this workspace already wait on {} (grant max {})", node.name, g.max_queued)));
+            return Err(no(
+                codes::QUEUE_FULL,
+                409,
+                format!(
+                    "{queued} jobs from this workspace already wait on {} ({}). Wait for one to start (k2 compute jobs --node {} --state queued), or ask your owner: k2 compute grant {} --workspace {} --max-queued {}",
+                    node.name,
+                    grant_line(g),
+                    node.name,
+                    node.name,
+                    ws.handle,
+                    g.max_queued * 2
+                ),
+            ));
         }
     }
     // A job over the node's caps would sit at the head of its queue
@@ -1236,11 +1267,6 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
                 format!("'{}': {}; ask for less, or pick a bigger node (k2 compute nodes)", node.name, r.message),
             ));
         }
-    }
-    let max_secs = grant.as_ref().map(|g| g.max_job_secs).unwrap_or(compute::DEFAULT_MAX_JOB_SECS);
-    let timeout = n(&v, "timeoutSecs").unwrap_or(max_secs);
-    if timeout < 1 || timeout > max_secs {
-        return Err(no(codes::BAD_REQUEST, 400, format!("--timeout must be at most {max_secs}s on this grant")));
     }
     let disk_gb = grant.as_ref().map(|g| g.max_disk_gb).unwrap_or(compute::DEFAULT_MAX_DISK_GB);
     // Source: the workspace's own repo only (never a path the client names
@@ -1311,6 +1337,31 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         }
     }
     Ok(out)
+}
+
+/// `--timeout` over the grant's (or the default) time per job.
+pub(crate) const TIMEOUT_OVER_GRANT: &str = "timeout_over_grant";
+
+/// 7200 → "2h", 5400 → "90m", 45 → "45s".
+fn human_secs(s: i64) -> String {
+    if s >= 3600 && s % 3600 == 0 {
+        format!("{}h", s / 3600)
+    } else if s >= 60 && s % 60 == 0 {
+        format!("{}m", s / 60)
+    } else {
+        format!("{s}s")
+    }
+}
+
+/// "grant: 2h/job, 1 parallel, 10 queued, 60 GB disk".
+fn grant_line(g: &store::GrantRow) -> String {
+    format!(
+        "grant: {}/job, {} parallel, {} queued, {} GB disk",
+        human_secs(g.max_job_secs),
+        g.max_parallel,
+        g.max_queued,
+        g.max_disk_gb
+    )
 }
 
 fn pick_node(who: &Who, v: &serde_json::Value, ws: &Ws, gate: Option<&str>) -> R<store::NodeRow> {
@@ -1646,6 +1697,22 @@ fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value
     Ok(serde_json::json!({ "jobs": jobs }))
 }
 
+/// A job the node killed at its memory cap (`failed`/`mem_cap`, no exit
+/// code): what to try next.
+fn mem_cap_hint(j: &store::JobRow) -> Option<String> {
+    if j.state != "failed" || j.reason.as_deref() != Some("mem_cap") {
+        return None;
+    }
+    Some(match j.plan().and_then(|p| p.limits.mem_bytes) {
+        Some(m) => {
+            let g = m as f64 / (1u64 << 30) as f64;
+            let shown = if (g - g.round()).abs() < 0.05 { format!("{}G", g.round() as u64) } else { format!("{g:.1}G") };
+            format!("killed at the memory cap (--mem {shown}): try a bigger --mem or CARGO_BUILD_JOBS=2")
+        }
+        None => "killed at the node's memory cap: pass a bigger --mem (k2 compute nodes shows each node's cap) or CARGO_BUILD_JOBS=2".into(),
+    })
+}
+
 /// What a `get?wait=N` waiter watches: a change in any of these ends the wait.
 fn wait_fingerprint(j: &store::JobRow) -> (String, Option<String>, i64, Option<usize>) {
     let position = (j.state == "queued").then(|| compute_ws::decision_for(&j.node_id).waiting.get(&j.id).map(|(p, _)| *p)).flatten();
@@ -1699,6 +1766,9 @@ fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> 
     let mut v = job_summary(&j);
     // `commit` is srcCommit; `dirty` says whether --dirty changes rode along.
     v["dirty"] = j.dirty_sha256.is_some().into();
+    if let Some(h) = mem_cap_hint(&j) {
+        v["hint"] = h.into();
+    }
     // The audit line: who asked for the cancel, and when.
     if j.state == "cancelled" || j.reason.as_deref() == Some("cancel_requested") {
         let db = k2_core::db::shared();

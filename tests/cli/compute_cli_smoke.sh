@@ -145,6 +145,19 @@ expect_has "nodes shows unreserved CPU" "$out" "unreserved"
 expect_has "nodes shows this workspace's grant in human units" "$out" "grant 2h/job 2 parallel 10 queued"
 expect_has "info shows the grant in human units" "$(k2 compute info mini)" "2h/job  2 parallel"
 set +e
+k2 compute run mini --timeout 3h -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "a --timeout over the grant is a bad request" "$rc" "2"
+expect_has "timeout_over_grant names the grant and the owner command" "$(cat "$SANDBOX/err")" "(grant: 2h/job, 2 parallel, 10 queued, 60 GB disk). Ask your owner: k2 compute grant mini --workspace"
+help="$(k2 compute --help)"
+for want in "k2 compute wait <job>..." "[--workspace WS]" "cancel <job> [--force]" "≤ the grant's max" "--wait [--failures] [--max-wait 9m]" "K2_COMPUTE_JOB"; do
+    expect_has "--help lists $want" "$help" "$want"
+done
+study="$(k2 study compute)"
+for want in "K2_COMPUTE_JOB=<job id>" "CANCEL" "WORKTREES" "k2 compute wait <id>" "sh -ec"; do
+    expect_has "study compute covers $want" "$study" "$want"
+done
+set +e
 stdout="$(k2 compute run mini -- sh -c 'cat a.txt; echo to-stderr >&2; exit 7' 2>"$SANDBOX/err")"; rc=$?
 set -e
 expect_eq "attached run exits with the job's code" "$rc" "7"

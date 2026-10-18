@@ -1409,3 +1409,64 @@ async fn queue_view_shows_whats_ahead_and_the_numbers() {
     stop_node(port, "dxa-queue", running).await;
     drop(env);
 }
+
+/// A8: a --timeout over the grant is refused before anything is bundled,
+/// naming the whole grant and the owner's command (or the default when
+/// there's no grant); queue_full names the grant too; a mem_cap kill gets
+/// a hint in `get`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn limits_up_front_and_the_mem_cap_hint() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "dxa-limits");
+    let bare = seed_ws(&env, "dxa-nogrant");
+    let (agent, _) = passport(&ws);
+    let (running, _) = online_node_for(&env, port, "dxa-limits", &ws).await;
+    let mut body = run_body("dxa-limits", &["true"], "client-dxa-limits-0001");
+    body["timeoutSecs"] = json!(3 * 3600);
+    let r = post(port, "/cli/compute/run", &agent, body).await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert_eq!(code(&r), "timeout_over_grant");
+    let hint = j(&r)["error"]["hint"].as_str().expect("hint").to_string();
+    assert_eq!(
+        hint,
+        "--timeout 3h is over this grant's 2h per job on dxa-limits (grant: 2h/job, 1 parallel, 10 queued, 60 GB disk). \
+         Ask your owner: k2 compute grant dxa-limits --workspace dxa-limits --max-time 3h"
+    );
+    // The owner without a grant for that workspace: the default, no grant command.
+    let mut body = run_body("dxa-limits", &["true"], "client-dxa-limits-0002");
+    body["timeoutSecs"] = json!(3 * 3600);
+    body["workspace"] = json!(bare.id);
+    let r = post(port, "/cli/compute/run", OWNER, body).await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert_eq!(j(&r)["error"]["hint"], "--timeout 3h is over the default 2h per job (no grant on dxa-limits)");
+    // queue_full names the grant.
+    node_pause(port, "dxa-limits", "pause").await;
+    let r = post(port, "/cli/compute/grants/set", OWNER, json!({"node": "dxa-limits", "workspace": ws.id, "maxQueued": 1})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let mut body = run_body("dxa-limits", &["true"], "client-dxa-limits-0003");
+    body["noSource"] = json!(true);
+    body["memBytes"] = json!(7i64 << 30);
+    let r = post(port, "/cli/compute/run", &agent, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let held = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    let mut body = run_body("dxa-limits", &["true"], "client-dxa-limits-0004");
+    body["noSource"] = json!(true);
+    let r = post(port, "/cli/compute/run", &agent, body).await;
+    assert_eq!((r.status, code(&r)), (409, "queue_full".to_string()), "{}", r.body);
+    let hint = j(&r)["error"]["hint"].as_str().expect("hint").to_string();
+    assert!(hint.contains("(grant: 2h/job, 1 parallel, 1 queued, 60 GB disk)") && hint.contains("--max-queued 2"), "{hint}");
+    // A mem_cap end gets a hint naming the --mem it ran with.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::compute::store::set_job_state(&conn, &held, k2_node_proto::frames::JobState::Failed, Some("mem_cap"), None, 100).expect("set state");
+    }
+    let v = job_json(port, &agent, &held).await;
+    assert_eq!(v["hint"], "killed at the memory cap (--mem 7G): try a bigger --mem or CARGO_BUILD_JOBS=2", "{v}");
+
+    stop_node(port, "dxa-limits", running).await;
+    drop(env);
+}

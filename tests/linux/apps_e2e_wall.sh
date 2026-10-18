@@ -157,7 +157,8 @@ PY
 	[ "$r" = live ] || fail "shop re-run: $r"
 	FS="$(front shop)"
 	[ "$(curl -s "http://127.0.0.1:$FS/")" = shop2 ] || fail "the re-run serves the new folder"
-	ok "a re-run of the label deploys a fresh copy of the folder (zero-downtime switch)"
+	[ "$(curl -s -m 5 "http://127.0.0.1:9100/")" = "extra shop2" ] || fail "the extra port after the re-run"
+	ok "a re-run of the label deploys a fresh copy of the folder (with an extra port: the old instance stops first, then the new one holds 9100)"
 	K2 publish rm shop --json >/tmp/w-rm.json || { cat /tmp/w-rm.json; fail "k2 publish rm shop (mapped)"; }
 	K2 app list --json | python3 -c 'import json,sys; assert not [a for a in json.load(sys.stdin)["apps"] if a["appId"]=="shop"]'
 	ok "k2 publish rm uninstalls the open-path App"

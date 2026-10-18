@@ -54,9 +54,11 @@ cargo build --release -p k2-root-helper --features test-keys --bin k2-root-helpe
 mkdir -p "$R/it/bin"
 cp "$R/target/release/k2-root-helper" "$R/it/bin/k2-root-helper-cur"
 cp "$R/target/release/examples/k2-root-helper-testsign" "$R/it/bin/testsign"
-# A "next" build: same source, the daemon manifest says 0.45.99.
+# A "next" build: same source, the daemon manifest says this release's
+# x.y.99 (always newer than the current build).
 cp crates/k2-daemon/Cargo.toml crates/k2-daemon/Cargo.toml.orig
-sed -i 's/^version = "[0-9.]*"$/version = "0.45.99"/' crates/k2-daemon/Cargo.toml
+NEXT_VER="$(sed -n 's/^version = "\([0-9]*\.[0-9]*\)\.[0-9]*"$/\1.99/p' crates/k2-daemon/Cargo.toml | head -n1)"
+sed -i "s/^version = \"[0-9.]*\"\$/version = \"$NEXT_VER\"/" crates/k2-daemon/Cargo.toml
 cargo build --release -p k2-root-helper --features test-keys --bin k2-root-helper 2>&1 | tail -n 1
 cp "$R/target/release/k2-root-helper" "$R/it/bin/k2-root-helper-next"
 # Unit-test binaries (current version again).

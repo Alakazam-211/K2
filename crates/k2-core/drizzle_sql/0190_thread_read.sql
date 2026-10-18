@@ -76,3 +76,27 @@ FROM overlay_conversations;
 INSERT OR IGNORE INTO read_cursors (person, kind, conv_id, last_read_seq, updated_at)
 SELECT 'owner', 'project', id, last_msg_seq, CAST(strftime('%s', 'now') AS INTEGER)
 FROM project_groups;
+--> statement-breakpoint
+-- A pinned Chat that moves to another conversation (a fresh session, a
+-- resume of an older one, a reset) leaves its old Thread unreachable by
+-- the workspace's address. Whatever was unread there would hold the badge
+-- with no way to open it, so the old conversation turns READ for every
+-- person who has been seen (rounds toward read; a Thread move remaps its
+-- own cursors in k2_core::read_state). Every writer of the pin goes
+-- through this trigger, whichever code path it is.
+CREATE TRIGGER IF NOT EXISTS read_retire_replaced_pin
+AFTER UPDATE OF session_id ON workspace_sessions
+WHEN OLD.session_id IS NOT NULL AND TRIM(OLD.session_id) != ''
+     AND (NEW.session_id IS NULL OR NEW.session_id != OLD.session_id)
+BEGIN
+    UPDATE read_cursors
+       SET last_read_seq = MAX(last_read_seq,
+               (SELECT last_thread_seq FROM overlay_conversations WHERE conversation_id = OLD.session_id)),
+           updated_at = CAST(strftime('%s', 'now') AS INTEGER)
+     WHERE kind = 'thread' AND conv_id = OLD.session_id
+       AND EXISTS (SELECT 1 FROM overlay_conversations WHERE conversation_id = OLD.session_id);
+    INSERT OR IGNORE INTO read_cursors (person, kind, conv_id, last_read_seq, updated_at)
+        SELECT p.person, 'thread', OLD.session_id, c.last_thread_seq, CAST(strftime('%s', 'now') AS INTEGER)
+        FROM read_people p, overlay_conversations c
+        WHERE c.conversation_id = OLD.session_id;
+END;

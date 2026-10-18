@@ -1046,6 +1046,39 @@ mod tests {
         assert_eq!(item(&conn, &owner(), KIND_THREAD, &to, now).expect("to").waiting, 0);
     }
 
+    /// A pinned Chat that moves to another conversation leaves its old
+    /// Thread unreachable by address: it turns read for every seen person
+    /// (no badge anyone can't clear), whatever code path swapped the pin.
+    #[test]
+    fn a_replaced_pin_retires_its_old_threads_unread() {
+        let (g, project) = db();
+        let h = g.handle();
+        let conn = h.lock();
+        ensure_person(&conn, "alice").expect("alice");
+        let old = conv();
+        let new = conv();
+        crate::db::schema::WorkspaceSession::upsert(&conn, &format!("ws-{old}"), &project, None, Some(&old), "claude", "system", "running")
+            .expect("pin old");
+        agent_post(&conn, &old, &project, "left behind 1");
+        agent_post(&conn, &old, &project, "left behind 2");
+        let now = now_secs();
+        assert_eq!(item(&conn, &owner(), KIND_THREAD, &old, now).expect("owner").unread, 2);
+        assert_eq!(item(&conn, &alice(), KIND_THREAD, &old, now).expect("alice").unread, 2);
+        // A fresh session takes the pin (an upsert, like the spawn path).
+        crate::db::schema::WorkspaceSession::upsert(&conn, &format!("ws-{old}"), &project, None, Some(&new), "claude", "system", "running")
+            .expect("pin new");
+        assert_eq!(item(&conn, &owner(), KIND_THREAD, &old, now).expect("owner").unread, 0, "retired for the owner");
+        assert_eq!(item(&conn, &alice(), KIND_THREAD, &old, now).expect("alice").unread, 0, "and for alice");
+        // The new pin's Thread counts as usual; a same-id upsert retires nothing.
+        agent_post(&conn, &new, &project, "fresh");
+        crate::db::schema::WorkspaceSession::upsert(&conn, &format!("ws-{old}"), &project, None, Some(&new), "claude", "system", "running")
+            .expect("same pin");
+        assert_eq!(item(&conn, &owner(), KIND_THREAD, &new, now).expect("owner new").unread, 1);
+        // Clearing the pin (a reset) retires it too.
+        conn.execute("UPDATE workspace_sessions SET session_id = NULL WHERE project_id = ?1", params![project]).expect("clear");
+        assert_eq!(item(&conn, &owner(), KIND_THREAD, &new, now).expect("owner new").unread, 0);
+    }
+
     #[test]
     fn delete_person_forgets_a_user_but_never_the_owner() {
         let (g, _) = db();

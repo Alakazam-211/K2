@@ -291,7 +291,10 @@ fn reapply_skin_door_after_mail_enable(daemon_port: Option<u16>) -> Option<Strin
                 .into(),
         );
     };
-    match k2_core::skin_door::apply(port) {
+    let applied = k2_core::skin_door::apply(port);
+    // front443: the mail Host's route follows (Caddy's, or Stalwart's).
+    crate::front443::rebuild();
+    match applied {
         Ok(_) => None,
         Err(e) => {
             k2_core::log_debug!("[mail] skin-door apply after enable failed: {e}");

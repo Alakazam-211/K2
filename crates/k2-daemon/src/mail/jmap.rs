@@ -711,6 +711,15 @@ impl StalwartClient {
         expect_set_clean("x:NetworkListener/set", &resp)
     }
 
+    /// front443 S5: one `x:NetworkListener/set` update built by
+    /// [`super::front_listener::https_update_args`] (the `https` listener's
+    /// bind and `overrideProxyTrustedNetworks`). Sockets move on the next
+    /// Stalwart restart.
+    pub fn listener_update(&self, args: serde_json::Value) -> Result<(), String> {
+        let resp = self.registry_call("x:NetworkListener/set", args)?;
+        expect_set_clean("x:NetworkListener/set", &resp)
+    }
+
     /// Bind bootstrap/recovery HTTP to loopback `:8080` (never `*:8080`
     /// / `[::]:8080`). Does not touch the public HTTPS listener
     /// (`/login` on :443 is a follow-up — do not close here).
@@ -759,7 +768,9 @@ impl StalwartClient {
         port_plan: &str,
         listeners: &[ListenerInfo],
     ) -> Result<(), String> {
-        let https_bind = super::preflight::https_listener_bind(port_plan);
+        // front443 S5: behind the :443 front a tls-alpn box binds
+        // 127.0.0.1:8443 and trusts the front's PROXY header.
+        let https_body = super::front_listener::https_listener_body(port_plan, k2_core::front443::mail_behind_front());
         let mut destroy: Vec<String> = Vec::new();
         let mut update = serde_json::Map::new();
         let mut create = serde_json::Map::new();
@@ -778,7 +789,7 @@ impl StalwartClient {
                 "https" => {
                     update.insert(
                         l.id.clone(),
-                        serde_json::json!({ "bind": { https_bind: true } }),
+                        https_body.clone(),
                     );
                 }
                 "submission" => has_submission = true,

@@ -113,6 +113,11 @@ pub trait PreflightEnv {
     fn dns01_token_present(&self) -> bool {
         false
     }
+    /// front443 with `--mail`: the daemon's :443 front passes the mail
+    /// names through to Stalwart (plan A behind the front).
+    fn front_mail(&self) -> bool {
+        false
+    }
     /// Can the daemon user `sudo -n` `/usr/local/libexec/k2-mail-helper`?
     /// Every install step needs it. Tests inject; default installed.
     fn mail_helper(&self) -> super::helper::HelperState {
@@ -233,7 +238,18 @@ pub fn run_preflight(env: &dyn PreflightEnv) -> PreflightReport {
     let router_owns = env.router_owns_443();
     let dns01 = env.dns01_token_present();
     let taken = env.port_listener(443);
-    let port_plan = if router_owns && dns01 {
+    let port_plan = if env.front_mail() {
+        checks.push(PreflightCheck {
+            id: "port-443",
+            label: "TLS / port plan",
+            status: CheckStatus::Info,
+            detail: "K2's :443 front passes the mail names through to Stalwart on 127.0.0.1:8443 \
+                     (PROXY v2, real client IPs) — plan A: certificates via ACME TLS-ALPN-01 \
+                     through the front"
+                .into(),
+        });
+        "tls-alpn"
+    } else if router_owns && dns01 {
         checks.push(PreflightCheck {
             id: "port-443",
             label: "TLS / port plan",
@@ -521,6 +537,10 @@ impl PreflightEnv for RealPreflightEnv {
         parse_meminfo_total(&meminfo)
     }
 
+    fn front_mail(&self) -> bool {
+        k2_core::front443::mail_behind_front()
+    }
+
     fn router_owns_443(&self) -> bool {
         if let Ok(door) = k2_core::skin::effective_front_door() {
             if door.mode == "direct" {
@@ -601,6 +621,7 @@ pub(crate) mod tests {
         pub router_owns_443: bool,
         pub dns01_token: bool,
         pub helper: crate::mail::helper::HelperState,
+        pub front_mail: bool,
     }
 
     impl Default for FakeEnv {
@@ -616,6 +637,7 @@ pub(crate) mod tests {
                 router_owns_443: false,
                 dns01_token: false,
                 helper: crate::mail::helper::HelperState::Installed,
+                front_mail: false,
             }
         }
     }
@@ -654,6 +676,33 @@ pub(crate) mod tests {
         fn mail_helper(&self) -> crate::mail::helper::HelperState {
             self.helper
         }
+        fn front_mail(&self) -> bool {
+            self.front_mail
+        }
+    }
+
+    /// front443 S5: with Stalwart behind the :443 front, the plan is A
+    /// (tls-alpn through the front) even though :443 is taken (by the
+    /// front) and Caddy is the box router; https binds 127.0.0.1:8443.
+    #[test]
+    fn behind_the_front_mail_keeps_plan_a_on_loopback() {
+        let env = FakeEnv {
+            front_mail: true,
+            router_owns_443: true,
+            listeners: vec![(443, "systemd (k2-front-443.socket)")],
+            ..FakeEnv::default()
+        };
+        let r = run_preflight(&env);
+        assert_eq!(r.port_plan, Some("tls-alpn"));
+        assert!(check(&r, "port-443").detail.contains("127.0.0.1:8443"), "{}", check(&r, "port-443").detail);
+        assert!(request_tls_certificate("tls-alpn"), "Stalwart's own ACME, through the front");
+        assert_eq!(
+            crate::mail::front_listener::https_listener_body("tls-alpn", true)["bind"],
+            serde_json::json!({"127.0.0.1:8443": true})
+        );
+        // Without the front nothing changes: a taken :443 is plan C.
+        let r = run_preflight(&FakeEnv { front_mail: false, ..env });
+        assert_eq!(r.port_plan, Some("http-01"));
     }
 
     /// Helper missing / not allowed is a hard stop whose detail is the

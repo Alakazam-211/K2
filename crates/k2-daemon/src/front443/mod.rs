@@ -124,7 +124,8 @@ pub async fn start() {
         })
     };
     *live().lock().unwrap_or_else(|p| p.into_inner()) = Some(Live { front, local, source, accept });
-    log_debug!("[front443] holding {local:?} (socket from {source}; cap {})", cap());
+    let held = local.map(|a| a.to_string()).unwrap_or_else(|| "nothing (no local address)".to_string());
+    log_debug!("[front443] holding {held} (socket from {source}; cap {})", cap());
     // Routes now, then on a timer; converge voice onto the passthrough tier.
     tokio::spawn(async move {
         // The live table needs the DB (hosted mail's names): wait for boot

@@ -1011,7 +1011,12 @@
    {
     "name": "hostchat config",
     "usage": "k2 hostchat config --public-url https://HOST [--json]",
-    "description": "Set Sew's server.public_url to a host on this box (its k2.dev label or a bound custom domain), then restart sew. Sew builds password setup links as <public-url>/setup. The voice URL is not set here: k2 hostchat media url."
+    "description": "Set Sew's server.public_url to a host on this box (its k2.dev label or a bound custom domain), then restart sew. Sew builds password setup links as <public-url>/setup. Until it is set, k2 hostchat status (and enable) warn public_url_unset with this fix. The voice URL is not set here: k2 hostchat media url."
+   },
+   {
+    "name": "hostchat meet",
+    "usage": "k2 hostchat meet bind <app-id> | unbind [--json]",
+    "description": "The reserved meet.<box>.k2.dev label (K-M2): bind points it at an installed App's front port, box-level with the tunnel token (K2 Connect needed; one App at a time; POST /cli/sew/meet/bind). Restart the App once so K2_APP_ORIGINS includes it. unbind deletes the label. Manage Sew."
    },
    {
     "name": "hostmail profile",

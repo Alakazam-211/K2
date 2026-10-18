@@ -367,6 +367,8 @@ fn voice_and_users_routes_sit_behind_manage_sew() {
         ("/cli/sew/media/probe", json!({"udp": "ok", "tcp": "ok", "turnTls": "ok"})),
         ("/cli/sew/media/uninstall", json!({})),
         ("/cli/sew/server/config", json!({"publicUrl": "https://hearth.lztek.k2.dev"})),
+        ("/cli/sew/meet/bind", json!({"app": "meetdemo"})),
+        ("/cli/sew/meet/unbind", json!({})),
         ("/cli/sew/users/invite", json!({"user": "bob"})),
         ("/cli/sew/users/owner", json!({"user": "rosson"})),
         ("/cli/sew/users/reset", json!({"user": "bob"})),
@@ -391,6 +393,63 @@ fn voice_and_users_routes_sit_behind_manage_sew() {
     let (st, v) = t.call(&agent("w-it"), "/cli/sew/media/probe", json!({"udp": "yes", "tcp": "ok", "turnTls": "ok"}));
     assert_eq!((st.as_str(), code(&v)), ("400 Bad Request", "bad_request"), "{v}");
     assert!(t.ops.effects().is_empty());
+}
+
+/// K-M2: the reserved `meet` label binds box-level to an installed App's
+/// front port (never through the publish routes), one App at a time, and
+/// unbinds; status shows it.
+#[test]
+fn the_meet_label_binds_to_an_apps_front_port_and_unbinds() {
+    let t = t();
+    let (st, v) = t.call(&agent("w-it"), "/cli/sew/meet/bind", json!({"app": "meetdemo"}));
+    assert_eq!((st.as_str(), code(&v)), ("404 Not Found", "app_not_found"), "{v}");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for (app, port) in [("meetdemo", 38701u16), ("other", 38702)] {
+            let svc = k2_core::published_services::insert(&conn, "w-it", app, "(app)", "/x", 0, "local", "stopped", "cmd", "").unwrap();
+            k2_core::deploy::store::insert_app(
+                &conn,
+                &k2_core::deploy::store::NewApp {
+                    app_id: app,
+                    service_id: &svc.id,
+                    seed_id: None,
+                    owner_workspace: "w-it",
+                    isolation: "process",
+                    memory_limit_bytes: None,
+                    front_port: port,
+                    created_by: "test",
+                },
+            )
+            .unwrap();
+        }
+    }
+    let (st, v) = t.call(&agent("w-it"), "/cli/sew/meet/bind", json!({"app": "MeetDemo"}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["url"], "https://meet.lztek.k2.dev");
+    assert_eq!(v["frontPort"], 38701);
+    assert!(v["hint"].as_str().unwrap().contains("k2 app restart meetdemo"), "{v}");
+    assert_eq!(t.ops.nested.lock().unwrap().last().cloned(), Some(("meet".to_string(), Some("127.0.0.1:38701".to_string()))));
+    let s = t.get(&Who::Owner, "/cli/sew/status").1;
+    assert_eq!(s["meet"]["app"], "meetdemo", "{s}");
+    // One App at a time.
+    let (st, v) = t.call(&Who::Owner, "/cli/sew/meet/bind", json!({"app": "other"}));
+    assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "meet_bound"), "{v}");
+    // Unbind deletes the label and the record.
+    let (st, v) = t.call(&Who::Owner, "/cli/sew/meet/unbind", json!({}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["unbound"], "meetdemo");
+    assert_eq!(t.ops.nested.lock().unwrap().last().cloned(), Some(("meet".to_string(), None)));
+    assert_eq!(t.get(&Who::Owner, "/cli/sew/status").1["meet"], Value::Null);
+    let (st, v) = t.call(&Who::Owner, "/cli/sew/meet/bind", json!({"app": "other"}));
+    assert_eq!(st, "200 OK", "{v}");
+    // No K2 Connect label: refused before any label call.
+    t.call(&Who::Owner, "/cli/sew/meet/unbind", json!({}));
+    *t.ops.label.lock().unwrap() = None;
+    let n = t.ops.nested.lock().unwrap().len();
+    let (st, v) = t.call(&Who::Owner, "/cli/sew/meet/bind", json!({"app": "other"}));
+    assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "no_label"), "{v}");
+    assert_eq!(t.ops.nested.lock().unwrap().len(), n);
 }
 
 #[test]
@@ -443,6 +502,8 @@ fn the_new_sew_routes_are_classified() {
         "/cli/sew/media/probe",
         "/cli/sew/media/uninstall",
         "/cli/sew/server/config",
+        "/cli/sew/meet/bind",
+        "/cli/sew/meet/unbind",
         "/cli/sew/users/invite",
         "/cli/sew/users/owner",
         "/cli/sew/users/reset",

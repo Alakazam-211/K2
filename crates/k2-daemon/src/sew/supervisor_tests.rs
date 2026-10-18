@@ -788,6 +788,8 @@ fn upgrade_machine_with_flip(env: &Env, req: &UpgradeRequest, from: &str, ops: &
         fn frpc_logins(&self) -> u64 { self.inner.frpc_logins() }
         fn voice_load(&self) -> Option<Value> { self.inner.voice_load() }
         fn voice_save(&self, v: Option<&Value>) -> Result<(), String> { self.inner.voice_save(v) }
+        fn record_load(&self, name: &str) -> Option<Value> { self.inner.record_load(name) }
+        fn record_save(&self, name: &str, v: Option<&Value>) -> Result<(), String> { self.inner.record_save(name, v) }
     }
     let w = Watch { inner: ops };
     let env2 = Env { ops: &w, secrets: env.secrets, latch: env.latch, token: env.token };
@@ -938,6 +940,7 @@ fn backups_list_and_run_over_mgmt_not_the_helper() {
 fn a_missing_key_mirror_is_a_setup_warning_but_a_stale_dir_mirror_degrades() {
     let t = t();
     t.enabled();
+    t.ops.records.lock().unwrap().insert("server".into(), json!({"publicUrl": "https://hearth.lztek.k2.dev"}));
     store::update(1, |r| {
         r.ship_kind = "dir".into();
         r.recovery_shown_at = Some(1);

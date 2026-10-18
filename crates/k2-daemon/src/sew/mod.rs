@@ -37,6 +37,7 @@
 //!
 //! Not here yet: host / mirror / ship / app-url routes (S32).
 
+pub mod meet;
 pub mod ops;
 pub mod routes;
 pub mod secrets;

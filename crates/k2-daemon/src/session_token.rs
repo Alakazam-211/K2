@@ -722,6 +722,8 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/sew/media/renew",
         "/cli/sew/media/probe",
         "/cli/sew/media/uninstall",
+        "/cli/sew/meet/bind",
+        "/cli/sew/meet/unbind",
         "/cli/sew/users",
         "/cli/sew/users/owner",
         "/cli/sew/users/invite",

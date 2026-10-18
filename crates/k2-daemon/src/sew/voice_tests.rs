@@ -411,6 +411,8 @@ fn other_renewal_failures_back_off_and_never_fight_a_lifecycle_step() {
 fn status_maps_voice_into_the_server_verdict() {
     let t = t();
     t.voice();
+    // Sew's public URL is set (its own warning has its own test).
+    t.ops.records.lock().unwrap().insert("server".into(), json!({"publicUrl": "https://hearth.lztek.k2.dev"}));
     // Clear the chat-side K2 alarms (no off-box backups, recovery key).
     store::update(1, |r| {
         r.ship_kind = "dir".into();
@@ -524,6 +526,33 @@ fn server_config_sets_only_the_public_url_and_setup_links_follow_it() {
         assert!(crate::sew::supervisor::server_config(&t.env(), bad).is_err(), "{bad}");
     }
     assert!(t.ops.effects().is_empty());
+    // K2 remembers what it set; a refused value never replaces it.
+    assert_eq!(crate::sew::supervisor::public_url(&t.env()).as_deref(), Some("https://hearth.lztek.k2.dev"));
+}
+
+/// 0.46.1: while Sew's public URL is unset, status (and so `enable`, which
+/// ends on status) warns, with the fix command; set, the warning goes and
+/// status reports the URL.
+#[test]
+fn status_warns_until_the_public_url_is_set_and_names_the_fix() {
+    let t = t();
+    t.ops.mgmt_status.lock().unwrap()["provider"] = json!("standalone");
+    t.enable_with(Some("standalone")).unwrap();
+    let s = crate::sew::supervisor::status(&t.env(), false);
+    let w: Vec<&Value> = s["warnings"].as_array().unwrap().iter().filter(|w| w["code"] == "public_url_unset").collect();
+    assert_eq!(w.len(), 1, "{}", s["warnings"]);
+    assert_eq!(w[0]["fix"], "k2 hostchat config --public-url https://<app>.lztek.k2.dev");
+    assert!(w[0]["message"].as_str().unwrap().contains("k2 hostchat config --public-url"), "{}", w[0]);
+    assert_eq!(s["publicUrl"], Value::Null);
+    crate::sew::supervisor::server_config(&t.env(), "https://hearth.lztek.k2.dev").unwrap();
+    let s = crate::sew::supervisor::status(&t.env(), false);
+    assert!(!s["warnings"].to_string().contains("public_url_unset"), "{}", s["warnings"]);
+    assert_eq!(s["publicUrl"], "https://hearth.lztek.k2.dev");
+    // No K2 Connect label: the fix names a generic host.
+    *t.ops.label.lock().unwrap() = None;
+    t.ops.records.lock().unwrap().clear();
+    let s = crate::sew::supervisor::status(&t.env(), false);
+    assert!(s["warnings"].to_string().contains("--public-url https://<host>"), "{}", s["warnings"]);
 }
 
 #[test]

@@ -301,6 +301,21 @@ impl Ptyd {
             if n > 0 {
                 crate::log_debug!("[ptyd] ended {} session(s) left by a previous daemon (no adoption before S3)", n);
             }
+            // P3: prune old versioned copies, keeping the current one and
+            // the running ptyd's image.
+            let mut keep = Vec::new();
+            if let Ok(cur) = run_location(&self.paths.home) {
+                keep.push(cur);
+            }
+            if let Some(exe) = self.ptyd_pid().and_then(exe_of) {
+                keep.push(exe);
+            }
+            if !keep.is_empty() {
+                let pruned = prune_versioned(&self.paths.home, &keep);
+                if pruned > 0 {
+                    crate::log_debug!("[ptyd] pruned {} old versioned cop{}", pruned, if pruned == 1 { "y" } else { "ies" });
+                }
+            }
         }
         *g = Some(Arc::clone(&o));
         Ok(o)
@@ -369,6 +384,57 @@ fn place_binary(home: &Path, from_env: bool, embedded: Option<(&[u8], &str)>) ->
     versioned_copy(home, &bytes, &hash).map_err(|e| format!("copy_bin:{}", e.kind()))
 }
 
+/// P3: delete versioned copies under `<home>/bin/ptyd/` except the dirs of
+/// the paths in `keep` (the current copy and the running ptyd's image).
+/// Returns how many were removed.
+pub fn prune_versioned(home: &Path, keep: &[PathBuf]) -> usize {
+    let root = home.join("bin").join("ptyd");
+    let keep_dirs: Vec<PathBuf> = keep
+        .iter()
+        .filter_map(|p| p.parent().map(|d| std::fs::canonicalize(d).unwrap_or_else(|_| d.to_path_buf())))
+        .collect();
+    let Ok(rd) = std::fs::read_dir(&root) else { return 0 };
+    let mut removed = 0;
+    for e in rd.flatten() {
+        let p = e.path();
+        if !p.is_dir() {
+            continue;
+        }
+        let canon = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+        if keep_dirs.contains(&canon) {
+            continue;
+        }
+        if std::fs::remove_dir_all(&p).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// The executable path of a running process (the live ptyd's image).
+pub fn exe_of(pid: i32) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut buf = vec![0u8; 4096];
+        // SAFETY: proc_pidpath writes at most buf.len() bytes.
+        let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr() as *mut libc::c_void, buf.len() as u32) };
+        if n <= 0 {
+            return None;
+        }
+        buf.truncate(n as usize);
+        Some(PathBuf::from(String::from_utf8_lossy(&buf).into_owned()))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 pub fn versioned_copy(home: &Path, bytes: &[u8], hash: &str) -> io::Result<PathBuf> {
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     let dir = home.join("bin").join("ptyd").join(format!("{}-{}", proto::PTYD_VERSION, &hash[..12]));
@@ -412,6 +478,26 @@ mod tests {
         versioned_copy(&home, &a, &ha).unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), a, "a hash mismatch is rewritten");
         std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn prune_keeps_current_and_running_copies_only() {
+        let home = std::env::temp_dir().join(format!("k2-ptyd-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let a = versioned_copy(&home, b"a-image", &auth::sha256_hex(b"a-image")).unwrap();
+        let b = versioned_copy(&home, b"b-image", &auth::sha256_hex(b"b-image")).unwrap();
+        let c = versioned_copy(&home, b"c-image", &auth::sha256_hex(b"c-image")).unwrap();
+        assert_eq!(prune_versioned(&home, &[a.clone(), c.clone()]), 1);
+        assert!(a.exists() && c.exists() && !b.exists());
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn exe_of_reports_our_own_image() {
+        // SAFETY: getpid.
+        let me = exe_of(unsafe { libc::getpid() }).expect("own exe");
+        assert_eq!(std::fs::canonicalize(me).unwrap(), std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap());
     }
 
     #[test]

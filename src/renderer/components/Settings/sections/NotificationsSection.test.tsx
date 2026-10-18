@@ -23,6 +23,23 @@ const cli = vi.hoisted(() => ({
 
 const events = vi.hoisted(() => ({ handlers: new Set<() => void>() }))
 
+// `/cli/settings` for the Message previews row. `settings` is what the
+// focused server's GET returns; `updates` records each write.
+const appSettings = vi.hoisted(() => ({
+  settings: {} as Json,
+  updates: [] as Json[],
+  updateError: null as Error | null,
+}))
+vi.mock('@/lib/daemon-settings', () => ({
+  settingsGet: vi.fn(async () => appSettings.settings),
+  settingsUpdate: vi.fn(async (u: Json) => {
+    appSettings.updates.push(u)
+    if (appSettings.updateError) throw appSettings.updateError
+    appSettings.settings = { ...appSettings.settings, ...u }
+    return appSettings.settings
+  }),
+}))
+
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(async () => undefined),
@@ -61,6 +78,7 @@ vi.mock('@/stores/session-events', async (orig) => ({
 }))
 
 import { NotificationsSection, NOTIFICATIONS_MANIFEST, ownerHint } from './NotificationsSection'
+import { PUSH_PREVIEWS_HINT, PUSH_PREVIEWS_LABEL, pushPreviewsValue } from './PushPreviewsRow'
 import { parseNotifyPrefs, sourceLabel } from './notify-api'
 import { useIsYouAuthor } from './useNotifyPrefs'
 import { settingsNav } from '../Settings'
@@ -149,6 +167,9 @@ beforeEach(() => {
   cli.adminError = null
   cli.postError = null
   events.handlers.clear()
+  appSettings.settings = {}
+  appSettings.updates = []
+  appSettings.updateError = null
 })
 
 afterEach(() => {
@@ -488,5 +509,74 @@ describe('notify-api shapes', () => {
       ['p-docs', 'default', null],
     ])
     expect(parseNotifyPrefs({ push: 'nope' }).push).toBeNull()
+  })
+})
+
+describe('Settings → Notifications: message previews (pushMessagePreviews)', () => {
+  it('reads the key: a boolean is the value, absent or not a boolean is null (row hidden)', () => {
+    expect(pushPreviewsValue({ pushMessagePreviews: true })).toBe(true)
+    expect(pushPreviewsValue({ pushMessagePreviews: false })).toBe(false)
+    expect(pushPreviewsValue({})).toBeNull()
+    expect(pushPreviewsValue({ pushMessagePreviews: 'yes' })).toBeNull()
+    expect(pushPreviewsValue(null)).toBeNull()
+  })
+
+  it('the owner sees the switch with the relay copy when the server has the key', async () => {
+    appSettings.settings = { pushMessagePreviews: true }
+    render(<NotificationsSection />)
+    const sw = (await screen.findByRole('switch', { name: PUSH_PREVIEWS_LABEL })) as HTMLButtonElement
+    expect(sw.getAttribute('aria-checked')).toBe('true')
+    const row = screen.getByTestId('notifications-push-previews')
+    expect(within(row).getByText(PUSH_PREVIEWS_HINT)).toBeTruthy()
+    expect(PUSH_PREVIEWS_HINT).toContain("K2's push relay and Apple or Google")
+    expect(screen.getByText('Message previews')).toBeTruthy()
+  })
+
+  it('hidden (title too) on a server whose settings lack the key', async () => {
+    appSettings.settings = { defaultAgent: 'claude' }
+    render(<NotificationsSection />)
+    await loaded()
+    await waitFor(() => expect(screen.getByTestId('notifications-defaults')).toBeTruthy())
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.queryByTestId('notifications-push-previews')).toBeNull()
+    expect(screen.queryByText('Message previews')).toBeNull()
+    expect(screen.queryByRole('switch', { name: PUSH_PREVIEWS_LABEL })).toBeNull()
+  })
+
+  it('an Admin sees it; a Member does not', async () => {
+    appSettings.settings = { pushMessagePreviews: false }
+    asAdmin()
+    render(<NotificationsSection />)
+    const sw = await screen.findByRole('switch', { name: PUSH_PREVIEWS_LABEL })
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    cleanup()
+    asMember()
+    render(<NotificationsSection />)
+    await loaded()
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.queryByTestId('notifications-push-previews')).toBeNull()
+  })
+
+  it('the toggle writes pushMessagePreviews through /cli/settings/update', async () => {
+    appSettings.settings = { pushMessagePreviews: true }
+    render(<NotificationsSection />)
+    const sw = await screen.findByRole('switch', { name: PUSH_PREVIEWS_LABEL })
+    fireEvent.click(sw)
+    await waitFor(() => expect(appSettings.updates).toEqual([{ pushMessagePreviews: false }]))
+    await waitFor(() => expect(sw.getAttribute('aria-checked')).toBe('false'))
+  })
+
+  it('a refused write reverts the switch and shows why', async () => {
+    appSettings.settings = { pushMessagePreviews: true }
+    appSettings.updateError = new Error('settings_update 403: pushMessagePreviews needs Admin')
+    render(<NotificationsSection />)
+    const sw = await screen.findByRole('switch', { name: PUSH_PREVIEWS_LABEL })
+    fireEvent.click(sw)
+    await waitFor(() => expect(screen.getByText(/needs Admin/)).toBeTruthy())
+    expect(sw.getAttribute('aria-checked')).toBe('true')
   })
 })

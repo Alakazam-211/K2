@@ -14,7 +14,7 @@
 #   - garden template: Start with the default (texting) and back to blank,
 #     same id/name/place, the old file kept in history, idempotent, a file
 #     with its own widgets needs --force, GET is 405;
-#   - themes (K2's are basic, paper, midnight; a saved `default` pick reads
+#   - themes (K2's are basic, paper, midnight, haunted, glass; a saved `default` pick reads
 #     as basic, quietly): list/next/prev/set/new, per-Garden picks, an unknown name
 #     exits 1, reset --theme clears an override, and a curl-only switch (no
 #     CLI, no client) shows up in /cli/zen/get;
@@ -434,10 +434,16 @@ capture zen theme next
 assert_eq "next goes to midnight" "$out" "theme midnight for this computer"
 capture zen theme next
 assert_eq "next goes to haunted (the Diary's study)" "$out" "theme haunted for this computer"
+# Glass is built in since 0.46.0 (Garden 1's default theme, K2 Companion's
+# look; Rosson 2026-10-16, kept 2026-10-18), last in the cycle.
+capture zen theme next
+assert_eq "next goes to glass (Garden 1's look)" "$out" "theme glass for this computer"
 capture zen theme next
 assert_eq "next wraps to basic" "$out" "theme basic for this computer"
 capture zen theme prev
-assert_eq "prev wraps to haunted" "$out" "theme haunted for this computer"
+assert_eq "prev wraps to glass" "$out" "theme glass for this computer"
+capture zen theme prev
+assert_eq "prev goes back to haunted" "$out" "theme haunted for this computer"
 capture zen theme prev
 assert_eq "prev goes back to midnight" "$out" "theme midnight for this computer"
 capture zen theme set neon
@@ -489,7 +495,7 @@ import json, sys
 d = json.load(sys.stdin)
 t = d["theme"]
 print(t["name"], t["builtin"], t["tokens"]["colors"]["dark"]["accent"], t["font"]["family"], "bg" if "background" in t else "nobg", ",".join(x["name"] for x in d["themes"]))')"
-assert_eq "get shows the curl switch" "$got" "sunset False #ff9e64 system nobg basic,paper,midnight,haunted,sunset"
+assert_eq "get shows the curl switch" "$got" "sunset False #ff9e64 system nobg basic,paper,midnight,haunted,glass,sunset"
 code="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/cli/zen/theme/set?token=$TOKEN")"
 assert_eq "GET theme/set is 405" "$code" "405"
 code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/cli/zen/theme/set?token=$TOKEN" --data-raw '{"name":"neon"}')"

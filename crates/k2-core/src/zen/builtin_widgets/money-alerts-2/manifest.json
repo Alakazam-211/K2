@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "Money alerts",
+  "description": "Money that needs a person: past-due subscriptions (states only by default: no amounts), canceled subscriptions still routing, and the Stripe reconcile.",
+  "entry": "index.html",
+  "caps": [
+    "sources:read"
+  ],
+  "reasons": {
+    "sources:read": "to show the sources this card's config names (config.source, config.sources)"
+  },
+  "sources": "config"
+}

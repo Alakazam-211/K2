@@ -35,6 +35,9 @@ use crate::cli_response::CliResponse;
 use crate::vault::actor::VaultCaller;
 use crate::vault_handoff_routes::{self as routes, Prepared, SendError};
 
+/// The `Custom` kind of a signed unsend (§9, H5).
+pub const REVOKE_KIND: &str = "vault-handoff-revoke/1";
+
 /// Body cap on the two vault federation routes (§5.3, H8).
 pub const MAX_BODY_BYTES: usize = 160 * 1024;
 /// Handoffs a peer may send in an hour (H17).
@@ -156,7 +159,8 @@ pub fn handle_vault_handoff(body: &[u8]) -> CliResponse {
     let signal = ingested.signal;
     let payload = match &signal.kind {
         SignalKind::Custom { kind, payload } if kind == vr::HANDOFF_KIND => payload.clone(),
-        _ => return reply("400 Bad Request", "wrong_kind", "this route takes vault-handoff/1 only"),
+        SignalKind::Custom { kind, payload } if kind == REVOKE_KIND => return receive_revoke(&vault, &peer_fp, &host, &signal, payload),
+        _ => return reply("400 Bad Request", "wrong_kind", "this route takes vault-handoff/1 and vault-handoff-revoke/1 only"),
     };
     let sender_agent = match &signal.from {
         AgentAddress::Agent { name, .. } => name.trim().to_ascii_lowercase(),
@@ -261,6 +265,7 @@ pub fn handle_vault_handoff(body: &[u8]) -> CliResponse {
         }
     };
     let rec = got.record;
+    routes::close_answered_ask(&vault, &rec, replied);
     let landed_name = rec.landed_name.clone().unwrap_or_else(|| rec.name.clone());
     let label = crate::vault::workspace_label(&to_ws);
     routes::audit(
@@ -281,6 +286,39 @@ pub fn handle_vault_handoff(body: &[u8]) -> CliResponse {
         })
         .to_string(),
     )
+}
+
+/// A peer takes back a delivery it sent us (§9): only the peer the row
+/// came from; the copy is disabled if it is still the version that
+/// delivery wrote; a pending copy is dropped and its card closed.
+fn receive_revoke(vault: &LocalVault, peer_fp: &str, host: &str, signal: &AgentSignal, payload: &Value) -> CliResponse {
+    let id = payload.get("deliveryId").and_then(Value::as_str).unwrap_or_default();
+    let sender_agent = match &signal.from {
+        AgentAddress::Agent { name, .. } => name.trim().to_ascii_lowercase(),
+        _ => "peer".to_string(),
+    };
+    let peer_addr = crate::federation_routes::federated_from_label(&sender_agent, host);
+    let before = match vault.handoff_get(id, "in") {
+        Ok(r) => r,
+        Err(e) => return vault_reply(&e),
+    };
+    match vault.handoff_unsend(id, Some(peer_fp), &format!("handoff:{peer_addr}")) {
+        Ok((r, disabled)) => {
+            if let Some(card) = before.card.as_deref() {
+                crate::overlay_routes::close_handoff_card(card, "unsent", None, None);
+            }
+            routes::audit(
+                &format!("handoff:{peer_addr}"),
+                &format!("ok unsend {} from {peer_addr} {id}{}", r.name, if disabled { " (copy disabled)" } else { "" }),
+                "federation",
+            );
+            CliResponse::ok_json(json!({ "status": "unsent", "deliveryId": id, "disabled": disabled, "reason": r.reason }).to_string())
+        }
+        Err(e) => {
+            routes::audit(&format!("handoff:{peer_addr}"), &format!("deny unsend {id} from {peer_addr}: {}", e.code), "federation");
+            vault_reply(&e)
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -622,6 +660,133 @@ pub(crate) fn send_remote(
             routes::audit(&stamp, &format!("ok send {} to {to_addr} {delivery_id} {status}", item.name), ingress);
             Ok(routes::send_answer(&out, &to_addr, true, None))
         }
+    }
+}
+
+/// A pinned, Trusted peer by the host the caller typed.
+fn trusted_peer(host: &str) -> Result<FederationPeer, VaultError> {
+    if !federation::enabled() {
+        return Err(VaultError::new("federation_off", 422, "federation is off on this server; turn it on and pair first"));
+    }
+    let store = PeerStore::load().map_err(|e| VaultError::internal(format!("peer store: {e}")))?;
+    let peer = store
+        .list()
+        .iter()
+        .find(|p| crate::federation_routes::peer_matches_user_host(p, host))
+        .cloned()
+        .ok_or_else(|| VaultError::not_found(format!("no paired server matches {host} (k2 fed peers)")))?;
+    if peer.trust != PeerTrust::Trusted {
+        return Err(VaultError::forbidden("not_connected", format!("{host} isn't trusted yet")));
+    }
+    Ok(peer)
+}
+
+/// `k2 vault ask agent::host NAME` (§4.3): the ask is a plain signed
+/// federation message (no secret), sent like `k2 msg agent::host`, and an
+/// `ask_out` row records who may answer. Returns (peer address, delivered).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ask_remote(
+    vault: &LocalVault,
+    c: &VaultCaller,
+    asker_ws: &str,
+    asker: &str,
+    agent: &str,
+    host: &str,
+    id: &str,
+    name: &str,
+    note: &str,
+) -> Result<(String, bool), VaultError> {
+    let peer = trusted_peer(host)?;
+    let roster = crate::federation_routes::handle_peer_roster(&peer.fingerprint);
+    if !roster.status.starts_with("200") {
+        return Err(VaultError::new("peer_unreachable", 502, format!("{host}'s roster didn't answer ({})", roster.status)));
+    }
+    let to_ws = crate::federation_routes::workspace_id_from_roster_body(&roster.body, agent).map_err(VaultError::not_found)?;
+    let handle = crate::federation_routes::handle_for_workspace_in_roster_body(&roster.body, &to_ws).unwrap_or_else(|| agent.to_string());
+    let peer_addr = crate::federation_routes::federated_from_label(&handle, &crate::federation_routes::peer_host(&peer));
+    let path = crate::vault::workspace_path(asker_ws).unwrap_or_else(|| asker_ws.to_string());
+    vault.handoff_record_ask(ask_row_remote(id, asker_ws, &peer_addr, &c.actor.stamp(), name, note, &peer.fingerprint))?;
+    let text = routes::ask_text(id, asker, name, note, "<the address in the [from …] line>");
+    let body = json!({ "to": format!("{}::{to_ws}::{handle}", peer.fingerprint), "text": text, "from_workspace": path });
+    let resp = crate::federation_routes::handle_send(body.to_string().as_bytes());
+    if !resp.status.starts_with("200") {
+        let _ = vault.handoff_close_ask(id, "ask_out", "refused");
+        let v: Value = serde_json::from_str(&resp.body).unwrap_or(Value::Null);
+        let code = v.get("error").and_then(|e| e.get("code")).and_then(Value::as_str).unwrap_or("");
+        return Err(if code == "not_connected" || resp.status.starts_with("403") {
+            VaultError::forbidden("not_connected", format!("{handle}::{host} isn't one of your connections (k2 connections add)"))
+        } else {
+            VaultError::new("peer_refused", 502, format!("{host} didn't take the ask ({})", resp.status))
+        });
+    }
+    let v: Value = serde_json::from_str(&resp.body).unwrap_or(Value::Null);
+    Ok((peer_addr, v.get("status").and_then(Value::as_str) == Some("sent")))
+}
+
+fn ask_row_remote(id: &str, ws: &str, peer_addr: &str, actor: &str, name: &str, note: &str, peer_fp: &str) -> HandoffRecord {
+    let mut r = HandoffRecord {
+        delivery_id: id.to_string(),
+        direction: "ask_out".into(),
+        status: String::new(),
+        local_workspace_id: ws.to_string(),
+        peer_addr: peer_addr.to_string(),
+        peer_fp: Some(peer_fp.to_string()),
+        sender_actor: actor.to_string(),
+        source_vault_id: None,
+        name: name.to_string(),
+        landed_name: None,
+        kind: "api_key".into(),
+        note: note.to_string(),
+        reply_to: None,
+        item: handoff::HandoffItem {
+            name: name.to_string(),
+            as_name: None,
+            kind: "api_key".into(),
+            hosts: vec![],
+            inject: None,
+            description: String::new(),
+            delivery: "fetch".into(),
+            ceiling: "env".into(),
+            human_given: false,
+            ttl_secs: None,
+        },
+        secret_id: None,
+        version: None,
+        reason: None,
+        card: None,
+        created_at: String::new(),
+        decided_at: None,
+        decided_by: None,
+        expires_at: None,
+    };
+    r.reason = None;
+    r
+}
+
+/// Unsend across servers (§9): a signed `vault-handoff-revoke/1` on the
+/// vault-handoff route. Returns (copy disabled, kept because replaced).
+pub(crate) fn unsend_remote(out: &HandoffRecord) -> Result<(bool, bool), VaultError> {
+    let fp = out.peer_fp.as_deref().unwrap_or_default();
+    let store = PeerStore::load().map_err(|e| VaultError::internal(format!("peer store: {e}")))?;
+    let peer = store.get(fp).cloned().ok_or_else(|| VaultError::not_found("that server isn't paired any more"))?;
+    let host = crate::federation_routes::peer_host(&peer);
+    let base = crate::federation_routes::gated_peer_base_url(&peer).map_err(|e| VaultError::forbidden("not_connected", e))?;
+    let from_handle = crate::vault::workspace_label(&out.local_workspace_id).to_ascii_lowercase();
+    let signal = AgentSignal {
+        delivery: Delivery::Inbox,
+        ..AgentSignal::new(
+            AgentAddress::Agent { workspace: WorkspaceId(out.local_workspace_id.clone()), name: from_handle },
+            AgentAddress::Agent { workspace: WorkspaceId(format!("peer:{fp}")), name: "vault".into() },
+            SignalKind::Custom { kind: REVOKE_KIND.to_string(), payload: json!({ "deliveryId": out.delivery_id }) },
+        )
+    };
+    let bytes = sign_signal(&peer, &signal)?;
+    match post_handoff(&base, bytes, &host)? {
+        Answer::Ok(v) => Ok((
+            v.get("disabled").and_then(Value::as_bool).unwrap_or(false),
+            v.get("reason").and_then(Value::as_str) == Some("unsent_kept_replaced"),
+        )),
+        Answer::Refused(status, code, hint) => Err(refused_error(status, &code, &hint, &host)),
     }
 }
 

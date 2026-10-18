@@ -437,3 +437,83 @@ fn peer_vault_cache_reports_a_changed_recipient() {
     t.v.peer_vault_forget("fp1").expect("forget");
     assert!(t.v.peer_vault("fp1").is_none());
 }
+
+// ── H5: asks and unsend ─────────────────────────────────────────────
+
+fn ask_row(ws: &str, peer: &str, name: &str) -> HandoffRecord {
+    HandoffRecord {
+        delivery_id: new_ask_id(),
+        direction: "ask_out".into(),
+        status: String::new(),
+        local_workspace_id: ws.into(),
+        peer_addr: peer.into(),
+        peer_fp: None,
+        sender_actor: "agent:ws-ops/s1".into(),
+        source_vault_id: None,
+        name: name.into(),
+        landed_name: None,
+        kind: "api_key".into(),
+        note: String::new(),
+        reply_to: None,
+        item: item(name),
+        secret_id: None,
+        version: None,
+        reason: None,
+        card: None,
+        created_at: String::new(),
+        decided_at: None,
+        decided_by: None,
+        expires_at: None,
+    }
+}
+
+#[test]
+fn an_open_ask_matches_only_its_peer_and_name_and_closes() {
+    let t = open("ho-ask");
+    let v = &t.v;
+    let a = v.handoff_record_ask(ask_row("ws-ops", "sales", "STRIPE_KEY")).expect("ask");
+    assert!(valid_ask_id(&a.delivery_id));
+    assert_eq!(a.status, "open");
+    assert!(v.handoff_ask_matches(&a.delivery_id, "ws-ops", "sales", "STRIPE_KEY"));
+    assert!(!v.handoff_ask_matches(&a.delivery_id, "ws-ops", "billing", "STRIPE_KEY"), "another sender");
+    assert!(!v.handoff_ask_matches(&a.delivery_id, "ws-ops", "sales", "OTHER"), "another name");
+    assert!(!v.handoff_ask_matches(&a.delivery_id, "ws-x", "sales", "STRIPE_KEY"), "another workspace");
+    assert!(v.handoff_close_ask(&a.delivery_id, "ask_out", "answered").expect("close"));
+    assert!(!v.handoff_ask_matches(&a.delivery_id, "ws-ops", "sales", "STRIPE_KEY"), "answered once");
+    // Expiry closes an ask.
+    let b = v.handoff_record_ask(ask_row("ws-ops", "sales", "K2")).expect("ask");
+    v.handoff_backdate_for_tests(&b.delivery_id, "ask_out").expect("backdate");
+    assert!(!v.handoff_ask_matches(&b.delivery_id, "ws-ops", "sales", "K2"), "past 7 days");
+    v.handoff_tick().expect("tick");
+    assert_eq!(v.handoff_get(&b.delivery_id, "ask_out").expect("row").status, "expired");
+}
+
+#[test]
+fn unsend_disables_the_copy_it_wrote_and_leaves_a_replacement_alone() {
+    let t = open("ho-unsend");
+    let v = &t.v;
+    let mut inc = incoming("ws-ops", item("K_UNSEND"), "sales::rosson.k2.dev", true);
+    inc.peer_fp = Some("fp-sales".into());
+    let r = v.handoff_receive(inc, SecretBytes::from_slice(SENTINEL.as_bytes())).expect("land");
+    let id = r.record.delivery_id.clone();
+    // Another server can't take it back.
+    assert_eq!(v.handoff_unsend(&id, Some("fp-mallory"), "x").expect_err("peer").code, "not_yours");
+    let (row, disabled) = v.handoff_unsend(&id, Some("fp-sales"), "handoff:sales::rosson.k2.dev").expect("unsend");
+    assert!(disabled);
+    assert_eq!(row.status, "unsent");
+    let m = v.meta(&Selector::user(Scope::workspace("ws-ops"), "K_UNSEND"), &Actor::Owner).expect("meta");
+    assert_eq!(m.status, SecretStatus::Disabled);
+    // A copy the owner replaced since is left alone.
+    let r = v.handoff_receive(incoming("ws-ops", item("K_KEEP"), "sales", true), SecretBytes::from_slice(SENTINEL.as_bytes())).expect("land");
+    v.rotate(&Selector::user(Scope::workspace("ws-ops"), "K_KEEP"), SecretBytes::from_slice(b"owners-own-new-value"), &Actor::Owner).expect("rotate");
+    let (row, disabled) = v.handoff_unsend(&r.record.delivery_id, None, "agent:ws-sales/s").expect("unsend");
+    assert!(!disabled);
+    assert_eq!(row.reason.as_deref(), Some("unsent_kept_replaced"));
+    assert_eq!(value(v, "ws-ops", "K_KEEP"), b"owners-own-new-value");
+    // A pending copy is dropped with its value.
+    let p = v.handoff_receive(incoming("ws-ops", item("K_PEND"), "sales", false), SecretBytes::from_slice(SENTINEL.as_bytes())).expect("pend");
+    let (row, _) = v.handoff_unsend(&p.record.delivery_id, None, "agent:ws-sales/s").expect("unsend");
+    assert_eq!(row.status, "unsent");
+    assert!(!v.handoff_has_value(&p.record.delivery_id));
+    assert_eq!(v.handoff_unsend(&p.record.delivery_id, None, "x").expect_err("twice").code, "not_unsendable");
+}

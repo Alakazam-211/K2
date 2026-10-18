@@ -73,6 +73,16 @@ pub fn new_delivery_id() -> String {
     format!("hd_{}", uuid::Uuid::new_v4().simple())
 }
 
+/// A new ask id (`ha_<uuid>`, §4.3).
+pub fn new_ask_id() -> String {
+    format!("ha_{}", uuid::Uuid::new_v4().simple())
+}
+
+/// `ha_` + 32 hex characters.
+pub fn valid_ask_id(id: &str) -> bool {
+    id.strip_prefix("ha_").is_some_and(|h| h.len() == 32 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 /// `hd_` + 32 hex characters.
 pub fn valid_delivery_id(id: &str) -> bool {
     id.strip_prefix("hd_").is_some_and(|h| h.len() == 32 && h.bytes().all(|b| b.is_ascii_hexdigit()))

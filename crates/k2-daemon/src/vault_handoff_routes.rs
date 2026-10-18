@@ -34,11 +34,17 @@ pub const INCOMING: &str = "/cli/vault/incoming";
 pub const DECIDE: &str = "/cli/vault/incoming/decide";
 pub const SENT: &str = "/cli/vault/sent";
 pub const ACCEPT_FROM: &str = "/cli/vault/accept-from";
+/// H5: ask an agent for a secret (a stamp message, never a value).
+pub const ASK: &str = "/cli/vault/ask";
+/// H5: this workspace's open and closed asks.
+pub const ASKS: &str = "/cli/vault/asks";
+/// H5: take back a delivery (not a revoke: the key may be in use).
+pub const UNSEND: &str = "/cli/vault/unsend";
 
 /// Routes this module serves.
-pub const ROUTES: &[&str] = &[SEND, INCOMING, DECIDE, SENT, ACCEPT_FROM];
+pub const ROUTES: &[&str] = &[SEND, INCOMING, DECIDE, SENT, ACCEPT_FROM, ASK, ASKS, UNSEND];
 /// POST-only routes among them (`accept-from` serves both).
-pub const POST_ROUTES: &[&str] = &[SEND, DECIDE];
+pub const POST_ROUTES: &[&str] = &[SEND, DECIDE, ASK, UNSEND];
 
 /// The auth-audit event every handoff line uses (Settings → Logs → Access
 /// Audit filters on it).
@@ -67,6 +73,9 @@ pub fn handle(
         DECIDE => decide(vault, c, body, ingress),
         ACCEPT_FROM if body.iter().all(|b| b.is_ascii_whitespace()) => accept_from_get(vault, c, params),
         ACCEPT_FROM => accept_from_post(vault, c, body, ingress),
+        ASK => ask(vault, c, body, ingress),
+        ASKS => asks(vault, c, params),
+        UNSEND => unsend(vault, c, body, ingress),
         _ => Err(VaultError::not_found("no such vault route")),
     };
     match r {
@@ -344,14 +353,22 @@ pub(crate) fn local_sender_keys(ws: &str) -> Vec<String> {
     out
 }
 
-/// A reply to an ask this workspace made? (H5 asks; none recorded yet in
-/// this version, so only an explicit open `ask_out` row would match.)
+/// A reply to an open ask this workspace made, from the asked address,
+/// for the asked name (H5, R1: it lands straight in).
 pub(crate) fn reply_matches(vault: &LocalVault, ws: &str, reply_to: Option<&str>, peer_addr: &str, name: &str) -> bool {
-    let Some(id) = reply_to else { return false };
-    vault
-        .handoff_get(id, "ask_out")
-        .map(|a| a.local_workspace_id == ws && a.status == "open" && a.peer_addr == peer_addr && a.name == name)
-        .unwrap_or(false)
+    match reply_to {
+        Some(id) => vault.handoff_ask_matches(id, ws, peer_addr, name),
+        None => false,
+    }
+}
+
+/// After a receive: a landed reply answers its ask.
+pub(crate) fn close_answered_ask(vault: &LocalVault, rec: &HandoffRecord, replied: bool) {
+    if let (true, "landed", Some(id)) = (replied, rec.status.as_str(), rec.reply_to.as_deref()) {
+        if let Err(e) = vault.handoff_close_ask(id, "ask_out", "answered") {
+            k2_core::log_debug!("[vault-handoff] close ask {id}: {}", e.code);
+        }
+    }
 }
 
 fn send_local(vault: &Arc<LocalVault>, c: &VaultCaller, token: &str, prep: Prepared, reply_to: Option<String>, ingress: &str) -> Result<Value, SendError> {
@@ -372,8 +389,8 @@ fn send_local(vault: &Arc<LocalVault>, c: &VaultCaller, token: &str, prep: Prepa
     }
     let sender_label = crate::vault::workspace_label(&sender_ws);
     let stamp = c.actor.stamp();
-    let auto = vault.accepts_from(&target_id, &local_sender_keys(&sender_ws))
-        || reply_matches(vault, &target_id, reply_to.as_deref(), &sender_label, &item.name);
+    let replied = reply_matches(vault, &target_id, reply_to.as_deref(), &sender_label, &item.name);
+    let auto = vault.accepts_from(&target_id, &local_sender_keys(&sender_ws)) || replied;
     let delivery_id = handoff::new_delivery_id();
     let name = item.name.clone();
     let landed_name = item.landed_name().to_string();
@@ -393,6 +410,7 @@ fn send_local(vault: &Arc<LocalVault>, c: &VaultCaller, token: &str, prep: Prepa
     };
     let got = vault.handoff_receive(inc, value)?;
     let rec = got.record;
+    close_answered_ask(vault, &rec, replied);
     let out = HandoffRecord {
         delivery_id: delivery_id.clone(),
         direction: "out".into(),
@@ -763,6 +781,177 @@ fn accept_from_post(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &
         _ => return Err(VaultError::bad_request("bad_action", "add or remove")),
     }
     Ok(json!({ "ok": true, "entries": entries_json(vault, Some(&ws))? }))
+}
+
+// ── asks and unsend (H5) ────────────────────────────────────────────
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AskBody {
+    to: Option<String>,
+    name: Option<String>,
+    #[serde(default)]
+    note: String,
+    /// People: the asking workspace.
+    workspace: Option<String>,
+}
+
+fn ask_row(id: &str, dir: &str, ws: &str, peer: &str, actor: &str, name: &str, note: &str) -> HandoffRecord {
+    HandoffRecord {
+        delivery_id: id.to_string(),
+        direction: dir.into(),
+        status: String::new(),
+        local_workspace_id: ws.to_string(),
+        peer_addr: peer.to_string(),
+        peer_fp: None,
+        sender_actor: actor.to_string(),
+        source_vault_id: None,
+        name: name.to_string(),
+        landed_name: None,
+        kind: "api_key".into(),
+        note: note.to_string(),
+        reply_to: None,
+        item: HandoffItem {
+            name: name.to_string(),
+            as_name: None,
+            kind: "api_key".into(),
+            hosts: vec![],
+            inject: None,
+            description: String::new(),
+            delivery: "fetch".into(),
+            ceiling: "env".into(),
+            human_given: false,
+            ttl_secs: None,
+        },
+        secret_id: None,
+        version: None,
+        reason: None,
+        card: None,
+        created_at: String::new(),
+        decided_at: None,
+        decided_by: None,
+        expires_at: None,
+    }
+}
+
+/// The ask's stamp text (names, the note, how to answer). Never a value.
+pub(crate) fn ask_text(id: &str, asker: &str, name: &str, note: &str, reply_to: &str) -> String {
+    let note = if note.is_empty() { String::new() } else { format!(": \"{note}\"") };
+    format!("[k2 vault ask {id}] {asker} asks for {name}{note}. To give it: k2 vault send {name} --to {reply_to} --reply {id}")
+}
+
+/// `POST /cli/vault/ask` (§4.3): record the ask and knock the asked agent
+/// with a stamp. Cross server it travels as a plain signed federation
+/// message (it holds no secret).
+fn ask(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Result<Value, VaultError> {
+    let b: AskBody = parse(body)?;
+    let stamp = c.actor.stamp();
+    let name = b.name.as_deref().map(str::trim).unwrap_or("");
+    k2_vault::model::validate_name(name, true)?;
+    let to = b.to.as_deref().map(str::trim).unwrap_or("");
+    let target = parse_target(to)?;
+    let asker_ws = match (c.workspace_id(), b.workspace.as_deref().map(str::trim).filter(|s| !s.is_empty())) {
+        (Some(ws), _) => ws.to_string(),
+        (None, Some(w)) => crate::vault::workspace_id(w).ok_or_else(|| VaultError::not_found(format!("no workspace named {w}")))?,
+        (None, None) => return Err(VaultError::bad_request("workspace_required", "which agent asks? (--workspace <name>)")),
+    };
+    let note = crate::vault::redact_str(&handoff::check_note(&b.note, handoff::NOTE_MAX, b"")?);
+    let asker = crate::vault::workspace_label(&asker_ws);
+    let id = handoff::new_ask_id();
+    let (peer_addr, delivered) = match target {
+        Target::Local(token) => {
+            let (target_path, target_id) =
+                crate::comms::resolve_target_project(&token).ok_or_else(|| VaultError::not_found(format!("no agent named {token} on this server")))?;
+            let label = crate::vault::workspace_label(&target_id);
+            if let Some(caller_ws) = c.workspace_id() {
+                if let Err(e) = crate::comms::require_local_peer(caller_ws, &target_id, &label) {
+                    return Err(VaultError::forbidden("not_connected", e.hint().to_string()));
+                }
+            }
+            vault.handoff_record_ask(ask_row(&id, "ask_out", &asker_ws, &label, &stamp, name, &note))?;
+            vault.handoff_record_ask(ask_row(&id, "ask_in", &target_id, &asker, &stamp, name, &note))?;
+            let text = ask_text(&id, &asker, name, &note, &asker);
+            let (resp, _) = crate::hire_routes::deliver_recorded(
+                &target_path,
+                &text,
+                &asker,
+                "",
+                true,
+                crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+                "msg",
+                &sender_for(c, &asker_ws),
+            );
+            (label, resp.success)
+        }
+        Target::Remote { agent, host, .. } => crate::federation_vault::ask_remote(vault, c, &asker_ws, &asker, &agent, &host, &id, name, &note)?,
+    };
+    audit(&stamp, &format!("ok ask {name} from {peer_addr} {id}"), ingress);
+    Ok(json!({ "ok": true, "askId": id, "name": name, "to": peer_addr, "delivered": delivered, "expiresInDays": handoff::PENDING_DAYS }))
+}
+
+fn asks(vault: &LocalVault, c: &VaultCaller, params: &HashMap<String, String>) -> Result<Value, VaultError> {
+    let ws = workspace_param(c, params)?;
+    let mut items = vec![];
+    for dir in ["ask_out", "ask_in"] {
+        for r in vault.handoffs(ws.as_deref(), Some(dir))? {
+            items.push(json!({
+                "askId": r.delivery_id,
+                "direction": if dir == "ask_out" { "out" } else { "in" },
+                "status": r.status,
+                "name": r.name,
+                "peer": r.peer_addr,
+                "note": r.note,
+                "workspace": crate::vault::workspace_label(&r.local_workspace_id),
+                "createdAt": r.created_at,
+                "expiresAt": r.expires_at,
+            }));
+        }
+    }
+    Ok(json!({ "items": items }))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UnsendBody {
+    id: Option<String>,
+}
+
+/// `POST /cli/vault/unsend` (§9): the sender takes a delivery back. Same
+/// server: this vault's copy; cross server: a signed revoke to the peer.
+/// Unsend is not a revoke: rotate the key at the provider for that.
+fn unsend(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Result<Value, VaultError> {
+    let b: UnsendBody = parse(body)?;
+    let id = b.id.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| VaultError::bad_request("id_required", "which delivery? (k2 vault sent)"))?;
+    let stamp = c.actor.stamp();
+    let out = vault.handoff_get(id, "out")?;
+    let mine = match c.workspace_id() {
+        Some(ws) => ws == out.local_workspace_id,
+        None => c.actor.is_admin_human(),
+    };
+    if !mine {
+        let e = VaultError::forbidden("not_yours", "only the agent that sent a delivery (or an Owner/Admin) takes it back");
+        audit(&stamp, &format!("deny unsend {} {id}: {}", out.name, e.code), ingress);
+        return Err(e);
+    }
+    let (disabled, kept) = if out.peer_fp.is_some() {
+        crate::federation_vault::unsend_remote(&out)?
+    } else {
+        let before = vault.handoff_get(id, "in")?;
+        let (r, disabled) = vault.handoff_unsend(id, None, &stamp)?;
+        if let Some(card) = before.card.as_deref() {
+            crate::overlay_routes::close_handoff_card(card, "unsent", None, None);
+        }
+        (disabled, r.reason.as_deref() == Some("unsent_kept_replaced"))
+    };
+    vault.handoff_update_out(id, "unsent", Some(if kept { "unsent_kept_replaced" } else { "unsent" }))?;
+    audit(&stamp, &format!("ok unsend {} to {} {id}{}", out.name, out.peer_addr, if disabled { " (copy disabled)" } else { "" }), ingress);
+    Ok(json!({
+        "ok": true,
+        "deliveryId": id,
+        "disabled": disabled,
+        "keptReplaced": kept,
+        "honest": "unsend is not a revoke: the receiver may already have used the key; rotate it at the provider to be sure",
+    }))
 }
 
 // ── expiry (called from the vault ticker) ───────────────────────────

@@ -40,6 +40,7 @@ import {
   type NotifyWorkspacePref,
 } from './notify-api'
 import { threadPushAvailable, useNotifyPrefs } from './useNotifyPrefs'
+import { PushPreviewsRow } from './PushPreviewsRow'
 
 export const NOTIFICATIONS_MANIFEST: SettingEntry[] = [
   {
@@ -65,6 +66,14 @@ export const NOTIFICATIONS_MANIFEST: SettingEntry[] = [
     description: 'What new and unset people get for each workspace (owner and admins)',
     keywords: ['notification', 'push', 'default', 'workspace', 'admin'],
     group: 'Workspace defaults',
+  },
+  {
+    id: 'notifications.previews',
+    section: 'notifications',
+    label: 'Show Message Text in Push Notifications',
+    description: 'Server-wide switch for message previews on phones (owner and admins)',
+    keywords: ['notification', 'push', 'preview', 'previews', 'message', 'text', 'privacy', 'lock screen'],
+    group: 'Message previews',
   },
   {
     id: 'notifications.people',
@@ -347,6 +356,9 @@ export function NotificationsSection(): React.JSX.Element {
             </>
           )}
         </SettingsGroup>
+
+        {/* Hides itself (title too) on a server without the key. */}
+        {isAdmin && <PushPreviewsRow />}
 
         {isAdmin && (
           <SettingsGroup title="Workspace defaults">

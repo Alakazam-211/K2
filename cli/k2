@@ -258,6 +258,15 @@ _cli_tool_id_for_verb() {
         agent)
             case "${2:-}" in
                 team|teams|instances|instance) echo "agent-teams" ;;
+                # 0.46.1: `k2 agent identity` sends the passport in a K2
+                # terminal, so an agent sets only its own color and picture.
+                identity) echo "agent-identity" ;;
+                *) echo "" ;;
+            esac ;;
+        # The leftover spelling of `k2 agent identity` rides the same tool.
+        workspace)
+            case "${2:-}" in
+                set-agent-identity) echo "agent-identity" ;;
                 *) echo "" ;;
             esac ;;
         help|--help|-h|glossary|help-deprecated|help-internal|help-advanced) echo "help" ;;
@@ -345,7 +354,7 @@ _cli_tool_default_mode() {
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat|sidecar|project) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
-        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|changes|usage|hostchat) echo "id" ;;
+        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|agent-identity|changes|usage|hostchat) echo "id" ;;
         *) echo "open" ;;
     esac
 }
@@ -353,7 +362,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|changes|usage|hostchat) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|agent-identity|changes|usage|hostchat) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -5221,64 +5230,160 @@ except Exception as e:
     print("Error: %s" % e, file=sys.stderr); sys.exit(1)'
 }
 
-# 0.45.5: the agent's name, color and picture in one call, through
-# POST /cli/agent/identity (the route Apps use with agent:identity).
-# The daemon checks everything: name rules, #rgb/#rrggbb, and the picture
-# (PNG/JPEG/WebP only, shrunk to 256 px and re-encoded; SVG refused).
-cmd_workspace_set_agent_identity() {
-    local usage="Usage: k2 workspace set-agent-identity <workspace> [--name <name>] [--color <#rrggbb>] [--image <file.png|jpg|webp> | --clear-image]"
-    local target="" name="" has_name="" color="" image="" clear_image=""
+# 0.46.1: `k2 agent identity` — an agent's name, color and picture, read
+# or changed in one call through /cli/agent/identity (the route Apps use
+# with agent:identity). The daemon checks everything: name rules,
+# #rgb/#rrggbb, and the picture (PNG/JPEG/WebP only, shrunk to 256 px and
+# re-encoded; SVG refused). `rgb(r,g,b)` / `r,g,b` become hex here, as for
+# `k2 agent hire --color`.
+#
+# An `id` tool (agent-identity): inside a K2 agent session it sends the
+# session passport, never the owner token. The daemon then pins the call
+# to the agent's own workspace and allows color and picture only (a name
+# is refused: agents can't rename themselves). Owners and Connect logins
+# reach any agent and may set the name.
+#
+# `k2 workspace set-agent-identity` is a thin alias of this function.
+cmd_help_agent_identity() {
+    cat <<'EOF'
+Show or change an agent's picture, color and name.
+
+USAGE
+  k2 agent identity [<agent>] [--json]                          show
+  k2 agent identity [<agent>] [--color <hex|rgb>]
+                    [--image <file.png|jpg|webp> | --clear-image]
+                    [--name <name>] [--json]                    change
+
+  <agent> is an agent name, handle or path. Omitted: from an agent's own
+  session, the agent itself; from a terminal, the agent in the current
+  directory.
+
+FROM AN AGENT'S SESSION
+  You may change only your own picture and color (any other agent is
+  refused, exit 3). --name is refused: agents can't rename themselves;
+  ask your owner. Writes are rate limited per agent (429: try later).
+
+FLAGS
+  --color <hex|rgb>       #rrggbb, #rgb, rgb(r,g,b) or r,g,b
+  --image <file>          PNG, JPEG or WebP, at most 2 MiB; the daemon
+                          checks the bytes, shrinks it to 256 px and
+                          re-encodes it. SVG is refused.
+  --clear-image           Remove the picture
+  --name <name>           Display name (owners only; ≤ 64 chars, no / or :)
+  --json                  Print the daemon's JSON
+
+EXIT CODES
+  0 ok · 1 error · 2 bad usage · 3 refused · 4 not found
+
+EXAMPLES
+  k2 agent identity                                  # who do I look like?
+  k2 agent identity --color '#22c55e' --image me.png # my own look
+  k2 agent identity scout --name "Scout" --clear-image   (owner)
+EOF
+}
+
+cmd_agent_identity() {
+    local usage="Usage: k2 agent identity [<agent>] [--color <hex|rgb>] [--image <file.png|jpg|webp> | --clear-image] [--name <name>] [--json]"
+    local target="" name="" has_name="" color="" image="" clear_image="" as_json=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --name)        [[ $# -ge 2 ]] || { echo "$usage" >&2; exit 1; }; name="$2"; has_name=1; shift 2 ;;
-            --color)       [[ $# -ge 2 ]] || { echo "$usage" >&2; exit 1; }; color="$2"; shift 2 ;;
-            --image)       [[ $# -ge 2 ]] || { echo "$usage" >&2; exit 1; }; image="$2"; shift 2 ;;
+            --name)        [[ $# -ge 2 ]] || { echo "$usage" >&2; exit 2; }; name="$2"; has_name=1; shift 2 ;;
+            --color)       [[ $# -ge 2 ]] || { echo "$usage" >&2; exit 2; }; color="$2"; shift 2 ;;
+            --image)       [[ $# -ge 2 ]] || { echo "$usage" >&2; exit 2; }; image="$2"; shift 2 ;;
             --clear-image) clear_image=1; shift ;;
-            -h|--help)     echo "$usage"; return 0 ;;
-            -*)            echo "Unknown flag: $1" >&2; echo "$usage" >&2; exit 1 ;;
+            --json)        as_json=1; shift ;;
+            -h|--help)     cmd_help_agent_identity; return 0 ;;
+            -*)            echo "Unknown flag: $1" >&2; echo "$usage" >&2; exit 2 ;;
             *)
-                if [[ -z "$target" ]]; then target="$1"; else echo "$usage" >&2; exit 1; fi
+                if [[ -z "$target" ]]; then target="$1"; else echo "$usage" >&2; exit 2; fi
                 shift ;;
         esac
     done
-    if [[ -z "$target" ]]; then echo "$usage" >&2; exit 1; fi
-    if [[ -z "$has_name" && -z "$color" && -z "$image" && -z "$clear_image" ]]; then
-        echo "Nothing to change. $usage" >&2; exit 1
-    fi
     if [[ -n "$image" && -n "$clear_image" ]]; then
-        echo "Use --image or --clear-image, not both." >&2; exit 1
+        echo "Use --image or --clear-image, not both." >&2; exit 2
     fi
     if [[ -n "$image" && ! -f "$image" ]]; then
-        echo "Error: no such file: $image" >&2; exit 1
+        echo "Error: no such file: $image" >&2; exit 2
     fi
-    python3 -c 'import base64,json,sys
+    # A path (anything with "/") is sent absolute. No agent named: from an
+    # agent session the daemon uses the passport's own workspace; from a
+    # terminal, the workspace this CLI resolved from the current directory.
+    case "$target" in
+        */*) target="$(cli_abs_path "$target")" ;;
+    esac
+    if [[ -z "$target" ]] && ! _cli_caller_is_agent_passport; then
+        target="$PROJECT"
+    fi
+    local method="GET" payload=""
+    if [[ -n "$has_name$color$image$clear_image" ]]; then
+        method="POST"
+        payload="$(python3 -c 'import base64,json,re,sys
 target, has_name, name, color, image, clear = sys.argv[1:7]
-body = {"workspace": target}
+def rgb_to_hex(s):
+    m = re.fullmatch(r"rgba?\(\s*([0-9]{1,3})\s*[, ]\s*([0-9]{1,3})\s*[, ]\s*([0-9]{1,3})(?:\s*[,/]\s*[0-9.]+\s*)?\)", s.strip(), re.I) \
+        or re.fullmatch(r"([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})", s.strip())
+    if not m or any(int(g) > 255 for g in m.groups()):
+        return s  # the daemon checks hex and refuses the rest
+    return "#" + "".join("%02x" % int(g) for g in m.groups())
+body = {}
+if target: body["workspace"] = target
 if has_name: body["displayName"] = name
-if color: body["color"] = color
+if color: body["color"] = rgb_to_hex(color)
 if clear: body["image"] = None
 elif image:
     raw = open(image, "rb").read()
+    if len(raw) > 2 * 1024 * 1024:
+        print("Error: the picture must be at most 2 MiB", file=sys.stderr); sys.exit(2)
     if raw.startswith(b"\x89PNG\r\n\x1a\n"): mime = "image/png"
     elif raw.startswith(b"\xff\xd8\xff"): mime = "image/jpeg"
     elif raw[:4] == b"RIFF" and raw[8:12] == b"WEBP": mime = "image/webp"
     else:
-        print("Error: the picture must be PNG, JPEG or WebP", file=sys.stderr); sys.exit(1)
+        print("Error: the picture must be PNG, JPEG or WebP", file=sys.stderr); sys.exit(2)
     body["image"] = "data:%s;base64,%s" % (mime, base64.b64encode(raw).decode())
-print(json.dumps(body))' "$target" "$has_name" "$name" "$color" "$image" "$clear_image" \
-        | cli_post_json_stdin "/cli/agent/identity" \
-        | python3 -c 'import json,sys
+print(json.dumps(body))' "$target" "$has_name" "$name" "$color" "$image" "$clear_image")" || exit $?
+    elif [[ -n "$target" ]]; then
+        payload="workspace=$(urlencode "$target")"
+    fi
+    local out
+    out="$(cli_send_json "$method" "/cli/agent/identity" "$payload")"
+    OUT="$out" AS_JSON="$as_json" METHOD="$method" python3 -c 'import json,os,sys
+raw = os.environ["OUT"]
+body, _, status = raw.rpartition("\n")
+status = status.strip()
+if status == "000" or not body.strip():
+    print("Error: no response from the K2 daemon (is it running?)", file=sys.stderr); sys.exit(1)
 try:
-    d = json.load(sys.stdin)
-except Exception as e:
-    print("Error: %s" % e, file=sys.stderr); sys.exit(1)
-if "error" in d:
-    print("Error: %s" % (d.get("message") or d["error"]), file=sys.stderr); sys.exit(1)
-changed = d.get("changed") or []
-print("Agent %s: %s" % (d.get("handle", ""), ", ".join(changed) + " updated" if changed else "no change"))
+    d = json.loads(body)
+except Exception:
+    print("Error: unexpected daemon response (HTTP %s): %s" % (status, body[:200]), file=sys.stderr); sys.exit(1)
+err = d.get("error") if isinstance(d, dict) else None
+if err is not None or not status.startswith("2"):
+    msg = d.get("message") or err or ("HTTP " + status)
+    if err == "rate_limited":
+        msg = "too many changes; try again in %ss" % d.get("retryAfterSecs", "?")
+    print("Error: %s" % msg, file=sys.stderr)
+    sys.exit({"403": 3, "404": 4, "401": 3}.get(status, 1))
+if os.environ.get("AS_JSON"):
+    print(json.dumps(d)); sys.exit(0)
+if os.environ["METHOD"] == "POST":
+    changed = d.get("changed") or []
+    print("Agent %s: %s" % (d.get("handle", ""), ", ".join(changed) + " updated" if changed else "no change"))
+else:
+    print("Agent %s" % d.get("handle", ""))
 print("  name:    %s" % d.get("displayName", ""))
 print("  color:   %s" % (d.get("color") or "-"))
-print("  picture: %s" % ("set" if d.get("image") else "none"))'
+print("  picture: %s" % ("set" if d.get("image") else "none"))
+if os.environ["METHOD"] != "POST":
+    can = []
+    if d.get("canEditIdentity"): can.append("color, picture" if not d.get("canEditHandle") else "name, color, picture")
+    if d.get("canEditHandle"): can.append("handle")
+    print("  you can change: %s" % (", ".join(can) or "nothing"))'
+}
+
+# Leftover (0.45.5) spelling: one implementation, `k2 agent identity`.
+cmd_workspace_set_agent_identity() {
+    echo "note: 'k2 workspace set-agent-identity' is now 'k2 agent identity' (same flags)." >&2
+    cmd_agent_identity "$@"
 }
 
 # D11: change the federated address. Requires an explicit confirm flag.
@@ -26188,6 +26293,19 @@ cmd_schema() {
       ]
     },
     {
+      "name": "agent identity",
+      "usage": "k2 agent identity [<agent>] [--color <hex|rgb>] [--image <file.png|jpg|webp> | --clear-image] [--name <name>] [--json]",
+      "description": "Show (no flags) or change an agent's picture, color and name. From an agent's own session: <agent> defaults to itself and may only be itself; only --color, --image and --clear-image (agents can't rename themselves; ask your owner). Owners and Connect logins reach any agent and may set --name. The daemon checks the picture's bytes (PNG/JPEG/WebP, at most 2 MiB, shrunk to 256 px; SVG refused). Agent writes are rate limited per agent. Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found. Leftover spelling: k2 workspace set-agent-identity.",
+      "args": [{"name": "agent", "required": false, "description": "Agent name, handle or path. Omitted: yourself (agent session) or the agent in the current directory."}],
+      "flags": [
+        {"name": "--color", "arg": "hex|rgb", "description": "#rrggbb, #rgb, rgb(r,g,b) or r,g,b."},
+        {"name": "--image", "arg": "file", "description": "PNG, JPEG or WebP, at most 2 MiB. SVG is refused."},
+        {"name": "--clear-image", "arg": null, "description": "Remove the picture."},
+        {"name": "--name", "arg": "name", "description": "Display name. Owners only; refused from an agent's session."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON (handle, displayName, color, image, canEditIdentity, canEditHandle; plus ok/changed on a change)."}
+      ]
+    },
+    {
       "name": "agent restart",
       "usage": "k2 agent restart <name> [--dry-run] [--json]",
       "description": "Restart an agent's pinned chat session on the same conversation (resume), so it re-reads its charter and .mcp.json. Reports the old and new session ids. Sidecar tabs are not touched.",
@@ -29745,6 +29863,12 @@ WHO IS NOT AN ADDRESS
   Connect-user names, Skin guests, and `--users` humans are not
   `k2 msg` targets. See `k2 study people`.
 
+YOUR PICTURE AND COLOR
+  `k2 agent identity` shows how you look. `k2 agent identity --color
+  '#22c55e' --image me.png` (or --clear-image) changes your own look;
+  every client updates live. Yours only: naming another agent is
+  refused. Your name and handle are your owner's to change; ask them.
+
 SESSION ROLE
   This CLI may run inside a scoped agent cell (passport in env) or
   from a human terminal. ID/locked tools need the session passport
@@ -32638,6 +32762,7 @@ COMMANDS
   list                    List every agent on this server with mode + live status
   retire <name>           Safely decommission an agent (guards + archive; never deletes)
   restart <name>          Restart the agent's chat session (reloads charter + MCP config; same conversation)
+  identity [<name>]       Show or change the picture, color and name (an agent: its own color and picture)
   context <subcommand>    Manage the always-on AGENTS.md context stack (layers)
   team [served|link|unlink]  Team links: who serves this agent, who it serves (agents read their own)
   instances [show|hire|retire]  Hires made from an inline recipe (owner/admin; v1 API keys hire too)
@@ -58508,6 +58633,8 @@ case "${1:-help}" in
             get)    shift 2; cmd_agent_get "$@" ;;
             set)    shift 2; cmd_agent_set "$@" ;;
             hire)   shift 2; cmd_agent_hire "$@" ;;
+            # 0.46.1: picture, color and name (agents: their own color and picture).
+            identity) shift 2; cmd_agent_identity "$@" ;;
             # 0.45.6 agent hire: team links, hire instances, the hire root.
             team|teams) shift 2; cmd_agent_team "$@" ;;
             instances|instance) shift 2; cmd_agent_instances "$@" ;;

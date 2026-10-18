@@ -604,6 +604,11 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/agents/hire",
         "/cli/agent-teams/links",
         "/cli/msg/who",
+        // 0.46.1 `k2 agent identity`: an agent reads and sets its OWN
+        // color and picture. The handler pins the workspace to the passport
+        // and refuses a name. `/cli/agent/handle` is NOT here (people and
+        // App passes with agent:handle only).
+        "/cli/agent/identity",
         // 0.45.7: `k2 publish status` / `subdomain create|target|rm` from
         // an agent — the daemon makes the control-plane call with the
         // token it holds. `connect_proxy` admits a passport for its OWN
@@ -1993,6 +1998,15 @@ mod tests {
         // …EXACT match only — no `/cli/browser/` prefix widening.
         assert!(!is_agent_verb("/cli/browser/open-url/extra"));
         assert!(!is_agent_verb("/cli/browser/anything-else"));
+    }
+
+    #[test]
+    fn is_agent_verb_admits_own_identity_not_handle() {
+        // 0.46.1 `k2 agent identity`: color + picture on the agent's own
+        // workspace; the handle stays a person's (or an App's) change.
+        assert!(is_agent_verb("/cli/agent/identity"));
+        assert!(!is_agent_verb("/cli/agent/handle"));
+        assert!(!is_agent_verb("/cli/agent/identity/x"));
     }
 
     #[test]

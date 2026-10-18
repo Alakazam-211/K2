@@ -1787,11 +1787,18 @@ async fn handle_one_request(
         }
         // 0.45.5 app identity surface (`agent_identity_routes`): an App pass
         // reaches its rooms' agents (caps checked per room in the handler);
-        // the owner token or a Connect login reaches any workspace. Agent
-        // passports are never admitted. A GET to `/cli/agent/handle` was
-        // already refused (405) by the central POST-only check.
+        // the owner token or a Connect login reaches any workspace. 0.46.1:
+        // an agent's own passport reaches `/cli/agent/identity` for its own
+        // workspace, color and picture only (`caller_from_passport`; a
+        // sandboxed or API session is refused). A passport on
+        // `/cli/agent/handle` is refused with a hint. A GET to
+        // `/cli/agent/handle` was already refused (405) by the central
+        // POST-only check.
         "/cli/agent/identity" | "/cli/agent/handle" => {
             let presented = super::http::extract_token(&query);
+            let passport = presented
+                .filter(|s| !s.is_empty())
+                .or_else(|| bearer_token.as_deref().map(str::trim).filter(|s| !s.is_empty()));
             let caller = if presented.is_some_and(k2_core::skin::is_skin_token) {
                 match presented.and_then(crate::apps::gateway::resolve_pass) {
                     Some(pass) => Ok(crate::agent_identity_routes::Caller::App(pass)),
@@ -1800,7 +1807,13 @@ async fn handle_one_request(
             } else if super::http::token_ok(&query, state.token.as_str()) {
                 let actor = super::http::actor_label(&query, state.token.as_str(), bearer_token.as_deref())
                     .unwrap_or_else(|| "owner".to_string());
-                Ok(crate::agent_identity_routes::Caller::Owner { actor })
+                Ok(crate::agent_identity_routes::Caller::Owner { actor, home: None })
+            } else if let Some(v) = passport.and_then(|t| crate::session_token::require_hook(t, &path)) {
+                crate::agent_identity_routes::caller_from_passport(&v.session_id, &v.principal)
+            } else if path == crate::agent_identity_routes::HANDLE_PATH
+                && passport.and_then(crate::session_token::validate_hook).is_some()
+            {
+                Err(crate::agent_identity_routes::agent_cannot_rename())
             } else {
                 Err(crate::cli::CliResponse::forbidden())
             };

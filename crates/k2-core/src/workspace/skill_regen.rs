@@ -331,6 +331,19 @@ forward them to `primary` unless asked or the work needs that session.
 `k2 whoami` is a lookup if the snapshot is missing. You do not need to
 run it on every turn, and it is not a wake protocol.
 
+## Your picture and color
+`k2 agent identity` shows how you look. Change your own look (every
+client updates live):
+
+```
+k2 agent identity --color '#22c55e'     # hex, #rgb or rgb(r,g,b)
+k2 agent identity --image me.png        # PNG/JPEG/WebP, ≤ 2 MiB; no SVG
+k2 agent identity --clear-image
+```
+
+Yours only: naming another agent is refused (exit 3). Your name and
+handle are your owner's to change; ask them.
+
 ## Send work to a workspace
 Addresses are **handles** (`sales-team`), not display names (`Sales Team`).
 `<handle>` from `k2 connections list`. Sidecar `sales/reviewer` shares
@@ -1943,6 +1956,10 @@ mod tests {
             "k2-cli skill must point custom agents at the agent contract",
         );
         // Context management stack (0.40.64): lean always-on stack management.
+        assert!(
+            body.contains("k2 agent identity --color"),
+            "k2-cli skill must teach `k2 agent identity` (0.46.1)"
+        );
         assert!(
             body.contains("k2 agent context"),
             "k2-cli skill must teach `k2 agent context`",

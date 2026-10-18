@@ -4,6 +4,9 @@
 //! the owner paths (unchanged), the `agent_identity_changed` event, and
 //! the audit lines.
 //!
+//! 0.46.1: an agent's own passport (`k2 agent identity`) sets its own
+//! color and picture, and nothing else (`agent_passport_*` below).
+//!
 //! Headless, temp HOME (the audit file and every AGENT.md land there or in
 //! temp room folders). No agent is spawned.
 
@@ -249,17 +252,30 @@ fn audit_lines() -> Vec<serde_json::Value> {
 }
 
 fn mint_passport(room: &Room) -> String {
+    mint_passport_as(room, "identity-agent")
+}
+
+fn mint_passport_as(room: &Room, agent_address: &str) -> String {
     let sid = SessionId::new();
     k2_daemon::session_token::mint_session_token(
         &sid,
         &sid.to_string(),
         HookPrincipal {
             workspace_uuid: room.id.clone(),
-            agent_address: "identity-agent".to_string(),
+            agent_address: agent_address.to_string(),
         },
         CredMode::ApiKey,
         Provider::Anthropic,
     )
+}
+
+/// The session id a passport (`<sid>.<secret>`) is bound to.
+fn passport_session(passport: &str) -> &str {
+    passport.split_once('.').expect("passport shape <sid>.<secret>").0
+}
+
+fn agent_post(port: u16, passport: &str, body: serde_json::Value) -> Resp {
+    http(port, "POST", &format!("/cli/agent/identity?token={passport}"), Some(&body.to_string()))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -527,7 +543,7 @@ async fn app_agent_identity_caps_jail_checks_handle_events_and_audit() {
             &format!("/cli/agent/identity?token={passport}"),
             Some(&serde_json::json!({"workspace": a.id, "displayName": "Self Named"}).to_string()),
         );
-        assert_eq!(r.status, 403, "agent passports never reach it; {}", r.body);
+        assert_status(&r, 403, "agent_cannot_rename", "an agent passport never renames (0.46.1)");
         assert_ne!(project_row(&a).0, "Self Named");
 
         // ── Audit: who, which agent, old → new; never the picture bytes.
@@ -584,5 +600,183 @@ async fn app_agent_identity_body_cap_is_413() {
         let text = String::from_utf8_lossy(&raw);
         assert!(text.starts_with("HTTP/1.1 413"), "{text}");
         assert_eq!(project_row(&a).3, None, "nothing stored");
+    });
+}
+
+/// 0.46.1 `k2 agent identity`: an agent's passport sets its OWN color and
+/// picture through the same checks, writes, event and audit; it is refused
+/// for another workspace (one answer, no oracle), for a name or handle, for
+/// SVG and oversize pictures, and past the per-workspace budget. Passports
+/// this daemon did not mint and API cells are refused. Owner unchanged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_passport_sets_own_color_and_picture_only() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = daemon.port;
+        let a = seed_room("selfie");
+        let b = seed_room("neighbor");
+        let pa = mint_passport(&a);
+        let mut rx = k2_daemon::session_events::subscribe();
+
+        // ── Read: no workspace named means itself.
+        let r = http(port, "GET", &format!("/cli/agent/identity?token={pa}"), None);
+        assert_eq!(r.status, 200, "own read; {}", r.body);
+        let v = r.json();
+        assert_eq!(v["handle"], a.handle.as_str(), "{v}");
+        assert_eq!(v["canEditIdentity"], true, "{v}");
+        assert_eq!(v["canEditHandle"], false, "{v}");
+        assert!(!r.body.contains(&a.path), "no path: {}", r.body);
+        // Naming itself works too.
+        let r = http(port, "GET", &format!("/cli/agent/identity?token={pa}&workspace={}", a.handle), None);
+        assert_eq!(r.status, 200, "own read by handle; {}", r.body);
+
+        // ── Another workspace, real or not: one 403, the same body.
+        let other = http(port, "GET", &format!("/cli/agent/identity?token={pa}&workspace={}", b.handle), None);
+        assert_status(&other, 403, "not_your_agent", "read another agent");
+        let missing = http(port, "GET", &format!("/cli/agent/identity?token={pa}&workspace=no-such-agent"), None);
+        assert_status(&missing, 403, "not_your_agent", "read a missing agent");
+        assert_eq!(other.body, missing.body, "no oracle between another agent and none");
+        let before_b = project_row(&b);
+        let r = agent_post(port, &pa, serde_json::json!({"workspace": b.handle, "color": "#654321"}));
+        assert_status(&r, 403, "not_your_agent", "write another agent");
+        let r = agent_post(port, &pa, serde_json::json!({"workspace": b.path, "color": "#654321"}));
+        assert_status(&r, 403, "not_your_agent", "write another agent by path");
+        assert_eq!(project_row(&b), before_b, "nothing written to another agent");
+
+        // ── Name and handle are refused, with the hint, before any write.
+        for body in [
+            serde_json::json!({"displayName": "Self Named"}),
+            serde_json::json!({"display_name": "Self Named", "color": "#111111"}),
+            serde_json::json!({"handle": "self-named"}),
+        ] {
+            let r = agent_post(port, &pa, body.clone());
+            assert_status(&r, 403, "agent_cannot_rename", &format!("rename {body}"));
+            assert!(r.body.contains("ask your owner"), "{}", r.body);
+        }
+        let r = http(
+            port,
+            "POST",
+            &format!("/cli/agent/handle?token={pa}"),
+            Some(&serde_json::json!({"handle": "self-named"}).to_string()),
+        );
+        assert_status(&r, 403, "agent_cannot_rename", "handle door");
+
+        // ── Pictures: SVG and oversize are refused by the same checks.
+        let r = agent_post(
+            port,
+            &pa,
+            serde_json::json!({"image": "data:image/svg+xml;base64,PHN2Zz48c2NyaXB0PmFsZXJ0KDEpPC9zY3JpcHQ+PC9zdmc+"}),
+        );
+        assert_eq!(r.status, 400, "svg; {}", r.body);
+        assert_eq!(r.json()["error"], "type_refused", "{}", r.body);
+        let huge = "A".repeat(k2_core::workspace::agent_look::MAX_INPUT_IMAGE_BYTES / 3 * 4 + 400);
+        let r = agent_post(port, &pa, serde_json::json!({"image": format!("data:image/png;base64,{huge}")}));
+        assert_eq!(r.status, 400, "oversize; {}", r.body);
+        assert_eq!(r.json()["error"], "too_large", "{}", r.body);
+        let r = agent_post(port, &pa, serde_json::json!({"color": "teal"}));
+        assert_eq!(r.status, 400, "bad color; {}", r.body);
+        assert_eq!(r.json()["error"], "bad_color", "{}", r.body);
+        let (name, handle, color, icon) = project_row(&a);
+        assert_eq!(
+            (name.as_str(), handle.as_str(), color.as_str(), icon.as_deref()),
+            (a.handle.as_str(), a.handle.as_str(), "#3b82f6", None),
+            "refusals write nothing"
+        );
+        assert!(drain_identity_events(&mut rx).is_empty(), "refusals emit nothing");
+
+        // ── A good write: its own color and picture, one event.
+        let r = agent_post(
+            port,
+            &pa,
+            serde_json::json!({"color": "#ABC", "image": format!("data:image/png;base64,{PNG_1X1}")}),
+        );
+        assert_eq!(r.status, 200, "own write; {}", r.body);
+        let v = r.json();
+        assert_eq!(v["changed"], serde_json::json!(["color", "image"]), "{v}");
+        assert_eq!(v["color"], "#aabbcc");
+        let img = v["image"].as_str().expect("image").to_string();
+        assert!(img.starts_with("data:image/png;base64,"), "{img}");
+        let (name, _, color, icon) = project_row(&a);
+        assert_eq!(name, a.handle, "the name is untouched");
+        assert_eq!(color, "#aabbcc");
+        assert_eq!(icon.as_deref(), Some(img.as_str()));
+        assert_eq!(drain_identity_events(&mut rx), one_event(&a.id, &["color", "image"]));
+        // Clear the picture, naming itself.
+        let r = agent_post(port, &pa, serde_json::json!({"workspace": a.handle, "image": null}));
+        assert_eq!(r.status, 200, "clear; {}", r.body);
+        assert_eq!(r.json()["changed"], serde_json::json!(["image"]));
+        assert_eq!(project_row(&a).3, None);
+        assert_eq!(drain_identity_events(&mut rx), one_event(&a.id, &["image"]));
+
+        // ── Audit: actor agent:<workspace>/<session>, client agent.
+        let actor = format!("agent:{}/{}", a.handle, passport_session(&pa));
+        let lines = audit_lines();
+        let mine: Vec<&serde_json::Value> = lines
+            .iter()
+            .filter(|l| l["event"] == "agent.identity.set" && l["user"] == actor.as_str())
+            .collect();
+        assert_eq!(mine.len(), 2, "one line per change; {lines:?}");
+        let first = mine
+            .iter()
+            .find(|l| l["outcome"].as_str().is_some_and(|o| o.contains("color=")))
+            .unwrap_or_else(|| panic!("the color+picture line: {mine:?}"));
+        let outcome = first["outcome"].as_str().expect("outcome");
+        assert!(outcome.contains(&format!("agent={}", a.id)), "{outcome}");
+        assert!(outcome.contains("color=#3b82f6->#aabbcc"), "{outcome}");
+        assert!(outcome.contains("image=none->sha256:"), "{outcome}");
+        assert!(!outcome.contains("base64"), "no picture bytes: {outcome}");
+        assert!(mine.iter().all(|l| l["client"] == "agent"), "{mine:?}");
+
+        // ── Passports this daemon did not mint, and API cells, are refused.
+        let r = agent_post(
+            port,
+            "0f0f0f0f-0000-4000-8000-000000000000.not-a-secret",
+            serde_json::json!({"color": "#222222"}),
+        );
+        assert_eq!(r.status, 403, "foreign passport; {}", r.body);
+        let api = mint_passport_as(&a, "api-cell-7");
+        let r = agent_post(port, &api, serde_json::json!({"color": "#222222"}));
+        assert_status(&r, 403, "wrong_credential", "api cell");
+        assert_eq!(project_row(&a).2, "#aabbcc", "nothing written by refused passports");
+
+        // ── Rate limit: one budget per workspace, shared by its sessions.
+        // Two writes are spent; the rest of the budget, then 429.
+        let max = k2_daemon::agent_identity_routes::WRITES_PER_PASS_MAX;
+        for i in 2..max {
+            let r = agent_post(port, &pa, serde_json::json!({"color": format!("#0000{:02x}", i)}));
+            assert_eq!(r.status, 200, "write {i}; {}", r.body);
+        }
+        let r = agent_post(port, &pa, serde_json::json!({"color": "#ff0000"}));
+        assert_status(&r, 429, "rate_limited", "over the budget");
+        let pa2 = mint_passport(&a);
+        let r = agent_post(port, &pa2, serde_json::json!({"color": "#ff0000"}));
+        assert_status(&r, 429, "rate_limited", "a second session of the same workspace shares it");
+        assert_ne!(project_row(&a).2, "#ff0000", "a 429 writes nothing");
+        let pb = mint_passport(&b);
+        let r = agent_post(port, &pb, serde_json::json!({"color": "#00ff00"}));
+        assert_eq!(r.status, 200, "another workspace has its own budget; {}", r.body);
+        assert_eq!(project_row(&b).2, "#00ff00");
+
+        // ── Owner behaviour unchanged: any agent, the name too, no budget.
+        let r = http(
+            port,
+            "POST",
+            &format!("/cli/agent/identity?token={OWNER_TOKEN}"),
+            Some(
+                &serde_json::json!({"workspace": a.handle, "displayName": "Owner Picked", "color": "#ff0000"})
+                    .to_string(),
+            ),
+        );
+        assert_eq!(r.status, 200, "owner after the agent's budget; {}", r.body);
+        assert_eq!(r.json()["canEditHandle"], true);
+        let (name, _, color, _) = project_row(&a);
+        assert_eq!((name.as_str(), color.as_str()), ("Owner Picked", "#ff0000"));
+        assert!(
+            audit_lines().iter().any(|l| l["event"] == "agent.identity.set"
+                && l["user"] == "owner-token"
+                && l["outcome"].as_str().is_some_and(|o| o.contains("Owner Picked"))),
+            "owner audited as before"
+        );
     });
 }

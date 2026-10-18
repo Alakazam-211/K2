@@ -12,19 +12,10 @@ import {
   reAddGoneRemoteConnection,
   canReAddGoneConnection,
   listRemoteConnections,
-  listFederationPeers,
-  trustedPeers,
-  fetchPeerRoster,
-  formatAgentHost,
-  federatedPeerHost,
-  sortPeersForPicker,
-  sortRosterForPicker,
-  emptyRosterNote,
   type RemoteConnectionEntry,
-  type FederationPeer,
-  type RosterAgent,
 } from '@/lib/federation'
 import { agentDisplayName } from '@/lib/workspace-agent'
+import { AddConnectionPicker } from './AddConnectionPicker'
 import {
   AgentColorPicker,
   AgentDisplayNameField,
@@ -3665,19 +3656,8 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
   const [relations, setRelations] = useState<WorkspaceRelation[]>([])
   const [incoming, setIncoming] = useState<WorkspaceRelation[]>([])
   const [loading, setLoading] = useState(true)
-  const [adding, setAdding] = useState(false)
-  const [search, setSearch] = useState('')
-  const [showLocalAdd, setShowLocalAdd] = useState(false)
-  const [showFedAdd, setShowFedAdd] = useState(false)
-  // Federated add wizard: pick trusted server → pick agent from their roster
-  const [fedPeers, setFedPeers] = useState<FederationPeer[]>([])
-  const [fedPeersAvailable, setFedPeersAvailable] = useState(true)
-  const [selectedPeerFp, setSelectedPeerFp] = useState('')
-  const [rosterAgents, setRosterAgents] = useState<RosterAgent[]>([])
-  const [rosterLoading, setRosterLoading] = useState(false)
-  /** The selected server answered its roster (false = no answer: offline,
-   *  unreachable or not trusted, never "a setting is off"). */
-  const [rosterAnswered, setRosterAnswered] = useState(true)
+  // 0.46.1: one Add connection picker (This server + paired servers).
+  const [showAdd, setShowAdd] = useState(false)
   const [remoteConns, setRemoteConns] = useState<RemoteConnectionEntry[]>([])
   const [remoteError, setRemoteError] = useState<string | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
@@ -3724,61 +3704,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
     fetchRelations()
   }, [fetchRelations])
 
-  // Load trusted federation peers when the federated-add panel opens
-  useEffect(() => {
-    if (!showFedAdd) return
-    let cancelled = false
-    void (async () => {
-      const res = await listFederationPeers()
-      if (cancelled) return
-      setFedPeersAvailable(res.available)
-      setFedPeers(res.available ? sortPeersForPicker(trustedPeers(res.data)) : [])
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [showFedAdd])
-
-  // When a peer server is selected, fetch its agent roster (permission-filtered server-side)
-  useEffect(() => {
-    if (!selectedPeerFp) {
-      setRosterAgents([])
-      return
-    }
-    let cancelled = false
-    setRosterLoading(true)
-    void (async () => {
-      const res = await fetchPeerRoster(selectedPeerFp)
-      if (cancelled) return
-      setRosterAgents(res.available ? res.data : [])
-      setRosterAnswered(res.available)
-      setRosterLoading(false)
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [selectedPeerFp])
-
-  const selectedPeer = useMemo(
-    () => fedPeers.find((p) => p.fingerprint === selectedPeerFp) ?? null,
-    [fedPeers, selectedPeerFp],
-  )
-
   const connectedIds = useMemo(() => new Set(relations.map((r) => r.targetProjectId)), [relations])
-  const availableProjects = useMemo(
-    () =>
-      projects
-        .filter((p) => p.id !== projectId && !connectedIds.has(p.id))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-    [projects, projectId, connectedIds],
-  )
-  const filteredProjects = useMemo(
-    () =>
-      search.trim()
-        ? availableProjects.filter((p) => p.name.toLowerCase().includes(search.toLowerCase()))
-        : availableProjects,
-    [availableProjects, search],
-  )
 
   // Agents already linked as federated connections (by agent::host)
   const linkedRemoteAddrs = useMemo(
@@ -3786,35 +3712,16 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
     [remoteConns],
   )
 
-  const availableRosterAgents = useMemo(() => {
-    if (!selectedPeer) return []
-    const host = federatedPeerHost(selectedPeer)
-    if (!host) return sortRosterForPicker(rosterAgents)
-    return sortRosterForPicker(
-      rosterAgents.filter((a) => {
-        const addr = formatAgentHost(a.agent, host).toLowerCase()
-        return !linkedRemoteAddrs.has(addr)
-      }),
-    )
-  }, [rosterAgents, selectedPeer, linkedRemoteAddrs])
-
+  // The picker stays open after an add (like Home's); it shows errors in
+  // its own footer, so these throw instead of setting the panel errors.
   const handleAddLocal = useCallback(
     async (targetProjectId: string) => {
-      setAdding(true)
       setLocalError(null)
-      try {
-        await daemonCliPost(primaryScope(), 'relations/create', {
-          source_project_id: projectId,
-          target_project_id: targetProjectId,
-        })
-        setShowLocalAdd(false)
-        setSearch('')
-        await fetchRelations()
-      } catch (e) {
-        setLocalError(e instanceof Error ? e.message : String(e))
-      } finally {
-        setAdding(false)
-      }
+      await daemonCliPost(primaryScope(), 'relations/create', {
+        source_project_id: projectId,
+        target_project_id: targetProjectId,
+      })
+      await fetchRelations()
     },
     [projectId, fetchRelations],
   )
@@ -3833,29 +3740,16 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
   )
 
   const handleAddFederated = useCallback(
-    async (agent: RosterAgent) => {
-      const peerHost = selectedPeer ? federatedPeerHost(selectedPeer) : ''
-      if (!sourcePath || !peerHost) {
-        setRemoteError('Missing workspace path or peer host — cannot add federated connection.')
-        return
+    async (target: string): Promise<string | null> => {
+      if (!sourcePath) {
+        throw new Error('This workspace has no resolved path on the active server.')
       }
-      const target = formatAgentHost(agent.agent, peerHost)
-      setAdding(true)
       setRemoteError(null)
-      try {
-        const { reverseWarning } = await addRemoteConnection(sourcePath, target)
-        setShowFedAdd(false)
-        setSelectedPeerFp('')
-        setRosterAgents([])
-        await fetchRelations()
-        if (reverseWarning) setRemoteError(reverseWarning)
-      } catch (e) {
-        setRemoteError(e instanceof Error ? e.message : String(e))
-      } finally {
-        setAdding(false)
-      }
+      const { reverseWarning } = await addRemoteConnection(sourcePath, target)
+      await fetchRelations()
+      return reverseWarning
     },
-    [sourcePath, selectedPeer, fetchRelations],
+    [sourcePath, fetchRelations],
   )
 
   const handleRemoveRemote = useCallback(
@@ -3908,74 +3802,48 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
     return map
   }, [projects])
 
-  const peerLabel = (p: FederationPeer) => p.label || p.subdomain || p.fingerprint.slice(0, 12)
-
   return (
     <div className="space-y-5">
-      {/* ── Local Connections ─────────────────────────────────────── */}
+      {/* ── Add connection (0.46.1: one picker for both kinds) ────── */}
       <div>
         <div className="flex items-center justify-between mb-2">
           <div>
-            <h3 className="text-xs font-medium text-[var(--color-text-primary)]">Local Connections</h3>
+            <h3 className="text-xs font-medium text-[var(--color-text-primary)]">Connections</h3>
             <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-              Workspaces on this server that this agent can message.
+              Agents this agent can message: on this server and on paired servers.
             </p>
           </div>
           <button
             type="button"
             onClick={() => {
-              setShowLocalAdd(!showLocalAdd)
-              setShowFedAdd(false)
-              setSearch('')
+              setShowAdd(!showAdd)
               setLocalError(null)
+              setRemoteError(null)
             }}
-            title="Add local connection"
+            title="Add connection"
+            aria-expanded={showAdd}
             className="w-6 h-6 flex items-center justify-center text-sm leading-none bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag"
           >
             +
           </button>
         </div>
-
-        {showLocalAdd && (
-          <div className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)] mb-2">
-            <div className="px-3 py-1.5 border-b border-[var(--color-border)]">
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value)
-                  setLocalError(null)
-                }}
-                placeholder="Search local workspaces…"
-                autoFocus
-                className="w-full bg-transparent text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none"
-              />
-            </div>
-            <div className="max-h-[200px] overflow-y-auto">
-              {filteredProjects.length === 0 ? (
-                <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
-                  {search.trim() ? 'No matching workspaces.' : 'No more local workspaces to connect.'}
-                </div>
-              ) : (
-                filteredProjects.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => void handleAddLocal(p.id)}
-                    disabled={adding}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.06] transition-colors no-drag cursor-pointer disabled:opacity-50 border-b border-[var(--color-border)] last:border-b-0"
-                  >
-                    <span
-                      className="w-2 h-2 flex-shrink-0 rounded-full"
-                      style={{ backgroundColor: p.color || 'var(--color-neutral)' }}
-                    />
-                    <span className="text-xs text-[var(--color-text-primary)] truncate">{p.name}</span>
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
+        {showAdd && (
+          <AddConnectionPicker
+            projectId={projectId}
+            connectedLocalIds={connectedIds}
+            connectedRemoteAddrs={linkedRemoteAddrs}
+            onAddLocal={handleAddLocal}
+            onAddRemote={handleAddFederated}
+            onClose={() => setShowAdd(false)}
+          />
         )}
+      </div>
+
+      {/* ── Local Connections ─────────────────────────────────────── */}
+      <div>
+        <div className="mb-2">
+          <h4 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">On this server</h4>
+        </div>
 
         {loading ? (
           <div className="text-[10px] text-[var(--color-text-muted)]">Loading…</div>
@@ -4051,106 +3919,9 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
 
       {/* ── Federated Connections ────────────────────────────────── */}
       <div>
-        <div className="flex items-center justify-between mb-2">
-          <div>
-            <h3 className="text-xs font-medium text-[var(--color-text-primary)]">Federated Connections</h3>
-            <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
-              Agents on paired servers. Pick a federated server, then an agent they expose.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setShowFedAdd(!showFedAdd)
-              setShowLocalAdd(false)
-              setSelectedPeerFp('')
-              setRosterAgents([])
-              setRemoteError(null)
-            }}
-            title="Add federated connection"
-            className="w-6 h-6 flex items-center justify-center text-sm leading-none bg-[var(--color-accent)] text-[var(--color-on-accent)] cursor-pointer no-drag"
-          >
-            +
-          </button>
+        <div className="mb-2">
+          <h4 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">On paired servers</h4>
         </div>
-
-        {showFedAdd && (
-          <div className="border border-[var(--color-border)] bg-[var(--color-bg-elevated)] mb-2">
-            <div className="px-3 py-2 border-b border-[var(--color-border)] space-y-2">
-              <label className="block text-[10px] text-[var(--color-text-muted)] uppercase tracking-wider">
-                Federated server
-              </label>
-              {!fedPeersAvailable ? (
-                <p className="text-[10px] text-[var(--color-text-muted)]">
-                  Federation is off or unavailable. Enable it under Settings → K2 Connect.
-                </p>
-              ) : fedPeers.length === 0 ? (
-                <p className="text-[10px] text-[var(--color-text-muted)]">
-                  No trusted federated servers yet. Under Settings → Connections, open a saved
-                  server and click <span className="text-[var(--color-text-secondary)]">Pair as federated peer</span>
-                  {' '}(enable federation on both sides first).
-                </p>
-              ) : (
-                <SettingDropdown
-                  value={selectedPeerFp}
-                  placeholder="Select a server…"
-                  menuAlign="left"
-                  fullWidth
-                  options={fedPeers.map((p) => ({
-                    value: p.fingerprint,
-                    label: (() => {
-                      const host = federatedPeerHost(p)
-                      return host ? `${peerLabel(p)} (${host})` : peerLabel(p)
-                    })(),
-                  }))}
-                  onChange={(fp) => {
-                    setSelectedPeerFp(fp)
-                    setRemoteError(null)
-                  }}
-                />
-              )}
-            </div>
-
-            {selectedPeerFp && (
-              <div className="max-h-[220px] overflow-y-auto">
-                <div className="px-3 py-1.5 text-[10px] text-[var(--color-text-muted)] border-b border-[var(--color-border)]">
-                  Agents on {selectedPeer ? peerLabel(selectedPeer) : 'server'} you can connect to
-                  {selectedPeer && federatedPeerHost(selectedPeer)
-                    ? ` · ${federatedPeerHost(selectedPeer)}`
-                    : ''}
-                </div>
-                {rosterLoading ? (
-                  <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">Loading agents…</div>
-                ) : availableRosterAgents.length === 0 ? (
-                  <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
-                    {emptyRosterNote(rosterAnswered, selectedPeer ? peerLabel(selectedPeer) : 'this server')}
-                  </div>
-                ) : (
-                  availableRosterAgents.map((a) => (
-                    <button
-                      key={`${a.workspace_id}:${a.agent}`}
-                      type="button"
-                      disabled={adding || !selectedPeer || !federatedPeerHost(selectedPeer)}
-                      onClick={() => void handleAddFederated(a)}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-white/[0.06] transition-colors no-drag cursor-pointer disabled:opacity-50 border-b border-[var(--color-border)] last:border-b-0"
-                    >
-                      <span className="w-2 h-2 flex-shrink-0 rounded-full bg-[var(--color-accent)]" />
-                      <span className="text-xs text-[var(--color-text-primary)] truncate">{a.agent}</span>
-                      <span className="text-[10px] text-[var(--color-text-muted)] truncate ml-auto">
-                        {a.workspace_name}
-                      </span>
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
-            {remoteError && showFedAdd && (
-              <div className="px-3 py-2 text-[10px] text-[var(--color-status-error-soft)] border-t border-[var(--color-border)]">
-                {remoteError}
-              </div>
-            )}
-          </div>
-        )}
 
         {loading ? null : remoteConns.length === 0 ? (
           <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2 border border-[var(--color-border)]">
@@ -4170,7 +3941,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
             ))}
           </div>
         )}
-        {!showFedAdd && remoteError && (
+        {remoteError && (
           <div className="mt-1 px-3 py-2 text-[10px] text-[var(--color-status-error-soft)] border border-[var(--color-border)]">
             {remoteError}
           </div>

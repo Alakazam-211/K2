@@ -885,6 +885,17 @@ describe('picker order (0.46.1): A to Z by the name shown, the address breaking 
     const sorted = sortRosterForPicker([agent('sales', 'w3'), agent('Billing', 'w2'), agent('billing', 'w1'), agent('ops', 'w4')])
     expect(sorted.map((a) => a.address)).toEqual(['w1::billing', 'w2::Billing', 'w4::ops', 'w3::sales'])
   })
+
+  it('sorts agents by the name shown first (as the daemon does), the handle only breaking ties', () => {
+    const a = (name: string, handle: string, ws: string): RosterAgent => ({
+      workspace_id: ws,
+      workspace_name: name,
+      agent: handle,
+      address: `${ws}::${handle}`,
+    })
+    const sorted = sortRosterForPicker([a('Zed', 'aaa', 'w1'), a('bob', 'zzz', 'w2'), a('', 'carl', 'w3'), a('Bob', 'bob-a', 'w4')])
+    expect(sorted.map((x) => x.address)).toEqual(['w4::bob-a', 'w2::zzz', 'w3::carl', 'w1::aaa'])
+  })
 })
 
 describe('the federated agent picker with nothing to show (0.46.1)', () => {

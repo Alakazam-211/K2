@@ -65,6 +65,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Message previews switch.** Owners and admins can turn message text in phone notifications on or off in Settings → Notifications. With it on, the text passes through K2's push relay and Apple or Google.
 - **Unread counts from the server.** Threads and project chats keep one read cursor per person, so the desktop and the phone agree on what is unread and what is waiting on you; `k2 thread unread` shows yours, and a Thread or project chat can be muted.
 - Reading a Thread in a Home room from another server, or in a Garden conversation whose agent lives on another server, marks it read on that server too.
+- **Chats open from the phone's cache.** A Thread or project chat read can ask for only what's new since the last message the phone has (`after_seq`), oldest first, along with any card answered, voided or expired since then, so K2 Companion shows a chat at once and catches up behind it (feature `thread-delta-v1`).
 - **Homes sync.** Your Homes sync with your own server, local-first, with a sync badge on Home and Settings → Homes Sync.
 
 ### Secrets between agents

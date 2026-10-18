@@ -24,7 +24,8 @@
 //! approved *and* held services, so approving opens the door at once (the
 //! nft rule reloads) without a restart; a service asked for after the App
 //! started needs one restart for its forward. Revoking shuts the door at
-//! once for new connections (an open connection runs until it closes).
+//! once and cuts its open connections; a held or revoked door answers with
+//! a TCP reset, never a stall (the helper's nft ruleset v4, 0.46.1).
 //!
 //! **Deny-list**: `k2_root_proto::apps::box_port_refusal` (system ports
 //! below 1024 incl. ssh, K2's App range 38600–38999 so no App reaches
@@ -471,7 +472,7 @@ pub fn request_manifest(who: &Who, app: &deploy::store::AppRow, seed_hash: &str,
 
 /// POST `/cli/app/box-service/revoke {app, name}`: at once (approved or
 /// held). The App's nft rule reloads without it: new connections are
-/// refused; an open one runs until it closes.
+/// refused at once and open ones are cut (nft ruleset v4).
 fn revoke(who: &Who, body: &[u8]) -> R<J> {
     need_credential(who)?;
     let v = json_body(body)?;
@@ -497,7 +498,7 @@ fn revoke(who: &Who, body: &[u8]) -> R<J> {
             extra: Some(json!({ "revoked": true })),
         });
     }
-    Ok(json!({ "ok": true, "revoked": true, "name": row.name, "hostPort": row.host_port, "note": "shut at once for new connections" }))
+    Ok(json!({ "ok": true, "revoked": true, "name": row.name, "hostPort": row.host_port, "note": "shut at once: new connections are refused and open ones cut" }))
 }
 
 #[cfg(test)]

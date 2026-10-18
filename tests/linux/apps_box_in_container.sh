@@ -207,8 +207,8 @@ expect_rc 0 "nft apply (open)"
 # Capture first: with pipefail, `nft … | grep -q` fails when grep exits
 # early and nft takes SIGPIPE.
 TABLE="$(inns nft list table inet k2app)"
-grep -q "chain k2app_v3" <<<"$TABLE" || fail "chain"
-grep -q "meta skuid $U jump k2app_v3" <<<"$TABLE" || fail "skuid rule: $TABLE"
+grep -q "chain k2app_v4" <<<"$TABLE" || fail "chain"
+grep -q "meta skuid $U jump k2app_v4" <<<"$TABLE" || fail "skuid rule: $TABLE"
 grep -q "chain k2app_apps" <<<"$TABLE" || fail "per-App chain"
 req daemon apps nft apply 38600-38899 38900-38999 5432
 expect_rc 0 "nft apply again (atomic replace)"
@@ -230,6 +230,12 @@ as_k2() { inns runuser -u k2 -- curl -s -o /dev/null -m 5 -w '%{http_code}' "$1"
 [ "$(as_app http://127.0.0.1:38910/)" = 000 ] || fail "k2app outside any App cgroup → a proxy port was allowed"
 [ "$(as_app http://127.0.0.1:38650/)" = 000 ] || fail "k2app outside any App cgroup → a gateway port was allowed"
 [ "$(as_app http://127.0.0.1:9999/)" = 000 ] || fail "k2app → another loopback port was allowed"
+# Ruleset v4 (0.46.1 lane 1): refused with a TCP reset at once, never a
+# 3 s stall (a held or revoked box service answers straight away).
+t0="$(date +%s%N)"
+as_app http://127.0.0.1:9999/ >/dev/null
+el=$((($(date +%s%N) - t0) / 1000000))
+[ "$el" -lt 2000 ] || fail "k2app → a refused loopback port took ${el} ms (a drop, not a reset)"
 [ "$(as_app "http://$MYIP:9998/")" = 000 ] || fail "k2app → this host's own address was allowed"
 [ "$(as_k2 http://127.0.0.1:9999/)" = 200 ] || fail "the daemon user must be unaffected (loopback)"
 [ "$(as_k2 "http://$MYIP:9998/")" = 200 ] || fail "the daemon user must be unaffected (own address)"
@@ -252,7 +258,7 @@ id k2appx >/dev/null || fail "k2appx user"
 req daemon apps nft apply 38600-38899 38900-38999 5432
 expect_rc 0 "nft apply with the process user"
 T2="$(inns nft list table inet k2app)"
-grep -q "meta skuid $(id -u k2appx) jump k2app_v3" <<<"$T2" || fail "k2appx is not in the table: $T2"
+grep -q "meta skuid $(id -u k2appx) jump k2app_v4" <<<"$T2" || fail "k2appx is not in the table: $T2"
 req daemon apps process-unit on
 expect_rc 0 "process-unit on"
 systemctl cat k2app-process@.service >/dev/null || fail "unit not loaded"

@@ -20,6 +20,11 @@
 // 0.45.6 (Rosson 2026-10-15, from K2 Companion): with `activity-drawer` (on
 // in Garden 1) the live Thread turn shows in `ZenActivityDrawer`, pulled
 // out of the message box's top edge, instead of the typing dots.
+//
+// 0.46.1 (thread-read-v1, Zen defaults): the conversation marks its Thread
+// read while it is looked at, says how many cards wait on you ("2
+// waiting", a click scrolls to the first) and, with `mute` (on in Garden
+// 1), has a bell to mute the Thread (`ZenThreadReadControls`).
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
@@ -44,6 +49,7 @@ import { ZenCompose } from './ZenCompose'
 import { ZenActivityDrawer, zenDrawerShows } from './ZenActivityDrawer'
 import { ZenStatusDot } from './ZenAgentsWidget'
 import { ZenProgressiveBlur } from './ZenProgressiveBlur'
+import { ZenMuteButton, ZenWaitingChip, useZenThreadAutoRead, useZenThreadEntry, zenCardWaiting } from './ZenThreadReadControls'
 import { ZenAgentAvatar, ZenWidgetStyles, initials, useNowSec, useZenRows, useZenThread } from './zen-widget-kit'
 
 // The bubbles, cards, dots and "Earlier messages" are the shared Thread
@@ -101,6 +107,8 @@ export interface ZenConversationOptions {
   loadOlder: boolean
   /** 0.45.6 Garden 1: the activity drawer above the box (`activity-drawer`). */
   activityDrawer?: boolean
+  /** 0.46.1 Garden 1: the bell that mutes this Thread (`mute`). */
+  mute?: boolean
 }
 
 const ALL_ON: ZenConversationOptions = { compose: true, attachments: true, loadOlder: true }
@@ -240,6 +248,24 @@ export function ZenConversation({
 
   const note = view?.note ?? null
   const showEmpty = ready && view.loaded && !view.error && items.length === 0
+  // thread-read-v1: read while looked at; the cards waiting on you.
+  useZenThreadAutoRead(view, note === null)
+  const readEntry = useZenThreadEntry(view)
+  const waitingInView = ready ? items.filter(zenCardWaiting) : []
+  const waiting = Math.max(readEntry?.waiting ?? 0, waitingInView.length)
+  const showWaiting = useCallback(() => {
+    const first = waitingInView[0]
+    if (!first) {
+      // Older than the loaded page: page back toward it.
+      loadOlder()
+      return
+    }
+    const el = Array.from(rootRef.current?.querySelectorAll<HTMLElement>('[data-zen-item]') ?? []).find(
+      (n) => n.getAttribute('data-zen-item') === first.id,
+    )
+    const box = el?.firstElementChild as HTMLElement | null | undefined
+    ;(box ?? el)?.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+  }, [waitingInView, loadOlder])
   return (
     <div
       ref={rootRef}
@@ -281,8 +307,11 @@ export function ZenConversation({
             </span>
           </span>
         </span>
+        <span className="ml-auto flex flex-shrink-0 items-center gap-2" data-zen-conversation-actions="">
+        <ZenWaitingChip waiting={waiting} onShow={showWaiting} />
+        {options.mute && <ZenMuteButton view={view} />}
         {row.people.length > 0 && (
-          <span className="ml-auto flex -space-x-1.5" data-zen-people="">
+          <span className="flex -space-x-1.5" data-zen-people="">
             {row.people.slice(0, 4).map((p) => (
               <span
                 key={p.user}
@@ -303,6 +332,7 @@ export function ZenConversation({
             ))}
           </span>
         )}
+        </span>
       </div>
 
       {row.needsYou && ready && (
@@ -372,16 +402,19 @@ export function ZenConversation({
         )}
         {ready &&
           items.map((it) => (
-            <Bubble
-              key={it.id}
-              item={it}
-              viewer={view?.viewer ?? null}
-              nowSec={nowSec}
-              server={row.server ?? 'this computer'}
-              onAnswer={(payload) => answer(it.id, payload)}
-              onVoid={() => dismiss(it.id)}
-              onMoreOptions={moreOptions}
-            />
+            // `display: contents`: the list's gap and layout see the bubble;
+            // the id lets "N waiting" scroll to a card.
+            <div key={it.id} data-zen-item={it.id} data-zen-item-waiting={zenCardWaiting(it) ? '' : undefined} style={{ display: 'contents' }}>
+              <Bubble
+                item={it}
+                viewer={view?.viewer ?? null}
+                nowSec={nowSec}
+                server={row.server ?? 'this computer'}
+                onAnswer={(payload) => answer(it.id, payload)}
+                onVoid={() => dismiss(it.id)}
+                onMoreOptions={moreOptions}
+              />
+            </div>
           ))}
         {ready && typing && <TypingIndicator />}
       </div>
@@ -431,6 +464,7 @@ export function ZenConversationWidget({ bridge, decl }: ZenWidgetProps): React.J
     attachments: decl.props.attachments !== false,
     loadOlder: decl.props['load-older'] !== false,
     activityDrawer: decl.props['activity-drawer'] === true,
+    mute: decl.props.mute === true,
   }
   // A pinned conversation opens itself.
   const opened = useRef<string | null>(null)

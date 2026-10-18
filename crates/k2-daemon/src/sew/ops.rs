@@ -115,6 +115,22 @@ pub trait SewOps: Send + Sync {
     /// Write the voice record (`None` removes it).
     fn voice_save(&self, v: Option<&Value>) -> Result<(), String>;
 
+    /// front443 holds this box's :443 and routes by SNI (0.46.1): voice
+    /// then runs the `passthrough` TURN tier behind it (TURN on 443 only).
+    fn front_serving(&self) -> bool {
+        false
+    }
+
+    /// The Sew this box runs knows the `passthrough` tier (0.2.1+; the
+    /// helper refuses it below that whatever the daemon thinks).
+    fn passthrough_supported(&self) -> bool {
+        k2_root_proto::sew::pinned_media_supports_passthrough()
+    }
+
+    /// Voice's state changed in a way the front routes on (a passthrough
+    /// install): rebuild its table now.
+    fn front_routes_changed(&self) {}
+
     /// This build pins a published Sew release
     /// (`k2_root_proto::sew::sew_release_pinned`). While false every
     /// install path refuses `sew_not_released`. Tests override it.
@@ -402,6 +418,12 @@ impl SewOps for RealOps {
             crate::domains::status::Served::Nothing => None,
         }
     }
+    fn front_serving(&self) -> bool {
+        crate::front443::serving()
+    }
+    fn front_routes_changed(&self) {
+        crate::front443::rebuild();
+    }
     fn frpc_logins(&self) -> u64 {
         k2_core::tunnel::connector::frpc_login_count()
     }
@@ -622,6 +644,12 @@ pub mod fake {
         /// (a test that holds a temp HOME); otherwise they are recorded.
         pub hook_calls: Mutex<Vec<String>>,
         pub real_hook: bool,
+        /// [`SewOps::front_serving`].
+        pub front: Mutex<bool>,
+        /// [`SewOps::passthrough_supported`] (true: as if Sew were 0.2.1+).
+        pub passthrough: Mutex<bool>,
+        /// Every port the served-leaf check probed.
+        pub served_ports: Mutex<Vec<u16>>,
     }
 
     pub const GIB: u64 = 1024 * 1024 * 1024;
@@ -702,6 +730,9 @@ pub mod fake {
                 mgmt_socket: Mutex::new(k2_root_proto::sew::SEW_MGMT_SOCKET.to_string()),
                 hook_calls: Mutex::new(vec![]),
                 real_hook: false,
+                front: Mutex::new(false),
+                passthrough: Mutex::new(true),
+                served_ports: Mutex::new(vec![]),
             }
         }
 
@@ -1108,12 +1139,19 @@ pub mod fake {
             self.nested.lock().unwrap().push((label.to_string(), target.map(str::to_string)));
             Ok(())
         }
-        fn served_leaf(&self, _connect: &str, _sni: &str, _port: u16) -> Option<String> {
+        fn served_leaf(&self, _connect: &str, _sni: &str, port: u16) -> Option<String> {
+            self.served_ports.lock().unwrap().push(port);
             match *self.serves_ours.lock().unwrap() {
                 Some(true) => self.last_leaf.lock().unwrap().clone(),
                 Some(false) => Some("0".repeat(64)),
                 None => None,
             }
+        }
+        fn front_serving(&self) -> bool {
+            *self.front.lock().unwrap()
+        }
+        fn passthrough_supported(&self) -> bool {
+            *self.passthrough.lock().unwrap()
         }
         fn frpc_logins(&self) -> u64 {
             *self.logins.lock().unwrap()

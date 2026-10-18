@@ -21,8 +21,17 @@
 //!   --when-idle`). `403 ip_unverified` is retried after the next frpc
 //!   Login (the relay learns the box's IP there), with backoff.
 //! - **Served check**: after install and on `status?health=1`, K2 connects
-//!   to `<node ip>:5349` with SNI `turn-<label>.k2.dev` and compares the leaf
-//!   it is served with the leaf it issued (`k2_turn_tls_mismatch` if not).
+//!   to `<node ip>:5349` (`:443` on the `passthrough` tier) with SNI
+//!   `turn-<label>.k2.dev` and compares the leaf it is served with the leaf
+//!   it issued (`k2_turn_tls_mismatch` if not).
+//! - **TURN tier** (0.46.1, front443): `direct` (sew-media on public TCP
+//!   5349, the default) or `passthrough` — when the daemon's :443 front
+//!   serves, sew-media listens on 127.0.0.1:5349 behind it, the front
+//!   splices `turn-<label>.k2.dev` there after a PROXY v2 header, and the
+//!   only ICE URL is `turns:turn-<label>.k2.dev:443` (Sew TURN-PT, rev 168).
+//!   The cert and key are staged exactly as for `direct`; the key never
+//!   leaves sew-media. [`set_tier`] moves an installed engine between the two
+//!   (`media reconfigure restart-now`: the listeners change).
 //! - **`voice.public_url`**: `wss://voice.<label>.k2.dev` by default (K2
 //!   points the nested `voice` label at 127.0.0.1:7880), or any `wss://`
 //!   origin on this box's own k2.dev label or a custom domain bound to it,
@@ -65,6 +74,8 @@ pub struct VoiceState {
     pub installed: bool,
     /// The `voice.public_url` Sew holds (or will, once installed).
     pub public_url: Option<String>,
+    /// `direct` or `passthrough` (front443); absent = `direct` (pre-0.46.1).
+    pub turn_tier: Option<String>,
     pub label: Option<String>,
     pub turn_host: Option<String>,
     /// The advertised IPv4[,IPv6].
@@ -94,6 +105,33 @@ pub struct VoiceState {
     pub installed_at: Option<i64>,
     pub updated_at: i64,
     pub warnings: Vec<String>,
+}
+
+/// The TURN tier behind the front.
+pub const TIER_PASSTHROUGH: &str = "passthrough";
+pub const TIER_DIRECT: &str = "direct";
+/// The public port the front owns.
+pub const FRONT_PORT: u16 = 443;
+
+/// The tier an installed engine runs (`direct` unless recorded).
+pub fn tier(st: &VoiceState) -> &str {
+    st.turn_tier.as_deref().unwrap_or(TIER_DIRECT)
+}
+
+/// The public TURN-TLS port of a tier.
+pub fn tier_port(tier: &str) -> u16 {
+    if tier == TIER_PASSTHROUGH {
+        FRONT_PORT
+    } else {
+        SEW_TURN_TLS_PORT
+    }
+}
+
+/// The host the front routes to sew-media's passthrough listener, when
+/// voice is installed on that tier.
+pub fn front_route_host(env: &Env) -> Option<String> {
+    let st = load(env);
+    (st.installed && tier(&st) == TIER_PASSTHROUGH).then_some(st.turn_host).flatten()
 }
 
 pub fn load(env: &Env) -> VoiceState {
@@ -245,8 +283,15 @@ pub fn preflight(env: &Env) -> Vec<Value> {
     } else {
         c.push(check("ports", "fail", format!("taken: {}", taken.join(", ")), "free them or stop what holds them"));
     }
-    if env.ops.port_taken("0.0.0.0", 443, false) {
-        c.push(check("turn_443", "info", ":443 is taken here", "TURN-TLS uses 5349: people on networks that allow only 443 cannot join calls"));
+    if env.ops.front_serving() {
+        c.push(check("turn_443", "ok", "K2's :443 front serves this box", "TURN-TLS rides :443 (passthrough tier): networks that allow only 443 can join calls"));
+    } else if env.ops.port_taken("0.0.0.0", 443, false) {
+        c.push(check(
+            "turn_443",
+            "info",
+            ":443 is taken here",
+            "TURN-TLS uses 5349: people on networks that allow only 443 cannot join calls (k2 front enable puts TURN on 443)",
+        ));
     }
     c
 }
@@ -527,22 +572,36 @@ fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
 
     step(env, "install");
     let host = turn_host(&label);
-    let body = json!({
+    // Behind the :443 front: sew-media on 127.0.0.1:5349, PROXY v2 first,
+    // advertised as 443 only (Sew's passthrough default).
+    let tier = if env.ops.front_serving() && env.ops.passthrough_supported() { TIER_PASSTHROUGH } else { TIER_DIRECT };
+    let turn_port = tier_port(tier);
+    let mut warnings_tier = Vec::new();
+    if env.ops.front_serving() && tier == TIER_DIRECT {
+        warnings_tier.push(format!(
+            "the :443 front serves, but this Sew has no passthrough TURN tier (Sew {} or later): TURN stays on TCP 5349",
+            pin::PASSTHROUGH_MIN_VERSION
+        ));
+    }
+    let mut body = json!({
         "public_url": url,
         "node_ip": node_ip,
         "udp_port": SEW_MEDIA_UDP_PORT,
         "tcp_port": SEW_MEDIA_TCP_PORT,
-        "turn_tls": "direct",
+        "turn_tls": tier,
         "turn_domain": host,
-        "turn_advertise_port": SEW_TURN_TLS_PORT,
         "sysctl": "apply",
         "turn_cert_pem": chain,
         "turn_key_pem": key_pem,
     });
+    if tier == TIER_DIRECT {
+        body["turn_advertise_port"] = json!(SEW_TURN_TLS_PORT);
+    }
     let out = sup::sew_run(env, &["media", "install"], Some(body.to_string().as_bytes())).map_err(|e| no("media_install_failed", 500, e))?;
     if let Some(w) = out.pointer("/sew/warnings").and_then(Value::as_array) {
         warnings.extend(w.iter().filter_map(Value::as_str).map(str::to_string));
     }
+    warnings.extend(warnings_tier);
 
     step(env, "label");
     let want_label = url == default_voice_url(&label);
@@ -560,16 +619,26 @@ fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
     sup::poll_units(env, &[UNIT_MEDIA], 60).map_err(|e| no("media_start_failed", 500, e))?;
 
     step(env, "verify");
+    if tier == TIER_PASSTHROUGH {
+        // The front routes the TURN name only once voice is recorded on
+        // this tier: record it, rebuild the front's table, then check.
+        update(env, |s| {
+            s.installed = true;
+            s.turn_tier = Some(tier.to_string());
+        });
+        env.ops.front_routes_changed();
+    }
     let ip4 = node_ip.split(',').next().unwrap_or("").to_string();
-    let served = served_check(env, &ip4, &host, st.cert_leaf_sha256.as_deref());
+    let served = served_check(env, &ip4, &host, st.cert_leaf_sha256.as_deref(), turn_port);
     if served != "ok" {
         warnings.push(format!(
-            "TURN-TLS check: {ip4}:{SEW_TURN_TLS_PORT} served {served} for {host} (a firewall, or another service on 5349?)"
+            "TURN-TLS check: {ip4}:{turn_port} served {served} for {host} (a firewall, or another service on {turn_port}?)"
         ));
     }
 
     let now = env.ops.now();
     st.installed = true;
+    st.turn_tier = Some(tier.to_string());
     st.public_url = Some(url.clone());
     st.node_ip = Some(node_ip.clone());
     st.node_ip_source = Some(if req.node_ip.is_some() { "manual" } else { "control_plane" }.into());
@@ -590,11 +659,14 @@ fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
         "publicUrl": url,
         "turnHost": host,
         "nodeIp": node_ip,
-        "turnTls": {"port": SEW_TURN_TLS_PORT, "served": served, "certNotAfter": st.cert_not_after},
-        "ports": {"udp": SEW_MEDIA_UDP_PORT, "tcp": SEW_MEDIA_TCP_PORT, "turnTls": SEW_TURN_TLS_PORT},
+        "turnTier": tier,
+        "turnTls": {"port": turn_port, "served": served, "certNotAfter": st.cert_not_after},
+        "ports": {"udp": SEW_MEDIA_UDP_PORT, "tcp": SEW_MEDIA_TCP_PORT, "turnTls": turn_port},
         "warnings": warnings,
-        "next": "open TCP 7881, UDP 7882 and TCP 5349 in the host and provider firewalls, test a call from outside, then \
-                 k2 hostchat media probe --udp ok --tcp ok --turn-tls ok",
+        "next": format!(
+            "open TCP 7881, UDP 7882 and TCP {turn_port} in the host and provider firewalls, test a call from outside, then \
+             k2 hostchat media probe --udp ok --tcp ok --turn-tls ok"
+        ),
     }))
 }
 
@@ -618,9 +690,10 @@ fn stage_media_bytes(env: &Env, path: Option<&std::path::Path>) -> R<()> {
     sup::helper_stdin(env, &["stage-media"], &bytes).map(|_| ()).map_err(|e| no("helper_error", 500, e))
 }
 
-/// `ok` (our leaf), `mismatch` (another cert) or `nothing` (no TLS).
-pub fn served_check(env: &Env, ip: &str, host: &str, ours: Option<&str>) -> String {
-    match env.ops.served_leaf(ip, host, SEW_TURN_TLS_PORT) {
+/// `ok` (our leaf), `mismatch` (another cert) or `nothing` (no TLS), on
+/// the tier's public port.
+pub fn served_check(env: &Env, ip: &str, host: &str, ours: Option<&str>, port: u16) -> String {
+    match env.ops.served_leaf(ip, host, port) {
         Some(l) if Some(l.as_str()) == ours => "ok".into(),
         Some(_) => "mismatch".into(),
         None => "nothing".into(),
@@ -674,6 +747,71 @@ pub fn set_url(env: &Env, url: &str) -> R<Value> {
     });
     sup::changed("voice-url");
     Ok(json!({"ok": true, "publicUrl": url, "applied": true, "changed": true, "restarted": [UNIT_SEW], "warnings": warnings}))
+}
+
+// ── TURN tier (front443) ─────────────────────────────────────────────────
+
+/// The chain and key K2 already holds for the TURN host (no issuance: a
+/// tier move must not spend K2 Connect's turn budget).
+fn held_material(env: &Env, st: &VoiceState) -> R<(String, String, String)> {
+    let host = st.turn_host.clone().ok_or_else(|| no("voice_not_installed", 409, "no TURN host recorded"))?;
+    let chain = st.cert_pem.clone().ok_or_else(|| no("k2_turn_cert_missing", 409, "no TURN certificate recorded: k2 hostchat media renew"))?;
+    let r = st.turn_key_ref.as_deref().ok_or_else(|| no("k2_turn_cert_missing", 409, "no TURN key recorded"))?;
+    let key_pem = env
+        .secrets
+        .resolve(r)
+        .map_err(|e| no("vault_closed", 503, e))?
+        .ok_or_else(|| no("k2_turn_cert_missing", 409, "the TURN key is gone from the vault: k2 hostchat media renew"))?;
+    Ok((host, chain, key_pem))
+}
+
+/// Move an installed engine to the `passthrough` tier (behind the :443
+/// front) or back to `direct` (public 5349). `sew media install
+/// --reconfigure --restart --now` with the tier, the TURN host and the
+/// same cert and key K2 holds: the TURN listeners change, so sew-media
+/// restarts and calls in progress drop (Sew docs/voice.md). A no-op when
+/// the engine already runs that tier, or voice isn't installed.
+pub fn set_tier(env: &Env, passthrough: bool) -> R<Value> {
+    let want = if passthrough { TIER_PASSTHROUGH } else { TIER_DIRECT };
+    let st = load(env);
+    if !st.installed {
+        return Ok(json!({"ok": true, "installed": false, "turnTier": want, "changed": false}));
+    }
+    if tier(&st) == want {
+        return Ok(json!({"ok": true, "installed": true, "turnTier": want, "changed": false}));
+    }
+    if passthrough && !env.ops.passthrough_supported() {
+        return Err(no(
+            pin::SEW_PASSTHROUGH_UNSUPPORTED,
+            409,
+            format!("this Sew has no passthrough TURN tier (needs Sew {} or later): TURN stays on TCP 5349", pin::PASSTHROUGH_MIN_VERSION),
+        ));
+    }
+    sup::helper_check(env)?;
+    let _l = sup::begin(env)?;
+    let (host, chain, key_pem) = held_material(env, &st)?;
+    let mut body = json!({
+        "turn_tls": want,
+        "turn_domain": host,
+        "turn_cert_pem": chain,
+        "turn_key_pem": key_pem,
+    });
+    if !passthrough {
+        body["turn_advertise_port"] = json!(SEW_TURN_TLS_PORT);
+    }
+    sup::sew_run(env, &["media", "reconfigure", "restart-now"], Some(body.to_string().as_bytes()))
+        .map_err(|e| no("media_reconfigure_failed", 500, e))?;
+    update(env, |s| s.turn_tier = Some(want.to_string()));
+    sup::changed("voice-tier");
+    Ok(json!({
+        "ok": true,
+        "installed": true,
+        "turnTier": want,
+        "changed": true,
+        "turnTlsPort": tier_port(want),
+        "restarted": [UNIT_MEDIA],
+        "note": "sew-media restarted: calls in progress dropped",
+    }))
 }
 
 // ── renewal ──────────────────────────────────────────────────────────────
@@ -874,7 +1012,7 @@ pub fn status(env: &Env, live: bool) -> (Value, Vec<String>, Vec<Value>) {
     let mut served = st.served.clone();
     if live {
         if let (Some(ip), Some(host)) = (st.node_ip.as_deref().and_then(|n| n.split(',').next()), st.turn_host.as_deref()) {
-            let s = served_check(env, ip, host, st.cert_leaf_sha256.as_deref());
+            let s = served_check(env, ip, host, st.cert_leaf_sha256.as_deref(), tier_port(tier(&st)));
             update(env, |v| {
                 v.served = Some(s.clone());
                 v.served_at = Some(now);
@@ -902,9 +1040,10 @@ pub fn status(env: &Env, live: bool) -> (Value, Vec<String>, Vec<Value>) {
         "nodeIpSource": st.node_ip_source,
         "cert": {"notAfter": st.cert_not_after, "daysLeft": st.cert_not_after.map(|t| (t - now) / 86_400),
                  "leafSha256": st.cert_leaf_sha256, "issuedAt": st.cert_issued_at},
-        "turnTls": {"port": SEW_TURN_TLS_PORT, "served": served, "checkedAt": st.served_at},
+        "turnTier": tier(&st),
+        "turnTls": {"port": tier_port(tier(&st)), "served": served, "checkedAt": st.served_at},
         "voiceLabel": st.voice_label,
-        "ports": {"udp": SEW_MEDIA_UDP_PORT, "tcp": SEW_MEDIA_TCP_PORT, "turnTls": SEW_TURN_TLS_PORT},
+        "ports": {"udp": SEW_MEDIA_UDP_PORT, "tcp": SEW_MEDIA_TCP_PORT, "turnTls": tier_port(tier(&st))},
         "probe": st.probe,
         "unit": unit.json(),
         "engine": engine,

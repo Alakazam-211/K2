@@ -4,8 +4,10 @@
 //! The drop-in (`k2_root_proto::templates::handoff_dropin`) gives the
 //! systemd unit `KillMode=process` (frpc, published services and skin
 //! helpers survive a stop, restart or crash and are re-adopted),
-//! `NotifyAccess=main` (a hand-off can move the unit's main pid) and
-//! `ExecReload=` SIGUSR2 (`systemctl reload` = a no-downtime hand-off).
+//! `NotifyAccess=main` (a hand-off can move the unit's main pid),
+//! `ExecReload=` SIGUSR2 (`systemctl reload` = a no-downtime hand-off) and
+//! `OOMPolicy=continue` (an OOM-killed agent in the unit's cgroup no longer
+//! makes systemd stop and restart the whole daemon).
 //!
 //! - **System unit** (provisioned boxes): through the root helper's
 //!   `daemon handoff-dropin install` (protocol 5). The unit comes from the
@@ -44,6 +46,25 @@ fn user_dropin_path(unit: &str) -> Option<std::path::PathBuf> {
     )
 }
 
+/// The drop-in path for `unit` in `scope` ("user" or "system").
+fn dropin_path(unit: &str, scope: &str) -> Option<std::path::PathBuf> {
+    if scope == "user" {
+        user_dropin_path(unit)
+    } else {
+        Some(
+            std::path::Path::new(k2_root_proto::paths::SYSTEMD_SYSTEM_DIR)
+                .join(format!("{unit}.d"))
+                .join(k2_root_proto::paths::HANDOFF_DROPIN_FILE),
+        )
+    }
+}
+
+/// Whether the file at `path` holds exactly this build's drop-in bytes.
+fn holds_current_dropin(path: Option<&std::path::Path>) -> bool {
+    path.and_then(|p| std::fs::read(p).ok())
+        .is_some_and(|b| b == handoff_dropin().as_bytes())
+}
+
 /// Where the drop-in for this daemon's unit lives, and whether it holds
 /// the canned bytes.
 pub fn dropin_state() -> Value {
@@ -51,19 +72,8 @@ pub fn dropin_state() -> Value {
         return json!({ "applies": false, "why": "not a systemd unit" });
     }
     let (_user, unit, scope) = crate::root_helper::own_unit();
-    let path = if scope == "user" {
-        user_dropin_path(&unit)
-    } else {
-        Some(
-            std::path::Path::new(k2_root_proto::paths::SYSTEMD_SYSTEM_DIR)
-                .join(format!("{unit}.d"))
-                .join(k2_root_proto::paths::HANDOFF_DROPIN_FILE),
-        )
-    };
-    let current = path
-        .as_ref()
-        .and_then(|p| std::fs::read(p).ok())
-        .is_some_and(|b| b == handoff_dropin().as_bytes());
+    let path = dropin_path(&unit, &scope);
+    let current = holds_current_dropin(path.as_deref());
     json!({
         "applies": true,
         "unit": unit,
@@ -131,7 +141,11 @@ pub fn ensure_on_boot() {
         return;
     }
     // Retries cover a box whose root helper is still protocol 4 at boot:
-    // the helper auto-heal installs this version's helper ~2 min in.
+    // the helper auto-heal installs this version's helper ~2 min in. They
+    // also cover an older helper that answers but renders its own (older)
+    // drop-in, e.g. a 0.46.0 helper without `OOMPolicy=continue`: the
+    // system unit counts as done only once the file holds this build's
+    // bytes, which it does after the helper self-updates.
     std::thread::Builder::new()
         .name("k2-handoff-dropin".into())
         .spawn(|| {
@@ -141,15 +155,25 @@ pub fn ensure_on_boot() {
                     return;
                 }
                 match install() {
-                    Ok(true) => {
-                        log_debug!(
-                            "[daemon/handoff] unit drop-in installed (KillMode=process, \
-                             NotifyAccess=main, ExecReload=SIGUSR2): frpc and Apps now survive a \
-                             daemon restart"
-                        );
+                    Ok(changed) => {
+                        let (_user, unit, scope) = crate::root_helper::own_unit();
+                        if !holds_current_dropin(dropin_path(&unit, &scope).as_deref()) {
+                            log_debug!(
+                                "[daemon/handoff] unit drop-in differs from this build's \
+                                 (older root helper?); retrying after the helper updates"
+                            );
+                            continue;
+                        }
+                        if changed {
+                            log_debug!(
+                                "[daemon/handoff] unit drop-in installed (KillMode=process, \
+                                 NotifyAccess=main, ExecReload=SIGUSR2, OOMPolicy=continue): \
+                                 frpc and Apps survive a daemon restart, and an OOM-killed \
+                                 agent no longer stops the daemon"
+                            );
+                        }
                         return;
                     }
-                    Ok(false) => return,
                     Err(e) => log_debug!("[daemon/handoff] unit drop-in not installed (yet): {e}"),
                 }
             }

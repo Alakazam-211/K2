@@ -3,7 +3,8 @@
 #
 # Runs a k2-daemon build as a transient unit carrying exactly the stage-H
 # drop-in settings (Type=simple, KillMode=process, NotifyAccess=main,
-# Restart=always), with a scratch HOME, a private XDG_RUNTIME_DIR and an
+# OOMPolicy=continue, Restart=always), with a scratch HOME, a private
+# XDG_RUNTIME_DIR and an
 # frpc stand-in under the tunnel supervisor. Checks:
 #   1. POST /cli/daemon/handoff moves the unit's MainPID to the successor,
 #      the unit stays active after the old daemon exits, frpc is the same
@@ -45,7 +46,8 @@ cat > "$HOME_D/.k2/tunnel.json" <<'EOF'
 EOF
 
 systemd-run --quiet --unit="$UNIT" \
-	-p Type=simple -p KillMode=process -p NotifyAccess=main -p Restart=always -p RestartSec=1 \
+	-p Type=simple -p KillMode=process -p NotifyAccess=main -p OOMPolicy=continue \
+	-p Restart=always -p RestartSec=1 \
 	-p "ExecReload=/bin/kill -USR2 \$MAINPID" \
 	--setenv=HOME="$HOME_D" --setenv=PATH="$BIN_D:/usr/local/bin:/usr/bin:/bin" \
 	--setenv=SHELL=/bin/false --setenv=XDG_RUNTIME_DIR="$RUN" \

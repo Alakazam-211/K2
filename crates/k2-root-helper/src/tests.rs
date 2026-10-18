@@ -1559,6 +1559,7 @@ fn handoff_dropin_install_is_canned_idempotent_and_reloads_once() {
     assert_eq!(body, k2_root_proto::templates::handoff_dropin());
     assert!(body.contains("\nKillMode=process\n"));
     assert!(body.contains("\nNotifyAccess=main\n"));
+    assert!(body.contains("\nOOMPolicy=continue\n"));
     assert!(!body.contains("NotifyAccess=all"));
     let mode = std::fs::metadata(t.p(HANDOFF_DROPIN)).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o644);
@@ -1586,6 +1587,30 @@ fn handoff_dropin_install_is_canned_idempotent_and_reloads_once() {
     // Removing nothing is fine and reloads nothing.
     ok(&t.call(&["daemon", "handoff-dropin", "remove"]));
     assert_eq!(reloads(&t), 3);
+}
+
+/// A box updated from 0.46.0 holds the drop-in without `OOMPolicy=`; the
+/// boot-time install must rewrite it (and reload) so an OOM-killed agent
+/// no longer stops the whole daemon unit.
+#[test]
+fn handoff_dropin_install_upgrades_the_0_46_0_dropin() {
+    let t = box_root();
+    std::fs::create_dir_all(t.p("/etc/systemd/system/k2-daemon.service.d")).unwrap();
+    let v0_46_0 = "# K2 runtime stage H (front-door hand-off). Written by k2-root-helper\n\
+                   # `daemon handoff-dropin install`; remove with `... remove`.\n\
+                   [Service]\n\
+                   KillMode=process\n\
+                   NotifyAccess=main\n\
+                   ExecReload=/bin/kill -USR2 $MAINPID\n";
+    std::fs::write(t.p(HANDOFF_DROPIN), v0_46_0).unwrap();
+    let o = t.call(&["daemon", "handoff-dropin", "install"]);
+    ok(&o);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["changed"], true);
+    let body = std::fs::read_to_string(t.p(HANDOFF_DROPIN)).unwrap();
+    assert_eq!(body, k2_root_proto::templates::handoff_dropin());
+    assert!(body.contains("\nOOMPolicy=continue\n"));
+    assert_eq!(reloads(&t), 1);
 }
 
 #[test]

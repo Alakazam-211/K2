@@ -133,6 +133,16 @@ Cloud-init automation: `scripts/cloud-init-k2-server.yaml.tpl`.
   existing boxes need the drop-in
   (`/etc/systemd/system/<unit>.service.d/killmode.conf`). Applied to the
   bare-metal box's main daemon 2026-07-06 (takes effect its next stop).
+- **`OOMPolicy=continue` on the daemon unit** (0.46.1): agents run in
+  the daemon's cgroup, and with the default `OOMPolicy=stop` one
+  OOM-killed agent made systemd stop and restart the whole daemon
+  (verified on the build box). The unit templates set it, and the stage H
+  drop-in (`<unit>.service.d/k2-handoff.conf`) carries it, so existing
+  boxes get it when the 0.46.1 daemon and root helper converge the
+  drop-in at boot (applies on `daemon-reload`, no restart). Check with
+  `systemctl show -p OOMPolicy <unit>`. Not on Stalwart, Postgres
+  (`OOMPolicy=kill` on purpose), Apps or the compute node (`Delegate=yes`
+  already defaults to `continue`).
 - Ubuntu minimal images may lack `sudo` — the provision script uses
   `sudo -u`; install sudo or swap to `runuser` if you hit that.
 - The daemon binds **127.0.0.1 only**; remote access is exclusively the

@@ -136,6 +136,69 @@ CREATE TABLE IF NOT EXISTS audit (
 CREATE INDEX IF NOT EXISTS audit_secret ON audit (secret_id, seq);
 "#;
 
+/// Agent-to-agent secret handoff (prd-agent-secret-handoff-v1 §12):
+/// four additive tables, created on every open. `user_version` stays 1
+/// (H22), so a 0.46.0 daemon still opens a vault that has them (it never
+/// reads them). Every row carries a MAC under the row key.
+///
+/// Deviation from the PRD sketch: `handoff` is keyed by (delivery id,
+/// direction), so a same-server send keeps its `out` row and its `in` row
+/// in one vault; `card` holds the Thread card the pending copy posted.
+pub const HANDOFF_TABLES: &str = r#"
+CREATE TABLE IF NOT EXISTS handoff (
+    delivery_id TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    status TEXT NOT NULL,
+    local_workspace_id TEXT NOT NULL,
+    peer_addr TEXT NOT NULL,
+    peer_fp TEXT,
+    sender_actor TEXT NOT NULL,
+    source_vault_id TEXT,
+    name TEXT NOT NULL,
+    landed_name TEXT,
+    kind TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    reply_to TEXT,
+    item_json TEXT NOT NULL,
+    secret_id TEXT,
+    version INTEGER,
+    reason TEXT,
+    card TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    decided_by TEXT,
+    expires_at TEXT,
+    row_mac BLOB NOT NULL,
+    PRIMARY KEY (delivery_id, direction)
+);
+CREATE INDEX IF NOT EXISTS handoff_ws ON handoff (local_workspace_id, status);
+
+CREATE TABLE IF NOT EXISTS handoff_value (
+    delivery_id TEXT PRIMARY KEY,
+    nonce BLOB NOT NULL,
+    ciphertext BLOB NOT NULL,
+    row_mac BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS handoff_accept (
+    workspace_id TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    added_by TEXT NOT NULL,
+    added_at TEXT NOT NULL,
+    row_mac BLOB NOT NULL,
+    PRIMARY KEY (workspace_id, sender)
+);
+
+CREATE TABLE IF NOT EXISTS peer_vault (
+    peer_fp TEXT PRIMARY KEY,
+    vault_id TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    features TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    row_mac BLOB NOT NULL
+);
+"#;
+
 pub fn configure(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "secure_delete", "ON")?;
@@ -157,5 +220,7 @@ pub fn migrate(conn: &Connection) -> Result<()> {
         conn.execute_batch(V1)?;
         conn.pragma_update(None, "user_version", 1)?;
     }
+    // Additive tables (H22): no version bump.
+    conn.execute_batch(HANDOFF_TABLES)?;
     Ok(())
 }

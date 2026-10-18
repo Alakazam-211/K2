@@ -37,6 +37,8 @@ use crate::redact::{Redactor, SURFACE_MIN_LEN};
 use crate::secret::{Key32, SecretBytes};
 use crate::store::*;
 
+mod handoff_store;
+
 pub const FORMAT: &str = "k2-vault/1";
 pub const VERSION_RETENTION_DAYS: i64 = 30;
 pub const REQUEST_EXPIRY_DAYS: i64 = 7;

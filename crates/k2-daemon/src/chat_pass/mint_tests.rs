@@ -1,6 +1,6 @@
 //! K7 unit tests: pass claims (incl. the optional caps ceiling), identity
 //! per caller type and the Owner-role Connect ruling (both settings), the
-//! mint handler's gates and order, rate limits, link cache, owner handoff
+//! mint handler's gates and order, rate limits, the live install id, owner handoff
 //! (person confirm, single use, 60 s, ≤ 5 outstanding), and no secret in
 //! the audit. Each HOME-touching test runs under `TempHome`; the keyring is
 //! a temp vault (fake key store).
@@ -45,14 +45,6 @@ struct FixedStatus(Result<String, String>);
 impl SewStatus for FixedStatus {
     fn install_id(&self) -> Result<String, String> {
         self.0.clone()
-    }
-}
-
-struct Calls(std::sync::Mutex<usize>, Result<String, String>);
-impl SewStatus for Calls {
-    fn install_id(&self) -> Result<String, String> {
-        *self.0.lock().unwrap() += 1;
-        self.1.clone()
     }
 }
 
@@ -257,25 +249,18 @@ fn rate_limit_per_sid_and_per_daemon() {
 }
 
 #[test]
-fn install_id_cache_fresh_stale_missing_and_mint_503() {
+fn install_id_is_asked_every_mint_validated_and_missing_is_503() {
     let _home = TempHome::new();
     let dead = FixedStatus(Err("down".into()));
-    assert!(link::install_id_for_mint(T0, &dead).is_err(), "nothing cached, Sew down");
-    let live = Calls(std::sync::Mutex::new(0), Ok("4242".into()));
-    assert_eq!(link::install_id_for_mint(T0, &live).expect("fetched"), "4242");
-    assert_eq!(link::install_id_for_mint(T0 + 599, &live).expect("fresh"), "4242");
-    assert_eq!(*live.0.lock().unwrap(), 1, "fresh value used without a call");
-    let moved = Calls(std::sync::Mutex::new(0), Ok("777".into()));
-    assert_eq!(link::install_id_for_mint(T0 + 600, &moved).expect("refreshed"), "777");
-    assert_eq!(link::install_id_for_mint(T0 + 2000, &dead).expect("stale used"), "777");
-    for bad in ["0", "abc", "0123", "12345678901234567890"] {
-        let b = FixedStatus(Ok(bad.into()));
-        link::clear_install_id().expect("clear");
-        assert!(link::install_id_for_mint(T0, &b).is_err(), "{bad} refused");
-        assert!(link::set_install_id(bad).is_err(), "{bad} refused");
+    assert_eq!(link::install_id_for_mint(&dead).unwrap_err(), "down");
+    assert_eq!(link::install_id_for_mint(&FixedStatus(Ok("4242".into()))).expect("live"), "4242");
+    // No cache: the next answer is what the next mint uses.
+    assert_eq!(link::install_id_for_mint(&FixedStatus(Ok("777".into()))).expect("moved"), "777");
+    assert!(link::install_id_for_mint(&dead).is_err(), "nothing stale to fall back to");
+    for bad in ["0", "abc", "0123", "12345678901234567890", ""] {
+        assert!(link::install_id_for_mint(&FixedStatus(Ok(bad.into()))).is_err(), "{bad} refused");
     }
     // The handler: no install id → 503 chat_unavailable.
-    link::clear_install_id().expect("clear");
     let r = ring("k7-503");
     let limiter = Limiter::new(PER_SID, PER_DAEMON);
     let codes = handoff::Store::default();
@@ -284,16 +269,199 @@ fn install_id_cache_fresh_stale_missing_and_mint_503() {
     let x = mint::handle_pass_with(&req(Some(OWNER), b""), &d);
     assert_eq!((x.response.status, code(&x).as_str()), ("503 Service Unavailable", "chat_unavailable"));
     // Keys unavailable → 503 too.
-    link::set_install_id(INSTALL).expect("set");
+    let live = FixedStatus(Ok(INSTALL.into()));
     let broken = |_: &ChatPassClaims| -> Result<String, KeyError> { Err(KeyError::Corrupt("x".into())) };
-    let d = Deps { sign: &broken, ..d };
+    let d = Deps { sign: &broken, status: &live, ..d };
     assert_eq!(code(&mint::handle_pass_with(&req(Some(OWNER), b""), &d)), "chat_unavailable");
+    // The client URL file stays 0600 under ~/.k2.
+    link::set_client_url("http://127.0.0.1:38472").expect("client url");
     let p = link::path();
     assert!(p.ends_with(".k2/sew-link.json"));
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&p).expect("link file").permissions().mode() & 0o777, 0o600);
+    }
+}
+
+#[test]
+fn sew_row_admits_only_a_linked_k2_identity_install() {
+    use crate::sew::store::Row;
+    let not = link::install_id_from_row(None).unwrap_err();
+    assert!(not.contains("not installed"), "{not}");
+    let mut row = Row::new("0.1.2", T0);
+    let pending = link::install_id_from_row(Some(&row)).unwrap_err();
+    assert!(pending.contains("no install id yet"), "{pending}");
+    row.install_id = Some("52566463487148032".into());
+    for st in ["installing", "running", "degraded", "stopped", "error", "upgrading"] {
+        row.status = st.into();
+        assert_eq!(link::install_id_from_row(Some(&row)).expect(st), "52566463487148032", "{st}");
+    }
+    for st in ["removed", "disabled"] {
+        row.status = st.into();
+        assert!(link::install_id_from_row(Some(&row)).is_err(), "{st} refused");
+    }
+    row.status = "running".into();
+    row.install_id = Some("0123".into());
+    assert!(link::install_id_from_row(Some(&row)).unwrap_err().contains("malformed"));
+    row.install_id = Some("52566463487148032".into());
+    row.enable_progress = Some(serde_json::json!({"provider": "standalone"}));
+    assert!(link::install_id_from_row(Some(&row)).unwrap_err().contains("standalone"));
+    row.enable_progress = Some(serde_json::json!({"provider": "k2"}));
+    assert_eq!(link::install_id_from_row(Some(&row)).expect("k2"), "52566463487148032");
+}
+
+/// 0.46.1 box test: a daemon that was up before `hostchat enable` answered
+/// every mint 503 "no install id: Sew is not configured on this box"
+/// (restart or not), while `hostchat status` showed the install id. The
+/// live mint source (`link::SewRow`) now reads the row status reads: the
+/// mint works right after enable, with or without voice, through an
+/// upgrade, and refuses again after uninstall and purge.
+mod live_row {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Mutex;
+
+    use super::*;
+    use crate::sew::ops::fake::{FakeOps, INSTALL_ID};
+    use crate::sew::secrets::MemSecrets;
+    use crate::sew::supervisor::{self as sup, EnableRequest, Env, UpgradeRequest};
+    use crate::sew::{store, voice};
+
+    const TARBALL: &str = "/home/k2/sew-0.0.2-x86_64-unknown-linux-gnu.tar.gz";
+    const MEDIA: &str = "/home/k2/sew-media-0.0.2-x86_64-unknown-linux-gnu.tar.gz";
+
+    fn fixture(name: &str) -> Vec<u8> {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../k2-root-proto/testdata/sew").join(name);
+        std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+    }
+
+    struct Box_ {
+        ops: FakeOps,
+        secrets: MemSecrets,
+        latch: AtomicBool,
+        token: Mutex<Option<String>>,
+        _db: k2_core::db::TestDbGuard,
+        _home: TempHome,
+    }
+
+    fn fresh_box() -> Box_ {
+        let home = TempHome::new();
+        let ops = FakeOps::new();
+        ops.files.lock().unwrap().insert(TARBALL.into(), fixture("sew-0.0.2-x86_64-unknown-linux-gnu.tar.gz"));
+        ops.files.lock().unwrap().insert(MEDIA.into(), fixture("sew-media-0.0.2-x86_64-unknown-linux-gnu.tar.gz"));
+        Box_ {
+            ops,
+            secrets: MemSecrets::default(),
+            latch: AtomicBool::new(false),
+            token: Mutex::new(None),
+            _db: k2_core::db::scoped_for_test(),
+            _home: home,
+        }
+    }
+
+    impl Box_ {
+        fn env(&self) -> Env<'_> {
+            Env { ops: &self.ops, secrets: &self.secrets, latch: &self.latch, token: &self.token }
+        }
+        /// What `POST /cli/sew/enable` runs: the chat machine, then voice
+        /// when asked (`--voice`).
+        fn enable(&self, with_voice: bool) {
+            let env = self.env();
+            let req = EnableRequest {
+                tarball_path: Some(TARBALL.into()),
+                voice: with_voice.then(voice::InstallRequest::default),
+                ..Default::default()
+            };
+            let latch = match sup::enable_begin(&env, &req) {
+                Ok(Ok(l)) => l,
+                Ok(Err(v)) => panic!("answered without a machine: {v}"),
+                Err(f) => panic!("{}: {}", f.code, f.hint),
+            };
+            sup::enable_machine(&env, &req).expect("enable");
+            drop(latch);
+            if with_voice {
+                let vr = voice::InstallRequest { tarball_path: Some(MEDIA.into()), ..Default::default() };
+                let l = voice::install_begin(&env, &vr).expect("voice begin");
+                voice::install_machine(&env, &vr).expect("voice install");
+                drop(l);
+            }
+            assert_eq!(store::load().expect("row").install_id.as_deref(), Some(INSTALL_ID));
+        }
+        /// One mint through the handler with the PRODUCTION source; a fresh
+        /// limiter each time so only the install id decides.
+        fn mint(&self, r: &Ring) -> mint::Reply {
+            let limiter = Limiter::new(PER_SID, PER_DAEMON);
+            let codes = handoff::Store::default();
+            let sign = |c: &ChatPassClaims| r.ring.sign(c, T0);
+            let d = Deps {
+                now: T0,
+                owner_connect_is_k2_owner: false,
+                status: &link::SewRow,
+                sign: &sign,
+                limiter: &limiter,
+                codes: &codes,
+            };
+            mint::handle_pass_with(&req(Some(OWNER), b""), &d)
+        }
+        fn assert_refused(&self, r: &Ring, why: &str) {
+            let x = self.mint(r);
+            assert_eq!((x.response.status, code(&x).as_str()), ("503 Service Unavailable", "chat_unavailable"), "{why}");
+        }
+        fn assert_mints(&self, r: &Ring, why: &str) {
+            let x = self.mint(r);
+            assert_eq!(x.response.status, "200 OK", "{why}: {}", x.response.body);
+            let pass = body(&x)["pass"].as_str().expect("pass").to_string();
+            let jwks = r.ring.public_jwks(T0).expect("jwks");
+            let aud = format!("sew:{INSTALL_ID}");
+            let got = verify_with_jwks(&pass, &jwks, &aud, T0).unwrap_or_else(|e| panic!("{why}: aud {aud}: {e}"));
+            assert_eq!(got.aud, aud, "{why}");
+        }
+    }
+
+    fn enable_then_mint_then_purge(with_voice: bool) {
+        let b = fresh_box();
+        let r = ring(if with_voice { "k7-live-voice" } else { "k7-live-chat" });
+        b.assert_refused(&r, "daemon up, Sew never enabled");
+        b.enable(with_voice);
+        // Same process, no restart, no extra setter: the mint follows the row.
+        b.assert_mints(&r, "right after enable");
+        let purged = sup::purge(&b.env(), "lztek", false).expect("purge");
+        assert_eq!(purged["purged"], true);
+        b.assert_refused(&r, "after purge");
+        // Re-enable after a purge works again without a restart.
+        b.ops.clear();
+        b.enable(with_voice);
+        b.assert_mints(&r, "re-enable after purge");
+    }
+
+    #[test]
+    fn mint_follows_enable_and_purge_without_a_restart_chat_only() {
+        enable_then_mint_then_purge(false);
+    }
+
+    #[test]
+    fn mint_follows_enable_and_purge_without_a_restart_with_voice() {
+        enable_then_mint_then_purge(true);
+    }
+
+    #[test]
+    fn mint_survives_upgrade_and_refuses_after_disable_and_uninstall() {
+        let b = fresh_box();
+        let r = ring("k7-live-upgrade");
+        b.enable(false);
+        *b.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+        store::update(1, |row| row.installed_version = Some("0.0.1".into())).expect("old release");
+        b.ops.clear();
+        let env = b.env();
+        let ureq = UpgradeRequest { tarball_path: Some(TARBALL.into()), dry_run: false };
+        let (l, from) = sup::upgrade_begin(&env, &ureq).expect("upgrade begin").expect("not current");
+        assert_eq!(sup::upgrade_machine(&env, &ureq, &from)["result"], "done");
+        drop(l);
+        b.assert_mints(&r, "after upgrade");
+        sup::disable(&env).expect("disable");
+        b.assert_refused(&r, "after disable");
+        sup::uninstall(&env, false).expect("uninstall");
+        b.assert_refused(&r, "after uninstall");
     }
 }
 

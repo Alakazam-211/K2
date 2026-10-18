@@ -1,71 +1,66 @@
 //! Sew link state (S28 §11, K7): the install id a pass's `aud` names, and
 //! the client URL the `--skin` gateway's Sew mode proxies to.
 //!
-//! Stored in `~/.k2/sew-link.json` (0600; nothing secret). Not in the
-//! vault: it survives a vault restore, and the chat-pass keys stay the only
-//! thing under `engine:chat-pass`. Not `~/.k2/chat-pass/` either: K6 moved
-//! the keys into the vault and that directory must not come back.
+//! The install id is read LIVE, on every mint, from the supervisor's
+//! `sew_server` row ([`SewRow`]): the same row `k2 hostchat status`
+//! reports as `installId`, that the enable machine's link step writes from
+//! Sew's mgmt `status`, and that purge deletes. There is no second copy.
+//! (0.46.1 box test: the mint used to read a cache in `sew-link.json` that
+//! nothing in production ever filled, so every mint after a real
+//! `hostchat enable` answered 503, restart or not.)
 //!
-//! `install_id_for_mint`:
-//! - cached and fetched < 600 s ago → use it;
-//! - else ask Sew's mgmt `status` ([`SewStatus`]). A good answer is stored
-//!   and used; the value must match `[1-9][0-9]{0,18}`;
-//! - failure with a cached value → the stale value (the id only changes on
-//!   a purge and reinstall), logged at most once per 10 min;
-//! - failure with nothing cached → error → 503 `chat_unavailable`.
+//! [`SewRow`] refuses (→ 503 `chat_unavailable`) when there is no row (not
+//! installed, or purged), the install was uninstalled or disabled, it runs
+//! Sew's own logins (standalone), or enable has not reached its link step.
 //!
-//! The real `SewStatus` wraps S27's Sew mgmt client (`GET /mgmt/v1/status`
-//! over the mgmt socket). S27 is not on this build, so no source is
-//! installed by default and status fails at once (no 2 s wait); S29 calls
-//! [`set_install_id`] after enable/upgrade/restore, and S27 installs the
-//! live source with [`set_status_source`].
+//! `sew-link.json` (0600; nothing secret) keeps only the client URL. Not in
+//! the vault: it survives a vault restore, and the chat-pass keys stay the
+//! only thing under `engine:chat-pass`. Not `~/.k2/chat-pass/` either: K6
+//! moved the keys into the vault and that directory must not come back.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-/// How long a fetched install id is fresh.
-pub const INSTALL_ID_FRESH_SECS: i64 = 600;
-/// Log a stale-id fallback at most this often.
-const STALE_LOG_EVERY_SECS: i64 = 600;
-
-/// `GET /mgmt/v1/status` → `install_id` (decimal string). Timeout 2 s.
+/// Where a mint gets the install id (tests inject fixed answers).
 pub trait SewStatus: Send + Sync {
     fn install_id(&self) -> Result<String, String>;
 }
 
-/// No Sew mgmt client configured (S27/S29 not on this box): fails at once.
-pub struct NotConfigured;
+/// Production: the supervisor's `sew_server` row, read on every call.
+pub struct SewRow;
 
-impl SewStatus for NotConfigured {
+impl SewStatus for SewRow {
     fn install_id(&self) -> Result<String, String> {
-        Err("Sew is not configured on this box".into())
+        install_id_from_row(crate::sew::store::load().as_ref())
     }
 }
 
-fn status_slot() -> &'static RwLock<Option<Arc<dyn SewStatus>>> {
-    static SLOT: RwLock<Option<Arc<dyn SewStatus>>> = RwLock::new(None);
-    &SLOT
-}
-
-/// Install the live status source (S27's mgmt client).
-pub fn set_status_source(src: Arc<dyn SewStatus>) {
-    *status_slot().write().unwrap_or_else(|p| p.into_inner()) = Some(src);
-}
-
-/// The installed status source, or [`NotConfigured`].
-pub fn status_source() -> Arc<dyn SewStatus> {
-    status_slot().read().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_else(|| Arc::new(NotConfigured))
+/// The install id a row admits a pass for (module doc).
+pub fn install_id_from_row(row: Option<&crate::sew::store::Row>) -> Result<String, String> {
+    let row = row.ok_or("Sew is not installed on this box (k2 hostchat enable)")?;
+    match row.status.as_str() {
+        "removed" => return Err("Sew was uninstalled (k2 hostchat enable brings it back)".into()),
+        "disabled" => return Err("Sew is disabled (k2 hostchat enable)".into()),
+        _ => {}
+    }
+    let provider = crate::sew::supervisor::row_provider(row);
+    if provider != k2_root_proto::sew::PROVIDER_K2 {
+        return Err(format!(
+            "Sew runs its own logins on this box (identity {provider}); K2 chat passes are for --identity k2"
+        ));
+    }
+    match row.install_id.as_deref() {
+        Some(id) if is_install_id(id) => Ok(id.to_string()),
+        Some(_) => Err("the recorded Sew install id is malformed".into()),
+        None => Err("Sew has no install id yet (enable has not finished: k2 hostchat status)".into()),
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinkState {
     pub format: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub install_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub install_id_fetched_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_url: Option<String>,
 }
@@ -75,7 +70,6 @@ pub fn path() -> PathBuf {
 }
 
 static LOCK: Mutex<()> = Mutex::new(());
-static LAST_STALE_LOG: Mutex<i64> = Mutex::new(i64::MIN);
 
 /// `[1-9][0-9]{0,18}` (S1 §6.1 `Id`).
 pub fn is_install_id(s: &str) -> bool {
@@ -115,31 +109,6 @@ pub fn read() -> Result<LinkState, String> {
     load()
 }
 
-/// S29 after enable/upgrade/restore: the install id Sew reports.
-pub fn set_install_id(id: &str) -> Result<(), String> {
-    set_install_id_at(id, super::keyring::now())
-}
-
-pub fn set_install_id_at(id: &str, now: i64) -> Result<(), String> {
-    if !is_install_id(id) {
-        return Err("install id must be decimal [1-9][0-9]{0,18}".into());
-    }
-    let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let mut s = load()?;
-    s.install_id = Some(id.to_string());
-    s.install_id_fetched_at = Some(now);
-    save(&s)
-}
-
-/// Forget the install id (Sew purged; tests).
-pub fn clear_install_id() -> Result<(), String> {
-    let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let mut s = load()?;
-    s.install_id = None;
-    s.install_id_fetched_at = None;
-    save(&s)
-}
-
 /// S29 after enable: Sew's client listen URL (loopback).
 pub fn set_client_url(url: &str) -> Result<(), String> {
     let u = url.trim();
@@ -156,38 +125,10 @@ pub fn client_url() -> Option<String> {
     read().ok().and_then(|s| s.client_url)
 }
 
-/// The install id for a mint at `now` (module doc).
-pub fn install_id_for_mint(now: i64, status: &dyn SewStatus) -> Result<String, String> {
-    let _g = LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let mut s = load()?;
-    if let (Some(id), Some(at)) = (s.install_id.as_deref(), s.install_id_fetched_at) {
-        if now - at < INSTALL_ID_FRESH_SECS && is_install_id(id) {
-            return Ok(id.to_string());
-        }
-    }
-    match status.install_id() {
-        Ok(id) if is_install_id(&id) => {
-            s.install_id = Some(id.clone());
-            s.install_id_fetched_at = Some(now);
-            save(&s)?;
-            Ok(id)
-        }
-        other => {
-            let why = match other {
-                Ok(bad) => format!("Sew reported a malformed install id ({} chars)", bad.len()),
-                Err(e) => e,
-            };
-            match s.install_id.as_deref().filter(|id| is_install_id(id)) {
-                Some(stale) => {
-                    let mut last = LAST_STALE_LOG.lock().unwrap_or_else(|p| p.into_inner());
-                    if now.saturating_sub(*last) >= STALE_LOG_EVERY_SECS {
-                        *last = now;
-                        super::keyring::klog(format!("Sew status unavailable ({why}); minting with the cached install id"));
-                    }
-                    Ok(stale.to_string())
-                }
-                None => Err(why),
-            }
-        }
+/// The install id for a mint, asked of `status` every time (module doc).
+pub fn install_id_for_mint(status: &dyn SewStatus) -> Result<String, String> {
+    match status.install_id()? {
+        id if is_install_id(&id) => Ok(id),
+        bad => Err(format!("Sew reported a malformed install id ({} chars)", bad.len())),
     }
 }

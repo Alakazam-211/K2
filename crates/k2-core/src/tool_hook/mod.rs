@@ -237,11 +237,16 @@ pub struct HookCtx {
     /// "Your name" setting is never read. `None` (tests' `Default`) →
     /// `Owner`.
     pub owner_name: Option<String>,
+    /// The owner's primary linked K2 login
+    /// ([`crate::person_name::owner_login`]): the `k2:owner` Sew username
+    /// ([`chat::owner_username`]). `None` (nothing linked) → `owner`.
+    pub owner_login: Option<String>,
 }
 
 impl HookCtx {
-    /// Load facts for `workspace_ids` (unknown ids are simply absent) and
-    /// the owner person's displayName. Call OUTSIDE any skin.db closure.
+    /// Load facts for `workspace_ids` (unknown ids are simply absent), the
+    /// owner person's displayName and linked login. Call OUTSIDE any
+    /// skin.db closure.
     pub fn load(actor: &str, workspace_ids: &[String]) -> HookCtx {
         let mut workspaces = HashMap::new();
         for id in workspace_ids {
@@ -255,6 +260,7 @@ impl HookCtx {
             owner_name: Some(
                 crate::person_name::load_effective(crate::notify_prefs::OWNER).display_name,
             ),
+            owner_login: crate::person_name::owner_login_now(),
         }
     }
 }

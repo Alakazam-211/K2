@@ -761,6 +761,9 @@ pub fn add_user_with_names(
         });
         Ok(())
     })?;
+    // Sew S27: a login listed in `ownerAccounts` only counts once it
+    // exists, so adding one can change the `k2:owner` chat username.
+    crate::tool_hook::kick_reconcile();
     crate::workspace::context_layers::refresh_users_roster_after_people_change();
     Ok(())
 }
@@ -787,6 +790,9 @@ pub fn remove_user(username: &str) -> Result<(), String> {
             crate::log_debug!("[connect_users] notify cleanup for '{username}' failed: {e}");
         }
     }
+    // Sew S27: removing the owner's linked login changes the `k2:owner`
+    // chat username (next linked login, else `owner`).
+    crate::tool_hook::kick_reconcile();
     crate::workspace::context_layers::refresh_users_roster_after_people_change();
     Ok(())
 }

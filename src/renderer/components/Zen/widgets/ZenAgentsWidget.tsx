@@ -375,6 +375,56 @@ export function ZenStatusDot({ row, size = 10 }: { row: ZenAgentRow; size?: numb
   )
 }
 
+/** "99+" above 99; null at 0. */
+function zenCountText(n: number): string | null {
+  if (!Number.isFinite(n) || n <= 0) return null
+  return n > 99 ? '99+' : String(Math.floor(n))
+}
+
+/** thread-read-v1: the row's unread count (accent; grey when muted) and
+ *  cards waiting on you (the needs-you colour). Zen variables only (Z20). */
+export function ZenUnreadPills({ unread }: { unread: NonNullable<ZenAgentRow['unread']> }): React.JSX.Element | null {
+  const count = zenCountText(unread.unread)
+  const waiting = zenCountText(unread.waiting)
+  if (count === null && waiting === null) return null
+  const pill: React.CSSProperties = {
+    minWidth: '1.5em',
+    padding: '0 0.4em',
+    borderRadius: 999,
+    fontSize: '0.7em',
+    fontWeight: 700,
+    lineHeight: '1.5em',
+    textAlign: 'center',
+  }
+  return (
+    <span className="flex flex-shrink-0 items-center" style={{ gap: 3 }} data-zen-unread="">
+      {waiting !== null && (
+        <span
+          data-zen-unread-waiting={waiting}
+          title={`${unread.waiting} waiting on you`}
+          style={{ ...pill, background: 'var(--zen-needs-you)', color: 'var(--zen-accent-text)' }}
+        >
+          {waiting}
+        </span>
+      )}
+      {count !== null && (
+        <span
+          data-zen-unread-count={count}
+          data-muted={unread.muted ? 'true' : 'false'}
+          title={unread.muted ? `${count} unread (muted)` : `${count} unread`}
+          style={{
+            ...pill,
+            background: unread.muted ? 'var(--zen-text-muted)' : 'var(--zen-accent)',
+            color: 'var(--zen-accent-text)',
+          }}
+        >
+          {count}
+        </span>
+      )}
+    </span>
+  )
+}
+
 function AgentRow({
   row,
   nowSec,
@@ -455,6 +505,7 @@ function AgentRow({
             <span className="ml-auto flex-shrink-0" style={{ fontSize: '0.75em', color: 'var(--zen-text-muted)' }}>
               {row.state === 'ok' && row.preview ? shortAge(row.preview.at, nowSec) : ''}
             </span>
+            {row.unread ? <ZenUnreadPills unread={row.unread} /> : null}
           </span>
           <span className="flex min-w-0 items-center gap-2" style={{ fontSize: '0.86em' }}>
             <span

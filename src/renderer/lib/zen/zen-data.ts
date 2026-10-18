@@ -126,6 +126,7 @@ import { zenWidgetMayRun, type ZenCustomWidgetPayload } from './zen-custom-types
 import { useZenGardensStore } from './zen-gardens'
 import { draftZenCompose } from './zen-compose-drafts'
 import { zenAgentsSource } from './zen-rail-views'
+import { initUnreadEvents, unreadKey, useUnreadStore } from '@/stores/unread'
 import type { ZenAgentCounts } from './zen-counts'
 import {
   isOwnThreadPost,
@@ -166,6 +167,20 @@ export interface ZenPreview {
    *  this login; an older doc without one: `via=compose`). */
   mine: boolean
   seq: number | null
+  /** thread-read-v1: the Thread the preview came from, and this person's
+   *  read state on it as `thread/latest` said (servers that report it). */
+  conversationId?: string | null
+  unread?: number
+  waiting?: number
+  muted?: boolean
+}
+
+/** thread-read-v1: a row's unread dot. `unread` is capped at 100 ("99+");
+ *  `waiting` = cards waiting on you (amber); muted = a grey dot. */
+export interface ZenUnread {
+  unread: number
+  waiting: number
+  muted: boolean
 }
 
 export interface ZenPerson {
@@ -206,6 +221,10 @@ export interface ZenAgentRow {
   /** Why, in a sentence (the conversation shows it). */
   detail: string | null
   preview: ZenPreview | null
+  /** thread-read-v1: this person's unread / waiting on the agent's Thread
+   *  (live for the window's server, else from the preview poll). Null when
+   *  nothing is unread or the server can't say. Optional for fixtures. */
+  unread?: ZenUnread | null
   /** Other people on this agent right now (never you). */
   people: ZenPerson[]
   selected: boolean
@@ -432,6 +451,11 @@ export interface ThreadLatestItem {
   kind: string | null
   preview: string | null
   error: string | null
+  /** thread-read-v1 servers, for a person caller. */
+  unread?: number
+  waiting?: number
+  muted?: boolean
+  lastReadSeq?: number
 }
 
 /** Parse `GET /cli/thread/latest`. Throws on a body that isn't one. */
@@ -454,6 +478,10 @@ export function parseThreadLatest(raw: unknown): ThreadLatestItem[] {
       kind: str(it.kind),
       preview: str(it.preview),
       error: err,
+      ...(typeof it.unread === 'number' ? { unread: it.unread } : {}),
+      ...(typeof it.waiting === 'number' ? { waiting: it.waiting } : {}),
+      ...(typeof it.muted === 'boolean' ? { muted: it.muted } : {}),
+      ...(typeof it.lastReadSeq === 'number' ? { lastReadSeq: it.lastReadSeq } : {}),
     })
   }
   return out
@@ -472,7 +500,17 @@ function previewFromItem(item: OverlayThreadItem, viewer: ThreadViewer | null): 
 function setPreview(address: string, next: ZenPreview): boolean {
   const prev = previews.get(address)
   if (prev && prev.seq !== null && next.seq !== null && next.seq < prev.seq) return false
-  if (prev && prev.text === next.text && prev.seq === next.seq && prev.at === next.at && prev.mine === next.mine) {
+  if (
+    prev &&
+    prev.text === next.text &&
+    prev.seq === next.seq &&
+    prev.at === next.at &&
+    prev.mine === next.mine &&
+    prev.conversationId === next.conversationId &&
+    prev.unread === next.unread &&
+    prev.waiting === next.waiting &&
+    prev.muted === next.muted
+  ) {
     return false
   }
   previews.set(address, next)
@@ -808,6 +846,23 @@ function rowColor(row: HomeRow, onConnected: boolean, roomEntry: HomeRoomEntry |
   return ws ? agentLookColor(ws.color) : null
 }
 
+/** thread-read-v1: a row's unread. The window's server: the live unread
+ *  store, by the preview's conversation (absent there = nothing unread).
+ *  Another server: what its `thread/latest` said on the last poll. */
+function rowUnread(preview: ZenPreview | null, onConnected: boolean): ZenUnread | null {
+  if (!preview) return null
+  const unreadState = useUnreadStore.getState()
+  if (onConnected && preview.conversationId && unreadState.loaded) {
+    const e = unreadState.byKey[unreadKey('thread', preview.conversationId)]
+    if (!e || (e.unread <= 0 && e.waiting <= 0)) return null
+    return { unread: e.unread, waiting: e.waiting, muted: e.muted }
+  }
+  const unread = preview.unread ?? 0
+  const waiting = preview.waiting ?? 0
+  if (unread <= 0 && waiting <= 0) return null
+  return { unread, waiting, muted: preview.muted === true }
+}
+
 function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow {
   const host = useConnectHostStore.getState()
   const projects = useProjectsStore.getState().projects
@@ -923,6 +978,7 @@ function rowFor(row: HomeRow, index: number, view: ZenView | null): ZenAgentRow 
     stateLabel,
     detail,
     preview: previews.get(row.address) ?? null,
+    unread: state === 'ok' ? rowUnread(previews.get(row.address) ?? null, onConnected) : null,
     people,
     selected: view !== null && selection.get(view.key) === row.address,
     openable: state === 'ok',
@@ -994,6 +1050,9 @@ function startLive(): void {
   // Pictures land in the Home avatar cache after the rows first paint.
   unsubs.push(useHomeAvatarStore.subscribe(on))
   unsubs.push(useGrokBotsStore.subscribe(on))
+  // thread-read-v1: the window server's unread dots move live.
+  initUnreadEvents()
+  unsubs.push(useUnreadStore.subscribe(on))
   // A custom widget's server scope fills in as other servers answer.
   unsubs.push(useZenServerRosters.subscribe(on))
   // Open rooms' own activity slices (Z39) and project lists (an agent's
@@ -1110,6 +1169,10 @@ async function refreshHostPreviews(hostKey: string, rows: ZenAgentRow[]): Promis
           from: it.from ?? '',
           mine: isOwnThreadPost({ via: it.via, author: it.author }, viewer),
           seq: it.seq,
+          conversationId: it.conversationId,
+          ...(it.unread !== undefined ? { unread: it.unread } : {}),
+          ...(it.waiting !== undefined ? { waiting: it.waiting } : {}),
+          ...(it.muted !== undefined ? { muted: it.muted } : {}),
         })
       }
     }

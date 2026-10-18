@@ -49,8 +49,10 @@ pub const REGEN: &str = "run `cargo run -p k2-core --bin contract-gen`";
 
 /// The frame script's size cap (UWA5; 16 KiB until Garden data's 15 rows
 /// and SDK helpers, contract-garden-data-v1 §7.2/§7.4, raised it to 24;
-/// 0.46.1's resilient subscriptions, typed errors and shape guards to 28).
-pub const FRAME_MAX_BYTES: usize = 28 * 1024;
+/// 0.46.1's resilient subscriptions, typed errors and shape guards to 28;
+/// the same release's garden-local guests.*, room.members, app.* and
+/// widget.self rows in the verb table to 32).
+pub const FRAME_MAX_BYTES: usize = 32 * 1024;
 
 /// The guide page's line cap (FC33; 80 until Garden data's 15 rows and
 /// their two cap groups, contract-garden-data-v1 §7.2).

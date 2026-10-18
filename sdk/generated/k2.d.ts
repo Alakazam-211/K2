@@ -515,7 +515,10 @@ export interface StoreTxHandle {
 }
 
 /** The shared error codes (UWA10). */
-export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'pass_required' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'chat_unavailable' | 'app_pass_required' | 'grant_required' | 'outside_app_rooms' | 'above_role' | 'has_role' | 'confirm_required' | 'declined'
+export type K2ErrorCode = 'cap_not_granted' | 'not_bound' | 'rate_limited' | 'too_large' | 'unknown_verb' | 'verb_unavailable' | 'verb_local' | 'not_exposed' | 'sending_off' | 'server_not_saved' | 'unreachable' | 'removed' | 'no_history' | 'failed' | 'conflict' | 'space_full' | 'value_too_large' | 'bad_key' | 'not_granted' | 'resync' | 'author_unknown' | 'stale_widget' | 'store_full' | 'bad_tx' | 'tx_expired' | 'busy' | 'paused' | 'bad_args' | 'bad_shape' | 'pass_required' | 'pass_invalid' | 'pass_wrong_link' | 'not_on_link' | 'json_required' | 'skin_room' | 'usage' | 'not_found' | 'bad_login' | 'locked' | 'card_not_pending' | 'guest_required' | 'no_app_pass' | 'no_app_key' | 'no_chat_grant' | 'chat_unavailable' | 'app_pass_required' | 'grant_required' | 'outside_app_rooms' | 'above_role' | 'has_role' | 'confirm_required' | 'declined'
+
+/** Codes worth retrying unchanged (catalog `retryable`); handler-object subscriptions retry these on their own. */
+export type K2_RETRYABLE = 'not_bound' | 'rate_limited' | 'unreachable' | 'busy'
 
 /** What `k2.connected` resolves with: the hello K2 sent this frame. */
 export interface K2Hello {
@@ -526,16 +529,61 @@ export interface K2Hello {
   readonly motion: { readonly reduced: boolean }
 }
 
-/** A refused call rejects with this. */
+/** A refused call rejects with this; `k2.K2Error` is the class (`err instanceof k2.K2Error`). */
 export interface K2Error extends Error {
   readonly name: 'K2Error'
   readonly code: K2ErrorCode
   readonly verb: string
+  /** Worth trying again unchanged (`K2_RETRYABLE`). */
+  readonly retryable: boolean
   readonly cap?: string
   readonly room?: string
   readonly feature?: string
   /** `unreachable` from a sources verb: the last view K2 has (phase stale). */
   readonly last?: unknown
+  /** Handler-object subscriptions: K2 will try again (true) or the subscription ended (false). */
+  readonly retrying?: boolean
+  /** Handler-object subscriptions: refusals in a row (1 = the first). */
+  readonly attempt?: number
+}
+
+/** A handler-object subscription (0.46.1). `data` gets each value, after the runtime's shape guard (a sources view is normalised: `items` is a list, `fields` an object). `error` gets every refusal: with `retrying` true K2 re-subscribes on its own after 1, 2, 4, 8, 16 then every 30 s; with `retrying` false (not retryable) it has ended. `state` hears `live`, `retrying` and `ended`. Nothing is called after the returned unsubscribe. */
+export interface K2Handlers<T> {
+  data(value: T): void
+  error?(error: K2Error): void
+  state?(state: 'live' | 'retrying' | 'ended'): void
+}
+
+/** A card view after `k2.shape.view`: always the keys a card draws from. */
+export interface K2SafeView {
+  name: string
+  label: string
+  health: 'ok' | 'warn' | 'crit' | 'unknown'
+  phase: 'pending' | 'live' | 'stale' | 'paused'
+  display: string
+  reason: string | null
+  reasonText: string | null
+  fields: Record<string, unknown>
+  items: Array<{ key: string; list?: string; health: 'ok' | 'warn' | 'crit' | 'unknown'; reason: string | null; fields: Record<string, unknown>; soft: { count: number; of: number; level: string | null } }>
+  counts: { ok: number; warn: number; crit: number; unknown: number }
+  soft: { count: number; of: number; level: string | null }
+  serverNow: number
+  updatedAt: number | null
+  [key: string]: unknown
+}
+
+/** Guards for data you didn't make (0.46.1): each returns a safe value, never throws. */
+export interface K2Shape {
+  /** A sources card view, normalised; null when `v` isn't one. */
+  view(v: unknown): K2SafeView | null
+  /** `v` if it is a list, else []. */
+  list(v: unknown): unknown[]
+  /** `v` if it is a plain object, else {}. */
+  obj(v: unknown): Record<string, unknown>
+  /** A finite number, else `fallback` (0). */
+  num(v: unknown, fallback?: number): number
+  /** A string, else `fallback` (''); cut to `max` characters when given. */
+  str(v: unknown, fallback?: string, max?: number): string
 }
 
 /** Every widget verb: its arguments and what it answers (or pushes). */
@@ -605,6 +653,8 @@ export interface K2 {
     get(): Promise<ThemeInfo>
     /** The same value as theme.get, pushed when the theme or motion changes. no cap · local · zen-widgets-v1. e.g. `k2.theme.changed(({theme}) => paint(theme))` */
     changed(cb: (value: ThemeInfo) => void, onError?: (error: K2Error) => void): () => void
+    /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
+    changed(handlers: K2Handlers<ThemeInfo>): () => void
   }
   readonly canvas: {
     /** Full-canvas Gardens: up to 32 rects (CSS px, this frame's viewport) where clicks reach you through K2's top drag strip; replaces the last list, [] clears. K2's own controls stay on top. no cap · local · zen-widgets-v1. e.g. `await k2.canvas.setHitRegions([bar.getBoundingClientRect()])` */
@@ -649,6 +699,8 @@ export interface K2 {
     list(): Promise<AgentRow[]>
     /** The same rows as agents.list, pushed on every change. cap agents:read · portable · zen-v1. e.g. `const off = k2.agents.subscribe((rows) => draw(rows))` */
     subscribe(cb: (value: AgentRow[]) => void, onError?: (error: K2Error) => void): () => void
+    /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
+    subscribe(handlers: K2Handlers<AgentRow[]>): () => void
   }
   readonly conversation: {
     /** Show this agent in the built-in Conversation that follows the widget. cap agents:read · local · zen-v1. e.g. `await k2.conversation.open(row.address)` */
@@ -661,12 +713,16 @@ export interface K2 {
     get(address: string): Promise<Person[]>
     /** The same list as presence.get, pushed on change. cap presence:read · local · zen-v1. e.g. `const off = k2.presence.subscribe(row.address, (people) => draw(people))` */
     subscribe(address: string, cb: (value: Person[]) => void, onError?: (error: K2Error) => void): () => void
+    /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
+    subscribe(address: string, handlers: K2Handlers<Person[]>): () => void
   }
   readonly thread: {
     /** A page of the Thread, oldest first; beforeSeq pages back through history. cap thread:read · portable · zen-v1. e.g. `const page = await k2.thread.read(row.address, {limit: 50})` */
     read(address: string, opts?: { beforeSeq?: number; limit?: number }): Promise<ThreadPage>
     /** The live Thread with one agent and its working turn, pushed on every change. cap thread:read · portable · zen-v1. e.g. `const off = k2.thread.subscribe(row.address, (view) => draw(view))` */
     subscribe(address: string, cb: (value: ThreadView) => void, onError?: (error: K2Error) => void): () => void
+    /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
+    subscribe(address: string, handlers: K2Handlers<ThreadView>): () => void
     /** Send text to the agent as you (text only, no files). cap thread:post · portable · zen-v1. e.g. `await k2.thread.post(row.address, 'How is it going?')` */
     post(address: string, text: string): Promise<Posted>
     /** Answer a choice card in the Thread (never a secret card). cap thread:post · portable · zen-v1. e.g. `await k2.thread.answer(row.address, card.id, 'Yes')` */
@@ -685,6 +741,8 @@ export interface K2 {
     history(address: string, field: string, opts?: { fromAt?: number; toAt?: number }): Promise<SourceHistory>
     /** The card view, pushed on every change (counts toward the 16 subscriptions). cap sources:read · portable · sources-v1. e.g. `const off = k2.sources.subscribe(k2.config.source, (v) => draw(v))` */
     subscribe(address: string, cb: (value: SourceView) => void, onError?: (error: K2Error) => void): () => void
+    /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
+    subscribe(address: string, handlers: K2Handlers<SourceView>): () => void
     /** Ask the source's server to check now (at most once every 15 seconds). cap sources:read · portable · sources-v1. e.g. `await k2.sources.refresh(k2.config.source)` */
     refresh(address: string): Promise<SourceRefresh>
     /** Open K2's Ask an agent box about this source (K2 writes the draft; nothing is sent). cap sources:read · local · sources-v1. e.g. `await k2.sources.ask(k2.config.source, tile.key)` */
@@ -712,7 +770,9 @@ export interface K2 {
     /** Drop a transaction's staged writes. This computer only. cap store:write · local · garden-data-v1. e.g. `await tx.abort()` */
     txAbort(txId: string): Promise<StoreTxAborted>
     /** Live changes under a prefix, from any writer (you, this widget, agents). The first delivery is the whole current state, then one per rev (never half of one). `since` resumes after a rev you have. Counts toward the 16 live subscriptions. This computer only. */
-    subscribe(prefix: string | { prefix?: string; since?: number }, cb: (delivery: StoreDelivery) => void, onError?: (error: K2Error) => void): () => void
+    subscribe(prefix: string | { prefix?: string; since?: number; from?: string }, cb: (delivery: StoreDelivery) => void, onError?: (error: K2Error) => void): () => void
+    /** Handler object: re-subscribes on its own after a retryable refusal; a delivery that isn't a StoreDelivery reaches `error` as bad_shape. */
+    subscribe(prefix: string | { prefix?: string; since?: number; from?: string }, handlers: K2Handlers<StoreDelivery>): () => void
     /** A transaction: add op parts (1,000 ops and 1 MiB in all), then commit them as one rev, or abort. This computer only. */
     tx(): StoreTxHandle
     /** Save text over 60 KiB (at most 1 MiB) as parts `<key>/~0`… plus a header at `<key>`, in one transaction. This computer only. */
@@ -752,6 +812,12 @@ export interface K2 {
   /** A file in the widget's folder as a data: URL, or null. */
   asset(name: string): string | null
   readonly motion: { readonly reduced: boolean }
+  /** Guards for data you didn't make. */
+  readonly shape: K2Shape
+  /** The error class (for `instanceof`). */
+  readonly K2Error: { new (wire: { code: K2ErrorCode; message: string }, verb: string): K2Error }
+  /** The codes worth retrying unchanged. */
+  readonly retryable: readonly K2ErrorCode[]
 }
 
 declare global {

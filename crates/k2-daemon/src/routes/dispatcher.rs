@@ -1454,6 +1454,15 @@ async fn handle_one_request(
                 // fingerprintable state beyond "the process restarted",
                 // which /boot-status already implies via `phase`.
                 "instanceId": crate::boot_status::instance_id(),
+                // homes-sync-v1 (0.46.1): this BOX's stable id (first 16 hex
+                // of SHA-256 over its federation identity public key; the
+                // fingerprint is already public to every peer and `k2 fed
+                // pubkey`). Survives restarts, unlike `instanceId`. Home rows
+                // name agents `handle::<serverId>` so a laptop's `local` and
+                // a phone's `rosson.k2.dev` are the same server. `publicHost`
+                // is the tunnel host (`<sub>.k2.dev`) or null.
+                "serverId": crate::boot_status::server_id(),
+                "publicHost": crate::boot_status::public_host(),
                 // Home M5: features the version string cannot tell apart
                 // (main and the last release share it). Additive like
                 // `scopedHooks`; an older daemon omits it and clients read
@@ -8211,6 +8220,65 @@ async fn handle_one_request(
             let params = super::http::parse_params(p, &query);
             let result = tokio::task::spawn_blocking(move || {
                 crate::notify_routes::handle_with_params(is_post, &p_owned, &body_bytes, &actor, &params)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
+        // homes-sync-v1 (0.46.1) — `/cli/me/homes*`: a person's own Homes
+        // and devices. The PERSON comes from the token (owner token →
+        // `owner`; a live Connect session → its person key), never the
+        // body. Anything else (agent passports, app passes, API keys) is
+        // 403 `homes_person_only`. A GET to a POST-only path was answered
+        // 405 before auth (`get_refused`).
+        p if crate::homes_routes::is_homes_route(p) => {
+            let actor = if super::http::token_is_owner(&query, state.token.as_str()) {
+                Some(crate::notify_routes::Actor::owner_token())
+            } else {
+                super::http::extract_token(&query)
+                    .filter(|t| !t.is_empty())
+                    .and_then(k2_core::connect_users::validate_session)
+                    .map(|u| crate::notify_routes::Actor::login(&u))
+            };
+            let Some(actor) = actor else {
+                if is_post {
+                    let _ = super::http::read_post_body_capped(&mut *stream, &mut buf, crate::homes_routes::MAX_BODY)
+                        .await;
+                } else {
+                    let _ = stream.read(&mut buf).await;
+                }
+                let r = crate::homes_routes::not_a_person();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            };
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::homes_routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        super::http::refuse_body_too_large(
+                            &mut *stream,
+                            &refused,
+                            "413 Payload Too Large",
+                            "application/json",
+                            r#"{"ok":false,"error":{"code":"body_too_large","hint":"Homes push body over 1 MiB"}}"#,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let p_owned = p.to_string();
+            let params = super::http::parse_params(p, &query);
+            let result = tokio::task::spawn_blocking(move || {
+                crate::homes_routes::handle(is_post, &p_owned, &body_bytes, &actor, &params)
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {

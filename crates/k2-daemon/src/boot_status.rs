@@ -35,6 +35,40 @@ use std::sync::{OnceLock, RwLock};
 /// two are intentionally decoupled. Starts at 1.
 pub const PROTOCOL: u32 = 1;
 
+/// homes-sync-v1: this box's stable `serverId` (the first 16 hex of the
+/// SHA-256 of its federation identity public key,
+/// `k2_core::federation::identity::server_id`). Unlike [`instance_id`] it
+/// survives restarts. Cached per identity path (tests move `$HOME`); `None`
+/// only when the identity key can't be read or made.
+pub fn server_id() -> Option<String> {
+    static CACHE: std::sync::Mutex<Option<(std::path::PathBuf, String)>> = std::sync::Mutex::new(None);
+    let path = k2_core::federation::identity::identity_path();
+    let mut cache = CACHE.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some((p, id)) = cache.as_ref() {
+        if *p == path && path.exists() {
+            return Some(id.clone());
+        }
+    }
+    match k2_core::federation::identity::server_id() {
+        Ok(id) => {
+            *cache = Some((path, id.clone()));
+            Some(id)
+        }
+        Err(e) => {
+            eprintln!("[boot-status] serverId unavailable: {e}");
+            None
+        }
+    }
+}
+
+/// homes-sync-v1: this box's public host key (`<sub>.k2.dev`) when a
+/// tunnel is configured with a token, else `None`.
+pub fn public_host() -> Option<String> {
+    let cfg = k2_core::tunnel::config::load().ok().filter(|c| !c.token.trim().is_empty())?;
+    let url = cfg.public_url()?;
+    url.strip_prefix("https://").map(|h| h.trim_end_matches('/').to_ascii_lowercase())
+}
+
 /// Per-process daemon instance id — 16 lowercase hex chars minted from the
 /// OS CSPRNG the first time it's read, then stable for the life of the
 /// process. NEVER persisted: a new id on every daemon start is the whole
@@ -379,6 +413,18 @@ fn thread_read_ready() -> bool {
         .unwrap_or(false)
 }
 
+/// homes-sync-v1 (0.46.1): `/cli/me/homes*` (a person's Homes synced
+/// between their devices), `homes_changed` / `homes_device_removed` frames
+/// and `serverId` on `/boot-status`. On only when migration 0193's tables
+/// exist.
+pub const FEATURE_HOMES_SYNC: &str = k2_core::homes_sync::FEATURE;
+
+fn homes_sync_ready() -> bool {
+    k2_core::db::try_shared()
+        .map(|db| k2_core::homes_sync::tables_exist(&db.lock()))
+        .unwrap_or(false)
+}
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -423,6 +469,9 @@ pub fn features() -> Vec<&'static str> {
     }
     if thread_read_ready() {
         out.push(FEATURE_THREAD_READ);
+    }
+    if homes_sync_ready() {
+        out.push(FEATURE_HOMES_SYNC);
     }
     out
 }
@@ -475,7 +524,8 @@ mod tests {
                 "files-path-scope-v1",
                 "thread-push-v1",
                 "push-previews-v1",
-                "thread-read-v1"
+                "thread-read-v1",
+                "homes-sync-v1"
             ]
         );
     }

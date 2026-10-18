@@ -788,6 +788,14 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/spam/train", Admin),
     get("/cli/mail/status", Member),
     get("/cli/mail/wait", Member),
+    // homes-sync-v1 (0.46.1): a person's own Homes and devices. Any login
+    // (and the owner token); the handler binds the person from the
+    // credential. Agents, app passes and API keys are refused there (403).
+    get("/cli/me/homes", Member),
+    get("/cli/me/homes/devices", Member),
+    post("/cli/me/homes/devices/register", Member),
+    post("/cli/me/homes/devices/remove", Member),
+    post("/cli/me/homes/push", Member),
     both("/cli/mode", Member),
     // `k2 msg who <id>` (0.45.6 S7): any login; a passport sees only
     // deliveries to or from its own workspace.

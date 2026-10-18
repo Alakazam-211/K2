@@ -49,5 +49,7 @@
   "activity_changed": "app",
   "notify_prefs_changed": "app",
   "room_members_changed": "app",
-  "app_deployed": "app"
+  "app_deployed": "app",
+  "homes_changed": "app",
+  "homes_device_removed": "app"
 }

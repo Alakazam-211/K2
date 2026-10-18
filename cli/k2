@@ -9743,10 +9743,11 @@ cmd_app() {
         quota|quotas) shift; cmd_app_quota "$@" ;;
         remote-pass) shift; cmd_app_remote_pass "$@" ;;
         # RS-A15: `grant <app> --kind …` is an App's own owner grant; the
-        # list|add|rm|copy-host forms stay the guest-login grants (cmd_skin).
+        # list|add|rm|set|hooks|copy-host forms stay the guest-login and hooked
+        # (Sew chat) grants (cmd_skin).
         grant|grants)
             case "${2:-}" in
-                ""|list|add|create|rm|remove|delete|revoke|copy-host|copyhost|-h|--help) cmd_skin "$@" ;;
+                ""|list|add|create|rm|remove|delete|revoke|set|update|hooks|hook|copy-host|copyhost|-h|--help) cmd_skin "$@" ;;
                 *)
                     if [ "$1" = grants ]; then shift; cmd_app_grants "$@"; else shift; cmd_app_grant_kind "$@"; fi
                     ;;
@@ -16031,9 +16032,13 @@ except Exception:
         # vault_confirm_required is the one confirm code (0.46.0);
         # confirm_required is what a 0.45.x daemon answers.
         person_only|owner_only|vault_confirm_required|confirm_required|lan_owner_only|field_person_only|secret_not_usable|forbidden)
-            # One hint only: ours only when the daemon gave none, and never
-            # the agent-switch line for owner_only (no switch opens it).
-            if [ -z "$daemon_hint" ] && [ "$code" != "owner_only" ]; then
+            # Never the agent-switch line for owner_only (no switch opens
+            # it). A refusal that a person or the switch can lift always
+            # names both (the daemon's hint says what, not who); any other
+            # code gets ours only when the daemon gave none.
+            local person_code=0
+            case "$code" in person_only|vault_confirm_required|confirm_required|field_person_only) person_code=1 ;; esac
+            if [ "$code" != "owner_only" ] && { [ -z "$daemon_hint" ] || [ "$person_code" = "1" ]; }; then
                 if [ "$code" = "secret_not_usable" ]; then
                     echo "Bind a secret from your own workspace, or ask your human for \"Allow managing server-wide secrets\"." >&2
                 else

@@ -171,7 +171,7 @@ for m in new old; do
     err="$("$K2" sources remove fleet --yes 2>&1 >/dev/null)"; rc=$?
     set -e
     expect_eq "sources: a confirm refusal ($m daemon) exits 3" "$rc" "3"
-    expect_has "sources: it says a person is needed ($m daemon)" "$err" "This needs a person."
+    expect_has "sources: it says a person is needed ($m daemon)" "$err" "This needs a person (run it outside K2"
 done
 expect_has "sources: a 0.46 daemon's code is shown" "$(echo new > "$MODE"; "$K2" sources remove fleet --yes 2>&1 || true)" "vault_confirm_required"
 echo mac > "$MODE"

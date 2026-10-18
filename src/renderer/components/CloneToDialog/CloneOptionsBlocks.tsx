@@ -5,6 +5,7 @@ import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { targetOf, useCloneToDialogStore } from '../../stores/clone-to-dialog'
 import type { CloneUnpackResult } from '../../lib/clone-to'
 import type { CloneVaultOutcome } from '../../lib/clone-vault'
+import { proposerName } from '../../lib/clone-proposals'
 import {
   anyCopy,
   canCopyRow,
@@ -215,10 +216,36 @@ export function PasswordPromptBlock(): React.JSX.Element | null {
   )
 }
 
-/** Label for the primary button: a Copy row or `.env` files need a confirm. */
-export function cloneButtonLabel(choices: Record<string, SecretChoice>, carrySecrets: boolean, confirming: boolean): string {
+/** Label for the primary button: a Copy row or `.env` files need a confirm;
+ *  an agent's proposal is approved by the same one confirm. */
+export function cloneButtonLabel(
+  choices: Record<string, SecretChoice>,
+  carrySecrets: boolean,
+  confirming: boolean,
+  proposal = false,
+): string {
   if (confirming) return 'Confirming…'
+  if (proposal) return 'Approve and clone'
   return anyCopy(choices) || carrySecrets ? 'Confirm and clone' : 'Clone'
+}
+
+/** The agent's proposal this dialog was opened from: who asked, why, and
+ *  that one confirm approves it (and covers copying secrets). */
+export function ProposalBlock(): React.JSX.Element | null {
+  const proposal = useCloneToDialogStore((s) => s.proposal)
+  if (!proposal) return null
+  return (
+    <div className="border border-[var(--color-border)] px-3 py-2 space-y-0.5" data-testid="clone-proposal-block">
+      <p className="text-xs text-[var(--color-text-secondary)]">
+        Proposed by <span className="text-[var(--color-text-primary)]">{proposerName(proposal)}</span>
+        {proposal.why ? `: ${proposal.why}` : ''}
+      </p>
+      <p className={muted}>
+        Its choices are filled in below; change any of them. One confirm approves the clone
+        {anyCopy(proposal.options.secrets) ? ' and covers copying its secrets' : ''}.
+      </p>
+    </div>
+  )
 }
 
 /** Done-screen lines: the Thread import (slice B's report) and the vault

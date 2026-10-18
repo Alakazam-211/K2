@@ -18,6 +18,7 @@ import CloneToDialog from './CloneToDialog'
 import { useCloneToDialogStore } from '../../stores/clone-to-dialog'
 import { doneCountsLine } from './CloneOptionsBlocks'
 import { MEMBER_NO_COPY_LINE, normalizePreview, type ClonePreview } from '../../lib/clone-options'
+import { parseProposal } from '../../lib/clone-proposals'
 import type { VaultRecipientLookup } from '../../lib/clone-vault'
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
@@ -205,5 +206,27 @@ describe('CloneToDialog while the preview loads', () => {
     expect(screen.getByText('Checking what travels…')).toBeTruthy()
     expect(screen.getByTestId('clone-env-block')).toBeTruthy()
     expect(screen.getByTestId('clone-confirm-button').textContent).toBe('Clone')
+  })
+})
+
+describe('Clone dialog opened from a proposal', () => {
+  it('says who proposed it and why, and the button approves and clones', async () => {
+    const p = parseProposal({
+      id: 'cp_1',
+      proposedBy: 'agent:sales/s1',
+      target: 'luzz.k2.dev',
+      options: { threads: true, secrets: { STRIPE_KEY: 'copy' }, allHistory: true },
+      why: 'move to the new box',
+      status: 'open',
+      summary: 'clone sales to luzz.k2.dev',
+    })
+    if (!p) throw new Error('parse')
+    useCloneToDialogStore.getState().start({ projectPath: '/w/sales', projectName: 'sales', host: null, onConfirm: vi.fn(), proposal: p })
+    render(<CloneToDialog />)
+    const block = screen.getByTestId('clone-proposal-block')
+    expect(block.textContent).toContain('Proposed by sales: move to the new box')
+    expect(block.textContent).toContain('One confirm approves the clone and covers copying its secrets.')
+    expect(screen.getByTestId('clone-confirm-button').textContent).toBe('Approve and clone')
+    useCloneToDialogStore.getState().close()
   })
 })

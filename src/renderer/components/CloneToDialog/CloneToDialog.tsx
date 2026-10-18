@@ -8,6 +8,7 @@ import {
   doneCountsLine,
   EnvFilesBlock,
   PasswordPromptBlock,
+  ProposalBlock,
   SecretsBlock,
   ThreadBlock,
   Tick,
@@ -65,6 +66,7 @@ export default function CloneToDialog(): React.JSX.Element | null {
   const error = useCloneToDialogStore((s) => s.error)
   const close = useCloneToDialogStore((s) => s.close)
   const openResult = useCloneToDialogStore((s) => s.openResult)
+  const fromProposal = useCloneToDialogStore((s) => s.proposal !== null)
 
   const isOptions = phase === 'options'
   const isTerminal = stage === 'done' || stage === 'error'
@@ -139,6 +141,8 @@ export default function CloneToDialog(): React.JSX.Element | null {
               progress phase. */}
           {isOptions && (
             <div className="space-y-3 pt-1">
+              {/* 0.46.1: opened from an agent's proposal. */}
+              <ProposalBlock />
               {/* 0.46.0: Thread, per-secret step, `.env` files (D3/D1/D4). */}
               <ThreadBlock />
               {previewLoading && (
@@ -306,7 +310,7 @@ export default function CloneToDialog(): React.JSX.Element | null {
                 disabled={confirming}
                 data-testid="clone-confirm-button"
               >
-                {cloneButtonLabel(secretChoices, carrySecrets, confirming)}
+                {cloneButtonLabel(secretChoices, carrySecrets, confirming, fromProposal)}
               </Button>
             </>
           ) : (

@@ -21,6 +21,7 @@ import {
   type SecretChoice,
 } from '@/lib/clone-options'
 import type { CloneVaultOptions, CloneVaultOutcome, CloneVaultTarget, VaultRecipientLookup } from '@/lib/clone-vault'
+import { applyProposalSecrets, type CloneProposal, type ProposalConfirm } from '@/lib/clone-proposals'
 
 /** Collaborators for the options phase (0.46.0), injected by `start`
  *  (start-clone-to.ts binds the source scope and the destination) so the
@@ -35,6 +36,14 @@ export interface CloneOptionDeps {
   /** Slice A's `clone-carry` confirm for the FINAL ask (Copy rows and/or
    *  `.env` files), on the source. */
   carryConfirm: (ask: CloneCarryAsk, methods: string[], askPassword: AskPassword) => Promise<string>
+  /** 0.46.1, running an agent's proposal: ONE person confirm that mints the
+   *  `clone-approve` token and (when the plan copies or sends `.env` files)
+   *  the `clone-carry` token, on the source. */
+  proposalConfirm?: (ask: CloneCarryAsk, askPassword: AskPassword, proposalId: string) => Promise<ProposalConfirm>
+  /** `clone-proposal/approve` with the approve token, on the source. */
+  approveProposal?: (id: string, approveToken: string) => Promise<void>
+  /** `clone-proposal/finish` once the run is done or failed, on the source. */
+  finishProposal?: (id: string, ok: boolean, detail?: string) => Promise<void>
 }
 
 /** What the run needs for the vault half (slice A's lib fields). */
@@ -128,6 +137,11 @@ interface CloneToDialogState {
   passwordPrompt: PasswordPrompt | null
   /** Agent proposal being run, if any (passed through as proposal_id). */
   proposalId: string | null
+  /** The agent's proposal the dialog was opened from (0.46.1), if any:
+   *  shown in the header, its choices prefill the options. */
+  proposal: CloneProposal | null
+  /** The proposal was approved (so the run's end is reported to it). */
+  proposalApproved: boolean
   optionDeps: CloneOptionDeps | null
   /** This clone's id (minted when the dialog opens). */
   cloneId: string | null
@@ -148,6 +162,8 @@ interface CloneToDialogState {
     onConfirm: (carrySecrets: boolean, includeAllHistory: boolean, extras?: CloneExtras, vault?: CloneVaultRun) => void
     optionDeps?: CloneOptionDeps
     proposalId?: string | null
+    /** Open prefilled from an agent's proposal; Clone approves it too. */
+    proposal?: CloneProposal | null
   }) => void
   setBringThread: (bring: boolean) => void
   setSinceDays: (days: number | null) => void
@@ -205,6 +221,8 @@ const RESET = {
   optionsError: null,
   passwordPrompt: null,
   proposalId: null,
+  proposal: null as CloneProposal | null,
+  proposalApproved: false,
   optionDeps: null,
   cloneId: null as string | null,
   vaultLookup: null as VaultRecipientLookup | null,
@@ -217,6 +235,14 @@ export function targetOf(lookup: VaultRecipientLookup | null): CloneVaultTarget 
   return lookup && 'target' in lookup ? lookup.target : null
 }
 
+/** Tell the daemon how an approved proposal's run ended (once). */
+function reportProposal(st: CloneToDialogState, ok: boolean, detail?: string): void {
+  if (!st.proposal || !st.proposalApproved || !st.optionDeps?.finishProposal) return
+  st.optionDeps.finishProposal(st.proposal.id, ok, detail).catch((e: unknown) => {
+    console.warn('[clone-to] proposal finish failed:', e)
+  })
+}
+
 // The resolver for the pending password prompt (module-level: functions
 // don't belong in the serializable store state).
 let pendingPassword: ((pw: string | null) => void) | null = null
@@ -224,7 +250,7 @@ let pendingPassword: ((pw: string | null) => void) | null = null
 export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
   ...RESET,
 
-  start: ({ projectPath, projectName, host, pull, onConfirm, optionDeps, proposalId }) => {
+  start: ({ projectPath, projectName, host, pull, onConfirm, optionDeps, proposalId, proposal }) => {
     pendingPassword = null
     set({
       ...RESET,
@@ -236,7 +262,16 @@ export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
       pull: pull ?? false,
       onConfirm,
       optionDeps: optionDeps ?? null,
-      proposalId: proposalId ?? null,
+      proposalId: proposal?.id ?? proposalId ?? null,
+      proposal: proposal ?? null,
+      // Prefilled as the agent proposed it; the person can change any of it.
+      ...(proposal
+        ? {
+            bringThread: proposal.options.threads,
+            sinceDays: proposal.options.sinceDays,
+            includeAllHistory: proposal.options.allHistory,
+          }
+        : {}),
       previewLoading: !!optionDeps,
     })
     if (!optionDeps) return
@@ -256,7 +291,14 @@ export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
         null,
       )
       if (stale()) return
-      set({ preview, previewLoading: false, secretChoices: target ? initialSecretChoices(preview) : {} })
+      const initial = target ? initialSecretChoices(preview) : {}
+      const allowCopy = (name: string): boolean =>
+        !!preview.callerCanCopySecrets && !!preview.secrets.rows.find((r) => r.name === name)?.copyable
+      set({
+        preview,
+        previewLoading: false,
+        secretChoices: target && proposal ? applyProposalSecrets(initial, proposal.options.secrets, allowCopy) : initial,
+      })
     })().catch((e: unknown) => {
       if (stale()) return
       set({ previewLoading: false, previewError: e instanceof Error ? e.message : String(e) })
@@ -310,7 +352,43 @@ export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
         set({ passwordPrompt: { method, label } })
       })
     let confirmToken: string | undefined
-    if (needsCarryConfirm(secretChoices, st.carrySecrets)) {
+    if (st.proposal) {
+      // An agent's proposal: ONE confirm approves it and covers any copy.
+      const deps = st.optionDeps
+      if (!deps?.proposalConfirm || !deps.approveProposal) {
+        set({ optionsError: 'Approving this proposal needs a server that can confirm it here.' })
+        return
+      }
+      const needsCarry = needsCarryConfirm(secretChoices, st.carrySecrets)
+      set({ confirming: true, optionsError: null })
+      try {
+        if (needsCarry) {
+          const plan = await deps.fetchPreview(ask, st.sinceDays)
+          const binding = plan.secrets.confirm
+          if (!binding) throw new Error("The source didn't offer a confirm for this clone (is its vault open?).")
+          if (!binding.allowed) throw new Error(MEMBER_NO_COPY_LINE)
+        }
+        const r = await deps.proposalConfirm(ask, askPassword, st.proposal.id)
+        if (needsCarry && !r.token) throw new Error("The confirm didn't cover copying secrets; try again.")
+        await deps.approveProposal(st.proposal.id, r.approveToken)
+        confirmToken = r.token ?? undefined
+        set({ proposalApproved: true })
+      } catch (e) {
+        set({
+          confirming: false,
+          passwordPrompt: null,
+          optionsError: e instanceof CloneConfirmCancelled ? null : e instanceof Error ? e.message : String(e),
+        })
+        return
+      }
+      // Closed while approving: the proposal is approved but never ran.
+      if (!get().isOpen) {
+        deps.finishProposal?.(st.proposal.id, false, 'closed before the clone started').catch((e: unknown) => {
+          console.warn('[clone-to] proposal finish failed:', e)
+        })
+        return
+      }
+    } else if (needsCarryConfirm(secretChoices, st.carrySecrets)) {
       if (!st.optionDeps) {
         set({ optionsError: 'This clone needs a person confirm, and none is available here.' })
         return
@@ -358,8 +436,14 @@ export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
 
   setStage: (stage) => set({ stage }),
   setSummary: (summary) => set({ summary }),
-  setDone: (result) => set({ stage: 'done', result }),
-  setError: (error) => set({ stage: 'error', error }),
+  setDone: (result) => {
+    reportProposal(get(), true)
+    set({ stage: 'done', result, proposalApproved: false })
+  },
+  setError: (error) => {
+    reportProposal(get(), false, error)
+    set({ stage: 'error', error, proposalApproved: false })
+  },
 
   openResult: async () => {
     const id = get().result?.project?.id

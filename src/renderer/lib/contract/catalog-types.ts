@@ -97,6 +97,9 @@ export const CATALOG_ERROR_CODES = [
   'tx_expired',
   'busy',
   'paused',
+  // Widget SDK guards (0.46.1, catalog 11).
+  'bad_args',
+  'bad_shape',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]
@@ -105,6 +108,8 @@ export interface CatalogErrorRow {
   code: CatalogErrorCode
   /** Extra fields the error carries: `cap`, `room`, `feature`. */
   fields?: Array<'cap' | 'room' | 'feature'>
+  /** Worth trying again unchanged (catalog 11). */
+  retryable?: boolean
   doc: string
 }
 

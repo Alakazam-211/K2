@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 10,
+  "catalogVersion": 11,
   "caps": [
     {
       "name": "agents:read",
@@ -75,11 +75,13 @@
     },
     {
       "code": "not_bound",
+      "retryable": true,
       "fields": ["room"],
       "doc": "The address isn't one of the agents this widget reaches (this computer's agents and your Homes' rows)."
     },
     {
       "code": "rate_limited",
+      "retryable": true,
       "doc": "Over a per-widget budget (calls, subscriptions, live servers, gardens.switch)."
     },
     {"code": "too_large", "doc": "A message or argument is over its size limit."},
@@ -96,7 +98,7 @@
     },
     {"code": "sending_off", "doc": "Posting is paused: the runaway guard tripped (too many posts). The person resumes it on the widget."},
     {"code": "server_not_saved", "doc": "The source's server isn't one of your saved servers (Settings → Network → Connected Servers)."},
-    {"code": "unreachable", "doc": "The source's server didn't answer. The error carries `last`: the last view K2 has, with phase stale."},
+    {"code": "unreachable", "retryable": true, "doc": "The source's server didn't answer. The error carries `last`: the last view K2 has, with phase stale."},
     {"code": "removed", "doc": "The source was removed on its server (its name is held for 7 days)."},
     {"code": "no_history", "doc": "The source keeps states only, so it has no history."},
     {"code": "failed", "doc": "The call failed; the message says why."},
@@ -111,8 +113,10 @@
     {"code": "store_full", "doc": "Garden data on this computer is full (512 MiB)."},
     {"code": "bad_tx", "doc": "No such transaction for this widget."},
     {"code": "tx_expired", "doc": "The transaction expired (30 s idle, or the daemon restarted); start again."},
-    {"code": "busy", "doc": "Too many open transactions; finish or abort one."},
-    {"code": "paused", "doc": "This widget is paused for too many identical writes; the person can resume it."}
+    {"code": "busy", "retryable": true, "doc": "Too many open transactions; finish or abort one."},
+    {"code": "paused", "doc": "This widget is paused for too many identical writes; the person can resume it."},
+    {"code": "bad_args", "doc": "An argument isn't plain data (functions, DOM nodes and cycles never cross) or the call's arguments aren't a list. The frame refuses it before it leaves; K2 refuses it too."},
+    {"code": "bad_shape", "doc": "K2 delivered a value that isn't the verb's shape (a card view without items, say). The runtime's guard refuses it to a handler-object subscription; the widget keeps its last good data."}
   ],
   "bannedFields": [
     "projectPath",

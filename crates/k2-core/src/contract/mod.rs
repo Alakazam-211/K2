@@ -236,6 +236,10 @@ pub struct ErrorRow {
     /// Extra fields the error carries (`cap`, `room`, `feature`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<String>,
+    /// Worth trying again unchanged (0.46.1, catalog 11): a handler-object
+    /// subscription re-subscribes on its own after one of these.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub retryable: bool,
     pub doc: String,
 }
 
@@ -391,8 +395,13 @@ mod tests {
                 "tx_expired",
                 "busy",
                 "paused",
+                // The widget SDK's guards (0.46.1, catalog 11).
+                "bad_args",
+                "bad_shape",
             ]
         );
+        let retry: Vec<&str> = catalog().errors.iter().filter(|e| e.retryable).map(|e| e.code.as_str()).collect();
+        assert_eq!(retry, ["not_bound", "rate_limited", "unreachable", "busy"], "what a handler-object subscription retries");
     }
 
     #[test]

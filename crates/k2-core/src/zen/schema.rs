@@ -314,8 +314,15 @@ pub const FILL_WIDGET_KINDS: &[&str] = &["agents", "conversation", CUSTOM_KIND];
 pub const CUSTOM_KIND: &str = "custom";
 /// What `custom` places, for errors and docs.
 pub const CUSTOM_KIND_DOC: &str = "a custom widget: an agent-written page in a sealed frame, from widgets/<name>/ (widget = \"<name>\") or a built-in (widget = \"k2:diary@1\"); it gets only the caps you allow with a click in the K2 app";
-/// At most this many custom widgets on one page (UW6, UW29).
-pub const MAX_CUSTOM_WIDGETS: usize = 6;
+/// At most this many custom widgets on one page (UW6, UW29). 6 until
+/// 0.46.1; raised to 10 for the Fleet Ops page (gap 6): each is a sealed
+/// frame with its own call and subscription budgets, and 3 columns hold 10
+/// comfortably with `weight` sizing the stacks.
+pub const MAX_CUSTOM_WIDGETS: usize = 10;
+/// `[[widget]] weight` (0.46.1, gap 6): a widget's share of its column's
+/// height when several stack in one column's body, 1 to this. Default 1
+/// (equal shares, as before).
+pub const MAX_WIDGET_WEIGHT: i64 = 12;
 /// A custom placement's `config` table, as JSON, is at most this long (UW7).
 pub const MAX_CONFIG_BYTES: usize = 4 * 1024;
 /// A custom placement's props (UW7): `home` and `agent` (text) and `config`
@@ -1787,6 +1794,29 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
             let pos = key_pos(ctx, *t, k, v, tpos);
             match k {
                 "kind" | "slot" => {}
+                // 0.46.1 (gap 6): a stacked widget's share of its column.
+                "weight" if in_band || in_menu || chrome => {
+                    ctx.error(
+                        pos,
+                        "weight sizes a widget stacked in a column's body; a band, a menu or a Zen control has no column share, so drop weight",
+                    );
+                    ok = false;
+                }
+                "weight" => match v.as_value().and_then(Value::as_integer) {
+                    Some(n) if (1..=MAX_WIDGET_WEIGHT).contains(&n) => {
+                        let p = item_pos(ctx, v, pos);
+                        ctx.pos.insert(format!("page.widget.{i}.weight"), p);
+                        w.insert("weight".into(), json!(n));
+                    }
+                    _ => {
+                        let p = item_pos(ctx, v, pos);
+                        ctx.error(
+                            p,
+                            format!("weight is a whole number, 1 to {MAX_WIDGET_WEIGHT}: its share of the column's height next to the widgets stacked with it (default 1)"),
+                        );
+                        ok = false;
+                    }
+                },
                 "id" => match v.as_value().and_then(Value::as_str) {
                     Some(id) if valid_widget_id(id) => {
                         if ids.iter().any(|x| x == id) {
@@ -1977,11 +2007,16 @@ fn check_widgets(ctx: &mut Ctx, item: &Item, at: (usize, usize)) {
                 other => {
                     ctx.error(
                         pos,
-                        unknown_key(other, "[[widget]]", &["id", "kind", "slot", "column", "edge", "align", "menu", "props", "widget"]),
+                        unknown_key(other, "[[widget]]", &["id", "kind", "slot", "column", "edge", "align", "menu", "props", "widget", "weight"]),
                     );
                     ok = false;
                 }
             }
+        }
+        if edge.is_some() && w.contains_key("weight") {
+            let p = t.get("weight").map(|v| item_pos(ctx, v, tpos)).unwrap_or(tpos);
+            ctx.error(p, "weight sizes a widget in a column's body; one at a column edge is a row, so drop weight or edge");
+            ok = false;
         }
         if kind.as_deref() == Some(CUSTOM_KIND) && t.get("widget").is_none() {
             ctx.error(

@@ -389,7 +389,7 @@ kind = "columns"
                 assert!(builtin_widget(&r).is_some(), "{}: '{name}' isn't a built-in widget in this build", e.file);
                 custom += 1;
             }
-            assert!(custom <= 6, "{}: at most 6 custom widgets", e.file);
+            assert!(custom <= crate::zen::schema::MAX_CUSTOM_WIDGETS, "{}: too many custom widgets", e.file);
         }
     }
 }

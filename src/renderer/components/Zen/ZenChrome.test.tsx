@@ -215,6 +215,13 @@ const EXAMPLES: Record<string, Example> = {
     items: TEMPLATE_ITEMS,
     bands: { top: g(['garden-switcher'], [], ['usage', 'theme-picker', 'zen-toggle']), bottom: null },
   },
+  // 0.46.1 (gap 6): two widgets stacked in column 1, sized 3:1 by weight.
+  weighted: {
+    widgets: [AGENTS, { ...CONVERSATION, weight: 3 }, { ...AGENTS, id: 'agents-2', column: 1, weight: 1 }, STRIP_RAIL],
+    from: 'template',
+    items: TEMPLATE_ITEMS,
+    bands: { top: g(['garden-switcher'], [], ['usage', 'theme-picker', 'zen-toggle']), bottom: null },
+  },
   'column-corner': {
     widgets: [AGENTS, CONVERSATION, STRIP_RAIL],
     from: 'garden',
@@ -423,6 +430,20 @@ describe('each guide example draws its layout from the page answer (FC34, S2)', 
     expect(row('[data-zen-band-row="top"]')).toEqual(['garden-switcher', 'drag', 'usage', 'theme-picker', 'zen-toggle'])
     twoChecks()
     expectNoSafeMode('texting-chrome')
+  })
+
+  it('weighted (0.46.1): widgets stacked in a column share its height by weight; a column without weights is unchanged', async () => {
+    await show('weighted')
+    const col1 = el('[data-zen-column="1"]')
+    const shares = Array.from(col1.children).map((c) => [c.getAttribute('data-zen-weight'), (c as HTMLElement).style.flex])
+    expect(shares).toEqual([
+      ['3', '3 1 0%'],
+      ['1', '1 1 0%'],
+    ])
+    // Column 0 has no weights: its widgets draw straight into the box, as before.
+    expect(el('[data-zen-column="0"]').querySelector('[data-zen-weight]')).toBeNull()
+    twoChecks()
+    expectNoSafeMode('weighted')
   })
 
   it('column-corner: the toggle at the bottom-right edge of the conversation column, outside its box', async () => {

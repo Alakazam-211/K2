@@ -256,18 +256,55 @@ fn custom_placements_in_the_schema() {
         15,
         "can't go in the top band",
     );
-    let mut seven = String::from("schema = 1\n");
-    for i in 0..7 {
-        seven.push_str(&format!("\n[[widget]]\nid = \"w{i}\"\nkind = \"custom\"\nwidget = \"w{i}\"\ncolumn = 0\n"));
-    }
-    let c = check(&seven);
+    // 0.46.1 (gap 6): 10 custom widgets per page (was 6); the 11th is refused.
+    let customs = |n: usize| {
+        let mut s = String::from("schema = 1\n");
+        for i in 0..n {
+            s.push_str(&format!("\n[[widget]]\nid = \"w{i}\"\nkind = \"custom\"\nwidget = \"w{i}\"\ncolumn = 0\n"));
+        }
+        s
+    };
+    assert!(check(&customs(10)).is_clean(), "{:?}", check(&customs(10)).errors);
+    let c = check(&customs(11));
     assert_eq!(c.errors.len(), 1, "{:?}", c.errors);
-    assert!(c.errors[0].message.contains("at most 6 custom widgets"));
+    assert!(c.errors[0].message.contains("at most 10 custom widgets"));
     let ok = check(&ARCADE_PAGE.replace("home = \"Work\"", "home = \"Work\"\nconfig = { speed = 2, title = \"Hi\", sound = false }"));
     assert!(ok.is_clean(), "{:?}", ok.errors);
     let page = crate::zen::garden_page(&ok.layer, schema::BLANK_TEMPLATE_ID);
     assert_eq!(page["widgets"][0]["props"]["config"], json!({"speed": 2, "title": "Hi", "sound": false}));
     assert_eq!(page["widgets"][1]["props"]["agents"], "arcade", "the Conversation follows the custom widget");
+}
+
+/// 0.46.1 (gap 6): `weight` sizes widgets stacked in a column's body; the
+/// page answer carries it; bands, menus, chrome and column edges refuse it.
+#[test]
+fn widget_weight_in_a_column_body() {
+    let check = |src: &str| {
+        schema::check_garden("gardens/g-test0001.toml", src, crate::zen::builtin_layer(), schema::BLANK_TEMPLATE_ID)
+    };
+    let stacked = ARCADE_PAGE.replace("column = 0\n[widget.props]\nhome", "column = 0\nweight = 3\n[widget.props]\nhome").replace(
+        "kind = \"conversation\"\ncolumn = 1\n",
+        "kind = \"conversation\"\ncolumn = 0\nweight = 1\n",
+    );
+    let c = check(&stacked);
+    assert!(c.is_clean(), "{:?}", c.errors);
+    let page = crate::zen::garden_page(&c.layer, schema::BLANK_TEMPLATE_ID);
+    assert_eq!(page["widgets"][0]["weight"], json!(3), "{page}");
+    assert_eq!(page["widgets"][1]["weight"], json!(1), "{page}");
+    assert!(check(ARCADE_PAGE).is_clean());
+    let plain = crate::zen::garden_page(&check(ARCADE_PAGE).layer, schema::BLANK_TEMPLATE_ID);
+    assert!(plain["widgets"][0].get("weight").is_none(), "no weight unless the file sets it: {plain}");
+    for (bad, why) in [("weight = 0", "1 to 12"), ("weight = 13", "1 to 12"), ("weight = 1.5", "whole number"), ("weight = \"big\"", "whole number")] {
+        let c = check(&ARCADE_PAGE.replace("column = 0\n[widget.props]\nhome", &format!("column = 0\n{bad}\n[widget.props]\nhome")));
+        assert_eq!(c.errors.len(), 1, "{bad}: {:?}", c.errors);
+        assert!(c.errors[0].message.contains(why), "{bad}: {}", c.errors[0].message);
+    }
+    let band = "schema = 1\n\n[[widget]]\nid = \"rail\"\nkind = \"nav-rail\"\nslot = \"top\"\nweight = 2\n";
+    let c = check(band);
+    assert!(c.errors.iter().any(|e| e.message.contains("has no column share")), "{:?}", c.errors);
+    let edge = "schema = 1\n\n[[widget]]\nid = \"rail\"\nkind = \"nav-rail\"\ncolumn = 0\nedge = \"top\"\nweight = 2\n";
+    let c = check(edge);
+    assert!(c.errors.iter().any(|e| e.message.contains("column edge is a row")), "{:?}", c.errors);
 }
 
 #[test]

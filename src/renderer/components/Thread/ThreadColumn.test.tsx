@@ -18,6 +18,9 @@ import {
   threadColumnNarrowNext,
 } from './ThreadColumn'
 import { ThreadBubble } from './ThreadZenKit'
+import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
+import type { ZenAgentRow, ZenThreadView } from '@/lib/zen/zen-data'
+import { ZenConversation } from '@/components/Zen/widgets/ZenConversationWidget'
 
 // jsdom has no ResizeObserver: a fake the test drives.
 type Cb = (entries: Array<{ contentRect: { width: number } }>) => void
@@ -38,8 +41,10 @@ class FakeRO {
   }
 }
 
-function resizeTo(width: number): void {
-  const live = observers.filter((o) => o.targets.length > 0)
+function resizeTo(width: number, el?: Element): void {
+  // With `el`: the column's own observer (others, e.g. the Zen list's
+  // stick-to-bottom, may watch it too among other boxes).
+  const live = observers.filter((o) => (el ? o.targets.length === 1 && o.targets[0] === el : o.targets.length > 0))
   expect(live.length).toBe(1)
   act(() => live[0].cb([{ contentRect: { width } }]))
 }
@@ -158,12 +163,55 @@ describe('ThreadMessageColumn', () => {
   })
 })
 
+describe('the Zen Garden Thread widget (phone width)', () => {
+  it('its messages sit in a ThreadMessageColumn: full width under 480px, the ratio above', () => {
+    let listener: ((v: ZenThreadView) => void) | null = null
+    const bridge = {
+      widgetId: 'conversation',
+      caps: new Set<string>(['thread:read']),
+      call(verb: string, ...args: unknown[]): unknown {
+        if (verb === 'thread.subscribe') {
+          listener = args[1] as (v: ZenThreadView) => void
+          return () => {
+            listener = null
+          }
+        }
+        if (verb === 'thread.read') return Promise.resolve()
+        throw new Error(`unexpected bridge verb ${verb}`)
+      },
+    } as unknown as ZenWidgetBridge
+    const row = { address: 'cortana::local', label: 'cortana', hostKey: 'local', server: null, working: false, activity: 'idle', reach: 'live', state: 'ok', people: [] } as unknown as ZenAgentRow
+    const { getByTestId } = render(<ZenConversation bridge={bridge} row={row} />)
+    expect(listener).not.toBeNull()
+    act(() =>
+      listener!({
+        address: 'cortana::local',
+        phase: 'ready',
+        note: null,
+        items: [item('a', 'theirs'), { ...item('b', 'mine'), doc: { ...item('b', 'mine').doc, from: 'me', via: 'compose' } } as OverlayThreadItem],
+        loaded: true,
+        hasMore: false,
+        loadingOlder: false,
+        error: null,
+      }),
+    )
+    const col = getByTestId('zen-conversation-column')
+    expect(messages(col).length).toBe(2)
+    resizeTo(360, col)
+    expect(col.hasAttribute('data-thread-narrow')).toBe(true)
+    for (const m of messages(col)) expect(m.style.maxWidth).toBe('calc(100% - 12px)')
+    resizeTo(900, col)
+    for (const m of messages(col)) expect(m.style.maxWidth).toBe('min(78%, 46rem)')
+  })
+})
+
 describe('every shared Thread list is a ThreadMessageColumn', () => {
   const src = (p: string): string => readFileSync(resolve(__dirname, '..', p), 'utf8')
   it.each([
     ['SessionView/ThreadOverlayPane.tsx', 'thread-overlay-column'],
     ['Projects/ProjectChatPanel.tsx', 'project-chat-column'],
     ['Feedback/TicketAgentRail.tsx', 'ticket-rail-column'],
+    ['Zen/widgets/ZenConversationWidget.tsx', 'zen-conversation-column'],
   ])('%s', (file, testId) => {
     const text = src(file)
     expect(text).toContain(`<ThreadMessageColumn`)

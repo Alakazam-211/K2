@@ -181,7 +181,7 @@ fn placements_carry_source_addresses_and_bad_ones_are_findings() {
     let w = &page["page"]["widgets"][0];
     assert_eq!(w["sources"], "config", "{w}");
     assert_eq!(w["sourceAddresses"], json!(["fleet::akzm.k2.dev", "deploys", "money", "release"]), "{w}");
-    assert_eq!(w["caps"], json!(["sources:read"]), "thread:post dropped: {w}");
+    assert_eq!(w["caps"], json!(["thread:post", "sources:read"]), "0.46.1: a sources card keeps thread:post it asked for: {w}");
 
     write_garden(&f, &g, &source_page("fleet-card", "source = \"Fleet::https://x\""));
     let v = f.validate(Some(&ZenFile::Garden(g.clone()))).expect("validate garden");

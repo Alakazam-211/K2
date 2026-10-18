@@ -141,6 +141,10 @@ pub(crate) struct Placed {
     pub(crate) widget: String,
     pub(crate) hash: String,
     pub(crate) caps: Vec<String>,
+    /// The live manifest's `reads` (0.46.1, gap 5).
+    pub(crate) reads: Vec<String>,
+    /// The widgets placed on the same Garden (their space names), for `from`.
+    pub(crate) neighbours: Vec<String>,
 }
 
 impl Placed {
@@ -169,10 +173,12 @@ pub(crate) fn resolve(b: &CallBody) -> Result<Placed, DataError> {
         return Err(DataError::NotFound("widget_not_found"));
     }
     let (_, g) = f.garden(&b.garden).map_err(|_| DataError::NotFound("widget_not_found"))?;
-    let p = f
-        .custom_placements()
+    let on_garden: Vec<_> = f.custom_placements().into_iter().filter(|p| p.garden == g.id).collect();
+    let neighbours: Vec<String> =
+        on_garden.iter().map(|p| p.widget.split('@').next().unwrap_or(&p.widget).to_string()).collect();
+    let p = on_garden
         .into_iter()
-        .find(|p| p.garden == g.id && p.placement == b.placement)
+        .find(|p| p.placement == b.placement)
         .ok_or(DataError::NotFound("widget_not_found"))?;
     let st = f.garden_widget_status(&g.id, &p.widget);
     let live = st.hash();
@@ -183,7 +189,8 @@ pub(crate) fn resolve(b: &CallBody) -> Result<Placed, DataError> {
         return Err(stale("the widget changed since this frame loaded"));
     }
     let caps = effective_caps(WidgetOrigin::of(&p.widget), &st.requested());
-    Ok(Placed { garden: g.id, placement: b.placement.clone(), widget: p.widget, hash: live.to_string(), caps })
+    let reads = st.manifest.as_ref().map(|m| m.reads.clone()).unwrap_or_default();
+    Ok(Placed { garden: g.id, placement: b.placement.clone(), widget: p.widget, hash: live.to_string(), caps, reads, neighbours })
 }
 
 fn run(b: &CallBody) -> Result<J, DataError> {
@@ -230,13 +237,21 @@ fn run(b: &CallBody) -> Result<J, DataError> {
             save_verb(&w, v, args)
         }
         v => {
-            let space = data_space(&w.widget)?;
+            // 0.46.1 (gap 5): `{from: "<widget>"}` reads another widget's
+            // data on this Garden, read-only, when the manifest's `reads`
+            // names it.
+            let from = from_opt(v, args)?;
+            let space = match &from {
+                Some(other) => read_space(&w, v, other)?,
+                None => data_space(&w.widget)?,
+            };
             // The maker's rights, read now (a revoke wins on the next call).
             let (maker, acc) = {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
                 let maker = authors::maker_of(&conn, &w.widget, &w.hash)?;
-                let acc = match rights::rights_for_widget(&conn, &space, &maker) {
+                let rights = if from.is_some() { rights::rights_for_neighbour(&conn, &space, &maker) } else { rights::rights_for_widget(&conn, &space, &maker) };
+                let acc = match rights {
                     Ok(a) => a,
                     Err(DataError::AuthorUnknown) => {
                         audit::line("zen.data.refused", &w.label(), &format!("{} code=author_unknown", space.as_str()));
@@ -296,6 +311,47 @@ fn author_unknown(w: &Placed) -> DataError {
             w.widget
         ),
     )
+}
+
+/// The options object of a read verb: `store.get`'s second argument,
+/// `store.list`'s and `store.changes`' first.
+fn read_opts<'a>(verb: &str, args: &'a [J]) -> Option<&'a serde_json::Map<String, J>> {
+    let i = match verb {
+        "store.get" => 1,
+        "store.list" | "store.changes" => 0,
+        _ => return None,
+    };
+    args.get(i).and_then(J::as_object)
+}
+
+/// `from`, when the verb carries it. Only the three read verbs take it.
+fn from_opt(verb: &str, args: &[J]) -> Result<Option<String>, DataError> {
+    match read_opts(verb, args).and_then(|o| o.get("from")) {
+        None | Some(J::Null) => Ok(None),
+        Some(J::String(s)) if !s.trim().is_empty() => Ok(Some(s.trim().to_string())),
+        Some(_) => Err(DataError::BadRequest(format!("{verb}: from is a widget name (text)"))),
+    }
+}
+
+/// The other widget's space for a `{from}` read: named in the live
+/// manifest's `reads`, placed on this Garden, and never a write.
+fn read_space(w: &Placed, verb: &str, other: &str) -> Result<Space, DataError> {
+    let other = other.split('@').next().unwrap_or(other);
+    if !w.reads.iter().any(|r| r == other) {
+        return Err(refused(
+            "not_bound",
+            403,
+            format!("{verb} from {other}: add \"{other}\" to this widget's manifest reads to read its data"),
+        ));
+    }
+    if !w.neighbours.iter().any(|n| n == other) {
+        return Err(refused(
+            "not_bound",
+            403,
+            format!("{verb} from {other}: {other} isn't placed on this Garden; a widget reads only its Garden neighbours' data"),
+        ));
+    }
+    data_space(other)
 }
 
 // ── arguments ────────────────────────────────────────────────────────
@@ -401,6 +457,7 @@ fn store_verb(
         "store.get" => {
             budget::spend(key, Spend::Read)?;
             let k = arg_str(args, 0, verb, "a key")?;
+            known_opts(arg_obj(args, 1, verb)?, &["from"], verb)?;
             read_check(acc, k)?;
             let e = s.get(space, k)?;
             audit::count(space.as_str(), &label, Some(made), Counted::Read);
@@ -442,7 +499,7 @@ fn store_verb(
         "store.list" => {
             budget::spend(key, Spend::Read)?;
             let o = arg_obj(args, 0, verb)?;
-            known_opts(o, &["prefix", "after", "limit"], verb)?;
+            known_opts(o, &["prefix", "after", "limit", "from"], verb)?;
             let prefix: String = opt_field(o, "prefix", verb)?.unwrap_or_default();
             let after: Option<String> = opt_field(o, "after", verb)?;
             let limit: usize = opt_field::<u64>(o, "limit", verb)?.map_or(DEFAULT_LIST_LIMIT, |l| l as usize);
@@ -459,7 +516,7 @@ fn store_verb(
         "store.changes" => {
             budget::spend(key, Spend::Read)?;
             let o = arg_obj(args, 0, verb)?;
-            known_opts(o, &["since", "after", "prefix"], verb)?;
+            known_opts(o, &["since", "after", "prefix", "from"], verb)?;
             let since: i64 = opt_field(o, "since", verb)?
                 .ok_or_else(|| DataError::BadRequest(format!("{verb} needs {{since}}")))?;
             if since < 0 {

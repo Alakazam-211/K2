@@ -36,6 +36,7 @@ impl ZenFiles {
         let dropped: Vec<&str> = requested.iter().filter(|c| !caps.contains(c)).map(String::as_str).collect();
         let reach = sources_reach_note(&caps);
         let sources = st.manifest.as_ref().and_then(|m| m.sources.clone());
+        let reads = st.manifest.as_ref().map(|m| m.reads.clone()).unwrap_or_default();
 
         let mut placements = Vec::new();
         for p in &placed {
@@ -88,6 +89,7 @@ impl ZenFiles {
             "dropped": dropped,
             "reach": reach,
             "sources": sources,
+            "reads": reads,
             "placements": placements,
             "runtime": runtime,
         }))

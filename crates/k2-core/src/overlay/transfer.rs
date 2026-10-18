@@ -886,6 +886,7 @@ impl Rewrite<'_> {
             external: None,
             imported: Some(meta),
             delivery_id: None,
+            handoff: None,
         };
         let key = import_key(
             project_id,

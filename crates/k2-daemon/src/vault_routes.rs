@@ -106,11 +106,14 @@ pub const PASSPORT_DENIED: &[&str] = &[
 pub const MAX_BODY: usize = 96 * 1024;
 
 pub fn is_route(path: &str) -> bool {
-    READ_ROUTES.contains(&path) || POST_ROUTES.contains(&path) || crate::vault_use_routes::is_route(path)
+    READ_ROUTES.contains(&path)
+        || POST_ROUTES.contains(&path)
+        || crate::vault_use_routes::is_route(path)
+        || crate::vault_handoff_routes::is_route(path)
 }
 
 pub fn is_post_route(path: &str) -> bool {
-    POST_ROUTES.contains(&path) || crate::vault_use_routes::is_post_route(path)
+    POST_ROUTES.contains(&path) || crate::vault_use_routes::is_post_route(path) || crate::vault_handoff_routes::is_post_route(path)
 }
 
 // ── responses ───────────────────────────────────────────────────────
@@ -268,6 +271,16 @@ pub fn meta_json(m: &SecretMeta) -> Value {
             })
             .collect();
         o.insert("hostsDisplay".into(), Value::Array(hosts));
+        // A copy another agent sent (prd-agent-secret-handoff-v1 §6.3):
+        // who, from where, when, and the delivery id.
+        if let Some(id) = m.origin.strip_prefix(k2_vault::handoff::ORIGIN_PREFIX) {
+            if let Some(r) = crate::vault::get().ok().and_then(|v| v.handoff_get(id, "in").ok()) {
+                o.insert(
+                    "handoff".into(),
+                    json!({ "deliveryId": r.delivery_id, "from": r.peer_addr, "at": r.created_at, "decidedBy": r.decided_by }),
+                );
+            }
+        }
     }
     v
 }
@@ -374,6 +387,9 @@ pub fn handle_on(
     }
     if crate::vault_use_routes::is_route(path) {
         return crate::vault_use_routes::handle(vault, path, &c, body, params, ingress);
+    }
+    if crate::vault_handoff_routes::is_route(path) {
+        return crate::vault_handoff_routes::handle(vault, path, &c, body, params, ingress);
     }
     let r = match path {
         STATUS => Ok(status_json(&vault.status())),
@@ -1010,7 +1026,12 @@ struct ConfirmBody {
     clone_plan: Option<crate::clone_vault::CarryAsk>,
 }
 
+/// Sending a person-given secret to another server (prd-agent-secret-
+/// handoff-v1 §7.6); `secretId` = the source secret's id.
+pub const HANDOFF_CONFIRM_ACTION: &str = "handoff-send";
+
 const CONFIRM_ACTIONS: &[&str] = &[
+    HANDOFF_CONFIRM_ACTION,
     "reveal",
     "kek-rotate",
     "rekey",

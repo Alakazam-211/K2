@@ -204,6 +204,7 @@ pub mod apps;
 pub mod compute_ws;
 // K2 vault (prd-k2-vault-v1): daemon glue + `/cli/vault/*`.
 pub mod vault;
+pub mod vault_handoff_routes;
 pub mod vault_routes;
 pub mod vault_use_routes;
 // Garden v3 data sources (prd-garden-v3-external-data-cards-v1): the poller,

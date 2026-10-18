@@ -448,24 +448,7 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
         ingress::DEFAULT_SKEW_SECS,
     ) {
         Ok(v) => v,
-        Err(e) => {
-            // Fail-closed: map each reject to a status. Auth/authorization
-            // failures are 403; malformed/bad-sig are 400; replay/skew/ttl/loop
-            // are 409 (the request was well-formed but not acceptable now).
-            let status = match e {
-                ingress::IngressError::UnknownPeer
-                | ingress::IngressError::NotTrusted
-                | ingress::IngressError::CapabilityDenied => "403 Forbidden",
-                ingress::IngressError::Decode(_) | ingress::IngressError::BadSignature => {
-                    "400 Bad Request"
-                }
-                ingress::IngressError::Replay
-                | ingress::IngressError::SkewTooLarge { .. }
-                | ingress::IngressError::TtlExpired
-                | ingress::IngressError::LoopDetected => "409 Conflict",
-            };
-            return json_err(status, e);
-        }
+        Err(e) => return ingress_reject(e),
     };
 
     // H4 (prd-agent-secret-handoff-v1): a vault kind never reaches a chat.
@@ -564,9 +547,11 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
 
     // The deliverable text (federation sends `Msg`; render any other kind
     // so nothing is silently lost).
+    // H14 backstop: a known vault value (8+ characters) pasted into a
+    // federated message never reaches the chat or Chatter.
     let text = match &signal.kind {
-        SignalKind::Msg { text } => text.clone(),
-        other => serde_json::to_string(other).unwrap_or_default(),
+        SignalKind::Msg { text } => k2_core::redaction::redact(text),
+        other => k2_core::redaction::redact(&serde_json::to_string(other).unwrap_or_default()),
     };
 
     // CONSENT GATE — the recipient workspace's per-project "allow remote
@@ -624,6 +609,23 @@ pub fn handle_inbound(body: &[u8]) -> CliResponse {
             .to_string(),
         )
     }
+}
+
+/// Fail-closed: map each ingress reject to a status. Auth/authorization
+/// failures are 403; malformed/bad-sig are 400; replay/skew/ttl/loop are
+/// 409 (the request was well-formed but not acceptable now).
+pub(crate) fn ingress_reject(e: ingress::IngressError) -> CliResponse {
+    let status = match e {
+        ingress::IngressError::UnknownPeer | ingress::IngressError::NotTrusted | ingress::IngressError::CapabilityDenied => {
+            "403 Forbidden"
+        }
+        ingress::IngressError::Decode(_) | ingress::IngressError::BadSignature => "400 Bad Request",
+        ingress::IngressError::Replay
+        | ingress::IngressError::SkewTooLarge { .. }
+        | ingress::IngressError::TtlExpired
+        | ingress::IngressError::LoopDetected => "409 Conflict",
+    };
+    json_err(status, e)
 }
 
 /// 404 for a signed `to` that does not name an agent this server lists.
@@ -749,7 +751,7 @@ fn deliver_inbound_tray(
 /// **Always** `agent::host` (lowercase). Never `@` — that sigil made
 /// receiving agents treat the handle as mail and call `k2 mail` instead of
 /// `k2 msg` (GH #47). Empty host → bare agent; empty agent → `"peer"`.
-fn federated_from_label(sender_agent: &str, host: &str) -> String {
+pub(crate) fn federated_from_label(sender_agent: &str, host: &str) -> String {
     let agent = sender_agent.trim().to_ascii_lowercase();
     let host = host.trim().to_ascii_lowercase();
     let agent = if agent.is_empty() {
@@ -767,7 +769,7 @@ fn federated_from_label(sender_agent: &str, host: &str) -> String {
 /// Look up `projects.path` by `projects.id` — the addressed workspace UUID
 /// carried in the verified `to` address. `None` when no project matches
 /// (the addressed workspace isn't on this server).
-fn resolve_project_path_by_id(workspace_id: &str) -> Option<String> {
+pub(crate) fn resolve_project_path_by_id(workspace_id: &str) -> Option<String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     conn.query_row(
@@ -1210,7 +1212,7 @@ fn bare_host(h: &str) -> String {
     h
 }
 
-fn peer_matches_user_host(peer: &k2_core::federation::FederationPeer, host: &str) -> bool {
+pub(crate) fn peer_matches_user_host(peer: &k2_core::federation::FederationPeer, host: &str) -> bool {
     if peer_selector_matches(peer, host) {
         return true;
     }
@@ -1238,7 +1240,7 @@ fn slugify_agent(s: &str) -> String {
     k2_core::workspace::handle::dash_fold_name(s)
 }
 
-fn workspace_id_from_roster_body(body: &str, agent: &str) -> Result<String, String> {
+pub(crate) fn workspace_id_from_roster_body(body: &str, agent: &str) -> Result<String, String> {
     let d: serde_json::Value =
         serde_json::from_str(body).map_err(|e| format!("parse peer roster: {e}"))?;
     if let Some(err) = d.get("error") {
@@ -1353,7 +1355,7 @@ fn peer_selector_matches(peer: &k2_core::federation::FederationPeer, sel: &str) 
 
 /// The peer's full HOST (no scheme/path) — the right-hand side of the
 /// `<agent>::<host>` connection address (F5: saved host:port, not `name::lan`).
-fn peer_host(peer: &k2_core::federation::FederationPeer) -> String {
+pub(crate) fn peer_host(peer: &k2_core::federation::FederationPeer) -> String {
     let base = peer_base_url(peer);
     if !base.is_empty() {
         return k2_core::connections::normalize_remote_host(&federation::host_port(&base));
@@ -1668,7 +1670,7 @@ fn heal_rows_from_roster(
 
 /// The cross-daemon send gate by identity (A7 S3 / CA3 / CA10). `Ok` to
 /// send; `Err` is the 403 `not_connected` response.
-fn remote_send_gate_check(
+pub(crate) fn remote_send_gate_check(
     from_ws: &str,
     peer: &k2_core::federation::FederationPeer,
     to_workspace_id: &str,

@@ -1264,6 +1264,39 @@ fn create_secret_card(
     Ok(item)
 }
 
+/// Post a `handoff` card on the receiving workspace's Thread
+/// (prd-agent-secret-handoff-v1 §10.1). `workspace` is the receiving
+/// workspace's folder (or any address `resolve_addr` takes). Returns
+/// `<conversation id>/<card id>` for the vault row. Names only.
+pub(crate) fn post_handoff_card(
+    workspace: &str,
+    from: &str,
+    body: &str,
+    card: overlay::HandoffCardBody,
+) -> Result<String, String> {
+    let resolved = resolve_addr(workspace).map_err(|r| r.body)?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let (item, links) =
+        overlay::post_handoff(&conn, &resolved.conversation_id, &resolved.project_id, from, &resolved.addr, body, card)?;
+    drop(conn);
+    crate::overlay_ws::emit_links(&links, &item.doc);
+    // Name-only push, like a secret card (§7).
+    push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret);
+    Ok(format!("{}/{}", resolved.conversation_id, item.id))
+}
+
+/// Close a `handoff` card (`landed` / `declined` / `expired`) by the ref
+/// [`post_handoff_card`] returned. A card already closed is a no-op.
+pub(crate) fn close_handoff_card(card_ref: &str, status: &str, reference: Option<String>, by: Option<overlay::PostAuthor>) {
+    let Some((conversation, card_id)) = card_ref.rsplit_once('/') else { return };
+    match overlay::mark_handoff(conversation, card_id, status, reference, by) {
+        Ok(cb) => publish_card_frame(&cb),
+        Err(e) if e == overlay::CARD_NOT_PENDING => {}
+        Err(e) => k2_core::log_debug!("[overlay] close handoff card {card_id}: {e}"),
+    }
+}
+
 /// A clone's leave-blank card on its own Thread (`conversation_id`, owned
 /// by `project_id`): from the clone itself, workspace scope. Outside the
 /// VS13 3-pending cap (the caller caps clone cards at 10, CL17). Returns

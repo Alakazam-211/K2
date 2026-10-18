@@ -1128,6 +1128,7 @@ pub const ROUTES: &[Route] = &[
     // K2 vault (prd-k2-vault-v1 §22.3, KV14). Passports reach the Member
     // rows through is_agent_verb and are checked in the handler; confirm,
     // reveal, recovery and key operations are never agent verbs.
+    both("/cli/vault/accept-from", Member),
     get("/cli/vault/audit", Admin),
     post("/cli/vault/backup", Owner),
     post("/cli/vault/backup/recipient", Owner),
@@ -1145,6 +1146,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/vault/get", Member),
     post("/cli/vault/grant", Member),
     post("/cli/vault/import", Member),
+    get("/cli/vault/incoming", Member),
+    post("/cli/vault/incoming/decide", Member),
     post("/cli/vault/kek/rotate", Owner),
     get("/cli/vault/list", Member),
     post("/cli/vault/policy", Member),
@@ -1160,6 +1163,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/vault/revoke", Member),
     post("/cli/vault/rollback", Owner),
     post("/cli/vault/rotate", Member),
+    post("/cli/vault/send", Member),
+    get("/cli/vault/sent", Member),
     both("/cli/vault/service", Member),
     post("/cli/vault/set", Member),
     get("/cli/vault/show", Member),

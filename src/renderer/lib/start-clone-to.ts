@@ -25,6 +25,12 @@ import {
 } from './clone-pull'
 import { useCloneToDialogStore, type CloneOptionDeps, type CloneVaultRun } from '@/stores/clone-to-dialog'
 import { cloneVaultConfirm, fetchClonePreview, type CloneExtras } from './clone-options'
+import {
+  approveProposal,
+  cloneProposalConfirm,
+  finishProposal,
+  type CloneProposal,
+} from './clone-proposals'
 import { askVaultRecipient, type VaultRecipientLookup } from './clone-vault'
 import type { ServerScope } from '@/kessel/server-scope'
 import { useProjectsStore } from '@/stores/projects'
@@ -55,6 +61,12 @@ export function defaultCloneOptionDeps(
     fetchPreview: (carry, sinceDays) => fetchClonePreview(post, scope, projectPath, carry, sinceDays),
     carryConfirm: (carry, methods, askPassword) =>
       cloneVaultConfirm(post, scope, projectPath, carry, methods, `clone ${projectName}`, askPassword),
+    // An agent's proposal (0.46.1): one confirm approves it and covers the
+    // copy; the approve and the finish go to the SOURCE server too.
+    proposalConfirm: (carry, askPassword, proposalId) =>
+      cloneProposalConfirm(post, scope, projectPath, carry, proposalId, `approve and clone ${projectName}`, askPassword),
+    approveProposal: (id, approveToken) => approveProposal(post, scope, id, approveToken),
+    finishProposal: (id, ok, detail) => finishProposal(post, scope, id, ok, detail),
   }
 }
 
@@ -82,6 +94,35 @@ export function startCloneTo(
     projectName,
     host,
     optionDeps,
+    onConfirm: (carrySecrets, includeAllHistory, extras, vault) => {
+      void runClone(projectPath, host, deps, carrySecrets, includeAllHistory, extras, vault)
+    },
+  })
+}
+
+/**
+ * Open the Clone dialog prefilled from an agent's clone proposal (0.46.1,
+ * `k2 clone propose`): its Thread, history and per-secret choices start as
+ * the agent proposed them, the person can change them, and the primary
+ * button approves and runs it with ONE confirm. `host` is the proposal's
+ * target among this window's Connect hosts.
+ */
+export function startCloneProposal(
+  proposal: CloneProposal,
+  projectPath: string,
+  projectName: string,
+  host: ConnectHost,
+  deps: CloneDeps = defaultCloneDeps(),
+  optionDeps: CloneOptionDeps = defaultCloneOptionDeps(primaryScope(), projectPath, projectName, () =>
+    askVaultRecipient(() => deps.destVaultRecipient(host), host.label),
+  ),
+): void {
+  useCloneToDialogStore.getState().start({
+    projectPath,
+    projectName,
+    host,
+    optionDeps,
+    proposal,
     onConfirm: (carrySecrets, includeAllHistory, extras, vault) => {
       void runClone(projectPath, host, deps, carrySecrets, includeAllHistory, extras, vault)
     },

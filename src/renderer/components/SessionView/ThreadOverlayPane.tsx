@@ -31,6 +31,7 @@ import {
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 
 // The choice card lives in its own file; Zen and Grok Bots import it from here.
+import { CloneProposalsBanner } from '@/components/CloneToDialog/CloneProposalsBanner'
 export { ChoiceCard, choiceLetter } from './ChoiceCard'
 
 // 2026-10-16 (Rosson: "update the thread UI in K2 to match what we have in
@@ -227,6 +228,8 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
       {...scope}
     >
       <ThreadZenStyles />
+      {/* 0.46.1: the agent's open clone proposals (Owner/Admin), Review / Deny. */}
+      <CloneProposalsBanner addr={addr} refreshKey={visible.length} />
       <div
         ref={listRef}
         data-testid="thread-overlay-list"

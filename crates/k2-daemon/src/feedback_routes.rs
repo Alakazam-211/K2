@@ -2317,6 +2317,9 @@ mod tests {
     /// never fails.
     #[test]
     fn feedback_comment_matrix_option_pick_answers_free_text_discusses() {
+        // The human author stamp reads the people list under $HOME (the
+        // linked owner login): a temp HOME, never the machine's real ~/.k2.
+        let _home = crate::test_support::TempHome::new();
         let (name, path) = unique("comment-matrix");
         insert_project(&name, &path);
         let sandbox_session = || {
@@ -2620,6 +2623,9 @@ mod tests {
     /// notification listens to — that seam is the event NAME).
     #[test]
     fn feedback_comment_routes_emit_commented_event() {
+        // The human author stamp reads the people list under $HOME (the
+        // linked owner login): a temp HOME, never the machine's real ~/.k2.
+        let _home = crate::test_support::TempHome::new();
         install_capture_sink();
         let (name, path) = unique("commented-event");
         insert_project(&name, &path);
@@ -2703,6 +2709,9 @@ mod tests {
     /// never `feedback:created`.
     #[test]
     fn feedback_answer_route_emits_commented_event() {
+        // The human author stamp reads the people list under $HOME (the
+        // linked owner login): a temp HOME, never the machine's real ~/.k2.
+        let _home = crate::test_support::TempHome::new();
         install_capture_sink();
         let (name, path) = unique("answer-commented");
         insert_project(&name, &path);

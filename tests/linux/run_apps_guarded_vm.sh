@@ -111,9 +111,12 @@ REMOTE
 		;;
 	vm)
 		echo "== the guarded e2e in a throwaway Debian 13 VM =="
-		"${SSH[@]}" bash -s -- "$R" "$IMAGE" "$STAMP" "${K2_IT_BAKED:-0}" "${K2_IT_KEEP_VM:-}" "${K2_IT_PHASES:-}" <<'REMOTE' 2>&1 | tee "$LOGS/vm.log"
+		"${SSH[@]}" bash -s -- "$R" "$IMAGE" "$STAMP" "${K2_IT_BAKED:-0}" "${K2_IT_KEEP_VM:-0}" "${K2_IT_PHASES:-all}" <<'REMOTE' 2>&1 | tee "$LOGS/vm.log"
 set -euo pipefail
-R="$1"; IMAGE="$2"; STAMP="$3"; BAKED="$4"; KEEP="${5:-}"; PHASES="${6:-}"
+R="$1"; IMAGE="$2"; STAMP="$3"; BAKED="$4"; KEEP="${5:-0}"; PHASES="${6:-all}"
+# ssh joins argv into one string: empty arguments vanish, so 0 and all stand for none.
+[ "$KEEP" = 0 ] && KEEP=""
+[ "$PHASES" = all ] && PHASES=""
 mkdir -p "$R/vm"
 podman build -q -t "$IMAGE" -f "$R/it/tests/Containerfile.vm-it" "$R/it/tests" >/dev/null
 NAME="k2-vm-it-$STAMP"

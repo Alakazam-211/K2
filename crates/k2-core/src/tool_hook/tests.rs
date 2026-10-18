@@ -1216,9 +1216,145 @@ fn username_suffix_is_deterministic_and_fits_64() {
     assert_eq!(long.len(), 64);
     assert!(sew_wire::is_valid_handle(&long));
     assert_ne!(a, chat::suffixed_username("sales", "k2:owner"));
-    assert_eq!(chat::owner_username(Some("Rosson Long")), "rosson-long");
     assert_eq!(chat::owner_username(Some("!")), "owner");
     assert_eq!(chat::owner_username(None), "owner");
+}
+
+// ── k2:owner username = the linked K2 login (Sew, 2026-10-17) ────────
+
+#[test]
+fn owner_username_is_the_login_normalised() {
+    assert_eq!(chat::owner_username(Some("z3thon")), "z3thon");
+    // Dots → `-`, other characters stripped, lowercased.
+    assert_eq!(chat::owner_username(Some("rosson.long")), "rosson-long");
+    assert_eq!(chat::owner_username(Some("Ro$s.On_2 ")), "ros-on_2");
+    assert_eq!(chat::owner_username(Some("ünï.x9")), "n-x9");
+    assert_eq!(chat::login_username(&"a".repeat(80)).unwrap().len(), 64);
+    // Nothing usable left → `owner`.
+    assert_eq!(chat::owner_username(Some("é")), "owner");
+    assert_eq!(chat::owner_username(Some("a")), "owner");
+    for l in ["z3thon", "rosson.long", "Ro$s.On_2", "ALL", "here"] {
+        let u = chat::login_username(l).unwrap();
+        chat::check_username(&u).unwrap_or_else(|e| panic!("{l} → {u}: {e}"));
+    }
+}
+
+#[test]
+fn owner_username_avoids_reserved_mentions() {
+    assert_eq!(
+        chat::RESERVED_USERNAMES,
+        ["here", "channel", "everyone", "all"]
+    );
+    for (login, want) in [
+        ("here", "here-k2"),
+        ("channel", "channel-k2"),
+        ("Everyone", "everyone-k2"),
+        ("all", "all-k2"),
+        ("a.ll", "a-ll"),
+        ("allison", "allison"),
+    ] {
+        assert_eq!(chat::owner_username(Some(login)), want, "{login}");
+    }
+    // The no-account fallback is not reserved.
+    assert!(!chat::RESERVED_USERNAMES.contains(&"owner"));
+    chat::check_username("owner").unwrap();
+    // A reserved word never reaches Sew from a grant either.
+    for w in chat::RESERVED_USERNAMES {
+        let e = chat::check_username(w).unwrap_err();
+        assert!(e.contains("reserved chat mention"), "{e}");
+    }
+}
+
+fn owner_desired(username: &str) -> Desired {
+    Desired {
+        request: ProvisionRequest {
+            external_id: ExternalId::K2Owner,
+            kind: MemberKind::Person,
+            agent_kind: None,
+            assistant_of: None,
+            guest: false,
+            profile: profile(username, "Rosson Long"),
+        },
+        grant: None,
+        grant_rev: OWNER_GRANT_REV.into(),
+    }
+}
+
+fn owner_member(username: &str) -> MgmtPrincipal {
+    let mut m = member(ExternalId::K2Owner, MemberKind::Person, username, "Rosson Long");
+    m.install_role = InstallRole::Owner;
+    m
+}
+
+fn username_updates(planned: &[reconcile::PlannedOp]) -> Vec<String> {
+    planned
+        .iter()
+        .filter(|p| p.op == Op::Update)
+        .filter_map(|p| p.payload["profile"]["username"].as_str().map(str::to_string))
+        .collect()
+}
+
+#[test]
+fn reconcile_renames_an_existing_owner_member_to_the_login() {
+    // 0.46.0-era install: Sew holds the display-name slug.
+    let (planned, s) = reconcile::plan(
+        &[owner_desired("z3thon")],
+        &[owner_member("rosson-long")],
+        &HashSet::new(),
+        &HashMap::new(),
+    );
+    assert_eq!(planned.len(), 1, "{planned:?}");
+    assert_eq!(planned[0].op, Op::Update);
+    assert_eq!(planned[0].subject, ExternalId::K2Owner);
+    assert_eq!(username_updates(&planned), ["z3thon"]);
+    assert_eq!(planned[0].payload["profile"].get("display_name"), None);
+    assert_eq!(s.updated, 1);
+}
+
+#[test]
+fn owner_fallback_username_is_sticky_until_the_login_changes() {
+    let fallback = chat::suffixed_username("z3thon", "k2:owner");
+    let mut sew = owner_member(&fallback);
+    // Two reconciles after a fallback: no rename.
+    for _ in 0..2 {
+        let (planned, _) = reconcile::plan(
+            &[owner_desired("z3thon")],
+            std::slice::from_ref(&sew),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        assert!(planned.is_empty(), "{planned:?}");
+    }
+    // A re-provision of the member keeps the fallback, too.
+    let mut req = owner_desired("z3thon").request;
+    assert!(chat::fill_provision_from_member(&mut req, &sew));
+    assert_eq!(req.profile.username, fallback);
+    // A bare-login member is left as it is.
+    let mut req = owner_desired("z3thon").request;
+    assert!(!chat::fill_provision_from_member(&mut req, &owner_member("z3thon")));
+    assert_eq!(req.profile.username, "z3thon");
+
+    // The login changes: exactly one rename, then nothing.
+    let (planned, _) = reconcile::plan(
+        &[owner_desired("rosson")],
+        std::slice::from_ref(&sew),
+        &HashSet::new(),
+        &HashMap::new(),
+    );
+    assert_eq!(username_updates(&planned), ["rosson"]);
+    assert_eq!(planned.len(), 1);
+    sew.username = "rosson".into();
+    let (planned, _) = reconcile::plan(
+        &[owner_desired("rosson")],
+        std::slice::from_ref(&sew),
+        &HashSet::new(),
+        &HashMap::new(),
+    );
+    assert!(planned.is_empty(), "{planned:?}");
+    // A different login's fallback is not "sticky" for the new login.
+    let mut req = owner_desired("rosson").request;
+    assert!(!chat::fill_provision_from_member(&mut req, &owner_member(&fallback)));
+    assert_eq!(req.profile.username, "rosson");
 }
 
 // ── K4: apply_reconcile against skin.db ─────────────────────────────
@@ -1416,24 +1552,47 @@ fn kick_reconcile_fires_on_main_db_and_app_user_changes() {
 // ── owner profile name (0.46.0 person names) ─────────────────────────
 
 /// The `k2:owner` Sew profile's display name is the owner person's
-/// displayName: the linked account's "First Last".
+/// displayName (the linked account's "First Last"); its username is the
+/// linked K2 login, never a slug of that name.
 #[test]
 fn owner_profile_name_is_the_linked_accounts_first_last() {
     let _e = setup();
-    crate::connect_users::add_user_with_names("rosson", "password1", Some("Rosson"), Some("Long"))
+    crate::connect_users::add_user_with_names("z3thon", "password1", Some("Rosson"), Some("Long"))
         .expect("add login");
-    crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["rosson"] })).expect("link");
+    crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["z3thon"] })).expect("link");
     // The retired "Your name" setting is ignored even when set.
     crate::app_settings::update(serde_json::json!({ "ownerDisplayName": "Old Name" })).expect("legacy");
     let ctx = HookCtx::load("owner-token", &[]);
     assert_eq!(ctx.owner_name.as_deref(), Some("Rosson Long"));
+    assert_eq!(ctx.owner_login.as_deref(), Some("z3thon"));
     let req = chat::owner_provision_request(&ctx);
     assert_eq!(req.external_id, ExternalId::K2Owner);
     assert_eq!(req.kind, MemberKind::Person);
     assert!(!req.guest);
     assert_eq!(req.profile.display_name, "Rosson Long");
-    assert_eq!(req.profile.username, "rosson-long");
+    assert_eq!(req.profile.username, "z3thon");
     assert_eq!(req.profile.email, None);
+}
+
+/// A linked login that is a reserved word is moved off it; with no
+/// linked account the username is `owner`.
+#[test]
+fn owner_username_from_disk_reserved_login_and_no_account() {
+    let _e = setup();
+    let ctx = HookCtx::load("owner-token", &[]);
+    assert_eq!(ctx.owner_login, None);
+    assert_eq!(chat::owner_provision_request(&ctx).profile.username, "owner");
+    crate::connect_users::add_user("all", "password1").expect("add login");
+    crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["all"] })).expect("link");
+    let req = chat::owner_provision_request(&HookCtx::load("owner-token", &[]));
+    assert_eq!(req.profile.username, "all-k2");
+    sew_wire::validate_provision(&req).expect("valid provision");
+    // Removing the linked login falls back to `owner` and kicks a reconcile.
+    let _ = take_reconcile_request();
+    crate::connect_users::remove_user("all").expect("remove login");
+    assert!(take_reconcile_request(), "linked login removal");
+    let req = chat::owner_provision_request(&HookCtx::load("owner-token", &[]));
+    assert_eq!(req.profile.username, "owner");
 }
 
 /// No First/Last: the linked username, and with nothing linked `Owner`

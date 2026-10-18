@@ -176,11 +176,6 @@ fn deprovision(ext: &ExternalId, grant_rev: Option<String>) -> PlannedOp {
     }
 }
 
-/// Sew's handle is right when it is the base or the deterministic suffix.
-fn username_ok(want: &str, have: &str, ext: &ExternalId) -> bool {
-    have == want || have == chat::suffixed_username(want, &ext.to_string())
-}
-
 /// The pure diff (§16.2 step 5, S27-A5, HC2):
 ///
 /// | Sew vs desired | op |
@@ -259,7 +254,7 @@ pub fn plan(
         }
         let want_user = &d.request.profile.username;
         let want_name = &d.request.profile.display_name;
-        let user_ok = username_ok(want_user, &m.username, d.ext());
+        let user_ok = chat::username_matches(want_user, &m.username, d.ext());
         // A8 (a): profile-only drift is repaired with `update` (a
         // ProfilePatch keeps omitted fields), never a provision. Email is
         // K2's only for principals, and only diffable when Sew's list

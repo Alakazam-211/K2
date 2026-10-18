@@ -202,6 +202,11 @@ pub fn check_username(name: &str) -> Result<(), String> {
             "username '{name}' must be 2–64 characters of a-z, 0-9, _ or -; chat cannot use it"
         ));
     }
+    if RESERVED_USERNAMES.contains(&name) {
+        return Err(format!(
+            "username '{name}' is a reserved chat mention (@{name}); chat cannot use it"
+        ));
+    }
     Ok(())
 }
 
@@ -209,29 +214,49 @@ fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
-/// Owner handle: slug of the owner's displayName (lowercase ASCII, spaces →
-/// `-`, other chars dropped, ≤ 64), else `owner` (§10.2).
-pub fn owner_username(display: Option<&str>) -> String {
-    let slug: String = display
-        .unwrap_or("")
+/// Sew's reserved mention words (`@here` etc.): never a username.
+pub const RESERVED_USERNAMES: [&str; 4] = ["here", "channel", "everyone", "all"];
+
+/// Moves a login off a reserved word (`all` → `all-k2`).
+const RESERVED_SUFFIX: &str = "-k2";
+
+/// A K2 login as a Sew username (Sew's rules for K2, 2026-10-17):
+/// lowercase ASCII, `.` → `-`, anything else outside `[a-z0-9_-]`
+/// stripped, at most 64 chars; a reserved word (`here`, `channel`,
+/// `everyone`, `all`) gets `-k2`. `None` when fewer than 2 chars are left.
+pub fn login_username(login: &str) -> Option<String> {
+    let norm: String = login
         .trim()
         .chars()
         .filter_map(|c| {
-            if c == ' ' {
+            let c = c.to_ascii_lowercase();
+            if c == '.' {
                 Some('-')
-            } else if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                Some(c.to_ascii_lowercase())
+            } else if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-' {
+                Some(c)
             } else {
                 None
             }
         })
         .take(64)
         .collect();
-    if slug.len() < 2 {
-        "owner".to_string()
-    } else {
-        slug
+    if norm.len() < 2 {
+        return None;
     }
+    if RESERVED_USERNAMES.contains(&norm.as_str()) {
+        return Some(format!("{norm}{RESERVED_SUFFIX}"));
+    }
+    Some(norm)
+}
+
+/// Owner handle: the owner's linked K2 login ([`login_username`]), else
+/// `owner` (no linked account, or nothing usable left of the login). The
+/// display name never feeds the handle (0.46.0: the username is the
+/// identity, "First Last" is only the display name).
+pub fn owner_username(login: Option<&str>) -> String {
+    login
+        .and_then(login_username)
+        .unwrap_or_else(|| "owner".to_string())
 }
 
 pub fn owner_profile_display_name(display: Option<&str>) -> String {
@@ -248,6 +273,14 @@ pub fn suffixed_username(base: &str, ext: &str) -> String {
     let hex = format!("{:02x}{:02x}", h[0], h[1]);
     let keep: String = base.chars().take(64 - 5).collect();
     format!("{keep}-{hex}")
+}
+
+/// Sew's handle is right when it is K2's username or its deterministic
+/// conflict fallback ([`suffixed_username`]). So a fallback sticks until
+/// K2's username itself changes (Sew, 2026-10-17: each rename is an audit
+/// row and a member event).
+pub fn username_matches(want: &str, have: &str, ext: &ExternalId) -> bool {
+    have == want || have == suffixed_username(want, &ext.to_string())
 }
 
 fn chat_grants_of(conn: &Connection, sql_where: &str, v: &str) -> Result<Vec<SkinGrant>, String> {
@@ -434,10 +467,21 @@ pub fn deprovision_op(grant: &SkinGrant, cause: Cause) -> Result<NewOp, String> 
 ///   `principals.email`, so K2's value — set or absent — wins).
 ///
 /// Fields the list does not carry (`None`: an older Sew) are unknown and
-/// left absent; nothing K2 can do there until SW14 ships. Returns whether
-/// the body changed. Pure.
+/// left absent; nothing K2 can do there until SW14 ships.
+///
+/// The username is sticky: when the member already holds the conflict
+/// fallback of K2's username ([`username_matches`]), the body keeps it, so
+/// a re-provision never flips the handle back to the bare login.
+///
+/// Returns whether the body changed. Pure.
 pub fn fill_provision_from_member(req: &mut ProvisionRequest, m: &MgmtPrincipal) -> bool {
     let mut changed = false;
+    if m.username != req.profile.username
+        && username_matches(&req.profile.username, &m.username, &req.external_id)
+    {
+        req.profile.username = m.username.clone();
+        changed = true;
+    }
     let mut take = |slot: &mut Option<String>, have: &Option<Option<String>>| {
         if slot.is_none() {
             if let Some(Some(v)) = have {
@@ -455,7 +499,6 @@ pub fn fill_provision_from_member(req: &mut ProvisionRequest, m: &MgmtPrincipal)
 }
 
 pub fn owner_provision_request(ctx: &HookCtx) -> ProvisionRequest {
-    let d = ctx.owner_name.as_deref();
     ProvisionRequest {
         external_id: ExternalId::K2Owner,
         kind: MemberKind::Person,
@@ -463,8 +506,8 @@ pub fn owner_provision_request(ctx: &HookCtx) -> ProvisionRequest {
         assistant_of: None,
         guest: false,
         profile: ProfileInput {
-            display_name: owner_profile_display_name(d),
-            username: owner_username(d),
+            display_name: owner_profile_display_name(ctx.owner_name.as_deref()),
+            username: owner_username(ctx.owner_login.as_deref()),
             email: None,
             title: None,
             pronouns: None,

@@ -211,7 +211,9 @@ pub fn classify(
                     .unwrap_or_default();
                 Outcome::Blocked {
                     status: Some(status),
-                    error: format!("username '{name}' is taken in chat"),
+                    error: format!(
+                        "username '{name}' is taken in chat (the fallback after the first choice was taken too); rename the other member in Sew, then retry"
+                    ),
                 }
             } else {
                 Outcome::UsernameRetry { status }
@@ -816,7 +818,7 @@ mod tests {
             Outcome::UsernameRetry { status: 409 }
         );
         assert!(
-            matches!(classify(&c, &row("provision", 1, "k2ob_x_u"), Ok(&taken), 0), Outcome::Blocked { ref error, .. } if error == "username 'ann' is taken in chat")
+            matches!(classify(&c, &row("provision", 1, "k2ob_x_u"), Ok(&taken), 0), Outcome::Blocked { ref error, .. } if error.starts_with("username 'ann' is taken in chat (the fallback"))
         );
         // 409 idempotency_conflict → blocked
         assert!(matches!(

@@ -10792,7 +10792,30 @@ async fn handle_one_request(
                     // (verify against the pinned key + require_peer, all inside
                     // the handler). DECISION-2: peers are asymmetric-key
                     // principals, never token_ok/owner.
-                    let body = super::http::read_post_body(&mut *stream, &mut buf).await;
+                    //
+                    // H0 (prd-agent-secret-handoff-v1 H8): a public route
+                    // reads a capped body. The cap fits the largest tray
+                    // package (1 MiB of files, base64) with room to spare.
+                    let body = match super::http::read_post_body_capped(
+                        &mut *stream,
+                        &mut buf,
+                        crate::federation_routes::INBOUND_MAX_BYTES,
+                    )
+                    .await
+                    {
+                        Ok(b) => b,
+                        Err(refused) => {
+                            super::http::refuse_body_too_large(
+                                &mut *stream,
+                                &refused,
+                                "413 Payload Too Large",
+                                "application/json",
+                                r#"{"error":"inbound envelope over 2 MiB","code":"too_large"}"#,
+                            )
+                            .await;
+                            return DispatchOutcome::Done;
+                        }
+                    };
                     tokio::task::spawn_blocking(move || {
                         crate::federation_routes::handle_inbound(&body)
                     })

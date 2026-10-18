@@ -570,6 +570,10 @@ struct RunBody {
     class: Option<String>,
     code: Option<String>,
     line: Option<u64>,
+    /// 0.46.1 S3: the source address a refused `sources.*` call named
+    /// (kept only when a placement's config names it).
+    #[serde(default)]
+    address: Option<String>,
 }
 
 /// Error reports kept per widget per minute; the frame host already stops a
@@ -580,7 +584,7 @@ static RUN_ERRORS: Mutex<Option<HashMap<String, Vec<std::time::Instant>>>> = Mut
 /// POST `/cli/zen/widget/run` (the renderer, decision-k2-runtime-v1 stage 0
 /// (d)): a frame's `ready` or uncaught error, for the bundle hash it ran.
 fn handle_widget_run(body: &[u8]) -> Result<J, ZenError> {
-    let b: RunBody = parse_body(body, "widget/run takes {widget, hash, event, message?, stack?, kind?, class?, code?, line?}")?;
+    let b: RunBody = parse_body(body, "widget/run takes {widget, hash, event, message?, stack?, kind?, class?, code?, line?, address?}")?;
     if b.event == "error" {
         let now = std::time::Instant::now();
         let mut g = RUN_ERRORS.lock().unwrap_or_else(|e| e.into_inner());
@@ -598,6 +602,7 @@ fn handle_widget_run(body: &[u8]) -> Result<J, ZenError> {
         class: b.class.as_deref(),
         code: b.code.as_deref(),
         line: b.line,
+        address: b.address.as_deref(),
     };
     files().record_widget_run_with(&b.widget, &b.hash, &b.event, &detail)
 }

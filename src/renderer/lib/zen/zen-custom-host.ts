@@ -61,7 +61,15 @@ export interface ZenFrameHostOptions {
 export type ZenFrameReport =
   | { event: 'ready' }
   | { event: 'error'; message: string; stack?: string }
-  | { event: 'refusal'; verb: string; code: string }
+  | { event: 'refusal'; verb: string; code: string; address?: string }
+
+/** The address a refusal of a `sources.*` verb names (its `room`), for the
+ *  daemon's log; the daemon keeps it only when a placement config names it
+ *  (0.46.1 S3). Agent verbs never send theirs. */
+export function zenRefusalAddress(verb: string, err: CatalogWireError): string | undefined {
+  if (!verb.startsWith('sources.') || typeof err.room !== 'string' || !err.room) return undefined
+  return err.room.slice(0, 200)
+}
 
 /** Refusals worth an agent's attention (contract-sources-v1 §11.4): the
  *  widget asked for something it can't have, or the source's server is
@@ -97,10 +105,6 @@ export function startZenFrameHost(frame: ZenFrameWindow, opts: ZenFrameHostOptio
   const post = (msg: ZenFrameReply): void => {
     if (!disposed) port.postMessage(msg)
   }
-  const layer = opts.makeLayer(
-    (sub, value) => post({ sub, value }),
-    (sub, error) => post({ sub, error }),
-  )
   const report = (r: ZenFrameReport): void => {
     try {
       opts.onReport?.(r)
@@ -108,6 +112,23 @@ export function startZenFrameHost(frame: ZenFrameWindow, opts: ZenFrameHostOptio
       console.warn(`[zen] widget ${opts.label}: the runtime report failed:`, err)
     }
   }
+  /** The verb each live subscription asked for, so a refusal that ends one
+   *  later (`pushError`) is reported like an answered one. */
+  const subVerbs = new Map<number, string>()
+  const reportRefusal = (verb: string, err: CatalogWireError): void => {
+    if (!ZEN_REPORTED_REFUSALS.has(err.code)) return
+    const address = zenRefusalAddress(verb, err)
+    report({ event: 'refusal', verb, code: err.code, ...(address ? { address } : {}) })
+  }
+  const layer = opts.makeLayer(
+    (sub, value) => post({ sub, value }),
+    (sub, error) => {
+      post({ sub, error })
+      const verb = subVerbs.get(sub)
+      subVerbs.delete(sub)
+      if (verb) reportRefusal(verb, error)
+    },
+  )
 
   const dispose = (): void => {
     if (disposed) return
@@ -179,12 +200,16 @@ export function startZenFrameHost(frame: ZenFrameWindow, opts: ZenFrameHostOptio
       opts.onChord(m.chord, opts.focused())
       return
     }
+    const verb = typeof m.verb === 'string' ? m.verb.slice(0, 60) : 'unknown'
+    if (typeof m.sub === 'number' && typeof m.verb === 'string') subVerbs.set(m.sub, verb)
+    if (typeof m.unsub === 'number') subVerbs.delete(m.unsub)
     void layer.handle(m).then((reply) => {
       if (!reply) return
       post(reply)
       const err = 'error' in reply ? reply.error : null
-      if (err && ZEN_REPORTED_REFUSALS.has(err.code)) {
-        report({ event: 'refusal', verb: typeof m.verb === 'string' ? m.verb.slice(0, 60) : 'unknown', code: err.code })
+      if (err) {
+        if ('sub' in reply && typeof reply.sub === 'number') subVerbs.delete(reply.sub)
+        reportRefusal(verb, err)
       }
     })
   }

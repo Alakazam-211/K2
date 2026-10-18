@@ -47,6 +47,20 @@ pub struct RunDetail<'a> {
     /// A catalog error code (`not_bound`).
     pub code: Option<&'a str>,
     pub line: Option<u64>,
+    /// 0.46.1 S3: the source address a refused `sources.*` call named. Kept
+    /// only when it is one this widget's placements (or its manifest) name,
+    /// so it is config, never a value read from a source; otherwise the row
+    /// says `addressWithheld`.
+    pub address: Option<&'a str>,
+}
+
+/// Longest source address kept on a refusal row.
+pub const MAX_ADDRESS: usize = 200;
+
+/// A source address's shape (`name` or `name::host`): letters, digits and
+/// `- _ . :`, at most [`MAX_ADDRESS`].
+fn address_shaped(a: &str) -> bool {
+    !a.is_empty() && a.len() <= MAX_ADDRESS && a.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))
 }
 
 /// Longest `class` / `code` kept.
@@ -78,6 +92,11 @@ pub fn run_text(r: &J) -> String {
     }
     if let Some(c) = r["code"].as_str() {
         out.push_str(&format!(" ({c})"));
+    }
+    if let Some(a) = r["address"].as_str() {
+        out.push_str(&format!(" for {a}"));
+    } else if r["addressWithheld"] == true {
+        out.push_str(" for an address no placement of this widget names (withheld)");
     }
     if let Some(l) = r["line"].as_u64() {
         out.push_str(&format!(" at line {l}"));
@@ -239,6 +258,27 @@ impl ZenFiles {
             if let Some(l) = d.line {
                 row["line"] = J::from(l);
             }
+            // 0.46.1 S3: name the refused source address when it is config
+            // (one a placement or the manifest names), never otherwise.
+            let mut address_hint: Option<String> = None;
+            if let (true, Some(a)) = (kind == "refusal", d.address.map(str::trim).filter(|a| !a.is_empty())) {
+                let a = a.to_ascii_lowercase();
+                if address_shaped(&a) && self.configured_source_addresses(&name).contains(&a) {
+                    row["address"] = J::String(a.clone());
+                    if d.code == Some("not_bound") {
+                        address_hint = Some(format!(
+                            "'{a}' is named in this widget's placement config but was refused: the window may have had an older page (K2 re-subscribes when the placement changes; Reload the widget otherwise). Check the source with k2 sources list"
+                        ));
+                    }
+                } else {
+                    row["addressWithheld"] = J::Bool(true);
+                    if d.code == Some("not_bound") {
+                        address_hint = Some(format!(
+                            "the widget asked for a source no placement names: add it to the placement's config.sources (k2 zen widget show {name} lists what each placement reads)"
+                        ));
+                    }
+                }
+            }
             if self.widget_reads_sources(&name) {
                 // GV49: fixed fields only; the message and stack never land.
                 row["redacted"] = J::Bool(true);
@@ -251,6 +291,9 @@ impl ZenFiles {
                 if let Some(s) = stack.filter(|s| !s.trim().is_empty()) {
                     row["stack"] = J::String(cut(s, MAX_STACK));
                 }
+            }
+            if let Some(h) = address_hint {
+                row["suggestion"] = J::String(h);
             }
         }
         let dir = self.widget_history_dir(&name);
@@ -330,6 +373,41 @@ impl ZenFiles {
             "hidden": r.hidden,
             "note": r.note,
         }))
+    }
+
+    /// Every source address this widget's placements bind (each placement's
+    /// `sourceAddresses` on its Garden's resolved page) plus its manifest's
+    /// fixed names, lower-case. Config the person or an agent wrote: never
+    /// a value read from a source.
+    pub fn configured_source_addresses(&self, name: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut push = |a: &str| {
+            let a = a.trim().to_ascii_lowercase();
+            if !a.is_empty() && !out.contains(&a) {
+                out.push(a);
+            }
+        };
+        if let Some(J::Array(list)) = self.widget_status(name).manifest.as_ref().and_then(|m| m.sources.clone()) {
+            for a in list.iter().filter_map(J::as_str) {
+                push(a);
+            }
+        }
+        let placed: Vec<_> = self.custom_placements().into_iter().filter(|p| p.widget == name).collect();
+        let mut gardens: Vec<&str> = placed.iter().map(|p| p.garden.as_str()).collect();
+        gardens.sort_unstable();
+        gardens.dedup();
+        for g in gardens {
+            let Ok(page) = self.resolve(Some(g)) else { continue };
+            for w in page["page"]["widgets"].as_array().into_iter().flatten() {
+                let ours = placed.iter().any(|p| p.garden == g && w["id"] == p.placement.as_str()) && w["widget"] == name;
+                if ours {
+                    for a in w["sourceAddresses"].as_array().into_iter().flatten().filter_map(J::as_str) {
+                        push(a);
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Is this user widget placed in any Garden?

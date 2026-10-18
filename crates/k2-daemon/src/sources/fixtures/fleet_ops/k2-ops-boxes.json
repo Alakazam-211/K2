@@ -1,0 +1,144 @@
+{
+ "agentAccess": "values",
+ "everySecs": 60,
+ "extract": {
+  "aggregates": {
+   "behind": {
+    "cond": {
+     "versionBehind": {
+      "field": "target_version"
+     }
+    },
+    "field": "version",
+    "op": "countWhere"
+   },
+   "boxes": {
+    "op": "count"
+   },
+   "far_behind": {
+    "cond": {
+     "versionBehind": {
+      "field": "target_version",
+      "minor": 1
+     }
+    },
+    "field": "version",
+    "op": "countWhere"
+   },
+   "not_ready": {
+    "cond": {
+     "ne": "ready"
+    },
+    "field": "phase",
+    "op": "countWhere"
+   },
+   "offline": {
+    "cond": {
+     "eq": false
+    },
+    "field": "online",
+    "op": "countWhere"
+   },
+   "versions": {
+    "field": "version",
+    "op": "distinct"
+   }
+  },
+  "fields": {
+   "error": "/boxes/error",
+   "target_version": "/boxes/target_version",
+   "ts": "/boxes/ts"
+  },
+  "items": {
+   "itemFields": {
+    "customer": "/customer",
+    "down_since": "/down_since",
+    "last_ok": "/last_ok",
+    "needs_go": "/needs_go",
+    "online": "/online",
+    "phase": "/phase",
+    "stripe_status": "/stripe_status",
+    "tier": "/tier",
+    "version": "/version"
+   },
+   "itemKey": "/label",
+   "pointer": "/boxes/items"
+  },
+  "trend": [
+   "boxes",
+   "offline",
+   "versions",
+   "behind",
+   "far_behind"
+  ]
+ },
+ "failAfter": 3,
+ "fetch": {
+  "url": "https://ops.example.test/api/ops/fleet?part=boxes"
+ },
+ "headers": [],
+ "keep": "values",
+ "label": "Ops: boxes (k2-watch + K2X)",
+ "link": null,
+ "name": "k2-ops-boxes",
+ "onTargetError": "crit",
+ "rules": [
+  {
+   "crit": {
+    "eq": false
+   },
+   "critAfter": 3,
+   "field": "online",
+   "ok": {
+    "eq": true
+   },
+   "warn": {
+    "eq": false
+   },
+   "warnAfter": 1
+  },
+  {
+   "field": "phase",
+   "ok": {
+    "eq": "ready"
+   },
+   "warn": {
+    "ne": "ready"
+   }
+  },
+  {
+   "field": "version",
+   "ok": {
+    "exists": true
+   },
+   "warn": {
+    "versionBehind": {
+     "field": "target_version",
+     "minor": 1
+    }
+   },
+   "warnAfter": 3
+  },
+  {
+   "crit": {
+    "ageGt": 900
+   },
+   "field": "ts",
+   "ok": {
+    "ageLt": 300
+   },
+   "warn": {
+    "ageGt": 300
+   }
+  },
+  {
+   "field": "ts",
+   "warn": {
+    "exists": false
+   }
+  }
+ ],
+ "secret": "OPS_READ_TOKEN",
+ "timeoutSecs": 10,
+ "viewers": "admin"
+}

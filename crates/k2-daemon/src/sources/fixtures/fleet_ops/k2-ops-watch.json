@@ -1,0 +1,89 @@
+{
+ "agentAccess": "values",
+ "everySecs": 60,
+ "extract": {
+  "aggregates": {
+   "failing": {
+    "op": "count"
+   }
+  },
+  "fields": {
+   "checks_ok": "/watch/ok",
+   "checks_total": "/watch/total",
+   "error": "/watch/error",
+   "muted": "/watch/muted",
+   "ts": "/watch/ts"
+  },
+  "items": {
+   "itemFields": {
+    "check": "/name",
+    "detail": "/detail",
+    "group": "/group",
+    "since": "/since"
+   },
+   "itemKey": "/name",
+   "pointer": "/watch/failing"
+  },
+  "trend": [
+   "checks_ok",
+   "failing"
+  ]
+ },
+ "failAfter": 3,
+ "fetch": {
+  "url": "https://ops.example.test/api/ops/fleet?part=watch"
+ },
+ "headers": [],
+ "keep": "values",
+ "label": "Ops: k2-watch checks",
+ "link": null,
+ "name": "k2-ops-watch",
+ "onTargetError": "crit",
+ "rules": [
+  {
+   "crit": {
+    "gt": 0
+   },
+   "field": "failing",
+   "ok": {
+    "eq": 0
+   }
+  },
+  {
+   "crit": {
+    "exists": true
+   },
+   "field": "check"
+  },
+  {
+   "field": "muted",
+   "ok": {
+    "eq": false
+   },
+   "warn": {
+    "eq": true
+   }
+  },
+  {
+   "crit": {
+    "ageGt": 900
+   },
+   "field": "ts",
+   "ok": {
+    "ageLt": 300
+   },
+   "warn": {
+    "ageGt": 300
+   }
+  },
+  {
+   "field": "ts",
+   "warn": {
+    "exists": false
+   }
+  }
+ ],
+ "secret": "OPS_READ_TOKEN",
+ "timeoutSecs": 10,
+ "viewers": "admin"
+}

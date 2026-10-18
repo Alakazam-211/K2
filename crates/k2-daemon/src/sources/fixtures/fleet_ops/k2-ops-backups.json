@@ -1,0 +1,74 @@
+{
+ "agentAccess": "values",
+ "everySecs": 60,
+ "extract": {
+  "aggregates": {
+   "backups": {
+    "op": "count"
+   },
+   "oldest_h": {
+    "field": "age_h",
+    "op": "max"
+   }
+  },
+  "fields": {
+   "error": "/backups/error",
+   "ts": "/backups/ts"
+  },
+  "items": {
+   "itemFields": {
+    "age_h": "/age_h"
+   },
+   "itemKey": "/name",
+   "pointer": "/backups/items"
+  },
+  "trend": [
+   "oldest_h"
+  ]
+ },
+ "failAfter": 3,
+ "fetch": {
+  "url": "https://ops.example.test/api/ops/fleet?part=backups"
+ },
+ "headers": [],
+ "keep": "values",
+ "label": "Ops: relay backups",
+ "link": null,
+ "name": "k2-ops-backups",
+ "onTargetError": "crit",
+ "rules": [
+  {
+   "crit": {
+    "gt": 50
+   },
+   "field": "age_h",
+   "ok": {
+    "lte": 26
+   },
+   "warn": {
+    "gt": 26
+   }
+  },
+  {
+   "crit": {
+    "ageGt": 900
+   },
+   "field": "ts",
+   "ok": {
+    "ageLt": 300
+   },
+   "warn": {
+    "ageGt": 300
+   }
+  },
+  {
+   "field": "ts",
+   "warn": {
+    "exists": false
+   }
+  }
+ ],
+ "secret": "OPS_READ_TOKEN",
+ "timeoutSecs": 10,
+ "viewers": "admin"
+}

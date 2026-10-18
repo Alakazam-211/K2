@@ -139,7 +139,11 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// manifest `reads` + `{from}` for a neighbour's data, a maker agent with
 /// the Gardens switch reaches its own widget's data, 10 custom widgets per
 /// page and `[[widget]] weight` (catalog version 10).
-pub const SKILL_VERSION_ZEN: u32 = 22;
+/// v23 = the widget SDK (0.46.1, catalog 11): typed K2Error with
+/// `retryable`, handler-object subscriptions that re-subscribe on their own,
+/// `k2.shape` guards, `bad_args` / `bad_shape`, and pinned chart libraries
+/// (`uplot@1.6.32`).
+pub const SKILL_VERSION_ZEN: u32 = 23;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

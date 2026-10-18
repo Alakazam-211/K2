@@ -765,7 +765,8 @@ Then, over the port only:
 The frame's first script is `sdk/generated/k2-frame.js` (the shared runtime
 `sdk/k2-runtime.js` joined with the catalog's widget verb table as
 `K2_CONTRACT`), nonced with the bundle's nonce and outside the widget's code
-budget; at most 16 KB.
+budget; at most 28 KB (16 KB at first, 24 KB with Garden data, 28 KB with the
+0.46.1 SDK below).
 
 **The hello comes after the widget's script.** The host posts it on the
 frame's `load`, so a widget's top-level code always runs before it. Calls
@@ -781,6 +782,79 @@ k2.connected.then(() => {
   k2.ready()
 }, () => showNote('K2 didn’t start this widget.'))
 ```
+
+### The widget SDK: typed errors, resilient subscriptions, guards (0.46.1, catalog 11)
+
+All of this lives in the frame runtime (`sdk/k2-runtime.js`); K2's own checks
+are unchanged and still run on every call. Types: `sdk/generated/k2.d.ts`.
+
+**Typed errors.** Every refusal is a `K2Error` (`err instanceof k2.K2Error`)
+with `name: "K2Error"`, a `code` from the closed list in the catalog's
+`errors` (the `K2ErrorCode` type), the `verb`, and `retryable`: true for
+the codes the catalog marks retryable (`k2.retryable`, the `K2_RETRYABLE`
+type): `not_bound`, `rate_limited`, `unreachable`, `busy`. `cap`, `room`,
+`feature` and `last` (the last view on `unreachable`) are carried as before.
+Two codes are new in catalog 11:
+
+| Code | When |
+|---|---|
+| `bad_args` | An argument isn't plain data (a function, a DOM node, a class instance, a cycle, `NaN`). The runtime refuses it in the frame before anything is sent (a call rejects, a subscribe throws); K2 also refuses a message whose `args` isn't a list. |
+| `bad_shape` | A handler-object subscription got a value that isn't the verb's shape (a sources card view without `display`/`health`, a store delivery that is neither a list nor `{resync, items}`). It reaches `error`; `data` isn't called, so the widget keeps its last good data. |
+
+**Two ways to subscribe.** Every subscribe helper (and `k2.subscribe`,
+`k2.store.subscribe`) takes either form:
+
+```js
+// 1. As before: one refusal ends it and reaches onError once. Widgets that
+//    retry on their own (the Fleet Ops cards) keep working unchanged.
+const off = k2.sources.subscribe(address, draw, (err) => drawGreyed(err.last, err.code))
+
+// 2. A handler object (0.46.1): the runtime re-subscribes on its own.
+const stop = k2.sources.subscribe(address, {
+  data(view) { draw(view) },                 // a normalised card view
+  error(err) { if (err.retrying) drawGreyed(err.last) else showNote(err.code) },
+  state(s) { badge(s) },                     // 'live' | 'retrying' | 'ended'
+})
+```
+
+With a handler object:
+
+- After a retryable refusal (`not_bound` while the placement isn't bound
+  yet, `unreachable`, `rate_limited`, `busy`) the runtime calls `error(err)`
+  with `err.retrying === true` and `err.attempt` (1, 2, …), and subscribes
+  again after 1, 2, 4, 8, 16, then every 30 s; the first value resets the
+  backoff. Any other code calls `error` with `retrying === false` and the
+  subscription ends (`state('ended')`).
+- Values go through the verb's shape guard first: `sources.subscribe`
+  values arrive as `k2.shape.view(...)` (always `items` (list), `fields`
+  (object), `counts`, `soft {count, of, level}`, `health`, `phase`,
+  `display`); the `last` on an `unreachable` is normalised the same way.
+  `store.changes` deliveries are checked too.
+- The returned function stops it: no `data`, `error` or `state` call ever
+  runs after it, including a retry that was waiting and values already in
+  flight. Calling it twice is fine.
+- K2's host-side hold for `not_bound` (30 s for a placement rebind, 0.46.1
+  S3) still applies; past it, the runtime's retry takes over, so a widget
+  never has to re-subscribe itself.
+
+**Guards** (`k2.shape`, frozen, never throw): `view(v)` (a normalised card
+view, or null), `list(v)` (`v` or `[]`), `obj(v)` (a plain object or `{}`),
+`num(v, fallback = 0)` (finite numbers only), `str(v, fallback = "", max?)`.
+
+### Charts and visualisation libraries
+
+Widgets name pinned libraries in the manifest's `requires.libs`
+(`"<id>@<version>"`, a version prefix ending at a dot works). K2 vendors
+them (`scripts/vendor-zen-lib.sh`: exact npm versions, tarball integrity in
+`scripts/zen-lib/vendor-package-lock.json`, per-file size + sha256 in
+`src/shared/zen-lib.json`, licences in `NOTICE.md` and next to each copy)
+and inlines them as nonced classic scripts after `k2-frame.js`. The frame's
+CSP is unchanged: no network, no `unsafe-eval`, no import maps. Chart
+libraries in the set: `uplot@1.6.32` (new in 0.46.1, about 50 KB: time
+series, sparklines, source history), `chart.js@4.5.1`, `echarts@6.1.0`,
+`d3@7.9.0`, and `plotly.js-dist-min@4.1.1` (a download library, fetched
+through the daemon and checked against its pin). The k2-zen skill's
+"What's available" section lists every library with its global and notes.
 
 ### Using the whole canvas (0.45.3)
 

@@ -105,3 +105,60 @@ describe('ChatMessageBody tables', () => {
     }
   })
 })
+
+// 0.46.1 RC (Rosson 2026-10-18): a message ending in a file path or a code
+// block scrolled a few px up and down inside its bubble, on every chat
+// surface that draws message markdown (the Thread, ticket and project chat,
+// the Garden Thread widget): `.chat-markdown { overflow-x: hidden }` made
+// each body a scroll container (CSS turns the other axis's `visible` into
+// `auto`), and the trailing inline code's padding or block margin became
+// vertical scroll. jsdom does not lay out, so this pins the style contract
+// with the real globals.css: the body is never a scroll container, and only
+// a code block or a table wrapper scrolls, sideways only.
+describe('chat body never scrolls vertically', () => {
+  const globalsCss = readFileSync(join(here, '..', '..', 'globals.css'), 'utf8')
+  let style: HTMLStyleElement
+  beforeEach(() => {
+    style = document.createElement('style')
+    style.textContent = globalsCss
+    document.head.appendChild(style)
+  })
+  afterEach(() => {
+    style.remove()
+  })
+
+  /** Overflow values that make a box a scroll container. */
+  const SCROLLS = new Set(['hidden', 'auto', 'scroll'])
+
+  it.each([
+    ['a file path in inline code', 'Done, see `crates/k2-daemon/src/push_routes.rs:40`'],
+    ['a fenced code block', 'Run this:\n\n```\ncargo test -p k2-daemon --test thread_file_links_integration\n```'],
+    ['a table', '| a | b |\n| --- | --- |\n| 1 | 2 |'],
+  ])('a message ending in %s: the body is not a scroll container', (_label, text) => {
+    const { container } = render(<ChatMessageBody text={text} />)
+    const body = container.querySelector('.chat-markdown')
+    if (!body) throw new Error('chat-markdown body missing')
+    const cs = getComputedStyle(body)
+    // `clip`/`visible` on both axes: neither one forces the other to auto.
+    expect(SCROLLS.has(cs.overflowX)).toBe(false)
+    expect(SCROLLS.has(cs.overflowY)).toBe(false)
+    expect(cs.overflowX).toBe('clip')
+  })
+
+  it('a long code block scrolls sideways only, never up and down', () => {
+    const { container } = render(<ChatMessageBody text={'```\n' + 'x'.repeat(400) + '\n```'} />)
+    const pre = container.querySelector('.chat-markdown pre')
+    if (!pre) throw new Error('code block missing')
+    const cs = getComputedStyle(pre)
+    expect(cs.overflowX).toBe('auto')
+    expect(cs.overflowY).toBe('hidden')
+  })
+
+  it('a wide table scrolls sideways only', () => {
+    const { container } = render(<ChatMessageBody text={'| a | b |\n| --- | --- |\n| 1 | 2 |'} />)
+    const wrap = container.querySelector('.chat-md-table-wrap')
+    if (!wrap) throw new Error('table wrapper missing')
+    expect(getComputedStyle(wrap).overflowX).toBe('auto')
+    expect(getComputedStyle(wrap).overflowY).toBe('hidden')
+  })
+})

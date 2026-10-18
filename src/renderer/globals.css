@@ -696,13 +696,25 @@ html[data-os]:not([data-os="mac"]) select optgroup {
 
 /* Compact markdown for Thread / Chatter / Project / Feedback — same
    tokens, tighter rhythm. Type matches the rest of K2 (`--font-ui` =
-   MesloLGM Nerd Font). Code fences stay Meslo via .code-highlighted. */
+   MesloLGM Nerd Font). Code fences stay Meslo via .code-highlighted.
+
+   A chat body is NEVER a scroll container (0.46.1 RC, Rosson
+   2026-10-18: a message ending in a file path or a code block scrolled a
+   few px up and down inside its bubble). `overflow-x: hidden` made it one:
+   when one axis is not visible/clip, the other's `visible` computes to
+   `auto`, so the inline code's padding, a trailing block's margin or a
+   descender poking past the last line box became vertical scroll.
+   `clip` cuts the sides the same way without making a scroll container
+   (and leaves overflow-y visible). Only a code block and a table wrapper
+   scroll, sideways only (`overflow-y: hidden` on each, below). Pinned by
+   ChatMessage.test.tsx ("chat body never scrolls vertically"). */
 .chat-markdown {
   font-family: var(--font-ui);
   line-height: 1.5;
   color: var(--color-text-primary);
   min-width: 0;
-  overflow-x: hidden;
+  overflow-x: clip;
+  overflow-y: visible;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
@@ -750,7 +762,11 @@ html[data-os]:not([data-os="mac"]) select optgroup {
 .chat-markdown pre {
   padding: 8px;
   margin: 0 0 6px 0;
-  overflow-x: hidden;
+  /* Long lines wrap (0b3c6ac6a); a token that still cannot fit scrolls
+     sideways. Never up and down: a horizontal scrollbar's own height must
+     not turn into a vertical scroll. */
+  overflow-x: auto;
+  overflow-y: hidden;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -774,6 +790,7 @@ html[data-os]:not([data-os="mac"]) select optgroup {
 .chat-markdown .chat-md-table-wrap {
   max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
   margin: 0 0 6px 0;
 }
 

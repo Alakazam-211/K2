@@ -267,7 +267,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:relays-dns@2", "ba1c6b83f7ae7f5d0b3cc37ef9d363dbf207ff7ce614fba195712a78beda0f78"),
     ("k2:deploys@2", "77bdf1a576a2a3b10acd7337d179200ffdf0bab81fe8f7a8666bbf5147c2a640"),
     ("k2:money-alerts@2", "aff2ee34006f71436793145e1989623349a82b6d538beb34d51e94074b69a5c7"),
-    ("k2:kanban@2", "c1dcf94935df4260e43cd76df6890506d7049fbb9535136a09bfb7564462ffc0"),
+    ("k2:kanban@2", "8ac36405d18351d0bb52a8f71426dffb32ad99831bcfd9b7c87e4b017d0c7884"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -628,6 +628,15 @@ mod tests {
             assert_eq!(file(w, f), file(one, f), "{f} is @1's");
         }
         assert_eq!(file(w, "kanban.js").replacen("k2:kanban@2", "k2:kanban@1", 1), file(one, "kanban.js"), "kanban.js is @1's");
+        // A message's code block or table scrolls sideways only, never up
+        // and down inside its bubble (0.46.1 RC smoke).
+        let css = file(w, "kanban.css");
+        for needle in [
+            ".md pre { margin: 0 0 6px; padding: 6px 8px; overflow-x: auto; overflow-y: hidden;",
+            ".md table { border-collapse: collapse; margin: 0 0 6px; display: block; overflow-x: auto; overflow-y: hidden; }",
+        ] {
+            assert!(css.contains(needle), "kanban.css lost {needle}");
+        }
         let html = file(w, "index.html");
         for needle in ["class=\"send-round\"", "title=\"Send (Enter)\"", "aria-label=\"Send\"", "class=\"dock-turn thread-ear\"", "class=\"compose-box\""] {
             assert!(html.contains(needle), "index.html lost {needle}");

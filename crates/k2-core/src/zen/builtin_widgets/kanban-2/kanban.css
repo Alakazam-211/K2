@@ -388,11 +388,14 @@ body.card-dragging, body.card-dragging * { cursor: grabbing !important; user-sel
   border-radius: 4px;
   padding: 0 4px;
 }
-.md pre { margin: 0 0 6px; padding: 6px 8px; overflow-x: auto; background: var(--kb-tint); border-radius: 6px; }
+/* A code block or table scrolls sideways only: `overflow-x: auto` alone
+   turns overflow-y into auto too, and a horizontal scrollbar's height then
+   scrolled a message up and down (0.46.1 RC, as in K2's own Thread). */
+.md pre { margin: 0 0 6px; padding: 6px 8px; overflow-x: auto; overflow-y: hidden; background: var(--kb-tint); border-radius: 6px; }
 .md pre code { background: none; padding: 0; white-space: pre; display: block; }
 .md blockquote { margin: 0 0 6px; padding: 1px 8px; border-left: 3px solid var(--kb-border); }
 .md hr { border: 0; border-top: 1px solid var(--kb-border); margin: 8px 0; }
-.md table { border-collapse: collapse; margin: 0 0 6px; display: block; overflow-x: auto; }
+.md table { border-collapse: collapse; margin: 0 0 6px; display: block; overflow-x: auto; overflow-y: hidden; }
 .md th, .md td { border: 1px solid var(--kb-border); padding: 2px 6px; text-align: left; }
 .md .md-url { color: var(--kb-accent); word-break: break-all; }
 

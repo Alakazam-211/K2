@@ -209,7 +209,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
-/// Owner handle: slug of `owner_display_name` (lowercase ASCII, spaces →
+/// Owner handle: slug of the owner's displayName (lowercase ASCII, spaces →
 /// `-`, other chars dropped, ≤ 64), else `owner` (§10.2).
 pub fn owner_username(display: Option<&str>) -> String {
     let slug: String = display
@@ -234,7 +234,7 @@ pub fn owner_username(display: Option<&str>) -> String {
     }
 }
 
-pub fn owner_display_name(display: Option<&str>) -> String {
+pub fn owner_profile_display_name(display: Option<&str>) -> String {
     match display.map(str::trim).filter(|s| !s.is_empty()) {
         Some(d) => truncate_chars(d, DISPLAY_NAME_MAX),
         None => "Owner".to_string(),
@@ -455,7 +455,7 @@ pub fn fill_provision_from_member(req: &mut ProvisionRequest, m: &MgmtPrincipal)
 }
 
 pub fn owner_provision_request(ctx: &HookCtx) -> ProvisionRequest {
-    let d = ctx.owner_display_name.as_deref();
+    let d = ctx.owner_name.as_deref();
     ProvisionRequest {
         external_id: ExternalId::K2Owner,
         kind: MemberKind::Person,
@@ -463,7 +463,7 @@ pub fn owner_provision_request(ctx: &HookCtx) -> ProvisionRequest {
         assistant_of: None,
         guest: false,
         profile: ProfileInput {
-            display_name: owner_display_name(d),
+            display_name: owner_profile_display_name(d),
             username: owner_username(d),
             email: None,
             title: None,

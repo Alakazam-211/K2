@@ -1405,10 +1405,57 @@ fn kick_reconcile_fires_on_main_db_and_app_user_changes() {
     assert!(take_reconcile_request(), "App user change (host login off)");
     skin::remove_principal("ann").unwrap();
     assert!(take_reconcile_request(), "principal removal");
-    let mut s = crate::app_settings::load();
-    s.owner_display_name = Some("Rosson".into());
-    crate::app_settings::save(&s).unwrap();
-    assert!(take_reconcile_request(), "owner display name");
+    crate::connect_users::add_user("rosson", "password1").expect("add login");
+    let _ = take_reconcile_request();
+    crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["rosson"] })).expect("link");
+    assert!(take_reconcile_request(), "owner account link");
+    crate::connect_users::set_names("rosson", Some("Rosson"), Some("Long")).expect("names");
+    assert!(take_reconcile_request(), "owner name change (linked account First/Last)");
+}
+
+// ── owner profile name (0.46.0 person names) ─────────────────────────
+
+/// The `k2:owner` Sew profile's display name is the owner person's
+/// displayName: the linked account's "First Last".
+#[test]
+fn owner_profile_name_is_the_linked_accounts_first_last() {
+    let _e = setup();
+    crate::connect_users::add_user_with_names("rosson", "password1", Some("Rosson"), Some("Long"))
+        .expect("add login");
+    crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["rosson"] })).expect("link");
+    // The retired "Your name" setting is ignored even when set.
+    crate::app_settings::update(serde_json::json!({ "ownerDisplayName": "Old Name" })).expect("legacy");
+    let ctx = HookCtx::load("owner-token", &[]);
+    assert_eq!(ctx.owner_name.as_deref(), Some("Rosson Long"));
+    let req = chat::owner_provision_request(&ctx);
+    assert_eq!(req.external_id, ExternalId::K2Owner);
+    assert_eq!(req.kind, MemberKind::Person);
+    assert!(!req.guest);
+    assert_eq!(req.profile.display_name, "Rosson Long");
+    assert_eq!(req.profile.username, "rosson-long");
+    assert_eq!(req.profile.email, None);
+}
+
+/// No First/Last: the linked username, and with nothing linked `Owner`
+/// (username `owner`) — never the retired "Your name" setting.
+#[test]
+fn owner_profile_name_falls_back_to_username_then_owner() {
+    let _e = setup();
+    crate::app_settings::update(serde_json::json!({ "ownerDisplayName": "Old Name" })).expect("legacy");
+    let ctx = HookCtx::load("owner-token", &[]);
+    assert_eq!(ctx.owner_name.as_deref(), Some("Owner"));
+    let req = chat::owner_provision_request(&ctx);
+    assert_eq!(req.profile.display_name, "Owner");
+    assert_eq!(req.profile.username, "owner");
+    // `Default` (no names loaded) matches the no-account fallback.
+    let req = chat::owner_provision_request(&HookCtx::default());
+    assert_eq!((req.profile.display_name.as_str(), req.profile.username.as_str()), ("Owner", "owner"));
+
+    crate::connect_users::add_user("z3thon", "password1").expect("add login");
+    crate::app_settings::update(serde_json::json!({ "ownerAccounts": ["z3thon"] })).expect("link");
+    let req = chat::owner_provision_request(&HookCtx::load("owner-token", &[]));
+    assert_eq!(req.profile.display_name, "z3thon");
+    assert_eq!(req.profile.username, "z3thon");
 }
 
 #[test]

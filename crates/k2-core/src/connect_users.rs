@@ -931,6 +931,9 @@ pub fn set_names(username: &str, first: Option<&str>, last: Option<&str>) -> Res
         }
         Ok(())
     })?;
+    // Sew S27: the owner's linked account's names are the `k2:owner`
+    // chat profile's display name.
+    crate::tool_hook::kick_reconcile();
     // The agents' User roster shows real names beside usernames.
     crate::workspace::context_layers::refresh_users_roster_after_people_change();
     Ok(())

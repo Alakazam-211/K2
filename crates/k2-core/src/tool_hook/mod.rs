@@ -231,12 +231,17 @@ pub struct HookCtx {
     /// `owner-token` | `user:<name>` | `agent:<handle>` | `system:*`.
     pub actor: String,
     pub workspaces: HashMap<String, WorkspaceFacts>,
-    pub owner_display_name: Option<String>,
+    /// The owner person's displayName (0.46.0 person names): the linked
+    /// account's "First Last", else its username, else `Owner`
+    /// ([`crate::person_name::effective`] for `owner`). The retired
+    /// "Your name" setting is never read. `None` (tests' `Default`) →
+    /// `Owner`.
+    pub owner_name: Option<String>,
 }
 
 impl HookCtx {
     /// Load facts for `workspace_ids` (unknown ids are simply absent) and
-    /// the owner display name. Call OUTSIDE any skin.db closure.
+    /// the owner person's displayName. Call OUTSIDE any skin.db closure.
     pub fn load(actor: &str, workspace_ids: &[String]) -> HookCtx {
         let mut workspaces = HashMap::new();
         for id in workspace_ids {
@@ -247,10 +252,9 @@ impl HookCtx {
         HookCtx {
             actor: actor.to_string(),
             workspaces,
-            owner_display_name: crate::app_settings::load()
-                .owner_display_name
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty()),
+            owner_name: Some(
+                crate::person_name::load_effective(crate::notify_prefs::OWNER).display_name,
+            ),
         }
     }
 }

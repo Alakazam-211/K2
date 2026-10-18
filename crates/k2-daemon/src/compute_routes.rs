@@ -336,6 +336,45 @@ pub(crate) fn ws_by_token(token: &str) -> Option<Ws> {
     ws_by_id(&id)
 }
 
+/// [`ws_by_token`] for callers WITHOUT a passport (the owner token, a
+/// Connect login): a path inside a git worktree of a workspace's repo
+/// (`.claude/worktrees/x`, where the CLI's walk-up stops because worktrees
+/// carry tracked `.k2/` files) answers as that workspace. Passports never
+/// get this: they only ever compare against their own workspace.
+pub(crate) fn ws_by_token_or_worktree(token: &str) -> Option<Ws> {
+    if let Some(w) = ws_by_token(token) {
+        return Some(w);
+    }
+    let t = Path::new(token.trim());
+    if !t.is_absolute() || !t.is_dir() {
+        return None;
+    }
+    let main = compute::sync::main_checkout_of(t)?.canonicalize().ok()?;
+    if let Some(w) = ws_by_token(&main.to_string_lossy()) {
+        return Some(w);
+    }
+    // git answers with the real path (/private/tmp on macOS); the project
+    // row may hold the path as it was added (/tmp/…): compare real paths.
+    let id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::Project::list(&conn)
+            .ok()?
+            .into_iter()
+            .find(|p| Path::new(&p.path).canonicalize().is_ok_and(|c| c == main))
+            .map(|p| p.id)
+    }?;
+    ws_by_id(&id)
+}
+
+fn no_workspace(req: &str) -> Refusal {
+    no(
+        "workspace_not_found",
+        404,
+        format!("no workspace '{req}'; from a folder outside the workspace pass --workspace <handle> (k2 compute grants lists them)"),
+    )
+}
+
 /// The workspace a request acts for. A passport's comes from the passport
 /// (naming another is `forbidden`); others must name one.
 fn target_ws(who: &Who, requested: Option<&str>) -> R<Ws> {
@@ -350,7 +389,7 @@ fn target_ws(who: &Who, requested: Option<&str>) -> R<Ws> {
         return Ok(ws);
     }
     let req = requested.ok_or_else(|| no("workspace_not_found", 404, "pass --workspace <workspace>"))?;
-    ws_by_token(req).ok_or_else(|| no("workspace_not_found", 404, format!("no workspace '{req}'")))
+    ws_by_token_or_worktree(req).ok_or_else(|| no_workspace(req))
 }
 
 /// For passports: the workspace switch must be on.
@@ -872,7 +911,7 @@ fn grants_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Val
     let ws = match gate {
         Some(own) => Some(own),
         None => match params.get("workspace").map(String::as_str).filter(|s| !s.is_empty()) {
-            Some(t) => Some(ws_by_token(t).ok_or_else(|| no("workspace_not_found", 404, format!("no workspace '{t}'")))?.id),
+            Some(t) => Some(ws_by_token_or_worktree(t).ok_or_else(|| no_workspace(t))?.id),
             None => None,
         },
     };
@@ -1196,10 +1235,11 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     // Source: the workspace's own repo only (never a path the client names
     // outside it, so a passport can't ship another repo off this machine).
     let job_id = crypto::random_id().map_err(|e| no("internal", 500, e))?;
-    let src = if b(&v, "noSource") == Some(true) {
-        None
+    let (src, source) = if b(&v, "noSource") == Some(true) {
+        (None, None)
     } else {
-        Some(source_for(&ws, &v, &job_id, &mut warnings)?)
+        let (src, info) = source_for(&ws, &v, &compute_ws::dirty_blob_path(&job_id), &mut warnings)?;
+        (Some(src), Some(info))
     };
     let detach = b(&v, "detach") == Some(true);
     let retry_interrupted = b(&v, "retryInterrupted").unwrap_or(detach);
@@ -1240,7 +1280,8 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
             Some(&node.id),
             Some(&ws.id),
             Some(&j.id),
-            serde_json::json!({"argv": plan.argv, "commit": plan.src.as_ref().map(|s| s.commit.clone()), "detach": detach, "needs": plan.needs}),
+            serde_json::json!({"argv": plan.argv, "commit": plan.src.as_ref().map(|s| s.commit.clone()), "detach": detach, "needs": plan.needs,
+                "source": source.as_ref().map(SourceInfo::json)}),
         );
         j
     };
@@ -1251,7 +1292,8 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         let conn = db.lock();
         store::job_by_id(&conn, &job.id).unwrap_or(job)
     };
-    let mut out = serde_json::json!({ "job": job_summary(&job), "existing": false, "warnings": warnings });
+    let mut out = serde_json::json!({ "job": job_summary(&job), "existing": false, "warnings": warnings,
+        "source": source.as_ref().map(SourceInfo::json) });
     if job.state == "queued" {
         if let Some((pos, why)) = compute_ws::decision_for(&node.id).waiting.get(&job.id) {
             out["queue"] = serde_json::json!({"position": pos, "reason": why.code, "message": why.message});
@@ -1363,50 +1405,99 @@ fn probe_job(ws: &Ws, v: &serde_json::Value, cpu_millis: Option<u64>, mem_bytes:
     }
 }
 
-fn source_for(ws: &Ws, v: &serde_json::Value, job_id: &str, warnings: &mut Vec<String>) -> R<Src> {
+/// `--dirty` with `--sha` naming anything but the checkout's own HEAD.
+pub(crate) const DIRTY_NEEDS_HEAD: &str = "dirty_needs_head";
+
+/// Where a job's code came from, for the `run` response and the
+/// `job_submit` event (not stored on the job row: no migration, and the
+/// plan digest stays as it was).
+#[derive(Debug, Clone)]
+pub(crate) struct SourceInfo {
+    /// `"worktree"` (a git worktree inside the workspace) or `"workspace"`.
+    pub(crate) checkout: &'static str,
+    /// The checkout, relative to the workspace folder ("" = its root).
+    pub(crate) path: String,
+    pub(crate) commit: String,
+    /// (changed, untracked, bytes) when `--dirty` sent changes.
+    pub(crate) dirty: Option<(usize, usize, u64)>,
+}
+
+impl SourceInfo {
+    pub(crate) fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "checkout": self.checkout,
+            "path": self.path,
+            "commit": self.commit,
+            "dirty": self.dirty.map(|(c, u, b)| serde_json::json!({"changed": c, "untracked": u, "bytes": b})),
+        })
+    }
+}
+
+fn source_for(ws: &Ws, v: &serde_json::Value, blob_out: &Path, warnings: &mut Vec<String>) -> R<(Src, SourceInfo)> {
     let ws_root = compute::sync::repo_root(Path::new(&ws.path))
         .map_err(|_| no(codes::NOT_A_REPO, 400, format!("workspace {} isn't a git repo; pass --no-source to run without code", ws.handle)))?;
     // Run from a git worktree inside the workspace (e.g.
     // .claude/worktrees/x): HEAD and --dirty come from that checkout, not
     // the main one. Objects are shared, so bundling by commit still works
     // from the workspace repo.
-    let root = match s(v, "repoDir").filter(|d| !d.is_empty()) {
+    let (root, checkout) = match s(v, "repoDir").filter(|d| !d.is_empty()) {
         Some(d) => match compute::sync::caller_checkout(Path::new(&ws.path), &ws_root, Path::new(d)) {
-            Ok(Some(wt)) => wt,
-            Ok(None) => ws_root,
+            Ok(Some(wt)) => (wt, "worktree"),
+            Ok(None) => (ws_root, "workspace"),
             Err(e) => {
                 warnings.push(format!("{e}; using workspace {}'s own checkout", ws.handle));
-                ws_root
+                (ws_root, "workspace")
             }
         },
-        None => ws_root,
+        None => (ws_root, "workspace"),
     };
     let dirty = b(v, "dirty") == Some(true);
-    let rev = s(v, "sha").unwrap_or("HEAD");
-    if dirty && rev != "HEAD" {
-        return Err(no(codes::BAD_REQUEST, 400, "--dirty sends your uncommitted changes on top of HEAD; it can't be combined with --sha"));
+    let sha = s(v, "sha");
+    // Every revision resolves in the checkout actually used (a worktree's
+    // HEAD is its own), never the main one.
+    let commit = compute::sync::resolve_commit(&root, sha.unwrap_or("HEAD")).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+    let rel = {
+        let base = Path::new(&ws.path).canonicalize().ok();
+        let r = root.canonicalize().unwrap_or_else(|_| root.clone());
+        base.and_then(|b| r.strip_prefix(&b).ok().map(|p| p.to_string_lossy().into_owned())).unwrap_or_else(|| r.to_string_lossy().into_owned())
+    };
+    if dirty && sha.is_some() {
+        // --dirty is a diff against the checkout's HEAD: --sha may only
+        // name that same commit.
+        let head = compute::sync::resolve_commit(&root, "HEAD").map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+        if head != commit {
+            let place = if rel.is_empty() { format!("workspace {}", ws.handle) } else { rel.clone() };
+            return Err(no(
+                DIRTY_NEEDS_HEAD,
+                400,
+                format!("--dirty sends {place}'s changes on top of its HEAD ({}); drop --sha or pass --sha HEAD", &head[..head.len().min(8)]),
+            ));
+        }
     }
-    let commit = compute::sync::resolve_commit(&root, rev).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
     let remote = compute::sync::origin_url(&root);
-    let blob = if dirty {
-        let out = compute_ws::dirty_blob_path(job_id);
+    let (blob, dirty_info) = if dirty {
+        let out = blob_out.to_path_buf();
         if let Some(d) = out.parent() {
             std::fs::create_dir_all(d).map_err(|e| no("internal", 500, format!("blob dir: {e}")))?;
         }
-        let (sha, bytes) = compute::sync::create_dirty_blob(&root, &out, compute::MAX_DIRTY_BYTES)
+        let (sha256, bytes) = compute::sync::create_dirty_blob(&root, &out, compute::MAX_DIRTY_BYTES)
             .map_err(|e| no(codes::DIRTY_TOO_LARGE, 400, e))?;
-        Some(Blob { sha256: sha, bytes })
+        let (changed, untracked) = compute::sync::dirty_counts(&root).map_err(|e| no("internal", 500, e))?;
+        (Some(Blob { sha256, bytes }), Some((changed, untracked, bytes)))
     } else {
-        if compute::sync::is_dirty(&root).unwrap_or(false) {
+        // With --sha the caller picked a commit on purpose: the working
+        // tree is irrelevant, so no warning.
+        if sha.is_none() && compute::sync::is_dirty(&root).unwrap_or(false) {
             warnings.push("the working tree has uncommitted changes; they are NOT sent (add --dirty to send them)".into());
         }
-        None
+        (None, None)
     };
     if remote.is_none() {
         warnings.push("no fetchable https origin: the node gets history as git bundles from this server".into());
     }
     let pk = compute::sync::project_key(&ws.id, remote.as_deref());
-    Ok(Src { project_key: pk, remote_url: remote, commit, dirty: blob, slots: 1 })
+    let info = SourceInfo { checkout, path: rel, commit: commit.clone(), dirty: dirty_info };
+    Ok((Src { project_key: pk, remote_url: remote, commit, dirty: blob, slots: 1 }, info))
 }
 
 // ── jobs ─────────────────────────────────────────────────────────────
@@ -1450,7 +1541,7 @@ fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value
     let ws = match gate {
         Some(own) => Some(own),
         None => match params.get("workspace").map(String::as_str).filter(|s| !s.is_empty()) {
-            Some(t) => Some(ws_by_token(t).ok_or_else(|| no("workspace_not_found", 404, format!("no workspace '{t}'")))?.id),
+            Some(t) => Some(ws_by_token_or_worktree(t).ok_or_else(|| no_workspace(t))?.id),
             None => None,
         },
     };
@@ -1469,6 +1560,8 @@ fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value
 fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     let j = job_for(who, params.get("job").map(String::as_str))?;
     let mut v = job_summary(&j);
+    // `commit` is srcCommit; `dirty` says whether --dirty changes rode along.
+    v["dirty"] = j.dirty_sha256.is_some().into();
     if j.state == "queued" {
         if let Some((pos, why)) = compute_ws::decision_for(&j.node_id).waiting.get(&j.id) {
             v["queue"] = serde_json::json!({"position": pos, "reason": why.code, "message": why.message});
@@ -1786,9 +1879,12 @@ mod tests {
         let ws = Ws { id: "ws-test".into(), path: r.to_str().expect("utf8").into(), handle: "ws".into() };
         let commit_for = |v: serde_json::Value| -> (String, Vec<String>) {
             let mut warnings = vec![];
-            match source_for(&ws, &v, "job-test", &mut warnings) {
-                Ok(src) => (src.commit, warnings),
-                Err(_) => panic!("source_for refused {v}"),
+            match source_for(&ws, &v, &d.join("unused.dirty.tar"), &mut warnings) {
+                Ok((src, info)) => {
+                    assert_eq!(src.commit, info.commit);
+                    (src.commit, warnings)
+                }
+                Err(e) => panic!("source_for refused {v}: {}", e.hint),
             }
         };
         // From the worktree: its HEAD, not the main checkout's.
@@ -1805,6 +1901,104 @@ mod tests {
         let (c, w) = commit_for(serde_json::json!({ "repoDir": other.to_str().expect("utf8") }));
         assert_eq!(c, main_head);
         assert!(w.iter().any(|x| x.contains("outside the workspace")), "{w:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A1 C3/C4/C5: the warning, `--dirty` and `--dirty --sha` all follow
+    /// the checkout actually used (a worktree's own HEAD and files).
+    #[test]
+    fn dirty_and_the_warning_follow_the_worktree_not_the_main_checkout() {
+        let d = std::env::temp_dir().join(format!("k2-compute-src-dirty-{}-{}", std::process::id(), compute::now()));
+        let _ = std::fs::remove_dir_all(&d);
+        let r = d.join("ws");
+        std::fs::create_dir_all(&r).expect("mkdir");
+        git(&r, &["init", "-q"]);
+        std::fs::write(r.join("a.txt"), "one\n").expect("write");
+        git(&r, &["add", "."]);
+        git(&r, &["commit", "-q", "-m", "one"]);
+        let wt = r.join(".claude/worktrees/x");
+        git(&r, &["worktree", "add", "-q", "-b", "wt", wt.to_str().expect("utf8")]);
+        std::fs::write(wt.join("a.txt"), "two\n").expect("write");
+        git(&wt, &["commit", "-q", "-am", "two"]);
+        let wt_head = git(&wt, &["rev-parse", "HEAD"]);
+        let wt_prev = git(&wt, &["rev-parse", "HEAD~1"]);
+        // The main checkout is dirty (always is in real life: .cursor/, notes).
+        std::fs::write(r.join("main-untracked.txt"), "main\n").expect("write");
+        let ws = Ws { id: "ws-test".into(), path: r.to_str().expect("utf8").into(), handle: "ws".into() };
+        let wt_s = wt.to_str().expect("utf8");
+        // Never under ~/.k2: the blob goes to this test's temp dir.
+        let job = d.join("blob.dirty.tar");
+        let go = |v: serde_json::Value| -> (R<(Src, SourceInfo)>, Vec<String>) {
+            let mut w = vec![];
+            let res = source_for(&ws, &v, &job, &mut w);
+            (res, w)
+        };
+        let warned = |w: &[String]| w.iter().any(|x| x.contains("uncommitted changes"));
+        // Clean worktree while main is dirty: no warning.
+        let (res, w) = go(serde_json::json!({"repoDir": wt_s}));
+        let (_, info) = res.expect("clean worktree run");
+        assert!(!warned(&w), "{w:?}");
+        assert_eq!((info.checkout, info.path.as_str(), info.commit.as_str()), ("worktree", ".claude/worktrees/x", wt_head.as_str()));
+        assert!(info.dirty.is_none());
+        // --sha on a dirty main checkout: never a warning.
+        let (res, w) = go(serde_json::json!({"sha": "HEAD"}));
+        res.expect("sha run from main");
+        assert!(!warned(&w), "{w:?}");
+        // No --sha from the dirty main checkout: warned.
+        let (res, w) = go(serde_json::json!({}));
+        res.expect("plain run from main");
+        assert!(warned(&w), "{w:?}");
+        // --dirty from the worktree: its untracked file, not main's.
+        std::fs::write(wt.join("wt-untracked.txt"), "wt\n").expect("write");
+        let (res, _) = go(serde_json::json!({"repoDir": wt_s, "dirty": true}));
+        let (src, info) = res.expect("dirty run from worktree");
+        let blob = src.dirty.expect("dirty blob");
+        assert_eq!(info.dirty.expect("dirty info"), (0, 1, blob.bytes));
+        assert_eq!(src.commit, wt_head);
+        let blob_path = job.clone();
+        let listing = std::process::Command::new("tar").arg("-tf").arg(&blob_path).output().expect("tar -tf");
+        assert!(listing.status.success(), "tar -tf {}", blob_path.display());
+        let listing = String::from_utf8_lossy(&listing.stdout).to_string();
+        assert!(listing.contains("untracked/wt-untracked.txt"), "{listing}");
+        assert!(!listing.contains("main-untracked.txt"), "{listing}");
+        let _ = std::fs::remove_file(&blob_path);
+        // --dirty --sha <the worktree's HEAD>: fine; --sha HEAD~1: refused.
+        let (res, _) = go(serde_json::json!({"repoDir": wt_s, "dirty": true, "sha": wt_head}));
+        assert_eq!(res.expect("dirty with sha = HEAD").0.commit, wt_head);
+        let (res, _) = go(serde_json::json!({"repoDir": wt_s, "dirty": true, "sha": wt_prev}));
+        let e = res.err().expect("dirty with an older sha is refused");
+        assert_eq!((e.code, e.status), (DIRTY_NEEDS_HEAD, 400));
+        assert!(e.hint.contains(".claude/worktrees/x") && e.hint.contains(&wt_head[..8]), "{}", e.hint);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A3 C7: an owner-token path inside a worktree answers as the
+    /// workspace whose repo it belongs to; an unrelated repo doesn't.
+    #[test]
+    fn a_worktree_path_resolves_to_its_main_checkout_only() {
+        let d = std::env::temp_dir().join(format!("k2-compute-ws-wt-{}-{}", std::process::id(), compute::now()));
+        let _ = std::fs::remove_dir_all(&d);
+        let r = d.join("ws");
+        std::fs::create_dir_all(&r).expect("mkdir");
+        git(&r, &["init", "-q"]);
+        std::fs::write(r.join("a.txt"), "one\n").expect("write");
+        git(&r, &["add", "."]);
+        git(&r, &["commit", "-q", "-m", "one"]);
+        let wt = r.join(".claude/worktrees/x");
+        git(&r, &["worktree", "add", "-q", "-b", "wt", wt.to_str().expect("utf8")]);
+        std::fs::create_dir_all(wt.join("sub")).expect("mkdir");
+        let main = |p: &Path| compute::sync::main_checkout_of(p).map(|m| m.canonicalize().expect("canon"));
+        let want = Some(r.canonicalize().expect("canon"));
+        assert_eq!(main(&wt), want);
+        assert_eq!(main(&wt.join("sub")), want);
+        assert_eq!(main(&r), want);
+        let other = d.join("other");
+        std::fs::create_dir_all(&other).expect("mkdir");
+        git(&other, &["init", "-q"]);
+        assert_ne!(main(&other), want);
+        let plain = d.join("plain");
+        std::fs::create_dir_all(&plain).expect("mkdir");
+        assert_eq!(compute::sync::main_checkout_of(&plain).filter(|p| p.starts_with(&d)), None);
         let _ = std::fs::remove_dir_all(&d);
     }
 }

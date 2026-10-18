@@ -253,3 +253,52 @@ fn agent_writes_are_rate_limited() {
     }
     assert!(limited, "a burst over 120 writes is refused");
 }
+
+/// Gap 7 (0.46.1): an agent with "Manage Gardens and data sources" that
+/// made a widget seeds its data with no grant; without the switch, or for a
+/// widget it didn't make, it's refused (`not_granted`). The first use writes
+/// one Access Audit line.
+#[test]
+fn a_maker_agent_with_the_switch_seeds_its_own_widget_without_a_grant() {
+    let _e = env();
+    let builder = agent("w-builder");
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::garden_data::authors::stamp(
+            &conn,
+            "fleet-ops-lists",
+            &"c".repeat(64),
+            &k2_core::garden_data::MadeBy::Agent { project_id: "w-builder".into() },
+            k2_core::garden_data::authors::StampSource::Sign,
+            k2_core::garden_data::authors::CallerKind::Agent,
+            5,
+        )
+        .unwrap();
+    }
+    let put = json!({"widget": "fleet-ops-lists", "key": "holds/ohana", "value": {"why": "customer freeze"}});
+    let (code, c) = err(&builder, "POST", "/cli/zen/data/put", put.clone(), &[]);
+    assert_eq!((code, c.as_str()), (403, "not_granted"), "no switch, no grant");
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute("UPDATE projects SET agents_can_manage_gardens = 1 WHERE id IN ('w-builder', 'w-keeper')", []).unwrap();
+    }
+    let v = ok(&builder, "POST", "/cli/zen/data/put", put, &[]);
+    assert_eq!(v["rev"], 1, "{v}");
+    let v = ok(&builder, "GET", "/cli/zen/data/get", json!({}), &[("widget", "fleet-ops-lists"), ("key", "holds/ohana")]);
+    assert_eq!(v["entry"]["value"]["why"], "customer freeze");
+    // Another agent with the switch didn't make it: still refused.
+    let (code, c) = err(
+        &agent("w-keeper"),
+        "POST",
+        "/cli/zen/data/put",
+        json!({"widget": "fleet-ops-lists", "key": "holds/x", "value": 1}),
+        &[],
+    );
+    assert_eq!((code, c.as_str()), (403, "not_granted"));
+    let audit = std::fs::read_to_string(k2_core::auth_audit::path()).expect("the audit log exists");
+    let lines: Vec<&str> = audit.lines().filter(|l| l.contains("zen-data-maker") && l.contains("data:fleet-ops-lists")).collect();
+    assert_eq!(lines.len(), 1, "one audit line for the first use: {audit}");
+    assert!(lines[0].contains("agent:board-builder"), "{}", lines[0]);
+}

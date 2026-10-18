@@ -687,7 +687,7 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
                     projection = Some(p);
                 }
                 FetchOutcome::Err { reason, http_status, .. } => {
-                    self_reading = Some(Reading::failed(health_of(spec.on_target_error), *reason, *http_status, fail_after, thresholds));
+                    self_reading = Some(Reading::failed(health_of(spec.on_target_error), *reason, *http_status, fail_after));
                     projection = None;
                 }
             }

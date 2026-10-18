@@ -810,7 +810,7 @@ mod tests {
         assert_eq!(names(&c, "owner"), vec!["From b"]);
         // Re-sending the exact same item is a no-op (idempotent retry).
         let r = push(&c, "owner", "b-dev", &[home("h1", "From b", "V", NOW + 30)], NOW).expect("retry");
-        assert_eq!((r.applied, r.superseded, r.cursor), (0, 1, 3));
+        assert_eq!((r.applied, r.superseded, r.cursor), (0, 1, 4), "no write, no cursor bump");
     }
 
     #[test]

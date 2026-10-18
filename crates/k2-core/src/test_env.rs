@@ -515,32 +515,51 @@ pub fn thread_id_name_violations(src_root: &Path) -> Vec<String> {
 /// answer under load). [`ClosedPort::new`] reserves `127.0.0.1:<port>`;
 /// [`ClosedPort::dual`] also reserves `[::1]:<port>` when the host has IPv6
 /// loopback, for tests of code that tries both.
+///
+/// How it is held: the port is the LOCAL end of a loopback connection the
+/// guard owns (a socket bound to it and connected to a private listener),
+/// not a bound-but-idle socket. An idle bound socket is a wildcard match
+/// for an incoming SYN, and older macOS kernels (the Mac minis, 2026-10)
+/// silently DROP a SYN that matches a socket in the CLOSED state, so the
+/// connect hangs until its timeout instead of being refused (newer macOS
+/// and Linux send a reset). A connected socket only matches its own peer,
+/// so a SYN from anyone else finds no socket at all and every kernel
+/// answers with a reset: refused at once, deterministically.
+///
+/// Reserved: the port comes from [`RESERVED_PORTS`], below every default
+/// ephemeral range (macOS 49152+, Linux 32768+), so no `bind(…:0)` in any
+/// test is ever handed it, and the held socket refuses a plain bind
+/// (`EADDRINUSE`). Linux also refuses a `SO_REUSEADDR` bind (Rust's
+/// `TcpListener::bind`) while the connection lives; BSD lets a
+/// `SO_REUSEADDR` bind of that exact port through, which only a test that
+/// names a port in that range on purpose could do.
 #[cfg(unix)]
 pub struct ClosedPort {
     port: u16,
     _fds: Vec<std::os::fd::OwnedFd>,
+    _peers: Vec<std::net::TcpStream>,
 }
 
 #[cfg(unix)]
 impl ClosedPort {
     /// Reserve a closed `127.0.0.1` port.
     pub fn new() -> Self {
-        let (fd, port) = reserve(false, 0).unwrap_or_else(|e| panic!("reserve 127.0.0.1:0: {e}"));
-        Self { port, _fds: vec![fd] }
+        let (fd, peer, port) = reserve(false, 0).unwrap_or_else(|e| panic!("reserve 127.0.0.1:0: {e}"));
+        Self { port, _fds: vec![fd], _peers: vec![peer] }
     }
 
     /// Reserve the same closed port on `127.0.0.1` and (when IPv6
     /// loopback exists) `::1`.
     pub fn dual() -> Self {
         for _ in 0..64 {
-            let (v4, port) = reserve(false, 0).unwrap_or_else(|e| panic!("reserve 127.0.0.1:0: {e}"));
+            let (v4, p4, port) = reserve(false, 0).unwrap_or_else(|e| panic!("reserve 127.0.0.1:0: {e}"));
             match reserve(true, port) {
-                Ok((v6, _)) => return Self { port, _fds: vec![v4, v6] },
+                Ok((v6, p6, _)) => return Self { port, _fds: vec![v4, v6], _peers: vec![p4, p6] },
                 // No IPv6 loopback on this host: nothing can listen there.
                 Err(e) if e.raw_os_error() == Some(libc::EAFNOSUPPORT)
                     || e.raw_os_error() == Some(libc::EADDRNOTAVAIL) =>
                 {
-                    return Self { port, _fds: vec![v4] }
+                    return Self { port, _fds: vec![v4], _peers: vec![p4] }
                 }
                 // Someone holds [::1]:port; pick another port.
                 Err(_) => continue,
@@ -555,9 +574,72 @@ impl ClosedPort {
     }
 }
 
-/// A bound, NOT listening TCP socket on loopback (`port` 0 = any).
+/// Where [`ClosedPort`] takes its ports: a range no K2 product or test port
+/// uses (those are 5432, 8443, 8470, 8730, 384xx, 38600-38999), below
+/// every default ephemeral range.
 #[cfg(unix)]
-fn reserve(v6: bool, port: u16) -> std::io::Result<(std::os::fd::OwnedFd, u16)> {
+pub const RESERVED_PORTS: std::ops::Range<u16> = 21000..32000;
+
+/// A TCP socket bound to loopback `port` (0 = the next free one in
+/// [`RESERVED_PORTS`]) and connected to a private loopback listener, plus
+/// that connection's accepted end; see [`ClosedPort`] for why.
+#[cfg(unix)]
+fn reserve(v6: bool, port: u16) -> std::io::Result<(std::os::fd::OwnedFd, std::net::TcpStream, u16)> {
+    if port != 0 {
+        return reserve_at(v6, port);
+    }
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let span = (RESERVED_PORTS.end - RESERVED_PORTS.start) as u32;
+    // Spread parallel test binaries over the range (pid), then walk it.
+    let base = std::process::id().wrapping_mul(2654435761) % span;
+    let mut last = None;
+    for _ in 0..512 {
+        let p = RESERVED_PORTS.start + ((base + NEXT.fetch_add(1, Ordering::Relaxed)) % span) as u16;
+        match reserve_at(v6, p) {
+            Ok(r) => return Ok(r),
+            Err(e) if e.raw_os_error() == Some(libc::EADDRINUSE) => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free port in the reserved range")))
+}
+
+/// [`reserve`] at exactly `port`.
+#[cfg(unix)]
+fn reserve_at(v6: bool, port: u16) -> std::io::Result<(std::os::fd::OwnedFd, std::net::TcpStream, u16)> {
+    use std::os::fd::AsRawFd;
+    // The private peer: bound first so its own port is never `port`.
+    let peer_listener = if v6 {
+        std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0))?
+    } else {
+        std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))?
+    };
+    let peer_port = peer_listener.local_addr()?.port();
+    let (fd, mut storage, len) = bind_plain(v6, port)?;
+    // SAFETY: `storage` is the sockaddr `bind_plain` filled for this family.
+    unsafe {
+        // Connect to the private peer (same family, loopback): the socket
+        // then matches only that peer, never a SYN from anyone else.
+        if v6 {
+            let a = &mut *(&mut storage as *mut _ as *mut libc::sockaddr_in6);
+            a.sin6_port = peer_port.to_be();
+        } else {
+            let a = &mut *(&mut storage as *mut _ as *mut libc::sockaddr_in);
+            a.sin_port = peer_port.to_be();
+        }
+        if libc::connect(fd.as_raw_fd(), &storage as *const _ as *const libc::sockaddr, len) != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    let (peer, _) = peer_listener.accept()?;
+    Ok((fd, peer, port))
+}
+
+/// A loopback socket bound to exactly `port` with no options (so a bind
+/// conflict is `EADDRINUSE`). Also the test's "is it still taken" probe.
+#[cfg(unix)]
+fn bind_plain(v6: bool, port: u16) -> std::io::Result<(std::os::fd::OwnedFd, libc::sockaddr_storage, libc::socklen_t)> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
     let family = if v6 { libc::AF_INET6 } else { libc::AF_INET };
     // SAFETY: plain socket syscalls on a fresh fd we own; every pointer
@@ -594,17 +676,7 @@ fn reserve(v6: bool, port: u16) -> std::io::Result<(std::os::fd::OwnedFd, u16)> 
         if libc::bind(fd.as_raw_fd(), &storage as *const _ as *const libc::sockaddr, len) != 0 {
             return Err(std::io::Error::last_os_error());
         }
-        let mut out: libc::sockaddr_storage = std::mem::zeroed();
-        let mut out_len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-        if libc::getsockname(fd.as_raw_fd(), &mut out as *mut _ as *mut libc::sockaddr, &mut out_len) != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let bound = if v6 {
-            (*(&out as *const _ as *const libc::sockaddr_in6)).sin6_port
-        } else {
-            (*(&out as *const _ as *const libc::sockaddr_in)).sin_port
-        };
-        Ok((fd, u16::from_be(bound)))
+        Ok((fd, storage, len))
     }
 }
 
@@ -769,17 +841,58 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn closed_port_refuses_at_once_and_stays_reserved() {
+        // Refused, not timed out: the kernel answered with a reset (a
+        // dropped SYN would end as TimedOut after the 5 s cap, and fail
+        // the kind check). No timing assertion: the kind is the proof.
+        for closed in [ClosedPort::new(), ClosedPort::dual()] {
+            for _ in 0..3 {
+                let err = std::net::TcpStream::connect_timeout(
+                    &std::net::SocketAddr::from(([127, 0, 0, 1], closed.port())),
+                    std::time::Duration::from_secs(5),
+                )
+                .expect_err("nothing listens on a reserved port");
+                assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused, "{err:?}");
+            }
+            // Reserved: a plain bind is refused while the guard lives …
+            let taken = bind_plain(false, closed.port()).map(|_| ());
+            assert_eq!(taken.as_ref().map_err(|e| e.raw_os_error()), Err(Some(libc::EADDRINUSE)), "port {}", closed.port());
+            // … on Linux even a SO_REUSEADDR one (Rust's TcpListener) …
+            #[cfg(target_os = "linux")]
+            assert!(std::net::TcpListener::bind(("127.0.0.1", closed.port())).is_err());
+            // … and no `bind(…:0)` is ever handed it: it sits below the
+            // ephemeral range.
+            assert!(RESERVED_PORTS.contains(&closed.port()), "{}", closed.port());
+            assert!(RESERVED_PORTS.end <= ephemeral_first(), "the reserved range overlaps this host's ephemeral ports");
+        }
+        // IPv6 loopback too, where the host has it.
         let closed = ClosedPort::dual();
-        let t = std::time::Instant::now();
-        let err = std::net::TcpStream::connect_timeout(
-            &std::net::SocketAddr::from(([127, 0, 0, 1], closed.port())),
-            std::time::Duration::from_secs(5),
-        )
-        .expect_err("nothing listens on a reserved port");
-        assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused, "{err:?}");
-        assert!(t.elapsed() < std::time::Duration::from_secs(1), "{:?}", t.elapsed());
-        // Reserved: nobody else can listen on it meanwhile.
-        assert!(std::net::TcpListener::bind(("127.0.0.1", closed.port())).is_err());
+        if let Ok(probe) = std::net::TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, 0)) {
+            drop(probe);
+            let err = std::net::TcpStream::connect_timeout(
+                &std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, closed.port())),
+                std::time::Duration::from_secs(5),
+            )
+            .expect_err("nothing listens on a reserved port");
+            assert_eq!(err.kind(), std::io::ErrorKind::ConnectionRefused, "{err:?}");
+            let taken = bind_plain(true, closed.port()).map(|_| ());
+            assert_eq!(taken.as_ref().map_err(|e| e.raw_os_error()), Err(Some(libc::EADDRINUSE)));
+        }
+    }
+
+    /// The first port this host hands out for `bind(…:0)`.
+    #[cfg(unix)]
+    fn ephemeral_first() -> u16 {
+        #[cfg(target_os = "linux")]
+        {
+            let t = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range").expect("ip_local_port_range");
+            t.split_whitespace().next().expect("low end").parse().expect("a port")
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let o = std::process::Command::new("/usr/sbin/sysctl").args(["-n", "net.inet.ip.portrange.first"]).output().expect("sysctl");
+            assert!(o.status.success(), "{o:?}");
+            String::from_utf8_lossy(&o.stdout).trim().parse().expect("a port")
+        }
     }
 
     #[test]

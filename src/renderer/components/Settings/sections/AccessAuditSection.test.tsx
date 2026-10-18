@@ -156,6 +156,46 @@ describe('AccessAuditSection', () => {
     expect(ipCells[0]?.textContent).toBe('203.0.113.9')
   })
 
+  it('an agent vault export is highlighted, shown under Successes, and bannered; a person export is not', async () => {
+    const AGENT_EXPORT: AuthAuditEvent = {
+      ts: '2026-10-17T09:00:00.000Z',
+      event: 'vault-carry',
+      user: 'agent:ws-sales/sess-9',
+      outcome: 'ok export 2 [server:STRIPE_KEY, server:OPENAI_KEY] of workspaces [] by agent:ws-sales/sess-9 (workspace ws-sales) to fp1 (vault v1)',
+      ingress: '-',
+      ip: '-',
+    }
+    const OWNER_EXPORT: AuthAuditEvent = { ...AGENT_EXPORT, ts: '2026-10-17T08:00:00.000Z', user: 'owner', outcome: 'ok export 1 [server:X] by owner' }
+    h.fetchWhoamiRole.mockResolvedValue('owner')
+    h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [OK, OWNER_EXPORT, AGENT_EXPORT], tail: 200 })
+    const { container } = render(<AccessAuditSection />)
+    await waitFor(() => {
+      expect(screen.getByRole('table')).toBeTruthy()
+    })
+    // Default filter (Successes) still shows the agent export, not the owner's.
+    expect(screen.getByText(AGENT_EXPORT.outcome)).toBeTruthy()
+    expect(screen.queryByText(OWNER_EXPORT.outcome)).toBeNull()
+    const flagged = container.querySelectorAll('tr[data-agent-vault-export="true"]')
+    expect(flagged.length).toBe(1)
+    expect(flagged[0]?.textContent).toContain('agent export')
+    expect(flagged[0]?.textContent).toContain('agent:ws-sales/sess-9')
+    expect(screen.getByTestId('agent-vault-export-banner').textContent).toContain('An agent exported secrets')
+    // All: the owner's export appears, unflagged.
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    expect(screen.getByText(OWNER_EXPORT.outcome)).toBeTruthy()
+    expect(container.querySelectorAll('tr[data-agent-vault-export="true"]').length).toBe(1)
+  })
+
+  it('no agent export: no banner', async () => {
+    h.fetchWhoamiRole.mockResolvedValue('owner')
+    h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [OK], tail: 200 })
+    render(<AccessAuditSection />)
+    await waitFor(() => {
+      expect(screen.getByRole('table')).toBeTruthy()
+    })
+    expect(screen.queryByTestId('agent-vault-export-banner')).toBeNull()
+  })
+
   it('admin: owner-only note and no audit fetch', async () => {
     h.fetchWhoamiRole.mockResolvedValue('admin')
     render(<AccessAuditSection />)

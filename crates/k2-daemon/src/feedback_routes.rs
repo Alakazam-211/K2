@@ -512,6 +512,53 @@ fn handle_skin_show(params: &HashMap<String, String>, pass: &SkinPass) -> CliRes
 
 /// `projects.name` + `projects.path` for a project id (for the
 /// `workspace` field in responses + the `projectPath` event field).
+/// A notice the daemon itself files for the server's people (H21 follow-up,
+/// 0.46.1): an `fyi` ticket on the agent's workspace, assigned to every
+/// enabled Owner and Admin login (none: unassigned, so it reaches every
+/// device), with the same created event, push and board frame as an ask.
+/// It lands on the Tickets board and the waiting badge, where the agent
+/// that caused it can't make it vanish unseen.
+pub(crate) fn file_owner_notice(
+    project_id: &str,
+    agent_name: &str,
+    title: &str,
+    body: &str,
+) -> Result<feedback::FeedbackItem, String> {
+    let mut item = feedback::create(feedback::NewFeedback {
+        project_id: project_id.to_string(),
+        agent_name: agent_name.to_string(),
+        kind: "fyi".to_string(),
+        title: title.to_string(),
+        body: Some(body.to_string()),
+        priority: 2,
+        ..Default::default()
+    })?;
+    let people: Vec<String> = k2_core::connect_users::list_users()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|u| !u.disabled && matches!(u.role, k2_core::connect_users::Role::Owner | k2_core::connect_users::Role::Admin))
+        .map(|u| u.username)
+        .collect();
+    if !people.is_empty() {
+        item = feedback::set_assignees(&item.id, &people)?;
+    }
+    let (_, path) = project_name_path(&item.project_id);
+    k2_core::agent_hooks::emit(
+        k2_core::agent_hooks::HookEvent::FeedbackCreated,
+        serde_json::json!({
+            "id": item.id,
+            "projectPath": path,
+            "title": item.title,
+            "kind": item.kind,
+            "priority": item.priority,
+            "agentName": item.agent_name,
+        }),
+    );
+    crate::push_routes::notify_feedback_created(&item.agent_name, &item.id, &item.assignees);
+    emit_ticket_changed(&item, CHANGE_CREATED, None);
+    Ok(item)
+}
+
 fn project_name_path(project_id: &str) -> (Option<String>, Option<String>) {
     let db = k2_core::db::shared();
     let conn = db.lock();

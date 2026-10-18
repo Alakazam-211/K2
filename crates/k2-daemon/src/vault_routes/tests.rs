@@ -650,6 +650,65 @@ fn an_agent_with_the_switch_carries_and_the_owner_sees_it() {
     });
 }
 
+/// H21 follow-up (0.46.1): an agent's carry export also files a visible
+/// owner notice, an `fyi` ticket on the agent's workspace naming the
+/// agent, the secrets (names only) and the destination, with the created
+/// event the desktop and the board listen for. A person's export files
+/// none (they are the person).
+#[test]
+fn an_agents_carry_export_files_an_owner_notice_with_names_never_values() {
+    use crate::vault_use_routes::{CARRY_EXPORT, RECIPIENT};
+    crate::test_support::with_temp_home(|| {
+        crate::test_support::install_capture_sink();
+        let dir = TestDir::new("carry-notice-ws");
+        let ws = dir.path().join(format!("notice-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]));
+        std::fs::create_dir_all(&ws).expect("mkdir");
+        let path = std::fs::canonicalize(&ws).expect("canon").to_string_lossy().to_string();
+        let project = k2_core::projects_ops::projects_add_without_git(&path).expect("register");
+        let label = crate::vault::workspace_label(&project.id);
+        let src = vault();
+        let dst = vault();
+        set_server(&src, "STRIPE_KEY", SENTINEL);
+        set_server(&src, "OPENAI_KEY", "k2test_NOTICE_OPENAI_11aa22bb33cc");
+        let (s, r) = call(&dst, RECIPIENT, &owner(), Value::Null);
+        assert_eq!(s, 200, "{r}");
+        let fp = r["fingerprint"].as_str().expect("fingerprint").to_string();
+        let vid = r["vaultId"].as_str().expect("vaultId").to_string();
+        let body = json!({ "targetRecipient": r["recipient"], "targetVaultId": vid, "server": ["STRIPE_KEY", "OPENAI_KEY"] });
+
+        let open = |id: &str| k2_core::feedback::list_for_project(id, &k2_core::feedback::ListFilter::All).expect("list");
+        assert!(open(&project.id).is_empty());
+        // A person exports: no notice.
+        let (s, ex) = call(&src, CARRY_EXPORT, &owner(), body.clone());
+        assert_eq!(s, 200, "{ex}");
+        assert!(open(&project.id).is_empty(), "the owner's own export files no notice");
+
+        let mark = crate::test_support::event_mark();
+        let (s, ex) = call(&src, CARRY_EXPORT, &agent(&project.id, true), body);
+        assert_eq!(s, 200, "{ex}");
+        let items = open(&project.id);
+        assert_eq!(items.len(), 1, "one notice: {items:?}");
+        let n = &items[0];
+        assert_eq!(n.kind, "fyi");
+        assert_eq!(n.status, "waiting", "it waits on the board until a person dismisses it");
+        assert_eq!(n.agent_name, label);
+        assert_eq!(n.title, format!("{label} exported 2 secrets to another vault"));
+        let text = n.body.clone().expect("body");
+        for want in ["server:STRIPE_KEY", "server:OPENAI_KEY", vid.as_str(), fp.as_str(), "session sess-9", "Access Audit", "k2 vault carry export"] {
+            assert!(text.contains(want), "notice lacks {want:?}: {text}");
+        }
+        assert!(!text.contains(SENTINEL) && !text.contains("k2test_NOTICE_OPENAI"), "a value in the notice: {text}");
+        let created: Vec<_> = crate::test_support::events_since(mark)
+            .into_iter()
+            .filter(|(name, p)| name == "feedback:created" && p["id"] == json!(n.id))
+            .collect();
+        assert_eq!(created.len(), 1, "the created event the desktop listens for");
+        assert_eq!(created[0].1["kind"], "fyi");
+
+        k2_core::projects_ops::projects_delete(&project.id).expect("cleanup");
+    });
+}
+
 /// People keep what they had: the owner and an Admin login carry with no
 /// confirm (the H21 audit row names them).
 #[test]

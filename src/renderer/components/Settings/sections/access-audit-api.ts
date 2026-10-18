@@ -73,6 +73,16 @@ export function isSuccessLogin(ev: AuthAuditEvent): boolean {
   return ev.event === 'login' && ev.outcome === 'ok'
 }
 
+/**
+ * H21 follow-up (0.46.1): an agent moved secrets out of this box's vault
+ * (`k2 vault carry export`). The daemon writes `vault-carry` with
+ * `ok export …` and the agent's stamp (`agent:<workspace>[/<session>]`);
+ * people (`owner`, `connect:<name>`) are not flagged.
+ */
+export function isAgentVaultExport(ev: AuthAuditEvent): boolean {
+  return ev.event === 'vault-carry' && ev.outcome.startsWith('ok export') && ev.user.startsWith('agent:')
+}
+
 export function formatAuditTimeUtc(ts: string): string {
   const d = new Date(ts)
   if (Number.isNaN(d.getTime())) return ts || '—'

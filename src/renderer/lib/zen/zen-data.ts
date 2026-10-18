@@ -287,6 +287,14 @@ export interface ZenThreadView {
    *  Thread turns. Built-in widgets only: never projected to a custom
    *  widget (closed shapes, zen-custom-projection). */
   liveTurn?: ThreadTurn | null
+  /** thread-read-v1 (0.46.1 Zen defaults): the Thread's conversation id,
+   *  so a built-in conversation can mark it read while it is looked at and
+   *  mute it. Null until the feed has one. Built-in widgets only: never
+   *  projected to a custom widget (closed shapes, zen-custom-projection). */
+  conversationId?: string | null
+  /** The conversation is on the window's server (the unread store only
+   *  knows that server's Threads). Built-in widgets only. */
+  windowServer?: boolean
 }
 
 /** `thread.post` options: files on this computer, or browser files. A
@@ -1541,6 +1549,8 @@ function threadView(address: string): ZenThreadView {
     turn: zenTurn(f),
     ...(f?.turnsReported ? { liveTurn: f.turn ?? null } : {}),
     viewer: viewerOf(address),
+    conversationId: f?.conversationId ? f.conversationId : null,
+    windowServer: c?.scope ? c.scope.isWindowHost() : false,
   }
 }
 

@@ -27,7 +27,7 @@ import {
 } from '@/lib/zen/zen-widget-routes'
 import { zenLib, ZenLibError } from '@/lib/zen/zen-lib-loader'
 import { zenFramePrelude, type ZenFrameTheme } from '@/lib/zen/zen-custom-prelude'
-import { createZenCustomLayer } from '@/lib/zen/zen-custom-bridge'
+import { createZenCustomLayer, type ZenCustomLayer } from '@/lib/zen/zen-custom-bridge'
 import { zenCustomSourcesFor } from '@/lib/zen/zen-custom-sources'
 import { createZenCustomStore, zenDataSpace } from '@/lib/zen/zen-custom-store'
 import { gardenCall } from '@/lib/garden-data/garden-data-api'
@@ -129,8 +129,15 @@ export function ZenCustomFrame({
   const boxRef = useRef<HTMLDivElement | null>(null)
   const frameRef = useRef<HTMLIFrameElement | null>(null)
   const hostRef = useRef<{ dispose(): void } | null>(null)
+  const layerRef = useRef<ZenCustomLayer | null>(null)
   const widgetRef = useRef(widget)
   widgetRef.current = widget
+  // 0.46.1: the placement's source addresses changed (a config edit, an
+  // approval): start any `not_bound` subscription the layer is holding.
+  const sourcesSig = (widget.sourceAddresses ?? []).join('\n')
+  useEffect(() => {
+    layerRef.current?.boundChanged()
+  }, [sourcesSig])
   const problemRef = useRef(onProblem)
   problemRef.current = onProblem
   const key = zenPlacementKey(gardenId, widget.id)
@@ -209,8 +216,8 @@ export function ZenCustomFrame({
           console.warn('[zen] the widget runtime report failed:', err),
         )
       },
-      makeLayer: (push, pushError) =>
-        createZenCustomLayer({
+      makeLayer: (push, pushError) => {
+        const layer = createZenCustomLayer({
           widget: () => widgetRef.current,
           gardenId: () => gardenId,
           inner: bridge,
@@ -259,8 +266,13 @@ export function ZenCustomFrame({
             setHitRegions: (rects) => setZenCanvasRegions(key, rects),
             startDrag: () => startZenCanvasDrag(key),
           },
+          setTimer: (fn, ms) => window.setTimeout(fn, ms),
+          clearTimer: (t) => window.clearTimeout(t as number),
           now: () => Date.now(),
-        }),
+        })
+        layerRef.current = layer
+        return layer
+      },
     })
   }
 

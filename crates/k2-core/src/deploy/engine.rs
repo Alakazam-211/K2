@@ -115,6 +115,26 @@ pub struct AppSpec {
     pub cache_dir: PathBuf,
     pub home_dir: PathBuf,
     pub log_path: PathBuf,
+    /// The open path's and the resource layer's per-App settings
+    /// (0.46.1: S13, S17). Default: guarded, K2's defaults.
+    pub wall: WallSpec,
+}
+
+/// What a walled engine renders beyond the guarded defaults (0.46.1).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WallSpec {
+    /// `apps.path = open`: the relaxed container (S13).
+    pub open: bool,
+    /// Open path: the port the App listens on inside its wall (an old
+    /// `--cmd` service's `--port`); `None` = K2's host port.
+    pub app_port: Option<u16>,
+    /// Open path: more TCP ports on host loopback (`k2 app config
+    /// --port-add`).
+    pub extra_ports: Vec<u16>,
+    /// `k2 app config --tasks` (`None` = K2's default, 512).
+    pub tasks: Option<u32>,
+    /// `k2 app config --cpu-weight` (`None` = systemd's default).
+    pub cpu_weight: Option<u32>,
 }
 
 /// What `prepare` produced (the working directory the start runs in).

@@ -128,16 +128,23 @@ pub fn proxy_env(px_port: u16) -> Vec<(&'static str, String)> {
 
 // ── signed builds ───────────────────────────────────────────────────────
 
-/// What this build of the engine speaks on its socket. One bump for all of
-/// 0.46.0 (the daemon refuses any other; boxes reinstall the engine):
-/// 2 = S14 `pass-write` and the pass folder (the in-wall gateway at 8730);
-/// S15 the egress proxy forward and proxy variables, `pxPort` in the
-/// prepare/start/adopt answers; lane D the MAC shim, `io` on start, exec
-/// timeouts, `exec-tty` terminals and the process exception's staging
-/// (`process-stage|activate|state`, its pass refreshed by `pass-write`);
-/// box services' `boxForwards` on start (an optional field, announced in
-/// `version`'s `features`, so it extends 2 rather than bumping it).
-pub const ENGINE_PROTOCOL: u32 = 2;
+/// What this build of the engine speaks on its socket (the daemon refuses
+/// any other; boxes reinstall the engine with `k2 app engine install`):
+/// - 2 (0.46.0) = S14 `pass-write` and the pass folder (the in-wall
+///   gateway at 8730); S15 the egress proxy forward and proxy variables,
+///   `pxPort` in the prepare/start/adopt answers; lane D the MAC shim, `io`
+///   on start, exec timeouts, `exec-tty` terminals and the process
+///   exception's staging; box services' `boxForwards` (a 2 extension
+///   announced in `version`'s `features`).
+/// - 3 (0.46.1, lane 1 "Wall") = one bump for the wall: `wall` on start
+///   (`guarded` | `relaxed`, the open path's container, S13) with the
+///   relaxed container's own port and extra ports; `resources` (an
+///   optional memory cap: no cap by default, L1; tasks, open files, CPU
+///   weight and the per-deployment log cap, S17); box forwards first-class;
+///   `dbPort` (the App's database door forwarded to `127.0.0.1:5432` in
+///   the wall, for lane 3); the `build` verb (the manifest's build inside
+///   the wall, S16) and the `logs` verb (each deployment's capped log).
+pub const ENGINE_PROTOCOL: u32 = 3;
 
 pub fn asset_name(arch: &str) -> String {
     format!("k2-app-engine-linux-{arch}")
@@ -343,6 +350,180 @@ pub enum Request {
     ProcessActivate { app: String, deployment: String },
     /// Which deployment the App's process folder holds (adopt, liveness).
     ProcessState { app: String },
+    /// S16: run a manifest's build inside the wall (protocol 3). The Seed
+    /// named is the source tree (seed-put first); the engine copies it into
+    /// a fresh work folder owned by the App's ids, runs `argv` there in a
+    /// container in the App's slot (its own ids, the floor, egress only
+    /// through the App's proxy), and on success answers `{exitCode, output,
+    /// tarLen}` followed by `tarLen` bytes: a tar of the built tree. A
+    /// failed build answers `ok` with its exit code and output, no tar.
+    Build(Box<BuildSpec>),
+    /// The last `lines` lines of one deployment's own log (protocol 3:
+    /// each container logs to a capped file, [`Resources::log_bytes`]).
+    Logs { app: String, deployment: String, lines: u32 },
+}
+
+/// The wall a container start renders (protocol 3).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Wall {
+    /// The guarded floor (§4.2): the Seed read-only at `/app`, a
+    /// read-only root, one port, egress only to listed hosts.
+    #[default]
+    Guarded,
+    /// The open path's relaxed container (§4.3, S13): everything in the
+    /// floor except a writable root, a writable **copy** of the code at
+    /// `/app` made at each start (Rosson Q3, 2026-10-17: the persistent
+    /// state is `/data`), extra TCP ports on host loopback, and egress
+    /// broad but still only through the App's proxy (logged, K24).
+    Relaxed,
+}
+
+impl Wall {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Wall::Guarded => "guarded",
+            Wall::Relaxed => "relaxed",
+        }
+    }
+}
+
+/// Resource lines on every container (§6.2, S17; protocol 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Resources {
+    /// The App's memory cap. `None` = no per-App cap (L1, Rosson
+    /// 2026-10-10, confirmed 2026-10-17): the Apps slice's ceiling is the
+    /// bound and an OOM there takes the biggest App, never the cores. A cap
+    /// also sets Node's heap to half of it ([`Resources::node_heap_mib`]).
+    pub memory_mib: Option<u64>,
+    /// `PidsLimit` (fork bombs, thread leaks).
+    pub tasks: u32,
+    /// Open files (`Ulimit=nofile`).
+    pub nofile: u32,
+    /// `CPUWeight` on the unit (`None` = systemd's default, 100).
+    pub cpu_weight: Option<u32>,
+    /// The deployment's log file cap (bytes): a log flood can't fill the
+    /// disk.
+    pub log_bytes: u64,
+}
+
+/// Bounds for [`Resources`] (inclusive).
+pub const MEMORY_MIB_BOUNDS: (u64, u64) = (64, 4_194_304);
+pub const TASKS_BOUNDS: (u32, u32) = (16, 65_536);
+pub const NOFILE_BOUNDS: (u32, u32) = (256, 1_048_576);
+pub const CPU_WEIGHT_BOUNDS: (u32, u32) = (1, 10_000);
+pub const LOG_BYTES_BOUNDS: (u64, u64) = (1 << 20, 1 << 30);
+/// §6.2 defaults: 512 tasks, 4096 open files, a 50 MiB log per deployment.
+pub const DEFAULT_TASKS: u32 = 512;
+pub const DEFAULT_NOFILE: u32 = 4096;
+pub const DEFAULT_LOG_BYTES: u64 = 50 << 20;
+
+impl Resources {
+    /// K2's defaults: no memory cap (L1), §6.2's tasks, files and log cap.
+    pub fn k2_default() -> Self {
+        Self { memory_mib: None, tasks: DEFAULT_TASKS, nofile: DEFAULT_NOFILE, cpu_weight: None, log_bytes: DEFAULT_LOG_BYTES }
+    }
+
+    pub fn check(&self) -> Result<(), &'static str> {
+        if self.memory_mib.is_some_and(|m| !(MEMORY_MIB_BOUNDS.0..=MEMORY_MIB_BOUNDS.1).contains(&m)) {
+            return Err("memory");
+        }
+        if !(TASKS_BOUNDS.0..=TASKS_BOUNDS.1).contains(&self.tasks) {
+            return Err("tasks");
+        }
+        if !(NOFILE_BOUNDS.0..=NOFILE_BOUNDS.1).contains(&self.nofile) {
+            return Err("nofile");
+        }
+        if self.cpu_weight.is_some_and(|w| !(CPU_WEIGHT_BOUNDS.0..=CPU_WEIGHT_BOUNDS.1).contains(&w)) {
+            return Err("cpu weight");
+        }
+        if !(LOG_BYTES_BOUNDS.0..=LOG_BYTES_BOUNDS.1).contains(&self.log_bytes) {
+            return Err("log cap");
+        }
+        Ok(())
+    }
+
+    /// Node's `--max-old-space-size`: half the cap, only when there is one
+    /// (Q6/AR45: the heap error, with a stack, comes before the kernel's
+    /// kill). No cap, no flag: V8 sizes its own heap.
+    pub fn node_heap_mib(&self) -> Option<u64> {
+        self.memory_mib.map(|m| m / 2)
+    }
+}
+
+/// One manifest build inside the wall (S16, protocol 3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BuildSpec {
+    /// The App whose slot (ids, egress proxy, nft rule) the build runs in.
+    pub app: String,
+    /// `b-<12 hex>`: names the build's unit and work folder.
+    pub build: String,
+    /// The source tree (a Seed hash the engine holds).
+    pub seed: String,
+    pub image: String,
+    /// The manifest's `build` argv, run in `/app` (the work copy).
+    pub argv: Vec<String>,
+    /// Declared, non-secret variables (no secrets reach a build).
+    pub env: BTreeMap<String, String>,
+    /// Package install scripts: off on the guarded path
+    /// (`npm_config_ignore_scripts=true` and friends), on for the open path.
+    pub scripts: bool,
+    pub timeout_secs: u64,
+    pub resources: Resources,
+}
+
+/// A build's bounds (seconds): up to an hour, 15 minutes by default.
+pub const BUILD_TIMEOUT_BOUNDS: (u64, u64) = (10, 3600);
+pub const BUILD_TIMEOUT_DEFAULT: u64 = 900;
+/// Largest built tree the engine streams back.
+pub const MAX_BUILD_TAR: u64 = 4 << 30;
+/// Most lines a `logs` call returns.
+pub const MAX_LOG_LINES: u32 = 5000;
+
+/// `b-<12 lowercase hex>`, the build id.
+pub fn build_id_ok(b: &str) -> bool {
+    b.len() == 14 && b.starts_with("b-") && b[2..].bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+}
+
+/// Every field of a build (the engine runs this before anything).
+pub fn check_build(s: &BuildSpec) -> Result<AppId, &'static str> {
+    let app = AppId::parse(&s.app).ok_or("app id")?;
+    if !build_id_ok(&s.build) {
+        return Err("build id");
+    }
+    if !seed_hash_ok(&s.seed) {
+        return Err("seed hash");
+    }
+    if !image_ok(&s.image) {
+        return Err("image");
+    }
+    if !exec_argv_ok(&s.argv) {
+        return Err("argv");
+    }
+    if s.env.len() > 256 || !s.env.iter().all(|(k, v)| env_name_ok(k) && value_ok(v, 32 * 1024)) {
+        return Err("env");
+    }
+    if !(BUILD_TIMEOUT_BOUNDS.0..=BUILD_TIMEOUT_BOUNDS.1).contains(&s.timeout_secs) {
+        return Err("timeout");
+    }
+    s.resources.check()?;
+    Ok(app)
+}
+
+/// The environment a guarded build runs with on top of the declared one:
+/// package managers' install scripts off (S16: a `postinstall` in a
+/// dependency never runs on the guarded path), no audit or update calls
+/// home, the cache inside the work tree's tmp.
+pub fn no_scripts_env() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("npm_config_ignore_scripts", "true"),
+        ("YARN_ENABLE_SCRIPTS", "false"),
+        ("npm_config_audit", "false"),
+        ("npm_config_fund", "false"),
+        ("npm_config_update_notifier", "false"),
+    ]
 }
 
 /// One `process` exception deployment (no image: the host's own
@@ -461,13 +642,27 @@ pub struct StartSpec {
     pub deployment: String,
     pub seed: String,
     pub image: String,
+    /// The wall rendered (protocol 3): the guarded floor or the open
+    /// path's relaxed container.
+    pub wall: Wall,
     /// Host loopback port the App's `$PORT` is published on.
     pub port: u16,
+    /// Relaxed only: the port the App listens on inside its wall (`$PORT`;
+    /// default = `port`). An old `--cmd` service keeps the port it always
+    /// used inside, behind a fresh host port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_port: Option<u16>,
+    /// Relaxed only: more TCP ports the App listens on, published on host
+    /// loopback under the same number (never public in 0.46.1; direct
+    /// public ports and UDP are 0.46.2, Rosson Q3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_ports: Vec<u16>,
     pub argv: Vec<String>,
     /// Declared, non-secret variables plus K2's own (an env file; never
     /// systemd-expanded).
     pub env: BTreeMap<String, String>,
-    pub memory_mib: u64,
+    /// Memory (optional), tasks, files, CPU weight, log cap (S17).
+    pub resources: Resources,
     /// The App's drain window; the container's stop timeout is longer
     /// (AR45: `StopTimeout` ≥ drain).
     pub drain_secs: u64,
@@ -478,16 +673,32 @@ pub struct StartSpec {
     pub pass_hex: Option<String>,
     /// The App's disk ceilings (§6.2, `io.max` through the unit).
     pub io: IoMax,
-    /// Box services (0.46.0, owner-approved): pasta forwards the
-    /// container's `127.0.0.1:<appPort>` to host `127.0.0.1:<hostPort>`,
-    /// like the gateway link. Approved or still held; the per-App nft rule
-    /// (root helper) admits only the approved ones, so a held or revoked
-    /// one is a forward to a closed door. An extension inside protocol 2:
-    /// left out when empty (older protocol-2 engines refuse the field, so
-    /// the daemon sends it only to an engine whose `version` lists
-    /// [`FEATURE_BOX_FORWARD`]).
+    /// Box services (owner-approved): pasta forwards the container's
+    /// `127.0.0.1:<appPort>` to host `127.0.0.1:<hostPort>`, like the
+    /// gateway link. Approved or still held; the per-App nft rule (root
+    /// helper) admits only the approved ones, so a held or revoked one is
+    /// a forward to a shut door (refused at once, never a stall).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub box_forwards: Vec<BoxForward>,
+    /// The App's database door on host loopback (lane 3, S21): forwarded
+    /// to [`IN_WALL_DB_PORT`] in the wall, like the gateway link. Inside
+    /// [`crate::apps::DB_PORTS`] (the range the nft table admits).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_port: Option<u16>,
+}
+
+/// The database door's port inside the wall: the App dials
+/// `127.0.0.1:5432` like any Postgres client.
+pub const IN_WALL_DB_PORT: u16 = 5432;
+/// Most extra ports a relaxed container publishes.
+pub const MAX_EXTRA_PORTS: usize = 8;
+
+/// The ports the App itself listens on inside its wall: `$PORT` (or the
+/// relaxed `appPort`) and the extra ports.
+pub fn own_ports(s: &StartSpec) -> Vec<u16> {
+    let mut v = vec![s.app_port.unwrap_or(s.port)];
+    v.extend(s.extra_ports.iter().copied());
+    v
 }
 
 /// One box service forward into the wall.
@@ -499,15 +710,25 @@ pub struct BoxForward {
 }
 
 /// What an engine build supports beyond its protocol number (the
-/// `version` answer's `features`). Extensions within protocol 2 (0.46.0
-/// ships one engine protocol bump).
+/// `version` answer's `features`). Protocol 3 carries everything the
+/// 0.46.1 wall needs; the list names it for the doctor.
 pub const FEATURE_BOX_FORWARD: &str = "box-forward";
-pub const ENGINE_FEATURES: &[&str] = &[FEATURE_BOX_FORWARD];
+pub const FEATURE_RELAXED: &str = "relaxed";
+pub const FEATURE_BUILD: &str = "build";
+pub const FEATURE_DB_FORWARD: &str = "db-forward";
+pub const ENGINE_FEATURES: &[&str] = &[FEATURE_BOX_FORWARD, FEATURE_RELAXED, FEATURE_BUILD, FEATURE_DB_FORWARD];
 
 /// A box forward's port inside the wall: an App port shape (≥ 1024, not
-/// 8730, not K2's range) and never the App's own `$PORT`.
+/// 8730, not K2's range), never the App's own port, never the database
+/// door's in-wall port.
 pub fn box_forward_ok(f: &BoxForward, app_port: u16) -> bool {
-    app_port_ok(f.app_port) && f.app_port != app_port && crate::apps::box_port_ok(f.host_port)
+    app_port_ok(f.app_port) && f.app_port != app_port && f.app_port != IN_WALL_DB_PORT && crate::apps::box_port_ok(f.host_port)
+}
+
+/// A database door port on host loopback: inside the range the nft table
+/// admits for every App ([`crate::apps::DB_PORTS`]).
+pub fn db_port_ok(p: u16) -> bool {
+    (crate::apps::DB_PORTS.lo..=crate::apps::DB_PORTS.hi).contains(&p)
 }
 
 /// The pass folder inside the container, read-only.
@@ -639,14 +860,35 @@ pub fn check_start(s: &StartSpec) -> Result<AppId, &'static str> {
     if !app_port_ok(s.port) {
         return Err("port");
     }
+    if s.wall == Wall::Guarded && (s.app_port.is_some() || !s.extra_ports.is_empty()) {
+        return Err("a guarded container has one port");
+    }
+    if s.app_port.is_some_and(|p| !app_port_ok(p)) {
+        return Err("app port");
+    }
+    if s.extra_ports.len() > MAX_EXTRA_PORTS {
+        return Err("extra ports");
+    }
+    let own = own_ports(s);
+    for (i, p) in own.iter().enumerate() {
+        if !app_port_ok(*p) || own[..i].contains(p) || (s.db_port.is_some() && *p == IN_WALL_DB_PORT) {
+            return Err("extra ports");
+        }
+    }
+    // An extra port is published on host loopback under its own number:
+    // never the host port K2 picked for `$PORT`.
+    if s.extra_ports.contains(&s.port) {
+        return Err("extra ports");
+    }
     if s.argv.is_empty() || s.argv.len() > 64 || !s.argv.iter().all(|a| !a.is_empty() && value_ok(a, 4096)) {
         return Err("argv");
     }
     if s.env.len() > 256 || !s.env.iter().all(|(k, v)| env_name_ok(k) && value_ok(v, 32 * 1024)) {
         return Err("env");
     }
-    if !(64..=65_536).contains(&s.memory_mib) {
-        return Err("memory");
+    s.resources.check()?;
+    if s.db_port.is_some_and(|p| !db_port_ok(p)) {
+        return Err("db port");
     }
     if s.drain_secs > 600 {
         return Err("drain");
@@ -676,7 +918,7 @@ pub fn check_start(s: &StartSpec) -> Result<AppId, &'static str> {
         return Err("box forwards");
     }
     for (i, f) in s.box_forwards.iter().enumerate() {
-        if !box_forward_ok(f, s.port) || s.box_forwards[..i].iter().any(|g| g.app_port == f.app_port) {
+        if !own.iter().all(|p| box_forward_ok(f, *p)) || s.box_forwards[..i].iter().any(|g| g.app_port == f.app_port) {
             return Err("box forward");
         }
     }
@@ -740,16 +982,28 @@ mod tests {
             deployment: "d-0123456789ab".into(),
             seed: "a".repeat(64),
             image: "localhost/k2-base/node24:ec857ea6bb60".into(),
+            wall: Wall::Guarded,
             port: 41234,
+            app_port: None,
+            extra_ports: vec![],
             argv: vec!["node".into(), "server.mjs".into()],
             env: [("NODE_ENV".to_string(), "production".to_string())].into(),
-            memory_mib: 512,
+            resources: Resources::k2_default(),
             drain_secs: 30,
             secrets: vec![SecretItem { env: None, file: Some("db.json".into()), value_hex: hex_encode(b"{}") }],
             pass_hex: Some(hex_encode(b"k2skn_x")),
             io: IoMax::k2_default(),
             box_forwards: vec![],
+            db_port: None,
         }
+    }
+
+    fn relaxed() -> StartSpec {
+        let mut s = spec();
+        s.wall = Wall::Relaxed;
+        s.app_port = Some(3000);
+        s.extra_ports = vec![9000, 9001];
+        s
     }
 
     #[test]
@@ -803,7 +1057,11 @@ mod tests {
             Box::new(|s| {
                 s.env.insert("X".into(), "a\nb".into());
             }),
-            Box::new(|s| s.memory_mib = 1),
+            Box::new(|s| s.resources.memory_mib = Some(1)),
+            Box::new(|s| s.resources.tasks = 1),
+            Box::new(|s| s.resources.nofile = 10),
+            Box::new(|s| s.resources.log_bytes = 10),
+            Box::new(|s| s.resources.cpu_weight = Some(0)),
             Box::new(|s| s.drain_secs = 3600),
             Box::new(|s| s.secrets[0].file = Some("../shadow".into())),
             Box::new(|s| s.secrets[0].env = Some("X".into())),
@@ -834,11 +1092,10 @@ mod tests {
     }
 
     #[test]
-    fn box_forwards_extend_protocol_2_without_changing_old_starts() {
-        // No forwards: the wire is byte-for-byte what a protocol-2 engine
-        // without the extension reads (the field is left out).
+    fn box_forwards_are_first_class_in_protocol_3() {
         let plain = serde_json::to_string(&Request::Start(Box::new(spec()))).unwrap();
-        assert!(!plain.contains("boxForwards"), "{plain}");
+        assert!(!plain.contains("boxForwards") && !plain.contains("dbPort") && !plain.contains("extraPorts"), "{plain}");
+        assert!(plain.contains("\"wall\":\"guarded\""), "{plain}");
         let mut s = spec();
         s.box_forwards = vec![BoxForward { app_port: 8470, host_port: 8470 }, BoxForward { app_port: 7880, host_port: 7880 }];
         assert!(check_start(&s).is_ok());
@@ -851,8 +1108,134 @@ mod tests {
         s.box_forwards = vec![BoxForward { app_port: 9000, host_port: 8470 }];
         assert!(check_start(&s).is_ok());
         assert!(serde_json::from_str::<BoxForward>(r#"{"appPort":1,"hostPort":2,"proto":"udp"}"#).is_err());
-        assert_eq!(ENGINE_PROTOCOL, 2, "box forwards ride protocol 2 (0.46.0 ships one bump)");
-        assert!(ENGINE_FEATURES.contains(&FEATURE_BOX_FORWARD));
+        assert_eq!(ENGINE_PROTOCOL, 3, "0.46.1's wall is one engine bump");
+        for f in [FEATURE_BOX_FORWARD, FEATURE_RELAXED, FEATURE_BUILD, FEATURE_DB_FORWARD] {
+            assert!(ENGINE_FEATURES.contains(&f), "{f}");
+        }
+        // A relaxed container's box forwards stay off every port the App
+        // itself listens on (its own port and the extra ones).
+        let mut s = relaxed();
+        s.box_forwards = vec![BoxForward { app_port: 9001, host_port: 8470 }];
+        assert_eq!(check_start(&s), Err("box forward"));
+        s.box_forwards = vec![BoxForward { app_port: 3000, host_port: 8470 }];
+        assert_eq!(check_start(&s), Err("box forward"));
+        s.box_forwards = vec![BoxForward { app_port: 8470, host_port: 8470 }];
+        assert!(check_start(&s).is_ok());
+    }
+
+    #[test]
+    fn the_relaxed_wall_and_its_ports() {
+        assert!(check_start(&relaxed()).is_ok());
+        assert_eq!(own_ports(&relaxed()), vec![3000, 9000, 9001]);
+        assert_eq!(own_ports(&spec()), vec![41234], "guarded: one port, the same inside and out");
+        type Tweak = Box<dyn Fn(&mut StartSpec)>;
+        let bad: Vec<(Tweak, &str)> = vec![
+            // A guarded container has exactly one port.
+            (Box::new(|s| { s.wall = Wall::Guarded; }), "a guarded container has one port"),
+            (Box::new(|s| { s.app_port = Some(80); }), "app port"),
+            (Box::new(|s| { s.app_port = Some(IN_WALL_GATEWAY_PORT); }), "app port"),
+            (Box::new(|s| { s.app_port = Some(38_650); }), "app port"),
+            (Box::new(|s| { s.extra_ports = vec![9000, 9000]; }), "extra ports"),
+            (Box::new(|s| { s.extra_ports = vec![3000]; }), "extra ports"),
+            (Box::new(|s| { s.extra_ports = vec![41234]; }), "extra ports"),
+            (Box::new(|s| { s.extra_ports = vec![1000]; }), "extra ports"),
+            (Box::new(|s| { s.extra_ports = (0..9).map(|i| 9100 + i).collect(); }), "extra ports"),
+        ];
+        for (i, (f, why)) in bad.iter().enumerate() {
+            let mut s = relaxed();
+            f(&mut s);
+            assert_eq!(check_start(&s), Err(*why), "case {i}");
+        }
+        assert_eq!(Wall::default(), Wall::Guarded);
+        assert_eq!(serde_json::to_string(&Wall::Relaxed).unwrap(), "\"relaxed\"");
+        assert!(serde_json::from_str::<Wall>("\"open\"").is_err(), "the wire names walls, not paths");
+    }
+
+    #[test]
+    fn resources_have_no_memory_cap_by_default() {
+        let r = Resources::k2_default();
+        assert_eq!(r.memory_mib, None, "L1: the user decides App memory");
+        assert_eq!(r.node_heap_mib(), None, "no cap, no heap flag");
+        assert_eq!((r.tasks, r.nofile, r.log_bytes), (512, 4096, 50 << 20));
+        assert!(r.check().is_ok());
+        let capped = Resources { memory_mib: Some(1024), ..r };
+        assert_eq!(capped.node_heap_mib(), Some(512), "Node heap at 50% only when capped");
+        let line = serde_json::to_string(&r).unwrap();
+        assert!(line.contains("\"memoryMib\":null"), "{line}");
+        assert!(serde_json::from_str::<Resources>(r#"{"memoryMib":null,"tasks":512,"nofile":4096,"cpuWeight":null,"logBytes":1048576,"swap":1}"#).is_err());
+    }
+
+    #[test]
+    fn the_db_door_forward() {
+        let mut s = spec();
+        s.db_port = Some(5432);
+        assert!(check_start(&s).is_ok());
+        assert!(serde_json::to_string(&s).unwrap().contains("\"dbPort\":5432"));
+        s.db_port = Some(5433);
+        assert_eq!(check_start(&s), Err("db port"), "only the range the nft table admits");
+        // With the door, nothing else of the App's may sit on 5432 inside.
+        let mut s = relaxed();
+        s.db_port = Some(5432);
+        s.extra_ports = vec![5432];
+        assert_eq!(check_start(&s), Err("extra ports"));
+        let mut s = spec();
+        s.db_port = Some(5432);
+        s.box_forwards = vec![BoxForward { app_port: IN_WALL_DB_PORT, host_port: 8470 }];
+        assert_eq!(check_start(&s), Err("box forward"));
+        assert!(!db_port_ok(22) && db_port_ok(5432));
+    }
+
+    fn bspec() -> BuildSpec {
+        BuildSpec {
+            app: "hearth".into(),
+            build: "b-0123456789ab".into(),
+            seed: "c".repeat(64),
+            image: "localhost/k2-base/node24:ec857ea6bb60".into(),
+            argv: vec!["npm".into(), "ci".into()],
+            env: [("NODE_ENV".to_string(), "production".to_string())].into(),
+            scripts: false,
+            timeout_secs: BUILD_TIMEOUT_DEFAULT,
+            resources: Resources::k2_default(),
+        }
+    }
+
+    #[test]
+    fn build_checks_and_wire() {
+        assert!(check_build(&bspec()).is_ok());
+        type Tweak = Box<dyn Fn(&mut BuildSpec)>;
+        let bad: Vec<Tweak> = vec![
+            Box::new(|s| s.app = "../x".into()),
+            Box::new(|s| s.build = "d-0123456789ab".into()),
+            Box::new(|s| s.build = "b-../../etc/xx".into()),
+            Box::new(|s| s.seed = "x".into()),
+            Box::new(|s| s.image = "docker.io/library/node:24".into()),
+            Box::new(|s| s.argv = vec![]),
+            Box::new(|s| s.argv = vec!["npm\nci".into()]),
+            Box::new(|s| {
+                s.env.insert("A-B".into(), "x".into());
+            }),
+            Box::new(|s| s.timeout_secs = 1),
+            Box::new(|s| s.timeout_secs = 7200),
+            Box::new(|s| s.resources.tasks = 0),
+        ];
+        for (i, f) in bad.iter().enumerate() {
+            let mut s = bspec();
+            f(&mut s);
+            assert!(check_build(&s).is_err(), "case {i}");
+        }
+        let r = Request::Build(Box::new(bspec()));
+        let line = serde_json::to_string(&r).unwrap();
+        assert!(line.starts_with("{\"verb\":\"build\""), "{line}");
+        assert!(line.contains("\"timeoutSecs\":900") && line.contains("\"scripts\":false"), "{line}");
+        assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), r);
+        let l = Request::Logs { app: "hearth".into(), deployment: "d-0123456789ab".into(), lines: 200 };
+        let line = serde_json::to_string(&l).unwrap();
+        assert!(line.starts_with("{\"verb\":\"logs\""), "{line}");
+        assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), l);
+        let env: BTreeMap<_, _> = no_scripts_env().into_iter().collect();
+        assert_eq!(env["npm_config_ignore_scripts"], "true");
+        assert_eq!(env["YARN_ENABLE_SCRIPTS"], "false");
+        assert!(build_id_ok("b-0123456789ab") && !build_id_ok("b-0123456789AB"));
     }
 
     #[test]

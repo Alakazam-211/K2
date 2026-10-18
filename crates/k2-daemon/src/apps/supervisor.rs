@@ -384,6 +384,8 @@ fn pipeline_fail(app_id: &str, dep: &str, code: &str, msg: &str) {
 
 fn spec_for(app: &AppRow, m: &Manifest, dep: &str) -> AppSpec {
     let dir = deploy::app_dir(&app.app_id);
+    let cfg = db(|c| k2_core::app_grace::config::load(c, &app.app_id)).unwrap_or_default();
+    let open = app.path == "open";
     AppSpec {
         app_id: app.app_id.clone(),
         service_id: app.service_id.clone(),
@@ -402,6 +404,15 @@ fn spec_for(app: &AppRow, m: &Manifest, dep: &str) -> AppSpec {
         cache_dir: dir.join("cache"),
         home_dir: dir.join("home"),
         log_path: deploy::deployment_log_path(&app.app_id, dep),
+        wall: k2_core::deploy::engine::WallSpec {
+            open,
+            // The relaxed container's own port and extra ports are open-path
+            // features: a guarded App never gets them, whatever is stored.
+            app_port: if open { cfg.app_port } else { None },
+            extra_ports: if open { cfg.tcp_ports() } else { Vec::new() },
+            tasks: cfg.resources.tasks,
+            cpu_weight: cfg.resources.cpu_weight,
+        },
     }
 }
 

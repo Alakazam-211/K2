@@ -408,6 +408,7 @@ mod tests {
             cache_dir: app.join("cache"),
             home_dir: app.join("home"),
             log_path: deploy::deployment_log_path("pe-test", "d-pe1"),
+            wall: Default::default(),
         }
     }
 

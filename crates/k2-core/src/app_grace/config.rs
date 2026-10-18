@@ -29,6 +29,11 @@ pub struct AppConfig {
     /// `normal` | `high` (high → VM once stage V ships).
     pub risk: String,
     pub db: Db,
+    /// The open path's in-wall port (0.46.1, K5): the port an old-style
+    /// `k2 publish run --cmd --port N` service listens on inside its
+    /// relaxed container, behind K2's host port. `None` = `$PORT`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_port: Option<u16>,
 }
 
 impl Default for AppConfig {
@@ -39,7 +44,15 @@ impl Default for AppConfig {
             recycle: Recycle::default(),
             risk: "normal".into(),
             db: Db::default(),
+            app_port: None,
         }
+    }
+}
+
+impl AppConfig {
+    /// The App's extra TCP ports (UDP waits for 0.46.2, Rosson Q3).
+    pub fn tcp_ports(&self) -> Vec<u16> {
+        self.ports.iter().filter(|p| p.proto == "tcp").map(|p| p.port).collect()
     }
 }
 

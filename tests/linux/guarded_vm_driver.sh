@@ -72,7 +72,7 @@ fi
 echo "== VM up: $("${SSH[@]}" '. /etc/os-release; echo $PRETTY_NAME $(uname -r)') (baked=${K2_IT_BAKED:-0})"
 tar -C /it -cf - . | "${SSH[@]}" 'mkdir -p /it && tar -C /it -xf - && chmod -R a+rX /it'
 rc=0
-"${SSH[@]}" 'bash /it/tests/apps_guarded_e2e.sh' || rc=$?
+"${SSH[@]}" "K2_IT_PHASES='${K2_IT_PHASES:-}' bash /it/tests/apps_guarded_e2e.sh" || rc=$?
 if [ "$rc" != 0 ] && [ -n "${K2_IT_KEEP_VM:-}" ]; then echo "== keeping the VM ${K2_IT_KEEP_VM}s for a look (ssh -i /vm/run/key -p 2222 root@127.0.0.1 in this container)"; sleep "$K2_IT_KEEP_VM"; fi
 down
 rm -rf "$RUN"

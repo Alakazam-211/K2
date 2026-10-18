@@ -185,8 +185,8 @@ K2 app list | grep -q "Guarded (container)" || fail "label"
 ok "label: Guarded (container)"
 K2 app logs esc-a >/tmp/la.txt 2>&1 || true
 grep -q "id mapping warmed in" /tmp/la.txt || fail "prepare warmed the mapping before the switch: $(tail -n 5 /tmp/la.txt)"
-grep -q "esc a1 up" /tmp/la.txt || { head -c 6000 /tmp/la.txt; fail "the App's own output via k2 app logs (journal)"; }
-ok "first id mapping paid at prepare (before the switch); App output reaches k2 app logs from the unit journal"
+grep -q "esc a1 up" /tmp/la.txt || { head -c 6000 /tmp/la.txt; fail "the App's own output via k2 app logs (its capped log, engine protocol 3)"; }
+ok "first id mapping paid at prepare (before the switch); App output reaches k2 app logs from its capped log (engine protocol 3 logs verb)"
 
 SVC="$(K2 app list --json | python3 -c "import json,sys; print([a for a in json.load(sys.stdin)['apps'] if a['appId']=='esc-a'][0]['serviceId'])")"
 curl -s "http://127.0.0.1:$FA/probe" >/tmp/pa.json
@@ -469,20 +469,21 @@ done
 [ "$n" = 1 ] || fail "after the watch window esc-a still runs $n containers"
 ok "after the watch window the warm previous container stopped"
 
-echo "== logs: rate limited per unit =="
+echo "== logs: a capped file per deployment (engine protocol 3) =="
 curl -s "http://127.0.0.1:$FA/flood" >/dev/null
 sleep 3
 UNIT="$(asapp podman ps --format '{{.Names}}' | grep '^k2app-esc-a--' | head -n1).service"
-n="$(journalctl --no-pager -o cat _SYSTEMD_USER_UNIT="$UNIT" 2>/dev/null | grep -c 'flood a2' || true)"
-[ "$n" -lt 20000 ] || fail "flood lines kept: $n of 20000 (no rate limit)"
-# journald reports the suppressed count when the 30 s window closes.
-SUP=0
-for _ in $(seq 1 45); do
-	journalctl --no-pager --since "-3min" | grep -q "Suppressed [0-9]* messages from user@$(id -u k2app).service" && { SUP=1; break; }
-	sleep 1
-done
-[ "$SUP" = 1 ] || fail "no journald suppression for user@k2app"
-ok "20000 log lines in a burst: the journal kept $n; journald suppressed the rest (LogRateLimit on user@k2app, all Apps together)"
+# The App's output goes to its own k8s-file log (max-size 50 MiB, S17),
+# never to the journal: a flood can't fill the disk or the journal.
+LC="$(asapp podman inspect "${UNIT%.service}" --format '{{.HostConfig.LogConfig.Type}} {{.HostConfig.LogConfig.Size}} {{.HostConfig.LogConfig.Path}}')"
+case "$LC" in "k8s-file 50MiB "* | "k8s-file 52428800 "* | "k8s-file 50MB "*) ;; *) fail "log config: $LC" ;; esac
+LP="$(printf '%s' "$LC" | awk '{print $3}')"
+n="$(grep -c 'flood a2' "$LP" || true)"
+[ "$n" -ge 1 ] || fail "flood lines in the App's log file: $n"
+j="$(journalctl --no-pager -o cat _SYSTEMD_USER_UNIT="$UNIT" 2>/dev/null | grep -c 'flood a2' || true)"
+[ "$j" = 0 ] || fail "App output reached the journal: $j lines"
+K2 app logs esc-a --tail 50 2>/dev/null | grep -q 'flood a2' || fail "k2 app logs reads the capped file"
+ok "20000 log lines in a burst: $n in the App's own 50 MiB-capped log, none in the journal; k2 app logs reads it"
 
 echo "== crash: K2 restarts it (backoff) =="
 asapp podman kill "${UNIT%.service}" >/dev/null 2>&1 || true
@@ -595,6 +596,29 @@ runuser -u k2app -- cat /var/lib/k2app/engine/slots.json | grep -q esc-b && fail
 nft list chain inet k2app k2app_apps | grep -q esc_b && fail "esc-b nft rule left"
 ok "purged: container, data, id slot and gateway rule gone"
 
+# ── the lane phases (plan-0461-lanes "tests/linux": lane 1 owns this
+# runner; each lane adds tests/linux/apps_e2e_<lane>.sh defining
+# `apps_e2e_<lane>`). They run here, with phase A's daemon, box and
+# engine up and esc-a live. K2_IT_PHASES names them (default: every one
+# shipped in /it/tests); apps_e2e_podman5.sh is a whole run of its own
+# (tests/linux/run_apps_podman5_lima.sh), never a phase.
+PHASES="${K2_IT_PHASES:-}"
+if [ -z "$PHASES" ]; then
+	for f in "$IT"/tests/apps_e2e_*.sh; do
+		[ -e "$f" ] || continue
+		n="$(basename "$f" .sh)"
+		n="${n#apps_e2e_}"
+		[ "$n" = podman5 ] || PHASES="$PHASES $n"
+	done
+fi
+for n in $PHASES; do
+	[ -f "$IT/tests/apps_e2e_$n.sh" ] || fail "phase $n: $IT/tests/apps_e2e_$n.sh is missing"
+	# shellcheck disable=SC1090
+	. "$IT/tests/apps_e2e_$n.sh"
+	declare -F "apps_e2e_$n" >/dev/null || fail "phase $n defines no apps_e2e_$n"
+	"apps_e2e_$n"
+done
+
 echo "== phase B: a fake daemon as k2-daemon.service's main process =="
 SEED="$(K2 app inspect esc-a --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["app"]["liveSeed"])')"
 IMAGE="$(asapp podman images --format '{{.Repository}}:{{.Tag}}' | grep '^localhost/k2-base/' | head -n1)"
@@ -655,7 +679,7 @@ PASS_HEX="$(printf 'k2skn_e2e_pass' | od -An -tx1 | tr -d ' \n')"
 SK_HEX="$(printf 'sk_e2e_value' | od -An -tx1 | tr -d ' \n')"
 DBJ_HEX="$(printf '{"db":1}' | od -An -tx1 | tr -d ' \n')"
 DEP=d-0000000000f1
-START="{\"verb\":\"start\",\"app\":\"esc-a\",\"deployment\":\"$DEP\",\"seed\":\"$SEED\",\"image\":\"$IMAGE\",\"port\":41999,\"argv\":[\"node\",\"server.mjs\"],\"env\":{\"NODE_ENV\":\"production\",\"K2_PORT\":\"38600\"},\"memoryMib\":256,\"drainSecs\":3,\"secrets\":[{\"env\":\"STRIPE_KEY\",\"file\":null,\"valueHex\":\"$SK_HEX\"},{\"env\":null,\"file\":\"db.json\",\"valueHex\":\"$DBJ_HEX\"}],\"passHex\":\"$PASS_HEX\",\"io\":{\"rbps\":null,\"wbps\":41943040,\"riops\":null,\"wiops\":2000}}"
+START="{\"verb\":\"start\",\"app\":\"esc-a\",\"deployment\":\"$DEP\",\"seed\":\"$SEED\",\"image\":\"$IMAGE\",\"wall\":\"guarded\",\"port\":41999,\"argv\":[\"node\",\"server.mjs\"],\"env\":{\"NODE_ENV\":\"production\",\"K2_PORT\":\"38600\"},\"resources\":{\"memoryMib\":256,\"tasks\":512,\"nofile\":4096,\"cpuWeight\":null,\"logBytes\":52428800},\"drainSecs\":3,\"secrets\":[{\"env\":\"STRIPE_KEY\",\"file\":null,\"valueHex\":\"$SK_HEX\"},{\"env\":null,\"file\":\"db.json\",\"valueHex\":\"$DBJ_HEX\"}],\"passHex\":\"$PASS_HEX\",\"io\":{\"rbps\":null,\"wbps\":41943040,\"riops\":null,\"wiops\":2000}}"
 req daemon '{"verb":"prepare","app":"esc-a","image":"'"$IMAGE"'","seed":"'"$SEED"'"}' | grep -q '"ok":true' || fail "prepare"
 req daemon "$START" >/tmp/st.json
 grep -q '"ok":true' /tmp/st.json || fail "start with secrets: $(cat /tmp/st.json)"

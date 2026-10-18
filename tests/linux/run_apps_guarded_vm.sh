@@ -61,6 +61,14 @@ cp cli/k2 "$R/it/cli/k2"
 cp scripts/install-root-helper.sh "$R/it/scripts/"
 cp -r tests/linux/apps_guarded_e2e.sh tests/linux/engine_client.py tests/linux/guarded-fixture tests/linux/guarded_vm_driver.sh \
    tests/linux/Containerfile.vm-it "$R/it/tests/"
+# The lane phases (apps_e2e_<lane>.sh, sourced by apps_guarded_e2e.sh) and
+# what lane 4's needs from this checkout.
+for f in tests/linux/apps_e2e_*.sh; do
+	case "$f" in *apps_e2e_podman5.sh) ;; *) cp "$f" "$R/it/tests/" ;; esac
+done
+mkdir -p "$R/it/src/sdk" "$R/it/src/tests"
+[ -d sdk/server ] && cp -r sdk/server "$R/it/src/sdk/"
+[ -d tests/contract ] && cp -r tests/contract "$R/it/src/tests/"
 chmod -R a+rX "$R/it"
 file "$R/it/bin/"* | sed "s#$R/##"
 REMOTE
@@ -68,7 +76,8 @@ REMOTE
 	tests)
 		# Iterate on the e2e scripts without a rebuild (working tree copies).
 		echo "== refresh $R/it/tests and cli from this working tree =="
-		tar -C "$ROOT/tests/linux" -cf - apps_guarded_e2e.sh engine_client.py guarded-fixture guarded_vm_driver.sh Containerfile.vm-it \
+		(cd "$ROOT/tests/linux" && tar -cf - apps_guarded_e2e.sh engine_client.py guarded-fixture guarded_vm_driver.sh Containerfile.vm-it \
+			$(ls apps_e2e_*.sh | grep -v podman5)) \
 			| "${SSH[@]}" "tar -C $R/it/tests -xf - && chmod -R a+rX $R/it/tests"
 		"${SSH[@]}" "cat > $R/it/cli/k2 && chmod 0755 $R/it/cli/k2" <"$ROOT/cli/k2"
 		;;
@@ -102,14 +111,14 @@ REMOTE
 		;;
 	vm)
 		echo "== the guarded e2e in a throwaway Debian 13 VM =="
-		"${SSH[@]}" bash -s -- "$R" "$IMAGE" "$STAMP" "${K2_IT_BAKED:-0}" "${K2_IT_KEEP_VM:-}" <<'REMOTE' 2>&1 | tee "$LOGS/vm.log"
+		"${SSH[@]}" bash -s -- "$R" "$IMAGE" "$STAMP" "${K2_IT_BAKED:-0}" "${K2_IT_KEEP_VM:-}" "${K2_IT_PHASES:-}" <<'REMOTE' 2>&1 | tee "$LOGS/vm.log"
 set -euo pipefail
-R="$1"; IMAGE="$2"; STAMP="$3"; BAKED="$4"; KEEP="${5:-}"
+R="$1"; IMAGE="$2"; STAMP="$3"; BAKED="$4"; KEEP="${5:-}"; PHASES="${6:-}"
 mkdir -p "$R/vm"
 podman build -q -t "$IMAGE" -f "$R/it/tests/Containerfile.vm-it" "$R/it/tests" >/dev/null
 NAME="k2-vm-it-$STAMP"
 trap 'podman rm -f "$NAME" >/dev/null 2>&1 || true' EXIT
-podman run --rm --name "$NAME" -e K2_IT_BAKED="$BAKED" -e K2_IT_KEEP_VM="$KEEP" --device /dev/kvm -v "$R/vm:/vm" -v "$R/it:/it:ro" "$IMAGE" bash /it/tests/guarded_vm_driver.sh
+podman run --rm --name "$NAME" -e K2_IT_BAKED="$BAKED" -e K2_IT_KEEP_VM="$KEEP" -e K2_IT_PHASES="$PHASES" --device /dev/kvm -v "$R/vm:/vm" -v "$R/it:/it:ro" "$IMAGE" bash /it/tests/guarded_vm_driver.sh
 REMOTE
 		;;
 	clean)

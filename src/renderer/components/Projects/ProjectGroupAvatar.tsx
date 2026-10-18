@@ -5,19 +5,24 @@
 // nav's collapsed icon rail AND the expanded rows (and the Settings
 // preview), so every surface stays in lockstep.
 //
-// Fetch/cache (the ProjectAvatar idiom, host-aware): a synchronous cache
-// check seeds state so a cached icon never flashes initials; a miss
-// fetches once and caches per host+group (group-icon-cache.ts). The
-// store's `revision` is an effect dep: `project-group:groups-changed`
-// drops the group's cache entry then bumps revision, so a fresh upload
-// (this client's or another's) refetches live.
+// Fetch/cache (the ProjectAvatar idiom, host-aware) — `useGroupIcon`:
+// a synchronous cache read during render, so a cached icon never flashes
+// initials; a miss fetches once (single-flight) and caches per host+group
+// (group-icon-cache.ts). 0.46.1: the cached entry is checked against the
+// row's `iconKey`, so a new upload (this client's or another's) refetches
+// exactly once and a rename, pin or chat line never does. Older daemons
+// (no key) keep the old path: groups-changed drops the entry and the
+// project's revision re-runs the fetch.
 
 import { useEffect, useState } from 'react'
-import { fetchProjectGroupIcon } from './projects-api'
-import { getCachedGroupIcon, setCachedGroupIcon } from './group-icon-cache'
+import {
+  getCachedGroupIcon,
+  loadGroupIcon,
+  resolveCachedGroupIcon,
+  type GroupIconEntry,
+} from './group-icon-cache'
 import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
-import { useProjectGroupsStore } from '@/stores/project-groups'
-import { primaryScope } from '@/kessel/server-scope'
+import { selectGroupRevision, useProjectGroupsStore } from '@/stores/project-groups'
 
 // THE SAME default palette workspaces offer (Settings → Workspaces color
 // row) so projects and workspaces share one color language; the hash
@@ -44,6 +49,46 @@ export function groupAvatarColor(groupId: string): string {
   return GROUP_AVATAR_COLORS[h % GROUP_AVATAR_COLORS.length]
 }
 
+/** The project's icon from the shared cache, fetching it (once) when the
+ *  cache has nothing valid for `iconKey`. `iconKey` defaults to the
+ *  loaded list row's; pass the show view's when you have it. `null` while
+ *  unknown (render the initials tile). `skip` disables it (a caller with
+ *  its own dataUrl). */
+export function useGroupIcon(
+  groupId: string,
+  iconKeyOverride?: string | null,
+  skip = false,
+): GroupIconEntry | null {
+  const hostKey = activeHostKey(useConnectHostStore((s) => s.activeHost))
+  const listKey = useProjectGroupsStore((s) => s.groups?.find((g) => g.id === groupId)?.iconKey)
+  const iconKey = iconKeyOverride !== undefined ? iconKeyOverride : listKey
+  // Older daemons: groups-changed drops the entry, then this moves.
+  const groupRevision = useProjectGroupsStore(selectGroupRevision(groupId))
+
+  // The cache is the state; this only re-renders once a load lands.
+  const [, setLoads] = useState(0)
+
+  useEffect(() => {
+    if (skip) return
+    if (resolveCachedGroupIcon(hostKey, groupId, iconKey)) return
+    let cancelled = false
+    void loadGroupIcon(hostKey, groupId, iconKey).then(() => {
+      if (!cancelled) setLoads((n) => n + 1)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [hostKey, groupId, iconKey, groupRevision, skip])
+
+  if (skip) return null
+  // Render-time cache read, so a cached icon never flashes initials.
+  // While a NEW icon (new key) loads, keep showing the previous one for
+  // this project rather than dropping to initials for one round trip.
+  return (
+    resolveCachedGroupIcon(hostKey, groupId, iconKey) ?? getCachedGroupIcon(hostKey, groupId) ?? null
+  )
+}
+
 export default function ProjectGroupAvatar({
   name,
   groupId,
@@ -62,45 +107,9 @@ export default function ProjectGroupAvatar({
    *  the avatar fetches/caches itself. */
   iconUrl?: string | null
 }): React.JSX.Element {
-  const hostKey = activeHostKey(useConnectHostStore((s) => s.activeHost))
-  // groups-changed drops the cache entry THEN bumps revision — re-run
-  // the effect so mounted avatars pick a fresh upload up live.
-  const revision = useProjectGroupsStore((s) => s.revision)
-
-  const [fetchedUrl, setFetchedUrl] = useState<string | null>(() => {
-    if (iconUrl) return null
-    // Check cache synchronously to avoid flash (ProjectAvatar idiom).
-    const cached = getCachedGroupIcon(hostKey, groupId)
-    return cached?.found && cached.dataUrl ? cached.dataUrl : null
-  })
-
-  useEffect(() => {
-    // A prop icon wins — skip the query entirely.
-    if (iconUrl) return
-
-    const cached = getCachedGroupIcon(hostKey, groupId)
-    if (cached) {
-      setFetchedUrl(cached.found && cached.dataUrl ? cached.dataUrl : null)
-      return
-    }
-
-    let cancelled = false
-    fetchProjectGroupIcon(primaryScope(), groupId)
-      .then((result) => {
-        setCachedGroupIcon(hostKey, groupId, result)
-        if (!cancelled) setFetchedUrl(result.found && result.dataUrl ? result.dataUrl : null)
-      })
-      .catch(() => {
-        // Advisory decoration — cache the miss so a broken route doesn't
-        // hammer the daemon; the initials fallback is always right.
-        setCachedGroupIcon(hostKey, groupId, { found: false, dataUrl: null })
-        if (!cancelled) setFetchedUrl(null)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [hostKey, groupId, iconUrl, revision])
+  // A prop icon wins — skip the query entirely.
+  const icon = useGroupIcon(groupId, undefined, !!iconUrl)
+  const fetchedUrl = icon?.found && icon.dataUrl ? icon.dataUrl : null
 
   const fallbackColor = color ?? groupAvatarColor(groupId)
   const shownUrl = iconUrl ?? fetchedUrl

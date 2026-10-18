@@ -534,6 +534,9 @@ export interface OpenUrlEvent {
 export interface ProjectGroupsChangedEvent {
   kind: 'project_groups_changed'
   reason: string
+  /** 0.46.1 daemons: the project the change is about. Absent from older
+   *  daemons (and hooks without one) — treat as "any project". */
+  groupId?: string
 }
 
 /** APP-LEVEL — the feedback set changed (remote live-update fix). Twin
@@ -1292,7 +1295,7 @@ type OpenUrlHandler = (url: string, source: OpenUrlEvent['source']) => void
 // `stores/project-groups.ts` / `stores/feedback.ts` are the consumers.
 // The handler receives the unwrapped `reason` string (the onOpenUrl
 // idiom) — consumers never need the `kind` discriminant.
-type ProjectGroupsChangedHandler = (reason: string) => void
+type ProjectGroupsChangedHandler = (reason: string, groupId?: string) => void
 type FeedbackChangedHandler = (reason: string) => void
 type ChatHistoryChangedHandler = () => void
 type TokenUsageChangedHandler = () => void
@@ -1585,7 +1588,8 @@ export function onOpenUrl(scope: ServerScope, fn: OpenUrlHandler): UnsubscribeFn
 /** Remote live-update fix — subscribe to APP-LEVEL `project_groups_changed`
  *  (the project-group set changed: structure / members / PoC / layout /
  *  chat message). The callback receives the unwrapped `reason` (the legacy
- *  hook name minus its `project-group:` prefix). Returns an unsubscribe
+ *  hook name minus its `project-group:` prefix) and, from 0.46.1 daemons,
+ *  the `groupId` it is about. Returns an unsubscribe
  *  fn. The primary bus survives the app-level WS teardown/reopen on a host
  *  switch, so one registration covers the app lifetime. */
 export function onProjectGroupsChanged(
@@ -1887,7 +1891,8 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
     for (const fn of h.openUrl) fn(m.url, m.source)
   },
   project_groups_changed: (h, m) => {
-    for (const fn of h.projectGroupsChanged) fn(m.reason)
+    const groupId = typeof m.groupId === 'string' && m.groupId ? m.groupId : undefined
+    for (const fn of h.projectGroupsChanged) fn(m.reason, groupId)
   },
   feedback_changed: (h, m) => {
     for (const fn of h.feedbackChanged) fn(m.reason)

@@ -31,6 +31,10 @@ export interface ProjectGroup {
   /** Present on newer daemons' list payload (possibly empty). When every
    *  row carries this array, the nav skips N `show`s for chips. */
   memberWorkspaceIds?: string[]
+  /** 0.46.1 daemons: the icon's cache key (changes exactly when the icon
+   *  does; null = no icon). Absent (undefined) from older daemons — then
+   *  the icon cache falls back to event-driven invalidation. */
+  iconKey?: string | null
 }
 
 /** A member row as `show` enriches it (workspace registry name/path +
@@ -125,9 +129,10 @@ export async function createProjectGroup(scope: ServerScope, name: string): Prom
   return daemonCliPost<ProjectGroup>(scope, 'project-group/create', { name })
 }
 
-/** POST /cli/project-group/pin — canonical nav Pinned-section flag. */
-export async function pinProjectGroup(scope: ServerScope, group: string, pinned: boolean): Promise<void> {
-  await daemonCliPost(scope, 'project-group/pin', { group, pinned })
+/** POST /cli/project-group/pin — canonical nav Pinned-section flag.
+ *  Answers with the updated group. */
+export async function pinProjectGroup(scope: ServerScope, group: string, pinned: boolean): Promise<ProjectGroup> {
+  return daemonCliPost<ProjectGroup>(scope, 'project-group/pin', { group, pinned })
 }
 
 /** POST /cli/project-group/rename — `{group, name}` → the renamed
@@ -159,8 +164,8 @@ export async function removeProjectGroupMember(scope: ServerScope, group: string
 
 /** POST /cli/project-group/set-poc — the reassignment dropdown's
  *  write; the target must already be a member (`not_a_member`). */
-export async function setProjectGroupPoc(scope: ServerScope, group: string, workspace: string): Promise<void> {
-  await daemonCliPost(scope, 'project-group/set-poc', { group, workspace })
+export async function setProjectGroupPoc(scope: ServerScope, group: string, workspace: string): Promise<ProjectGroup> {
+  return daemonCliPost<ProjectGroup>(scope, 'project-group/set-poc', { group, workspace })
 }
 
 /** GET /cli/project-group/icon — the group's icon dataUrl (§6.7.7),
@@ -169,12 +174,20 @@ export async function setProjectGroupPoc(scope: ServerScope, group: string, work
 export async function fetchProjectGroupIcon(
   scope: ServerScope,
   group: string,
-): Promise<{ found: boolean; dataUrl: string | null }> {
-  const res = await daemonCliGet<{ ok: boolean; found: boolean; dataUrl: string | null }>(scope,
-    'project-group/icon',
-    { group },
-  )
-  return { found: res.found ?? false, dataUrl: res.dataUrl ?? null }
+): Promise<{ found: boolean; dataUrl: string | null; iconKey?: string | null }> {
+  const res = await daemonCliGet<{
+    ok: boolean
+    found: boolean
+    dataUrl: string | null
+    iconKey?: string | null
+  }>(scope, 'project-group/icon', { group })
+  const out: { found: boolean; dataUrl: string | null; iconKey?: string | null } = {
+    found: res.found ?? false,
+    dataUrl: res.dataUrl ?? null,
+  }
+  // 0.46.1 daemons report the key the blob was cached under.
+  if (res.iconKey !== undefined) out.iconKey = res.iconKey
+  return out
 }
 
 /** POST /cli/project-group/set-icon — `{group, dataUrl}`; null clears.
@@ -185,8 +198,13 @@ export async function setProjectGroupIcon(
   scope: ServerScope,
   group: string,
   dataUrl: string | null,
-): Promise<void> {
-  await daemonCliPost(scope, 'project-group/set-icon', { group, dataUrl })
+): Promise<{ iconKey?: string | null }> {
+  const res = await daemonCliPost<{ iconKey?: string | null } | null>(scope, 'project-group/set-icon', {
+    group,
+    dataUrl,
+  })
+  // 0.46.1 daemons answer with the new icon's cache key.
+  return res && res.iconKey !== undefined ? { iconKey: res.iconKey } : {}
 }
 
 /** POST /cli/project-group/set-color — `{group, color}` (`#rrggbb`);

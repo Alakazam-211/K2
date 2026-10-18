@@ -3,10 +3,23 @@
 // groups-changed drop clears the group EVERYWHERE (a payload without a
 // groupId clears all — correctness over thrift).
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+const iconApi = vi.hoisted(() => ({
+  fetch: vi.fn(async (): Promise<{ found: boolean; dataUrl: string | null; iconKey?: string | null }> => ({
+    found: false,
+    dataUrl: null,
+  })),
+}))
+vi.mock('./projects-api', () => ({
+  fetchProjectGroupIcon: (_scope: unknown, _group: string) => iconApi.fetch(),
+}))
+
 import {
   dropCachedGroupIcon,
   getCachedGroupIcon,
+  loadGroupIcon,
+  resolveCachedGroupIcon,
   setCachedGroupIcon,
 } from './group-icon-cache'
 
@@ -52,5 +65,53 @@ describe('group-icon-cache', () => {
     dropCachedGroupIcon('1')
     expect(getCachedGroupIcon('local', 'group-11')).toEqual(ICON)
     expect(getCachedGroupIcon('local', '1')).toBeUndefined()
+  })
+})
+
+// ── 0.46.1: iconKey validation + single-flight loads ─────────────────────
+
+describe('group-icon-cache iconKey', () => {
+  beforeEach(() => {
+    dropCachedGroupIcon()
+    iconApi.fetch.mockReset()
+  })
+
+  it('a cached entry is fresh only under the key it was stored with', () => {
+    setCachedGroupIcon('local', 'g1', { ...ICON, iconKey: 'k1' })
+    expect(resolveCachedGroupIcon('local', 'g1', 'k1')).toEqual({ ...ICON, iconKey: 'k1' })
+    expect(resolveCachedGroupIcon('local', 'g1', 'k2')).toBeUndefined()
+    // Older daemon (no key): any entry.
+    expect(resolveCachedGroupIcon('local', 'g1', undefined)).toEqual({ ...ICON, iconKey: 'k1' })
+    // The daemon says there is no icon: nothing to fetch.
+    expect(resolveCachedGroupIcon('local', 'g9', null)).toEqual({ found: false, dataUrl: null, iconKey: null })
+  })
+
+  it('concurrent loads share ONE GET; a cached key never GETs again; a new key GETs once', async () => {
+    iconApi.fetch.mockImplementation(async () => ({ ...ICON, iconKey: 'k1' }))
+    const [a, b, c] = await Promise.all([
+      loadGroupIcon('local', 'g1', 'k1'),
+      loadGroupIcon('local', 'g1', 'k1'),
+      loadGroupIcon('local', 'g1', 'k1'),
+    ])
+    expect(iconApi.fetch).toHaveBeenCalledTimes(1)
+    expect(a).toEqual({ ...ICON, iconKey: 'k1' })
+    expect(b).toBe(a)
+    expect(c).toBe(a)
+    await loadGroupIcon('local', 'g1', 'k1')
+    expect(iconApi.fetch).toHaveBeenCalledTimes(1)
+    iconApi.fetch.mockImplementation(async () => ({ ...ICON, iconKey: 'k2' }))
+    await loadGroupIcon('local', 'g1', 'k2')
+    await loadGroupIcon('local', 'g1', 'k2')
+    expect(iconApi.fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('a failed GET caches a miss under the requested key (no hammering); the next key retries', async () => {
+    iconApi.fetch.mockRejectedValueOnce(new Error('route down'))
+    expect(await loadGroupIcon('local', 'g1', 'k1')).toEqual({ found: false, dataUrl: null, iconKey: 'k1' })
+    await loadGroupIcon('local', 'g1', 'k1')
+    expect(iconApi.fetch).toHaveBeenCalledTimes(1)
+    iconApi.fetch.mockImplementation(async () => ({ ...ICON, iconKey: 'k2' }))
+    expect(await loadGroupIcon('local', 'g1', 'k2')).toEqual({ ...ICON, iconKey: 'k2' })
+    expect(iconApi.fetch).toHaveBeenCalledTimes(2)
   })
 })

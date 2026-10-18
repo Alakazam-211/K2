@@ -13,10 +13,15 @@
 //     fires ONE fetch;
 //   - layout-changed bumps `revision` ONLY (no list fetch — a layout
 //     save changes no list metadata);
-//   - message-created bumps `revision` and schedules the coalesced
-//     refetch; unread is the DAEMON's (thread-read-v1): the store posts
-//     nothing on it (the open chat panel marks read, the daemon's
-//     `project_read` frame moves the badge);
+//   - message-created bumps `messageRevision` ONLY (0.46.1): no list
+//     refetch and no structural revision, so open settings/page views
+//     don't refetch on chat lines; unread is the DAEMON's
+//     (thread-read-v1): the store posts nothing on it (the open chat
+//     panel marks read, the daemon's `project_read` frame moves the
+//     badge);
+//   - 0.46.1 frames name their project (`groupId`): only that project's
+//     `selectGroupRevision` moves; a frame naming none moves every
+//     project's (older daemons);
 //   - selectGroup marks the group read: POST /cli/project-group/read,
 //     only when the daemon's unread store says it has unread;
 //   - P6 (§6.4): read semantics gate on the chat drawer being VISIBLE —
@@ -33,7 +38,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 // session-events registry: record the store's handler so tests can fire
 // reasons through it (the daemon-broadcasts.test.ts idiom).
 const ev = vi.hoisted(() => ({
-  handlers: [] as Array<(reason: string) => void>,
+  handlers: [] as Array<(reason: string, groupId?: string) => void>,
   hello: [] as Array<() => void>,
   read: [] as Array<(e: Record<string, unknown>) => void>,
 }))
@@ -42,7 +47,7 @@ vi.mock('@/stores/session-events', async () => {
   // mocks fail loudly unless it is the primary scope.
   const { expectPrimaryScope } = await import('@/test-utils/scope')
   return {
-    onProjectGroupsChanged: vi.fn((scope: unknown, fn: (reason: string) => void) => {
+    onProjectGroupsChanged: vi.fn((scope: unknown, fn: (reason: string, groupId?: string) => void) => {
       expectPrimaryScope(scope)
       ev.handlers.push(fn)
       return () => void (ev.handlers = ev.handlers.filter((f) => f !== fn))
@@ -104,7 +109,8 @@ vi.mock('@/stores/connect-host', () => ({
   useConnectHostStore: { getState: () => ({ activeHost: 'local' }) },
 }))
 
-import { useProjectGroupsStore, initProjectGroupEvents } from '@/stores/project-groups'
+import { useProjectGroupsStore, initProjectGroupEvents, selectGroupRevision } from '@/stores/project-groups'
+import { dropCachedGroupIcon, getCachedGroupIcon, setCachedGroupIcon } from '@/components/Projects/group-icon-cache'
 import { usePageViewStore } from '@/stores/page-view'
 import { useUnreadStore, type UnreadEntry } from '@/stores/unread'
 
@@ -145,9 +151,9 @@ async function flush(): Promise<void> {
   await new Promise((r) => setTimeout(r, 0))
 }
 
-function fire(reason: string): void {
+function fire(reason: string, groupId?: string): void {
   if (ev.handlers.length === 0) throw new Error('no project-groups handler registered')
-  for (const fn of [...ev.handlers]) fn(reason)
+  for (const fn of [...ev.handlers]) fn(reason, groupId)
 }
 
 describe('project-groups store event wiring', () => {
@@ -241,7 +247,7 @@ describe('project-groups store event wiring', () => {
     }
   })
 
-  it('message-created bumps revision + the coalesced refetch, and posts no read itself', async () => {
+  it('message-created bumps messageRevision ONLY: no list fetch, no structural revision, no read', async () => {
     vi.useFakeTimers()
     try {
       // Even while VIEWING the group: the open panel marks read from the
@@ -249,18 +255,78 @@ describe('project-groups store event wiring', () => {
       usePageViewStore.setState({ page: 'projects' })
       useProjectGroupsStore.setState({ selectedGroupId: 'g1', chatCollapsed: false })
       seedUnread('g1')
-      const before = useProjectGroupsStore.getState().revision
-      fire('message-created')
-      expect(useProjectGroupsStore.getState().revision).toBe(before + 1)
+      const s0 = useProjectGroupsStore.getState()
+      const g1Rev = selectGroupRevision('g1')(s0)
+      fire('message-created', 'g1')
+      fire('message-created') // an older daemon's frame names no project
+      const s1 = useProjectGroupsStore.getState()
+      expect(s1.messageRevision).toBe(s0.messageRevision + 2)
+      expect(s1.revision).toBe(s0.revision)
+      expect(selectGroupRevision('g1')(s1)).toBe(g1Rev)
+      await vi.advanceTimersByTimeAsync(1000)
+      await vi.advanceTimersByTimeAsync(0) // settle any fetch chain
       expect(api.fetchProjectGroups).not.toHaveBeenCalled()
-      await vi.advanceTimersByTimeAsync(300)
-      await vi.advanceTimersByTimeAsync(0) // settle the fetch chain
-      expect(api.fetchProjectGroups).toHaveBeenCalledTimes(1)
       expect(readPosts()).toEqual([])
       expect(unreadIds()).toEqual(['g1'])
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it("a structural frame naming a project moves only that project's revision", () => {
+    const s0 = useProjectGroupsStore.getState()
+    fire('members-changed', 'g1')
+    const s1 = useProjectGroupsStore.getState()
+    expect(s1.revision).toBe(s0.revision + 1)
+    expect(selectGroupRevision('g1')(s1)).toBe(selectGroupRevision('g1')(s0) + 1)
+    expect(selectGroupRevision('g2')(s1)).toBe(selectGroupRevision('g2')(s0))
+    expect(s1.messageRevision).toBe(s0.messageRevision)
+  })
+
+  it("a structural frame naming NO project (older daemon) moves every project's revision", () => {
+    const s0 = useProjectGroupsStore.getState()
+    fire('poc-changed')
+    const s1 = useProjectGroupsStore.getState()
+    expect(selectGroupRevision('g1')(s1)).toBe(selectGroupRevision('g1')(s0) + 1)
+    expect(selectGroupRevision('g2')(s1)).toBe(selectGroupRevision('g2')(s0) + 1)
+  })
+
+  it('groups-changed keeps cached icons when rows carry iconKey, drops that project only otherwise', () => {
+    setCachedGroupIcon('local', 'g1', { found: true, dataUrl: 'data:image/png;base64,a', iconKey: 'k' })
+    setCachedGroupIcon('local', 'g2', { found: true, dataUrl: 'data:image/png;base64,b', iconKey: 'k2' })
+    // 0.46.1 daemon: the list carries iconKey — the cache validates by key.
+    useProjectGroupsStore.setState({
+      groups: [
+        { id: 'g1', name: 'A', pocWorkspaceId: null, pinned: false, color: null, sortOrder: 0, createdAt: 1, updatedAt: 1, memberCount: 0, iconKey: 'k' },
+        { id: 'g2', name: 'B', pocWorkspaceId: null, pinned: false, color: null, sortOrder: 0, createdAt: 1, updatedAt: 1, memberCount: 0, iconKey: 'k2' },
+      ],
+    })
+    fire('groups-changed', 'g1')
+    expect(getCachedGroupIcon('local', 'g1')).toBeTruthy()
+    // Older daemon: no iconKey on the rows — drop the named project only.
+    useProjectGroupsStore.setState({
+      groups: [
+        { id: 'g1', name: 'A', pocWorkspaceId: null, pinned: false, color: null, sortOrder: 0, createdAt: 1, updatedAt: 1, memberCount: 0 },
+        { id: 'g2', name: 'B', pocWorkspaceId: null, pinned: false, color: null, sortOrder: 0, createdAt: 1, updatedAt: 1, memberCount: 0 },
+      ],
+    })
+    fire('groups-changed', 'g1')
+    expect(getCachedGroupIcon('local', 'g1')).toBeUndefined()
+    expect(getCachedGroupIcon('local', 'g2')).toBeTruthy()
+    dropCachedGroupIcon()
+  })
+
+  it('patchGroup patches one loaded row in place and ignores unknown ids', () => {
+    useProjectGroupsStore.setState({
+      groups: [
+        { id: 'g1', name: 'A', pocWorkspaceId: null, pinned: false, color: null, sortOrder: 0, createdAt: 1, updatedAt: 1, memberCount: 0 },
+      ],
+    })
+    useProjectGroupsStore.getState().patchGroup('g1', { name: 'A2', pinned: true })
+    expect(useProjectGroupsStore.getState().groups?.[0]).toMatchObject({ id: 'g1', name: 'A2', pinned: true })
+    const before = useProjectGroupsStore.getState().groups
+    useProjectGroupsStore.getState().patchGroup('nope', { name: 'X' })
+    expect(useProjectGroupsStore.getState().groups).toBe(before)
   })
 
   it('the Projects badge follows the daemon: a project_read frame clears the group', () => {

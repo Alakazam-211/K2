@@ -112,7 +112,8 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Presence/PresenceKickButton.tsx',
   'components/Projects/ProjectChatPanel.tsx',
   'components/Projects/ProjectDashboard.tsx',
-  'components/Projects/ProjectGroupAvatar.tsx',
+  // 0.46.1: the shared icon cache's single-flight GET (was ProjectGroupAvatar).
+  'components/Projects/group-icon-cache.ts',
   'components/Projects/ProjectNav.tsx',
   'components/Projects/ProjectSettings.tsx',
   'components/Projects/ProjectsPage.tsx',

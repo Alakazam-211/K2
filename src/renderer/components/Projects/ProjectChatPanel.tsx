@@ -13,7 +13,7 @@
 //   - Opens on the recent tail (GET messages, default 20); "Show
 //     earlier" widens the tail window (`limit` stepping — the route has
 //     no `before` param) up to the daemon's 500 cap, preserving scroll.
-//   - Live: `project-group:message-created` bumps the store revision;
+//   - Live: `project-group:message-created` bumps the store messageRevision;
 //     the panel coalesce-refetches on a trailing 300ms window (N rapid
 //     messages → ONE fetch — the FeedbackItemView idiom). DRAFT
 //     PROTECTION: the composer draft lives in panel-local state;
@@ -96,7 +96,9 @@ interface LastPost {
 }
 
 export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): React.JSX.Element {
-  const revision = useProjectGroupsStore((s) => s.revision)
+  // Chat lines only (0.46.1): structural project changes no longer bump
+  // this, and chat lines no longer bump the structural `revision`.
+  const revision = useProjectGroupsStore((s) => s.messageRevision)
   // "You": `owner`, plus the logins linked to the owner when this viewer
   // is the owner person (the owner's phone and laptop are one person).
   const isYou = useIsYouAuthor()

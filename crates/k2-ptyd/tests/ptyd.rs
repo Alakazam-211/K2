@@ -648,19 +648,68 @@ fn launch_env_is_the_allowlist_only() {
     let paths = home.paths();
     wait_listening(&paths);
     let pid: i32 = std::fs::read_to_string(&paths.lock).unwrap().trim().parse().unwrap();
-    let env = process_env(pid);
-    assert!(env.contains("K2_HOME="), "sanity: env readable: {env}");
-    assert!(!env.contains("leak-me-not") && !env.contains("NOTIFY_SOCKET"), "{env}");
+    check_live_env(pid, &home.home);
     let mut c = owner(&home);
     assert_eq!(c.request(Request::Shutdown { end_sessions: true }).unwrap(), Reply::Ok);
     wait_gone(pid, Duration::from_secs(5));
 }
 
-fn process_env(pid: i32) -> String {
+/// The launch env, derived from the allowlist itself: strict, and
+/// independent of whatever the test runner's own environment carries.
+#[test]
+fn launch_env_is_exactly_the_allowlisted_subset() {
+    use std::ffi::OsString;
+    let parent: Vec<(OsString, OsString)> = vec![
+        ("PATH".into(), "/usr/bin".into()),
+        ("LC_ALL".into(), "C.UTF-8".into()),
+        ("K2_HOME".into(), "/parent/home/must/not/win".into()),
+        ("K2_HOOK_TOKEN".into(), "leak".into()),
+        ("NOTIFY_SOCKET".into(), "/run/leak".into()),
+        ("LISTEN_FDS".into(), "3".into()),
+        ("K2_COMPUTE_JOB".into(), "node-noise".into()),
+        ("XDG_CONFIG_HOME".into(), "/x".into()),
+    ];
+    let env = k2_ptyd::launch::launch_env(parent, Path::new("/h/.k2"), &[("K2_PTYD_ORPHAN_SECS", "900"), ("K2_HOOK_SOCK", "nope")]);
+    let want: Vec<(OsString, OsString)> = vec![
+        ("K2_HOME".into(), "/h/.k2".into()),
+        ("K2_PTYD_ORPHAN_SECS".into(), "900".into()),
+        ("LC_ALL".into(), "C.UTF-8".into()),
+        ("PATH".into(), "/usr/bin".into()),
+    ];
+    assert_eq!(env, want);
+    for (k, _) in &env {
+        assert!(k2_ptyd::env_allowed(k.to_str().unwrap()), "{k:?} is not on the allowlist");
+    }
+}
+
+/// Live check of a launched ptyd's environment. Linux: ptyd is non-dumpable
+/// (S-3/P71), so `/proc/<pid>/environ` is readable only by root — as
+/// non-root that refusal IS the assertion; as root every key must be on the
+/// allowlist. macOS (debug builds have no PT_DENY_ATTACH): `ps eww`.
+fn check_live_env(pid: i32, home: &Path) {
     if cfg!(target_os = "linux") {
-        String::from_utf8_lossy(&std::fs::read(format!("/proc/{pid}/environ")).unwrap()).replace('\0', " ")
+        let r = std::fs::read(format!("/proc/{pid}/environ"));
+        // SAFETY: geteuid has no preconditions.
+        if unsafe { libc::geteuid() } != 0 {
+            assert_eq!(r.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied, "ptyd must be non-dumpable (environ unreadable to non-root)");
+            return;
+        }
+        let raw = r.unwrap();
+        let mut saw_home = false;
+        for kv in raw.split(|b| *b == 0).filter(|s| !s.is_empty()) {
+            let kv = String::from_utf8_lossy(kv);
+            let (k, v) = kv.split_once('=').expect("KEY=VALUE");
+            assert!(k2_ptyd::env_allowed(k), "{k} leaked into ptyd's env");
+            if k == "K2_HOME" {
+                assert_eq!(Path::new(v), home);
+                saw_home = true;
+            }
+        }
+        assert!(saw_home, "K2_HOME present");
     } else {
         let out = Command::new("ps").args(["eww", "-o", "command=", "-p", &pid.to_string()]).output().unwrap();
-        String::from_utf8_lossy(&out.stdout).into_owned()
+        let env = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(env.contains(&format!("K2_HOME={}", home.display())), "sanity: env readable: {env}");
+        assert!(!env.contains("leak-me-not") && !env.contains("NOTIFY_SOCKET"), "{env}");
     }
 }

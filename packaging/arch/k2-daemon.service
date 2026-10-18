@@ -20,6 +20,10 @@ Type=simple
 ExecStart=/usr/bin/k2-daemon
 Restart=always
 RestartSec=2
+# Agents run in this unit's cgroup. The default OOMPolicy=stop turns one
+# OOM-killed agent into a stop + restart of the whole daemon; continue lets
+# only that process die. (The stage H drop-in carries the same line.)
+OOMPolicy=continue
 StandardOutput=append:%h/.k2/daemon.stdout.log
 StandardError=append:%h/.k2/daemon.stderr.log
 

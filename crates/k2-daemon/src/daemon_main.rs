@@ -1335,9 +1335,9 @@ async fn async_main() {
     crate::root_helper::heal::spawn_auto_heal();
 
     // Runtime stage H: converge the unit's hand-off drop-in (KillMode=
-    // process, NotifyAccess=main, ExecReload=SIGUSR2) — through the root
-    // helper on a system unit, directly on a user unit. Background, never
-    // blocks boot; K2_HANDOFF_DROPIN=off opts out.
+    // process, NotifyAccess=main, ExecReload=SIGUSR2, OOMPolicy=continue) —
+    // through the root helper on a system unit, directly on a user unit.
+    // Background, never blocks boot; K2_HANDOFF_DROPIN=off opts out.
     crate::handoff_setup::ensure_on_boot();
 
     // prd-dns-pending-and-cutover-safety-v1 P1: re-check `pending_ns`

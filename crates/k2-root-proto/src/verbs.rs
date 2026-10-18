@@ -504,7 +504,8 @@ pub enum Verb {
     KeepGenBump,
     // daemon (protocol 5, runtime stage H)
     /// Write the daemon unit's hand-off drop-in (`KillMode=process`,
-    /// `NotifyAccess=main`, `ExecReload=` SIGUSR2) and `daemon-reload`.
+    /// `NotifyAccess=main`, `ExecReload=` SIGUSR2, `OOMPolicy=continue`) and
+    /// `daemon-reload`.
     DaemonHandoffDropinInstall,
     /// Remove it again and `daemon-reload`.
     DaemonHandoffDropinRemove,

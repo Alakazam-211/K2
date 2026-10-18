@@ -274,6 +274,10 @@ RestartSec=2
 # SIGUSR2. frpc keeps a stable localPort and is re-adopted, Apps survive a
 # restart, and `systemctl reload` is a no-downtime hand-off.
 KillMode=control-group
+# Agents run in this unit's cgroup. The default OOMPolicy=stop turns one
+# OOM-killed agent into a stop + restart of the whole daemon; continue lets
+# only that process die. (The stage H drop-in carries the same line.)
+OOMPolicy=continue
 
 [Install]
 WantedBy=multi-user.target

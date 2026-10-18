@@ -126,6 +126,7 @@ matches "desktop is an Application" "$ARCH/k2.desktop" '^Type=Application$'
 contains "unit ExecStart=/usr/bin/k2-daemon" "$ARCH/k2-daemon.service" "ExecStart=/usr/bin/k2-daemon"
 contains "unit WantedBy=default.target" "$ARCH/k2-daemon.service" "WantedBy=default.target"
 contains "unit Restart=always" "$ARCH/k2-daemon.service" "Restart=always"
+matches "unit OOMPolicy=continue (an OOM-killed agent must not stop the daemon)" "$ARCH/k2-daemon.service" '^OOMPolicy=continue$'
 contains "PKGBUILD installs user unit path" "$ARCH/PKGBUILD" '/usr/lib/systemd/user/k2-daemon.service'
 contains "PKGBUILD installs home unit" "$ARCH/PKGBUILD" '/usr/lib/systemd/user/k2-daemon-home.service'
 contains "unit requires home service" "$ARCH/k2-daemon.service" "Requires=k2-daemon-home.service"

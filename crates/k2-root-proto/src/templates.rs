@@ -74,16 +74,27 @@ pub fn hardening_dropin() -> &'static str {
 ///   (an agent) could name itself the main pid and pass this helper's
 ///   daemon-caller check.
 /// - `ExecReload=`: `systemctl reload` = a no-downtime hand-off (SIGUSR2).
+/// - `OOMPolicy=continue`: agents run inside the daemon's cgroup. With the
+///   default `stop`, the kernel OOM killer taking one agent (or frpc, or an
+///   App helper) makes systemd stop the whole unit and `Restart=always`
+///   bring it back: every session and tunnel drops for one runaway agent.
+///   `continue` lets only the killed process die (verified on the build
+///   box). If the daemon itself is OOM-killed, its main process exits and
+///   `Restart=always` still restarts it. Applies on `daemon-reload`, no
+///   restart needed.
 ///
 /// Shared with the provisioning templates and the user-unit writer, so a
 /// new box, a migrated box and a user-scope daemon all carry the same lines.
+/// The daemon re-asserts it every boot ([`handoff_dropin`] bytes compare),
+/// so a box on an older drop-in picks up a new line on update.
 pub fn handoff_dropin() -> &'static str {
     "# K2 runtime stage H (front-door hand-off). Written by k2-root-helper\n\
      # `daemon handoff-dropin install`; remove with `... remove`.\n\
      [Service]\n\
      KillMode=process\n\
      NotifyAccess=main\n\
-     ExecReload=/bin/kill -USR2 $MAINPID\n"
+     ExecReload=/bin/kill -USR2 $MAINPID\n\
+     OOMPolicy=continue\n"
 }
 
 /// front443's socket unit (`/etc/systemd/system/k2-front-443.socket`,
@@ -220,6 +231,23 @@ mod tests {
         assert!(d.contains("\n[Service]\nSockets=k2-front-443.socket\n"), "{d}");
         assert!(d.contains("\nWants=k2-front-443.socket\nAfter=k2-front-443.socket\n"), "{d}");
         assert!(!d.contains("Ambient") && !d.contains("Capabilit"), "no capability, ever: {d}");
+    }
+
+    #[test]
+    fn handoff_dropin_keeps_the_daemon_up_when_an_agent_is_oom_killed() {
+        let d = handoff_dropin();
+        let service: Vec<&str> = d.lines().filter(|l| !l.starts_with('#')).collect();
+        assert_eq!(
+            service,
+            [
+                "[Service]",
+                "KillMode=process",
+                "NotifyAccess=main",
+                "ExecReload=/bin/kill -USR2 $MAINPID",
+                "OOMPolicy=continue",
+            ]
+        );
+        assert!(d.ends_with('\n'));
     }
 
     #[test]

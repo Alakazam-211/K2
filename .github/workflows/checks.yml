@@ -129,6 +129,7 @@ jobs:
           bash tests/cli/root_helper_cli.sh
           bash tests/cli/front_cli.sh
           bash tests/cli/provision_mail_helper.sh
+          bash tests/cli/daemon_unit_oompolicy.sh
 
       # Zen v2 (prd-zen-user-widgets-v2 UWB28): the steps above only
       # compile, so the verb catalog's lint, the generated-file freshness

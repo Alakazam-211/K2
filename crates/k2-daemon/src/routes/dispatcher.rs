@@ -1809,7 +1809,14 @@ async fn handle_one_request(
                     .unwrap_or_else(|| "owner".to_string());
                 Ok(crate::agent_identity_routes::Caller::Owner { actor, home: None })
             } else if let Some(v) = passport.and_then(|t| crate::session_token::require_hook(t, &path)) {
-                crate::agent_identity_routes::caller_from_passport(&v.session_id, &v.principal)
+                // An agent's session lives on this machine: its passport
+                // arriving over the LAN, the tunnel or an App link is not
+                // that agent.
+                if ingress == Ingress::Loopback {
+                    crate::agent_identity_routes::caller_from_passport(&v.session_id, &v.principal)
+                } else {
+                    Err(crate::agent_identity_routes::remote_passport())
+                }
             } else if path == crate::agent_identity_routes::HANDLE_PATH
                 && passport.and_then(crate::session_token::validate_hook).is_some()
             {

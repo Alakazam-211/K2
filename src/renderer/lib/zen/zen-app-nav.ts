@@ -9,13 +9,19 @@
 //     is per window and remembered (`k2.zen.window.v1.<label>`).
 //   bridge.call('app.current')               → the view shown now
 //   bridge.call('app.subscribeCurrent', fn)  → unsubscribe; fn(view) on change
-//   bridge.call('app.badges')                → { tickets: ZenAppBadge }
+//   bridge.call('app.badges')                → { tickets, agents?, projects? }
 //   bridge.call('app.subscribe', fn)         → unsubscribe; fn(badges) on change
 //     The top bar's Tickets badge (`ticketsBadgeProps`), from the same
-//     feedback store, so Zen and the top bar always agree.
+//     feedback store, so Zen and the top bar always agree. 0.46.1
+//     (thread-read-v1): `agents` is this person's Thread badge (unmuted
+//     unread + every card waiting on them) and `projects` the project
+//     chats with something unread or waiting, from the unread store (the
+//     window's server). Absent on a server without thread-read-v1 or at 0.
+//     Numbers only.
 
 import { ticketsBadgeProps } from '@/components/TopBar/PageTabs'
 import { useFeedbackStore } from '@/stores/feedback'
+import { selectProjectBadgeCount, useUnreadStore } from '@/stores/unread'
 import { registerZenVerb, ZenBridgeError } from './zen-bridge'
 import { isZenRailView, useZenWindowStore, ZEN_RAIL_VIEWS, type ZenRailView } from './zen-window'
 
@@ -29,8 +35,17 @@ export interface ZenAppBadge {
   title: string | undefined
 }
 
+/** 0.46.1: a count badge from the unread store; `waiting` = some of it is
+ *  cards waiting on you (drawn in the needs-you colour). */
+export interface ZenAppCountBadge {
+  badge: number
+  waiting: boolean
+}
+
 export interface ZenAppBadges {
   tickets: ZenAppBadge
+  agents?: ZenAppCountBadge
+  projects?: ZenAppCountBadge
 }
 
 /** `app.open(page)`: show `page` in this window's Garden (Zen stays on). */
@@ -54,27 +69,65 @@ export function zenAppSubscribeCurrent(fn: unknown): () => void {
   })
 }
 
-/** `app.badges()`: the top bar's Tickets badge right now. */
+/** The unread store's badges (window server; none before it loads). */
+function unreadBadges(): Pick<ZenAppBadges, 'agents' | 'projects'> {
+  const u = useUnreadStore.getState()
+  if (!u.loaded) return {}
+  const out: Pick<ZenAppBadges, 'agents' | 'projects'> = {}
+  let threadWaiting = 0
+  let projectWaiting = 0
+  for (const e of Object.values(u.byKey)) {
+    if (e.kind === 'thread') threadWaiting += e.waiting
+    else projectWaiting += e.waiting
+  }
+  // The daemon's total also counts project chats; Agents shows Threads.
+  let threadUnread = 0
+  for (const e of Object.values(u.byKey)) if (e.kind === 'thread' && !e.muted) threadUnread += e.unread
+  const agents = threadUnread + threadWaiting
+  if (agents > 0) out.agents = { badge: agents, waiting: threadWaiting > 0 }
+  const projects = selectProjectBadgeCount(u)
+  if (projects > 0) out.projects = { badge: projects, waiting: projectWaiting > 0 }
+  return out
+}
+
+/** `app.badges()`: the top bar's Tickets badge right now, and (0.46.1) the
+ *  Agents and Projects unread badges. */
 export function zenAppBadges(): ZenAppBadges {
   const s = useFeedbackStore.getState()
   const t = ticketsBadgeProps(s)
-  return { tickets: { badge: t.badge, stale: t.badgeStale, title: t.badgeTitle } }
+  return { tickets: { badge: t.badge, stale: t.badgeStale, title: t.badgeTitle }, ...unreadBadges() }
+}
+
+function sameCount(a: ZenAppCountBadge | undefined, b: ZenAppCountBadge | undefined): boolean {
+  return a?.badge === b?.badge && a?.waiting === b?.waiting
 }
 
 function sameBadges(a: ZenAppBadges, b: ZenAppBadges): boolean {
-  return a.tickets.badge === b.tickets.badge && a.tickets.stale === b.tickets.stale && a.tickets.title === b.tickets.title
+  return (
+    a.tickets.badge === b.tickets.badge &&
+    a.tickets.stale === b.tickets.stale &&
+    a.tickets.title === b.tickets.title &&
+    sameCount(a.agents, b.agents) &&
+    sameCount(a.projects, b.projects)
+  )
 }
 
 /** `app.subscribe(fn)`: `fn(badges)` whenever they change. */
 export function zenAppSubscribe(fn: unknown): () => void {
   if (typeof fn !== 'function') throw new ZenBridgeError('unknown_verb', 'app.subscribe', 'needs a function')
   let last = zenAppBadges()
-  return useFeedbackStore.subscribe(() => {
+  const check = (): void => {
     const next = zenAppBadges()
     if (sameBadges(next, last)) return
     last = next
     ;(fn as (b: ZenAppBadges) => void)(next)
-  })
+  }
+  const offFeedback = useFeedbackStore.subscribe(check)
+  const offUnread = useUnreadStore.subscribe(check)
+  return () => {
+    offFeedback()
+    offUnread()
+  }
 }
 
 /** Register the `app:navigate` verbs. Returns the uninstall. */

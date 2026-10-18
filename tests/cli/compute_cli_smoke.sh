@@ -289,6 +289,50 @@ for _ in $(seq 1 100); do
 done
 expect_has "the job ended cancelled" "$(k2 compute get "$JOBC")" ": cancelled"
 
+echo "== wait and run --wait (A5) =="
+JW0="$(k2 compute run mini --detach -- true 2>/dev/null)"
+set +e
+k2 compute wait "$JW0" >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "wait on a passing job exits 0" "$rc" "0"
+expect_has "wait prints the end line" "$(cat "$SANDBOX/err")" "[k2 compute] job $JW0 on mini: exit 0"
+JW1="$(k2 compute run mini --detach -- sh -c 'echo "test result: FAILED. 1 passed; 2 failed"; exit 101' 2>/dev/null)"
+set +e
+fout="$(k2 compute wait "$JW1" --failures 2>"$SANDBOX/err")"; rc=$?
+set -e
+expect_eq "wait passes the job's exit 101 through" "$rc" "101"
+expect_has "--failures prints the failure lines" "$fout" "test result: FAILED"
+expect_eq "cancelled job waits to 3" "$(set +e; k2 compute wait "$JOBC" >/dev/null 2>"$SANDBOX/err"; echo $?)" "3"
+expect_has "cancelled job error JSON" "$(cat "$SANDBOX/err")" '{"error": "cancelled"'
+set +e
+k2 compute wait "$JW0" "$JW1" "$JOBC" >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "several jobs: the first failing job's exit" "$rc" "101"
+JWS="$(k2 compute run mini --detach -- sleep 20 2>/dev/null)"
+set +e
+k2 compute wait "$JWS" --max-wait 2s >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "--max-wait expiry exits 3" "$rc" "3"
+expect_has "and says still_running with the next wait line" "$(cat "$SANDBOX/err")" "\"hint\": \"k2 compute wait $JWS\""
+k2 compute cancel "$JWS" --force >/dev/null
+set +e
+k2 compute wait nosuchjob >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "wait on a missing job exits 4" "$rc" "4"
+set +e
+rout="$(k2 compute run mini --wait -- sh -c 'echo never-streamed; exit 5' 2>"$SANDBOX/err")"; rc=$?
+set -e
+expect_eq "run --wait exits with the job's code" "$rc" "5"
+RW="$(printf '%s\n' "$rout" | head -1)"
+expect_eq "run --wait prints only the job id on stdout" "$rout" "$RW"
+expect_has "the id is the job's" "$(k2 compute get "$RW")" "job $RW on mini: done"
+case "$rout$(cat "$SANDBOX/err")" in *never-streamed*) bad "run --wait streams no log text" ;; *) ok "run --wait streams no log text" ;; esac
+expect_has "run --wait posted detach:false" "$(k2 compute get "$RW" --json)" '"detach":false'
+set +e
+k2 compute run mini --wait --detach -- true >/dev/null 2>&1; rc=$?
+set -e
+expect_eq "--wait with --detach is a bad request" "$rc" "2"
+
 echo "== remove =="
 out="$(k2 compute node remove mini)"
 expect_has "removed" "$out" "removed mini"

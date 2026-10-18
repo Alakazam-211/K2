@@ -1557,8 +1557,56 @@ fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value
     Ok(serde_json::json!({ "jobs": rows.iter().map(job_summary).collect::<Vec<_>>() }))
 }
 
+/// What a `get?wait=N` waiter watches: a change in any of these ends the wait.
+fn wait_fingerprint(j: &store::JobRow) -> (String, Option<String>, i64, Option<usize>) {
+    let position = (j.state == "queued").then(|| compute_ws::decision_for(&j.node_id).waiting.get(&j.id).map(|(p, _)| *p)).flatten();
+    (j.state.clone(), j.reason.clone(), j.generation, position)
+}
+
+/// Re-checks of a waiting `get` happen at most this often: the change
+/// counter moves on every log chunk, and a job that prints a lot must not
+/// turn a waiter into a hot loop.
+const WAIT_RECHECK: Duration = Duration::from_millis(500);
+
+/// `get?wait=N` (N ≤ 25 s; the same parameter compute B uses): block until
+/// the job's state, reason, attempt or queue position changes, it ends, or
+/// N seconds pass. Counts as following the job, so an attached run
+/// (`run --wait`) gets no duplicate `[compute]` message while it waits.
+fn wait_for_change(j: store::JobRow, wait: u64) -> R<store::JobRow> {
+    if wait == 0 || j.is_terminal() {
+        return Ok(j);
+    }
+    compute_ws::touch_follower(&j.id);
+    let deadline = Instant::now() + Duration::from_secs(wait);
+    let start = wait_fingerprint(&j);
+    let mut row = j;
+    loop {
+        let seen = compute_ws::change_counter();
+        let checked = Instant::now();
+        row = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::job_by_id(&conn, &row.id)
+        }
+        .ok_or_else(|| no(codes::JOB_NOT_FOUND, 404, "the job vanished"))?;
+        let now = Instant::now();
+        if row.is_terminal() || now >= deadline || wait_fingerprint(&row) != start {
+            break;
+        }
+        compute_ws::wait_change(seen, deadline - now);
+        let pause = WAIT_RECHECK.saturating_sub(checked.elapsed()).min(deadline.saturating_duration_since(Instant::now()));
+        if !pause.is_zero() {
+            std::thread::sleep(pause);
+        }
+    }
+    compute_ws::touch_follower(&row.id);
+    Ok(row)
+}
+
 fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     let j = job_for(who, params.get("job").map(String::as_str))?;
+    let wait = params.get("wait").and_then(|w| w.parse::<u64>().ok()).unwrap_or(0).min(25);
+    let j = wait_for_change(j, wait)?;
     let mut v = job_summary(&j);
     // `commit` is srcCommit; `dirty` says whether --dirty changes rode along.
     v["dirty"] = j.dirty_sha256.is_some().into();

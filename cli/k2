@@ -13931,6 +13931,7 @@ Agents:
                  [--detach] [--dirty] [--sha REV] [--no-source]
                  [--env K=V]... [--cpus N] [--mem 16G] [--timeout 2h]
                  [--exclusive] [--retry-interrupted|--no-retry] [--raw] [--workspace WS]
+                 [--wait [--failures] [--max-wait 9m]]
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
                  (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
                   rust@<ch>, cargo-nextest, sys:<pkg>, or aqua:owner/repo@v;
@@ -13941,6 +13942,12 @@ Agents:
                  workspace is found for you, and run takes HEAD and --dirty from
                  that worktree; from anywhere else pass --workspace <handle>.
   k2 compute get <job> [--json]
+  k2 compute wait <job>... [--failures] [--max-wait 9m] [--quiet] [--json]
+                 block until the jobs end, no log text; exit = the job's exit
+                 code (first failing job for several), 3 for cancelled/failed/
+                 timeout, 3 + still_running when --max-wait passes first.
+                 run --wait = submit, print the id, then wait (no [compute]
+                 message while it waits; a --detach job always gets one).
   k2 compute attach <job> [--since SEQ] [--raw]
   k2 compute logs <job> [--tail N] [--failures] [--raw]
   k2 compute cancel <job> [--force]
@@ -14350,11 +14357,14 @@ open(os.environ["K2_CP_STATE"], "w").write("|".join([
 
 cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
-    local retry="" raw=0 workspace=""
+    local retry="" raw=0 workspace="" wait=0 wait_failures=0 max_wait=""
     local -a labels=() envs=() needs=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; break ;;
+            --wait) wait=1; shift ;;
+            --failures) wait_failures=1; shift ;;
+            --max-wait) max_wait="${2:-}"; shift 2 ;;
             --any) any=1; shift ;;
             --os) os="${2:-}"; shift 2 ;;
             --arch) arch="${2:-}"; shift 2 ;;
@@ -14388,6 +14398,18 @@ cmd_compute_run() {
         echo "usage: name a node or pass --any (k2 compute nodes)" >&2
         exit 2
     fi
+    if [ "$wait" = "1" ] && [ "$detach" = "1" ]; then
+        echo "usage: --wait and --detach don't mix (--wait blocks until the end; --detach returns at once)" >&2
+        exit 2
+    fi
+    if { [ "$wait_failures" = "1" ] || [ -n "$max_wait" ]; } && [ "$wait" = "0" ]; then
+        echo "usage: --failures and --max-wait go with --wait (k2 compute run <node> --wait --failures -- …)" >&2
+        exit 2
+    fi
+    # --wait: attached on the daemon (detach:false), so an agent in a K2 tab
+    # gets no second [compute] line while `wait` follows it; one automatic
+    # retry after an interruption, like --detach.
+    [ "$wait" = "1" ] && [ -z "$retry" ] && retry=1
     local cwd="" repo_dir=""
     cwd="$(git rev-parse --show-prefix 2>/dev/null || true)"
     cwd="${cwd%/}"
@@ -14471,8 +14493,17 @@ print(j["id"] + "\t" + line)')"
     echo "$line" >&2
     if [ "$detach" = "1" ]; then
         echo "${job_id:0:8}"
-        echo "[k2 compute] detached: you get a [compute] message when it ends. k2 compute attach ${job_id:0:8}" >&2
+        echo "[k2 compute] detached. k2 compute wait ${job_id:0:8} blocks until it ends (agents in a K2 tab also get a [compute] message)" >&2
         exit 0
+    fi
+    if [ "$wait" = "1" ]; then
+        # The id first, so an agent whose shell tool times out can resume
+        # with `k2 compute wait <id>`. Log text never streams here.
+        echo "${job_id:0:8}"
+        local -a wargs=("$job_id")
+        [ "$wait_failures" = "1" ] && wargs+=(--failures)
+        [ -n "$max_wait" ] && wargs+=(--max-wait "$max_wait")
+        cmd_compute_wait "${wargs[@]}"
     fi
     _compute_follow "$job_id" "$raw" 0
 }
@@ -14520,6 +14551,137 @@ if t:
     lines = lines[-int(t):]
 sys.stdout.write("\n".join(lines) + ("\n" if lines else ""))' "$tmp"
     rm -f "$tmp"
+}
+
+# k2 compute wait <job>... [--failures] [--max-wait D] [--quiet] [--json]
+# Blocks until every job ends; exits like an attached run's end (the job's
+# exit code, 128+signal, or 3 for cancelled/failed/timeout/interrupted/
+# unknown). --max-wait: exit 3 + still_running when D passes first.
+cmd_compute_wait() {
+    local failures=0 quiet=0 max_wait="" as_json=0
+    local -a jobs=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --failures) failures=1; shift ;;
+            --quiet|-q) quiet=1; shift ;;
+            --json) as_json=1; shift ;;
+            --max-wait) max_wait="${2:-}"; shift 2 ;;
+            -*) echo "usage: k2 compute wait <job>... [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2 ;;
+            *) jobs+=("$1"); shift ;;
+        esac
+    done
+    [ "${#jobs[@]}" -gt 0 ] || { echo "usage: k2 compute wait <job>... [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2; }
+    local deadline=""
+    if [ -n "$max_wait" ]; then
+        deadline=$(( $(date +%s) + $(_compute_secs "$max_wait") ))
+    fi
+    local dir n=0 j
+    dir="$(mktemp -d -t k2-compute-wait-XXXXXX)"
+    for j in "${jobs[@]}"; do
+        local fails=0 last="" w resp left info
+        while :; do
+            w=20
+            if [ -n "$deadline" ]; then
+                left=$(( deadline - $(date +%s) ))
+                [ "$left" -lt 0 ] && left=0
+                [ "$left" -lt "$w" ] && w="$left"
+            fi
+            # One throttled long poll (≤ 20 s) per round; it also tells the
+            # daemon someone follows the job (no duplicate [compute] line).
+            resp="$(_compute_send GET /cli/compute/jobs/get "job=$(urlencode "$j")&wait=$w")"
+            _compute_split "$resp"
+            if [ "$_CP_STATUS" = "000" ]; then
+                fails=$((fails + 1))
+                [ "$fails" -eq 1 ] && echo "[k2 compute] lost the K2 server; retrying (the job keeps running on the node)" >&2
+                if [ "$fails" -gt 60 ]; then
+                    rm -rf "$dir"
+                    echo "{\"error\":\"lost_contact\",\"hint\":\"no answer from the K2 server for 10 minutes; the job may still be running: k2 compute wait $j\"}" >&2
+                    exit 3
+                fi
+                sleep 10
+                continue
+            fi
+            if [ "$_CP_STATUS" != "200" ]; then
+                rm -rf "$dir"
+                _CP_404_EXIT=4 _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            fi
+            fails=0
+            printf '%s' "$_CP_BODY" > "$dir/$n.json"
+            info="$(python3 -c '
+import json, sys
+j = json.load(open(sys.argv[1]))
+q = j.get("queue") or {}
+st = j.get("state") or "?"
+key = "%s|%s|%s" % (st, q.get("position"), q.get("reason"))
+term = st in ("done", "failed", "cancelled", "timeout", "interrupted", "unknown")
+if st == "queued" and q:
+    line = "%s queued on %s: position %s%s (%s)" % (j.get("short"), j.get("node"), q.get("position"),
+        (" of %s" % q["of"]) if q.get("of") else "", q.get("reason"))
+else:
+    line = "%s %s on %s" % (j.get("short"), st, j.get("node"))
+print("%d\t%s\t%s" % (1 if term else 0, key, line))' "$dir/$n.json")"
+            local term="${info%%$'\t'*}" rest="${info#*$'\t'}"
+            local key="${rest%%$'\t'*}" line="${rest#*$'\t'}"
+            if [ "$term" = "1" ]; then break; fi
+            if [ "$key" != "$last" ] && [ "$quiet" = "0" ]; then
+                echo "[k2 compute] $line" >&2
+            fi
+            last="$key"
+            if [ -n "$deadline" ] && [ "$(date +%s)" -ge "$deadline" ]; then break; fi
+        done
+        n=$((n + 1))
+    done
+    local out rc
+    out="$(K2_CP_JSON="$as_json" K2_CP_N="$n" python3 -c '
+import json, os, sys
+d = sys.argv[1]
+n = int(os.environ["K2_CP_N"])
+bodies = [json.load(open(os.path.join(d, "%d.json" % i))) for i in range(n)]
+term = ("done", "failed", "cancelled", "timeout", "interrupted", "unknown")
+rc = None
+unfinished = []
+errs = []
+failed_ids = []
+for j in bodies:
+    st = j.get("state")
+    if st not in term:
+        unfinished.append(j.get("short"))
+        continue
+    a, b = j.get("startedAt") or j.get("assignedAt"), j.get("endedAt")
+    took = (" after %dm%02ds" % ((b - a) // 60, (b - a) % 60)) if a and b else ""
+    if st == "done" and j.get("exitCode") is not None:
+        code, what = int(j["exitCode"]), "exit %s" % j["exitCode"]
+    elif st == "done":
+        code, what = 128 + int(j.get("signal") or 0), "killed by signal %s" % j.get("signal")
+    else:
+        code, what = 3, st + ((" (%s)" % j["reason"]) if j.get("reason") else "")
+        errs.append(json.dumps({"error": st, "reason": j.get("reason") or "", "hint": "k2 compute get %s; k2 compute retry %s" % (j.get("short"), j.get("short"))}))
+    sys.stderr.write("[k2 compute] job %s on %s: %s%s\n" % (j.get("short"), j.get("node"), what, took))
+    if code != 0:
+        failed_ids.append(j.get("id"))
+        if rc is None:
+            rc = code
+for e in errs:
+    sys.stderr.write(e + "\n")
+if unfinished:
+    sys.stderr.write(json.dumps({"error": "still_running", "jobs": unfinished, "hint": "k2 compute wait " + " ".join(unfinished)}) + "\n")
+    rc = 3
+if os.environ.get("K2_CP_JSON") == "1":
+    print(json.dumps(bodies))
+print("RC %d %s" % (rc or 0, " ".join(i for i in failed_ids if i)))' "$dir")"
+    rm -rf "$dir"
+    local tail_line="${out##*$'\n'}"
+    [ "$tail_line" = "$out" ] && out="" || out="${out%$'\n'*}"
+    [ -n "$out" ] && printf '%s\n' "$out"
+    rc="$(printf '%s' "$tail_line" | cut -d' ' -f2)"
+    if [ "$failures" = "1" ]; then
+        local fid
+        for fid in $(printf '%s' "$tail_line" | cut -d' ' -f3-); do
+            echo "── failures in ${fid:0:8} (k2 compute logs ${fid:0:8} --failures --tail 60) ──"
+            ( cmd_compute_logs "$fid" --failures --tail 60 ) || true
+        done
+    fi
+    exit "${rc:-3}"
 }
 
 cmd_compute_node() {
@@ -15078,6 +15240,7 @@ cmd_compute() {
             _compute_follow "$job" "$raw" "seq:${since:-0}"
             ;;
         logs) cmd_compute_logs "$@" ;;
+        wait) cmd_compute_wait "$@" ;;
         cancel)
             # 0.46.1: a job that already left the queue is stopped only with
             # --force (the CLI sends ifState: queued without it; 409
@@ -31193,6 +31356,14 @@ RUN
     [compute] job <id> on <node>: exit 1 after 6m12s. k2 compute logs <id> --tail 50
   Longer than your shell tool's timeout? Use --detach. (If an attached
   run gets killed, the job keeps going and you still get that line.)
+  WAIT without log text: k2 compute run <node> --wait -- cargo test
+  prints the job id, then blocks and exits with the job's exit code;
+  k2 compute wait <id>... does the same for jobs already submitted.
+  --max-wait 9m stops waiting first (exit 3, still_running, with the
+  wait line to run next), so a shell tool capped at 10 minutes can loop.
+  --failures prints the failure lines of a job that ended non-zero.
+  run --wait sends no [compute] message while it waits (only if the
+  waiting CLI dies); a --detach job always gets its message.
   Code: the node checks out a commit (HEAD, or --sha REV) in a fresh
   worktree. Uncommitted work is NOT sent unless --dirty. A warm target
   dir per project keeps cargo incremental.

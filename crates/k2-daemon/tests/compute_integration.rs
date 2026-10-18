@@ -1250,3 +1250,75 @@ async fn cancel_if_queued_never_kills_a_started_job() {
     stop_node(port, "dxa-cancel", running).await;
     drop(env);
 }
+
+/// A5: `get?wait=N` returns soon after the job's state changes, at N
+/// seconds when nothing changes, and counts as following the job, so an
+/// attached run waited on this way (`run --wait`) sends no `[compute]`
+/// message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn get_wait_returns_on_state_change() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "dxa-wait");
+    let (agent, sid) = passport(&ws);
+    let (running, _) = online_node_for(&env, port, "dxa-wait", &ws).await;
+    k2_daemon::compute_ws::test_sink_register(&sid);
+
+    // A queued job; the wait returns once it leaves the queue.
+    node_pause(port, "dxa-wait", "pause").await;
+    let mut body = run_body("dxa-wait", &["sh", "-c", "echo out; sleep 3; exit 9"], "client-dxa-wait-00001");
+    body["noSource"] = json!(true);
+    body["detach"] = json!(false);
+    body["retryInterrupted"] = json!(true);
+    let r = post(port, "/cli/compute/run", &agent, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    let a = agent.clone();
+    let jb = job.clone();
+    let waiter = tokio::spawn(async move {
+        let t = Instant::now();
+        let r = get(port, "/cli/compute/jobs/get", &a, &format!("job={jb}&wait=20")).await;
+        (t.elapsed(), r)
+    });
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let resumed = Instant::now();
+    node_pause(port, "dxa-wait", "resume").await;
+    let (took, r) = waiter.await.expect("waiter");
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_ne!(j(&r)["state"], "queued", "{}", r.body);
+    assert!(took >= Duration::from_millis(900), "it waited for the change: {took:?}");
+    assert!(resumed.elapsed() < Duration::from_secs(4), "returned soon after the change: {:?}", resumed.elapsed());
+
+    // Nothing changes for N seconds: it returns at N.
+    wait_state(port, &agent, &job, "running").await;
+    let t = Instant::now();
+    let r = get(port, "/cli/compute/jobs/get", &agent, &format!("job={job}&wait=1")).await;
+    assert_eq!(j(&r)["state"], "running", "{}", r.body);
+    assert!(t.elapsed() >= Duration::from_millis(900) && t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+
+    // Keep waiting until the end (what `k2 compute wait` does).
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let fin = loop {
+        assert!(Instant::now() < deadline, "job never ended");
+        let r = get(port, "/cli/compute/jobs/get", &agent, &format!("job={job}&wait=5")).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let v = j(&r);
+        if v["state"] == "done" {
+            break v;
+        }
+    };
+    assert_eq!(fin["exitCode"], 9, "{fin}");
+    // Followed through get?wait: no [compute] message for this attached run.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(k2_daemon::compute_ws::test_sink_take(&sid), Vec::<String>::new());
+    // A finished job answers at once, whatever N.
+    let t = Instant::now();
+    let r = get(port, "/cli/compute/jobs/get", &agent, &format!("job={job}&wait=20")).await;
+    assert_eq!(r.status, 200);
+    assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
+
+    stop_node(port, "dxa-wait", running).await;
+    drop(env);
+}

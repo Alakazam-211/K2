@@ -10,19 +10,45 @@
 //   - the PoC-successor surface rule (§6.5: removing the PoC is
 //     disabled with an explanation until a successor is chosen — the
 //     daemon's 409 `poc_successor_required` is the backstop),
-//   - "Add to dashboard" for the pinned-HTML browser: append an
-//     `{kind:"htmlDoc",workspaceId,filePath}` pane to a dashboard's
-//     canonical layout via the §6.8 tree machinery (adopt → append
-//     right-most → serialize), idempotent per (workspaceId, filePath).
+//   - whether a dashboard already shows an HTML file (the Add/Remove
+//     button state; the daemon's add-pane/remove-pane routes do the
+//     actual layout edit — 0.46.1 daemon-first, no client-side
+//     read-modify-write of the whole layout),
+//   - who may change what (0.46.1, Rosson 2026-10-18): from the login's
+//     ROLE as the daemon reports it, never the window's eye/pencil.
 
-import {
-  adoptLayout,
-  insertEdge,
-  isHtmlDocPane,
-  readingOrder,
-  serializeDashboardLayout,
-  type LayoutNode,
-} from './dashboard-layout'
+import { adoptLayout, isHtmlDocPane, readingOrder, type LayoutNode } from './dashboard-layout'
+import type { SettingEntry } from '@/components/Settings/searchManifest'
+
+export type ProjectRole = 'owner' | 'admin' | 'member'
+
+/** What the signed-in person may change on the project settings page.
+ *  Mirrors the daemon floors (`project_group_routes.rs` is_admin_only +
+ *  route_policy): name, pin and agents are any login; picture, color,
+ *  dashboards and deleting the project are owner or admin. An unknown
+ *  role (whoami not answered yet, an older daemon) leaves it to the
+ *  daemon, like `roleMeetsFloor`. */
+export interface ProjectSettingsCaps {
+  canEdit: boolean
+  canEditLooks: boolean
+  canEditDashboards: boolean
+  canDelete: boolean
+}
+
+export function projectSettingsCaps(role: ProjectRole | null): ProjectSettingsCaps {
+  const admin = role === null || role === 'owner' || role === 'admin'
+  return { canEdit: true, canEditLooks: admin, canEditDashboards: admin, canDelete: admin }
+}
+
+/** The one banner shown when something on the page is read-only for
+ *  this person, or null when they can change everything. */
+export function readOnlyBannerText(role: ProjectRole | null): string | null {
+  if (projectSettingsCaps(role).canDelete) return null
+  return (
+    'You can rename and pin this project and change its agents. ' +
+    'Only the owner or an admin can change its picture, color and dashboards, or delete it.'
+  )
+}
 
 /** Case-insensitive name filter for the left master list (the
  *  ProjectsSection `matchesSearch` idiom — groups have no path, so the
@@ -58,7 +84,7 @@ export function removeMemberBlockedReason(
   pocWorkspaceId: string | null,
 ): string | null {
   if (pocWorkspaceId !== null && workspaceId === pocWorkspaceId) {
-    return 'This agent is the Point of Contact — reassign the PoC to a successor first.'
+    return 'Make another agent the point of contact first.'
   }
   return null
 }
@@ -75,26 +101,25 @@ export function hasHtmlDocPane(
   )
 }
 
-/** "Add to dashboard" (§6.5): append an htmlDoc pane to the
- *  dashboard's canonical layout. Adopts the stored blob first (an
- *  untouched 'Main' materializes its PoC seed — same as the
- *  dashboard's first real edit), then appends as a right-most region
- *  (the §6.8 member-click default). Idempotent: a doc already on the
- *  dashboard returns `added: false` and the ORIGINAL blob untouched —
- *  callers skip the save. */
-export function appendHtmlDocPane(
+/** Whether the dashboard (as it draws — an untouched blob draws the
+ *  point of contact's pane) already shows this HTML file. */
+export function dashboardShowsDoc(
   layoutJson: string,
   pocWorkspaceId: string | null,
   doc: { workspaceId: string; filePath: string },
-): { layoutJson: string; added: boolean } {
-  const root = adoptLayout(layoutJson, pocWorkspaceId)
-  if (hasHtmlDocPane(root, doc.workspaceId, doc.filePath)) {
-    return { layoutJson, added: false }
-  }
-  const next = insertEdge(root, 'right', {
-    kind: 'htmlDoc',
-    workspaceId: doc.workspaceId,
-    filePath: doc.filePath,
-  })
-  return { layoutJson: serializeDashboardLayout(next), added: true }
+): boolean {
+  return hasHtmlDocPane(adoptLayout(layoutJson, pocWorkspaceId), doc.workspaceId, doc.filePath)
 }
+
+/** Settings search entries for Settings → Projects (each id is the
+ *  row's `data-settings-id`). */
+export const PROJECT_GROUPS_MANIFEST: SettingEntry[] = [
+  { id: 'project-groups.name', section: 'project-groups', label: 'Project name', description: 'Rename a project', keywords: ['rename', 'project', 'name'] },
+  { id: 'project-groups.picture', section: 'project-groups', label: 'Project picture', description: 'Upload or remove a project picture', keywords: ['icon', 'image', 'avatar', 'picture'] },
+  { id: 'project-groups.color', section: 'project-groups', label: 'Project color', description: 'The color behind the project picture', keywords: ['color', 'colour', 'swatch'] },
+  { id: 'project-groups.pinned', section: 'project-groups', label: 'Show in Pinned', description: 'Pin a project for everyone on this server', keywords: ['pin', 'pinned', 'favorite'] },
+  { id: 'project-groups.delete', section: 'project-groups', label: 'Delete project', description: 'Remove a project with its dashboards and chat', keywords: ['delete', 'remove', 'project'] },
+  { id: 'project-groups.dashboards', section: 'project-groups', label: 'Dashboards', description: 'Add, rename, move and delete project dashboards', keywords: ['dashboard', 'tabs', 'layout'] },
+  { id: 'project-groups.agents', section: 'project-groups', label: 'Project agents', description: 'Agents in a project and its point of contact', keywords: ['agents', 'members', 'point of contact', 'poc'] },
+  { id: 'project-groups.add-agent', section: 'project-groups', label: 'Add agent to project', description: 'Add an agent to a project', keywords: ['add', 'agent', 'member'] },
+]

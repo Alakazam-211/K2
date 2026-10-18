@@ -349,6 +349,49 @@ export async function saveDashboardLayout(
   })
 }
 
+/** One pane a client may add to or take off a dashboard. */
+export type DashboardPaneGesture =
+  | { kind: 'terminal'; workspaceId: string }
+  | { kind: 'htmlDoc'; workspaceId: string; filePath: string }
+
+/** The dashboard after an add/remove; `changed: false` = nothing to do
+ *  (already there / not there). */
+export interface DashboardPaneResult extends ProjectGroupDashboard {
+  changed: boolean
+}
+
+/** POST /cli/project-group/dashboard/add-pane — 0.46.1 daemon-first:
+ *  send the ONE pane, the daemon appends it (right edge) under its own
+ *  lock, so another client's change in between is never overwritten.
+ *  Idempotent. Owner or admin. */
+export async function addDashboardPane(
+  scope: ServerScope,
+  group: string,
+  dashboardId: string,
+  pane: DashboardPaneGesture,
+): Promise<DashboardPaneResult> {
+  return daemonCliPost<DashboardPaneResult>(scope, 'project-group/dashboard/add-pane', {
+    group,
+    dashboardId,
+    pane,
+  })
+}
+
+/** POST /cli/project-group/dashboard/remove-pane — the remove twin of
+ *  {@link addDashboardPane}. */
+export async function removeDashboardPane(
+  scope: ServerScope,
+  group: string,
+  dashboardId: string,
+  pane: DashboardPaneGesture,
+): Promise<DashboardPaneResult> {
+  return daemonCliPost<DashboardPaneResult>(scope, 'project-group/dashboard/remove-pane', {
+    group,
+    dashboardId,
+    pane,
+  })
+}
+
 /** GET /cli/project-group/messages — the single chat stream,
  *  oldest-first. No `after` → the LATEST `limit` (default 20, max 500);
  *  `after` is strictly-greater unix seconds (the incremental path). The

@@ -309,7 +309,11 @@ describe('Settings → Projects fetch budget', () => {
 
   it('the icon is fetched once and reused; an unchanged iconKey never refetches it', async () => {
     await mountSettings()
-    expect(daemon.gets.filter((g) => g.route === 'project-group/icon').length).toBe(1)
+    // The left list shows every project's picture: one GET per project.
+    const alphaIcon = (): number =>
+      daemon.gets.filter((g) => g.route === 'project-group/icon' && g.params?.group === 'g-alpha').length
+    expect(alphaIcon()).toBe(1)
+    expect(daemon.gets.filter((g) => g.route === 'project-group/icon').length).toBe(2)
     expect(iconShown()).toBe(true)
     // A rename emits groups-changed for this project: the icon is unchanged.
     daemon.gets = []
@@ -367,12 +371,16 @@ describe('Settings → Projects switching', () => {
 })
 
 describe('Settings → Projects optimistic edits', () => {
+  function rename(to: string): void {
+    const input = screen.getByLabelText('Project name') as HTMLInputElement
+    input.focus()
+    fireEvent.change(input, { target: { value: to } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+  }
+
   it('rename shows the new name at once and keeps it', async () => {
     await mountSettings()
-    fireEvent.click(screen.getByTitle('Rename project'))
-    const input = document.querySelector('input[type="text"]:not([placeholder])') as HTMLInputElement
-    fireEvent.change(input, { target: { value: 'Alpha Prime' } })
-    fireEvent.keyDown(input, { key: 'Enter' })
+    rename('Alpha Prime')
     expect(heading()).toBe('Alpha Prime')
     await advance(1000)
     expect(heading()).toBe('Alpha Prime')
@@ -382,10 +390,7 @@ describe('Settings → Projects optimistic edits', () => {
   it('a refused rename rolls back and says why', async () => {
     await mountSettings()
     daemon.failNext['project-group/rename'] = 'name taken'
-    fireEvent.click(screen.getByTitle('Rename project'))
-    const input = document.querySelector('input[type="text"]:not([placeholder])') as HTMLInputElement
-    fireEvent.change(input, { target: { value: 'Beta' } })
-    fireEvent.keyDown(input, { key: 'Enter' })
+    rename('Beta')
     expect(heading()).toBe('Beta')
     await advance(1000)
     expect(heading()).toBe('Alpha')
@@ -394,7 +399,7 @@ describe('Settings → Projects optimistic edits', () => {
 
   it('pin flips at once; a refused pin flips back with a toast', async () => {
     await mountSettings()
-    const pin = must(document.querySelector('[data-settings-id="project-pinned"]'))
+    const pin = screen.getByRole('switch', { name: 'Show in Pinned' })
     fireEvent.click(pin)
     expect(pin.getAttribute('aria-checked')).toBe('true')
     await advance(1000)
@@ -404,35 +409,31 @@ describe('Settings → Projects optimistic edits', () => {
     expect(pin.getAttribute('aria-checked')).toBe('false')
     await advance(1000)
     expect(pin.getAttribute('aria-checked')).toBe('true')
-    expect(useToastStore.getState().toasts.some((t) => t.message.includes('Pin failed'))).toBe(true)
+    expect(useToastStore.getState().toasts.some((t) => t.message.includes("Couldn't change Pinned"))).toBe(true)
   })
 
   it('point of contact changes at once; a refused change rolls back', async () => {
     await mountSettings()
-    expect(document.body.textContent).toContain('PoC WS-A')
-    // SettingDropdown: open, pick WS-B.
-    fireEvent.click(screen.getByLabelText('Point of Contact'))
-    fireEvent.click(menuOption('WS-B'))
-    expect(document.body.textContent).toContain('PoC WS-B')
+    expect(document.body.textContent).toContain('Point of contact: WS-A')
+    fireEvent.click(makePocButton('WS-B'))
+    expect(document.body.textContent).toContain('Point of contact: WS-B')
     await advance(1000)
-    expect(document.body.textContent).toContain('PoC WS-B')
+    expect(document.body.textContent).toContain('Point of contact: WS-B')
     daemon.failNext['project-group/set-poc'] = 'not allowed'
-    fireEvent.click(screen.getByLabelText('Point of Contact'))
-    fireEvent.click(menuOption('WS-A'))
-    expect(document.body.textContent).toContain('PoC WS-A')
+    fireEvent.click(makePocButton('WS-A'))
+    expect(document.body.textContent).toContain('Point of contact: WS-A')
     await advance(1000)
-    expect(document.body.textContent).toContain('PoC WS-B')
+    expect(document.body.textContent).toContain('Point of contact: WS-B')
     expect(useToastStore.getState().toasts.some((t) => t.message.includes('not allowed'))).toBe(true)
   })
 })
 
-/** The open SettingDropdown menu's row (portaled last into <body>). */
-function menuOption(label: string): HTMLElement {
-  const buttons = screen
-    .getAllByText(label)
-    .map((el) => el.closest('button'))
-    .filter((b): b is HTMLButtonElement => b !== null)
-  return must(buttons[buttons.length - 1] ?? null)
+/** The "Make point of contact" button on an agent's row. */
+function makePocButton(agent: string): HTMLElement {
+  const row = screen
+    .getAllByTestId('project-agent-row')
+    .find((r) => r.textContent?.includes(agent))
+  return must(row?.querySelector('button') ?? null)
 }
 
 function must(el: Element | null): HTMLElement {

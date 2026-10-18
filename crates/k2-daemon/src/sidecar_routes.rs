@@ -1252,6 +1252,17 @@ fn handle_stop(caller: &Caller, body: &[u8]) -> Result<(serde_json::Value, Strin
 
 // ── access (§5.5) ─────────────────────────────────────────────────────
 
+/// The owner token or an Owner-role Connect login (an Admin is not).
+fn caller_is_owner(caller: &Caller) -> bool {
+    match caller {
+        Caller::Owner => true,
+        Caller::Login { username } => {
+            k2_core::connect_users::role_for_user(username) == Some(k2_core::connect_users::Role::Owner)
+        }
+        _ => false,
+    }
+}
+
 fn handle_access(
     caller: &Caller,
     body: &[u8],
@@ -1278,11 +1289,23 @@ fn handle_access(
         && toggle != "apps_open"
         && toggle != "chat_manage"
         && toggle != "gardens_manage"
+        && toggle != "compute_manage"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'apps_manage', 'apps_open', 'chat_manage', 'compute', 'compute_operate', 'gardens_manage', 'projects_manage' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'apps_manage', 'apps_open', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'gardens_manage', 'projects_manage' or 'vault_manage'",
+        ));
+    }
+    if toggle == "compute_manage" && !caller_is_owner(caller) {
+        // "Allow managing compute nodes" hands an agent owner verbs (node
+        // add/confirm/retire), so only the owner flips it: the owner token
+        // or an Owner login. An Admin login can't (it would hand out more
+        // than an Admin holds); a passport never reaches here.
+        return Err(err(
+            "owner_only",
+            403,
+            "only the server's owner may turn \"Allow managing compute nodes\" on or off (Settings → Workspaces → <agent> → Agent, or k2 compute manage on|off --workspace <ws> from a terminal outside K2)",
         ));
     }
     let value = match v.get("value") {
@@ -1386,6 +1409,34 @@ fn handle_access(
         return Ok((
             serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "chat_manage", "agentsCanManageChat": value }),
             format!("ok {} chat_manage={value}", ws.handle),
+        ));
+    }
+    if toggle == "compute_manage" {
+        // Agents manage compute nodes (0194, Rosson 2026-10-18): "Allow
+        // managing compute nodes". Default OFF. Owner only (checked above).
+        // `/cli/agent-access/set` is not an agent verb, so an agent can
+        // never turn it on, for itself or anyone. The caller writes the
+        // `agent-access-set` Access Audit line; the compute event log gets
+        // one too.
+        k2_core::workspace::settings::set_agents_can_manage_compute(&ws.id, value)
+            .map_err(|e| err("workspace_not_found", 404, e))?;
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::compute::store::record_event(
+                &conn,
+                &caller.audit_user(),
+                if value { "agent_manage_on" } else { "agent_manage_off" },
+                None,
+                Some(&ws.id),
+                None,
+                serde_json::json!({}),
+            );
+        }
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "compute_manage", "agentsCanManageCompute": value }),
+            format!("ok {} compute_manage={value}", ws.handle),
         ));
     }
     if toggle == "gardens_manage" {

@@ -1411,6 +1411,12 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // of a source's bound secret (sources.secret_workspace) and the
         // Garden/widget proposal queue (zen_proposals). Additive only.
         ("0181_gardens_manage", include_str!("../../drizzle_sql/0181_gardens_manage.sql")),
+        // 0194 — agents manage compute nodes (0.46.1, Rosson 2026-10-18):
+        // the per-agent "Allow managing compute nodes" switch
+        // (projects.agents_can_manage_compute, DEFAULT 0). Additive only:
+        // 0182–0193 are held by other 0.46.1 lanes; renumber freely on a
+        // slip (and edit the migration-order tests below).
+        ("0194_compute_manage", include_str!("../../drizzle_sql/0194_compute_manage.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2074,7 +2080,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0181_gardens_manage",
+            last_name, "0194_compute_manage",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2118,6 +2124,7 @@ mod tests {
                 "0179_workspace_design_mode",
                 "0180_clone_imports",
                 "0181_gardens_manage",
+                "0194_compute_manage",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2163,6 +2170,7 @@ mod tests {
                 "0179_workspace_design_mode",
                 "0180_clone_imports",
                 "0181_gardens_manage",
+                "0194_compute_manage",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2395,7 +2403,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0181 (Gardens manage) is the newest; roll it back first. Its
+            // 0194 (compute manage, 0.46.1) is the newest: its record goes
+            // (its projects column stays; re-adding it is skipped as a
+            // duplicate column).
+            conn.execute("DELETE FROM _migrations WHERE name = '0194_compute_manage'", []).unwrap();
+            // 0181 (Gardens manage) came before it; roll it back next. Its
             // projects column stays (re-adding it is skipped as a duplicate
             // column), its sources column went with the table.
             conn.execute_batch("DROP TABLE zen_proposals;").unwrap();

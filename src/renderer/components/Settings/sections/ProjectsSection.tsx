@@ -69,7 +69,7 @@ import { setSqlDbAgentAccess } from './data-api'
 import { primaryScope } from '@/kessel/server-scope'
 import { SquareCheckbox } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
-import { computeErrorMessage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
+import { computeErrorMessage, setWorkspaceComputeManage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import { reorderedZoneIds } from '@/components/Sidebar/row-drag-reorder'
 
@@ -105,6 +105,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-manage-agents', section: 'projects', label: 'Allow hiring and managing agents', description: 'Lets this workspace\'s main agent open and stop sidecars (k2 sidecar); later also hire and retire agents', keywords: ['agents_can_manage_agents', 'sidecar', 'hire', 'agent', 'passport', 'manage agents'] },
   { id: 'projects.agents-can-manage-vault', section: 'projects', label: 'Allow managing server-wide secrets', description: 'Lets this workspace\'s main agent share server secrets with other workspaces and look after them (k2 vault); never with itself, and never loosen a secret it uses', keywords: ['vault_manage', 'vault', 'secret', 'secrets', 'passport', 'agent', 'it agent'] },
   { id: 'projects.agents-can-use-compute', section: 'projects', label: 'Allow compute nodes', description: 'Lets this workspace\'s agents run builds and tests on the machines switched on in Settings → Compute (k2 compute run); on grants every machine, and ones added later', keywords: ['agents_can_use_compute', 'compute', 'compute nodes', 'node', 'machines', 'build', 'tests', 'k2 compute', 'passport', 'agent'] },
+  { id: 'projects.agents-can-manage-compute', section: 'projects', label: 'Allow managing compute nodes', description: 'Lets this workspace\'s agent add and confirm compute machines, rename, pause, drain, resume, retire and route them, and grant or revoke them for any workspace (k2 compute node, k2 compute grant); every act is logged and adding or confirming a machine sends you an inbox note. Turning the preview on or off and removing a machine stay yours. Only the owner can switch it', keywords: ['agents_can_manage_compute', 'compute_manage', 'manage', 'compute', 'compute nodes', 'node', 'machines', 'enroll', 'confirm', 'grant', 'revoke', 'retire', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Allow this agent to operate compute nodes', description: 'Lets this workspace\'s agent pause, drain, resume, narrow, update and restart services on your compute machines without asking each time; root actions still wait for you (k2 compute operate)', keywords: ['agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Manage K2 projects', description: 'Lets this workspace\'s agent create, rename and delete K2 projects and add or remove their members (k2 project); on by default. Off: it can still read projects and post in its project chat', keywords: ['agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-gardens', section: 'projects', label: 'Manage Gardens and data sources', description: 'Lets this workspace\'s agent approve data sources, bind secrets it may already use, pause, pin, enable triggers and edit Gardens and widgets with no confirm (k2 sources, k2 zen); every act is logged. Off: it proposes and you approve', keywords: ['agents_can_manage_gardens', 'gardens_manage', 'gardens', 'garden', 'zen', 'widgets', 'data sources', 'sources', 'triggers', 'approve', 'k2 sources', 'k2 zen', 'passport', 'agent'] },
@@ -1407,6 +1408,7 @@ function ProjectDetail({
               <AgentsManageVaultToggle project={project} />
               <AgentsUseComputeToggle project={project} />
               <AgentsOperateComputeToggle project={project} />
+              <AgentsManageComputeToggle project={project} />
               <AgentsManageProjectsToggle project={project} />
               <AgentsManageGardensToggle project={project} />
             </SettingsGroup>
@@ -2326,6 +2328,131 @@ export function AgentsOperateComputeToggle({
           </div>
           {error ? (
             <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-operate-error">
+              {error}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Agents manage compute nodes (0194, Rosson 2026-10-18) — "Allow managing
+// compute nodes". DEFAULTS OFF. On: a local agent from this workspace adds
+// and confirms machines, renames, pauses/drains/resumes, retires and routes
+// them, and grants or revokes them for any workspace, each act an Access
+// Audit line (add and confirm also drop an owner inbox note). The preview
+// flag, removing a machine and this switch stay the owner's. Writes POST
+// /cli/agent-access/set `{workspace, toggle: 'compute_manage', value}` via
+// `setWorkspaceComputeManage` (same route as `k2 compute manage`). The
+// daemon lets only the owner flip it: an Admin sees it read-only, a Member
+// never sees it; until whoami answers it shows but can't be flipped. The
+// check lives in the daemon; this only shows the switch.
+export function manageComputeVisibility(role: OperateComputeRole | null): { show: boolean; canFlip: boolean } {
+  if (role === 'member') return { show: false, canFlip: false }
+  return { show: true, canFlip: role === 'owner' }
+}
+
+export function AgentsManageComputeToggle({
+  project,
+  compact = false,
+  readOnly = false,
+}: {
+  project: ProjectWithWorkspaces
+  /** Drawer Agent tab: the label and switch only (no description box). */
+  compact?: boolean
+  /** Shown but not flippable: a room on another server. */
+  readOnly?: boolean
+}): React.JSX.Element | null {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [role, setRole] = useState<OperateComputeRole | null>(null)
+  const enabled = (project.agentsCanManageCompute ?? 0) === 1
+
+  useEffect(() => {
+    let cancelled = false
+    void fetchViewerRole().then((r) => {
+      if (!cancelled) setRole(r)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const { show, canFlip } = manageComputeVisibility(role)
+  if (!show) return null
+
+  const toggle = async (): Promise<void> => {
+    if (busy || !canFlip || readOnly) return
+    const next = !enabled
+    const before = project.agentsCanManageCompute
+    setBusy(true)
+    setError(null)
+    useProjectsStore.setState((s) => ({
+      projects: s.projects.map((p) =>
+        p.id === project.id ? { ...p, agentsCanManageCompute: next ? 1 : 0 } : p,
+      ),
+    }))
+    try {
+      await setWorkspaceComputeManage(project.path, next)
+      noteOptimisticProjectsMutationSuccess()
+      emitProjectsChanged()
+    } catch (err) {
+      useProjectsStore.setState((s) => ({
+        projects: s.projects.map((p) =>
+          p.id === project.id ? { ...p, agentsCanManageCompute: before } : p,
+        ),
+      }))
+      setError(computeErrorMessage(err))
+      console.error('[agent-access] compute_manage write failed', err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className={permissionRowClass(compact)}>
+      <div className="flex items-start gap-3">
+        <button
+          onClick={toggle}
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Allow managing compute nodes"
+          disabled={busy || !canFlip || readOnly}
+          data-settings-id="projects.agents-can-manage-compute"
+          className={`mt-0.5 w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+          }`}
+          title={
+            role === null
+              ? 'Checking that you are the owner of this server'
+              : !canFlip
+                ? 'Only the server\'s owner can change this'
+                : enabled
+                  ? 'This workspace\'s agent manages your compute machines (logged)'
+                  : 'This workspace\'s agent cannot manage your compute machines'
+          }
+        >
+          <span
+            className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
+              enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+            }`}
+          />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">
+            Allow managing compute nodes{' '}
+            <span className="text-[10px] font-normal text-[var(--color-text-muted)]">Beta</span>
+          </div>
+          <div className={permissionDescClass(compact)}>
+            Lets this agent add and confirm compute machines, rename, pause, drain, resume, retire
+            and route them, and grant or revoke them for any workspace, without asking you (k2
+            compute node, k2 compute grant). Every act is logged in Access Audit, and adding or
+            confirming a machine sends you an inbox note. Turning compute on or off and removing a
+            machine stay yours. Only you (the owner) can switch this.
+          </div>
+          {error ? (
+            <div className="text-[10px] text-[var(--color-status-error-soft)] mt-1" data-testid="agents-compute-manage-error">
               {error}
             </div>
           ) : null}

@@ -10,6 +10,12 @@
 //! - Owner/admin verbs refuse every passport with `owner_only`, including
 //!   a K2 shell tab (a human typing inside K2 sends the tab's passport):
 //!   the teaching text says to use a terminal outside K2.
+//! - "Allow managing compute nodes" (`compute_manage`, 0194,
+//!   [`crate::compute_manage`]): a local agent passport whose workspace has
+//!   the switch may also run node add/confirm/rename/pause/drain/resume/
+//!   retire/route and grant/revoke (any workspace), audited. Preview
+//!   on/off, node remove and the switch itself stay the owner's; a passport
+//!   from off the loopback listener never gets it (`owner_only` as before).
 //!
 //! The TCP dispatcher and the per-cell socket both build a [`Who`] and
 //! call [`handle`] (blocking: DB, git, the log long-poll).
@@ -24,6 +30,7 @@ use k2_core::compute::{self as compute, codes, logs, scheduler, store};
 use k2_core::connect_users::Role;
 
 use crate::cli_response::CliResponse;
+use crate::compute_manage::Manager;
 use crate::compute_ws;
 
 /// Largest request body.
@@ -285,6 +292,24 @@ pub(crate) fn need_owner(who: &Who) -> R<()> {
     }
 }
 
+/// The owner, or a local agent under "Allow managing compute nodes". With
+/// no manager this is exactly [`need_owner`] (same refusal bytes).
+fn owner_or_manager(who: &Who, mgr: Option<&Manager>) -> R<()> {
+    if mgr.is_some() {
+        return Ok(());
+    }
+    need_owner(who)
+}
+
+/// Owner/admin, or a local agent under "Allow managing compute nodes".
+/// With no manager this is exactly [`need_admin`].
+fn admin_or_manager(who: &Who, mgr: Option<&Manager>) -> R<()> {
+    if mgr.is_some() {
+        return Ok(());
+    }
+    need_admin(who)
+}
+
 pub(crate) fn need_credential(who: &Who) -> R<()> {
     match who {
         Who::Invalid => Err(no("forbidden", 403, "invalid or missing token")),
@@ -353,6 +378,16 @@ fn target_ws(who: &Who, requested: Option<&str>) -> R<Ws> {
     ws_by_token(req).ok_or_else(|| no("workspace_not_found", 404, format!("no workspace '{req}'")))
 }
 
+/// The workspace a grant/revoke acts for. A manager may name any workspace
+/// (its own when it names none); everyone else follows [`target_ws`].
+fn grant_target_ws(who: &Who, requested: Option<&str>, mgr: Option<&Manager>) -> R<Ws> {
+    let Some(m) = mgr else { return target_ws(who, requested) };
+    match requested.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(req) => ws_by_token(req).ok_or_else(|| no("workspace_not_found", 404, format!("no workspace '{req}'"))),
+        None => ws_by_id(&m.project_id).ok_or_else(|| no("workspace_not_found", 404, "your workspace is not registered")),
+    }
+}
+
 /// For passports: the workspace switch must be on.
 fn passport_gate(who: &Who) -> R<Option<String>> {
     let Some((own, _)) = who.passport() else { return Ok(None) };
@@ -411,24 +446,37 @@ pub(crate) fn audit(who: &Who, kind: &str, node: Option<&str>, ws: Option<&str>,
 
 // ── entry ────────────────────────────────────────────────────────────
 
-/// Route a compute request. Blocking.
+/// Route a compute request that did not come in on the loopback listener
+/// (the per-cell socket). Blocking. "Allow managing compute nodes" never
+/// applies here: see [`handle_from`].
 pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
+    handle_from(path, who, body, params, false)
+}
+
+/// Route a compute request. Blocking. `local` = it reached the TCP
+/// loopback listener (not LAN, the Connect tunnel, an App link or a
+/// loopback proxy): only then may a passport act under "Allow managing
+/// compute nodes" ([`crate::compute_manage`]).
+pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, String>, local: bool) -> CliResponse {
     if !compute::enabled() {
         return dark();
     }
+    let mgr = crate::compute_manage::manager(&who, local);
+    let mgr = mgr.as_ref();
     let r = match path {
-        "/cli/compute/nodes" => nodes_list(&who),
-        "/cli/compute/nodes/info" => node_info(&who, params),
-        "/cli/compute/nodes/enroll-code" => enroll_code(&who, body),
-        "/cli/compute/nodes/confirm" => node_confirm(&who, body),
+        "/cli/compute/nodes" => nodes_list(&who, mgr),
+        "/cli/compute/nodes/info" => node_info(&who, params, mgr),
+        "/cli/compute/nodes/enroll-code" => enroll_code(&who, body, mgr),
+        "/cli/compute/nodes/confirm" => node_confirm(&who, body, mgr),
+        // Hard delete: the owner's, switch or not.
         "/cli/compute/nodes/remove" => node_remove(&who, body),
-        "/cli/compute/nodes/retire" => node_retire(&who, body),
-        "/cli/compute/nodes/rename" => node_rename(&who, body),
-        "/cli/compute/nodes/pause" => node_pause(&who, body),
-        "/cli/compute/nodes/routes" => node_routes(&who, body),
-        "/cli/compute/grants" => grants_list(&who, params),
-        "/cli/compute/grants/set" => grant_set(&who, body),
-        "/cli/compute/grants/revoke" => grant_revoke(&who, body),
+        "/cli/compute/nodes/retire" => node_retire(&who, body, mgr),
+        "/cli/compute/nodes/rename" => node_rename(&who, body, mgr),
+        "/cli/compute/nodes/pause" => node_pause(&who, body, mgr),
+        "/cli/compute/nodes/routes" => node_routes(&who, body, mgr),
+        "/cli/compute/grants" => grants_list(&who, params, mgr),
+        "/cli/compute/grants/set" => grant_set(&who, body, mgr),
+        "/cli/compute/grants/revoke" => grant_revoke(&who, body, mgr),
         "/cli/compute/agents" => agents_list(&who),
         "/cli/compute/agents/set" => agents_set(&who, body),
         "/cli/compute/run" => run(&who, body),
@@ -505,9 +553,10 @@ fn granted_node_ids(ws: &str) -> Vec<String> {
     store::grants(&conn, None, Some(ws)).into_iter().map(|g| g.node_id).collect()
 }
 
-fn nodes_list(who: &Who) -> R<serde_json::Value> {
+fn nodes_list(who: &Who, mgr: Option<&Manager>) -> R<serde_json::Value> {
     need_credential(who)?;
-    let gate = passport_gate(who)?;
+    // A manager sees every node (it adds, confirms and retires them).
+    let gate = if mgr.is_some() { None } else { passport_gate(who)? };
     sweep_retiring();
     let rows = {
         let db = k2_core::db::shared();
@@ -534,7 +583,7 @@ fn nodes_list(who: &Who) -> R<serde_json::Value> {
             v
         })
         .collect();
-    let codes: Vec<serde_json::Value> = if who.is_owner() {
+    let codes: Vec<serde_json::Value> = if who.is_owner() || mgr.is_some() {
         compute::enroll::pending().into_iter().map(|(name, exp)| serde_json::json!({"name": name, "expiresAt": exp})).collect()
     } else {
         Vec::new()
@@ -558,16 +607,19 @@ fn node_visible(who: &Who, n: &store::NodeRow) -> R<()> {
     Ok(())
 }
 
-fn node_info(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+fn node_info(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>) -> R<serde_json::Value> {
     need_credential(who)?;
     let n = node_or_404(params.get("node").map(String::as_str))?;
-    node_visible(who, &n)?;
+    if mgr.is_none() {
+        node_visible(who, &n)?;
+    }
     let mut v = node_json(&n, who.is_owner());
     let (grants, jobs) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let ws = who.passport().map(|(w, _)| w.to_string());
-        let grants = store::grants(&conn, Some(&n.id), ws.as_deref());
+        // A manager sees every grant on the node; jobs stay its own.
+        let grants = store::grants(&conn, Some(&n.id), if mgr.is_some() { None } else { ws.as_deref() });
         let jobs = store::list_jobs(&conn, &store::JobFilter { node_id: Some(&n.id), workspace_id: ws.as_deref(), limit: 10, ..Default::default() });
         (grants, jobs)
     };
@@ -583,8 +635,8 @@ fn controller_url(override_url: Option<&str>) -> String {
     format!("https://{}", compute_ws::controller_label())
 }
 
-fn enroll_code(who: &Who, body: &[u8]) -> R<serde_json::Value> {
-    need_owner(who)?;
+fn enroll_code(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
+    owner_or_manager(who, mgr)?;
     let v = json_body(body)?;
     let name = s(&v, "name").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the node: k2 compute node add <name>"))?;
     if !compute::enroll::valid_name(name) {
@@ -608,6 +660,10 @@ fn enroll_code(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let (code, entry) = compute::enroll::mint(name, &who.label()).map_err(|e| no(codes::BAD_REQUEST, 409, e))?;
     let enroll = pairing::EnrollString::new(&code, &fp).ok_or_else(|| no("internal", 500, "enroll string"))?.render();
     audit(who, "enroll_code", None, None, None, serde_json::json!({"name": name, "url": url}));
+    if let Some(m) = mgr {
+        crate::compute_manage::audit(m, "node-add", name, &[]);
+        crate::compute_manage::owner_notice(m, "added", name);
+    }
     let args = format!("--controller {url} --enroll {enroll} --name {name}");
     Ok(serde_json::json!({
         "name": name,
@@ -625,8 +681,8 @@ fn enroll_code(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     }))
 }
 
-fn node_confirm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
-    need_owner(who)?;
+fn node_confirm(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
+    owner_or_manager(who, mgr)?;
     let v = json_body(body)?;
     let n = node_or_404(s(&v, "node"))?;
     let typed = s(&v, "sas").ok_or_else(|| no(codes::BAD_REQUEST, 400, "pass the 6-digit code the node shows"))?;
@@ -656,6 +712,10 @@ fn node_confirm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         granted
     };
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"compute": "node_confirmed"}));
+    if let Some(m) = mgr {
+        crate::compute_manage::audit(m, "node-confirm", &n.name, &[]);
+        crate::compute_manage::owner_notice(m, "confirmed", &n.name);
+    }
     let handles: Vec<String> = auto_granted.iter().map(|w| ws_handle(w)).collect();
     let next = if handles.is_empty() {
         format!("k2 compute grant {} --workspace <ws> (no workspace may use it yet)", n.name)
@@ -700,8 +760,8 @@ fn remove_now(by: &str, n: &store::NodeRow) -> R<usize> {
 /// "Use compute from this machine" OFF (Settings → Compute): queued jobs
 /// are cancelled, running ones finish (the node drains meanwhile), then
 /// the node is removed. Idle → removed now. Owner only, like remove.
-fn node_retire(who: &Who, body: &[u8]) -> R<serde_json::Value> {
-    need_owner(who)?;
+fn node_retire(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
+    owner_or_manager(who, mgr)?;
     let v = json_body(body)?;
     let n = node_or_404(s(&v, "node"))?;
     let now = compute::now();
@@ -720,6 +780,9 @@ fn node_retire(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     }
     if running == 0 {
         let more = remove_now(&who.label(), &n)?;
+        if let Some(m) = mgr {
+            crate::compute_manage::audit(m, "node-retire", &n.name, &[("state", "revoked")]);
+        }
         return Ok(serde_json::json!({"ok": true, "node": n.name, "state": "revoked", "jobsCancelled": cancelled.len() + more}));
     }
     {
@@ -737,6 +800,9 @@ fn node_retire(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         );
     }
     compute::access::mark_retiring_at(&compute::access::retiring_path(), &n.id, &who.label(), now).map_err(|e| no("local_write", 500, e))?;
+    if let Some(m) = mgr {
+        crate::compute_manage::audit(m, "node-retire", &n.name, &[("state", "draining")]);
+    }
     compute_ws::kick(&n.id);
     compute_ws::notify_change();
     Ok(serde_json::json!({"ok": true, "node": n.name, "state": "draining", "running": running, "jobsCancelled": cancelled.len(),
@@ -774,8 +840,8 @@ pub fn sweep_retiring() {
     }
 }
 
-fn node_rename(who: &Who, body: &[u8]) -> R<serde_json::Value> {
-    need_admin(who)?;
+fn node_rename(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
+    admin_or_manager(who, mgr)?;
     let v = json_body(body)?;
     let n = node_or_404(s(&v, "node"))?;
     let name = s(&v, "name").ok_or_else(|| no(codes::BAD_REQUEST, 400, "pass the new name"))?;
@@ -789,11 +855,15 @@ fn node_rename(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     }
     store::rename_node(&conn, &n.id, name).map_err(|e| no("internal", 500, e))?;
     store::record_event(&conn, &who.label(), "rename", Some(&n.id), None, None, serde_json::json!({"from": n.name, "to": name}));
+    drop(conn);
+    if let Some(m) = mgr {
+        crate::compute_manage::audit(m, "node-rename", &n.name, &[("to", name)]);
+    }
     Ok(serde_json::json!({"ok": true, "node": name}))
 }
 
-fn node_pause(who: &Who, body: &[u8]) -> R<serde_json::Value> {
-    need_admin(who)?;
+fn node_pause(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
+    admin_or_manager(who, mgr)?;
     let v = json_body(body)?;
     let n = node_or_404(s(&v, "node"))?;
     let action = s(&v, "action").unwrap_or("pause");
@@ -808,6 +878,9 @@ fn node_pause(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         let conn = db.lock();
         store::set_controller_pause(&conn, &n.id, pause, &who.label(), compute::now()).map_err(|e| no("internal", 500, e))?;
         store::record_event(&conn, &who.label(), "controller_pause", Some(&n.id), None, None, serde_json::json!({"action": action}));
+    }
+    if let Some(m) = mgr {
+        crate::compute_manage::audit(m, &format!("node-{action}"), &n.name, &[]);
     }
     if pause.is_none() {
         // Resuming a retiring node keeps it (the machine was switched back on).
@@ -837,8 +910,8 @@ fn route_ok(u: &str) -> bool {
     }
 }
 
-fn node_routes(who: &Who, body: &[u8]) -> R<serde_json::Value> {
-    need_admin(who)?;
+fn node_routes(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
+    admin_or_manager(who, mgr)?;
     let v = json_body(body)?;
     let n = node_or_404(s(&v, "node"))?;
     let mut routes = n.routes.clone();
@@ -857,14 +930,24 @@ fn node_routes(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let conn = db.lock();
     store::set_routes(&conn, &n.id, &routes).map_err(|e| no("internal", 500, e))?;
     store::record_event(&conn, &who.label(), "routes", Some(&n.id), None, None, serde_json::json!({"routes": routes}));
+    drop(conn);
+    if let Some(m) = mgr {
+        if let Some(add) = s(&v, "add") {
+            crate::compute_manage::audit(m, "node-route-add", &n.name, &[("url", add)]);
+        }
+        if let Some(rm) = s(&v, "remove") {
+            crate::compute_manage::audit(m, "node-route-rm", &n.name, &[("url", rm)]);
+        }
+    }
     Ok(serde_json::json!({"ok": true, "node": n.name, "routes": routes, "note": "the node learns new routes on its next connect"}))
 }
 
 // ── grants ───────────────────────────────────────────────────────────
 
-fn grants_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+fn grants_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>) -> R<serde_json::Value> {
     need_credential(who)?;
-    let gate = passport_gate(who)?;
+    // A manager grants any workspace, so it lists them all.
+    let gate = if mgr.is_some() { None } else { passport_gate(who)? };
     let node = match params.get("node").map(String::as_str).filter(|s| !s.is_empty()) {
         Some(t) => Some(node_or_404(Some(t))?.id),
         None => None,
@@ -890,14 +973,14 @@ fn grants_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Val
     Ok(serde_json::json!({ "grants": rows }))
 }
 
-fn grant_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
-    need_admin(who)?;
+fn grant_set(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
+    admin_or_manager(who, mgr)?;
     let v = json_body(body)?;
     let n = node_or_404(s(&v, "node"))?;
     if n.state != "active" {
         return Err(no("not_active", 409, format!("'{}' is {}; confirm it first", n.name, n.state)));
     }
-    let ws = target_ws(who, s(&v, "workspace"))?;
+    let ws = grant_target_ws(who, s(&v, "workspace"), mgr)?;
     let limits = store::GrantLimits {
         max_job_secs: n_pos(&v, "maxJobSecs", 60, 7 * 86_400)?,
         max_disk_gb: n_pos(&v, "maxDiskGb", 1, 10_000)?,
@@ -911,6 +994,9 @@ fn grant_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         store::record_event(&conn, &who.label(), "grant", Some(&n.id), Some(&ws.id), None, serde_json::to_value(&g).unwrap_or_default());
         g
     };
+    if let Some(m) = mgr {
+        crate::compute_manage::audit(m, "grant", &n.name, &[("for", &ws.handle)]);
+    }
     let switch_on = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -930,15 +1016,19 @@ fn n_pos(v: &serde_json::Value, k: &str, lo: i64, hi: i64) -> R<Option<i64>> {
     }
 }
 
-fn grant_revoke(who: &Who, body: &[u8]) -> R<serde_json::Value> {
-    need_admin(who)?;
+fn grant_revoke(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
+    admin_or_manager(who, mgr)?;
     let v = json_body(body)?;
     let n = node_or_404(s(&v, "node"))?;
-    let ws = target_ws(who, s(&v, "workspace"))?;
+    let ws = grant_target_ws(who, s(&v, "workspace"), mgr)?;
     let db = k2_core::db::shared();
     let conn = db.lock();
     let removed = store::revoke_grant(&conn, &n.id, &ws.id).map_err(|e| no("internal", 500, e))?;
     store::record_event(&conn, &who.label(), "grant_revoke", Some(&n.id), Some(&ws.id), None, serde_json::json!({"removed": removed}));
+    drop(conn);
+    if let Some(m) = mgr {
+        crate::compute_manage::audit(m, "revoke", &n.name, &[("for", &ws.handle)]);
+    }
     Ok(serde_json::json!({"ok": true, "removed": removed, "node": n.name, "workspace": ws.handle,
         "note": "queued and running jobs keep going; new runs are refused"}))
 }
@@ -973,6 +1063,12 @@ fn agents_list(who: &Who) -> R<serde_json::Value> {
                 "agentsCanUseCompute": a.agents_can_use_compute,
                 // Node admin (Q14): "Allow this agent to operate compute nodes".
                 "agentsCanOperateCompute": compute::admin::agents_can_operate_compute(&conn, &a.workspace_id),
+                // "Allow managing compute nodes" (0194).
+                // (Read on the connection this list already holds.)
+                "agentsCanManageCompute": conn
+                    .query_row("SELECT agents_can_manage_compute FROM projects WHERE id = ?1", [&a.workspace_id], |r| r.get::<_, i64>(0))
+                    .map(|v| v == 1)
+                    .unwrap_or(false),
                 "grants": grants,
             })
         })

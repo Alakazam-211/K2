@@ -304,6 +304,12 @@ interface Project {
   // Gardens with no confirm (audited). Written via POST
   // /cli/agent-access/set `toggle: 'gardens_manage'` (Owner/Admin).
   agentsCanManageGardens?: number
+  // Agents manage compute nodes (0194) — "Allow managing compute nodes"
+  // (0/1, default 0). On: a local agent from this workspace adds, confirms,
+  // renames, pauses/drains/resumes, retires and routes nodes and grants or
+  // revokes any workspace (audited). Written via POST
+  // /cli/agent-access/set `toggle: 'compute_manage'` (the owner only).
+  agentsCanManageCompute?: number
 }
 
 export interface ProjectWithWorkspaces extends Project {

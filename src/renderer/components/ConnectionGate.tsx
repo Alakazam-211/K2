@@ -71,6 +71,12 @@ import { AppErrorBoundary } from './AppErrorBoundary'
 import GateChrome from './TopBar/GateChrome'
 import { noteServerVersion, primaryScope } from '@/kessel/server-scope'
 import { homeHostKey } from '@/lib/host-key'
+import {
+  IDLE_DAEMON_UPDATE,
+  daemonUpdateCopy,
+  useLocalDaemonUpdateState,
+  type LocalDaemonUpdateState,
+} from '@/lib/local-daemon-update'
 
 /** Shape of the daemon's GET /boot-status response. `detail` is free-text
  *  for the UI only — never branch on it. `instanceId` (0.40.48, optional —
@@ -732,6 +738,10 @@ export function ConnectionGate(): React.ReactElement {
   // K2 Connect step #3: a host the user picked that needs a password
   // (no remembered/expired token). Rendered as the full-screen sign-in.
   const pendingSignIn = useConnectHostStore((s) => s.pendingSignIn)
+  // Linux: the app restarts a stale LOCAL k2-daemon user service itself
+  // (src-tauri linux_daemon.rs). Poll its phase only while the local gate
+  // is waiting; a remote daemon is never restarted.
+  const localDaemonUpdate = useLocalDaemonUpdateState(!isRemote && decision.kind !== 'accept')
 
   // A tokenless active remote (e.g. an expired session restored from the
   // address book, or a boot where the keychain token didn't resolve)
@@ -1370,7 +1380,13 @@ export function ConnectionGate(): React.ReactElement {
     return (
       <>
         {roomsHost}
-        <ConnectingOverlay decision={decision} attempts={attempts} importFailed={importFailed} />
+        <ConnectingOverlay
+          decision={decision}
+          attempts={attempts}
+          importFailed={importFailed}
+          daemonUpdate={isRemote ? IDLE_DAEMON_UPDATE : localDaemonUpdate}
+          isLocal={!isRemote}
+        />
         {/* 0.40.48: a wedge that survived the step-1 auto-reload latches
             BEFORE the app can mount (the poisoned pool blocks the accept),
             so the wedged banner must also render over the connecting
@@ -1527,10 +1543,27 @@ interface ConnectingOverlayProps {
   /** Fix C: the Phase-2 App import exhausted its retries — say so and
    *  always surface the Reload button (attempts may be frozen). */
   importFailed: boolean
+  /** Local daemon restart phase (Linux; idle elsewhere and for remotes). */
+  daemonUpdate: LocalDaemonUpdateState
+  /** The wait is on the local daemon (version-mismatch copy applies). */
+  isLocal: boolean
 }
 
-function ConnectingOverlay({ decision, attempts, importFailed }: ConnectingOverlayProps): React.ReactElement {
+function ConnectingOverlay({
+  decision,
+  attempts,
+  importFailed,
+  daemonUpdate,
+  isLocal,
+}: ConnectingOverlayProps): React.ReactElement {
   const migrating = decision.kind === 'migrating'
+  // A local daemon on another version (any platform), or the Linux
+  // service restart in progress / failed: say "Updating K2 daemon…" or
+  // why it could not, not a dead "Connecting…".
+  const updateCopy =
+    !importFailed && isLocal
+      ? daemonUpdateCopy(decision.kind === 'wait' ? decision.reason : null, daemonUpdate)
+      : null
 
   // Heading + sub-line. While the (correct) daemon is migrating we tell
   // the user updates are being applied; otherwise it's a plain connect.
@@ -1538,9 +1571,11 @@ function ConnectingOverlay({ decision, attempts, importFailed }: ConnectingOverl
   // daemon accepted; it's the UI bundle that couldn't load).
   const heading = importFailed
     ? 'K2 failed to load'
+    : updateCopy ? updateCopy.heading
     : migrating ? 'Setting up K2…' : 'Connecting…'
   const subline = importFailed
     ? 'The app interface could not be loaded.'
+    : updateCopy ? updateCopy.subline
     : migrating
       ? (decision.detail && decision.detail.length > 0 ? decision.detail : 'Applying updates…')
       : null
@@ -1550,7 +1585,9 @@ function ConnectingOverlay({ decision, attempts, importFailed }: ConnectingOverl
   // a plain 'wait' (unreachable / wrong version) surface it after ~10s.
   // importFailed shows it UNCONDITIONALLY: on a local accept the poll
   // loop stopped, so the attempt thresholds can never fire on their own.
-  const showReloadButton = shouldShowReloadButton({ migrating, attempts, importFailed })
+  const showReloadButton =
+    updateCopy?.forceReload === true ||
+    shouldShowReloadButton({ migrating, attempts, importFailed })
 
   return (
     <div
@@ -1584,12 +1621,31 @@ function ConnectingOverlay({ decision, attempts, importFailed }: ConnectingOverl
         {subline !== null && (
           <div style={{ fontSize: '0.85rem', opacity: 0.7 }}>{subline}</div>
         )}
+        {updateCopy?.detail && (
+          <div
+            data-testid="daemon-update-detail"
+            style={{
+              fontSize: '0.8rem',
+              opacity: 0.85,
+              maxWidth: '560px',
+              whiteSpace: 'pre-wrap',
+              lineHeight: 1.5,
+              userSelect: 'text',
+              WebkitUserSelect: 'text',
+              cursor: 'text',
+            }}
+          >
+            {updateCopy.detail}
+          </div>
+        )}
       </div>
       {showReloadButton && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
           <div style={{ fontSize: '0.85rem', opacity: 0.75, maxWidth: '440px', textAlign: 'center', lineHeight: 1.5 }}>
             {importFailed
               ? 'The app failed to load after several attempts. Reloading usually fixes this — if it keeps happening, quit and relaunch K2.'
+              : updateCopy?.forceReload
+                ? 'After fixing it, reload to connect.'
               : migrating
                 ? 'K2 is still applying updates. This can take a minute on a large upgrade — you can keep waiting, or reload below.'
                 : "Your K2 daemon may still be loading. If you're unsure, quit and relaunch the app, or try reloading with the button below."}

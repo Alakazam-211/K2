@@ -238,6 +238,9 @@ pub mod port_claim;
 // the hook owner check (macOS proc_pidinfo, Linux /proc).
 pub mod proc_ancestry;
 pub mod project_config;
+// Linux package SHA256SUMS parsing + verification (desktop updater pkexec
+// install refuses a package without a matching line).
+pub mod release_sums;
 // Projects V1 P1 (prd-projects-v1) — named GROUPS of workspaces
 // (`project_groups`, NOT the legacy `projects` workspace registry):
 // membership + PoC rules, the per-group chat stream, and canonical

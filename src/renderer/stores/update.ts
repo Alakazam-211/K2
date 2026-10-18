@@ -25,6 +25,19 @@ interface InstallUpdateProbe {
   version: string | null
   has_update: boolean
   download_url: string | null
+  /** Rust says this deb/rpm/Arch install can take the in-app download +
+   *  SHA256SUMS verify + pkexec install (commands::linux_pkg_update).
+   *  Missing/false keeps the open-the-download offer. */
+  can_install?: boolean
+}
+
+/** `install_linux_package_update` result. `installed` → relaunch next;
+ *  `manual` → the verified file is staged, show message + command. */
+export interface LinuxInstallOutcome {
+  status: 'installed' | 'manual'
+  message: string
+  manual_command: string | null
+  daemon: { outcome: string; message: string | null } | null
 }
 
 interface UpdateState {
@@ -36,9 +49,21 @@ interface UpdateState {
   /** Linux package offer (Arch: the pacman asset; deb/rpm: the release
    *  page). Set only when plugin-updater is skipped. */
   archDownloadUrl: string | null
+  /** Linux package install can run in-app (pkexec). */
+  linuxCanInstall: boolean
+  /** The in-app Linux install is running (download, verify, pkexec). */
+  linuxInstalling: boolean
+  /** pkexec could not run (missing, cancelled, no agent, tool failed):
+   *  the exact command for a terminal. */
+  linuxManualCommand: string | null
   checkForUpdate: () => Promise<boolean>
-  /** Available-row Download: Arch opens the pkg, anything else runs the installer. */
+  /** Available-row button: Linux packages install in-app when they can
+   *  (else open the package / release page); anything else runs the
+   *  Tauri updater download. */
   openAvailableDownload: () => Promise<void>
+  /** Download, verify against SHA256SUMS, pkexec install, restart the
+   *  local daemon, relaunch. */
+  installLinuxPackage: () => Promise<void>
   startDownload: () => Promise<void>
   installAndRelaunch: () => Promise<void>
 }
@@ -75,13 +100,22 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
   progress: 0,
   error: null,
   archDownloadUrl: null,
+  linuxCanInstall: false,
+  linuxInstalling: false,
+  linuxManualCommand: null,
 
   checkForUpdate: async () => {
     if (isAirgap()) {
-      set({ status: 'idle', error: null, archDownloadUrl: null })
+      set({ status: 'idle', error: null, archDownloadUrl: null, linuxCanInstall: false })
       return false
     }
-    set({ status: 'checking', error: null, archDownloadUrl: null })
+    set({
+      status: 'checking',
+      error: null,
+      archDownloadUrl: null,
+      linuxCanInstall: false,
+      linuxManualCommand: null,
+    })
     try {
       const probe = await invoke<InstallUpdateProbe>('probe_install_update')
       // Linux packages (Arch, deb, rpm) update from their package, not the
@@ -95,6 +129,7 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
             notes: null,
             error: null,
             archDownloadUrl: probe.download_url,
+            linuxCanInstall: probe.can_install === true,
           })
           return true
         }
@@ -142,6 +177,10 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
 
   openAvailableDownload: async () => {
     const url = get().archDownloadUrl
+    if (url && get().linuxCanInstall) {
+      await get().installLinuxPackage()
+      return
+    }
     if (url) {
       try {
         await invoke('plugin:opener|open_url', { url })
@@ -151,6 +190,42 @@ export const useUpdateStore = create<UpdateState>((set, get) => ({
       return
     }
     await get().startDownload()
+  },
+
+  installLinuxPackage: async () => {
+    const version = get().version
+    if (!version || !get().linuxCanInstall || get().linuxInstalling) return
+    set({ status: 'downloading', progress: 0, error: null, linuxInstalling: true, linuxManualCommand: null })
+    let outcome: LinuxInstallOutcome
+    try {
+      outcome = await invoke<LinuxInstallOutcome>('install_linux_package_update', { version })
+    } catch (err) {
+      // Refused: no SHA256SUMS line, hash mismatch, download failure.
+      console.error('[updater] Linux package install refused:', err)
+      set({ status: 'error', error: updateErrorText(err), linuxInstalling: false })
+      return
+    }
+    if (outcome.status !== 'installed') {
+      set({
+        status: 'error',
+        error: outcome.message,
+        linuxInstalling: false,
+        linuxManualCommand: outcome.manual_command,
+      })
+      return
+    }
+    set({ status: 'ready', progress: 100 })
+    try {
+      // Exits this process; the helper starts the packaged launcher.
+      await invoke('relaunch_after_linux_package_update')
+    } catch (err) {
+      console.error('[updater] Relaunch after Linux install failed:', err)
+      set({
+        status: 'error',
+        error: `K2 v${version} is installed. Please reopen K2 to use it. (${updateErrorText(err)})`,
+        linuxInstalling: false,
+      })
+    }
   },
 
   startDownload: async () => {

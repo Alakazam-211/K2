@@ -16,6 +16,9 @@ pub mod workspace_ops;
 // the rest of Unit 6's batch. The renderer hits `/cli/chat/*` on
 // k2so-daemon directly.
 pub mod updater;
+// Linux deb/rpm/Arch: in-app download + SHA256SUMS verify + pkexec install
+// + local daemon restart + relaunch (OS integration; SUMS logic in k2-core).
+pub mod linux_pkg_update;
 // Phase 2 Unit 5 — `claude_auth` command shims deleted. The renderer
 // hits `/cli/claude-auth/*` on k2so-daemon directly; no Tauri-side
 // command surface for it remains. Scheduler ownership (the launchd

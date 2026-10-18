@@ -57,6 +57,9 @@ pub use k2_core::{perf, perf_hist, perf_timer};
 // in-process. Small for now (ping + status); grows as daemon handlers
 // land.
 mod daemon_client;
+// Linux: restart the local k2-daemon user service when its version differs
+// from the app's (the launchctl kickstart twin), with the gate's state.
+mod linux_daemon;
 // Phase 2 Unit 1 — companion bridges (settings + terminal + event
 // sink + app event source) moved to k2so-daemon. The daemon now
 // owns the ngrok tunnel and registers its own providers against
@@ -204,21 +207,31 @@ fn check_daemon_version_and_restart() {
                 );
                 return;
             }
-            // Linux .deb: systemd owns the daemon — do not kill from the
-            // thin client. Windows NSIS: the bundled k2-daemon.exe sits
-            // next to k2.exe; after an in-app update the OLD process is
-            // often still holding the port while the NEW k2.exe waits
-            // forever in ConnectionGate (exact version). Kill + respawn.
+            // Linux: systemd owns the daemon (user unit k2-daemon.service).
+            // pacman/apt/dnf run as root and cannot restart a user unit, so
+            // after a package upgrade the OLD daemon keeps answering and the
+            // new app waits forever on the exact-version gate. Restart the
+            // LOCAL unit ourselves and wait for the matching version
+            // (linux_daemon.rs: loopback + same user + unit MainPID only;
+            // explains drop-in overrides instead of editing them).
+            // Windows NSIS: the bundled k2-daemon.exe sits next to k2.exe;
+            // after an in-app update the OLD process is often still holding
+            // the port while the NEW k2.exe waits forever in ConnectionGate
+            // (exact version). Kill + respawn.
             #[cfg(target_os = "linux")]
             {
                 log_debug!(
-                    "[version-check] STALE daemon=v{} app=v{} version_match={} stale_binary={} (attempt={}); launchd unavailable on this platform — restart the k2-daemon service manually (e.g. systemctl --user restart k2-daemon)",
+                    "[version-check] STALE daemon=v{} app=v{} version_match={} stale_binary={} (attempt={}); reconciling the k2-daemon user service",
                     status.version,
                     app_version,
                     version_match,
                     stale_binary,
                     attempt
                 );
+                if !version_match {
+                    let report = crate::linux_daemon::reconcile(app_version);
+                    log_debug!("[version-check] linux reconcile: {report:?}");
+                }
                 return;
             }
             #[cfg(windows)]
@@ -2038,6 +2051,9 @@ pub fn run() {
             commands::updater::get_current_version,
             commands::updater::probe_install_update,
             commands::updater::broadcast_sync,
+            commands::linux_pkg_update::install_linux_package_update,
+            commands::linux_pkg_update::relaunch_after_linux_package_update,
+            commands::linux_pkg_update::local_daemon_update_state,
             // Plan B cleanup — `workspace_layout_*` command surface
             // deleted. Routed daemon data; the renderer reaches it
             // host-aware via `/cli/workspace-layouts/*` on the active

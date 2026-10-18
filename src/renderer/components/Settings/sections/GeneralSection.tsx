@@ -126,6 +126,9 @@ export function GeneralSection(): React.JSX.Element {
   const updateProgress = useUpdateStore((s) => s.progress)
   const updateError = useUpdateStore((s) => s.error)
   const updatePackageUrl = useUpdateStore((s) => s.archDownloadUrl)
+  const linuxCanInstall = useUpdateStore((s) => s.linuxCanInstall)
+  const linuxInstalling = useUpdateStore((s) => s.linuxInstalling)
+  const linuxManualCommand = useUpdateStore((s) => s.linuxManualCommand)
 
   // Load current version on mount
   useEffect(() => {
@@ -262,7 +265,12 @@ export function GeneralSection(): React.JSX.Element {
             <div>
               <p className="text-xs text-[var(--color-text-primary)]">K2 v{updateVersion} is available</p>
               <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">You&apos;re on v{currentVersion}</p>
-              {updatePackageUrl && (
+              {updatePackageUrl && linuxCanInstall && (
+                <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5" data-testid="linux-package-update-hint">
+                  K2 downloads the package, checks it against the release&apos;s SHA256SUMS, and asks for your password to install it. The app and its daemon then restart.
+                </p>
+              )}
+              {updatePackageUrl && !linuxCanInstall && (
                 <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5" data-testid="linux-package-update-hint">
                   Updates on Linux come from your package (deb, rpm or Arch). Download opens the new version on GitHub releases.
                 </p>
@@ -272,13 +280,21 @@ export function GeneralSection(): React.JSX.Element {
               className="px-3 py-1 text-xs font-medium bg-[var(--color-accent)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent)]/90 transition-colors no-drag cursor-pointer"
               onClick={() => void useUpdateStore.getState().openAvailableDownload()}
             >
-              Download
+              {updatePackageUrl && linuxCanInstall ? 'Install & Relaunch' : 'Download'}
             </button>
           </div>
         )}
 
         {/* Downloading */}
-        {webFeatures.appUpdater && updateStatus === 'downloading' && (
+        {webFeatures.appUpdater && updateStatus === 'downloading' && linuxInstalling && (
+          <div className="p-3 border border-[var(--color-border)]" data-testid="linux-package-installing">
+            <p className="text-xs text-[var(--color-text-primary)]">Installing v{updateVersion}...</p>
+            <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+              Downloading and checking the package. K2 will ask for your password, then restart.
+            </p>
+          </div>
+        )}
+        {webFeatures.appUpdater && updateStatus === 'downloading' && !linuxInstalling && (
           <div className="p-3 border border-[var(--color-border)]">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs text-[var(--color-text-primary)]">Downloading v{updateVersion}...</span>
@@ -313,6 +329,19 @@ export function GeneralSection(): React.JSX.Element {
         {webFeatures.appUpdater && updateStatus === 'error' && (
           <div className="p-3 border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)]">
             <p className="text-[10px] text-[var(--color-status-error-soft)]">{updateError}</p>
+            {linuxManualCommand && (
+              <div className="mt-2 flex items-start gap-2" data-testid="linux-package-manual-command">
+                <code className="flex-1 min-w-0 break-all select-text text-[10px] p-1.5 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]">
+                  {linuxManualCommand}
+                </code>
+                <button
+                  className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"
+                  onClick={() => void navigator.clipboard?.writeText(linuxManualCommand)}
+                >
+                  Copy
+                </button>
+              </div>
+            )}
             <div className="flex items-center gap-2 mt-2">
               <button
                 className="px-2 py-0.5 text-[10px] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors no-drag cursor-pointer"

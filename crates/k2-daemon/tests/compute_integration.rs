@@ -1367,6 +1367,8 @@ async fn queue_view_shows_whats_ahead_and_the_numbers() {
     let msg = q["message"].as_str().expect("message");
     assert!(msg.starts_with("asks 4 CPUs; ") && msg.contains("of 6 CPUs free; 1 running"), "{msg}");
     // A's next job is behind its grant (1 parallel), second in the queue.
+    // FIFO is by created_at (whole seconds), then id: make the order certain.
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     let third = submit(a.clone(), vec!["true"], "client-dxa-queue-0003", None).await;
     let third_id = third["job"]["id"].as_str().expect("id").to_string();
     let v = job_json(port, &a, &third_id).await;
@@ -1486,7 +1488,9 @@ async fn limits_up_front_and_the_mem_cap_hint() {
     let ws = seed_ws(&env, "dxa-limits");
     let bare = seed_ws(&env, "dxa-nogrant");
     let (agent, _) = passport(&ws);
-    let (running, _) = online_node_for(&env, port, "dxa-limits", &ws).await;
+    let (running, node_id) = online_node_for(&env, port, "dxa-limits", &ws).await;
+    // The default disk is min(25% of the node's free disk, 60 GB): read it back.
+    let disk = grant_of(&ws.id, &node_id).expect("grant")["maxDiskGb"].as_i64().expect("maxDiskGb");
     let mut body = run_body("dxa-limits", &["true"], "client-dxa-limits-0001");
     body["timeoutSecs"] = json!(3 * 3600);
     let r = post(port, "/cli/compute/run", &agent, body).await;
@@ -1495,8 +1499,10 @@ async fn limits_up_front_and_the_mem_cap_hint() {
     let hint = j(&r)["error"]["hint"].as_str().expect("hint").to_string();
     assert_eq!(
         hint,
-        "--timeout 3h is over this grant's 2h per job on dxa-limits (grant: 2h/job, 1 parallel, 10 queued, 60 GB disk). \
-         Ask your owner: k2 compute grant dxa-limits --workspace dxa-limits --max-time 3h"
+        format!(
+            "--timeout 3h is over this grant's 2h per job on dxa-limits (grant: 2h/job, 1 parallel, 10 queued, {disk} GB disk). \
+             Ask your owner: k2 compute grant dxa-limits --workspace dxa-limits --max-time 3h"
+        )
     );
     // The owner without a grant for that workspace: the default, no grant command.
     let mut body = run_body("dxa-limits", &["true"], "client-dxa-limits-0002");
@@ -1520,7 +1526,7 @@ async fn limits_up_front_and_the_mem_cap_hint() {
     let r = post(port, "/cli/compute/run", &agent, body).await;
     assert_eq!((r.status, code(&r)), (409, "queue_full".to_string()), "{}", r.body);
     let hint = j(&r)["error"]["hint"].as_str().expect("hint").to_string();
-    assert!(hint.contains("(grant: 2h/job, 1 parallel, 1 queued, 60 GB disk)") && hint.contains("--max-queued 2"), "{hint}");
+    assert!(hint.contains(&format!("(grant: 2h/job, 1 parallel, 1 queued, {disk} GB disk)")) && hint.contains("--max-queued 2"), "{hint}");
     // A mem_cap end gets a hint naming the --mem it ran with.
     {
         let db = k2_core::db::shared();

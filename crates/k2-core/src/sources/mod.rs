@@ -59,6 +59,9 @@ pub const MAX_ITEMS: usize = 200;
 pub const MAX_STRING: usize = 200;
 pub const MAX_PROJECTION_BYTES: usize = 64 * 1024;
 pub const MAX_TREND_SERIES: usize = 8;
+/// History series per source: the trend, then counts and aggregates
+/// (0.46.1).
+pub const MAX_HISTORY_SERIES: usize = 24;
 pub const REFRESH_MIN_SECS: u32 = 15;
 /// One request every 2 s per origin.
 pub const ORIGIN_RATE_PER_SEC: f64 = 0.5;
@@ -206,6 +209,9 @@ pub struct FetchPlan {
     pub secret_workspace: Option<String>,
     pub timeout_secs: u32,
     pub max_bytes: u32,
+    /// `expect.status` (0.46.1): these statuses are answers, whatever the
+    /// body; `None` = JSON 2xx only.
+    pub expect_status: Option<Vec<u16>>,
 }
 
 #[derive(Debug, Clone)]

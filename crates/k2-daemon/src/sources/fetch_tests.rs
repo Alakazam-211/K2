@@ -78,6 +78,7 @@ pub(crate) fn plan(origin: &str, path: &str, lan: bool) -> FetchPlan {
         secret_workspace: None,
         timeout_secs: 5,
         max_bytes: 1 << 20,
+        expect_status: None,
     }
 }
 
@@ -122,6 +123,53 @@ fn json_304_and_status_codes_map_to_outcomes() {
     assert_eq!(reason("/teapot"), Reason::Http4xx);
     assert_eq!(reason("/boom"), Reason::Http5xx);
     assert_eq!(reason("/away"), Reason::RedirectOtherOrigin);
+}
+
+#[test]
+fn expect_status_makes_listed_statuses_answers_whatever_the_body() {
+    let _a = AirgapEnv::set(false);
+    let f = Fake::start(|head| {
+        let path = head.split_whitespace().nth(1).unwrap_or("/").to_string();
+        match path.as_str() {
+            "/html" => http("200 OK", &[], b"<html>k2.dev</html>"),
+            "/auth" => http("401 Unauthorized", &[], b"login required"),
+            "/json401" => http("401 Unauthorized", &[], br#"{"error":"auth"}"#),
+            "/boom" => http("500 Internal Server Error", &[], b"{}"),
+            "/nocontent" => http("204 No Content", &[], b""),
+            _ => http("404 Not Found", &[], b""),
+        }
+    });
+    let o = f.origin();
+    let with = |p: &str, x: &[u16]| {
+        let mut pl = plan(&o, p, true);
+        pl.expect_status = Some(x.to_vec());
+        fetch_once(&pl)
+    };
+    match with("/html", &[200, 401]) {
+        FetchOutcome::Ok { status, body, .. } => assert_eq!((status, body), (200, serde_json::Value::Null), "HTML reads as null"),
+        other => panic!("{other:?}"),
+    }
+    match with("/auth", &[200, 401]) {
+        FetchOutcome::Ok { status, body, .. } => assert_eq!((status, body), (401, serde_json::Value::Null), "401 is an answer"),
+        other => panic!("{other:?}"),
+    }
+    match with("/json401", &[401]) {
+        FetchOutcome::Ok { body, .. } => assert_eq!(body["error"], "auth", "JSON is still read"),
+        other => panic!("{other:?}"),
+    }
+    match with("/boom", &[200, 401]) {
+        FetchOutcome::Err { reason, http_status, .. } => assert_eq!((reason, http_status), (Reason::Http5xx, Some(500))),
+        other => panic!("{other:?}"),
+    }
+    match with("/nocontent", &[401]) {
+        FetchOutcome::Err { reason, .. } => assert_eq!(reason, Reason::UnexpectedStatus, "an unlisted 2xx isn't the answer"),
+        other => panic!("{other:?}"),
+    }
+    // Without expect the same answers fail as before.
+    match fetch_once(&plan(&o, "/auth", true)) {
+        FetchOutcome::Err { reason, .. } => assert_eq!(reason, Reason::HttpAuth),
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]

@@ -267,7 +267,7 @@ impl Sched {
 
     fn save_gap(&self, conn: &Connection, id: &str, st: &SourceState, from: i64, to: i64) -> Option<i64> {
         let e = self.entries.get(id)?;
-        let trend = e.spec.extract.trend.clone();
+        let trend = k2_core::sources::state::history_series(&e.spec);
         let keep_values = e.spec.keep == Keep::Values;
         store::tx(conn, |c| {
             let rev = store::save_state(c, st, None)?;
@@ -468,6 +468,7 @@ impl Sched {
             secret_workspace: e.row.secret_workspace.clone(),
             timeout_secs: spec.timeout_secs,
             max_bytes: spec.max_bytes,
+            expect_status: spec.expect.as_ref().map(|x| x.status.clone()),
         };
         match &spec.fetch {
             FetchTargets::Url(u) => {

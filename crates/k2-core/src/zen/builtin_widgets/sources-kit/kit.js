@@ -48,6 +48,15 @@
     return Math.floor(s / 86400) + ' d ago'
   }
 
+  /** "soft crit 2/3" (0.46.1: the reading waiting to go hard), or the
+   *  older "retrying 2/3" when the daemon sends no level; '' when nothing
+   *  waits. */
+  function softHint(soft) {
+    if (!soft || !(soft.count > 0)) return ''
+    if (soft.level) return 'soft ' + soft.level + ' ' + soft.count + '/' + soft.of
+    return soft.count < soft.of ? 'retrying ' + soft.count + '/' + soft.of : ''
+  }
+
   /** Wall time HH:MM on this computer for seconds since the epoch. */
   function clock(t) {
     var d = new Date(t * 1000)
@@ -128,8 +137,8 @@
       } else {
         meta.appendChild(el('span', 'k2c-age', 'no check yet'))
       }
-      var soft = view.soft
-      if (soft && soft.count > 0 && soft.count < soft.of) meta.appendChild(el('span', 'k2c-soft', 'retrying ' + soft.count + '/' + soft.of))
+      var softText = softHint(view.soft)
+      if (softText) meta.appendChild(el('span', 'k2c-soft', softText))
       if (view.recoveredAt && now - view.recoveredAt < HOUR && view.display === 'ok') {
         meta.appendChild(el('span', 'k2c-recovered', 'recovered ' + ago(now - view.recoveredAt)))
       }
@@ -181,7 +190,8 @@
         if (v !== undefined && v !== null && v !== '') detail.push(String(v))
       }
       if (it.reason) detail.push(it.reason.replace(/_/g, ' '))
-      if (it.soft && it.soft.count > 0 && it.soft.count < it.soft.of) detail.push('retrying ' + it.soft.count + '/' + it.soft.of)
+      var itSoft = softHint(it.soft)
+      if (itSoft) detail.push(itSoft)
       if (detail.length) tile.appendChild(el('div', 'k2c-tile-detail', detail.join(' · ')))
       if (opts.ask && (st === 'crit' || st === 'stale' || st === 'unknown')) {
         var b = el('button', 'k2c-ask', 'Ask an agent')

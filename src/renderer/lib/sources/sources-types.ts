@@ -43,12 +43,18 @@ export type Reason =
   | 'redirect_other_origin'
   | 'budget'
   | 'paused_by_person'
+  /** `expect.status` didn't list the status (0.46.1). */
+  | 'unexpected_status'
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
+/** A reading waiting to go hard: `count` checks in a row of `of`
+ *  needed. `level` (0.46.1) is the waiting reading (`soft crit 2/3`);
+ *  null/absent when nothing waits. */
 export interface Soft {
   count: number
   of: number
+  level?: Health | null
 }
 
 export interface Counts {
@@ -82,6 +88,9 @@ export interface SourceSimulated {
 
 export interface ItemView {
   key: string
+  /** The `extract.lists` entry (0.46.1); absent for `items`. The key is
+   *  then `<list>/<itemKey>`. */
+  list?: string
   health: Health
   reason: Reason | null
   /** Seconds: when this item went hard. */
@@ -144,25 +153,46 @@ export type FetchTargets =
   | { targets: FetchTarget[] }
   | { urlSecret: { name: string; origin: string } }
 
+/** `{field}`: another field of the same item, else a source field (0.46.1). */
+export interface FieldRef {
+  field: string
+}
+
+export type Operand = number | FieldRef
+
+/** A version, or a field/value with at most one distance (0.46.1). */
+export type VersionRef =
+  | string
+  | { field?: string; value?: string; major?: number; minor?: number; patch?: number }
+
 export type Cond =
-  | { eq: JsonValue }
-  | { ne: JsonValue }
+  | { eq: JsonValue | FieldRef }
+  | { ne: JsonValue | FieldRef }
   | { in: JsonValue[] }
-  | { lt: number }
-  | { lte: number }
-  | { gt: number }
-  | { gte: number }
+  | { lt: Operand }
+  | { lte: Operand }
+  | { gt: Operand }
+  | { gte: Operand }
   | { exists: boolean }
+  /** Seconds since a timestamp field (epoch s/ms or RFC 3339), 0.46.1. */
+  | { ageGt: number }
+  | { ageLt: number }
+  | { versionBehind: VersionRef }
+  | { versionAtLeast: VersionRef }
 
 export interface Rule {
   field: string
   crit?: Cond | null
   warn?: Cond | null
   ok?: Cond | null
+  /** Checks in a row before warn goes hard (1-20, default 1), 0.46.1. */
+  warnAfter?: number
+  /** Checks in a row, the last crit, before crit goes hard (default warnAfter). */
+  critAfter?: number
 }
 
 export type Aggregate =
-  | { op: 'count' }
+  | { op: 'count'; list?: string }
   | { op: 'countWhere'; field: string; cond: Cond }
   | { op: 'sum'; field: string }
   | { op: 'min'; field: string }
@@ -178,8 +208,17 @@ export interface ItemsSpec {
 export interface Extract {
   fields?: Record<string, string>
   items?: ItemsSpec | null
+  /** More item lists by name (single-URL only), 0.46.1. */
+  lists?: Record<string, ItemsSpec>
+  /** name -> pointer; keeps the array/object length, 0.46.1. */
+  counts?: Record<string, string>
   aggregates?: Record<string, Aggregate>
   trend?: string[]
+}
+
+/** Status-only checks, 0.46.1: listed statuses are healthy answers. */
+export interface Expect {
+  status: number[]
 }
 
 /** `GET /cli/sources/export`; the body of `propose` / `add`. */
@@ -204,6 +243,7 @@ export interface SourceExport {
   agentAccess?: AgentAccess | null
   viewers?: Viewers | null
   keep?: Keep
+  expect?: Expect | null
 }
 
 /** A preset-based `propose` / `add` body. */

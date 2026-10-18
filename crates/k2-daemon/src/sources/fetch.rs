@@ -76,7 +76,7 @@ pub fn fetch_detailed(plan: &FetchPlan) -> Fetched {
             if let Some(extra) = &resolved.extra_redact {
                 r.body = extra.redact(&r.body);
             }
-            from_response(r, elapsed_ms)
+            from_response(r, elapsed_ms, plan.expect_status.as_deref())
         }
         Err(e) => Fetched { outcome: err(reason_for(&e), None, None), park_secs: None },
     }
@@ -139,15 +139,37 @@ thread_local! {
     pub(crate) static PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-fn from_response(r: vault_fetch::FetchResult, elapsed_ms: u32) -> Fetched {
+fn from_response(r: vault_fetch::FetchResult, elapsed_ms: u32, expect: Option<&[u16]>) -> Fetched {
     let status = r.status;
     let park = match status {
         429 | 503 => retry_after(&r).or_else(|| window_spent(&r)).or((status == 429).then_some(60)),
         _ => window_spent(&r),
     };
-    let outcome = if r.truncated {
+    let outcome = if expect.is_some_and(|x| x.contains(&status)) {
+        // A status-only check (`expect.status`, 0.46.1): a listed status is
+        // an answer. JSON is read when it parses (and wasn't cut); anything
+        // else reads as null. A cut body is never parsed [GV41].
+        let body = if r.truncated {
+            serde_json::Value::Null
+        } else {
+            #[cfg(test)]
+            PARSES.with(|c| c.set(c.get() + 1));
+            serde_json::from_slice::<serde_json::Value>(&r.body).unwrap_or(serde_json::Value::Null)
+        };
+        FetchOutcome::Ok {
+            status,
+            body,
+            not_modified: false,
+            etag: header(&r, "etag").map(str::to_string),
+            last_modified: header(&r, "last-modified").map(str::to_string),
+            elapsed_ms,
+        }
+    } else if r.truncated {
         // Never parsed: a cut body is `too_large` [GV41].
         err(Reason::TooLarge, Some(status), None)
+    } else if expect.is_some() && (200..=299).contains(&status) {
+        // Expecting other statuses: an unlisted 2xx isn't the answer.
+        err(Reason::UnexpectedStatus, Some(status), None)
     } else {
         match status {
             304 => FetchOutcome::Ok {

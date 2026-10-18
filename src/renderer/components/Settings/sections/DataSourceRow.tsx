@@ -41,6 +41,7 @@ export function stateText(row: SourceListRow): string {
   if (v.display === 'pending') return 'waiting for the first check'
   if (v.display === 'stale') return `stale${v.reasonText ? ` · ${v.reasonText}` : ''}`
   if (v.display === 'paused') return `paused${v.reasonText ? ` · ${v.reasonText}` : ''}`
+  if (v.soft.count > 0 && v.soft.level) return `${v.display} · soft ${v.soft.level} ${v.soft.count}/${v.soft.of}`
   if (v.soft.count > 0 && v.soft.count < v.soft.of) return `${v.display} · retrying ${v.soft.count}/${v.soft.of}`
   return v.display
 }

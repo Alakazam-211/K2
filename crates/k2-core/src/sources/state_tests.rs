@@ -156,31 +156,222 @@ fn a_never_reached_source_shows_stale_not_pending_after_fail_after() {
 }
 
 #[test]
-fn non_ok_readings_go_through_the_soft_count_and_escalation_keeps_the_incident() {
+fn rule_readings_go_hard_at_once_by_default_and_failafter_never_delays_them() {
+    // 0.46.1: failAfter (3 here) is for fetch failures only.
     let mut r = Run::new(single());
     let body = |s: &str| ok(json!({"status": {"indicator": "x"}, "open": 2, "components": [{"name": "api", "status": s}]}));
     r.poll(vec![(None, body("operational"))]);
     assert_eq!(r.st.items["api"].health, Health::Ok);
-    r.poll(vec![(None, body("degraded"))]);
-    r.poll(vec![(None, body("degraded"))]);
-    assert_eq!(r.st.items["api"].health, Health::Ok, "warn is soft until failAfter");
     let ts = r.poll(vec![(None, body("degraded"))]);
-    assert!(hard(&ts).contains(&(Some("api"), TransitionKind::WentWarn)));
+    assert!(hard(&ts).contains(&(Some("api"), TransitionKind::WentWarn)), "warn applies on the first check");
+    assert!(hard(&ts).contains(&(None, TransitionKind::WentWarn)));
+    assert!(!r.st.has_soft());
     let inc = r.st.items["api"].incident_id.clone().expect("incident opened");
-    for _ in 0..3 {
-        r.poll(vec![(None, body("major_outage"))]);
-    }
-    assert_eq!(r.st.items["api"].health, Health::Crit);
+    let ts = r.poll(vec![(None, body("major_outage"))]);
+    assert!(hard(&ts).contains(&(Some("api"), TransitionKind::WentCrit)));
     assert_eq!(r.st.items["api"].incident_id.as_deref(), Some(inc.as_str()), "warn → crit keeps the incident");
-    assert_eq!(r.st.incident_id.is_some(), true);
+    assert!(r.st.incident_id.is_some());
+    let ts = r.poll(vec![(None, body("operational"))]);
+    assert!(hard(&ts).contains(&(Some("api"), TransitionKind::Recovered)));
+    assert_eq!(r.st.items["api"].soft_count, 0, "ok ends the streak");
+}
 
-    // failAfter = 1: readings apply at once.
+#[test]
+fn warn_after_and_crit_after_escalate_per_rule() {
     let mut s = single();
-    s.fail_after = 1;
+    s.rules = vec![serde_json::from_value(json!({
+        "field": "status", "crit": {"eq": "major_outage"}, "warn": {"eq": "degraded"}, "ok": {"eq": "operational"},
+        "warnAfter": 1, "critAfter": 3
+    }))
+    .unwrap()];
+    let mut r = Run::new(s);
+    let body = |s: &str| ok(json!({"status": {"indicator": "x"}, "open": 2, "components": [{"name": "api", "status": s}]}));
+    r.poll(vec![(None, body("operational"))]);
+    // A crit reading shows as warn at once and goes crit on the 3rd check.
+    let ts = r.poll(vec![(None, body("major_outage"))]);
+    assert_eq!(hard(&ts), vec![(Some("api"), TransitionKind::WentWarn), (None, TransitionKind::WentWarn)]);
+    let it = &r.st.items["api"];
+    assert_eq!((it.health, it.soft_health, it.soft_count), (Health::Warn, Some(Health::Crit), 1), "soft crit 1/3");
+    assert!(r.st.has_soft());
+    assert!(hard(&r.poll(vec![(None, body("major_outage"))])).is_empty());
+    assert_eq!(r.st.items["api"].soft_count, 2);
+    let ts = r.poll(vec![(None, body("major_outage"))]);
+    assert_eq!(hard(&ts), vec![(Some("api"), TransitionKind::WentCrit), (None, TransitionKind::WentCrit)]);
+    assert_eq!(r.st.items["api"].soft_health, None);
+    // Recovery is at once; then a degraded/crit mix counts as one streak.
+    r.poll(vec![(None, body("operational"))]);
+    assert_eq!(r.st.items["api"].health, Health::Ok);
+    r.poll(vec![(None, body("degraded"))]);
+    r.poll(vec![(None, body("major_outage"))]);
+    assert_eq!(r.st.items["api"].health, Health::Warn);
+    r.poll(vec![(None, body("major_outage"))]);
+    assert_eq!(r.st.items["api"].health, Health::Crit, "3 not-ok checks in a row, the last crit");
+
+    // warnAfter 2: the first warn is soft.
+    let mut s = single();
+    s.rules[0].warn_after = Some(2);
     let mut r = Run::new(s);
     r.poll(vec![(None, body("operational"))]);
-    let ts = r.poll(vec![(None, body("degraded"))]);
-    assert!(hard(&ts).contains(&(Some("api"), TransitionKind::WentWarn)));
+    assert!(hard(&r.poll(vec![(None, body("degraded"))])).is_empty());
+    assert_eq!(r.st.items["api"].soft_health, Some(Health::Warn));
+    assert!(hard(&r.poll(vec![(None, body("degraded"))])).contains(&(Some("api"), TransitionKind::WentWarn)));
+}
+
+#[test]
+fn soft_of_names_the_threshold_of_the_waiting_reading() {
+    let rated = rules::Rated { health: Health::Crit, warn_after: 1, crit_after: 3 };
+    assert_eq!(soft_of(Some(Health::Crit), Some(rated), false, 5), 3);
+    assert_eq!(soft_of(Some(Health::Warn), Some(rated), false, 5), 1);
+    assert_eq!(soft_of(Some(Health::Unknown), Some(rated), false, 5), 5);
+    assert_eq!(soft_of(Some(Health::Crit), Some(rated), true, 5), 5, "a fetch failure waits failAfter");
+}
+
+/// The Fleet Ops shape: K2 Web's ops summary serves the boxes, each with a
+/// version and a last-seen time, the fleet target version, and a cert list.
+fn fleet_ops() -> SourceSpec {
+    let v: SourceSpec = serde_json::from_value(json!({
+        "name": "k2-ops-boxes", "label": "K2 boxes", "fetch": {"url": "https://k2.dev/api/ops/fleet?part=boxes"},
+        "secret": "K2_OPS_READ_TOKEN", "everySecs": 60, "failAfter": 3,
+        "extract": {
+            "fields": {"target_version": "/target_version", "ts": "/ts"},
+            "counts": {"past_due_n": "/past_due"},
+            "items": {"pointer": "/boxes", "itemKey": "/name", "itemFields": {"version": "/version", "seen": "/last_seen"}},
+            "lists": {"certs": {"pointer": "/certs", "itemKey": "/host", "itemFields": {"cert_days": "/days_left"}}},
+            "aggregates": {
+                "behind": {"op": "countWhere", "field": "version", "cond": {"versionBehind": {"field": "target_version"}}},
+                "far_behind": {"op": "countWhere", "field": "version",
+                               "cond": {"versionBehind": {"field": "target_version", "minor": 1}}}
+            },
+            "trend": ["behind", "far_behind"]
+        },
+        "rules": [
+            {"field": "ts", "crit": {"ageGt": 900}, "warn": {"ageGt": 300}, "ok": {"exists": true}},
+            {"field": "version", "warn": {"versionBehind": {"field": "target_version"}},
+             "crit": {"versionBehind": {"field": "target_version", "minor": 1}},
+             "ok": {"versionAtLeast": {"field": "target_version"}}, "critAfter": 3},
+            {"field": "seen", "crit": {"ageGt": 600}, "ok": {"ageLt": 600}, "warnAfter": 1, "critAfter": 2},
+            {"field": "cert_days", "crit": {"lt": 7}, "warn": {"lt": 21}, "ok": {"gte": 21}},
+            {"field": "past_due_n", "warn": {"gt": 0}, "ok": {"eq": 0}}
+        ]
+    }))
+    .expect("the Fleet Ops spec parses");
+    v.validate(false).expect("the Fleet Ops spec validates").spec
+}
+
+#[test]
+fn fleet_ops_fixture_stale_behind_target_and_crit_after_n() {
+    let spec = fleet_ops();
+    let mut r = Run::new(spec);
+    let body = |now: i64, ts_age: i64, ohana: &str, luzz_seen_age: i64, past_due: usize| {
+        ok(json!({
+            "ts": now - ts_age,
+            "target_version": "0.46.0",
+            "past_due": vec![json!({"id": "x"}); past_due],
+            "boxes": [
+                {"name": "akzm", "version": "0.46.0", "last_seen": now - 30},
+                {"name": "ohana", "version": ohana, "last_seen": now - 30},
+                {"name": "luzz", "version": "0.46.1", "last_seen": now - luzz_seen_age}
+            ],
+            "certs": [{"host": "k2.dev", "days_left": 60}, {"host": "app.k2.dev", "days_left": 12}]
+        }))
+    };
+    let next = |r: &Run| r.now + 60;
+
+    // All current except a cert in 12 days (warn at once, not after failAfter).
+    let ts = r.poll(vec![(None, body(next(&r), 10, "0.46.0", 30, 0))]);
+    assert_eq!(r.st.items["akzm"].health, Health::Ok);
+    assert_eq!(r.st.items["luzz"].health, Health::Ok, "ahead of target is ok");
+    assert_eq!(r.st.items["certs/app.k2.dev"].health, Health::Warn);
+    assert_eq!(r.st.items["certs/k2.dev"].health, Health::Ok);
+    assert_eq!(r.st.health, Health::Warn);
+    assert!(hard(&ts).contains(&(None, TransitionKind::WentWarn)));
+    let p = r.proj.clone().unwrap();
+    assert_eq!((p.fields["behind"].clone(), p.fields["far_behind"].clone()), (json!(0), json!(0)));
+    assert_eq!(p.fields["past_due_n"], json!(0));
+
+    // ohana falls one patch behind: warn on the first check.
+    r.poll(vec![(None, body(next(&r), 10, "0.45.9", 30, 0))]);
+    assert_eq!(r.st.items["ohana"].health, Health::Warn);
+    assert_eq!(r.proj.as_ref().unwrap().fields["behind"], json!(1));
+
+    // ohana a minor behind: warn now, crit after 3 checks in a row.
+    r.poll(vec![(None, body(next(&r), 10, "0.44.4", 30, 0))]);
+    assert_eq!(r.st.items["ohana"].health, Health::Warn);
+    assert_eq!(r.st.items["ohana"].soft_health, Some(Health::Crit));
+    assert_eq!(r.proj.as_ref().unwrap().fields["far_behind"], json!(1));
+    let ts = r.poll(vec![(None, body(next(&r), 10, "0.44.4", 30, 0))]);
+    assert_eq!(hard(&ts), vec![(Some("ohana"), TransitionKind::WentCrit), (None, TransitionKind::WentCrit)], "streak of 3 (0.45.9, 0.44.4, 0.44.4)");
+
+    // The block's own timestamp goes old while it is still served: warn,
+    // then crit, with no fetch failing.
+    r.poll(vec![(None, body(next(&r), 0, "0.46.0", 30, 0))]);
+    assert_eq!(r.st.items["ohana"].health, Health::Ok);
+    assert_eq!(r.st.self_health, Some(Health::Ok));
+    r.poll(vec![(None, body(next(&r), 400, "0.46.0", 30, 0))]);
+    assert_eq!(r.st.self_health, Some(Health::Warn), "ts 400 s old");
+    r.poll(vec![(None, body(next(&r), 1000, "0.46.0", 30, 0))]);
+    assert_eq!(r.st.self_health, Some(Health::Crit), "ts 1000 s old");
+    assert_eq!(r.st.health, Health::Crit);
+    assert_eq!(r.st.phase, Phase::Live, "the fetch itself is fine");
+
+    // A box not seen for 10+ minutes: crit only after 2 checks.
+    r.poll(vec![(None, body(next(&r), 0, "0.46.0", 30, 0))]);
+    r.poll(vec![(None, body(next(&r), 0, "0.46.0", 900, 0))]);
+    assert_eq!(r.st.items["luzz"].health, Health::Warn, "crit after 2: warn first");
+    r.poll(vec![(None, body(next(&r), 0, "0.46.0", 900, 0))]);
+    assert_eq!(r.st.items["luzz"].health, Health::Crit);
+
+    // A second list shows up as a count: past_due goes warn at once.
+    r.poll(vec![(None, body(next(&r), 0, "0.46.0", 30, 2))]);
+    assert_eq!(r.proj.as_ref().unwrap().fields["past_due_n"], json!(2));
+    assert_eq!(r.st.self_health, Some(Health::Warn));
+
+    // Fetch failures still wait failAfter (3).
+    r.poll(vec![(None, body(next(&r), 0, "0.46.0", 30, 0))]);
+    assert_eq!(r.st.self_health, Some(Health::Ok));
+    for n in 1..=2 {
+        r.poll(vec![(None, fail(Reason::Http5xx))]);
+        assert_eq!(r.st.self_health, Some(Health::Ok), "fetch failure {n}/3 is soft");
+        assert_eq!(r.st.soft_health, Some(Health::Crit));
+    }
+    r.poll(vec![(None, fail(Reason::Http5xx))]);
+    assert_eq!(r.st.self_health, Some(Health::Crit));
+}
+
+#[test]
+fn history_points_cover_counts_and_aggregates_not_just_the_trend() {
+    let spec = fleet_ops();
+    let names = history_series(&spec);
+    assert_eq!(&names[..2], &["behind".to_string(), "far_behind".to_string()], "trend first");
+    assert!(names.contains(&"past_due_n".to_string()));
+    let now = 1_792_200_000;
+    let a = apply_poll(
+        &SourceState::new("s1"),
+        PollInput {
+            spec: &spec,
+            outcomes: vec![(None, ok(json!({"ts": now, "target_version": "0.46.0", "past_due": [1, 2, 3], "boxes": [], "certs": []})))],
+            now,
+            simulated: false,
+            prev_projection: None,
+        },
+    );
+    assert!(a.points.contains(&("past_due_n".to_string(), 3.0)), "{:?}", a.points);
+    assert!(a.points.contains(&("behind".to_string(), 0.0)));
+}
+
+#[test]
+fn expect_status_counts_listed_statuses_as_healthy_answers() {
+    let spec: SourceSpec = serde_json::from_value(json!({
+        "name": "connect", "label": "Connect", "fetch": {"url": "https://connect.k2.dev/"}, "everySecs": 60,
+        "expect": {"status": [200, 401]}
+    }))
+    .unwrap();
+    let spec = spec.validate(false).unwrap().spec;
+    let mut r = Run::new(spec);
+    // The daemon hands the core an Ok with a null body for a listed status.
+    let ts = r.poll(vec![(None, FetchOutcome::Ok { status: 401, body: Json::Null, not_modified: false, etag: None, last_modified: None, elapsed_ms: 3 })]);
+    assert_eq!((r.st.health, r.st.phase, r.st.http_status), (Health::Ok, Phase::Live, Some(401)));
+    assert!(hard(&ts).contains(&(None, TransitionKind::WentOk)));
 }
 
 #[test]

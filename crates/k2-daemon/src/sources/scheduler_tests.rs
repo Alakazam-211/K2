@@ -93,7 +93,11 @@ fn delays_jitter_soft_and_backoff() {
     }
     let mut st = SourceState::new("x");
     st.soft_count = 1;
-    assert_eq!(next_delay(&st, &spec), Duration::from_secs(60));
+    st.soft_health = Some(k2_core::sources::Health::Warn);
+    assert_eq!(next_delay(&st, &spec), Duration::from_secs(60), "a waiting reading re-checks sooner");
+    st.soft_health = None;
+    st.soft_count = 2;
+    assert!(next_delay(&st, &spec) > Duration::from_secs(100), "a streak with nothing waiting keeps the normal pace");
     st.soft_count = 0;
     st.fetch_failures = 3;
     st.backoff_k = 0;
@@ -334,4 +338,76 @@ fn an_expired_mute_is_cleared_and_reported() {
     h.step(&conn);
     assert!(h.posts.iter().any(|p| p.unmuted.iter().any(|r| r.id == row.id)));
     assert_eq!(store::get_by_id(&conn, &row.id).unwrap().unwrap().mute_until, None);
+}
+
+/// The Fleet Ops shape end to end through the scheduler and the store: one
+/// K2 Web summary with boxes, versions, the fleet target and the block's own
+/// timestamp. Behind target warns at once (failAfter 3 never delays it), a
+/// minor behind goes crit after 3 checks in a row (soft re-checks every
+/// 60 s), and an old `ts` that is still served goes crit with no fetch
+/// failing.
+#[test]
+fn fleet_ops_fixture_through_the_scheduler() {
+    let _a = AirgapEnv::set(false);
+    let g = k2_core::db::scoped_for_test();
+    let db = g.handle();
+    let conn = db.lock();
+    let row = add(
+        &conn,
+        json!({
+            "name": "k2-ops-boxes", "label": "K2 boxes", "fetch": {"url": "https://k2.dev/api/ops/fleet?part=boxes"},
+            "everySecs": 300, "failAfter": 3,
+            "extract": {
+                "fields": {"target_version": "/target_version", "ts": "/ts"},
+                "items": {"pointer": "/boxes", "itemKey": "/name", "itemFields": {"version": "/version"}},
+                "aggregates": {"behind": {"op": "countWhere", "field": "version",
+                                          "cond": {"versionBehind": {"field": "target_version"}}}}
+            },
+            "rules": [
+                {"field": "ts", "warn": {"ageGt": 300}, "crit": {"ageGt": 900}, "ok": {"exists": true}},
+                {"field": "version", "ok": {"versionAtLeast": {"field": "target_version"}},
+                 "warn": {"versionBehind": {"field": "target_version"}},
+                 "crit": {"versionBehind": {"field": "target_version", "minor": 1}}, "critAfter": 3}
+            ]
+        }),
+        false,
+    );
+    let ts = Arc::new(Mutex::new(T0 + 100_000));
+    let ts2 = ts.clone();
+    let mut h = Harness::new(
+        move |_| {
+            let t = *ts2.lock().unwrap();
+            ok_body(json!({"ts": t, "target_version": "0.46.0", "boxes": [
+                {"name": "akzm", "version": "0.46.0"}, {"name": "ohana", "version": "0.44.4"}, {"name": "luzz", "version": "0.45.9"}]}))
+        },
+        T0,
+    );
+    warm(&mut h, &conn);
+    let (st, proj) = store::load_state(&conn, &row.id).unwrap().unwrap();
+    assert_eq!(st.items["luzz"].health, Health::Warn, "behind target warns on the first check");
+    assert_eq!((st.items["ohana"].health, st.items["ohana"].soft_health), (Health::Warn, Some(Health::Crit)), "soft crit 1/3");
+    assert_eq!(st.items["akzm"].health, Health::Ok);
+    assert_eq!(proj.as_ref().unwrap().fields["behind"], json!(2));
+    // The card view says so too.
+    let row_now = store::get_by_id(&conn, &row.id).unwrap().unwrap();
+    let v = k2_core::sources::view::build(&row_now, &st, proj.as_ref(), k2_core::sources::Viewer::Person, h.wall);
+    let ohana = v.items.iter().find(|i| i.key == "ohana").unwrap();
+    assert_eq!((ohana.soft.count, ohana.soft.of, ohana.soft.level), (1, 3, Some(Health::Crit)));
+    for _ in 0..2 {
+        h.advance(60);
+        h.step(&conn);
+    }
+    let (st, _) = store::load_state(&conn, &row.id).unwrap().unwrap();
+    assert_eq!(st.items["ohana"].health, Health::Crit, "crit after 3 checks, re-checked every 60 s");
+    let ev = store::events(&conn, &row.id, 50).unwrap();
+    assert!(ev.iter().any(|e| e.kind == "went_crit" && e.item_key.as_deref() == Some("ohana")));
+    assert!(ev.iter().any(|e| e.kind == "went_warn" && e.item_key.as_deref() == Some("luzz")));
+    // The block's ts goes old while still served.
+    *ts.lock().unwrap() = T0 - 10_000;
+    h.advance(400);
+    h.step(&conn);
+    let (st, _) = store::load_state(&conn, &row.id).unwrap().unwrap();
+    assert_eq!(st.self_health, Some(Health::Crit), "stale data reads crit");
+    assert_eq!(st.phase, Phase::Live, "the fetch itself is fine");
+    assert_eq!(st.fetch_failures, 0);
 }

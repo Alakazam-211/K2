@@ -79,6 +79,8 @@ pub enum Reason {
     RedirectOtherOrigin,
     Budget,
     PausedByPerson,
+    /// `expect.status` didn't list the status (0.46.1).
+    UnexpectedStatus,
 }
 
 impl Reason {
@@ -104,6 +106,7 @@ impl Reason {
         Reason::RedirectOtherOrigin,
         Reason::Budget,
         Reason::PausedByPerson,
+        Reason::UnexpectedStatus,
     ];
 
     /// The stored and wire code (`source_state.reason`, `reason` in JSON).
@@ -130,6 +133,7 @@ impl Reason {
             Reason::RedirectOtherOrigin => "redirect_other_origin",
             Reason::Budget => "budget",
             Reason::PausedByPerson => "paused_by_person",
+            Reason::UnexpectedStatus => "unexpected_status",
         }
     }
 
@@ -161,6 +165,7 @@ impl Reason {
             Reason::RedirectOtherOrigin => "The site redirected to a different address.",
             Reason::Budget => "K2 is holding checks to this site to stay within its rate.",
             Reason::PausedByPerson => "A person paused this source.",
+            Reason::UnexpectedStatus => "The site answered with a status this source doesn't expect.",
         }
     }
 }
@@ -311,9 +316,10 @@ impl SourceState {
         }
     }
 
-    /// Something is waiting on a soft re-check (source level or any item).
+    /// Something is waiting on a soft re-check (source level or any item):
+    /// a reading that hasn't gone hard yet.
     pub fn has_soft(&self) -> bool {
-        self.soft_count > 0 || self.items.values().any(|i| i.soft_count > 0)
+        self.soft_health.is_some() || self.items.values().any(|i| i.soft_health.is_some())
     }
 
     /// The first poll after a gap is computed against a gap (triggers
@@ -425,6 +431,23 @@ pub struct PollApplied {
     pub points: Vec<(String, f64)>,
 }
 
+/// Series a source keeps history for (0.46.1): its `extract.trend` first,
+/// then every count and aggregate, up to `MAX_HISTORY_SERIES`. Never for
+/// `keep: "states"`.
+pub fn history_series(spec: &SourceSpec) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let names = spec.extract.trend.iter().chain(spec.extract.counts.keys()).chain(spec.extract.aggregates.keys());
+    for n in names {
+        if out.len() >= super::MAX_HISTORY_SERIES {
+            break;
+        }
+        if !out.contains(n) {
+            out.push(n.clone());
+        }
+    }
+    out
+}
+
 /// `max(3 × every, every + 120)`.
 pub fn stale_window(spec: &SourceSpec) -> i64 {
     let every = i64::from(spec.every_secs);
@@ -445,29 +468,47 @@ fn kind_for(from: Health, to: Health) -> TransitionKind {
     }
 }
 
-/// One soft/hard step (Checkmk style, GV56): `ok` applies at once; any
-/// other reading that differs from the hard state counts toward
-/// `fail_after` and turns hard on reaching it (at once with
-/// `fail_after = 1`). Returns the hard change.
-fn step(hard: Health, soft: &mut Option<Health>, count: &mut u32, reading: Health, fail_after: u32) -> Option<Health> {
-    if reading == hard {
+/// One soft/hard step (Checkmk style, GV56; 0.46.1 thresholds). `ok`
+/// applies at once and ends the streak. Any other reading adds one to the
+/// streak of checks in a row that weren't ok (`count`), and goes hard when
+/// the streak reaches its threshold: crit at `crit_after`, warn (also for a
+/// crit reading that hasn't reached `crit_after` yet) at `warn_after`,
+/// unknown at `warn_after`. Until then the hard state stays and `soft`
+/// holds the waiting reading. Fetch failures use `failAfter` for both;
+/// rule readings use their rules' `warnAfter`/`critAfter` (default 1, at
+/// once). Returns the hard change.
+fn step(hard: Health, soft: &mut Option<Health>, count: &mut u32, r: &Reading) -> Option<Health> {
+    if r.health == Health::Ok {
         *soft = None;
         *count = 0;
+        return (hard != Health::Ok).then_some(Health::Ok);
+    }
+    *count = count.saturating_add(1);
+    if r.health == hard {
+        *soft = None;
         return None;
     }
-    if reading == Health::Ok || fail_after <= 1 {
-        *soft = None;
-        *count = 0;
-        return Some(reading);
+    let reached = match r.health {
+        Health::Crit if *count >= r.crit_after => Some(Health::Crit),
+        Health::Crit | Health::Warn if *count >= r.warn_after => Some(Health::Warn),
+        Health::Unknown if *count >= r.warn_after => Some(Health::Unknown),
+        _ => None,
+    };
+    let new_hard = reached.unwrap_or(hard);
+    *soft = (new_hard != r.health).then_some(r.health);
+    (new_hard != hard).then_some(new_hard)
+}
+
+/// The threshold the view shows next to a waiting reading (`soft.of`).
+pub fn soft_of(soft: Option<Health>, rated: Option<rules::Rated>, fetch_failed: bool, fail_after: u32) -> u32 {
+    if fetch_failed {
+        return fail_after;
     }
-    *count += 1;
-    *soft = Some(reading);
-    if *count >= fail_after {
-        *soft = None;
-        *count = 0;
-        Some(reading)
-    } else {
-        None
+    match (soft, rated) {
+        (Some(Health::Crit), Some(r)) => r.crit_after,
+        (Some(Health::Warn), Some(r)) => r.warn_after,
+        (Some(Health::Unknown), _) => fail_after,
+        _ => 1,
     }
 }
 
@@ -494,12 +535,30 @@ fn health_of(ote: OnTargetError) -> Health {
     }
 }
 
-/// A reading: health plus the fixed reason and status that explain it.
+/// A reading: health plus the fixed reason and status that explain it,
+/// and the checks in a row it needs before it goes hard.
 #[derive(Debug, Clone, Copy)]
 struct Reading {
     health: Health,
     reason: Option<Reason>,
     http_status: Option<u16>,
+    warn_after: u32,
+    crit_after: u32,
+}
+
+impl Reading {
+    /// A fetch failure: hard after `failAfter`.
+    fn failed(health: Health, reason: Reason, http_status: Option<u16>, fail_after: u32) -> Reading {
+        Reading { health, reason: Some(reason), http_status, warn_after: fail_after, crit_after: fail_after }
+    }
+
+    /// A rule reading. Unknown (no rule matched, or a value went missing)
+    /// still waits `failAfter`, as before 0.46.1; warn and crit use the
+    /// rules' own thresholds, so `failAfter` never delays them.
+    fn rated(r: rules::Rated, http_status: Option<u16>, fail_after: u32) -> Reading {
+        let (w, c) = if r.health == Health::Unknown { (fail_after, fail_after) } else { (r.warn_after, r.crit_after) };
+        Reading { health: r.health, reason: None, http_status, warn_after: w, crit_after: c }
+    }
 }
 
 /// Pure. Applies one cycle, returns the new state, the projection to
@@ -508,8 +567,10 @@ struct Reading {
 /// - A fan-out target that fails makes its own item red (or unknown with
 ///   `onTargetError: unknown`) and leaves the source live [GV55]; the
 ///   source counts as failing only when every target fails.
-/// - Readings go hard after `failAfter` (§5.5); only hard changes make
-///   health transitions, and they open/continue/close incidents.
+/// - Fetch failures go hard after `failAfter` (§5.5); rule readings after
+///   their rules' `warnAfter`/`critAfter` (default at once, 0.46.1). Only
+///   hard changes make health transitions, and they open/continue/close
+///   incidents.
 /// - `keep: "states"` returns a keys-only projection and no points.
 pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
     let spec = input.spec;
@@ -542,7 +603,7 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
                     _ => None,
                 })
                 .collect();
-            let fresh_p = extract::extract_fanout(&spec.extract, &fresh);
+            let fresh_p = extract::extract_fanout(&spec.extract, &fresh, now);
             let mut p = Projection::default();
             for t in targets.iter().take(super::MAX_ITEMS) {
                 let fields = fresh_p
@@ -550,10 +611,10 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
                     .or_else(|| prev_proj.item(&t.key))
                     .map(|i| i.fields.clone())
                     .unwrap_or_default();
-                p.items.push(extract::ProjectedItem { key: t.key.clone(), fields });
+                p.items.push(extract::ProjectedItem { key: t.key.clone(), fields, list: None });
             }
-            extract::add_aggregates(&spec.extract, &mut p);
-            let rated = rules::rate_items(spec, &p);
+            extract::add_aggregates(&spec.extract, &mut p, now);
+            let rated = rules::rate_items(spec, &p, now);
             for t in targets.iter().take(super::MAX_ITEMS) {
                 let item = st.items.entry(t.key.clone()).or_insert_with(|| ItemState::new(&t.key, true));
                 item.is_target = true;
@@ -568,14 +629,14 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
                             item.etag = etag.clone();
                             item.last_modified = last_modified.clone();
                         }
-                        let h = rated.get(&t.key).copied().unwrap_or(Health::Ok);
-                        item_readings.insert(t.key.clone(), Reading { health: h, reason: None, http_status: Some(*status) });
+                        let h = rated.get(&t.key).copied().unwrap_or(rules::Rated::now(Health::Ok));
+                        item_readings.insert(t.key.clone(), Reading::rated(h, Some(*status), fail_after));
                     }
                     Some(FetchOutcome::Err { reason, http_status, .. }) => {
                         item.checked_at = Some(now);
                         item_readings.insert(
                             t.key.clone(),
-                            Reading { health: health_of(spec.on_target_error), reason: Some(*reason), http_status: *http_status },
+                            Reading::failed(health_of(spec.on_target_error), *reason, *http_status, fail_after),
                         );
                     }
                     None => {}
@@ -584,8 +645,8 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
             let keys: Vec<&str> = targets.iter().map(|t| t.key.as_str()).collect();
             st.items.retain(|k, _| keys.contains(&k.as_str()));
             if any_success {
-                let h = rules::rate_source(spec, &p).unwrap_or(Health::Ok);
-                self_reading = Some(Reading { health: h, reason: None, http_status: None });
+                let h = rules::rate_source(spec, &p, now).unwrap_or(rules::Rated::now(Health::Ok));
+                self_reading = Some(Reading::rated(h, None, fail_after));
             }
             projection = Some(p);
         }
@@ -598,10 +659,10 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
                     } else {
                         st.etag = etag.clone();
                         st.last_modified = last_modified.clone();
-                        extract::extract_single(&spec.extract, body)
+                        extract::extract_single(&spec.extract, body, now)
                     };
-                    for (k, h) in rules::rate_items(spec, &p) {
-                        item_readings.insert(k, Reading { health: h, reason: None, http_status: None });
+                    for (k, h) in rules::rate_items(spec, &p, now) {
+                        item_readings.insert(k, Reading::rated(h, None, fail_after));
                     }
                     let keys: Vec<String> = p.items.iter().map(|i| i.key.clone()).collect();
                     st.items.retain(|k, _| keys.contains(k));
@@ -610,16 +671,12 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
                         item.updated_at = Some(now);
                         item.checked_at = Some(now);
                     }
-                    let h = rules::rate_source(spec, &p).unwrap_or(Health::Ok);
-                    self_reading = Some(Reading { health: h, reason: None, http_status: Some(*status) });
+                    let h = rules::rate_source(spec, &p, now).unwrap_or(rules::Rated::now(Health::Ok));
+                    self_reading = Some(Reading::rated(h, Some(*status), fail_after));
                     projection = Some(p);
                 }
                 FetchOutcome::Err { reason, http_status, .. } => {
-                    self_reading = Some(Reading {
-                        health: health_of(spec.on_target_error),
-                        reason: Some(*reason),
-                        http_status: *http_status,
-                    });
+                    self_reading = Some(Reading::failed(health_of(spec.on_target_error), *reason, *http_status, fail_after));
                     projection = None;
                 }
             }
@@ -630,7 +687,7 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
     for (key, r) in &item_readings {
         let Some(item) = st.items.get_mut(key) else { continue };
         let before = item.health;
-        if let Some(to) = step(before, &mut item.soft_health, &mut item.soft_count, r.health, fail_after) {
+        if let Some(to) = step(before, &mut item.soft_health, &mut item.soft_count, r) {
             let incident_id = incident(&mut item.incident_id, to);
             item.health = to;
             item.hard_since = (to != Health::Ok).then_some(now);
@@ -654,7 +711,7 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
     // Source level: its own reading.
     if let Some(r) = self_reading {
         let hard = st.self_health.unwrap_or(Health::Unknown);
-        if let Some(to) = step(hard, &mut st.soft_health, &mut st.soft_count, r.health, fail_after) {
+        if let Some(to) = step(hard, &mut st.soft_health, &mut st.soft_count, &r) {
             st.self_health = Some(to);
         } else if st.self_health.is_none() && r.health == Health::Unknown {
             st.self_health = Some(Health::Unknown);
@@ -749,7 +806,7 @@ pub fn apply_poll(prev: &SourceState, input: PollInput) -> PollApplied {
     let mut points = Vec::new();
     if spec.keep == Keep::Values && any_success {
         if let Some(p) = &projection {
-            for t in &spec.extract.trend {
+            for t in &history_series(spec) {
                 let v = match p.fields.get(t) {
                     Some(Json::Number(n)) => n.as_f64(),
                     Some(Json::Bool(b)) => Some(if *b { 1.0 } else { 0.0 }),

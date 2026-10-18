@@ -279,6 +279,7 @@ fn voice_to_passthrough() -> Result<Value, Refusal> {
         set_turn_pending(None);
         return Err((409, "front_turn_route_unverified", format!("TURN stays on TCP 5349: {e}")));
     }
+    log_debug!("[front443] TURN route proved through the front ({host} -> {TURN_BACKEND}); moving voice to passthrough");
     let moved = voice_tier(true);
     set_turn_pending(None);
     let mut v = moved?;
@@ -434,6 +435,13 @@ pub fn status_json() -> Value {
         "routes": routes::current().json(),
         "caddy": caddy.map(|c| json!({"port": c.port, "hosts": c.hosts, "proxyV2": c.proxy_protocol})),
         "helper": helper_gate().err(),
+        // Enabled but not serving: systemd's own state and words for the
+        // socket (why it didn't start), through the helper's open status.
+        "socketUnit": if cfg.enabled && !serving && helper_gate().is_ok() {
+            helper_front("status").map(|v| v["unit"].clone()).unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        },
     })
 }
 
@@ -521,7 +529,17 @@ pub fn enable(mail: bool, daemon_port: u16) -> Result<Value, Refusal> {
             return Err((409, "front_install_failed", format!("{e}{}", if warnings.is_empty() { String::new() } else { format!(" ({})", warnings.join("; ")) })));
         }
     };
-    let restart = !serving();
+    // systemd passes the socket only to a service it starts, and won't
+    // start the socket while this service is active, so the daemon takes it
+    // at its next start: the helper scheduled that one restart (systemctl
+    // restart of this unit, a few seconds out). A hand-off can't carry it:
+    // the successor isn't started by systemd.
+    let needs_restart = !serving();
+    let restart = needs_restart && helper["restartScheduled"] == true;
+    if needs_restart && !restart {
+        let (_user, unit, _scope) = crate::root_helper::own_unit();
+        warnings.push(format!("the front is installed; restart the daemon to take port 443: `systemctl restart {unit}` (as root)"));
+    }
     let (table, w) = rebuild();
     warnings.extend(w);
     // TURN moves only once the front serves (Sew's order): now, when it
@@ -542,13 +560,17 @@ pub fn enable(mail: bool, daemon_port: u16) -> Result<Value, Refusal> {
         "restarting": restart,
         "routes": table.json(),
         "warnings": warnings,
+        "restartNeeded": needs_restart,
         "next": if restart {
-            "the daemon restarts once to take the :443 socket; voice moves to TURN on 443 when it is back"
+            "K2 will restart its daemon once to take port 443 (a few seconds; agents resume). Voice moves to TURN on 443 when it is back."
+        } else if needs_restart {
+            "restart the daemon to take port 443"
         } else {
             "serving"
         },
     }))
 }
+
 
 /// `POST /cli/front/disable`. Blocking.
 pub fn disable(daemon_port: u16) -> Result<Value, Refusal> {

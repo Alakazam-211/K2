@@ -5,9 +5,15 @@
 //!   `/etc/systemd/system/k2-front-443.socket`
 //!   ([`k2_root_proto::templates::front_socket_unit`]: `ListenStream=[::]:443`,
 //!   `Service=` the caller's own unit) and the canned daemon drop-in
-//!   `<unit>.d/k2-front.conf` (`Sockets=`), reloads systemd and starts the
-//!   socket. A socket that cannot start (something else holds :443) is
-//!   rolled back: nothing stays installed.
+//!   `<unit>.d/k2-front.conf` (`Sockets=`) and reloads systemd. It does NOT
+//!   start the socket: systemd refuses to start a socket whose `Service=` is
+//!   already active ("Socket service k2-daemon.service already active,
+//!   refusing."), and the caller is always that live service. The socket
+//!   starts with the daemon's next start (the drop-in's `Wants=`/`After=`;
+//!   checked on systemd 255: a clean exit under `Restart=always`, or a
+//!   `systemctl restart`, starts the socket first and passes its fd). If
+//!   :443 is already taken, install refuses before writing anything and
+//!   names the listener.
 //! - `front remove` (daemon): stops the socket, removes both files,
 //!   reloads systemd.
 //! - `front status` (open): read-only.
@@ -20,13 +26,21 @@
 //! already serves ANOTHER configured daemon's unit is refused, never taken
 //! over. User-scope daemons are refused (a user manager can't bind :443).
 //!
-//! The daemon still has to restart once to receive the fd
-//! (`LISTEN_FDS`); it does that itself after `install` returns (a plain
-//! supervisor restart, `Restart=always`).
+//! The daemon restarts once to receive the fd (`LISTEN_FDS`): `install`
+//! schedules `systemctl restart <the caller's unit>` a few seconds out
+//! (`systemd-run --on-active`, a transient `k2-front-restart` timer), so
+//! the daemon's answer goes out first and the restart doesn't depend on the
+//! unit's `Restart=` policy. systemd then stops the daemon, starts the
+//! socket and starts the daemon with the fd. A hand-off can't carry it: the
+//! successor is started by the daemon, not by systemd, and systemd only
+//! passes a socket to a service it starts.
 
 use std::ffi::OsStr;
 
-use k2_root_proto::paths::{FRONT_DROPIN_FILE, FRONT_SOCKET_FILE, FRONT_SOCKET_UNIT, SYSTEMCTL, SYSTEMD_SYSTEM_DIR};
+use k2_root_proto::paths::{
+    FRONT_DROPIN_FILE, FRONT_RESTART_DELAY_SECS, FRONT_RESTART_UNIT, FRONT_SOCKET_FILE, FRONT_SOCKET_UNIT, JOURNALCTL,
+    SYSTEMCTL, SYSTEMD_RUN, SYSTEMD_SYSTEM_DIR,
+};
 use k2_root_proto::templates::{front_dropin, front_socket_unit};
 
 use crate::caller::{self, Caller, DaemonEntry};
@@ -36,6 +50,109 @@ use crate::fsx::Kind;
 
 /// Largest socket unit file the helper reads back.
 const UNIT_READ_CAP: usize = 16 * 1024;
+/// The front's port.
+const FRONT_PORT: u16 = 443;
+
+/// Local addresses in LISTEN state on `port` in a `/proc/net/tcp` or
+/// `/proc/net/tcp6` table, with their socket inodes. Pure.
+pub(crate) fn listeners_on(table: &str, port: u16) -> Vec<(String, u64)> {
+    let mut out = Vec::new();
+    for line in table.lines().skip(1) {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 10 || f[3] != "0A" {
+            continue;
+        }
+        let Some((addr, p)) = f[1].split_once(':') else { continue };
+        if u16::from_str_radix(p, 16).ok() != Some(port) {
+            continue;
+        }
+        let ip = match addr.len() {
+            8 => u32::from_str_radix(addr, 16)
+                .ok()
+                .map(|v| std::net::Ipv4Addr::from(v.swap_bytes()).to_string()),
+            32 => {
+                let mut b = [0u8; 16];
+                let mut ok = true;
+                for (i, chunk) in addr.as_bytes().chunks(8).enumerate() {
+                    let w = std::str::from_utf8(chunk).ok().and_then(|c| u32::from_str_radix(c, 16).ok());
+                    match w {
+                        Some(w) => b[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes()),
+                        None => ok = false,
+                    }
+                }
+                ok.then(|| format!("[{}]", std::net::Ipv6Addr::from(b)))
+            }
+            _ => None,
+        };
+        if let Some(ip) = ip {
+            out.push((format!("{ip}:{port}"), f[9].parse().unwrap_or(0)));
+        }
+    }
+    out
+}
+
+/// The process holding socket `inode` (`comm[pid]`), when /proc says.
+fn socket_owner(ctx: &Ctx, inode: u64) -> Option<String> {
+    if inode == 0 {
+        return None;
+    }
+    let want = format!("socket:[{inode}]");
+    for e in std::fs::read_dir(ctx.p("/proc")).ok()?.flatten() {
+        let name = e.file_name();
+        let Some(pid) = name.to_str().filter(|n| n.bytes().all(|b| b.is_ascii_digit())) else { continue };
+        let Ok(fds) = std::fs::read_dir(e.path().join("fd")) else { continue };
+        for fd in fds.flatten() {
+            if std::fs::read_link(fd.path()).ok().is_some_and(|l| l.as_os_str() == want.as_str()) {
+                let comm = std::fs::read_to_string(e.path().join("comm")).unwrap_or_default();
+                let comm: String = comm.trim().chars().filter(|c| !c.is_control()).take(32).collect();
+                return Some(format!("{comm}[{pid}]"));
+            }
+        }
+    }
+    None
+}
+
+/// Who already listens on :443 (empty when it is free).
+fn port_443_taken(ctx: &Ctx) -> Vec<String> {
+    let mut who = Vec::new();
+    for t in ["/proc/net/tcp", "/proc/net/tcp6"] {
+        let Ok(text) = std::fs::read_to_string(ctx.p(t)) else { continue };
+        for (addr, inode) in listeners_on(&text, FRONT_PORT) {
+            who.push(match socket_owner(ctx, inode) {
+                Some(o) => format!("{addr} ({o})"),
+                None => addr,
+            });
+        }
+    }
+    who
+}
+
+/// `systemctl show` state of the socket unit, plus systemd's own last log
+/// lines for it (why it did or didn't start), trimmed.
+fn socket_unit_report(ctx: &Ctx) -> serde_json::Value {
+    let run = |prog: &str, args: &[&str]| -> String {
+        let a: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        ctx.exec
+            .run(prog, &a, None)
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    let show = run(SYSTEMCTL, &["show", "-p", "ActiveState", "-p", "SubState", "-p", "Result", FRONT_SOCKET_UNIT]);
+    let mut state = serde_json::Map::new();
+    for line in show.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            if matches!(k, "ActiveState" | "SubState" | "Result") {
+                state.insert(k.to_string(), serde_json::json!(v.chars().take(32).collect::<String>()));
+            }
+        }
+    }
+    let journal: Vec<String> = run(JOURNALCTL, &["-u", FRONT_SOCKET_UNIT, "-n", "6", "-o", "cat", "--no-pager"])
+        .lines()
+        .map(|l| l.chars().filter(|c| !c.is_control()).take(200).collect())
+        .filter(|l: &String| !l.is_empty())
+        .collect();
+    serde_json::json!({"state": state, "journal": journal})
+}
 
 /// What `/etc/systemd/system/k2-front-443.socket` holds now.
 #[derive(Debug, PartialEq, Eq)]
@@ -131,6 +248,18 @@ pub fn install(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
     {
         return Err(Fail::state("front refused: another K2 daemon's unit still carries the front drop-in"));
     }
+    // :443 must be free, unless our socket already holds it (a re-run).
+    let socket_active = is_active(ctx);
+    if !socket_active {
+        let who = port_443_taken(ctx);
+        if !who.is_empty() {
+            return Err(Fail::state(format!(
+                "front refused: port 443 is already in use on this box by {} — stop it or move it behind the \
+                 front (hosted mail on :443: k2 front enable --mail)",
+                who.join(", ")
+            )));
+        }
+    }
     let socket_changed = match &cur {
         SocketFile::File { bytes, .. } if bytes == want.as_bytes() => false,
         _ => {
@@ -164,29 +293,55 @@ pub fn install(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
             return Err(f);
         }
     }
-    // Listen now. Something else on :443 (Stalwart's tls-alpn listener, a
-    // Caddy, nginx) makes this fail: undo the files so a half-installed
-    // front never pulls a failing socket into the daemon's next start.
-    if let Err(f) = ctx.run_ok(SYSTEMCTL, &["start", FRONT_SOCKET_UNIT], None) {
-        let _ = ctx.run_ok(SYSTEMCTL, &["stop", FRONT_SOCKET_UNIT], None);
-        let removed_socket = remove_socket_file(ctx).unwrap_or(false);
-        let removed_dropin = set_dropin(ctx, &d.unit, FRONT_DROPIN_FILE, None, "front").unwrap_or(false);
-        if removed_socket || removed_dropin {
-            let _ = reload(ctx);
-        }
-        let _ = ctx.run_ok(SYSTEMCTL, &["reset-failed", FRONT_SOCKET_UNIT], None);
-        return Err(Fail::state(format!(
-            "front refused: :443 could not be taken (is something else listening on it?) — {}",
-            f.msg
-        )));
+    // Never `systemctl start` the socket here: its service (the caller) is
+    // active, and systemd refuses that. A left-over failed state would
+    // block the start at the daemon's restart, so clear it, then schedule
+    // the one restart that starts the socket and hands the daemon its fd.
+    let mut restart_scheduled = false;
+    if !socket_active {
+        let _ = ctx.exec.run(SYSTEMCTL, &["reset-failed".to_string(), FRONT_SOCKET_UNIT.to_string()], None);
+        restart_scheduled = schedule_restart(ctx, &d.unit)?;
     }
     Ok(serde_json::json!({
         "unit": d.unit,
         "socket": FRONT_SOCKET_UNIT,
         "installed": true,
         "changed": changed,
-        "active": true,
+        "active": socket_active,
+        "restartScheduled": restart_scheduled,
+        "restartInSecs": restart_scheduled.then_some(FRONT_RESTART_DELAY_SECS),
     }))
+}
+
+/// `systemd-run --unit k2-front-restart --on-active=<delay>s --collect
+/// systemctl restart <unit>`: a transient timer, so the daemon (the
+/// caller) answers before systemd restarts it. `unit` is the daemon.toml
+/// entry's (validated by `unit_ok`); nothing else comes from the caller.
+fn schedule_restart(ctx: &Ctx, unit: &str) -> HResult<bool> {
+    // A timer left from an earlier install would make the name clash.
+    let _ = ctx.exec.run(SYSTEMCTL, &["stop".to_string(), format!("{FRONT_RESTART_UNIT}.timer")], None);
+    let _ = ctx.exec.run(SYSTEMCTL, &["reset-failed".to_string(), format!("{FRONT_RESTART_UNIT}.service")], None);
+    let delay = format!("--on-active={FRONT_RESTART_DELAY_SECS}");
+    let name = format!("--unit={FRONT_RESTART_UNIT}");
+    ctx.run_ok(
+        SYSTEMD_RUN,
+        &[&name, &delay, "--timer-property=AccuracySec=100ms", "--collect", "--quiet", SYSTEMCTL, "restart", unit],
+        None,
+    )
+    .map_err(|f| {
+        Fail::state(format!(
+            "front installed, but the daemon's restart could not be scheduled ({}): run `systemctl restart {unit}` as root",
+            f.msg
+        ))
+    })?;
+    Ok(true)
+}
+
+fn is_active(ctx: &Ctx) -> bool {
+    let args = vec!["is-active".to_string(), FRONT_SOCKET_UNIT.to_string()];
+    ctx.exec
+        .run(SYSTEMCTL, &args, None)
+        .is_ok_and(|o| o.status == 0 && String::from_utf8_lossy(&o.stdout).trim() == "active")
 }
 
 pub fn remove(ctx: &Ctx, who: &Caller) -> HResult<serde_json::Value> {
@@ -259,5 +414,6 @@ pub fn status(ctx: &Ctx) -> HResult<serde_json::Value> {
         "heldFor": held_for,
         "active": active,
         "dropins": dropins,
+        "unit": if cur == SocketFile::Missing { serde_json::Value::Null } else { socket_unit_report(ctx) },
     }))
 }

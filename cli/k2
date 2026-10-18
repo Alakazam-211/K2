@@ -13864,12 +13864,20 @@ if "serving" in d:
         print("closed     :", ", ".join("%s %s" % (k, v) for k, v in cl.items() if v))
     if d.get("helper"):
         print("helper     :", d.get("helper"))
+    su = d.get("socketUnit") or {}
+    if su:
+        st = su.get("state") or {}
+        print("socket unit:", st.get("ActiveState"), st.get("SubState") or "", "(" + str(st.get("Result")) + ")")
+        for line in su.get("journal") or []:
+            print("  systemd  :", line)
     sys.exit(0)
 print("front      :", "on" if d.get("enabled") else "off")
 if d.get("enabled"):
     print("mail       :", "behind the front" if d.get("mail") else "not behind the front")
     if d.get("restarting"):
-        print("restarting : the daemon restarts now to take the :443 socket")
+        print("restarting : K2 will restart its daemon once to take port 443")
+    elif d.get("restartNeeded"):
+        print("restart    : needed to take port 443 (see warning)")
 for w in d.get("warnings") or []:
     print("warning    :", w)
 if d.get("next"):

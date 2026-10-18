@@ -3273,34 +3273,21 @@ async fn handle_one_request(
             })
             .await
             .unwrap_or_else(|e| Err((500, "worker_join", e.to_string())));
-            let (status, body, restart) = match r {
-                Ok(v) => {
-                    let restart = v["restarting"] == true;
-                    ("200 OK", v, restart)
-                }
+            // A restart to take the socket is systemd's, scheduled by the
+            // root helper (`front install`), never this process exiting.
+            let (status, body) = match r {
+                Ok(v) => ("200 OK", v),
                 Err((code, err, msg)) => {
                     let status = match code {
                         400 => "400 Bad Request",
                         409 => "409 Conflict",
                         _ => "500 Internal Server Error",
                     };
-                    (status, serde_json::json!({"ok": false, "error": err, "message": msg}), false)
+                    (status, serde_json::json!({"ok": false, "error": err, "message": msg}))
                 }
             };
             super::http::send_response(&mut *stream, status, "application/json", &body.to_string()).await;
             let _ = stream.flush().await;
-            // The daemon takes the socket at its next start: a plain
-            // supervisor restart (systemd Restart=always passes LISTEN_FDS).
-            // The harness has no shutdown_tx and never restarts.
-            if restart {
-                if let Some(tx) = state.shutdown_tx.clone() {
-                    tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_millis(300)).await;
-                        k2_core::log_debug!("[front443] restarting to take the :443 socket");
-                        let _ = tx.send(());
-                    });
-                }
-            }
             return DispatchOutcome::Done;
         }
         // #58 Phase-1 close — POST /cli/daemon/hook-revoke-all. The global

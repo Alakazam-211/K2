@@ -9,9 +9,12 @@
 //!    mail host's Domain `subjectAlternativeNames` to exactly `[host]`
 //!    (an empty list orders five names in ONE order; one missing A record
 //!    fails it). If the lock was written by THIS run, queue at most one
-//!    `AcmeRenewal` — only when the served cert is missing or self-signed,
-//!    the mail host points here, and no Pending/Retry AcmeRenewal exists
-//!    for that Domain (HF8). A valid cert is never re-ordered (§10).
+//!    `AcmeRenewal` — only when the served cert is missing, self-signed,
+//!    expired or does not cover the mail host (0.46.1), the mail host
+//!    points here, and no Pending/Retry AcmeRenewal exists for that Domain
+//!    (HF8). A valid cert is never re-ordered (§10). After that, the
+//!    hourly live-cert check ([`crate::mail::cert_trigger`]) re-orders
+//!    under a backoff whenever the live cert goes wrong.
 //! 2. **A4 spam rules** — Stalwart downloads the *latest* spam-filter rules
 //!    at first start. v3.0.2 (live 2026-09-22 11:32 UTC) uses `bit_and`,
 //!    which first exists in Stalwart 0.16.23; the 3 DNSBL rules then fail
@@ -742,7 +745,8 @@ pub struct CertInputs<'a> {
     pub host: &'a str,
     pub owner: CertOwner,
     pub port_plan: Option<&'a str>,
-    /// `missing` | `self-signed` | `issued` (status's TLS probe).
+    /// `missing` | `self-signed` | `mismatch` | `expired` | `unknown` |
+    /// `issued` (the live probe; [`crate::mail::cert_trigger::trigger_state`]).
     pub served_state: &'a dyn Fn() -> String,
     /// Does the mail host point at this box?
     pub points_here: &'a dyn Fn() -> PointsHere,
@@ -792,21 +796,50 @@ fn retry_decision(
     inp: &CertInputs<'_>,
 ) -> RetryDecision {
     let served = (inp.served_state)();
-    if served != "missing" && served != "self-signed" {
+    // 0.46.1: expired and mismatch (a leaf that does not cover the mail
+    // host) count like self-signed; issued and unknown never re-order.
+    if served != "missing" && crate::mail::cert_trigger::reorder_reason(&served).is_none() {
         return RetryDecision::NotQueued(format!(
             "the served certificate is {served} — never re-ordered; the next scheduled \
              renewal orders {host} only"
         ));
     }
-    match (inp.points_here)() {
+    match queue_guarded(api, domain_id, host, inp.points_here) {
+        Guarded::Queued(task_id) => {
+            RetryDecision::Queued { domain_id: domain_id.to_string(), task_id }
+        }
+        Guarded::Blocked(why) | Guarded::Failed(why) => RetryDecision::NotQueued(why),
+    }
+}
+
+/// [`queue_guarded`]'s outcome.
+enum Guarded {
+    Queued(String),
+    /// A guard said no (host elsewhere, DNS unknown, a live task, the task
+    /// list unreadable). Not an attempt.
+    Blocked(String),
+    /// The queue call failed.
+    Failed(String),
+}
+
+/// The guards every K2-queued `AcmeRenewal` passes (HF8, and the 0.46.1
+/// live-cert re-order): the mail host points here and no Pending/Retry
+/// task exists for the Domain; then ONE task.
+fn queue_guarded(
+    api: &dyn DefaultsApi,
+    domain_id: &str,
+    host: &str,
+    points_here: &dyn Fn() -> PointsHere,
+) -> Guarded {
+    match points_here() {
         PointsHere::Yes => {}
         PointsHere::No(d) => {
-            return RetryDecision::NotQueued(format!(
+            return Guarded::Blocked(format!(
                 "{d} — add the A record for {host}, then `k2 hostmail cert renew`"
             ))
         }
         PointsHere::Unknown(d) => {
-            return RetryDecision::NotQueued(format!(
+            return Guarded::Blocked(format!(
                 "could not tell whether {host} points here ({d}) — `k2 hostmail cert renew` \
                  once it does"
             ))
@@ -815,21 +848,73 @@ fn retry_decision(
     let tasks = match api.acme_tasks() {
         Ok(t) => t,
         Err(e) => {
-            return RetryDecision::NotQueued(format!(
+            return Guarded::Blocked(format!(
                 "could not read Stalwart's ACME tasks ({e}) — no order queued"
             ))
         }
     };
     if let Some(t) = tasks.iter().find(|t| t.domain_id == domain_id && t.is_live()) {
-        return RetryDecision::NotQueued(format!(
+        return Guarded::Blocked(format!(
             "Stalwart already has a {} ACME task ({}) for this domain — it picks up the \
              locked names itself",
             t.state, t.id
         ));
     }
     match api.queue_acme_renewal(domain_id) {
-        Ok(task_id) => RetryDecision::Queued { domain_id: domain_id.to_string(), task_id },
-        Err(e) => RetryDecision::NotQueued(format!("queueing the ACME order failed: {e}")),
+        Ok(task_id) => Guarded::Queued(task_id),
+        Err(e) => Guarded::Failed(format!("queueing the ACME order failed: {e}")),
+    }
+}
+
+/// 0.46.1 live-cert re-order on a stalwart-acme box
+/// ([`crate::mail::cert_trigger`]): ONE `AcmeRenewal` for the mail host's
+/// Domain, only while Stalwart ACME is Automatic with the name list
+/// already locked to the mail host (the boot reconcile locks it — an
+/// unlocked list would order five names in one order), the host points
+/// here and no Pending/Retry task exists. Never writes anything else.
+pub(crate) fn live_cert_order(
+    api: &dyn DefaultsApi,
+    host: &str,
+    points_here: &dyn Fn() -> PointsHere,
+) -> crate::mail::cert_trigger::StalwartOrder {
+    use crate::mail::cert_trigger::StalwartOrder;
+    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    let domain_id = match api.mail_domain_id(&host) {
+        Ok(Some(d)) => d,
+        Ok(None) => {
+            return StalwartOrder::NotEligible(format!(
+                "no Stalwart domain carries the mail hostname {host}"
+            ))
+        }
+        Err(e) => return StalwartOrder::NotNow(format!("could not read Stalwart's domains: {e}")),
+    };
+    match api.get(&domain_id) {
+        Ok(CertManagement::Automatic { subject_alternative_names, .. }) => {
+            if !sans_locked_to(&subject_alternative_names, &host) {
+                return StalwartOrder::NotNow(format!(
+                    "Stalwart ACME's name list is not locked to {host} yet — the boot \
+                     reconcile locks it first"
+                ));
+            }
+        }
+        Ok(CertManagement::Manual) => {
+            return StalwartOrder::NotEligible(format!(
+                "Stalwart ACME is Manual for {host} — nothing orders it automatically"
+            ))
+        }
+        Ok(CertManagement::Other(t)) => {
+            return StalwartOrder::NotEligible(format!(
+                "domain {domain_id} has certificateManagement '@type' '{t}' — not touching it"
+            ))
+        }
+        Err(e) => {
+            return StalwartOrder::NotNow(format!("could not read certificateManagement: {e}"))
+        }
+    }
+    match queue_guarded(api, &domain_id, &host, points_here) {
+        Guarded::Queued(task_id) => StalwartOrder::Queued(task_id),
+        Guarded::Blocked(why) => StalwartOrder::NotNow(why),
+        Guarded::Failed(e) => StalwartOrder::Failed(e),
     }
 }
 
@@ -1220,11 +1305,13 @@ fn run_live(reason: &'static str) {
     let installed = supervisor::row_field("installed_version");
     let port_plan = supervisor::row_field("port_plan");
     let owner = super::cert_owner::mail_cert_owner(&host);
+    // 0.46.1: Stalwart's own listeners (465/993) decide, like the hourly
+    // live-cert check; the probed state is kept for its backoff record.
+    let served_seen: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
     let served = || {
-        supervisor::tls_cert_status(Some(&host))["state"]
-            .as_str()
-            .unwrap_or("missing")
-            .to_string()
+        let s = super::cert_trigger::trigger_state(&supervisor::tls_cert_status(Some(&host)));
+        *served_seen.borrow_mut() = Some(s.clone());
+        s
     };
     let points = || live_points_here(&host);
     let ctx = Ctx {
@@ -1248,6 +1335,10 @@ fn run_live(reason: &'static str) {
     let readable = markers.is_some();
     let mut restart = restart_live;
     let out = reconcile(&client, &ctx, markers, &mut restart);
+    if out.markers.acme_retry.as_ref().is_some_and(|a| a.at == ctx.now) {
+        let seen = served_seen.borrow().clone().unwrap_or_else(|| "missing".into());
+        super::cert_trigger::note_boot_order(&host, &seen, ctx.now);
+    }
     if readable {
         if let Err(e) = save_markers(&out.markers) {
             k2_core::log_debug!("{P} FAILED to record what K2 changed: {e}");
@@ -1264,12 +1355,13 @@ fn run_live(reason: &'static str) {
 /// addresses; IPv6 = this box's global interface addresses, so a stray
 /// AAAA counts as "elsewhere" — Let's Encrypt prefers IPv6)?
 #[cfg_attr(test, allow(dead_code))]
-fn live_points_here(host: &str) -> PointsHere {
+pub(crate) fn live_points_here(host: &str) -> PointsHere {
     let resolver = match super::dns_verify::SystemResolver::new() {
         Ok(r) => r,
         Err(e) => return PointsHere::Unknown(format!("no resolver: {e}")),
     };
-    // Only reached after a fresh lock with no real cert served: one
+    // Only reached when an order is about to be queued (a fresh lock, or
+    // the live-cert check, with no good cert served): one
     // checkip read when the cache is empty/stale (never under air-gap).
     super::cert_names::refresh_public_ipv4_if_stale();
     let addrs = super::cert_names::box_addrs_local(super::cert_names::cached_public_ipv4().as_deref());

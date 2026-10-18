@@ -725,6 +725,81 @@ fn acme_retry_guards() {
     assert!(matches!(out, CertStep::Locked { retry: RetryDecision::Queued { .. }, .. }));
 }
 
+/// 0.46.1: after a fresh lock, an expired cert or one that does not cover
+/// the mail host queues the one order too; `unknown` (unparseable leaf)
+/// never does.
+#[test]
+fn fresh_lock_retry_covers_expired_and_mismatch() {
+    for served in ["expired", "mismatch"] {
+        let api = Fake::new();
+        let out = cert(&api, &Inputs { served, ..Inputs::stalwart() });
+        assert!(matches!(out, CertStep::Locked { retry: RetryDecision::Queued { .. }, .. }), "{served}: {out:?}");
+        assert_eq!(api.writes().iter().filter(|w| w.starts_with("task-create")).count(), 1, "{served}");
+    }
+    let api = Fake::new();
+    let out = cert(&api, &Inputs { served: "unknown", ..Inputs::stalwart() });
+    assert!(matches!(out, CertStep::Locked { retry: RetryDecision::NotQueued(_), .. }), "{out:?}");
+    assert!(!api.writes().iter().any(|w| w.starts_with("task")));
+}
+
+// ── 0.46.1 live-cert order (stalwart-acme) ──────────────────────────────
+
+fn locked(api: &Fake) {
+    *api.cm.borrow_mut() = CertManagement::Automatic {
+        acme_provider_id: "acme-p1".into(),
+        subject_alternative_names: vec!["mail.example.com".into()],
+    };
+}
+
+fn live_order(api: &Fake, points: PointsHere) -> crate::mail::cert_trigger::StalwartOrder {
+    let points = move || points.clone();
+    live_cert_order(api, "Mail.Example.com.", &points)
+}
+
+#[test]
+fn live_cert_order_queues_one_task_on_a_locked_automatic_domain() {
+    use crate::mail::cert_trigger::StalwartOrder;
+    let api = Fake::new();
+    locked(&api);
+    assert_eq!(live_order(&api, PointsHere::Yes), StalwartOrder::Queued("task-k2-1".into()));
+    assert_eq!(api.writes(), vec!["task-create dom-1"], "never anything but the one task");
+}
+
+#[test]
+fn live_cert_order_guards() {
+    use crate::mail::cert_trigger::StalwartOrder;
+    // Name list not locked yet (the setup default orders five names).
+    let api = Fake::new();
+    let out = live_order(&api, PointsHere::Yes);
+    assert!(matches!(&out, StalwartOrder::NotNow(w) if w.contains("not locked")), "{out:?}");
+    assert!(api.writes().is_empty(), "{:?}", api.writes());
+    // Manual / another type: not Stalwart ACME's to order.
+    let api = Fake::new();
+    *api.cm.borrow_mut() = CertManagement::Manual;
+    assert!(matches!(live_order(&api, PointsHere::Yes), StalwartOrder::NotEligible(_)));
+    assert!(api.writes().is_empty());
+    let api = Fake::new();
+    *api.cm.borrow_mut() = CertManagement::Other("Custom".into());
+    assert!(matches!(live_order(&api, PointsHere::Yes), StalwartOrder::NotEligible(_)));
+    assert!(api.writes().is_empty());
+    // Host elsewhere / DNS unknown.
+    for points in [PointsHere::No("A 198.51.100.9 is not this box".into()), PointsHere::Unknown("timeout".into())] {
+        let api = Fake::new();
+        locked(&api);
+        assert!(matches!(live_order(&api, points), StalwartOrder::NotNow(_)));
+        assert!(api.writes().is_empty());
+    }
+    // A live task already runs for this Domain.
+    for state in ["Pending", "Retry"] {
+        let api = Fake::new();
+        locked(&api);
+        api.tasks.borrow_mut().push(task("t-old", "dom-1", state));
+        let out = live_order(&api, PointsHere::Yes);
+        assert!(matches!(&out, StalwartOrder::NotNow(w) if w.contains("t-old")), "{out:?}");
+        assert!(api.writes().is_empty());
+    }
+}
+
 // ── The reconcile ───────────────────────────────────────────────────────
 
 /// quillify: 0.16.10, v3.0.2 rules, defaults everywhere. A4 lands before

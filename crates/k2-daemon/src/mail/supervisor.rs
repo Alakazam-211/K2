@@ -681,7 +681,7 @@ struct PortVerdict {
 }
 
 /// Worse verdicts rank higher: the overall `state` is the worst port.
-fn verdict_rank(state: &str) -> u8 {
+pub(crate) fn verdict_rank(state: &str) -> u8 {
     match state {
         "self-signed" => 5,
         "mismatch" => 4,
@@ -4099,4 +4099,66 @@ pub(crate) fn with_test_issued_cert(sans: &[&str]) -> TestTlsCertGuard {
     params.distinguished_name = ldn;
     let der = params.signed_by(&key, &ca_cert, &ca_key).expect("sign").der().to_vec();
     with_test_tls_cert(TlsProbe::Handshake { leaf_der: der })
+}
+
+/// What one probed port serves in [`with_test_served_ports`].
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) enum TestLeaf<'a> {
+    /// A CA-signed leaf (issuer != subject) for these SANs, valid now.
+    Issued(&'a [&'a str]),
+    /// The same, but its notAfter is in the past.
+    Expired(&'a [&'a str]),
+    /// Stalwart's rcgen fallback (SAN localhost, issuer == subject).
+    SelfSigned,
+    /// Nothing answers on the port.
+    Missing,
+}
+
+/// Test seam for other modules (0.46.1 live-cert re-order): each probed
+/// port serves its own [`TestLeaf`]. Never opens a socket.
+#[cfg(test)]
+pub(crate) fn with_test_served_ports(ports: &[(u16, TestLeaf<'_>)]) -> TestTlsCertGuard {
+    use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+    let ca_leaf = |sans: &[&str], expired: bool| -> Vec<u8> {
+        let ca_key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("ca key");
+        let mut ca = CertificateParams::new(Vec::<String>::new()).expect("ca params");
+        ca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, "R11");
+        dn.push(DnType::OrganizationName, "Let's Encrypt");
+        ca.distinguished_name = dn;
+        let ca_cert = ca.self_signed(&ca_key).expect("ca sign");
+        let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
+        let mut params = CertificateParams::new(sans.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            .expect("SAN params");
+        let mut ldn = DistinguishedName::new();
+        ldn.push(DnType::CommonName, sans.first().copied().unwrap_or("leaf"));
+        params.distinguished_name = ldn;
+        if expired {
+            params.not_before = rcgen::date_time_ymd(2020, 1, 1);
+            params.not_after = rcgen::date_time_ymd(2020, 4, 1);
+        }
+        params.signed_by(&key, &ca_cert, &ca_key).expect("sign").der().to_vec()
+    };
+    let probes = ports
+        .iter()
+        .map(|(port, leaf)| {
+            let probe = match leaf {
+                TestLeaf::Issued(sans) => TlsProbe::Handshake { leaf_der: ca_leaf(sans, false) },
+                TestLeaf::Expired(sans) => TlsProbe::Handshake { leaf_der: ca_leaf(sans, true) },
+                TestLeaf::SelfSigned => {
+                    let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("key");
+                    let params =
+                        CertificateParams::new(vec!["localhost".to_string()]).expect("params");
+                    TlsProbe::Handshake {
+                        leaf_der: params.self_signed(&key).expect("self-sign").der().to_vec(),
+                    }
+                }
+                TestLeaf::Missing => TlsProbe::Missing,
+            };
+            (*port, probe)
+        })
+        .collect();
+    with_test_tls_ports(probes)
 }

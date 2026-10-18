@@ -17,7 +17,9 @@
 // - Agents already connected stay in the list, checked.
 // - Adding keeps the picker open; the row turns checked once the
 //   connection lists reload. Errors show in the footer.
-// - Esc closes (the caller's `onClose`).
+// - Esc, or a press anywhere outside the picker and its + button, closes
+//   it (the caller's `onClose`); Esc hands focus back to the + button.
+//   A press on the + is left to the +, which toggles it closed.
 //
 // While the daemon answers (at most ~5 s), This server paints at once
 // from the projects store; so does it when federation is off here or the
@@ -45,6 +47,7 @@ import {
   type AgentListSection,
 } from '@/components/ui/SearchableAgentList'
 import { AgentListStatus } from '@/components/ui/AgentListStatus'
+import { useDismiss, type DismissReason } from '@/hooks/useDismiss'
 
 export interface AddConnectionPickerProps {
   /** The workspace we add connections FOR (hidden from This server). */
@@ -59,6 +62,9 @@ export interface AddConnectionPickerProps {
    *  error; a returned string is a warning to show. */
   onAddRemote: (target: string) => Promise<string | null>
   onClose: () => void
+  /** The button that opens it (the +): a press on it isn't "outside", and
+   *  Esc gives it focus back. */
+  anchorRef?: React.RefObject<HTMLElement | null>
 }
 
 type PickTarget =
@@ -98,6 +104,7 @@ export function AddConnectionPicker({
   onAddLocal,
   onAddRemote,
   onClose,
+  anchorRef,
 }: AddConnectionPickerProps): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
   const avatarCache = useHomeAvatarStore((s) => s.cached)
@@ -109,6 +116,13 @@ export function AddConnectionPicker({
   const [note, setNote] = useState<Note | null>(null)
   const alive = useRef(true)
   const loadSeq = useRef(0)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const noAnchor = useRef<HTMLElement | null>(null)
+
+  useDismiss([rootRef, anchorRef ?? noAnchor], (reason: DismissReason) => {
+    onClose()
+    if (reason === 'escape') anchorRef?.current?.focus()
+  })
 
   useEffect(() => {
     alive.current = true
@@ -409,7 +423,7 @@ export function AddConnectionPicker({
   }
 
   return (
-    <div className={panelClass} role="dialog" aria-label="Add connection">
+    <div ref={rootRef} className={panelClass} role="dialog" aria-label="Add connection">
       <SearchableAgentList
         sections={sections}
         query={query}
@@ -420,7 +434,6 @@ export function AddConnectionPicker({
         emptyText="No agents match"
         ariaLabel="Agents you can connect to"
         listClassName={listClass}
-        onEscape={onClose}
         autoFocus
       />
       {note && (

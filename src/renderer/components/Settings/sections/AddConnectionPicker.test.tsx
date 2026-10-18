@@ -39,6 +39,7 @@ vi.mock('@/lib/daemon-cli', () => ({
 }))
 
 import { AddConnectionPicker } from './AddConnectionPicker'
+import { ConnectedWorkspacesPanel } from './ProjectsSection'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
@@ -412,5 +413,88 @@ describe('AddConnectionPicker: honest states', () => {
     cli.handler = ok(ROSTERS)
     fireEvent.click(within(status.parentElement as HTMLElement).getByRole('button', { name: 'Retry' }))
     await screen.findByText('RPM')
+  })
+})
+
+// Rosson's 0.46.1 RC smoke: a click on blank space outside the picker did
+// not close it; only the + did. The real Connections panel, + and all.
+describe('Connections panel: the + picker closes like a popover', () => {
+  const panelRoutes: Handler = async (route) => {
+    if (route === 'federation/peer-rosters') return ROSTERS
+    if (route === 'relations/list' || route === 'relations/list-incoming') return []
+    if (route === 'auth/whoami') return { role: 'owner' }
+    throw new DaemonHttpError('not found', 404, null)
+  }
+  const plus = (): HTMLButtonElement => screen.getByRole('button', { name: '+' }) as HTMLButtonElement
+  const picker = (): HTMLElement | null => screen.queryByRole('dialog', { name: 'Add connection' })
+  /** A press as the browser sends it: pointerdown, mousedown, then click. */
+  const press = (el: Element): void => {
+    fireEvent.pointerDown(el)
+    fireEvent.mouseDown(el)
+    fireEvent.mouseUp(el)
+    fireEvent.click(el)
+  }
+
+  async function openPanel(): Promise<HTMLElement> {
+    cli.handler = panelRoutes
+    render(
+      <div>
+        <p data-testid="blank">Blank space</p>
+        <ConnectedWorkspacesPanel projectId={SELF} />
+      </div>,
+    )
+    fireEvent.click(plus())
+    await screen.findByText('RPM')
+    const el = picker()
+    if (!el) throw new Error('the + did not open the picker')
+    return el
+  }
+
+  it('a pointerdown outside the picker closes it', async () => {
+    await openPanel()
+    fireEvent.pointerDown(screen.getByTestId('blank'))
+    expect(picker()).toBeNull()
+    expect(plus().getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('Esc closes it and puts focus back on the +', async () => {
+    await openPanel()
+    await waitFor(() => expect(document.activeElement).toBe(search()))
+    fireEvent.keyDown(search(), { key: 'Escape' })
+    expect(picker()).toBeNull()
+    expect(document.activeElement).toBe(plus())
+  })
+
+  it('Esc from a button inside the picker (Retry) closes it too', async () => {
+    await openPanel()
+    const retry = within(sectionEl('peer:fp-old')).getByRole('button', { name: 'Retry' })
+    retry.focus()
+    fireEvent.keyDown(retry, { key: 'Escape' })
+    expect(picker()).toBeNull()
+    expect(document.activeElement).toBe(plus())
+  })
+
+  it('a press in the search box, the list or a row keeps it open', async () => {
+    const el = await openPanel()
+    press(search())
+    fireEvent.change(search(), { target: { value: 'cort' } })
+    expect(picker()).toBe(el)
+    const list = el.querySelector('[role="listbox"]')
+    if (!list) throw new Error('no listbox in the picker')
+    press(list)
+    expect(picker()).toBe(el)
+    press(sectionEl('peer:fp-rpm'))
+    expect(picker()).toBe(el)
+  })
+
+  it('the + still toggles it: closed with one press, no close-then-reopen', async () => {
+    await openPanel()
+    press(plus())
+    expect(picker()).toBeNull()
+    expect(plus().getAttribute('aria-expanded')).toBe('false')
+    press(plus())
+    await screen.findByText('RPM')
+    expect(picker()).not.toBeNull()
+    expect(plus().getAttribute('aria-expanded')).toBe('true')
   })
 })

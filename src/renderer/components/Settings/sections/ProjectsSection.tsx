@@ -3652,12 +3652,13 @@ interface WorkspaceRelation {
   createdAt: string
 }
 
-function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.JSX.Element {
+export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.JSX.Element {
   const [relations, setRelations] = useState<WorkspaceRelation[]>([])
   const [incoming, setIncoming] = useState<WorkspaceRelation[]>([])
   const [loading, setLoading] = useState(true)
   // 0.46.1: one Add connection picker (This server + paired servers).
   const [showAdd, setShowAdd] = useState(false)
+  const addButtonRef = useRef<HTMLButtonElement>(null)
   const [remoteConns, setRemoteConns] = useState<RemoteConnectionEntry[]>([])
   const [remoteError, setRemoteError] = useState<string | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
@@ -3814,6 +3815,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
             </p>
           </div>
           <button
+            ref={addButtonRef}
             type="button"
             onClick={() => {
               setShowAdd(!showAdd)
@@ -3835,6 +3837,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
             onAddLocal={handleAddLocal}
             onAddRemote={handleAddFederated}
             onClose={() => setShowAdd(false)}
+            anchorRef={addButtonRef}
           />
         )}
       </div>

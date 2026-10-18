@@ -28,6 +28,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { formatRelativeTime } from '@/lib/format-relative-time'
+import { useDismiss } from '@/hooks/useDismiss'
 import { isWebClient } from '@/lib/is-web'
 import {
   assignFeedback,
@@ -496,29 +497,6 @@ function TicketBody({
       )}
     </div>
   )
-}
-
-/** Closes a header popover on an outside mousedown or Esc (capture phase,
- *  so the first Esc closes the popover and not the open ticket). */
-function useDismiss(rootRef: React.RefObject<HTMLElement | null>, onClose: () => void, active = true): void {
-  useEffect(() => {
-    if (!active) return
-    const onDown = (e: MouseEvent): void => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) onClose()
-    }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        onClose()
-      }
-    }
-    document.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey, true)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey, true)
-    }
-  }, [rootRef, onClose, active])
 }
 
 /** The header's status chip, which is also the status dropdown: waiting,

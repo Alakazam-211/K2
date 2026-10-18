@@ -17,7 +17,7 @@ use rusqlite::Connection;
 
 pub use doc::{ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin, WidgetPlacementClaim};
 pub use options::{parse_options_value, split_options_csv};
-pub use store::{ExtTxn, OverlayPage, SeqRemap};
+pub use store::{ExtTxn, OverlayPage, SeqRemap, ThreadDelta};
 pub use transfer::IMPORTED_READ_ONLY;
 
 static WRITE: Mutex<()> = Mutex::new(());
@@ -468,7 +468,7 @@ pub fn mark_handoff(
         h.answered_by = by;
         h.answered_at = Some(doc::now_secs());
     }
-    store::put_doc(&doc)?;
+    store::put_card_doc(conversation_id, item.seq, &doc)?;
     Ok(CardCallback {
         conversation_id: conversation_id.to_string(),
         doc_id: doc.id.clone(),
@@ -565,7 +565,7 @@ pub fn answer_card(
     } else {
         return Err(CARD_NOT_PENDING.to_string());
     };
-    store::put_card_doc(conversation_id, &doc)?;
+    store::put_card_doc(conversation_id, item.seq, &doc)?;
     Ok(CardCallback {
         conversation_id: conversation_id.to_string(),
         doc_id: doc.id.clone(),
@@ -598,7 +598,7 @@ pub fn mark_secret(
         s.answered_by = by;
         s.answered_at = Some(doc::now_secs());
     }
-    store::put_card_doc(conversation_id, &doc)?;
+    store::put_card_doc(conversation_id, item.seq, &doc)?;
     Ok(CardCallback {
         conversation_id: conversation_id.to_string(),
         doc_id: doc.id.clone(),
@@ -649,7 +649,7 @@ pub fn void_card(
     } else {
         return Err(CARD_NOT_PENDING.to_string());
     };
-    store::put_card_doc(conversation_id, &doc)?;
+    store::put_card_doc(conversation_id, item.seq, &doc)?;
     Ok(CardCallback {
         conversation_id: conversation_id.to_string(),
         doc_id: doc.id.clone(),
@@ -683,7 +683,7 @@ fn expire_locked(conversation_id: &str, card_id: &str) -> Result<CardCallback, S
     } else {
         return Err(CARD_NOT_PENDING.to_string());
     };
-    store::put_card_doc(conversation_id, &doc)?;
+    store::put_card_doc(conversation_id, item.seq, &doc)?;
     Ok(CardCallback {
         conversation_id: conversation_id.to_string(),
         doc_id: doc.id.clone(),
@@ -823,6 +823,14 @@ pub fn read_thread_page(
     limit: usize,
 ) -> Result<OverlayPage, String> {
     store::read_thread_page(conversation_id, since_seq, before_seq, limit)
+}
+
+/// thread-delta-v1: items with `seq > after_seq` OLDEST first (at most
+/// `limit`, `0` = all; `has_more` when newer ones remain), plus the items
+/// at or below `after_seq` that changed in place or left since (see
+/// [`ThreadDelta`]).
+pub fn read_thread_delta(conversation_id: &str, after_seq: i64, limit: usize) -> Result<ThreadDelta, String> {
+    store::read_thread_delta(conversation_id, after_seq, limit)
 }
 
 pub fn read_chatter_page(
@@ -1629,5 +1637,122 @@ mod tests {
         let chatter = read_chatter_page(&conv, None, None, 50).expect("chatter empty");
         assert!(chatter.items.is_empty(), "{chatter:?}");
         assert!(!chatter.has_more);
+    }
+
+    // ── thread-delta-v1 ────────────────────────────────────────────────
+
+    fn seqs(items: &[OverlayItem]) -> Vec<i64> {
+        items.iter().map(|i| i.seq).collect()
+    }
+
+    fn card_status(item: &OverlayItem) -> String {
+        item.doc.choice.as_ref().expect("a choice card").status.clone()
+    }
+
+    #[test]
+    fn delta_pages_forward_and_carries_card_changes_marked_at_or_after_the_cursor() {
+        let project_id = seed_project("ovl-delta");
+        let conv = uuid::Uuid::new_v4().to_string();
+        let dbh = conn();
+        let c = dbh.lock();
+        for i in 1..=3 {
+            post_thread(&c, &conv, &project_id, "k2", "ovl-delta", &format!("m{i}"), "thread").expect("post");
+        }
+        let opts = || vec!["Go".to_string(), "Stop".to_string()];
+        let (a, _) = post_choice(&c, &conv, &project_id, "k2", "ovl-delta", "A?", opts(), false, None).expect("card a");
+        let (b, _) = post_choice(&c, &conv, &project_id, "k2", "ovl-delta", "B?", opts(), false, None).expect("card b");
+        assert_eq!((a.seq, b.seq), (4, 5));
+
+        // Forward pages, oldest first; has_more = newer items remain.
+        let d = read_thread_delta(&conv, 0, 2).expect("delta");
+        assert_eq!((seqs(&d.items), d.has_more), (vec![1, 2], true));
+        let d = read_thread_delta(&conv, 2, 2).expect("delta");
+        assert_eq!((seqs(&d.items), d.has_more), (vec![3, 4], true));
+        let d = read_thread_delta(&conv, 4, 2).expect("delta");
+        assert_eq!((seqs(&d.items), d.has_more), (vec![5], false));
+        let d = read_thread_delta(&conv, 5, 2).expect("delta");
+        assert!(d.items.is_empty() && !d.has_more && d.changed.is_empty() && d.removed.is_empty(), "{d:?}");
+        let d = read_thread_delta(&conv, 0, 0).expect("delta all");
+        assert_eq!((seqs(&d.items), d.has_more), (vec![1, 2, 3, 4, 5], false), "limit 0 = all");
+
+        // A reader holding 1..=5 sees card A's answer in `changed`.
+        answer_card(&conv, &project_id, &a.id, Some("Go"), None, None).expect("answer a");
+        let d = read_thread_delta(&conv, 5, 25).expect("delta");
+        assert!(d.items.is_empty(), "{d:?}");
+        assert_eq!(seqs(&d.changed), vec![4]);
+        assert_eq!(d.changed[0].id, a.id);
+        assert_eq!(card_status(&d.changed[0]), "answered");
+        assert_eq!(d.changed[0].doc.choice.as_ref().expect("choice").answer.as_deref(), Some("Go"));
+
+        // Then B is voided (`k2 thread void`): both changes, seq order.
+        void_card(&conv, &project_id, &b.id, None).expect("void b");
+        let d = read_thread_delta(&conv, 5, 25).expect("delta");
+        assert_eq!(seqs(&d.changed), vec![4, 5]);
+        assert_eq!(card_status(&d.changed[1]), "voided");
+
+        // A reader whose cursor is 4 gets B in `items` (current state),
+        // never twice; A (seq 4 <= 4) comes back in `changed`.
+        let d = read_thread_delta(&conv, 4, 25).expect("delta");
+        assert_eq!(seqs(&d.items), vec![5]);
+        assert_eq!(card_status(&d.items[0]), "voided");
+        assert_eq!(seqs(&d.changed), vec![4]);
+
+        // After a new post the reader holds 1..=6, fetched after both
+        // changes: nothing is re-sent.
+        post_thread(&c, &conv, &project_id, "k2", "ovl-delta", "m6", "thread").expect("post 6");
+        let d = read_thread_delta(&conv, 6, 25).expect("delta");
+        assert!(d.items.is_empty() && d.changed.is_empty(), "changes marked below the cursor were seen: {d:?}");
+        // A change made while the reader's cursor is the newest seq is
+        // marked with that seq: found (never lost at the boundary).
+        let (cc, _) = post_choice(&c, &conv, &project_id, "k2", "ovl-delta", "C?", opts(), false, None).expect("card c");
+        let d = read_thread_delta(&conv, cc.seq, 25).expect("delta");
+        assert!(d.changed.is_empty(), "{d:?}");
+        expire_card(&conv, &cc.id).expect("expire c");
+        let d = read_thread_delta(&conv, cc.seq, 25).expect("delta");
+        assert_eq!(seqs(&d.changed), vec![cc.seq]);
+        assert_eq!(card_status(&d.changed[0]), "expired");
+
+        // The newest-N page is unchanged by the change log.
+        let page = read_thread_page(&conv, None, None, 2).expect("page");
+        assert_eq!((seqs(&page.items), page.has_more), (vec![6, 7], true));
+    }
+
+    #[test]
+    fn delta_reports_rows_a_split_took_and_a_move_starts_over() {
+        let project_id = seed_project("ovl-delta-split");
+        let from = uuid::Uuid::new_v4().to_string();
+        let to = uuid::Uuid::new_v4().to_string();
+        let dbh = conn();
+        let c = dbh.lock();
+        let mut ids = Vec::new();
+        for i in 1..=4 {
+            let body = format!("{}-{i}", if i % 2 == 0 { "fork" } else { "keep" });
+            let (it, _) = post_thread(&c, &from, &project_id, "k2", "ovl-delta", &body, "thread").expect("post");
+            ids.push(it.id);
+        }
+        // A reader holds 1..=4 of `from`; the fork's rows (2, 4) move out.
+        let take = |d: &OverlayDoc| d.body.as_deref().is_some_and(|b| b.starts_with("fork-"));
+        split_conversation(&c, &from, &to, &project_id, &take).expect("split").expect("moved");
+        let d = read_thread_delta(&from, 4, 25).expect("delta");
+        assert!(d.items.is_empty() && d.changed.is_empty(), "{d:?}");
+        assert_eq!(d.removed, vec![(2, ids[1].clone()), (4, ids[3].clone())]);
+        // A reader that only held 1..=2 learns 2 left; 4 never reaches it.
+        let d = read_thread_delta(&from, 2, 25).expect("delta");
+        assert_eq!(seqs(&d.items), vec![3]);
+        assert_eq!(d.removed, vec![(2, ids[1].clone())]);
+        // The fork's new conversation is renumbered and has no history.
+        let d = read_thread_delta(&to, 0, 25).expect("delta");
+        assert_eq!(seqs(&d.items), vec![1, 2]);
+        assert!(d.changed.is_empty() && d.removed.is_empty(), "{d:?}");
+
+        // A move renumbers under a new conversation id: the old key's
+        // change rows go (a reader sees the new conversation_id and reloads).
+        let moved_to = uuid::Uuid::new_v4().to_string();
+        move_conversation(&c, &from, &moved_to).expect("move").expect("moved");
+        let d = read_thread_delta(&from, 0, 25).expect("delta");
+        assert!(d.items.is_empty() && d.changed.is_empty() && d.removed.is_empty(), "{d:?}");
+        let d = read_thread_delta(&moved_to, 0, 25).expect("delta");
+        assert_eq!(seqs(&d.items), vec![1, 2]);
+        assert!(d.removed.is_empty(), "{d:?}");
     }
 }

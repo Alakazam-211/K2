@@ -1005,6 +1005,37 @@ pub fn list_messages(
     }
 }
 
+/// thread-delta-v1: messages with `seq > after_seq`, OLDEST first (by
+/// seq), at most `limit` (default [`MESSAGES_DEFAULT_LIMIT`], max
+/// [`MESSAGES_AFTER_LIMIT`]). `truncated` = newer messages remain past the
+/// page. A project message never changes after it is posted (no edit,
+/// delete, card or reaction exists); only deleting the whole group removes
+/// them, so a delta is complete with the new rows alone.
+pub fn list_messages_after_seq(group_id: &str, after_seq: i64, limit: Option<i64>) -> Result<MessagePage, String> {
+    if let Some(l) = limit {
+        if l < 1 {
+            return Err("usage: limit must be >= 1".to_string());
+        }
+    }
+    let eff = limit.unwrap_or(MESSAGES_DEFAULT_LIMIT).min(MESSAGES_AFTER_LIMIT);
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, group_id, author, body, created_at, seq, author_kind FROM project_group_messages \
+             WHERE group_id = ?1 AND seq > ?2 ORDER BY seq ASC LIMIT ?3",
+        )
+        .map_err(|e| format!("prepare: {e}"))?;
+    let mut messages: Vec<ProjectGroupMessage> = stmt
+        .query_map(params![group_id, after_seq, eff + 1], row_to_message)
+        .map_err(|e| format!("query: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("row: {e}"))?;
+    let truncated = messages.len() as i64 > eff;
+    messages.truncate(eff as usize);
+    Ok(MessagePage { messages, truncated })
+}
+
 /// A group's dashboards, position order. V1 surfaces only the
 /// auto-created 'Main' row; everything is dashboard-id-addressed so
 /// V1.1 multi-dashboards needs no migration.

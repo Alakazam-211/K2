@@ -9,6 +9,7 @@
 //! pending_cards conv/id             → ""     (cards waiting on a person)
 //! meta          key                 → value  (one-time index builds)
 //! import_ids    project/host/doc    → id     (imported lines, dedupe)
+//! thread_changes conv/mark:020/id   → seq | removed:seq  (thread-delta-v1)
 //! ```
 //!
 //! Never query by scanning `docs/`. Walk a collection prefix, then point-get.
@@ -52,6 +53,18 @@ const EXT_STATE: TableDefinition<&str, &[u8]> = TableDefinition::new("ext_state"
 /// doc, not conversation, so it survives [`move_conversation`] (a pending
 /// import settling onto the pin) and a re-run never adds a line twice.
 const IMPORT_IDS: TableDefinition<&str, &str> = TableDefinition::new("import_ids");
+/// Thread docs that changed after they were posted (thread-delta-v1):
+/// `{conv}/{mark:020}/{doc id}` → `"{seq}"` (rewritten in place: a card
+/// answered, set, voided or expired, a handoff closed, a collected line
+/// updated) or `"removed:{seq}"` (a split took it out of this
+/// conversation). `mark` is the conversation's highest Thread seq when the
+/// change was written (before it), so a reader that holds every seq up to
+/// N has seen each change marked below N and needs the ones marked `>= N`
+/// (`GET /cli/thread?after_seq=N`). Written in the change's own redb
+/// transaction. One small row per change; never pruned (a card changes
+/// once).
+const THREAD_CHANGES: TableDefinition<&str, &str> = TableDefinition::new("thread_changes");
+const CHANGE_REMOVED_PREFIX: &str = "removed:";
 
 static DB: OnceLock<Result<Database, String>> = OnceLock::new();
 
@@ -140,10 +153,11 @@ pub fn put_doc(doc: &OverlayDoc) -> Result<(), String> {
     Ok(())
 }
 
-/// A card whose status changed (answered, set, voided, expired): the body
-/// and its `pending_cards` entry in ONE write. A card that is no longer
-/// pending leaves the index.
-pub fn put_card_doc(conversation_id: &str, doc: &OverlayDoc) -> Result<(), String> {
+/// A card whose status changed (answered, set, voided, expired, a handoff
+/// landed or declined): the body, its `pending_cards` entry and its
+/// `thread_changes` row (thread-delta-v1) in ONE write. A card that is no
+/// longer pending leaves the index. `seq` is the card's Thread seq.
+pub fn put_card_doc(conversation_id: &str, seq: i64, doc: &OverlayDoc) -> Result<(), String> {
     let json = serde_json::to_vec(doc).map_err(|e| format!("overlay doc json: {e}"))?;
     let db = db()?;
     let txn = db.begin_write().map_err(|e| format!("overlay redb write: {e}"))?;
@@ -162,7 +176,117 @@ pub fn put_card_doc(conversation_id: &str, doc: &OverlayDoc) -> Result<(), Strin
             pending.remove(key.as_str()).map_err(|e| format!("overlay pending_cards remove: {e}"))?;
         }
     }
+    note_change(&txn, conversation_id, &doc.id, Some(seq))?;
     txn.commit().map_err(|e| format!("overlay redb commit: {e}"))
+}
+
+// ── thread-delta-v1 change log ─────────────────────────────────────────
+
+fn change_key(conversation_id: &str, mark: i64, doc_id: &str) -> String {
+    format!("{conversation_id}/{}/{doc_id}", seq_pad(mark))
+}
+
+/// `(mark, doc id)` of a `thread_changes` key of `conversation_id`, or
+/// None when the key belongs to another conversation that shares the
+/// prefix (conversation ids may hold '/').
+fn parse_change_key<'a>(conversation_id: &str, key: &'a str) -> Option<(i64, &'a str)> {
+    let (rest, id) = key.rsplit_once('/')?;
+    let (conv, mark) = rest.rsplit_once('/')?;
+    if conv != conversation_id || mark.len() != 20 {
+        return None;
+    }
+    Some((mark.parse().ok()?, id))
+}
+
+/// The highest Thread seq of `conversation_id` in `table` (0 when empty).
+fn last_thread_seq<T: ReadableTable<&'static str, &'static str>>(
+    table: &T,
+    conversation_id: &str,
+) -> Result<i64, String> {
+    let start = format!("{conversation_id}/");
+    let end = conv_end(conversation_id);
+    let mut range = table
+        .range(start.as_str()..end.as_str())
+        .map_err(|e| format!("overlay thread range: {e}"))?;
+    match range.next_back() {
+        Some(entry) => {
+            let (k, v) = entry.map_err(|e| format!("overlay thread iter: {e}"))?;
+            Ok(parse_conv_pointer("thread", k.value(), v.value())?.0)
+        }
+        None => Ok(0),
+    }
+}
+
+/// Record that Thread doc `doc_id` of `conversation_id` changed in place,
+/// marked with the conversation's highest seq now (a split writes its
+/// removals itself). `seq` None: look the doc's seq up (newest first); a
+/// doc that is not on this Thread records nothing.
+fn note_change(
+    txn: &redb::WriteTransaction,
+    conversation_id: &str,
+    doc_id: &str,
+    seq: Option<i64>,
+) -> Result<(), String> {
+    let (mark, seq) = {
+        let thread = txn.open_table(THREAD).map_err(|e| format!("overlay open thread: {e}"))?;
+        let mark = last_thread_seq(&thread, conversation_id)?;
+        let seq = match seq {
+            Some(s) => s,
+            None => {
+                let start = format!("{conversation_id}/");
+                let end = conv_end(conversation_id);
+                let mut found = None;
+                for entry in thread
+                    .range(start.as_str()..end.as_str())
+                    .map_err(|e| format!("overlay thread range: {e}"))?
+                    .rev()
+                {
+                    let (k, v) = entry.map_err(|e| format!("overlay thread iter: {e}"))?;
+                    if v.value() == doc_id {
+                        found = Some(parse_conv_pointer("thread", k.value(), v.value())?.0);
+                        break;
+                    }
+                }
+                match found {
+                    Some(s) => s,
+                    None => return Ok(()),
+                }
+            }
+        };
+        (mark, seq)
+    };
+    let value = seq.to_string();
+    let mut changes = txn
+        .open_table(THREAD_CHANGES)
+        .map_err(|e| format!("overlay open thread_changes: {e}"))?;
+    changes
+        .insert(change_key(conversation_id, mark, doc_id).as_str(), value.as_str())
+        .map_err(|e| format!("overlay insert thread_changes: {e}"))?;
+    Ok(())
+}
+
+/// Drop every `thread_changes` row of `conversation_id`: a move or a
+/// split's merge renumbered its seqs (readers start over on the new key).
+fn drop_changes(txn: &redb::WriteTransaction, conversation_id: &str) -> Result<(), String> {
+    let mut changes = txn
+        .open_table(THREAD_CHANGES)
+        .map_err(|e| format!("overlay open thread_changes: {e}"))?;
+    let start = format!("{conversation_id}/");
+    let end = conv_end(conversation_id);
+    let mut keys = Vec::new();
+    for entry in changes
+        .range(start.as_str()..end.as_str())
+        .map_err(|e| format!("overlay thread_changes range: {e}"))?
+    {
+        let (k, _) = entry.map_err(|e| format!("overlay thread_changes iter: {e}"))?;
+        if parse_change_key(conversation_id, k.value()).is_some() {
+            keys.push(k.value().to_string());
+        }
+    }
+    for k in keys {
+        changes.remove(k.as_str()).map_err(|e| format!("overlay thread_changes remove: {e}"))?;
+    }
+    Ok(())
 }
 
 /// A Thread doc that is a card waiting on a person: a pending choice or
@@ -760,6 +884,127 @@ fn read_conv_page(
     Ok(OverlayPage { items, has_more })
 }
 
+/// A forward page of a Thread plus what changed below it (thread-delta-v1,
+/// `GET /cli/thread?after_seq=N`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadDelta {
+    /// Items with `seq > after_seq`, OLDEST first, at most `limit`
+    /// (`limit == 0`: all of them).
+    pub items: Vec<OverlayItem>,
+    /// More items newer than the last one in `items` exist.
+    pub has_more: bool,
+    /// Items with `seq <= after_seq` whose doc changed in place since the
+    /// reader's copy (a card answered, voided, set, expired; a handoff
+    /// closed; a collected line updated), in their current state,
+    /// ascending seq. May repeat a change the reader already has (a change
+    /// written while `after_seq` was the newest seq); applying it again is
+    /// a no-op.
+    pub changed: Vec<OverlayItem>,
+    /// `(seq, id)` of items with `seq <= after_seq` that left this Thread
+    /// since (a fork-tab split moved them to their own conversation).
+    pub removed: Vec<(i64, String)>,
+}
+
+/// [`ThreadDelta`] of `conversation_id` after `after_seq`, read in ONE
+/// redb read transaction (the page and the changes agree).
+pub fn read_thread_delta(conversation_id: &str, after_seq: i64, limit: usize) -> Result<ThreadDelta, String> {
+    let empty = ThreadDelta { items: Vec::new(), has_more: false, changed: Vec::new(), removed: Vec::new() };
+    let after_seq = after_seq.max(0);
+    let db = db()?;
+    let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+    let thread = match txn.open_table(THREAD) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(empty),
+        Err(e) => return Err(format!("overlay open thread: {e}")),
+    };
+    let end = conv_end(conversation_id);
+    let mut pointers = Vec::new();
+    let mut has_more = false;
+    {
+        let start = conv_key(conversation_id, after_seq.saturating_add(1));
+        let range = thread
+            .range(start.as_str()..end.as_str())
+            .map_err(|e| format!("overlay thread range: {e}"))?;
+        for entry in range {
+            if limit != 0 && pointers.len() >= limit {
+                has_more = true;
+                break;
+            }
+            let (k, v) = entry.map_err(|e| format!("overlay thread iter: {e}"))?;
+            pointers.push(parse_conv_pointer("thread", k.value(), v.value())?);
+        }
+    }
+    // Changes marked at or after `after_seq`, of items the reader holds
+    // (seq <= after_seq; newer ones are in `items` or a later page in
+    // their current state). Last row per doc wins; a removal is final.
+    let mut touched: std::collections::BTreeMap<String, (i64, bool)> = std::collections::BTreeMap::new();
+    match txn.open_table(THREAD_CHANGES) {
+        Ok(changes) => {
+            let start = format!("{conversation_id}/{}", seq_pad(after_seq));
+            for entry in changes
+                .range(start.as_str()..end.as_str())
+                .map_err(|e| format!("overlay thread_changes range: {e}"))?
+            {
+                let (k, v) = entry.map_err(|e| format!("overlay thread_changes iter: {e}"))?;
+                let Some((_mark, id)) = parse_change_key(conversation_id, k.value()) else {
+                    continue;
+                };
+                let raw = v.value();
+                let (removed, seq_raw) = match raw.strip_prefix(CHANGE_REMOVED_PREFIX) {
+                    Some(rest) => (true, rest),
+                    None => (false, raw),
+                };
+                let seq: i64 = seq_raw
+                    .parse()
+                    .map_err(|e| format!("overlay thread_changes value '{raw}': {e}"))?;
+                if seq > after_seq {
+                    continue;
+                }
+                let prior_removed = touched.get(id).is_some_and(|(_, r)| *r);
+                touched.insert(id.to_string(), (seq, removed || prior_removed));
+            }
+        }
+        Err(redb::TableError::TableDoesNotExist(_)) => {}
+        Err(e) => return Err(format!("overlay open thread_changes: {e}")),
+    }
+    let mut changed_ptrs = Vec::new();
+    let mut removed = Vec::new();
+    for (id, (seq, gone)) in touched {
+        if gone {
+            removed.push((seq, id));
+            continue;
+        }
+        // The pointer must still name this doc (a later move renumbers and
+        // drops the rows; never hand back a stale seq).
+        let here = thread
+            .get(conv_key(conversation_id, seq).as_str())
+            .map_err(|e| format!("overlay get thread: {e}"))?
+            .is_some_and(|g| g.value() == id);
+        if here {
+            changed_ptrs.push((seq, id));
+        }
+    }
+    changed_ptrs.sort();
+    removed.sort();
+    let load = |ptrs: Vec<(i64, String)>| -> Result<Vec<OverlayItem>, String> {
+        let mut out = Vec::with_capacity(ptrs.len());
+        for (seq, id) in ptrs {
+            let Some(doc) = point_get_doc(&txn, &id)? else {
+                return Err(format!("overlay thread seq {seq} points at missing docs/{id}"));
+            };
+            out.push(OverlayItem {
+                collection: "thread".to_string(),
+                seq,
+                id,
+                doc,
+                conversation_id: Some(conversation_id.to_string()),
+            });
+        }
+        Ok(out)
+    };
+    Ok(ThreadDelta { items: load(pointers)?, has_more, changed: load(changed_ptrs)?, removed })
+}
+
 fn point_get_doc(txn: &redb::ReadTransaction, id: &str) -> Result<Option<OverlayDoc>, String> {
     let table = txn
         .open_table(DOCS)
@@ -852,6 +1097,8 @@ pub struct MovedCollection {
     /// Every row now under the new key, with where it was before: read
     /// cursors are remapped through this (seqs are renumbered).
     pub remap: Vec<SeqRemap>,
+    /// `(old seq, doc id)` of the rows taken from the old key.
+    pub taken: Vec<(i64, String)>,
 }
 
 /// One renumbered row of a move or split.
@@ -895,6 +1142,10 @@ pub fn move_conversation(
         retarget_pending_cards(&txn, &docs, from, to, None)?;
         (thread, chatter)
     };
+    // thread-delta-v1: both keys' seqs are gone or renumbered; a reader
+    // sees the new conversation_id and starts over.
+    drop_changes(&txn, from)?;
+    drop_changes(&txn, to)?;
     before_commit(&thread, &chatter)?;
     txn.commit()
         .map_err(|e| format!("overlay redb commit: {e}"))?;
@@ -917,6 +1168,12 @@ pub fn split_conversation(
     let txn = db
         .begin_write()
         .map_err(|e| format!("overlay redb write: {e}"))?;
+    // thread-delta-v1: `from`'s highest seq BEFORE the split marks the
+    // removals, so every reader that saw a taken row gets it.
+    let mark = {
+        let t = txn.open_table(THREAD).map_err(|e| format!("overlay open thread: {e}"))?;
+        last_thread_seq(&t, from)?
+    };
     let (thread, chatter) = {
         let docs = txn
             .open_table(DOCS)
@@ -927,6 +1184,19 @@ pub fn split_conversation(
         retarget_pending_cards(&txn, &docs, from, to, Some(take))?;
         (thread, chatter)
     };
+    if !thread.taken.is_empty() {
+        // `to` was merged and renumbered (no reader is on it yet); each row
+        // taken from `from` is a removal there.
+        drop_changes(&txn, to)?;
+        let mut changes = txn
+            .open_table(THREAD_CHANGES)
+            .map_err(|e| format!("overlay open thread_changes: {e}"))?;
+        for (seq, id) in &thread.taken {
+            changes
+                .insert(change_key(from, mark, id).as_str(), format!("{CHANGE_REMOVED_PREFIX}{seq}").as_str())
+                .map_err(|e| format!("overlay insert thread_changes: {e}"))?;
+        }
+    }
     before_commit(&thread, &chatter)?;
     txn.commit()
         .map_err(|e| format!("overlay redb commit: {e}"))?;
@@ -983,7 +1253,7 @@ fn move_collection(
     }
     let new = conv_pointers(&table, collection, to)?;
     if old.is_empty() {
-        return Ok(MovedCollection { moved: 0, total: new.len(), remap: Vec::new() });
+        return Ok(MovedCollection { moved: 0, total: new.len(), remap: Vec::new(), taken: Vec::new() });
     }
     // (created_at, source: 0 = the old key first on a tie, seq, id)
     let mut rows: Vec<(i64, u8, i64, String)> = Vec::with_capacity(old.len() + new.len());
@@ -1018,6 +1288,7 @@ fn move_collection(
         moved: old.len(),
         total: rows.len(),
         remap,
+        taken: old,
     })
 }
 
@@ -1093,8 +1364,14 @@ impl ExtTxn<'_> {
         Ok(out)
     }
 
-    /// Rewrite a doc in place (its seq and ids stay).
+    /// Rewrite a doc in place (its seq and ids stay), with its
+    /// `thread_changes` row (thread-delta-v1).
     pub fn put_doc(&mut self, doc: &OverlayDoc) -> Result<(), String> {
+        self.write_doc(doc)?;
+        note_change(self.txn, &self.conv, &doc.id, None)
+    }
+
+    fn write_doc(&mut self, doc: &OverlayDoc) -> Result<(), String> {
         let json = serde_json::to_vec(doc).map_err(|e| format!("overlay doc json: {e}"))?;
         let mut t = self
             .txn
@@ -1140,7 +1417,7 @@ impl ExtTxn<'_> {
             };
             last + 1
         };
-        self.put_doc(doc)?;
+        self.write_doc(doc)?;
         {
             let mut t = self
                 .txn

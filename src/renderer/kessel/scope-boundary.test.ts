@@ -168,6 +168,15 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/Settings/sections/NotificationsSection.tsx',
   'components/Settings/sections/notify-api.ts',
   'components/Settings/sections/useNotifyPrefs.ts',
+  // 0.46.1 Settings → App Approvals (door S20): the window's server's held
+  // App requests.
+  'components/Settings/sections/app-approvals-api.ts',
+  // 0.46.1 secret handoff (H4): Vault Incoming/Sent default to the window's
+  // server; callers with a room pass its scope.
+  'components/Settings/sections/handoff-api.ts',
+  // 0.46.1 remote switch: the per-agent switch in the window's server's
+  // workspace settings.
+  'components/Settings/shared/RemoteInstructToggle.tsx',
   'components/Sidebar/ActiveBar.tsx',
   'components/Sidebar/IconRail.tsx',
   'components/Sidebar/ProjectAvatar.tsx',

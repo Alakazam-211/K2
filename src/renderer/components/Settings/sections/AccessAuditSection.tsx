@@ -237,7 +237,7 @@ export function AccessAuditSection(): React.JSX.Element {
             <p
               role="status"
               data-testid="agent-vault-export-banner"
-              className="text-xs mb-3 px-2 py-1.5 border border-[var(--color-warning,#c98a1b)] text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]"
+              className="text-xs mb-3 px-2 py-1.5 border border-[var(--color-status-warn)] text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]"
             >
               {agentExports === 1
                 ? 'An agent exported secrets from this box’s vault in this window. It is marked below; names only, never values.'
@@ -277,7 +277,7 @@ export function AccessAuditSection(): React.JSX.Element {
                         key={`${ev.ts}-${ev.user}-${ev.outcome}-${i}`}
                         data-agent-vault-export={flagged ? 'true' : undefined}
                         className={`border-b border-[var(--color-border)] text-[var(--color-text-primary)] ${
-                          flagged ? 'bg-[var(--color-warning-bg,rgba(201,138,27,0.14))] border-l-2 border-l-[var(--color-warning,#c98a1b)]' : ''
+                          flagged ? 'bg-[var(--color-status-warn-soft)] border-l-2 border-l-[var(--color-status-warn)]' : ''
                         }`}
                       >
                         <td className="py-1.5 pr-3 font-mono whitespace-nowrap">
@@ -286,7 +286,7 @@ export function AccessAuditSection(): React.JSX.Element {
                         <td className="py-1.5 pr-3">
                           {ev.event || '—'}
                           {flagged && (
-                            <span className="ml-1 text-[10px] px-1 border border-[var(--color-warning,#c98a1b)] text-[var(--color-warning,#c98a1b)]">
+                            <span className="ml-1 text-[10px] px-1 border border-[var(--color-status-warn)] text-[var(--color-status-warn)]">
                               agent export
                             </span>
                           )}

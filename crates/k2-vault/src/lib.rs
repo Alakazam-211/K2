@@ -23,6 +23,7 @@ pub mod engine;
 pub mod error;
 pub mod fetch;
 pub mod fsutil;
+pub mod handoff;
 pub mod hosts;
 pub mod inject;
 pub mod keystore;

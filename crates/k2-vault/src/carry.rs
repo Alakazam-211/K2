@@ -187,7 +187,7 @@ struct Envelope {
 }
 
 impl LocalVault {
-    fn carry_identity(&self) -> Result<Identity> {
+    pub(crate) fn carry_identity(&self) -> Result<Identity> {
         self.engine_ensure(ENGINE, IDENTITY, Gen::Ed25519)?;
         let v = self.engine_value(ENGINE, IDENTITY)?;
         let mut arr = [0u8; 32];

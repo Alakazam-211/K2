@@ -311,46 +311,113 @@ fn every_write_is_one_security_stdin_line_hex_then_text_then_refused() {
     assert_eq!(args, ["find-generic-password", "-a", ACCT, "-s", "svc", "-g", "/tmp/x"]);
 }
 
-#[test]
-fn no_source_file_writes_keychain_item_data_in_process() {
-    // The ratchet behind the 0.45.2 fix: changing an item's data from a
-    // K2 process replaces its partition list with K2's, and every
-    // `security` read (Claude Code's) then prompts. Only this module's
-    // tests may call these.
-    // Calls, not mentions in comments.
-    let banned = [
-        "SecKeychainItemModifyAttributesAndData(",
-        "SecKeychainItemModifyContent(",
-        "SecKeychainItemCreateFromContent(",
-        "SecKeychainAddGenericPassword(",
-        "SecItemAdd(",
-        "SecItemUpdate(",
-        "set_generic_password(",
-    ];
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+/// Calls that change a Keychain item's data in process (not mentions in
+/// comments).
+const IN_PROCESS_WRITES: &[&str] = &[
+    "SecKeychainItemModifyAttributesAndData(",
+    "SecKeychainItemModifyContent(",
+    "SecKeychainItemCreateFromContent(",
+    "SecKeychainAddGenericPassword(",
+    "SecItemAdd(",
+    "SecItemUpdate(",
+    "set_generic_password(",
+];
+
+/// The ONE in-process write K2 makes on purpose (Rosson 2026-10-18, option
+/// b): the vault's box key, decision KV5. Only the signed daemon may read
+/// that item; writing it through `/usr/bin/security` would put `security`
+/// on the item's ACL, so any process of the same user could read the key
+/// with it. The exemption is pinned to this one file, this one call and
+/// the `dev.k2.vault` service the file declares; any other in-process
+/// write there, or anywhere else, still fails the scan.
+const VAULT_KEY_WRITE: (&str, &str, &str) = (
+    "crates/k2-daemon/src/vault/keychain.rs",
+    "set_generic_password(SERVICE, ",
+    "pub const SERVICE: &str = \"dev.k2.vault\";",
+);
+
+/// Every in-process Keychain data write under `root`'s `dirs`, as
+/// `"<path>: <call>"`, after the single vault-key exemption.
+fn in_process_write_hits(root: &Path, dirs: &[&str]) -> Vec<String> {
+    let (exempt_file, exempt_call, exempt_service) = VAULT_KEY_WRITE;
     let mut hits = Vec::new();
-    for dir in ["crates/k2-core/src", "crates/k2-daemon/src"] {
+    for dir in dirs {
         let mut stack = vec![root.join(dir)];
         while let Some(d) = stack.pop() {
             for e in std::fs::read_dir(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display())) {
                 let p = e.unwrap().path();
                 if p.is_dir() {
                     stack.push(p);
-                } else if p.extension().map(|x| x == "rs").unwrap_or(false) {
-                    if p.file_name().unwrap() == "macos_keychain_tests.rs" {
-                        continue;
+                    continue;
+                }
+                if p.extension().map(|x| x != "rs").unwrap_or(true) || p.file_name().unwrap() == "macos_keychain_tests.rs" {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&p).unwrap();
+                let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+                for b in IN_PROCESS_WRITES {
+                    let mut n = text.matches(b).count();
+                    // The vault key: exactly one call, on the dev.k2.vault
+                    // service, in exactly that file.
+                    if rel == exempt_file
+                        && *b == "set_generic_password("
+                        && text.contains(exempt_service)
+                        && text.matches(exempt_call).count() == 1
+                    {
+                        n -= 1;
                     }
-                    let text = std::fs::read_to_string(&p).unwrap();
-                    for b in banned {
-                        if text.contains(b) {
-                            hits.push(format!("{}: {b}", p.display()));
-                        }
+                    for _ in 0..n {
+                        hits.push(format!("{rel}: {b}"));
                     }
                 }
             }
         }
     }
+    hits
+}
+
+#[test]
+fn no_source_file_writes_keychain_item_data_in_process() {
+    // The ratchet behind the 0.45.2 fix: changing an item's data from a
+    // K2 process replaces its partition list with K2's, and every
+    // `security` read (Claude Code's) then prompts. Only this module's
+    // tests may call these, plus the vault's own key (KV5, above).
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let root = root.canonicalize().unwrap_or(root);
+    let hits = in_process_write_hits(&root, &["crates/k2-core/src", "crates/k2-daemon/src"]);
     assert!(hits.is_empty(), "in-process keychain data writes: {hits:#?}");
+    // The exemption is live: the vault key write is still where it was.
+    let vault = std::fs::read_to_string(root.join(VAULT_KEY_WRITE.0)).expect("the vault keychain file");
+    assert!(vault.contains(VAULT_KEY_WRITE.1) && vault.contains(VAULT_KEY_WRITE.2), "the KV5 write moved: update VAULT_KEY_WRITE");
+}
+
+#[test]
+fn the_vault_key_exemption_covers_exactly_one_call_in_one_file() {
+    let root = std::env::temp_dir().join(format!("k2-kc-scan-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+    let vault_dir = root.join("crates/k2-daemon/src/vault");
+    std::fs::create_dir_all(&vault_dir).unwrap();
+    let svc = VAULT_KEY_WRITE.2;
+    let write = |rel: &str, body: &str| std::fs::write(root.join(rel), body).unwrap();
+    let scan = || in_process_write_hits(&root, &["crates/k2-daemon/src"]);
+    let file = VAULT_KEY_WRITE.0;
+
+    // The real shape: one call on dev.k2.vault. Exempt.
+    write(file, &format!("{svc}\nfn w() {{ set_generic_password(SERVICE, account, bytes) }}\n"));
+    assert!(scan().is_empty(), "{:?}", scan());
+    // A second write in the same file fails.
+    write(file, &format!("{svc}\nfn w() {{ set_generic_password(SERVICE, a, b); set_generic_password(SERVICE, c, d) }}\n"));
+    assert!(!scan().is_empty(), "two writes in the vault file must fail");
+    // Another service in the same file fails.
+    write(file, "pub const SERVICE: &str = \"Claude Code-credentials\";\nfn w() { set_generic_password(SERVICE, a, b) }\n");
+    assert!(!scan().is_empty(), "another service must fail");
+    // Another call there fails (any other in-process write).
+    write(file, &format!("{svc}\nfn w() {{ set_generic_password(SERVICE, a, b); SecItemAdd(q, r) }}\n"));
+    assert_eq!(scan(), [format!("{file}: SecItemAdd(")]);
+    // The same call in any other file fails.
+    write(file, &format!("{svc}\nfn w() {{ set_generic_password(SERVICE, a, b) }}\n"));
+    write("crates/k2-daemon/src/vault/other.rs", &format!("{svc}\nfn w() {{ set_generic_password(SERVICE, a, b) }}\n"));
+    assert_eq!(scan(), ["crates/k2-daemon/src/vault/other.rs: set_generic_password("]);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]

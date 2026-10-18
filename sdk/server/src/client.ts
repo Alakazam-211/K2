@@ -10,6 +10,11 @@
 // - Answers are projected onto the catalog's closed shapes (`wire.ts`).
 // - Users and rooms of this App go through the App key on
 //   `/v1/apps/<K2_APP_ID>/…` (S45), not a pass.
+// - RS-A15 (0.46.1): with the owner's `guests-rooms` grant, the App's own
+//   pass reads and sets its guests' rooms through the catalog rows:
+//   `k2.asApp().guests.rooms({username})` and
+//   `k2.asApp().guests.setRooms({username, rooms})` (no App key, no owner
+//   token).
 
 import { AsyncLocalStorage } from 'node:async_hooks'
 

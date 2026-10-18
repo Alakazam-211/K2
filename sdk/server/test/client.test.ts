@@ -333,3 +333,58 @@ describe('sockets', () => {
     off()
   })
 })
+
+describe('guests.rooms / guests.setRooms (RS-A15: no owner token)', () => {
+  const view = {
+    ok: true,
+    app: 'svc-jobs-1',
+    username: 'dana',
+    rooms: ['p-acme'],
+    roomHandles: ['acme'],
+    role: null,
+    enabled: true,
+    changed: true,
+  }
+
+  it('asApp sets a guest’s rooms with the App pass: POST /cli/skin/guests/rooms, JSON body', async () => {
+    const k2 = client()
+    answer = () => ({ status: 200, body: { ...view, grant: 'dropped by the closed shape' } })
+    const v = await k2.asApp().guests.setRooms({ username: 'dana', rooms: ['acme'] })
+    expect(v).toEqual(view)
+    expect(gw.seen).toHaveLength(1)
+    const s = gw.seen[0]!
+    expect([s.method, s.url, bearer(s)]).toEqual(['POST', '/cli/skin/guests/rooms', APP1])
+    expect(s.headers['content-type']).toBe('application/json')
+    expect(JSON.parse(s.body)).toEqual({ username: 'dana', rooms: ['acme'] })
+  })
+
+  it('asApp reads one guest: GET with the username in the query', async () => {
+    const k2 = client()
+    answer = () => ({ status: 200, body: { ...view, changed: false } })
+    const v = await k2.asApp().guests.rooms({ username: 'dana' })
+    expect(v.changed).toBe(false)
+    const s = gw.seen[0]!
+    expect(s.method).toBe('GET')
+    const u = new URL(s.url, gw.url)
+    expect([u.pathname, u.searchParams.get('username'), bearer(s)]).toEqual(['/cli/skin/guests/rooms', 'dana', APP1])
+  })
+
+  it('without asApp (no guest bound) it fails guest_required and sends nothing', async () => {
+    const k2 = client()
+    const err = await k2.guests.setRooms({ username: 'dana', rooms: [] }).catch((e: unknown) => e)
+    expect((err as K2Error).code).toBe('guest_required')
+    expect(gw.seen).toHaveLength(0)
+  })
+
+  it('the refusals are K2Errors with the shared codes', async () => {
+    const k2 = client()
+    answer = () => ({ status: 403, body: { ok: false, error: { code: 'grant_required', hint: 'ask the owner' } } })
+    const err = (await k2.asApp().guests.setRooms({ username: 'dana', rooms: ['acme'] }).catch((e: unknown) => e)) as K2Error
+    expect([err.code, err.status]).toEqual(['grant_required', 403])
+    answer = () => ({ status: 429, body: { ok: false, error: { code: 'rate_limited', hint: 'slow', retryAfterMs: 900 } }, headers: { 'retry-after': '1' } })
+    const limited = (await k2.asApp().guests.rooms({ username: 'dana' }).catch((e: unknown) => e)) as K2Error
+    expect(limited.code).toBe('rate_limited')
+    expect(APP_VERBS['guests.setRooms'].cap).toBe('guests:rooms')
+    expect(APP_VERBS['guests.setRooms'].door).toBe('link')
+  })
+})

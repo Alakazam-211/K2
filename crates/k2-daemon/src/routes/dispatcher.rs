@@ -6499,6 +6499,38 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // RS-A15 (0.46.1): the owner's per-App grants and guest rooms over
+        // the CLI. Not behind the preview flag (every published service).
+        // Caller rules live in the handler.
+        p if crate::apps::guest_rooms::ROUTES.contains(&p) => {
+            if crate::apps::guest_rooms::POST_ROUTES.contains(&p)
+                && !super::http::require_post(&mut *stream, &mut buf, is_post).await
+            {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::apps::grace::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::apps::grace::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::apps::guest_rooms::handle(&p_owned, &who, is_post, &body_bytes, &params)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // 0.46.0 App grace (Rosson's cross-over plan): warnings, clean mode,
         // App keys, held requests. Not behind the preview flag: they serve
         // every published --cmd service. Caller rules live in the handler.

@@ -482,6 +482,13 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
     },
     WidgetProp {
         kind: "agents",
+        name: "unread",
+        ty: PropType::Bool,
+        default: Some("true"),
+        doc: "your unread count and the cards waiting on you, on each row and on the pin grid's pictures (a grey count when you muted that Thread). Servers with thread-read-v1 (0.46.1)",
+    },
+    WidgetProp {
+        kind: "agents",
         name: "status",
         ty: PropType::SubsetOf(AGENT_STATUSES),
         default: Some("[\"working\", \"idle\", \"needs-you\"]"),
@@ -563,6 +570,13 @@ pub const WIDGET_PROPS: &[WidgetProp] = &[
         ty: PropType::Bool,
         default: Some("false"),
         doc: "while the agent works on your message, a drawer above the box shows its step, tool counts and a clock (click it for the detail); off, three dots under the last message. Garden 1 turns it on",
+    },
+    WidgetProp {
+        kind: "conversation",
+        name: "mute",
+        ty: PropType::Bool,
+        default: Some("false"),
+        doc: "a bell in the header to mute or unmute this agent's Thread: no pushes, left out of your badge, its count goes grey. The conversation always marks the Thread read while you look at it and says how many cards wait on you. Garden 1 turns it on (0.46.1, thread-read-v1 servers)",
     },
     WidgetProp {
         kind: "nav-rail",

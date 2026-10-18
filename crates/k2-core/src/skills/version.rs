@@ -130,7 +130,12 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// v20 = the Kanban Garden (0.45.7): New Garden lists it, `k2:kanban` in the
 /// examples, and its board's keys (`board/<garden id>/col|card/<id>`) for
 /// agents writing with `k2 store --widget k2:kanban`.
-pub const SKILL_VERSION_ZEN: u32 = 20;
+/// (v21-v23 are taken on other 0.46.1 lanes: the widget dev loop, Garden
+/// polish caps, the widget SDK.)
+/// v24 = Thread read state in Zen (0.46.1, thread-read-v1): the Agents
+/// widget's `unread` prop and the Conversation's `mute` prop (Garden 1 turns
+/// it on); conversations mark their Thread read while looked at.
+pub const SKILL_VERSION_ZEN: u32 = 24;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

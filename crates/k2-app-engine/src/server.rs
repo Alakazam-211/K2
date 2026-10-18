@@ -18,7 +18,7 @@ use std::time::Duration;
 use k2_root_proto::apps::{AppId, APP_HOME, APP_USER, CONTAINERS_CONF, SUBGID_FILE, SUBUID_FILE};
 use k2_root_proto::engine::{
     self as wire, app_slice, check_start, codes, deployment_ok, gateway_port, hex_decode, image_ok, pass_hex_ok, proxy_port, seed_hash_ok,
-    slot_base, unit_stem, Answer, Request, StartSpec, EXEC_TIMEOUT_BOUNDS, MAX_HEADER, MAX_IMAGE_BYTES, MAX_OUTPUT, MAX_SEED_BYTES,
+    slot_base, unit_stem, Answer, Request, StartSpec, Wall, EXEC_TIMEOUT_BOUNDS, MAX_HEADER, MAX_IMAGE_BYTES, MAX_OUTPUT, MAX_SEED_BYTES,
     PASS_FILE_NAME, PASS_ROOT, PASS_TARGET, SECRETS_TARGET_DIR,
 };
 use serde_json::{json, Value};
@@ -35,8 +35,22 @@ pub fn podman_bin() -> &'static str {
     k2_root_proto::podman::podman_bin()
 }
 pub const SYSTEMCTL: &str = "/usr/bin/systemctl";
+pub const CP: &str = "/usr/bin/cp";
+pub const CHMOD: &str = "/usr/bin/chmod";
 
 type R<T> = Result<T, (&'static str, String)>;
+
+/// `NODE_OPTIONS` in every App container: a fatal-error report for the
+/// App's agent always; V8's heap at half the memory cap only when there is
+/// a cap (Q6/AR45: the heap error, with a stack, before the kernel's
+/// kill). No cap (L1, the default): V8 sizes its own heap.
+pub fn node_options(r: &wire::Resources) -> String {
+    let report = "--report-on-fatalerror --report-directory=/data/.k2-diagnostics";
+    match r.node_heap_mib() {
+        Some(h) => format!("--max-old-space-size={h} {report}"),
+        None => report.to_string(),
+    }
+}
 
 fn bad(m: impl Into<String>) -> (&'static str, String) {
     (codes::BAD_REQUEST, m.into())
@@ -73,6 +87,20 @@ pub struct RunState {
     /// state files).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub box_forwards: Vec<wire::BoxForward>,
+    /// The wall rendered (protocol 3; absent = guarded).
+    #[serde(default)]
+    pub wall: Wall,
+    /// Relaxed: this deployment's writable copy of the code (removed with
+    /// the instance).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_dir: Option<String>,
+    /// Relaxed: the App's own port inside and its extra ports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_ports: Vec<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_port: Option<u16>,
 }
 
 impl Engine {
@@ -84,6 +112,11 @@ impl Engine {
             lock: Mutex::new(()),
             subid_files: (PathBuf::from(SUBUID_FILE), PathBuf::from(SUBGID_FILE)),
         }
+    }
+
+    /// The unit-file lock (writes + `daemon-reload`).
+    pub(crate) fn locked(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.lock.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Tests: keep the pass folders somewhere writable.
@@ -137,6 +170,13 @@ impl Engine {
     pub(crate) fn seeds(&self) -> PathBuf {
         self.home.join("seeds")
     }
+    /// User units K2 writes besides Quadlet's (the Apps' slice files).
+    fn user_units(&self) -> PathBuf {
+        self.home.join(".config/systemd/user")
+    }
+    pub(crate) fn builds_dir(&self) -> PathBuf {
+        self.state().join("builds")
+    }
     pub(crate) fn apps(&self) -> PathBuf {
         self.home.join("apps")
     }
@@ -146,7 +186,7 @@ impl Engine {
     fn run_dir(&self, app: &AppId) -> PathBuf {
         self.state().join("run").join(app.as_str())
     }
-    fn quadlets(&self) -> PathBuf {
+    pub(crate) fn quadlets(&self) -> PathBuf {
         self.home.join(".config/containers/systemd")
     }
     pub fn seccomp_path(&self) -> PathBuf {
@@ -160,13 +200,13 @@ impl Engine {
         c
     }
 
-    fn run(&self, prog: &str, args: &[&str], stdin: Option<Vec<u8>>, secs: u64) -> R<Out> {
+    pub(crate) fn run(&self, prog: &str, args: &[&str], stdin: Option<Vec<u8>>, secs: u64) -> R<Out> {
         let mut c = self.cmd(prog);
         c.args(args);
         sys::run(c, stdin, Duration::from_secs(secs), MAX_OUTPUT).map_err(|e| (codes::IO, format!("{prog}: {e}")))
     }
 
-    fn podman(&self, args: &[&str], stdin: Option<Vec<u8>>, secs: u64) -> R<Out> {
+    pub(crate) fn podman(&self, args: &[&str], stdin: Option<Vec<u8>>, secs: u64) -> R<Out> {
         let o = self.run(podman_bin(), args, stdin, secs)?;
         if !o.ok() {
             return Err((codes::PODMAN, format!("podman {}: {}", args.first().unwrap_or(&""), o.why())));
@@ -174,7 +214,7 @@ impl Engine {
         Ok(o)
     }
 
-    fn systemctl(&self, args: &[&str], secs: u64) -> R<Out> {
+    pub(crate) fn systemctl(&self, args: &[&str], secs: u64) -> R<Out> {
         let mut a = vec!["--user"];
         a.extend_from_slice(args);
         self.run(SYSTEMCTL, &a, None, secs)
@@ -206,12 +246,14 @@ impl Engine {
             (self.state(), 0o700),
             (self.state().join("run"), 0o700),
             (self.state().join("images"), 0o700),
+            (self.builds_dir(), 0o700),
             (self.quadlets(), 0o700),
+            (self.user_units(), 0o700),
         ] {
             std::fs::DirBuilder::new().recursive(true).mode(mode).create(&d).map_err(|e| format!("mkdir {}: {e}", d.display()))?;
         }
-        // Leftovers of an interrupted Seed put or image load.
-        for dir in [self.seeds(), self.state().join("images")] {
+        // Leftovers of an interrupted Seed put, image load or build tar.
+        for dir in [self.seeds(), self.state().join("images"), self.builds_dir()] {
             if let Ok(rd) = std::fs::read_dir(&dir) {
                 for e in rd.flatten() {
                     let n = e.file_name().to_string_lossy().to_string();
@@ -269,6 +311,9 @@ impl Engine {
             Request::ProcessStage(spec) => crate::process::stage(self, &spec),
             Request::ProcessActivate { app, deployment } => crate::process::activate(self, &app, &deployment),
             Request::ProcessState { app } => crate::process::state(self, &app),
+            // Answered in `serve_conn` (a tar follows the answer line).
+            Request::Build(_) => Err(bad("build streams its tree; it has no one-line answer")),
+            Request::Logs { app, deployment, lines } => self.logs(&app, &deployment, lines),
             Request::Adopt => self.adopt(),
             Request::RemoveApp { app, data } => self.remove_app(&app, data),
             Request::PassWrite { app, pass_hex } => {
@@ -356,7 +401,7 @@ impl Engine {
         crate::slots::capacity(&su, &sg, APP_USER)
     }
 
-    fn slot_of(&self, app: &AppId) -> R<u64> {
+    pub(crate) fn slot_of(&self, app: &AppId) -> R<u64> {
         crate::slots::load(&self.slots_path())
             .map_err(|e| (codes::IO, e))?
             .get(app.as_str())
@@ -445,7 +490,8 @@ impl Engine {
         for k in ["PORT", "HOME", "TMPDIR", "NODE_OPTIONS", "K2_PASS_FILE", "K2_SECRETS_DIR", "K2_APP_DATA", "K2_APP_CACHE"] {
             env.remove(k);
         }
-        env.insert("PORT".into(), s.port.to_string());
+        let app_port = s.app_port.unwrap_or(s.port);
+        env.insert("PORT".into(), app_port.to_string());
         env.insert("HOME".into(), "/app-home".into());
         env.insert("TMPDIR".into(), "/tmp".into());
         env.insert("K2_APP_DATA".into(), "/data".into());
@@ -456,12 +502,7 @@ impl Engine {
         for (k, v) in wire::proxy_env(px) {
             env.insert(k.into(), v);
         }
-        // AR45: V8 heap at 50% of the cap, so the heap error (with a stack)
-        // comes before the kernel's kill; a fatal-error report for agents.
-        env.insert(
-            "NODE_OPTIONS".into(),
-            format!("--max-old-space-size={} --report-on-fatalerror --report-directory=/data/.k2-diagnostics", s.memory_mib / 2),
-        );
+        env.insert("NODE_OPTIONS".into(), node_options(&s.resources));
         let mut mounts = Vec::new();
         let mut made = Vec::new();
         let cleanup = |made: &[String]| {
@@ -507,7 +548,22 @@ impl Engine {
             cleanup(&made);
             return Err((codes::IO, e));
         }
-        let seed_s = seed_dir.to_string_lossy().to_string();
+        // Relaxed (open path, Rosson Q3): the code is copied at every start
+        // into this deployment's own writable folder, owned by the App's
+        // ids; what must persist goes in /data.
+        let base = slot_base(slot);
+        let work = match s.wall {
+            Wall::Guarded => None,
+            Wall::Relaxed => match self.work_copy(&app, &seed_dir, &format!("work/{}", s.deployment), base) {
+                Ok(w) => Some(w),
+                Err(e) => {
+                    cleanup(&made);
+                    let _ = std::fs::remove_file(&env_file);
+                    return Err(e);
+                }
+            },
+        };
+        let seed_s = work.as_deref().unwrap_or(&seed_dir).to_string_lossy().to_string();
         let data_s = self.apps().join(app.as_str()).join("data").to_string_lossy().to_string();
         let cache_s = self.apps().join(app.as_str()).join("cache").to_string_lossy().to_string();
         let env_s = env_file.to_string_lossy().to_string();
@@ -516,9 +572,10 @@ impl Engine {
         let unit_text = quadlet::render(&quadlet::Render {
             app: &app,
             deployment: &s.deployment,
+            wall: s.wall,
             image: &s.image,
             runtime: &runtime,
-            base: slot_base(slot),
+            base,
             seed_dir: &seed_s,
             data_dir: &data_s,
             cache_dir: &cache_s,
@@ -527,15 +584,19 @@ impl Engine {
             gw_port: gw,
             px_port: px,
             port: s.port,
+            app_port,
+            extra_ports: &s.extra_ports,
             argv: &s.argv,
-            memory_mib: s.memory_mib,
+            resources: &s.resources,
             drain_secs: s.drain_secs,
             secrets: &mounts,
             pass_dir: pass_dir.as_deref(),
             io: &s.io,
             box_forwards: &s.box_forwards,
+            db_port: s.db_port,
         });
         let qfile = self.quadlets().join(format!("{stem}.container"));
+        let slice_file = self.user_units().join(app_slice(&app));
         let state = RunState {
             app: app.as_str().into(),
             deployment: s.deployment.clone(),
@@ -546,18 +607,36 @@ impl Engine {
             unit: unit.clone(),
             secrets: made.clone(),
             box_forwards: s.box_forwards.clone(),
+            wall: s.wall,
+            work_dir: work.as_ref().map(|w| w.to_string_lossy().to_string()),
+            app_port: s.app_port,
+            extra_ports: s.extra_ports.clone(),
+            db_port: s.db_port,
         };
         let undo = |this: &Self| {
             let _ = std::fs::remove_file(&qfile);
             let _ = std::fs::remove_file(&env_file);
             let _ = std::fs::remove_file(run_dir.join(format!("{}.json", s.deployment)));
             cleanup(&made);
+            if let Some(w) = &work {
+                this.remove_owned(w);
+            }
             let _g = this.lock.lock().unwrap_or_else(|e| e.into_inner());
             let _ = this.systemctl(&["daemon-reload"], 60);
         };
         {
             let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-            if let Err(e) = sys::write_atomic(&qfile, unit_text.as_bytes(), 0o600)
+            // The App's CPU weight sits on its slice (weights compare
+            // siblings); no weight, no file.
+            let slice_res = match quadlet::slice_unit(&app, &s.resources) {
+                Some(text) => sys::write_atomic(&slice_file, text.as_bytes(), 0o600),
+                None => match std::fs::remove_file(&slice_file) {
+                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("remove {}: {e}", slice_file.display())),
+                    _ => Ok(()),
+                },
+            };
+            if let Err(e) = slice_res
+                .and_then(|_| sys::write_atomic(&qfile, unit_text.as_bytes(), 0o600))
                 .and_then(|_| sys::write_atomic(&run_dir.join(format!("{}.json", s.deployment)), &serde_json::to_vec(&state).unwrap_or_default(), 0o600))
             {
                 drop(_g);
@@ -580,10 +659,77 @@ impl Engine {
             return Err((codes::SYSTEMD, format!("start {unit}: {} (its output: k2 app logs)", r.why())));
         }
         let pid = self.show(&unit, "MainPID").and_then(|p| p.parse::<i32>().ok()).filter(|p| *p > 0);
-        Ok(json!({ "unit": unit, "gwPort": gw, "pxPort": px, "slot": slot, "pid": pid, "slice": app_slice(&app), "boxForwards": s.box_forwards }))
+        Ok(json!({
+            "unit": unit, "gwPort": gw, "pxPort": px, "slot": slot, "pid": pid, "slice": app_slice(&app),
+            "boxForwards": s.box_forwards, "wall": s.wall, "appPort": app_port, "extraPorts": s.extra_ports, "dbPort": s.db_port,
+        }))
     }
 
-    fn show(&self, unit: &str, prop: &str) -> Option<String> {
+    /// A writable copy of `src` at `apps/<id>/<rel>`, owned by the App's
+    /// root (its slot's first id): the open path's code (copied at every
+    /// start, Q3) and a build's work tree. Links are copied as links
+    /// (`cp -a`), never followed out of the tree.
+    pub(crate) fn work_copy(&self, app: &AppId, src: &Path, rel: &str, base: u64) -> R<PathBuf> {
+        use std::os::unix::fs::DirBuilderExt;
+        if rel.contains("..") || rel.starts_with('/') {
+            return Err(bad("work folder"));
+        }
+        let dst = self.apps().join(app.as_str()).join(rel);
+        if let Some(parent) = dst.parent() {
+            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent).map_err(|e| (codes::IO, format!("mkdir: {e}")))?;
+        }
+        if dst.exists() {
+            self.remove_owned(&dst);
+        }
+        let (src_s, dst_s) = (src.to_string_lossy().to_string(), dst.to_string_lossy().to_string());
+        let o = self.run(CP, &["-a", "--no-preserve=ownership", &src_s, &dst_s], None, 900)?;
+        if !o.ok() {
+            self.remove_owned(&dst);
+            return Err((codes::IO, format!("copy the code: {}", o.why())));
+        }
+        // A stored Seed is sealed read-only: the copy is the App's to write
+        // (its root has no capability to write past the mode bits).
+        let o = self.run(CHMOD, &["-R", "u+w", &dst_s], None, 600)?;
+        if !o.ok() {
+            self.remove_owned(&dst);
+            return Err((codes::IO, format!("make the copy writable: {}", o.why())));
+        }
+        let ids = format!("{base}:{base}");
+        if let Err(e) = self.podman(&["unshare", "chown", "-R", "-h", &ids, &dst_s], None, 900) {
+            self.remove_owned(&dst);
+            return Err(e);
+        }
+        Ok(dst)
+    }
+
+    /// Remove a folder whose files belong to an App's mapped ids (inside
+    /// k2app's namespace, where they are k2app's).
+    pub(crate) fn remove_owned(&self, p: &Path) {
+        let s = p.to_string_lossy().to_string();
+        if !s.starts_with(&self.apps().to_string_lossy().to_string()) || s.contains("/../") {
+            return;
+        }
+        let _ = self.run(podman_bin(), &["unshare", "rm", "-rf", "--one-file-system", &s], None, 600);
+        let _ = std::fs::remove_dir_all(p);
+    }
+
+    /// S17 / protocol 3: the App's last `lines` log lines from its capped
+    /// `k8s-file` log (`podman logs`; the container is the deployment's).
+    fn logs(&self, app: &str, dep: &str, lines: u32) -> R<Value> {
+        let (a, _) = Self::ids(app, dep)?;
+        let n = lines.clamp(1, wire::MAX_LOG_LINES).to_string();
+        let ctr = unit_stem(&a, dep);
+        let o = self.run(podman_bin(), &["logs", "--tail", &n, &ctr], None, 60)?;
+        if !o.ok() {
+            return Err((codes::NOT_FOUND, format!("no log for {ctr}: {}", o.why())));
+        }
+        let mut out = o.stdout.clone();
+        out.extend_from_slice(&o.stderr);
+        out.truncate(MAX_OUTPUT);
+        Ok(json!({ "text": String::from_utf8_lossy(&out) }))
+    }
+
+    pub(crate) fn show(&self, unit: &str, prop: &str) -> Option<String> {
         let o = self.systemctl(&["show", "-p", prop, "--value", unit], 30).ok()?;
         o.ok().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
     }
@@ -603,9 +749,15 @@ impl Engine {
         // TimeoutStopSec bounds it.
         let r = self.systemctl(&["stop", &unit], 900)?;
         let st_path = self.run_dir(&a).join(format!("{dep}.json"));
-        let secrets = std::fs::read(&st_path).ok().and_then(|b| serde_json::from_slice::<RunState>(&b).ok()).map(|s| s.secrets).unwrap_or_default();
-        for n in &secrets {
-            let _ = self.run(podman_bin(), &["secret", "rm", n], None, 30);
+        let st = std::fs::read(&st_path).ok().and_then(|b| serde_json::from_slice::<RunState>(&b).ok());
+        for n in st.as_ref().map(|s| s.secrets.clone()).unwrap_or_default() {
+            let _ = self.run(podman_bin(), &["secret", "rm", &n], None, 30);
+        }
+        // Relaxed: the deployment's copy of the code goes with it (only the
+        // engine's own `apps/<id>/work/<deployment>` is ever removed).
+        let expected = self.apps().join(a.as_str()).join("work").join(dep);
+        if st.as_ref().and_then(|s| s.work_dir.as_deref()).is_some_and(|w| Path::new(w) == expected) {
+            self.remove_owned(&expected);
         }
         let _ = std::fs::remove_file(self.quadlets().join(format!("{}.container", unit_stem(&a, dep))));
         let _ = std::fs::remove_file(self.run_dir(&a).join(format!("{dep}.env")));
@@ -711,7 +863,11 @@ impl Engine {
         for s in self.run_states() {
             let st = self.liveness(&s.app, &s.deployment)?;
             if st["state"] == "running" {
-                live.push(json!({ "app": s.app, "deployment": s.deployment, "port": s.port, "gwPort": s.gw_port, "pxPort": s.px_port, "unit": s.unit, "pid": st["pid"], "boxForwards": s.box_forwards }));
+                live.push(json!({
+                    "app": s.app, "deployment": s.deployment, "port": s.port, "gwPort": s.gw_port, "pxPort": s.px_port, "unit": s.unit,
+                    "pid": st["pid"], "boxForwards": s.box_forwards, "wall": s.wall, "appPort": s.app_port, "extraPorts": s.extra_ports,
+                    "dbPort": s.db_port,
+                }));
             }
         }
         Ok(json!({ "instances": live }))
@@ -728,6 +884,7 @@ impl Engine {
             stopped.push(s.deployment);
         }
         let _ = std::fs::remove_dir(self.run_dir(&a));
+        let _ = std::fs::remove_file(self.user_units().join(app_slice(&a)));
         // The App's pass goes with its last instance (the daemon revoked it).
         let _ = std::fs::remove_dir_all(self.pass_dir(&a));
         let mut purged = false;
@@ -785,6 +942,8 @@ fn verb_name(r: &Request) -> &'static str {
         Request::ProcessStage(_) => "process-stage",
         Request::ProcessActivate { .. } => "process-activate",
         Request::ProcessState { .. } => "process-state",
+        Request::Build(_) => "build",
+        Request::Logs { .. } => "logs",
     }
 }
 
@@ -861,6 +1020,30 @@ pub fn serve_conn(engine: &Engine, conn: UnixStream, admit: &dyn Fn(i32) -> Resu
                 let _ = conn.set_read_timeout(Some(Duration::from_secs(16 * 60)));
                 let res = crate::tty::bridge(cmd, *cols, *rows, conn);
                 audit(verb, &who, res.is_ok(), res.as_ref().err().map(|_| codes::IO));
+            }
+        }
+        return;
+    }
+    // A build: answer, then the built tree's tar (`tarLen` bytes).
+    if let Request::Build(spec) = &req {
+        match crate::build::run(engine, spec) {
+            Err((code, msg)) => {
+                audit(verb, &who, false, Some(code));
+                answer(&mut out, &Answer::err(code, msg));
+            }
+            Ok(b) => {
+                let mut line = serde_json::to_vec(&Answer::ok(b.answer)).unwrap_or_default();
+                line.push(b'\n');
+                let sent = out.write_all(&line).and_then(|_| match &b.tar {
+                    Some(t) => std::fs::File::open(t).and_then(|mut f| std::io::copy(&mut f, &mut out)).map(|_| ()),
+                    None => Ok(()),
+                });
+                let _ = out.flush();
+                if let Some(t) = &b.tar {
+                    let _ = std::fs::remove_file(t);
+                }
+                audit(verb, &who, sent.is_ok(), sent.as_ref().err().map(|_| codes::IO));
+                let _ = out.shutdown(std::net::Shutdown::Write);
             }
         }
         return;
@@ -1066,12 +1249,56 @@ mod tests {
 
     #[test]
     fn run_state_round_trip() {
-        let s = RunState { app: "jobs".into(), deployment: "d-0123456789ab".into(), port: 41000, gw_port: 38600, px_port: 38900, slot: 0, unit: "k2app-jobs--d-0123456789ab.service".into(), secrets: vec![], box_forwards: vec![] };
+        let s = RunState {
+            app: "jobs".into(),
+            deployment: "d-0123456789ab".into(),
+            port: 41000,
+            gw_port: 38600,
+            px_port: 38900,
+            slot: 0,
+            unit: "k2app-jobs--d-0123456789ab.service".into(),
+            secrets: vec![],
+            box_forwards: vec![],
+            wall: Wall::Relaxed,
+            work_dir: Some("/var/lib/k2app/apps/jobs/work/d-0123456789ab".into()),
+            app_port: Some(3000),
+            extra_ports: vec![9000],
+            db_port: None,
+        };
         let j = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<RunState>(&j).unwrap(), s);
-        // A protocol-1 state file (no proxy forward) still reads.
+        // A protocol-1 state file (no proxy forward) still reads, as guarded.
         let old = r#"{"app":"jobs","deployment":"d-0123456789ab","port":41000,"gwPort":38600,"slot":0,"unit":"u.service","secrets":[]}"#;
-        assert_eq!(serde_json::from_str::<RunState>(old).unwrap().px_port, 0);
+        let o = serde_json::from_str::<RunState>(old).unwrap();
+        assert_eq!((o.px_port, o.wall, o.work_dir), (0, Wall::Guarded, None));
         let _ = StartSpec::clone;
+    }
+
+    #[test]
+    fn node_options_carry_a_heap_only_under_a_cap() {
+        let r = wire::Resources::k2_default();
+        assert_eq!(node_options(&r), "--report-on-fatalerror --report-directory=/data/.k2-diagnostics");
+        let c = wire::Resources { memory_mib: Some(768), ..r };
+        assert_eq!(node_options(&c), "--max-old-space-size=384 --report-on-fatalerror --report-directory=/data/.k2-diagnostics");
+    }
+
+    /// The relaxed path's code copy lands under the App's own folder only;
+    /// a relative path that climbs out is refused before any copy.
+    #[test]
+    fn work_copies_stay_in_the_apps_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let e = Engine::new(d.path().to_path_buf(), "/tmp".into());
+        let app = AppId::parse("shop").unwrap();
+        let src = d.path().join("seeds").join("x");
+        std::fs::create_dir_all(&src).unwrap();
+        for rel in ["../escape", "/etc", "work/../../x"] {
+            assert_eq!(e.work_copy(&app, &src, rel, 65_537).unwrap_err().0, codes::BAD_REQUEST, "{rel}");
+        }
+        assert!(!d.path().join("escape").exists());
+        // remove_owned never touches anything outside apps/.
+        let outside = d.path().join("keep");
+        std::fs::create_dir_all(&outside).unwrap();
+        e.remove_owned(&outside);
+        assert!(outside.is_dir());
     }
 }

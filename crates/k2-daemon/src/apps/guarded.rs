@@ -36,19 +36,23 @@ use k2_core::deploy::engine::{
 };
 use k2_core::deploy::codes;
 use k2_root_proto::apps::AppId;
-use k2_root_proto::engine::{self as wire, Answer, Request, SecretItem, StartSpec};
+use k2_root_proto::engine::{self as wire, Answer, Request, SecretItem, StartSpec, Wall};
 use serde_json::{json, Value};
 
 /// `engine_ref` prefix that marks a handle as the guarded engine's.
 pub const REF_PREFIX: &str = "podman:";
+/// `engine_ref` prefix of a relaxed (open path) instance: the same engine,
+/// routed to `apps::open` by `supervisor::engine_of`.
+pub const RELAXED_REF_PREFIX: &str = "relaxed:";
 
-/// Default per-App memory cap when the App has none set (§6.2: 512 MiB
-/// for a Next BFF). The guarded floor always has a cap (§4.2 item 10).
-pub const DEFAULT_MEMORY_MIB: u64 = 512;
-
-/// The pinned base image (docker.io `node:24-bookworm-slim`, 2026-10-14):
-/// the platform manifest digest per arch. The local name carries the
-/// digest's first 12 hex, so a new pin is a new image.
+/// The pinned base images: the platform manifest digest per arch (checked
+/// against the registry 2026-10-17). The local name carries the digest's
+/// first 12 hex, so a new pin is a new image.
+/// - `node24` (`node:24-bookworm-slim`): the guarded path's runtime.
+/// - `node24-full` (`node:24-bookworm`: Debian's toolchain, python3, git,
+///   gcc, make): the open path's relaxed container ("any toolchain", K4)
+///   and every in-wall build (S16: native modules compile; the output runs
+///   on the same Debian and Node line as the slim image).
 pub struct BaseImage {
     pub name: &'static str,
     pub digest: &'static str,
@@ -56,11 +60,22 @@ pub struct BaseImage {
 
 pub const NODE24_AMD64: &str = "sha256:ec857ea6bb60cb3d0fa4d97495590c5fe7d51be8572c307b55957eeb06569cf7";
 pub const NODE24_ARM64: &str = "sha256:156e9bc7a0a267cc6ca77b4283e32b123479342df684ce297455d7b95ff5a6b5";
+pub const NODE24_FULL_AMD64: &str = "sha256:7f7f17f773027e7f0475fa829fc0d793d75918fda85b9e517c9cc5aa46200406";
+pub const NODE24_FULL_ARM64: &str = "sha256:56c5d272cd7214c7f8b076c25146e79f75f7fcf951757511143dba0ce5b90140";
 
 pub fn base_image_for(arch: &str) -> Option<BaseImage> {
     match arch {
         "x86_64" => Some(BaseImage { name: "node24", digest: NODE24_AMD64 }),
         "aarch64" => Some(BaseImage { name: "node24", digest: NODE24_ARM64 }),
+        _ => None,
+    }
+}
+
+/// The open path's and the builds' image (toolchain included).
+pub fn full_image_for(arch: &str) -> Option<BaseImage> {
+    match arch {
+        "x86_64" => Some(BaseImage { name: "node24-full", digest: NODE24_FULL_AMD64 }),
+        "aarch64" => Some(BaseImage { name: "node24-full", digest: NODE24_FULL_ARM64 }),
         _ => None,
     }
 }
@@ -202,8 +217,23 @@ pub fn guarded_env(spec: &AppSpec, host_lang: Option<String>, host_tz: Option<St
     env
 }
 
-/// The live Seed's manifest caps (the ceiling of the App's link pass).
+/// The live Seed's manifest caps (the ceiling of the App's link pass):
+/// its stored row first (the manifest K2 validated at build; an open-path
+/// folder snapshot carries its manifest only there, and a `manifest.json`
+/// that happens to sit in an agent's folder never sets caps), else the
+/// Seed's own `manifest.json`.
 pub(crate) fn seed_caps(seed_dir: &Path) -> Result<Vec<String>> {
+    let hash = seed_dir.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::deploy::store::get_seed(&conn, &hash).map_err(|e| eng_err(codes::SEED_NOT_FOUND, e.to_string()))?
+    };
+    if let Some(row) = row {
+        let m: k2_core::deploy::manifest::Manifest =
+            serde_json::from_value(row.manifest).map_err(|e| eng_err(codes::MANIFEST_INVALID, format!("the Seed's stored manifest: {e}")))?;
+        return Ok(m.caps);
+    }
     let path = seed_dir.join(k2_core::deploy::manifest::MANIFEST_FILE);
     let text = std::fs::read_to_string(&path).map_err(|e| eng_err(codes::SEED_NOT_FOUND, format!("{}: {e}", path.display())))?;
     let m: k2_core::deploy::manifest::Manifest =
@@ -265,10 +295,34 @@ pub fn secret_items(env: Vec<(String, String)>, files: Vec<(String, Vec<u8>)>) -
     (out, dropped)
 }
 
-pub fn memory_mib(limit_bytes: Option<i64>) -> u64 {
+/// The App's memory cap on the wire (MiB). `None` = no per-App cap (L1,
+/// Rosson 2026-10-10, confirmed in Q4 2026-10-17: the 512 MiB default is
+/// gone; the Apps slice's ceiling is the bound).
+pub fn memory_cap_mib(limit_bytes: Option<i64>) -> Option<u64> {
     match limit_bytes {
-        Some(b) if b > 0 => ((b as u64) / (1024 * 1024)).clamp(64, 65_536),
-        _ => DEFAULT_MEMORY_MIB,
+        Some(b) if b > 0 => Some(((b as u64) / (1024 * 1024)).clamp(wire::MEMORY_MIB_BOUNDS.0, wire::MEMORY_MIB_BOUNDS.1)),
+        _ => None,
+    }
+}
+
+/// The process exception's cap: its system unit needs a number, so no
+/// per-App cap means the largest the root helper takes (the Apps slice's
+/// budget still bounds every App together, L1).
+pub fn process_memory_mib(limit_bytes: Option<i64>) -> u64 {
+    let (lo, hi) = k2_root_proto::apps::PROCESS_MEM_MIB;
+    memory_cap_mib(limit_bytes).map(|m| m.clamp(lo, hi)).unwrap_or(hi)
+}
+
+/// Every container's resource lines (S17): the owner's cap if any, the
+/// App's task limit and CPU weight, K2's open-files and log caps.
+pub fn resources_for(spec: &AppSpec) -> wire::Resources {
+    let d = wire::Resources::k2_default();
+    wire::Resources {
+        memory_mib: memory_cap_mib(spec.memory_limit_bytes),
+        tasks: spec.wall.tasks.map(|t| t.clamp(wire::TASKS_BOUNDS.0, wire::TASKS_BOUNDS.1)).unwrap_or(d.tasks),
+        nofile: d.nofile,
+        cpu_weight: spec.wall.cpu_weight.map(|w| w.clamp(wire::CPU_WEIGHT_BOUNDS.0, wire::CPU_WEIGHT_BOUNDS.1)),
+        log_bytes: d.log_bytes,
     }
 }
 
@@ -306,10 +360,21 @@ fn tmp_dir() -> PathBuf {
 
 pub const SKOPEO: &str = "/usr/bin/skopeo";
 
-/// The base image on the engine: present, or fetched (skopeo, by digest,
-/// as the daemon user) and streamed in.
+/// The guarded base image on the engine (see [`ensure_base`]).
 pub fn ensure_image() -> Result<String> {
     let base = base_image_for(std::env::consts::ARCH).ok_or_else(|| eng_err(codes::ENGINE_UNAVAILABLE, "no pinned base image for this CPU"))?;
+    ensure_base(&base)
+}
+
+/// The open path's and the builds' image on the engine.
+pub fn ensure_full_image() -> Result<String> {
+    let base = full_image_for(std::env::consts::ARCH).ok_or_else(|| eng_err(codes::ENGINE_UNAVAILABLE, "no pinned base image for this CPU"))?;
+    ensure_base(&base)
+}
+
+/// A pinned image on the engine: present, or fetched (skopeo, by digest,
+/// as the daemon user) and streamed in.
+pub fn ensure_base(base: &BaseImage) -> Result<String> {
     let image = base.local();
     let has = call(&Request::ImageHas { image: image.clone() }, None, Duration::from_secs(60))?;
     if has["present"] == true {
@@ -419,13 +484,6 @@ pub fn gateway_rule_argv(app: &str, gw: u16, box_ports: &[u16]) -> Vec<String> {
     a
 }
 
-/// Does the engine take box forwards (`version` lists the feature)?
-fn engine_has_box_forward() -> bool {
-    engine_version().is_ok_and(|v| {
-        v["features"].as_array().is_some_and(|f| f.iter().any(|x| x.as_str() == Some(wire::FEATURE_BOX_FORWARD)))
-    })
-}
-
 pub fn remove_gateway_rule(app: &str) {
     let st = crate::root_helper::state();
     if st.usable(k2_root_proto::version::APPS_MIN_PROTOCOL) {
@@ -433,10 +491,21 @@ pub fn remove_gateway_rule(app: &str) {
     }
 }
 
-/// A guarded deployment's output: its unit's journal, read by the root
-/// helper (`apps logs`; k2app is a system user, so journald files its
-/// lines in the system journal).
+/// A walled deployment's output: its capped log file through the engine
+/// (protocol 3, `logs`); a deployment a protocol-2 engine started logged
+/// to the journal, which the root helper reads (`apps logs`).
 pub fn logs(app: &str, deployment: &str, lines: u32) -> Result<String> {
+    match call(&Request::Logs { app: app.into(), deployment: deployment.into(), lines: lines.clamp(1, wire::MAX_LOG_LINES) }, None, Duration::from_secs(90)) {
+        Ok(v) => return Ok(v["text"].as_str().unwrap_or("").to_string()),
+        Err(e) if e.code == "engine_not_found" => {}
+        Err(e) => return Err(e),
+    }
+    journal_logs(app, deployment, lines)
+}
+
+/// The unit's journal (k2app is a system user, so journald files its lines
+/// in the system journal), read by the root helper.
+pub fn journal_logs(app: &str, deployment: &str, lines: u32) -> Result<String> {
     let st = crate::root_helper::state();
     if !st.usable(k2_root_proto::version::APPS_MIN_PROTOCOL) {
         return Err(eng_err(codes::ENGINE_UNAVAILABLE, "reading a guarded App's journal needs the root helper (protocol 6)"));
@@ -477,26 +546,18 @@ pub fn ensure_proxy(app: &str, px: Option<u16>) -> std::result::Result<u16, Stri
     super::egress_proxy::ensure(app, px).map(|_| px)
 }
 
-impl RuntimeEngine for GuardedEngine {
-    fn isolation(&self) -> Isolation {
-        Isolation::Container
+/// What the label in the App's log says for a wall.
+fn wall_word(w: Wall) -> &'static str {
+    match w {
+        Wall::Guarded => "guarded",
+        Wall::Relaxed => "open (relaxed container)",
     }
+}
 
-    fn caps(&self) -> EngineCaps {
-        EngineCaps {
-            separate_user: true,
-            memory_limit: true,
-            cpu_limit: false,
-            read_only_seed: true,
-            // Egress only through the App's own proxy (S15); the table
-            // drops everything else.
-            egress_gate: true,
-            exec: true,
-            adopt: true,
-        }
-    }
-
-    fn prepare(&self, seed: &SeedRef, spec: &AppSpec) -> Result<Prepared> {
+impl GuardedEngine {
+    /// `prepare` for either wall: the engine at protocol 3, the wall's
+    /// image and the Seed on the engine, the App's slot and gateway port.
+    pub(crate) fn prepare_with(&self, seed: &SeedRef, spec: &AppSpec, wall: Wall) -> Result<Prepared> {
         let app = app_id(&spec.app_id)?;
         let v = engine_version().map_err(|e| eng_err(codes::ENGINE_UNAVAILABLE, e))?;
         if v["protocol"].as_u64() != Some(wire::ENGINE_PROTOCOL as u64) {
@@ -505,19 +566,27 @@ impl RuntimeEngine for GuardedEngine {
                 format!("the App engine speaks protocol {} and this daemon {}: k2 app engine install", v["protocol"], wire::ENGINE_PROTOCOL),
             ));
         }
-        let image = ensure_image()?;
+        let image = match wall {
+            Wall::Guarded => ensure_image()?,
+            Wall::Relaxed => ensure_full_image()?,
+        };
         ensure_seed(seed)?;
         let t0 = Instant::now();
         let p = call(&Request::Prepare { app: app.as_str().into(), image, seed: seed.hash.clone() }, None, Duration::from_secs(960))?;
         let slot = p["slot"].as_u64().ok_or_else(|| eng_err(codes::ENGINE_UNAVAILABLE, "prepare gave no slot"))?;
         let gw = p["gwPort"].as_u64().and_then(|g| u16::try_from(g).ok()).ok_or_else(|| eng_err(codes::ENGINE_UNAVAILABLE, "prepare gave no gateway port"))?;
-        log_line(spec, &format!("guarded: slot {slot}, gateway port {gw}, id mapping warmed in {} ms", t0.elapsed().as_millis()));
+        log_line(spec, &format!("{}: slot {slot}, gateway port {gw}, id mapping warmed in {} ms", wall_word(wall), t0.elapsed().as_millis()));
         self.prepared.lock().unwrap_or_else(|e| e.into_inner()).insert(spec.deployment_id.clone(), (slot, gw));
         Ok(Prepared { workdir: seed.path.clone() })
     }
 
-    fn start(&self, spec: &AppSpec, p: &Prepared, port: u16) -> Result<RunHandle> {
+    /// `start` for either wall (S12 guarded, S13 relaxed): the gateway
+    /// link and pass, granted secrets, box services and the egress proxy
+    /// are the same; the relaxed container adds its own port inside and
+    /// extra ports, and copies the code at start (the engine does).
+    pub(crate) fn start_with(&self, spec: &AppSpec, p: &Prepared, port: u16, wall: Wall) -> Result<RunHandle> {
         let app = app_id(&spec.app_id)?;
+        let word = wall_word(wall);
         if !wire::app_port_ok(port) {
             return Err(eng_err(codes::ENGINE_UNAVAILABLE, format!("port {port} is in K2's reserved range")));
         }
@@ -528,16 +597,24 @@ impl RuntimeEngine for GuardedEngine {
             .remove(&spec.deployment_id)
             .ok_or_else(|| eng_err(codes::ENGINE_UNAVAILABLE, "start before prepare"))?;
         let seed_hash = spec_seed_hash(p).ok_or_else(|| eng_err(codes::SEED_NOT_FOUND, "the prepared Seed has no hash"))?;
+        let (app_port, extra_ports) = match wall {
+            Wall::Guarded => (None, Vec::new()),
+            Wall::Relaxed => (spec.wall.app_port, spec.wall.extra_ports.clone()),
+        };
         let mut env = guarded_env(spec, std::env::var("LANG").ok(), std::env::var("TZ").ok());
-        // Box services (0.46.0): approved and held ones are forwarded into
-        // the wall; the App's nft rule opens only the approved ones.
-        let (mut box_forwards, skipped) = super::box_service_routes::forwards_for(app.as_str(), port);
+        // Box services: approved and held ones are forwarded into the wall;
+        // the App's nft rule opens only the approved ones.
+        let in_wall_port = app_port.unwrap_or(port);
+        let (mut box_forwards, mut skipped) = super::box_service_routes::forwards_for(app.as_str(), in_wall_port);
+        box_forwards.retain(|f| {
+            let clash = extra_ports.contains(&f.app_port);
+            if clash {
+                skipped.push(format!("{} (in-wall port {} is one of the App's own ports)", f.host_port, f.app_port));
+            }
+            !clash
+        });
         if !skipped.is_empty() {
-            log_line(spec, &format!("guarded: box services not forwarded (refused port, or on the App's own port {port}): {}", skipped.join(", ")));
-        }
-        if !box_forwards.is_empty() && !engine_has_box_forward() {
-            log_line(spec, "guarded: the App engine predates box services; reinstall it (k2 app engine install) and restart the App");
-            box_forwards.clear();
+            log_line(spec, &format!("{word}: box services not forwarded (refused port, or on one of the App's own ports): {}", skipped.join(", ")));
         }
         if !box_forwards.is_empty() {
             for (k, v) in super::box_service_routes::env_for(app.as_str(), false) {
@@ -548,7 +625,7 @@ impl RuntimeEngine for GuardedEngine {
             log_line(
                 spec,
                 &format!(
-                    "guarded: box services in the wall: {} (k2 app box-service {})",
+                    "{word}: box services in the wall: {} (k2 app box-service {})",
                     box_forwards.iter().map(|f| format!("127.0.0.1:{} -> host {}", f.app_port, f.host_port)).collect::<Vec<_>>().join(", "),
                     spec.app_id
                 ),
@@ -558,7 +635,7 @@ impl RuntimeEngine for GuardedEngine {
         // starts (it may call K2 on boot). A redeploy keeps the listener.
         let (caps, rooms, dropped_caps) = super::gateway::link_policy(&seed_caps(&p.workdir)?, &spec.workspace_id);
         if !dropped_caps.is_empty() {
-            log_line(spec, &format!("guarded: caps the App pass can't carry (owner widenings, 0.46.1): {}", dropped_caps.join(", ")));
+            log_line(spec, &format!("{word}: caps the App pass can't carry (owner widenings): {}", dropped_caps.join(", ")));
         }
         let had_link = super::gateway::port_of(app.as_str()).is_some();
         let link = super::gateway::LinkSpec {
@@ -579,42 +656,51 @@ impl RuntimeEngine for GuardedEngine {
         let g = crate::vault::publish_env::granted(&spec.service_id, &spec.workspace_id, &p.workdir);
         let (secrets, dropped) = secret_items(g.env, g.files);
         if !dropped.is_empty() {
-            log_line(spec, &format!("guarded: granted secrets not delivered (names the wall refuses): {}", dropped.join(", ")));
+            log_line(spec, &format!("{word}: granted secrets not delivered (names the wall refuses): {}", dropped.join(", ")));
         }
-        let base = base_image_for(std::env::consts::ARCH).ok_or_else(|| eng_err(codes::ENGINE_UNAVAILABLE, "no pinned base image for this CPU"))?;
+        let base = match wall {
+            Wall::Guarded => base_image_for(std::env::consts::ARCH),
+            Wall::Relaxed => full_image_for(std::env::consts::ARCH),
+        }
+        .ok_or_else(|| eng_err(codes::ENGINE_UNAVAILABLE, "no pinned base image for this CPU"))?;
         let s = StartSpec {
             app: app.as_str().into(),
             deployment: spec.deployment_id.clone(),
             seed: seed_hash,
             image: base.local(),
+            wall,
             port,
+            app_port,
+            extra_ports,
             argv: spec.argv.clone(),
             env,
-            memory_mib: memory_mib(spec.memory_limit_bytes),
+            resources: resources_for(spec),
             drain_secs: spec.drain_secs.min(600),
             secrets,
             pass_hex: Some(wire::hex_encode(pass.as_bytes())),
             io: k2_root_proto::apps::IoMax::from_column(spec.io_max_json.as_deref()),
             box_forwards,
+            // Lane 3 (S21) fills the App's database door.
+            db_port: None,
         };
         if let Err(w) = wire::check_start(&s) {
             close_new_link();
-            return Err(eng_err(codes::MANIFEST_INVALID, format!("the guarded engine can't run this: {w}")));
+            return Err(eng_err(codes::MANIFEST_INVALID, format!("the {word} engine can't run this: {w}")));
         }
         // S15: the App's egress proxy listens before the App starts, so a
         // request at boot finds it (same slot offset as the gateway port).
         let px_planned = k2_root_proto::apps::proxy_port_for_gateway(gw);
         match ensure_proxy(app.as_str(), px_planned) {
-            Ok(px) => log_line(spec, &format!("guarded: egress proxy on 127.0.0.1:{px} (k2 app egress {})", spec.app_id)),
-            Err(e) => log_line(spec, &format!("guarded: egress proxy not listening ({e}); the App has no egress until it is")),
+            Ok(px) => log_line(spec, &format!("{word}: egress proxy on 127.0.0.1:{px} (k2 app egress {})", spec.app_id)),
+            Err(e) => log_line(spec, &format!("{word}: egress proxy not listening ({e}); the App has no egress until it is")),
         }
-        let v = match call(&Request::Start(Box::new(s)), None, Duration::from_secs(420)) {
+        let v = match call(&Request::Start(Box::new(s)), None, Duration::from_secs(1200)) {
             Ok(v) => v,
             Err(mut e) => {
                 close_new_link();
-                // The unit's own words (Podman / the OCI runtime) are in the
+                // Podman's and the OCI runtime's own words are in the unit's
                 // journal, which only the root helper reads for k2app.
-                if let Ok(t) = logs(app.as_str(), &spec.deployment_id, 12) {
+                if let Ok(t) = journal_logs(app.as_str(), &spec.deployment_id, 12) {
                     let t: String = t.trim().chars().rev().take(1500).collect::<Vec<_>>().into_iter().rev().collect();
                     if !t.is_empty() {
                         e.message.push_str(&format!("; the unit said: {t}"));
@@ -625,14 +711,20 @@ impl RuntimeEngine for GuardedEngine {
         };
         let unit = v["unit"].as_str().unwrap_or_default().to_string();
         super::box_service_routes::record_live(app.as_str(), &v);
-        log_line(spec, &format!("guarded container {unit} started on 127.0.0.1:{port}; its output is in the unit's journal (k2 app logs)"));
+        log_line(
+            spec,
+            &format!("{word} container {unit} started on 127.0.0.1:{port}{}; its output: k2 app logs {}", match app_port {
+                Some(ap) if ap != port => format!(" (the App's port {ap} inside)"),
+                _ => String::new(),
+            }, spec.app_id),
+        );
         if let Err(e) = install_gateway_rule(app.as_str(), gw) {
-            log_line(spec, &format!("guarded: gateway rule not installed ({e}); the App can't reach K2 until it is"));
+            log_line(spec, &format!("{word}: gateway rule not installed ({e}); the App can't reach K2 until it is"));
         }
         // The engine's answer is the truth for the forward it rendered.
         if let Some(px) = proxy_port_of(&v, Some(gw)).filter(|p| Some(*p) != px_planned) {
             if let Err(e) = ensure_proxy(app.as_str(), Some(px)) {
-                log_line(spec, &format!("guarded: egress proxy not listening ({e}); the App has no egress until it is"));
+                log_line(spec, &format!("{word}: egress proxy not listening ({e}); the App has no egress until it is"));
             }
         }
         Ok(RunHandle {
@@ -640,8 +732,44 @@ impl RuntimeEngine for GuardedEngine {
             deployment_id: spec.deployment_id.clone(),
             port,
             pid: v["pid"].as_i64().and_then(|p| i32::try_from(p).ok()),
-            engine_ref: format!("{REF_PREFIX}{unit}"),
+            engine_ref: format!("{}{unit}", ref_prefix(wall)),
         })
+    }
+}
+
+/// `engine_ref` prefix per wall (`supervisor::engine_of` routes by it).
+pub fn ref_prefix(w: Wall) -> &'static str {
+    match w {
+        Wall::Guarded => REF_PREFIX,
+        Wall::Relaxed => RELAXED_REF_PREFIX,
+    }
+}
+
+impl RuntimeEngine for GuardedEngine {
+    fn isolation(&self) -> Isolation {
+        Isolation::Container
+    }
+
+    fn caps(&self) -> EngineCaps {
+        EngineCaps {
+            separate_user: true,
+            memory_limit: true,
+            cpu_limit: false,
+            read_only_seed: true,
+            // Egress only through the App's own proxy (S15); the table
+            // drops everything else.
+            egress_gate: true,
+            exec: true,
+            adopt: true,
+        }
+    }
+
+    fn prepare(&self, seed: &SeedRef, spec: &AppSpec) -> Result<Prepared> {
+        self.prepare_with(seed, spec, Wall::Guarded)
+    }
+
+    fn start(&self, spec: &AppSpec, p: &Prepared, port: u16) -> Result<RunHandle> {
+        self.start_with(spec, p, port, Wall::Guarded)
     }
 
     fn liveness(&self, h: &RunHandle) -> Liveness {
@@ -725,7 +853,9 @@ impl RuntimeEngine for GuardedEngine {
                 deployment_id: dep.into(),
                 port,
                 pid: i["pid"].as_i64().and_then(|p| i32::try_from(p).ok()),
-                engine_ref: format!("{REF_PREFIX}{unit}"),
+                // Relaxed and guarded instances come back from one engine;
+                // the prefix routes each to its own `RuntimeEngine`.
+                engine_ref: format!("{}{unit}", ref_prefix(serde_json::from_value::<Wall>(i["wall"].clone()).unwrap_or_default())),
             });
         }
         Ok(out)
@@ -834,6 +964,7 @@ mod tests {
             cache_dir: "/x/cache".into(),
             home_dir: "/x/home".into(),
             log_path: "/x/log".into(),
+            wall: Default::default(),
         }
     }
 
@@ -869,9 +1000,29 @@ mod tests {
 
     #[test]
     fn memory_and_base_image() {
-        assert_eq!(memory_mib(None), 512);
-        assert_eq!(memory_mib(Some(1 << 30)), 1024);
-        assert_eq!(memory_mib(Some(1)), 64);
+        // L1 / Q4: no default cap; the owner's cap is passed through.
+        assert_eq!(memory_cap_mib(None), None);
+        assert_eq!(memory_cap_mib(Some(0)), None);
+        assert_eq!(memory_cap_mib(Some(1 << 30)), Some(1024));
+        assert_eq!(memory_cap_mib(Some(1)), Some(64));
+        assert_eq!(process_memory_mib(None), 65_536, "the process unit needs a number: the helper's top");
+        assert_eq!(process_memory_mib(Some(2 << 30)), 2048);
+        let mut s = spec();
+        let r = resources_for(&s);
+        assert_eq!((r.memory_mib, r.tasks, r.nofile, r.cpu_weight), (None, 512, 4096, None));
+        assert_eq!(r.node_heap_mib(), None);
+        s.memory_limit_bytes = Some(1 << 30);
+        s.wall.tasks = Some(1_000_000);
+        s.wall.cpu_weight = Some(300);
+        let r = resources_for(&s);
+        assert_eq!((r.memory_mib, r.tasks, r.cpu_weight, r.node_heap_mib()), (Some(1024), 65_536, Some(300), Some(512)));
+        assert!(r.check().is_ok());
+        let f = full_image_for("x86_64").unwrap();
+        assert_eq!(f.local(), "localhost/k2-base/node24-full:7f7f17f77302");
+        assert!(wire::image_ok(&f.local()) && wire::image_ok(&full_image_for("aarch64").unwrap().local()));
+        assert!(full_image_for("riscv64").is_none());
+        assert_eq!(ref_prefix(Wall::Guarded), "podman:");
+        assert_eq!(ref_prefix(Wall::Relaxed), "relaxed:");
         let b = base_image_for("x86_64").unwrap();
         assert_eq!(b.local(), "localhost/k2-base/node24:ec857ea6bb60");
         assert!(wire::image_ok(&b.local()));

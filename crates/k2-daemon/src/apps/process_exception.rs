@@ -159,7 +159,7 @@ impl RuntimeEngine for ProcessException {
         env.extend(super::box_service_routes::env_for(app.as_str(), true));
         let g = crate::vault::publish_env::granted(&spec.service_id, &spec.workspace_id, &p.workdir);
         let (secrets, _dropped) = guarded::secret_items(g.env, g.files);
-        let memory_mib = guarded::memory_mib(spec.memory_limit_bytes);
+        let memory_mib = guarded::process_memory_mib(spec.memory_limit_bytes);
         let ps = ProcessSpec {
             app: app.as_str().into(),
             deployment: spec.deployment_id.clone(),

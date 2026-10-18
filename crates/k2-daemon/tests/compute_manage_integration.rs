@@ -192,6 +192,14 @@ fn grant_of(ws: &str, node: &str) -> Option<k2_core::compute::store::GrantRow> {
     k2_core::compute::store::grant(&conn, node, ws)
 }
 
+/// "Alerts go to" is server-wide and the DB is shared by every test in
+/// this binary: each test sets the value it relies on.
+fn set_alerts_to(ws: Option<&str>) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::compute::admin::set_setting(&conn, k2_core::compute::admin::ALERTS_TO, ws, "owner", 1).unwrap();
+}
+
 fn manage_on(ws: &str) -> bool {
     k2_core::workspace::settings::agents_can_manage_compute(ws)
 }
@@ -256,6 +264,7 @@ async fn compute_manage_switch_end_to_end() {
     let ops = seed_ws(&env, "cm-ops");
     let web = seed_ws(&env, "cm-web");
     let (agent, sid) = passport(&ops);
+    set_alerts_to(None);
     pending_node("cmpend1", "cm-pend");
     active_node("cmact1", "cm-act");
 
@@ -439,11 +448,7 @@ async fn owner_notice_follows_alerts_to() {
     let ops = seed_ws(&env, "cn-ops");
     let it = seed_ws(&env, "cn-it");
     let (agent, _) = passport(&ops);
-    {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::compute::admin::set_setting(&conn, k2_core::compute::admin::ALERTS_TO, Some(&it.id), "owner", 1).unwrap();
-    }
+    set_alerts_to(Some(&it.id));
     let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ops.id, "toggle": "compute_manage", "value": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let r = post(d.port, "/cli/compute/nodes/enroll-code", &agent, json!({"name": "cn-new"})).await;
@@ -452,4 +457,5 @@ async fn owner_notice_follows_alerts_to() {
     assert_eq!(notes.len(), 1, "{notes:#?}");
     assert!(notes[0].contains("Agent cn-ops added compute node cn-new"), "{notes:#?}");
     assert!(inbox_titles(&ops).is_empty(), "the alerts workspace gets it instead");
+    set_alerts_to(None);
 }

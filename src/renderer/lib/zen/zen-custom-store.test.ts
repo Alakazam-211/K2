@@ -297,4 +297,28 @@ describe('the custom layer: Garden data verbs', () => {
     expect(await layer.handle({ sub: 100, verb: 'store.get', args: ['k'] })).toMatchObject({ sub: 100, error: { code: 'failed' } })
     layer.dispose()
   })
+
+  it('0.46.1: subscribe {from} pages the neighbour with from and follows its space, not its own', async () => {
+    let rev = 1
+    const f = fake(() => ({ head: rev, items: [change(`holds/${rev}`, rev)], next: null, partial: false }))
+    const { layer, pushes } = layerWith(createZenCustomStore(f.deps))
+    expect(await layer.handle({ sub: 1, verb: 'store.changes', args: [{ prefix: 'holds/', from: 'fleet-ops-lists' }] })).toBeNull()
+    await flush()
+    expect(f.calls.filter((c) => c.verb === 'store.changes').map((c) => c.args[0])).toEqual([
+      { since: 0, prefix: 'holds/', from: 'fleet-ops-lists' },
+    ])
+    expect(pushes).toHaveLength(1)
+    // Its own space's pushes don't wake it; the neighbour's do.
+    rev = 2
+    for (const cb of f.changed) cb('data:board', 2)
+    await flush()
+    expect(pushes).toHaveLength(1)
+    for (const cb of f.changed) cb('data:fleet-ops-lists', 2)
+    await flush()
+    expect(pushes).toHaveLength(2)
+    expect(f.calls.filter((c) => c.verb === 'store.changes').at(-1)?.args[0]).toEqual({ since: 1, prefix: 'holds/', from: 'fleet-ops-lists' })
+    // A bad from is refused before any call.
+    expect(await layer.handle({ sub: 2, verb: 'store.changes', args: [{ from: 7 }] })).toMatchObject({ sub: 2, error: { code: 'failed' } })
+    layer.dispose()
+  })
 })

@@ -81,7 +81,17 @@ pub struct Manifest {
     /// sources) or a list of source names on this computer (≤ 16).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sources: Option<J>,
+    /// 0.46.1 (gap 5): other widgets whose Garden data this one may READ
+    /// (`k2.store.get/list/subscribe` with `{from}`), each a folder name or
+    /// a built-in `k2:<name>` (no `@version`), ≤ [`MAX_MANIFEST_READS`].
+    /// Read-only; the other widget must be placed on the same Garden, and
+    /// the reader's maker needs read rights there. Needs `store:read`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reads: Vec<String>,
 }
+
+/// At most this many other widgets in a manifest's `reads`.
+pub const MAX_MANIFEST_READS: usize = 8;
 
 /// At most this many fixed source names in a manifest.
 pub const MAX_MANIFEST_SOURCES: usize = 16;
@@ -143,6 +153,11 @@ impl Manifest {
                 .map(|c| c.as_str().map(str::to_string))
                 .collect::<Option<_>>()?,
             sources: v.get("sources").filter(|s| !s.is_null()).cloned(),
+            reads: v
+                .get("reads")
+                .and_then(J::as_array)
+                .map(|a| a.iter().filter_map(J::as_str).map(str::to_string).collect())
+                .unwrap_or_default(),
         })
     }
 }
@@ -299,6 +314,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
     let mut libs: Vec<J> = Vec::new();
     let mut features: Vec<String> = Vec::new();
     let mut sources: Option<J> = None;
+    let mut reads: Vec<String> = Vec::new();
     let mut saw_schema = false;
 
     for (k, val) in obj {
@@ -467,6 +483,33 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                 J::Array(_) => err(k, format!("sources lists at most {MAX_MANIFEST_SOURCES} names")),
                 _ => err(k, "sources is \"config\" (the placement's config.source names them) or a list of source names".into()),
             },
+            // 0.46.1 (gap 5): other widgets' data this one may read.
+            "reads" => match val.as_array() {
+                Some(list) if list.len() <= MAX_MANIFEST_READS => {
+                    for (i, r) in list.iter().enumerate() {
+                        let p = format!("reads.{i}");
+                        let Some(r) = r.as_str().map(str::trim) else {
+                            err(&p, "each entry in reads is a widget name (a string)".into());
+                            continue;
+                        };
+                        let ok = match r.strip_prefix("k2:") {
+                            Some(n) => !n.is_empty() && !n.contains('@') && super::valid_theme_name(n),
+                            None => super::valid_theme_name(r),
+                        };
+                        if !ok {
+                            err(&p, format!("'{r}' isn't a widget: name its folder (fleet-ops-lists) or a built-in without a version (k2:kanban)"));
+                        } else if r == folder {
+                            err(&p, "a widget reads its own data without listing it; reads names other widgets".into());
+                        } else if reads.iter().any(|x| x == r) {
+                            err(&p, format!("'{r}' is listed twice"));
+                        } else {
+                            reads.push(r.to_string());
+                        }
+                    }
+                }
+                Some(_) => err(k, format!("reads lists at most {MAX_MANIFEST_READS} widgets")),
+                None => err(k, "reads is a list of other widgets whose data this one reads: [\"fleet-ops-lists\"]".into()),
+            },
             "net" | "secrets" => {
                 err(k, format!("'{k}' isn't part of manifest schema 1; outside data comes from data sources: ask for sources:read and name them in \"sources\" (k2 study data-sources)"))
             }
@@ -508,7 +551,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                     err(
                         k,
                         format!(
-                            "unknown key '{other}' in manifest.json; use schema, name, description, entry, caps, reasons, id, requires, sources"
+                            "unknown key '{other}' in manifest.json; use schema, name, description, entry, caps, reasons, id, requires, sources, reads"
                         ),
                     );
                 }
@@ -521,15 +564,15 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
     if name.is_none() && !obj.contains_key("name") {
         errors.push(d(1, 1, "manifest.json needs a \"name\" (shown in K2's review dialog as the widget's own words)".into()));
     }
-    let reads = crate::sources::SOURCES_READ_CAP;
-    if sources.is_some() && !caps.iter().any(|c| c == reads) {
+    let sources_cap = crate::sources::SOURCES_READ_CAP;
+    if sources.is_some() && !caps.iter().any(|c| c == sources_cap) {
         let (l, c) = at("sources");
-        errors.push(d(l, c, format!("sources_needs_cap: a widget that names sources must ask for \"{reads}\" in caps")));
+        errors.push(d(l, c, format!("sources_needs_cap: a widget that names sources must ask for \"{sources_cap}\" in caps")));
     }
     // 0.46.1 (Rosson 2026-10-17): a sources reader keeps thread:post and
     // store:write when it asks for them. Validate says so plainly, as a
     // note (a warning, never an error), so the person sees the reach.
-    if caps.iter().any(|c| c == reads) && caps.iter().any(|c| c == super::widget_access::THREAD_POST) {
+    if caps.iter().any(|c| c == sources_cap) && caps.iter().any(|c| c == super::widget_access::THREAD_POST) {
         let (l, c) = at("caps");
         warnings.push(d(
             l,
@@ -540,7 +583,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
             ),
         ));
     }
-    if caps.iter().any(|c| c == reads) && caps.iter().any(|c| c == super::widget_access::STORE_WRITE) {
+    if caps.iter().any(|c| c == sources_cap) && caps.iter().any(|c| c == super::widget_access::STORE_WRITE) {
         let (l, c) = at("caps");
         warnings.push(d(
             l,
@@ -550,6 +593,10 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                 super::widget_access::SOURCES_REACH_STORE
             ),
         ));
+    }
+    if !reads.is_empty() && !caps.iter().any(|c| c == "store:read") {
+        let (l, c) = at("reads");
+        errors.push(d(l, c, "reads_needs_cap: a widget that reads other widgets' data must ask for \"store:read\" in caps".into()));
     }
     for cap in reasons.keys() {
         if !caps.contains(cap) {
@@ -570,6 +617,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
         libs,
         features,
         sources,
+        reads,
     };
     (Some(m), errors, warnings)
 }
@@ -873,6 +921,40 @@ mod tests {
         let w: Vec<&str> = warns.iter().map(|d| d.message.as_str()).collect();
         assert!(w.iter().any(|m| m.starts_with("sources_reach_store")), "{w:?}");
         assert!(!w.iter().any(|m| m.starts_with("sources_reach_thread")), "{w:?}");
+    }
+
+    /// Gap 5 (0.46.1): `reads` names other widgets, needs store:read, never
+    /// itself, no versions, no repeats, at most 8; it round-trips through
+    /// the saved manifest.
+    #[test]
+    fn reads_names_other_widgets_and_needs_store_read() {
+        let base = "{\n  \"schema\": 1,\n  \"name\": \"Rollouts\",\n  \"caps\": [\"store:read\", \"sources:read\"],\n  \"sources\": \"config\",\n  \"reads\": ";
+        let (m, e, _) = manifest(&format!("{base}[\"fleet-ops-lists\", \"k2:kanban\"]\n}}\n"));
+        assert!(e.is_empty(), "{e:?}");
+        let m = m.expect("manifest");
+        assert_eq!(m.reads, vec!["fleet-ops-lists".to_string(), "k2:kanban".to_string()]);
+        let saved = serde_json::to_value(&m).expect("json");
+        assert_eq!(saved["reads"], json!(["fleet-ops-lists", "k2:kanban"]));
+        assert_eq!(Manifest::from_saved(&saved).expect("saved").reads, m.reads);
+        let plain = manifest(&with("\"reasons\": {}")).0.expect("plain");
+        assert!(serde_json::to_value(&plain).expect("json").get("reads").is_none(), "empty reads isn't written");
+        for (bad, why) in [
+            ("[\"agent-arcade\"]", "a widget reads its own data"),
+            ("[\"k2:kanban@1\"]", "isn't a widget"),
+            ("[\"Fleet Ops\"]", "isn't a widget"),
+            ("[\"a\", \"a\"]", "listed twice"),
+            ("[1]", "a widget name"),
+            ("\"fleet\"", "reads is a list"),
+            ("[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\"]", "at most 8"),
+        ] {
+            let (m, e, _) = manifest(&format!("{base}{bad}\n}}\n"));
+            assert!(m.is_none(), "{bad}");
+            assert!(e.iter().any(|d| d.message.contains(why)), "{bad}: {e:?}");
+        }
+        let no_cap = "{\n  \"schema\": 1,\n  \"name\": \"X\",\n  \"caps\": [\"agents:read\"],\n  \"reads\": [\"board\"]\n}\n";
+        let (m, e, _) = manifest(no_cap);
+        assert!(m.is_none());
+        assert!(e.iter().any(|d| d.message.starts_with("reads_needs_cap")), "{e:?}");
     }
 
     #[test]

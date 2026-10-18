@@ -120,7 +120,8 @@ export interface ZenCustomStoreDeps {
 export interface ZenCustomStore {
   /** One `garden-local` verb; `by` comes back in the person's words. */
   call(verb: string, args: unknown[]): Promise<unknown>
-  /** `k2.store.subscribe`: `arg` is a prefix or `{prefix?, since?}`. */
+  /** `k2.store.subscribe`: `arg` is a prefix or `{prefix?, since?, from?}`
+   *  (`from`: a neighbour widget named in the manifest's `reads`, 0.46.1). */
   subscribe(arg: unknown, push: (value: unknown) => void, fail: (error: CatalogWireError) => void): () => void
 }
 
@@ -185,6 +186,7 @@ export function createZenCustomStore(deps: ZenCustomStoreDeps): ZenCustomStore {
   ): (() => void) => {
     let prefix = ''
     let since = 0
+    let from: string | null = null
     if (typeof arg === 'string') prefix = arg
     else if (isObj(arg)) {
       if (arg.prefix !== undefined) {
@@ -197,9 +199,17 @@ export function createZenCustomStore(deps: ZenCustomStoreDeps): ZenCustomStore {
         }
         since = arg.since
       }
+      if (arg.from !== undefined && arg.from !== null) {
+        if (typeof arg.from !== 'string' || !arg.from) throw new ZenStoreError('failed', 'store.subscribe: from is a widget name')
+        from = arg.from
+      }
     } else if (arg !== undefined && arg !== null) {
-      throw new ZenStoreError('failed', 'store.subscribe takes a prefix or {prefix, since}')
+      throw new ZenStoreError('failed', 'store.subscribe takes a prefix or {prefix, since, from}')
     }
+    // 0.46.1 (gap 5): a neighbour's data rides its own space's pushes; the
+    // daemon checks `from` against the manifest's `reads` on every page.
+    const space = from === null ? deps.space : zenDataSpace(from)
+    const fromOpt = from === null ? {} : { from }
     let live = true
     let running = false
     let again = false
@@ -219,7 +229,7 @@ export function createZenCustomStore(deps: ZenCustomStoreDeps): ZenCustomStore {
       const items: unknown[] = []
       let after: string | undefined
       for (;;) {
-        const page = (await call('store.list', [{ prefix, ...(after !== undefined ? { after } : {}), limit: 500 }])) as {
+        const page = (await call('store.list', [{ prefix, ...(after !== undefined ? { after } : {}), limit: 500, ...fromOpt }])) as {
           items: unknown[]
           next: string | null
         }
@@ -245,7 +255,9 @@ export function createZenCustomStore(deps: ZenCustomStoreDeps): ZenCustomStore {
           for (;;) {
             let page: { head: number; items: Row[]; next: { since: number; after?: string } | null; partial: boolean }
             try {
-              page = (await call('store.changes', [{ since: at.since, ...(at.after !== undefined ? { after: at.after } : {}), prefix }])) as typeof page
+              page = (await call('store.changes', [
+                { since: at.since, ...(at.after !== undefined ? { after: at.after } : {}), prefix, ...fromOpt },
+              ])) as typeof page
             } catch (err) {
               const e = zenStoreErrorFrom(err)
               if (e.daemonCode !== 'resync') throw e
@@ -291,8 +303,8 @@ export function createZenCustomStore(deps: ZenCustomStoreDeps): ZenCustomStore {
       }
     }
 
-    const offChanged = deps.onChanged((space, rev) => {
-      if (space !== deps.space || !live) return
+    const offChanged = deps.onChanged((changedSpace, rev) => {
+      if (changedSpace !== space || !live) return
       if (rev <= cursor.since && !running) return
       void pump()
     })

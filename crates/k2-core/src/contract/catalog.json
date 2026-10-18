@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 9,
+  "catalogVersion": 10,
   "caps": [
     {
       "name": "agents:read",
@@ -2586,6 +2586,19 @@
           "title": "key",
           "type": "string",
           "description": "A key in this widget's data, like obj/7."
+        },
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Read another widget's data on this Garden instead (its folder name, or k2:<name>); it must be in your manifest's reads. Read-only."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
         }
       ],
       "response": {
@@ -2625,6 +2638,7 @@
       },
       "errors": [
         "cap_not_granted",
+        "not_bound",
         "not_granted",
         "author_unknown",
         "stale_widget",
@@ -2633,7 +2647,7 @@
         "failed",
         "bad_key"
       ],
-      "doc": "One key of this widget's data, or null.",
+      "doc": "One key of this widget's data (or, with {from}, of a widget it reads), or null.",
       "example": "const e = await k2.store.get('obj/7')"
     },
     {
@@ -2812,6 +2826,10 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 500
+            },
+            "from": {
+              "type": "string",
+              "description": "Read another widget's data on this Garden instead (its folder name, or k2:<name>); it must be in your manifest's reads. Read-only."
             }
           },
           "required": [],
@@ -2873,6 +2891,7 @@
       },
       "errors": [
         "cap_not_granted",
+        "not_bound",
         "not_granted",
         "author_unknown",
         "stale_widget",
@@ -2915,6 +2934,10 @@
             },
             "prefix": {
               "type": "string"
+            },
+            "from": {
+              "type": "string",
+              "description": "Read another widget's data on this Garden instead (its folder name, or k2:<name>); it must be in your manifest's reads. Read-only."
             }
           },
           "required": [
@@ -3004,6 +3027,7 @@
       },
       "errors": [
         "cap_not_granted",
+        "not_bound",
         "not_granted",
         "author_unknown",
         "stale_widget",

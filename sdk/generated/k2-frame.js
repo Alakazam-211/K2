@@ -7,7 +7,7 @@
 (function () {
   'use strict'
   var K2_CONTRACT = Object.freeze({
-    catalogVersion: 9,
+    catalogVersion: 10,
     errors: Object.freeze(['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused']),
     verbs: Object.freeze({
       'gardens.list': Object.freeze({ cap: null, reach: 'local', kind: 'call', feature: 'zen-gardens-v1' }),

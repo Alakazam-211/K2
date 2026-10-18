@@ -44,6 +44,20 @@ pub fn rights_for_widget(conn: &Connection, space: &Space, maker: &MadeBy) -> Re
     }
 }
 
+/// What a widget made by `maker` may READ in a neighbour's `space` (a
+/// `{from}` read, 0.46.1 gap 5): the owner's and K2's widgets everything;
+/// an agent's widget its maker's grants there, or everything when that
+/// agent also made the neighbour and holds the switch. Callers never write
+/// through this.
+pub fn rights_for_neighbour(conn: &Connection, space: &Space, maker: &MadeBy) -> Result<Access, DataError> {
+    match maker {
+        MadeBy::Owner | MadeBy::K2 => Ok(Access::Full),
+        MadeBy::Agent { project_id } if maker_owns_widget_data(conn, space, project_id)? => Ok(Access::Full),
+        MadeBy::Agent { project_id } => grants::access_for_agent(conn, space, project_id),
+        MadeBy::Unclaimed => Err(DataError::AuthorUnknown),
+    }
+}
+
 /// Does `project_id`'s agent reach `space` as its widget's maker: a `data:`
 /// space of a folder widget whose newest stamped version that agent made,
 /// with the `gardens_manage` switch on? (Its `k2 store --widget` then gets

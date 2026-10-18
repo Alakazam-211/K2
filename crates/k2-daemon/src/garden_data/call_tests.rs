@@ -359,3 +359,57 @@ fn agent_transactions_are_bound_to_their_caller_and_checked_per_part() {
     let r = ok(&o, "POST", "/cli/zen/data/tx/commit", json!({"txId": id}), &[]);
     assert_eq!(r["ops"], 2);
 }
+
+/// Gap 5 (0.46.1): with `"reads": ["lists"]` in its manifest, `board` reads
+/// the `lists` widget's data on the same Garden through `{from}`, read-only;
+/// undeclared or unplaced neighbours answer `not_bound`, and an agent-made
+/// reader needs its maker's read grant on the neighbour.
+#[test]
+fn a_widget_reads_a_declared_neighbours_data_read_only() {
+    let d = door(&["store:read", "store:write"]);
+    // Place `lists` next to `board`, and give board `reads`.
+    d.f.new_widget("lists", Some("hello")).expect("lists folder");
+    let page = format!("{PAGE}\n[[widget]]\nid = \"l1\"\nkind = \"custom\"\nwidget = \"lists\"\ncolumn = 0\n");
+    std::fs::write(d.f.path_of(&ZenFile::Garden(d.garden.clone())), &page).expect("garden page");
+    let reader = |reads: &str| {
+        format!(
+            "{{\n  \"schema\": 1,\n  \"name\": \"Board\",\n  \"entry\": \"index.html\",\n  \"caps\": [\"store:read\", \"store:write\"],\n  \"reads\": {reads}\n}}\n"
+        )
+    };
+    std::fs::write(d.f.widget_dir("board").join("manifest.json"), reader("[\"lists\"]")).expect("manifest");
+    d.stamp(MadeBy::Owner);
+    ok(&DataWho::Owner, "POST", "/cli/zen/data/put", json!({"widget": "lists", "key": "holds/ohana", "value": "freeze"}), &[]);
+    ok(&DataWho::Owner, "POST", "/cli/zen/data/put", json!({"widget": "lists", "key": "holds/luzz", "value": "migrating"}), &[]);
+
+    let e = d.call("store.get", json!(["holds/ohana", {"from": "lists"}]));
+    assert_eq!(e["value"], "freeze", "{e}");
+    assert_eq!(d.call("store.get", json!(["holds/ohana"])), Value::Null, "without from, its own data");
+    let page = d.call("store.list", json!([{"prefix": "holds/", "from": "lists"}]));
+    let keys: Vec<&str> = page["items"].as_array().unwrap().iter().map(|i| i["key"].as_str().unwrap()).collect();
+    assert_eq!(keys, vec!["holds/luzz", "holds/ohana"]);
+    let ch = d.call("store.changes", json!([{"since": 0, "from": "lists"}]));
+    assert_eq!(ch["items"].as_array().unwrap().len(), 2, "{ch}");
+    // Read-only: no write verb takes from.
+    let (code, v) = d.raw(&d.hash(), "store.put", json!(["holds/x", 1, {"from": "lists"}]));
+    assert_eq!(code, 400, "{v}");
+    let v = ok(&DataWho::Owner, "GET", "/cli/zen/data/get", json!({}), &[("widget", "lists"), ("key", "holds/x")]);
+    assert_eq!(v["entry"], Value::Null, "nothing written to the neighbour");
+    // Not in reads → not_bound.
+    assert_eq!(d.refuse("store.get", json!(["holds/ohana", {"from": "diary"}])), "not_bound");
+    // In reads but not placed on this Garden → not_bound.
+    std::fs::write(d.f.widget_dir("board").join("manifest.json"), reader("[\"lists\", \"elsewhere\"]")).expect("manifest");
+    d.stamp(MadeBy::Owner);
+    assert_eq!(d.refuse("store.get", json!(["k", {"from": "elsewhere"}])), "not_bound");
+    assert_eq!(d.refuse("store.get", json!(["k", {"nope": 1}])), "bad_request");
+
+    // An agent-made reader (new code, so a new hash the agent signs first)
+    // reads the neighbour with its maker's grants only.
+    std::fs::write(d.f.widget_dir("board").join("manifest.json"), reader("[\"lists\"]")).expect("manifest");
+    let index = d.f.widget_dir("board").join("index.html");
+    let html = std::fs::read_to_string(&index).expect("index.html");
+    std::fs::write(&index, format!("{html}\n<!-- agent version -->\n")).expect("index.html");
+    d.stamp(MadeBy::Agent { project_id: "w-builder".into() });
+    assert_eq!(d.refuse("store.get", json!(["holds/ohana", {"from": "lists"}])), "not_granted");
+    person_grant("lists", "w-builder", "read", "holds/");
+    assert_eq!(d.call("store.get", json!(["holds/ohana", {"from": "lists"}]))["value"], "freeze");
+}

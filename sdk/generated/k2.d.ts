@@ -441,9 +441,9 @@ export interface K2Verbs {
   'sources.subscribe': { args: [address: string]; value: SourceView }
   'sources.refresh': { args: [address: string]; value: SourceRefresh }
   'sources.ask': { args: [address: string, itemKey?: string | null]; value: SourceAsk }
-  'store.get': { args: [key: string]; value: StoreEntry | null }
-  'store.list': { args: [opts?: { after?: string; limit?: number; prefix?: string }]; value: StorePage }
-  'store.changes': { args: [opts: { after?: string; prefix?: string; since: number }]; value: StoreChanges }
+  'store.get': { args: [key: string, opts?: { from?: string }]; value: StoreEntry | null }
+  'store.list': { args: [opts?: { after?: string; from?: string; limit?: number; prefix?: string }]; value: StorePage }
+  'store.changes': { args: [opts: { after?: string; from?: string; prefix?: string; since: number }]; value: StoreChanges }
   'store.put': { args: [key: string, value: unknown, opts?: { ifRev?: number }]; value: StoreRev }
   'store.delete': { args: [key: string, opts?: { ifRev?: number }]; value: StoreDeleted }
   'store.batch': { args: [ops: StoreOp[]]; value: StoreCommit }
@@ -543,12 +543,12 @@ export interface K2 {
     ask(address: string, itemKey?: string | null): Promise<SourceAsk>
   }
   readonly store: {
-    /** One key of this widget's data, or null. This computer only. cap store:read · local · garden-data-v1. e.g. `const e = await k2.store.get('obj/7')` */
-    get(key: string): Promise<StoreEntry | null>
+    /** One key of this widget's data (or, with {from}, of a widget it reads), or null. This computer only. cap store:read · local · garden-data-v1. e.g. `const e = await k2.store.get('obj/7')` */
+    get(key: string, opts?: { from?: string }): Promise<StoreEntry | null>
     /** Keys in order, a page at a time (at most 500 and 60 KiB). This computer only. cap store:read · local · garden-data-v1. e.g. `const {items, next} = await k2.store.list({prefix: 'obj/'})` */
-    list(opts?: { after?: string; limit?: number; prefix?: string }): Promise<StorePage>
+    list(opts?: { after?: string; from?: string; limit?: number; prefix?: string }): Promise<StorePage>
     /** Changes after a cursor, whole revs at a time (subscribe uses this). This computer only. cap store:read · local · garden-data-v1. e.g. `const page = await k2.store.changes({since: 41})` */
-    changes(opts: { after?: string; prefix?: string; since: number }): Promise<StoreChanges>
+    changes(opts: { after?: string; from?: string; prefix?: string; since: number }): Promise<StoreChanges>
     /** Save one key; with ifRev, only if nobody changed it since. This computer only. cap store:write · local · garden-data-v1. e.g. `const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})` */
     put(key: string, value: unknown, opts?: { ifRev?: number }): Promise<StoreRev>
     /** Delete one key (a missing key is not an error). This computer only. cap store:write · local · garden-data-v1. e.g. `await k2.store.delete('obj/7')` */

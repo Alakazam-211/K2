@@ -4,9 +4,10 @@
 //!
 //! - **Sources** (the daemon's own bindings, read at each start):
 //!   the bound custom hostnames (`k2 domain name add <host> --role
-//!   app:<app>`, on an attached apex) and the nested label
-//!   `https://<app>.<sub>.k2.dev` when the App is tunnelled and the box has
-//!   a K2 Connect subdomain.
+//!   app:<app>`, on an attached apex), the reserved `meet` label when it is
+//!   bound to the App (`k2 hostchat meet bind <app>`, K-M2), and the nested
+//!   label `https://<app>.<sub>.k2.dev` when the App is tunnelled and the
+//!   box has a K2 Connect subdomain.
 //! - `K2_APP_ORIGIN` = the primary origin: the first bound custom domain
 //!   (sorted), else the nested label. `K2_APP_ORIGINS` = every origin,
 //!   comma-separated, primary first.
@@ -79,7 +80,7 @@ fn box_subdomain() -> String {
 /// The public origins of the published service `service_id` named `name`
 /// (an App's name is its id), read from the daemon's bindings now.
 pub fn for_service(service_id: &str, name: &str) -> Vec<String> {
-    for_service_on(service_id, name, &box_subdomain(), None)
+    for_service_on(service_id, name, &box_subdomain(), crate::sew::meet::bound_live())
 }
 
 fn for_service_on(service_id: &str, name: &str, sub: &str, meet: Option<(String, Option<String>)>) -> Vec<String> {
@@ -180,6 +181,14 @@ mod tests {
             k2_core::domains::remove_name(&conn, "hearth.example.com").unwrap();
         }
         assert_eq!(for_service_on(&tunnel_id, "hearth", "sewlab", None), vec!["https://hearth.sewlab.k2.dev".to_string()]);
+        // The `meet` label bound to this App (K-M2) comes before its own;
+        // bound to another App, it isn't this one's.
+        let meet = |app: &str| Some((app.to_string(), Some("https://meet.sewlab.k2.dev".to_string())));
+        assert_eq!(
+            for_service_on(&tunnel_id, "hearth", "sewlab", meet("hearth")),
+            vec!["https://meet.sewlab.k2.dev".to_string(), "https://hearth.sewlab.k2.dev".to_string()]
+        );
+        assert_eq!(for_service_on(&tunnel_id, "hearth", "sewlab", meet("other")), vec!["https://hearth.sewlab.k2.dev".to_string()]);
     }
 
     #[test]

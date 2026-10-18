@@ -333,8 +333,13 @@ function StepBody({ step }: { step: ThreadStripStep }): React.JSX.Element {
   )
 }
 
-/** A message sent while the agent works ends the open turn `superseded`
- *  at once (the daemon's `Tracker::start`, thread_activity.rs), but the new
+/** From 0.46.1 a message sent while the agent works joins its running turn
+ *  (the daemon's `Tracker::start`, thread_activity.rs): the same `turnId`
+ *  carries on with its clock and tally, so there is nothing to hold. The
+ *  hold below covers the cases that still end a turn `superseded` (a
+ *  message while the turn wasn't running, e.g. the lead between prompts or
+ *  only children left) and servers before 0.46.1, where every mid-turn
+ *  message did: the old turn ends at once, but the new
  *  turn's first frame only comes once the message is delivered and the
  *  agent is on it (the inject's own timed sleeps are ~0.5s). Until then the
  *  drawer keeps showing the turn it had, so it doesn't slide out and back

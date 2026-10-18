@@ -552,6 +552,22 @@ describe('Thread turn: activity frames (S7)', () => {
     expect(other?.turnId).toBe('turn-2')
   })
 
+  it('a message that joins the running turn (0.46.1) is one more frame of the same turn', () => {
+    const t4 = applyActivityFrame(null, frameOf(activity()), 0)
+    expect(t4?.messages).toBe(1)
+    expect(t4?.lastComposeAt).toBe(t4?.startedAt)
+    const joined = applyActivityFrame(t4, frameOf(activity({ rev: 5, messages: 2, lastComposeAt: 1_000_069_000 })), 0)
+    expect(joined).toMatchObject({ turnId: 'turn-1', messages: 2, lastComposeAt: 1_000_069_000, end: null })
+    expect(joined?.startedAt).toBe(t4?.startedAt)
+    expect(joined?.tally).toEqual(t4?.tally)
+    expect(isTurnLive(joined)).toBe(true)
+    // An older server sends neither field: one message, from startedAt.
+    const old = coerceThreadTurn(activity({ messages: undefined, lastComposeAt: undefined }), 0)
+    expect(old?.messages).toBe(1)
+    expect(old?.lastComposeAt).toBe(old?.startedAt)
+    expect(coerceThreadTurn(activity({ messages: 'two' }), 0)?.messages).toBe(1)
+  })
+
   it('an end frame ends the turn; a later rev of the same turn (Q7 resume) brings it back', () => {
     const live = applyActivityFrame(null, frameOf(activity()), 0)
     const ended = applyActivityFrame(live, frameOf(activity({ rev: 5, state: 'idle', end: { reason: 'reply', detail: null, at: 1_000_080_000 } })), 0)

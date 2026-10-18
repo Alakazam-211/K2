@@ -40,8 +40,21 @@
 //!   display `idle` or `monitoring` (`done`); the lead's own end reason
 //!   (`interrupted`, `failed`, an exit = `session_gone`); the row removed
 //!   (`session_gone`); a newer turn on the same conversation
-//!   (`superseded`); no evidence for 2× `STALE_AFTER` (`stale`, A24). A
-//!   turn that ends leaves no trace (Q8): its end frame, then nothing.
+//!   that is not running (`superseded`, see below); no evidence for 2×
+//!   `STALE_AFTER` (`stale`, A24). A turn that ends leaves no trace (Q8):
+//!   its end frame, then nothing.
+//! - **One turn while the agent works (0.46.1, Rosson 2026-10-17).** A
+//!   person's message delivered while the conversation's turn is
+//!   **running** (opened, on the lead's strip, the lead working or waiting)
+//!   joins that turn: same `turnId`, same `startedAt`, the tally and the
+//!   subagents done so far kept; `messages` counts the person's messages
+//!   in the turn and `lastComposeAt` is the newest one's receipt time. It
+//!   sends an update frame, never an end plus a start. The turn binds and
+//!   ends on the newest message, as a fresh turn would (its binding resets
+//!   to that message, and `replied` too). Any other turn (not opened yet,
+//!   the lead idle, or a replied turn showing only its children) still
+//!   ends `superseded` and the message starts a fresh turn, as does a
+//!   message after a turn that ended (done / reply).
 //! - **Replies (Rosson 2026-10-12).** An agent's Thread post marks the
 //!   turn `replied` and sends no end frame: an agent posts while it is
 //!   still working ("on it", progress), and the post itself runs inside
@@ -375,7 +388,16 @@ struct Turn {
     id: String,
     conversation_id: String,
     addr: String,
+    /// The first message's receipt time: the strip's clock.
     started_at: i64,
+    /// The newest message's doc id (`id` until a message joins the
+    /// running turn): the delivery reports for it.
+    compose_id: String,
+    /// The newest message's receipt time: binding, the unbound floor and
+    /// the A24 bound count from it.
+    composed_at: i64,
+    /// The person's messages delivered into this turn.
+    messages: u32,
     stage: Stage,
     /// The agent has replied in Thread during this turn.
     replied: bool,
@@ -406,6 +428,9 @@ impl Turn {
             conversation_id: conversation_id.to_string(),
             addr: addr.to_string(),
             started_at,
+            compose_id: id.to_string(),
+            composed_at: started_at,
+            messages: 1,
             stage: Stage::Delivering,
             replied: false,
             opened: false,
@@ -436,6 +461,27 @@ impl Turn {
     fn wake(&mut self, at: i64) {
         self.wake_at = Some(self.wake_at.map_or(at, |w| w.min(at)));
     }
+
+    /// The turn is running: its strip is up on the lead's own work (the
+    /// lead working or waiting). A new message joins it.
+    fn running(&self, snap: Option<&RowSnap>) -> bool {
+        self.opened && self.stage == Stage::Live && snap.is_some_and(RowSnap::lead_busy)
+    }
+
+    /// A person's message joins the running turn: the clock, the tally
+    /// and the counts stay; binding starts over on the new message, as it
+    /// would for a fresh turn (it may be folded into the lead's running
+    /// turn, or submitted as its next prompt).
+    fn join(&mut self, addr: &str, compose_id: &str, at: i64) {
+        self.addr = addr.to_string();
+        self.compose_id = compose_id.to_string();
+        self.composed_at = at;
+        self.messages += 1;
+        self.replied = false;
+        self.bound = None;
+        self.pending_binds.clear();
+        self.unbound_end_at = None;
+    }
 }
 
 /// One frame to publish.
@@ -464,11 +510,21 @@ pub struct Tracker {
 }
 
 impl Tracker {
-    /// TW1: a human Thread inject is about to be delivered. Nothing is
-    /// sent: the message alone never opens a turn.
-    pub fn start(&mut self, conversation_id: &str, addr: &str, turn_id: &str, now: i64) -> Vec<Out> {
+    /// TW1: a human Thread inject is about to be delivered. The message
+    /// alone never opens a turn: with no running turn nothing is sent.
+    /// While the conversation's turn is running the message joins it and
+    /// an update frame goes out (same turn, `messages` + 1).
+    pub fn start(&mut self, conversation_id: &str, addr: &str, turn_id: &str, snaps: Snaps, now: i64) -> Vec<Out> {
         let mut out = Vec::new();
         if let Some(mut old) = self.turns.remove(conversation_id) {
+            let snap = old.session.as_deref().and_then(snaps);
+            if old.running(snap.as_ref()) {
+                old.join(addr, turn_id, now);
+                let body = self.body(&mut old, snap.as_ref(), now);
+                maybe_send(&mut old, body, now, &mut out);
+                self.turns.insert(conversation_id.to_string(), old);
+                return out;
+            }
             // TW3: a newer turn on the conversation ends the open one.
             out.extend(self.end(&mut old, EndReason::Superseded, None, None, now));
         }
@@ -481,10 +537,17 @@ impl Tracker {
     /// the inject reached, or `None` when delivery failed.
     pub fn delivered(&mut self, conversation_id: &str, turn_id: &str, target: Option<&str>, snaps: Snaps, now: i64) -> Vec<Out> {
         let mut out = Vec::new();
-        let Some(turn) = self.turns.get_mut(conversation_id).filter(|t| t.id == turn_id) else {
+        let Some(turn) = self.turns.get_mut(conversation_id).filter(|t| t.compose_id == turn_id) else {
             return out;
         };
         let Some(sid) = target else {
+            if turn.opened {
+                // A message that joined a running turn didn't arrive: the
+                // turn it joined is still the agent's, and still runs.
+                log_debug!("[thread-activity] message {turn_id} for turn {} was not delivered", turn.id);
+                self.eval(conversation_id, snaps, now, &mut out);
+                return out;
+            }
             let mut turn = self.turns.remove(conversation_id).expect("present");
             out.extend(self.end(&mut turn, EndReason::DeliveryFailed, None, None, now));
             return out;
@@ -510,7 +573,7 @@ impl Tracker {
     pub fn moved(&mut self, from: &str, turn_id: &str, to: &str, now: i64) -> Vec<Out> {
         let mut out = Vec::new();
         let Some(mut turn) = self.turns.remove(from) else { return out };
-        if turn.id != turn_id {
+        if turn.compose_id != turn_id {
             self.turns.insert(from.to_string(), turn);
             return out;
         }
@@ -526,7 +589,7 @@ impl Tracker {
     /// key → provider id): its turn, whatever its id, goes with it.
     pub fn conversation_moved(&mut self, from: &str, to: &str, now: i64) -> Vec<Out> {
         let turn_id = match self.turns.get(from) {
-            Some(t) => t.id.clone(),
+            Some(t) => t.compose_id.clone(),
             None => return Vec::new(),
         };
         self.moved(from, &turn_id, to, now)
@@ -744,7 +807,7 @@ impl Tracker {
         let mut resolved: Option<Option<String>> = None;
         let resolver = self.addr_resolver;
         for turn in self.turns.values_mut() {
-            if at < turn.started_at {
+            if at < turn.composed_at {
                 continue;
             }
             if turn.addr != addr {
@@ -823,7 +886,7 @@ impl Tracker {
             return false;
         }
         // A24, as for a live turn.
-        let last = snap.evidence_at.unwrap_or(turn.started_at).max(turn.started_at);
+        let last = snap.evidence_at.unwrap_or(turn.composed_at).max(turn.composed_at);
         if now >= last + STALE_END_MS {
             out.extend(self.end(turn, EndReason::Stale, None, Some(&snap), now));
             return false;
@@ -848,14 +911,14 @@ impl Tracker {
             if snap.lead_busy() || snap.lifecycle == Lifecycle::None {
                 turn.opened = true;
             } else {
-                if snap.turn_started_at.is_some_and(|t| t >= turn.started_at) {
+                if snap.turn_started_at.is_some_and(|t| t >= turn.composed_at) {
                     // The agent ran a turn after the message and is idle
                     // again before we saw it busy: nothing to show.
                     log_debug!("[thread-activity] turn {} on {} passed unseen", turn.id, turn.conversation_id);
                     return false;
                 }
                 // Waiting for the agent to start; silent, bounded by A24.
-                let due = turn.started_at + STALE_END_MS;
+                let due = turn.composed_at + STALE_END_MS;
                 if now >= due {
                     return false;
                 }
@@ -865,7 +928,7 @@ impl Tracker {
         }
         let reached = match &turn.bound {
             Some(b) => b.reached(&snap),
-            None => snap.lead_since >= turn.started_at + UNBOUND_MIN_MS,
+            None => snap.lead_since >= turn.composed_at + UNBOUND_MIN_MS,
         };
         if snap.lead == LeadState::Idle && reached {
             let explicit = match snap.lead_end_reason {
@@ -904,7 +967,7 @@ impl Tracker {
         }
         // A24: no evidence for 2× STALE_AFTER ends it; until then a
         // decayed row shows `stale` and the clock keeps running.
-        let last = snap.evidence_at.unwrap_or(turn.started_at).max(turn.started_at);
+        let last = snap.evidence_at.unwrap_or(turn.composed_at).max(turn.composed_at);
         if now >= last + STALE_END_MS {
             out.extend(self.end(turn, EndReason::Stale, None, Some(&snap), now));
             return false;
@@ -974,6 +1037,8 @@ impl Tracker {
             "line": line,
             "startedAt": turn.started_at,
             "since": turn.started_at,
+            "messages": turn.messages,
+            "lastComposeAt": turn.composed_at,
             "subagents": snap.map_or(0, |s| s.subagents),
             "subagentsDone": turn.subagents_done.len(),
             "background": snap.map_or(0, |s| s.background),
@@ -1077,7 +1142,7 @@ fn run(f: impl FnOnce(&mut Tracker, i64) -> Vec<Out>) {
 /// TW1: a human Thread inject (`turn_id` = its doc id) is about to be
 /// delivered to `addr`. `started_at` is the post's ms receipt time (A23).
 pub fn start_turn(conversation_id: &str, addr: &str, turn_id: &str, started_at: i64) {
-    run(|t, _| t.start(conversation_id, addr, turn_id, started_at));
+    run(|t, _| t.start(conversation_id, addr, turn_id, &snap_of, started_at));
 }
 
 /// TW1: delivery returned; `target` is the v2 session it reached.
@@ -1283,7 +1348,7 @@ mod tests {
     /// to SID at 1_100. Returns what the delivery sent: the opening frame
     /// when the agent is already mid-turn, else nothing.
     fn live(t: &mut Tracker, row: &Fake) -> Vec<Out> {
-        assert!(t.start(CONV, ADDR, "turn-1", 1_000).is_empty(), "a Thread message alone opens nothing");
+        assert!(t.start(CONV, ADDR, "turn-1", &row.lookup(), 1_000).is_empty(), "a Thread message alone opens nothing");
         let out = t.delivered(CONV, "turn-1", Some(SID), &row.lookup(), 1_100);
         for o in &out {
             assert_ne!(o.body["phase"], "delivering", "no delivering frame: {}", o.body);
@@ -1522,12 +1587,12 @@ mod tests {
     fn a_turn_that_never_opened_ends_without_a_frame() {
         let mut t = Tracker::default();
         let row = Fake::new(snap(LeadState::Idle, Display::Idle, 0));
-        assert!(t.start(CONV, ADDR, "turn-1", 1_000).is_empty());
+        assert!(t.start(CONV, ADDR, "turn-1", &row.lookup(), 1_000).is_empty());
         assert!(t.delivered(CONV, "turn-1", None, &row.lookup(), 1_050).is_empty(), "T-S6c: silent when nothing was shown");
         assert!(t.turns.is_empty());
 
         live(&mut t, &row);
-        assert!(t.start(CONV, ADDR, "turn-2", 2_000).is_empty(), "superseding an unopened turn is silent");
+        assert!(t.start(CONV, ADDR, "turn-2", &row.lookup(), 2_000).is_empty(), "superseding an unopened turn is silent");
         assert_eq!(t.turns[CONV].id, "turn-2");
 
         let mut t = Tracker::default();
@@ -1687,7 +1752,7 @@ mod tests {
     fn a_turn_follows_a_re_pinned_conversation() {
         let mut t = Tracker::default();
         let row = Fake::new(snap(LeadState::Working, Display::Working, 1_050));
-        assert!(t.start(CONV, ADDR, "turn-1", 1_000).is_empty());
+        assert!(t.start(CONV, ADDR, "turn-1", &row.lookup(), 1_000).is_empty());
         assert!(t.moved(CONV, "turn-1", "conv-2", 1_100).is_empty());
         let out = t.delivered("conv-2", "turn-1", Some(SID), &row.lookup(), 1_600);
         assert_eq!(out[0].conversation_id, "conv-2");
@@ -1698,23 +1763,176 @@ mod tests {
         assert!(t.turns.contains_key("conv-2"));
     }
 
-    /// T-S6f: a second compose ends the first (open) turn `superseded`;
-    /// the new one sends nothing until the agent is on it.
+    /// The Bash `cargo test` tool call, start and result, as owner hooks.
+    fn cargo_test(t: &mut Tracker, row: &Fake, pre: i64, post: i64) -> Vec<Out> {
+        let mut out = t.envelope(
+            &hook(r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"cargo test"}}"#),
+            pre,
+            &row.lookup(),
+            pre,
+        );
+        out.extend(t.envelope(&hook(r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"t1"}"#), post, &row.lookup(), post));
+        out
+    }
+
+    /// T-S6f (0.46.1, Rosson 2026-10-17): a second compose while the turn
+    /// runs keeps one turn: same id, same start time, the tally kept,
+    /// `messages` 2. An update frame goes out, never an end plus a start;
+    /// the message's delivery reports under its own id; the turn ends on
+    /// the lead's Stop with everything it counted.
     #[test]
-    fn a_second_compose_supersedes_the_first() {
+    fn a_second_compose_while_running_keeps_one_turn() {
+        let mut t = Tracker::default();
+        let row = Fake::new(snap(LeadState::Working, Display::Working, 900));
+        let mut all = live(&mut t, &row);
+        assert_eq!(only(&all)["messages"], 1, "{all:?}");
+        all.extend(t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some(ADDR.into()) }, 1_200, &row.lookup(), 1_200));
+        all.extend(cargo_test(&mut t, &row, 1_300, 1_600));
+        assert_eq!(t.current(CONV, &row.lookup(), 1_700).expect("live")["tally"]["cmd"], 1);
+
+        // The person sends again while the agent works.
+        let out = t.start(CONV, ADDR, "turn-2", &row.lookup(), 2_200);
+        let b = only(&out).clone();
+        assert_eq!(out[0].turn_id, "turn-1", "the same turn: {out:?}");
+        assert_eq!(b["turnId"], "turn-1");
+        assert_eq!(b["end"], Value::Null, "no end on a mid-turn send: {b}");
+        assert_eq!(b["startedAt"], 1_000, "the clock keeps running from the first message");
+        assert_eq!(b["since"], 1_000);
+        assert_eq!(b["tally"]["cmd"], 1, "the tally is kept");
+        assert_eq!((b["messages"].as_u64(), b["lastComposeAt"].as_i64()), (Some(2), Some(2_200)), "{b}");
+        all.extend(out);
+
+        // A late report for the first message changes nothing; the second
+        // message's delivery reports under its own id.
+        assert!(t.delivered(CONV, "turn-1", Some(SID), &row.lookup(), 2_300).is_empty());
+        all.extend(t.delivered(CONV, "turn-2", Some(SID), &row.lookup(), 2_800));
+        assert_eq!(t.turns.len(), 1);
+        assert_eq!(t.turns[CONV].id, "turn-1");
+        let b = t.current(CONV, &row.lookup(), 2_900).expect("still live");
+        assert_eq!(
+            (b["turnId"].as_str(), b["startedAt"].as_i64(), b["tally"]["cmd"].as_u64(), b["messages"].as_u64()),
+            (Some("turn-1"), Some(1_000), Some(1), Some(2)),
+            "{b}"
+        );
+
+        // The second message folds into the running turn; more tools add
+        // to the same tally; the lead's Stop ends the one turn.
+        all.extend(t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some(ADDR.into()) }, 3_000, &row.lookup(), 3_000));
+        all.extend(cargo_test(&mut t, &row, 3_600, 4_200));
+        no_end(&all);
+        row.set(RowSnap { lead_since: 5_000, ..snap(LeadState::Idle, Display::Idle, 900) });
+        let out = t.row_changed(SID, &row.lookup(), 5_000);
+        assert_eq!(end_of(&out), ("done".to_string(), None));
+        let b = only(&out);
+        assert_eq!((b["turnId"].as_str(), b["startedAt"].as_i64()), (Some("turn-1"), Some(1_000)));
+        assert_eq!((b["tally"]["cmd"].as_u64(), b["messages"].as_u64()), (Some(2), Some(2)), "{b}");
+        all.extend(out);
+        assert!(t.turns.is_empty());
+
+        // Every frame was the one turn, in order: no end-and-start pair.
+        assert!(all.iter().all(|o| o.turn_id == "turn-1" && o.body["turnId"] == "turn-1"), "{all:?}");
+        let revs: Vec<u64> = all.iter().map(|o| o.body["rev"].as_u64().expect("rev")).collect();
+        assert!(revs.windows(2).all(|w| w[0] < w[1]), "rev moves forward: {revs:?}");
+        assert_eq!(all.iter().filter(|o| !o.body["end"].is_null()).count(), 1, "one end, last: {all:?}");
+    }
+
+    /// The joined message binds the turn by itself, as a fresh turn would:
+    /// the lead's Stop on the prompt it was working on, before the message
+    /// is taken up, is not the end; the message submitted as the next
+    /// prompt binds it, and that prompt's Stop ends it.
+    #[test]
+    fn a_joined_message_binds_on_its_own_stamp() {
+        let mut t = Tracker::default();
+        let row = Fake::new(snap(LeadState::Working, Display::Working, 900));
+        let mut all = live(&mut t, &row);
+        all.extend(t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some(ADDR.into()) }, 1_200, &row.lookup(), 1_200));
+        all.extend(t.reply(CONV, &row.lookup(), 1_500));
+        assert!(t.turns[CONV].bound.is_some() && t.turns[CONV].replied);
+        all.extend(t.start(CONV, ADDR, "turn-2", &row.lookup(), 2_200));
+        all.extend(t.delivered(CONV, "turn-2", Some(SID), &row.lookup(), 2_300));
+        assert!(t.turns[CONV].bound.is_none(), "binding starts over on the new message");
+        assert!(!t.turns[CONV].replied, "the new message has no reply yet");
+        // The lead stops on the old prompt right after the send.
+        row.set(RowSnap { lead_since: 2_500, ..snap(LeadState::Idle, Display::Idle, 900) });
+        all.extend(t.row_changed(SID, &row.lookup(), 2_500));
+        assert!(t.turns.contains_key(CONV), "the message isn't taken up yet");
+        // It's submitted as the next prompt and binds.
+        row.set(snap(LeadState::Working, Display::Working, 2_600));
+        all.extend(t.envelope(
+            &hook(r#"{"hook_event_name":"UserPromptSubmit","prompt_id":"p2","prompt":"[from u] [thread:sales] and the linter"}"#),
+            2_600,
+            &row.lookup(),
+            2_600,
+        ));
+        all.extend(t.tick(&row.lookup(), 6_000));
+        no_end(&all);
+        assert!(all.iter().all(|o| o.turn_id == "turn-1"), "{all:?}");
+        row.set(RowSnap { lead_since: 7_000, ..snap(LeadState::Idle, Display::Idle, 2_600) });
+        let out = t.row_changed(SID, &row.lookup(), 7_000);
+        assert_eq!(end_of(&out), ("done".to_string(), None), "bound by its own prompt");
+        assert_eq!((only(&out)["turnId"].as_str(), only(&out)["startedAt"].as_i64()), (Some("turn-1"), Some(1_000)));
+    }
+
+    /// A turn that ended (done) is followed by a fresh turn: a new id, a
+    /// new clock, an empty tally, one message.
+    #[test]
+    fn a_compose_after_a_finished_turn_starts_a_new_turn() {
         let mut t = Tracker::default();
         let row = Fake::new(snap(LeadState::Working, Display::Working, 900));
         live(&mut t, &row);
-        let out = t.start(CONV, ADDR, "turn-2", 2_000);
+        t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some(ADDR.into()) }, 1_200, &row.lookup(), 1_200);
+        cargo_test(&mut t, &row, 1_300, 1_600);
+        row.set(RowSnap { lead_since: 3_000, ..snap(LeadState::Idle, Display::Idle, 900) });
+        assert_eq!(end_of(&t.row_changed(SID, &row.lookup(), 3_000)), ("done".to_string(), None));
+        assert!(t.start(CONV, ADDR, "turn-2", &row.lookup(), 5_000).is_empty(), "a message alone opens nothing");
+        assert!(t.delivered(CONV, "turn-2", Some(SID), &row.lookup(), 5_050).is_empty());
+        assert_eq!(t.turns[CONV].id, "turn-2");
+        row.set(snap(LeadState::Working, Display::Working, 5_100));
+        let out = t.row_changed(SID, &row.lookup(), 5_100);
+        let b = only(&out);
+        assert_eq!((out[0].turn_id.as_str(), b["turnId"].as_str()), ("turn-2", Some("turn-2")));
+        assert_eq!((b["startedAt"].as_i64(), b["messages"].as_u64(), b["lastComposeAt"].as_i64()), (Some(5_000), Some(1), Some(5_000)));
+        assert_eq!(b["tally"]["cmd"], 0, "a fresh tally: {b}");
+    }
+
+    /// A compose while the open turn is not running (its lead idle, not
+    /// yet ended) still ends it `superseded`; the new turn sends nothing
+    /// until the agent is on it. A late delivery report for the old turn
+    /// is ignored.
+    #[test]
+    fn a_compose_when_the_lead_is_idle_supersedes_the_open_turn() {
+        let mut t = Tracker::default();
+        let row = Fake::new(snap(LeadState::Working, Display::Working, 900));
+        live(&mut t, &row);
+        // Idle inside the unbound floor: open, not ended, not running.
+        row.set(RowSnap { lead_since: 1_500, ..snap(LeadState::Idle, Display::Idle, 900) });
+        no_end(&t.row_changed(SID, &row.lookup(), 1_500));
+        assert!(t.turns.contains_key(CONV));
+        let out = t.start(CONV, ADDR, "turn-2", &row.lookup(), 2_000);
         assert_eq!(out.len(), 1, "{out:?}");
         assert_eq!(out[0].turn_id, "turn-1");
         assert_eq!(out[0].body["end"]["reason"], "superseded");
         assert_eq!(out[0].body["state"], "stopped");
-        // A late delivery report for the old turn is ignored.
         assert!(t.delivered(CONV, "turn-1", Some(SID), &row.lookup(), 2_100).is_empty());
         assert_eq!(t.turns[CONV].id, "turn-2");
+        row.set(snap(LeadState::Working, Display::Working, 2_150));
         let out = t.delivered(CONV, "turn-2", Some(SID), &row.lookup(), 2_200);
         assert_eq!((out[0].turn_id.as_str(), out[0].body["phase"].as_str()), ("turn-2", Some("working")));
+        assert_eq!(out[0].body["messages"], 1);
+    }
+
+    /// A message that joined a running turn but never reached the agent
+    /// leaves the turn running: no `delivery_failed` end for work that
+    /// goes on.
+    #[test]
+    fn a_failed_delivery_of_a_joined_message_keeps_the_turn() {
+        let mut t = Tracker::default();
+        let row = Fake::new(snap(LeadState::Working, Display::Working, 900));
+        live(&mut t, &row);
+        no_end(&t.start(CONV, ADDR, "turn-2", &row.lookup(), 2_000));
+        no_end(&t.delivered(CONV, "turn-2", None, &row.lookup(), 2_100));
+        assert_eq!(t.turns[CONV].id, "turn-1");
+        assert_eq!(t.current(CONV, &row.lookup(), 2_200).expect("still live")["messages"], 2);
     }
 
     /// TW4 (c), (d): the lead's own end reason ends a bound turn; a
@@ -1864,7 +2082,7 @@ mod tests {
     fn binding_needs_the_same_session_and_address() {
         let mut t = Tracker::default();
         let row = Fake::new(snap(LeadState::Working, Display::Working, 1_050));
-        t.start(CONV, ADDR, "turn-1", 1_000);
+        t.start(CONV, ADDR, "turn-1", &row.lookup(), 1_000);
         t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some(ADDR.into()) }, 1_020, &row.lookup(), 1_020);
         t.delivered(CONV, "turn-1", Some(SID), &row.lookup(), 1_100);
         assert!(t.turns[CONV].bound.is_some(), "a stamp read while delivering binds on delivery");
@@ -1892,7 +2110,7 @@ mod tests {
         }
         let row = Fake::new(snap(LeadState::Working, Display::Working, 1_050));
         let mut t = Tracker::default().with_addr_resolver(resolve);
-        t.start(CONV, "sales/reviewer", "turn-1", 1_000);
+        t.start(CONV, "sales/reviewer", "turn-1", &row.lookup(), 1_000);
         t.delivered(CONV, "turn-1", Some(SID), &row.lookup(), 1_010);
         t.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some("sales/other".into()) }, 1_100, &row.lookup(), 1_100);
         assert!(t.turns[CONV].bound.is_none(), "another conversation's address never binds");
@@ -1900,7 +2118,7 @@ mod tests {
         assert!(t.turns[CONV].bound.is_some(), "the old address binds the renamed turn");
 
         let mut plain = Tracker::default();
-        plain.start(CONV, "sales/reviewer", "turn-1", 1_000);
+        plain.start(CONV, "sales/reviewer", "turn-1", &row.lookup(), 1_000);
         plain.delivered(CONV, "turn-1", Some(SID), &row.lookup(), 1_010);
         plain.transcript(SID, &TranscriptSignal::Queued { thread_addr: Some("sales/1".into()) }, 1_100, &row.lookup(), 1_100);
         assert!(plain.turns[CONV].bound.is_none(), "without a resolver only the exact string binds");
@@ -2003,7 +2221,8 @@ mod tests {
         assert_eq!((b["phase"].as_str(), b["state"].as_str(), b["end"].is_null()), (Some("children"), Some("monitoring"), true));
     }
 
-    /// A new compose supersedes the children's strip.
+    /// A new compose supersedes the children's strip: the lead was done
+    /// (it replied), so the message is a new turn, not a joined one.
     #[test]
     fn a_new_compose_supersedes_the_childrens_strip() {
         let mut t = Tracker::default();
@@ -2012,7 +2231,7 @@ mod tests {
         t.reply(CONV, &row.lookup(), 2_000);
         row.set(idle_with(1, 0, 0, Display::Working));
         t.row_changed(SID, &row.lookup(), 3_200);
-        let out = t.start(CONV, ADDR, "turn-2", 4_000);
+        let out = t.start(CONV, ADDR, "turn-2", &row.lookup(), 4_000);
         assert_eq!(out.len(), 1, "{out:?}");
         assert_eq!((out[0].turn_id.as_str(), out[0].body["end"]["reason"].as_str()), ("turn-1", Some("superseded")));
     }

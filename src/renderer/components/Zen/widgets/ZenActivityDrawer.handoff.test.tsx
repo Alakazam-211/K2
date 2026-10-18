@@ -110,6 +110,36 @@ describe('the activity ear across a message sent while the agent works', () => {
     expect(look().mounted).toBe(false)
   })
 
+  it('0.46.1: a message that joins the running turn keeps the ear, its clock and its tally (no hold needed)', () => {
+    const live1 = turn({ turnId: 't1', startedAt: T0 - 20_000, phaseSince: T0 - 1_000, rev: 4 }, T0)
+    const { rerender } = render(<ZenActivityDrawer turn={live1} onStop={() => {}} />)
+    const tile = look().tile
+    expect(tile).not.toBeNull()
+    const clock = (): string | null | undefined => document.querySelector('[data-zen-drawer-clock]')?.textContent
+    expect(clock()).toBe('0:20')
+    const seen: Seen[] = [look()]
+
+    // The user sends while the agent works: the daemon's update frame for
+    // the same turn (messages 2), never an end.
+    act(() => vi.advanceTimersByTime(300))
+    const joined = turn(
+      { turnId: 't1', startedAt: T0 - 20_000, phaseSince: T0 - 1_000, rev: 5, messages: 2, lastComposeAt: T0 + 300 },
+      T0 + 300,
+    )
+    expect(joined.messages).toBe(2)
+    rerender(<ZenActivityDrawer turn={joined} onStop={() => {}} />)
+    seen.push(look())
+    for (let i = 0; i < 5; i++) {
+      act(() => vi.advanceTimersByTime(1_000))
+      seen.push(look())
+    }
+    expect(seen.map((s) => s.phase)).toEqual(seen.map(() => 'in'))
+    expect(seen.every((s) => s.tile === tile)).toBe(true)
+    // The clock runs on from the first message; it never went back to 0.
+    expect(clock()).toBe('0:25')
+    expect(document.querySelector('[data-zen-drawer-stop]')).not.toBeNull()
+  })
+
   it('a supersede with no new turn collapses once the hold runs out', () => {
     const live1 = turn({ turnId: 't1', startedAt: T0 - 5_000, phaseSince: T0 - 500 }, T0)
     const { rerender } = render(<ZenActivityDrawer turn={live1} />)

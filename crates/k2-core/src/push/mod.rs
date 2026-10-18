@@ -2059,7 +2059,9 @@ mod tests {
         let p = K2Cloud::payload(&previewed(ThreadMsgKind::Text, 1, text), &stamp, "owner");
         assert_eq!(p["body"], text);
         assert!(!p["data"].to_string().contains("Ready to ship"), "the preview rides `body` only");
-        assert_eq!(p["data"].as_object().expect("data").len(), 13);
+        // 13 keys + thread-read-v1's unreadTotal / waitingTotal (numbers, never text).
+        assert_eq!(p["data"].as_object().expect("data").len(), 15);
+        assert_eq!((p["data"]["unreadTotal"].as_str(), p["data"]["waitingTotal"].as_str()), (Some("4"), Some("1")));
     }
 
     /// Coalesced: "N new messages · <latest preview>", 140 chars at most;

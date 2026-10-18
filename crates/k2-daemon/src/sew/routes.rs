@@ -536,7 +536,8 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         }
         "/cli/sew/server/rollback" => {
             need_manage(who)?;
-            sup::rollback(&env)
+            let v = json_body(body)?;
+            sup::rollback_with(&env, &sup::RollbackRequest { media_tarball_path: abs_path(&v, "mediaTarballPath")? })
         }
         "/cli/sew/server/backup" => {
             need_manage(who)?;

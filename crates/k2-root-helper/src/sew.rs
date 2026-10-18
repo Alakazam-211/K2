@@ -36,6 +36,15 @@
 //!   its `version`) and is removed after the call. The voice engine follows
 //!   in a separate verb, `media upgrade`, run by the NEW core once the
 //!   daemon has checked it (the sidecar pins are baked into `sew`).
+//! - **Rollback mirrors it** (Sew, 2026-10-17): after the core rollback
+//!   and the daemon's check of the old core, `media rollback` has the OLD
+//!   core reinstall its own release's engine (`sew media upgrade --tarball
+//!   <kept> --now`; Sew 0.1.x checks only pin + bytes, so this downgrades).
+//!   The helper KEEPS engine tarballs for that under [`SEW_KEEP_DIR`]: the
+//!   pin's after a successful media install / upgrade, and an older
+//!   release's when the daemon stages it. Never Sew's `sew-media.prev`.
+//!   Media notices are REPLACED by the reinstalled engine's set (removed
+//!   when that release shipped none).
 //! - **No groups, no firewall, no edits of Sew's files.** The daemon user
 //!   never joins `sew-mgmt`: its uid rides `sew install`'s JSON as
 //!   `mgmt_allow_uids` and Sew writes `[mgmt] allow_uids` (SW5 + SW7); the
@@ -99,6 +108,7 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
             let mut out = run_sew(ctx, &args, None)?;
             if out["sewExit"] == 0 {
                 out["noticesRemoved"] = notices_or_error(remove_all_notices(ctx));
+                out["keptRemoved"] = notices_or_error(remove_kept(ctx));
             }
             Ok(out)
         }
@@ -115,6 +125,7 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
         SewVerb::Token => token(ctx),
         SewVerb::MediaInstall => media_install(ctx, stdin),
         SewVerb::MediaUpgrade => media_upgrade(ctx),
+        SewVerb::MediaRollback => media_rollback(ctx),
         SewVerb::MediaUninstall => {
             require_known(ctx)?;
             let mut out = run_sew(ctx, &["media", "uninstall"], None)?;
@@ -162,6 +173,7 @@ fn installs(verb: &SewVerb) -> bool {
             | SewVerb::Upgrade
             | SewVerb::MediaInstall
             | SewVerb::MediaUpgrade
+            | SewVerb::MediaRollback
     )
 }
 
@@ -583,6 +595,7 @@ pub fn status(ctx: &Ctx) -> J {
         "staged": {
             "core": staged_version(ctx, SEW_STAGE_TARBALL, false),
             "media": staged_version(ctx, SEW_STAGE_MEDIA_TARBALL, true),
+            "keptMedia": kept_media_versions(ctx),
         },
         "units": {
             "sewDb": unit_state(ctx, UNIT_DB),
@@ -603,6 +616,18 @@ pub fn status(ctx: &Ctx) -> J {
 // ── stage / install-bin ─────────────────────────────────────────────────
 
 fn stage(ctx: &Ctx, tarball: &[u8], media: bool) -> HResult<J> {
+    if media {
+        let sha = sha256_hex(tarball);
+        let pin = pinned_media_artifact(ctx.arch).map_err(Fail::state)?;
+        if !sha.eq_ignore_ascii_case(pin.1.tarball_sha256) {
+            // Not the pin: an older release's engine is kept for a rollback.
+            let Some(v) = known_media_tarball(&sha, ctx.arch) else {
+                return Err(Fail::argv("stage: tarball sha256 mismatch (not a sew-media release this build knows)"));
+            };
+            keep_media(ctx, v, tarball)?;
+            return Ok(json!({"kept": v, "kind": "media-previous", "tarballSha256": sha}));
+        }
+    }
     let (version, art, member, dest) = if media {
         let (v, a) = pinned_media_artifact(ctx.arch).map_err(Fail::state)?;
         (v, a, "sew-media", SEW_STAGE_MEDIA_TARBALL)
@@ -883,9 +908,109 @@ fn media_upgrade(ctx: &Ctx) -> HResult<J> {
     let tarball = ctx.p(SEW_STAGE_MEDIA_TARBALL).display().to_string();
     let mut out = run_sew(ctx, &["media", "upgrade", "--tarball", &tarball, "--now"], None)?;
     if out["sewExit"] == 0 {
-        out["notices"] = notices_or_error(install_notices(ctx, &bytes, SEW_MEDIA_DOC_DIR));
+        out["notices"] = notices_or_error(replace_notices(ctx, &bytes, SEW_MEDIA_DOC_DIR));
+        out["kept"] = notices_or_error(keep_media(ctx, pinned_media_artifact(ctx.arch).map_err(Fail::state)?.0, &bytes));
     }
     Ok(out)
+}
+
+/// The reverse of [`media_upgrade`]: the installed (rolled-back) core
+/// reinstalls ITS release's engine from the kept tarball. Refused before
+/// anything runs when the core is the pin (roll the core back first) or
+/// the tarball is not kept.
+fn media_rollback(ctx: &Ctx) -> HResult<J> {
+    let installed = require_known(ctx)?;
+    if installed == pinned().version {
+        return Err(Fail::state(format!(
+            "media rollback refused: the installed Sew is the pin ({installed}); the core is rolled back first (engine sew rollback)"
+        )));
+    }
+    let (mv, art) = media_artifact_of(installed, ctx.arch).map_err(|e| Fail::state(format!("media rollback refused: {e}")))?;
+    let path = kept_media_path(mv).ok_or_else(|| Fail::state("media rollback refused: bad sew-media version"))?;
+    let missing = || {
+        Fail::state(format!(
+            "media rollback refused: the sew-media {mv} tarball (Sew {installed}'s engine) is not kept on this box; \
+             stage it first: k2 hostchat rollback --media-tarball sew-media-{mv}-{}.tar.gz",
+            art.triple
+        ))
+    };
+    let bytes = read_staged(ctx, &path)?.ok_or_else(missing)?;
+    if !sha256_hex(&bytes).eq_ignore_ascii_case(art.tarball_sha256) {
+        return Err(Fail::state(format!("media rollback refused: the kept sew-media {mv} tarball is not Sew {installed}'s pin")));
+    }
+    let tarball = ctx.p(&path).display().to_string();
+    let mut out = run_sew(ctx, &["media", "upgrade", "--tarball", &tarball, "--now"], None)?;
+    out["to"] = json!(mv);
+    if out["sewExit"] == 0 {
+        out["notices"] = notices_or_error(replace_notices(ctx, &bytes, SEW_MEDIA_DOC_DIR));
+    }
+    Ok(out)
+}
+
+/// The engine's notices become exactly `archive`'s set: written when it
+/// has one, removed when that release shipped none (0.1.x cores), so a
+/// rollback never leaves the newer release's files behind.
+pub(crate) fn replace_notices(ctx: &Ctx, archive: &[u8], doc_dir: &str) -> HResult<J> {
+    if extract_notices(archive)?.is_empty() {
+        let removed = remove_notices(ctx, doc_dir)?;
+        return Ok(json!({"dir": J::Null, "files": [], "removed": removed}));
+    }
+    install_notices(ctx, archive, doc_dir)
+}
+
+/// The kept-tarball dir (root 0700), created when missing.
+fn keep_dir(ctx: &Ctx) -> HResult<Dir> {
+    let base = stage_dir(ctx)?;
+    let (_, leaf) = split(SEW_KEEP_DIR);
+    sub_dir(ctx, &base, leaf, 0o700)
+}
+
+/// Keep sew-media `version`'s tarball (0600 root), then drop the oldest
+/// beyond [`SEW_KEEP_MAX`].
+fn keep_media(ctx: &Ctx, version: &str, tarball: &[u8]) -> HResult<J> {
+    let path = kept_media_path(version).ok_or_else(|| Fail::state("keep: bad sew-media version"))?;
+    let d = keep_dir(ctx)?;
+    let (_, name) = split(&path);
+    d.write_atomic(OsStr::new(name), tarball, 0o600, ctx.root_owner())
+        .map_err(|e| Fail::io_err("keep sew-media tarball", e))?;
+    let mut have = kept_media_versions(ctx);
+    let mut dropped = Vec::new();
+    while have.len() > SEW_KEEP_MAX {
+        let old = have.remove(0);
+        if old != version {
+            if let Some(p) = kept_media_path(&old) {
+                let _ = remove_file(ctx, &p);
+            }
+            dropped.push(old);
+        }
+    }
+    Ok(json!({"media": version, "dropped": dropped}))
+}
+
+/// Kept sew-media versions, oldest first.
+fn kept_media_versions(ctx: &Ctx) -> Vec<String> {
+    let mut v: Vec<String> = releases()
+        .iter()
+        .filter_map(|r| r.media.as_ref().map(|m| m.version))
+        .filter(|mv| kept_media_path(mv).is_some_and(|p| exists(ctx, &p)))
+        .map(str::to_string)
+        .collect();
+    v.sort_by(|a, b| version_cmp(a, b).unwrap_or(std::cmp::Ordering::Equal));
+    v.dedup();
+    v
+}
+
+/// After a purge: the kept engine tarballs go too.
+fn remove_kept(ctx: &Ctx) -> HResult<J> {
+    let mut removed = Vec::new();
+    for v in kept_media_versions(ctx) {
+        if let Some(p) = kept_media_path(&v) {
+            if remove_file(ctx, &p)? {
+                removed.push(v);
+            }
+        }
+    }
+    Ok(json!({"media": removed}))
 }
 
 /// A notice step after Sew already acted: what it wrote, or `{error}`.
@@ -975,6 +1100,8 @@ fn media_install(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
     // same way, and remove them with the binaries.
     if out["sewExit"] == 0 {
         out["notices"] = notices_or_error(install_notices(ctx, &bytes, SEW_MEDIA_DOC_DIR));
+        let v = pinned_media_artifact(ctx.arch).map_err(Fail::state)?.0;
+        out["kept"] = notices_or_error(keep_media(ctx, v, &bytes));
     }
     Ok(out)
 }

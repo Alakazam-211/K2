@@ -1752,10 +1752,88 @@ pub fn recover_interrupted_upgrade(env: &Env) -> Value {
     store::load().and_then(|r| r.upgrade_progress).unwrap_or_default()
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct RollbackRequest {
+    /// The PREVIOUS release's sew-media tarball, when voice is installed and
+    /// the helper does not keep it yet (it keeps the ones it installed).
+    pub media_tarball_path: Option<std::path::PathBuf>,
+}
+
+/// `k2 hostchat rollback` without a media tarball.
+pub fn rollback(env: &Env) -> R<Value> {
+    rollback_with(env, &RollbackRequest::default())
+}
+
+/// With voice installed, the previous release's engine tarball must be in
+/// hand before the core moves (Sew 2026-10-17: the OLD core reinstalls it
+/// after the core rollback). Stages a given tarball (the helper keeps an
+/// older release's engine). Returns the engine version the rollback puts
+/// back.
+fn rollback_media_source(env: &Env, prev: Option<&str>, req: &RollbackRequest) -> R<Option<String>> {
+    let Some(prev) = prev else {
+        return Err(no(
+            "rollback_target_unknown",
+            409,
+            "voice is installed but K2 has no record of the previous Sew version, so it can't put the matching voice \
+             engine back; nothing was changed",
+        ));
+    };
+    let (mv, art) = k2_root_proto::sew::media_artifact_of(prev, &env.ops.arch()).map_err(|e| no("media_unpinned", 409, e))?;
+    if let Some(p) = &req.media_tarball_path {
+        let bytes = env.ops.read_file(p, MAX_TARBALL).map_err(|e| no("bad_request", 400, e))?;
+        if !crate::update_routes::verify_sha256(&bytes, art.tarball_sha256) {
+            return Err(no(
+                "sha256_mismatch",
+                400,
+                format!("{} is not sew-media {mv} for {} (Sew {prev}'s engine); nothing was changed", p.display(), art.triple),
+            ));
+        }
+        helper(env, &["stage-media"], Some(&bytes)).map_err(|e| no("helper_error", 500, e))?;
+    }
+    let kept = helper(env, &["status"], None)
+        .ok()
+        .and_then(|s| s.pointer("/staged/keptMedia").and_then(Value::as_array).cloned())
+        .unwrap_or_default();
+    if !kept.iter().any(|k| k.as_str() == Some(mv)) {
+        return Err(no(
+            "previous_media_tarball_needed",
+            409,
+            format!(
+                "voice is installed: after the core goes back to {prev}, that core reinstalls its own voice engine, sew-media \
+                 {mv}, and this box doesn't keep that tarball. Name it: k2 hostchat rollback --media-tarball \
+                 sew-media-{mv}-{}.tar.gz; nothing was changed",
+                art.triple
+            ),
+        ));
+    }
+    Ok(Some(mv.to_string()))
+}
+
+/// `sew doctor`'s voice-engine checks after a rollback: `media.binary` ok
+/// and `media.version` = `sew-media <v>` matching the core. `(ok, json)`.
+fn doctor_media(env: &Env, want: &str) -> (bool, Value) {
+    let v = match helper(env, &["doctor"], None) {
+        Ok(v) => v,
+        Err(e) => return (false, json!({"error": e})),
+    };
+    let check = |id: &str| {
+        v.pointer("/sew/checks")
+            .and_then(Value::as_array)
+            .and_then(|a| a.iter().find(|c| c["id"] == id).cloned())
+            .unwrap_or_else(|| json!({"id": id, "status": "missing", "detail": "sew doctor did not report it"}))
+    };
+    let (bin, ver) = (check("media.binary"), check("media.version"));
+    let ok = bin["status"] == "ok" && ver["status"] == "ok" && ver["detail"].as_str() == Some(&format!("sew-media {want}"));
+    (ok, json!({"ok": ok, "sewExit": sew_exit(&v), "mediaBinary": bin, "mediaVersion": ver}))
+}
+
 /// `k2 hostchat rollback`: back to the previous version and its data
 /// (only when the schema did not change; else Sew refuses and a restore is
-/// the way back).
-pub fn rollback(env: &Env) -> R<Value> {
+/// the way back). With voice: the reverse of the upgrade (Sew 2026-10-17):
+/// core back → K2's check of the old core → the OLD core reinstalls the
+/// previous release's engine (`engine sew media rollback`) → `sew doctor`'s
+/// media checks in the answer.
+pub fn rollback_with(env: &Env, req: &RollbackRequest) -> R<Value> {
     if !env.ops.linux() {
         return Err(unsupported());
     }
@@ -1765,6 +1843,8 @@ pub fn rollback(env: &Env) -> R<Value> {
     }
     helper_check(env)?;
     let _l = begin(env)?;
+    let voice = super::voice::load(env).installed;
+    let media_to = if voice { rollback_media_source(env, row.previous_version.as_deref(), req)? } else { None };
     let v = helper(env, &["rollback"], None).map_err(|e| no("helper_error", 500, e))?;
     match sew_exit(&v).unwrap_or(0) {
         0 => {}
@@ -1799,12 +1879,43 @@ pub fn rollback(env: &Env) -> R<Value> {
         r.last_error = health_err.clone().map(|e| format!("rolled back, but Sew is unhealthy: {e}"));
     });
     let mut body = json!({"ok": ok, "state": if ok { "running" } else { "error" }, "version": to, "sew": v["sew"], "error": health_err});
-    if super::voice::load(env).installed {
-        // Sew has no engine rollback verb: an engine an upgrade moved stays.
-        body["warning"] = json!(
-            "the voice engine (sew-media) is not rolled back: Sew has no engine rollback, so it stays on the version the \
-             upgrade put in place; if calls fail, check k2 hostchat media status"
-        );
+    let Some(mv) = media_to else { return Ok(body) };
+    if !ok {
+        // The old core is not healthy: its engine is not touched.
+        body["media"] = json!({"result": "skipped", "to": mv, "error": "the old core failed K2's health check"});
+        return Ok(body);
+    }
+    let media = match helper(env, &["media", "rollback"], None) {
+        Err(e) => Err(format!("the helper refused the voice engine rollback: {e}")),
+        Ok(m) => match sew_exit(&m) {
+            Some(0) => Ok(m),
+            Some(n) => Err(format!("sew media upgrade (back to sew-media {mv}) exit {n}: {}", sew_message(&m))),
+            None => Err(format!("the helper answered the voice engine rollback without a Sew exit: {}", short(&m))),
+        },
+    };
+    let (doc_ok, doctor) = doctor_media(env, &mv);
+    body["doctor"] = doctor.clone();
+    let err = match &media {
+        Err(e) => Some(format!("Sew is back on {want}, but its voice engine was not put back: {e}")),
+        Ok(_) if !doc_ok => Some(format!(
+            "Sew and its voice engine are back on {want} / sew-media {mv}, but sew doctor disagrees: media.binary {} ({}), \
+             media.version {} ({})",
+            doctor["mediaBinary"]["status"].as_str().unwrap_or("?"),
+            doctor["mediaBinary"]["detail"].as_str().unwrap_or(""),
+            doctor["mediaVersion"]["status"].as_str().unwrap_or("?"),
+            doctor["mediaVersion"]["detail"].as_str().unwrap_or(""),
+        )),
+        Ok(_) => None,
+    };
+    body["media"] = match &media {
+        Ok(m) => json!({"result": "done", "to": mv, "notices": m.get("notices")}),
+        Err(e) => json!({"result": "failed", "to": mv, "error": e}),
+    };
+    if let Some(e) = err {
+        k2_core::log_debug!("[sew] rollback: {e}");
+        body["ok"] = json!(false);
+        body["error"] = json!(e);
+        save_enable(env, |r| r.last_error = Some(e));
     }
     Ok(body)
 }

@@ -1262,3 +1262,99 @@ fn upgrade_with_voice_aborts_before_any_change_on_a_wrong_media_tarball() {
     assert!(last.contains("aborted before any change") && last.contains("sew-media"), "{last}");
     assert_eq!(p["lastError"].as_str(), Some(last.as_str()));
 }
+
+// ── rollback with voice: the reverse of the upgrade ──────────────────────
+
+const OLD_MEDIA_TARBALL: &str = "/home/k2/sew-media-0.0.1-x86_64-unknown-linux-gnu.tar.gz";
+
+/// Upgraded with voice (core + engine on the pin, previous core 0.0.1),
+/// the old engine's tarball on disk but not kept by the helper.
+fn upgraded_with_voice() -> T {
+    let t = t2_old();
+    with_voice(&t);
+    assert_eq!(voice_upgrade(&t)["result"], "done");
+    t.ops.files.lock().unwrap().insert(OLD_MEDIA_TARBALL.into(), fixture("sew-media-0.0.1-x86_64-unknown-linux-gnu.tar.gz"));
+    t.ops.clear();
+    t
+}
+
+fn rollback_req(media: Option<&str>) -> RollbackRequest {
+    RollbackRequest { media_tarball_path: media.map(Into::into) }
+}
+
+/// Sew 2026-10-17: core back → K2's check of the OLD core → the OLD core
+/// reinstalls the previous release's engine → sew doctor's media checks in
+/// the answer. No warning about a stranded engine any more.
+#[test]
+fn rollback_with_voice_has_the_old_core_put_the_previous_engine_back_and_reports_doctor() {
+    let t = upgraded_with_voice();
+    // The core is rolled back on the box (Sew swaps sew.prev in).
+    t.ops.queue("engine sew rollback", Ok(json!({"sewExit": 0, "sew": {"state": "rolled_back", "to": "0.0.1"}})));
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    let r = rollback_with(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL))).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!((r["media"]["result"].as_str(), r["media"]["to"].as_str()), (Some("done"), Some("0.0.1")), "{r}");
+    assert_eq!(r["doctor"]["ok"], true, "{r}");
+    assert_eq!(r["doctor"]["mediaVersion"]["detail"], "sew-media 0.0.1");
+    assert_eq!(r["doctor"]["mediaBinary"]["status"], "ok");
+    assert!(r.get("warning").is_none(), "{r}");
+    let eff = t.ops.effects();
+    let pos = |e: &str| eff.iter().position(|x| x == e).unwrap_or_else(|| panic!("{e} missing: {eff:?}"));
+    assert!(pos("engine sew stage-media") < pos("engine sew rollback"), "the old engine is kept before the core moves: {eff:?}");
+    assert!(pos("engine sew rollback") < pos("engine sew media rollback"), "core first: {eff:?}");
+    assert!(pos("engine sew media rollback") < pos("engine sew doctor"), "doctor last: {eff:?}");
+    assert!(!eff.iter().any(|e| e == "engine sew media upgrade"), "never the new core's verb: {eff:?}");
+    let row = t.row();
+    assert_eq!((row.status.as_str(), row.installed_version.as_deref()), ("running", Some("0.0.1")));
+    assert!(row.last_error.is_none(), "{:?}", row.last_error);
+}
+
+/// The previous engine's tarball is neither kept nor named: refused with
+/// the fix in the words, BEFORE the core moves.
+#[test]
+fn rollback_with_voice_refuses_before_anything_moves_without_the_previous_engine() {
+    let t = upgraded_with_voice();
+    let f = rollback_with(&t.env(), &rollback_req(None)).unwrap_err();
+    assert_eq!(f.code, "previous_media_tarball_needed", "{}", f.hint);
+    assert!(f.hint.contains("--media-tarball sew-media-0.0.1-x86_64-unknown-linux-gnu.tar.gz"), "{}", f.hint);
+    assert!(f.hint.contains("nothing was changed"));
+    assert!(!t.ops.effects().iter().any(|e| e == "engine sew rollback"), "{:?}", t.ops.effects());
+    // The wrong tarball: refused, nothing staged or rolled back.
+    let f = rollback_with(&t.env(), &rollback_req(Some(TARBALL))).unwrap_err();
+    assert_eq!(f.code, "sha256_mismatch", "{}", f.hint);
+    assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
+    assert_eq!(t.row().installed_version.as_deref(), Some(pinned().version));
+}
+
+/// The old core put the engine back, but sew doctor disagrees (the mixed
+/// pair 0.1.2 core + 0.2.0 engine fails 0.1.2's media.binary): surfaced
+/// in the answer and in lastError, ok false. An engine step Sew refuses is
+/// surfaced the same way.
+#[test]
+fn rollback_with_voice_surfaces_doctor_disagreement_and_engine_failure() {
+    let t = upgraded_with_voice();
+    t.ops.queue("engine sew rollback", Ok(json!({"sewExit": 0, "sew": {"state": "rolled_back", "to": "0.0.1"}})));
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    t.ops.queue(
+        "engine sew doctor",
+        Ok(json!({"sewExit": 1, "sew": {"ok": false, "checks": [
+            {"id": "media.binary", "status": "fail", "detail": "the binary's sha256 differs from the pin baked into sew", "hint": ""},
+            {"id": "media.version", "status": "warn", "detail": "sew-media 0.0.2, sew 0.0.1: upgrade pending", "hint": ""},
+        ]}})),
+    );
+    let r = rollback_with(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL))).unwrap();
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(r["doctor"]["ok"], false);
+    let e = r["error"].as_str().unwrap();
+    assert!(e.contains("media.binary fail") && e.contains("differs from the pin"), "{e}");
+    assert_eq!(t.row().last_error.as_deref(), Some(e));
+
+    let t = upgraded_with_voice();
+    t.ops.queue("engine sew rollback", Ok(json!({"sewExit": 0, "sew": {"state": "rolled_back", "to": "0.0.1"}})));
+    *t.ops.on_disk.lock().unwrap() = Some("0.0.1".into());
+    t.ops.queue("engine sew media rollback", Ok(json!({"sewExit": 3, "sew": null, "reason": "media_unpinned_build"})));
+    let r = rollback_with(&t.env(), &rollback_req(Some(OLD_MEDIA_TARBALL))).unwrap();
+    assert_eq!((r["ok"].as_bool(), r["media"]["result"].as_str()), (Some(false), Some("failed")), "{r}");
+    let e = t.row().last_error.unwrap();
+    assert!(e.contains("voice engine was not put back") && e.contains("exit 3") && e.contains("media_unpinned_build"), "{e}");
+}

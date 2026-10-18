@@ -224,6 +224,12 @@ const server = http.createServer(async (req, res) => {
     } else if (u.pathname === "/slow") {
       await new Promise((r) => setTimeout(r, Number(u.searchParams.get("ms") || 1000)));
       res.end(`slow ${TAG}\n`);
+    } else if (u.pathname === "/stat") {
+      // Lane 1 (the relaxed container): does a path exist, and what's in
+      // it (the /app copy is fresh at each start; /data persists).
+      const p = u.searchParams.get("p") || "/";
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ path: p, exists: fs.existsSync(p), text: fs.existsSync(p) ? read0(p).trim().slice(0, 200) : null }));
     } else {
       res.end(`${TAG}\n`);
     }
@@ -232,6 +238,12 @@ const server = http.createServer(async (req, res) => {
   }
 });
 server.listen(port, "0.0.0.0", () => console.log(`esc ${TAG} up on ${port}`));
+// Lane 1: an open-path App's extra port (`k2 app config --port-add`),
+// named by `extra-port.txt` in the folder.
+if (fs.existsSync(here + "extra-port.txt")) {
+  const xp = Number(read("extra-port.txt"));
+  http.createServer((req, res) => res.end(`extra ${TAG}\n`)).listen(xp, "0.0.0.0", () => console.log(`esc ${TAG} extra on ${xp}`));
+}
 process.on("SIGTERM", () => {
   console.log(`esc ${TAG} SIGTERM, draining ${inflight}`);
   server.close(() => { console.log(`esc ${TAG} drained`); process.exit(0); });

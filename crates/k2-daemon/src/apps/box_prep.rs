@@ -493,10 +493,30 @@ pub fn doctor(f: &Facts) -> J {
             )
         });
         out.push(match (hs("/enginePresent").as_bool() == Some(true), &f.engine) {
+            (true, Some(Ok(v)))
+                if v["version"].as_str() == Some(env!("CARGO_PKG_VERSION"))
+                    && v["protocol"].as_u64() == Some(k2_root_proto::engine::ENGINE_PROTOCOL as u64) =>
+            {
+                c(
+                    "engine",
+                    "ok",
+                    &format!(
+                        "k2-app-engine {} answering (protocol {}, runtime {})",
+                        env!("CARGO_PKG_VERSION"),
+                        k2_root_proto::engine::ENGINE_PROTOCOL,
+                        v["runtime"].as_str().unwrap_or("?")
+                    ),
+                    None,
+                )
+            }
             (true, Some(Ok(v))) if v["version"].as_str() == Some(env!("CARGO_PKG_VERSION")) => c(
                 "engine",
-                "ok",
-                &format!("k2-app-engine {} answering (runtime {})", env!("CARGO_PKG_VERSION"), v["runtime"].as_str().unwrap_or("?")),
+                "warn",
+                &format!(
+                    "k2-app-engine speaks protocol {} and this daemon {} (k2 app engine install)",
+                    v["protocol"],
+                    k2_root_proto::engine::ENGINE_PROTOCOL
+                ),
                 None,
             ),
             (true, Some(Ok(v))) => c(
@@ -1084,6 +1104,23 @@ mod tests {
             .unwrap_or_else(|| panic!("no check {id}"))["status"]
             .as_str()
             .unwrap()
+    }
+
+    /// 0.46.1: the engine check is ok only for this daemon's version AND
+    /// engine protocol (3); an engine on protocol 2 is told to reinstall.
+    #[test]
+    fn the_engine_check_names_its_protocol() {
+        let mut f = good();
+        f.helper_status.as_mut().unwrap()["enginePresent"] = json!(true);
+        f.engine = Some(Ok(json!({"version": env!("CARGO_PKG_VERSION"), "protocol": 3, "runtime": "crun"})));
+        let d = doctor(&f);
+        assert_eq!(status_of(&d, "engine"), "ok", "{d}");
+        let detail = d["checks"].as_array().unwrap().iter().find(|c| c["id"] == "engine").unwrap()["detail"].clone();
+        assert!(detail.as_str().unwrap().contains("protocol 3"), "{detail}");
+        f.engine = Some(Ok(json!({"version": env!("CARGO_PKG_VERSION"), "protocol": 2, "runtime": "crun"})));
+        let d = doctor(&f);
+        assert_eq!(status_of(&d, "engine"), "warn", "{d}");
+        assert!(d.to_string().contains("speaks protocol 2 and this daemon 3"), "{d}");
     }
 
     #[test]

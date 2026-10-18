@@ -1522,8 +1522,9 @@ fn read_log(app_id: &str, deployment: &str) -> String {
     let p = deploy::deployment_log_path(app_id, deployment);
     let mut text = std::fs::read_to_string(p.with_extension("log.1")).unwrap_or_default();
     text.push_str(&std::fs::read_to_string(&p).unwrap_or_default());
-    // A guarded instance's own output is in its unit's journal (rate
-    // limited per unit, W §5.3); the file holds K2's lines about it.
+    // A walled instance's own output is its capped log file, read through
+    // the engine (protocol 3, S17; the journal for a deployment an older
+    // engine started); the file here holds K2's lines about it.
     let guarded = {
         let db = k2_core::db::shared();
         let conn = db.lock();

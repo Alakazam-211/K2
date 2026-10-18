@@ -435,6 +435,11 @@ impl Engine {
         let gw = gateway_port(slot).ok_or((codes::NO_SLOT, "slot outside the gateway range".into()))?;
         let px = proxy_port(slot).ok_or((codes::NO_SLOT, "slot outside the proxy range".into()))?;
         let base = slot_base(slot);
+        // The App's slice exists from here on, so the daemon's per-App nft
+        // rule (nft resolves the cgroup path when the rule loads) can be in
+        // place before anything in the slice dials out (a build does at
+        // once). Best effort: a unit start creates it anyway.
+        let _ = self.systemctl(&["start", &app_slice(&app)], 30);
         let dir = self.apps().join(app.as_str());
         {
             use std::os::unix::fs::DirBuilderExt;

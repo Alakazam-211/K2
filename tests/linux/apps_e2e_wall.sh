@@ -169,7 +169,7 @@ PY
 	runuser -u k2 -- mkdir -p "$B"
 	cat >"$B/manifest.json" <<'JSON'
 {"schema":1,"kind":"app","id":"bld","name":"Build","version":"1.0.0",
- "build":["sh","-c","npm ci && echo built > dist.txt && (curl -s -m 8 -o /dev/null -w '%{http_code}' https://example.com/ > egress.txt || echo refused > egress.txt) && (curl -s -m 20 -o /dev/null -w '%{http_code}' https://registry.npmjs.org/ > registry.txt || echo refused > registry.txt)"],
+ "build":["sh","-c","npm ci && echo built > dist.txt && (curl -s -m 8 -o /dev/null -w '%{http_code}' https://example.com/ > egress.txt || echo refused > egress.txt) && (curl -sS -m 20 -o /dev/null -w '%{http_code}' https://registry.npmjs.org/ > registry.txt 2>registry.err || echo refused > registry.txt)"],
  "host":{"mode":"cmd","start":["node","-e","require('http').createServer((q,s)=>s.end('bld')).listen(process.env.PORT)"]}}
 JSON
 	cat >"$B/package.json" <<'JSON'
@@ -188,7 +188,7 @@ JSON
 	[ "$(cat "$SD/dist.txt")" = built ] || fail "the build's output file"
 	[ ! -e "$SD/POSTINSTALL_RAN" ] || fail "a postinstall script ran on the guarded path"
 	[ "$(cat "$SD/egress.txt")" = refused ] || fail "the build reached a non-registry host: $(cat "$SD/egress.txt")"
-	[ "$(cat "$SD/registry.txt")" = 200 ] || fail "the build couldn't reach the npm registry through its proxy: $(cat "$SD/registry.txt")"
+	[ "$(cat "$SD/registry.txt")" = 200 ] || fail "the build couldn't reach the npm registry through its proxy: $(cat "$SD/registry.txt") $(cat "$SD/registry.err" 2>/dev/null) egress log: $(tail -n 5 "$K2HOME/.k2/apps/build/logs/egress.log" 2>/dev/null)"
 	jq_ 'cw=v["seed"]["createdWith"]; assert cw["engine"]=="wall", cw; assert (v["seed"].get("builtFrom") or "").startswith("seed:"), v["seed"].get("builtFrom")' /tmp/w-b.json
 	ok "k2 app build ran the manifest's build in the wall: install scripts off, the registry reachable, example.com refused, the tree stored as the Seed (createdWith.engine = wall)"
 	rm -f "$B/package-lock.json"

@@ -375,6 +375,11 @@ fn decide(app: &str, host: &str, port: u16) -> Result<(Vec<SocketAddr>, Verdict)
 /// Production recorder: counters, first-seen audit, and a note to the
 /// App's agent the first time a host is refused.
 fn record_db(app: &str, host: &str, port: u16, through: bool, rule: Option<&HostSpec>, code: &str) {
+    // The reserved build slot is no App (no rows to count against); its
+    // connections are in its egress log.
+    if app == super::wall_build::BUILD_SLOT {
+        return;
+    }
     let now = k2_core::deploy::now();
     let (first, ws) = {
         let db = k2_core::db::shared();

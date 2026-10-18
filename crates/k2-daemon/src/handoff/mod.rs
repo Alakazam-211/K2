@@ -399,7 +399,14 @@ enum Msg {
     },
     /// Followed in the same `sendmsg` by the fds: the singleton lock
     /// first, then one listener per role, in `roles` order.
-    Take { roles: Vec<Role> },
+    Take {
+        roles: Vec<Role>,
+        /// front443's live route table, when `Front443` is among `roles`:
+        /// the successor routes from its first connection (it boots the
+        /// front before its DB is open). Ignored by older successors.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        front_routes: Option<crate::front443::routes::RouteTable>,
+    },
     Ack,
 }
 
@@ -457,7 +464,12 @@ fn successor_receive_unix(fd_str: &str) -> Result<std::fs::File, String> {
     .map_err(|e| format!("send HELLO: {e}"))?;
     let (body, mut fds) = fdpass::recv_msg(&sock, 8).map_err(|e| format!("receive TAKE: {e}"))?;
     let roles = match serde_json::from_slice::<Msg>(&body) {
-        Ok(Msg::Take { roles }) => roles,
+        Ok(Msg::Take { roles, front_routes }) => {
+            if let Some(t) = front_routes {
+                crate::front443::routes::set_handed(t);
+            }
+            roles
+        }
         Ok(other) => return Err(format!("expected TAKE, got {other:?}")),
         Err(e) => return Err(format!("unreadable TAKE: {e}")),
     };
@@ -641,7 +653,10 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
     let roles: Vec<Role> = held.iter().map(|(r, _)| *r).collect();
     let mut fds = vec![lock_fd];
     fds.extend(held.iter().map(|(_, l)| l.as_raw_fd()));
-    let take = serde_json::to_vec(&Msg::Take { roles: roles.clone() }).expect("serialize take");
+    let front_routes = roles
+        .contains(&Role::Front443)
+        .then(|| (*crate::front443::routes::current()).clone());
+    let take = serde_json::to_vec(&Msg::Take { roles: roles.clone(), front_routes }).expect("serialize take");
     if let Err(e) = fdpass::send_msg(&ours, &take, &fds) {
         let _ = child.kill();
         let _ = child.wait();

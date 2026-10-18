@@ -120,30 +120,50 @@ pub fn install(t: RouteTable) {
     table().store(Arc::new(t));
 }
 
-/// `~/.k2/front443-routes.json`: the last table built, so a daemon that
-/// boots (or takes over in a hand-off) routes from its first connection,
-/// before the DB and the rest of its state are up.
-pub fn persisted_path() -> std::path::PathBuf {
-    k2_core::paths::k2_home().join("front443-routes.json")
-}
-
-pub fn save_persisted(t: &RouteTable) -> Result<(), String> {
-    let text = serde_json::to_string(t).map_err(|e| e.to_string())?;
-    k2_core::fs_atomic::atomic_write_private(&persisted_path(), text.as_bytes()).map_err(|e| e.to_string())
-}
-
-/// The persisted table, re-validated entry by entry (a hand-edited file
-/// can't point the front anywhere but loopback).
-pub fn load_persisted() -> Option<RouteTable> {
-    parse_persisted(&std::fs::read_to_string(persisted_path()).ok()?)
-}
-
-/// [`load_persisted`]'s parse + re-validation (pure).
-pub fn parse_persisted(text: &str) -> Option<RouteTable> {
-    let raw: RouteTable = serde_json::from_str(text).ok()?;
-    let mut t = RouteTable::default();
-    for (h, b) in raw.hosts {
-        let _ = t.insert(&h, b);
+/// The one backend each kind may have in production (the daemon builds
+/// its own table only with these; a handed-over table is filtered to them).
+pub fn fixed_backend(kind: Kind) -> Backend {
+    let lo = |port| SocketAddr::from(([127, 0, 0, 1], port));
+    match kind {
+        Kind::Turn => Backend { kind, addr: lo(5349), proxy: true, refuse_loopback_clients: false },
+        Kind::Stalwart => Backend { kind, addr: lo(8443), proxy: true, refuse_loopback_clients: true },
+        // PROXY only when that Caddy reads it: the one free field.
+        Kind::Caddy => Backend { kind, addr: lo(k2_core::front443::CADDY_FRONT_PORT), proxy: false, refuse_loopback_clients: false },
     }
-    Some(t)
+}
+
+impl RouteTable {
+    /// The entries whose backend is exactly its kind's fixed backend
+    /// ([`fixed_backend`]; a Caddy route may carry PROXY or not). Applied to
+    /// the table a hand-off predecessor passes, never trusting more than
+    /// the daemon itself would build. No file is ever read: a same-uid
+    /// process (an agent) could plant one.
+    pub fn fixed_backends_only(&self) -> RouteTable {
+        let mut t = RouteTable::default();
+        for (h, b) in &self.hosts {
+            let f = fixed_backend(b.kind);
+            let same = b.addr == f.addr
+                && b.refuse_loopback_clients == f.refuse_loopback_clients
+                && (b.kind == Kind::Caddy || b.proxy == f.proxy);
+            if same {
+                let _ = t.insert(h, b.clone());
+            }
+        }
+        t
+    }
+}
+
+/// The table a hand-off predecessor passed (taken once by `front443::start`).
+fn handed() -> &'static std::sync::Mutex<Option<RouteTable>> {
+    static H: OnceLock<std::sync::Mutex<Option<RouteTable>>> = OnceLock::new();
+    H.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Successor: keep the predecessor's table (fixed backends only).
+pub fn set_handed(t: RouteTable) {
+    *handed().lock().unwrap_or_else(|p| p.into_inner()) = Some(t.fixed_backends_only());
+}
+
+pub fn take_handed() -> Option<RouteTable> {
+    handed().lock().unwrap_or_else(|p| p.into_inner()).take()
 }

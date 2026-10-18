@@ -17,6 +17,7 @@ fn listener_fd_round_trips_over_the_socketpair() {
 
     let body = serde_json::to_vec(&Msg::Take {
         roles: vec![Role::Main],
+        front_routes: None,
     })
     .expect("ser");
     fdpass::send_msg(&a, &body, &[lockfile.as_raw_fd(), listener.as_raw_fd()]).expect("send");
@@ -26,7 +27,7 @@ fn listener_fd_round_trips_over_the_socketpair() {
 
     let (got, mut fds) = fdpass::recv_msg(&b, 8).expect("recv");
     match serde_json::from_slice::<Msg>(&got).expect("parse") {
-        Msg::Take { roles } => assert_eq!(roles, vec![Role::Main]),
+        Msg::Take { roles, .. } => assert_eq!(roles, vec![Role::Main]),
         other => panic!("expected TAKE, got {other:?}"),
     }
     assert_eq!(fds.len(), 2, "lock + one listener");

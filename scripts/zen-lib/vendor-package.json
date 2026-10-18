@@ -27,7 +27,8 @@
     "preact": "10.29.8",
     "roughjs": "4.6.6",
     "three": "0.186.0",
-    "tone": "15.1.22"
+    "tone": "15.1.22",
+    "uplot": "1.6.32"
   },
   "devDependencies": {
     "esbuild": "0.28.2"

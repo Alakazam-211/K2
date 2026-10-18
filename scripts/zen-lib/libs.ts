@@ -255,6 +255,21 @@ export const LIBS: LibSpec[] = [
     licenses: ['echarts/LICENSE', 'echarts/NOTICE', 'echarts/licenses/LICENSE-d3'],
     files: [{ name: 'echarts.min.js', copy: 'echarts/dist/echarts.min.js' }],
   },
+  {
+    id: 'uplot',
+    version: '1.6.32',
+    title: 'uPlot',
+    global: 'uPlot',
+    license: 'MIT',
+    copyright: 'Copyright (c) 2022 Leon Sorokin',
+    source: 'bundled',
+    licenses: ['uplot/LICENSE'],
+    files: [
+      { name: 'uPlot.iife.min.js', copy: 'uplot/dist/uPlot.iife.min.js' },
+      { name: 'uplot-style.js', style: { tag: 'uplot', css: [{ path: 'uplot/dist/uPlot.min.css' }] } },
+    ],
+    notes: 'Small and fast time series (about 50 KB): sparklines and history lines for source trends. Give it a width and height; data is [xs, ...ys] with xs in seconds.',
+  },
   // ── Animation ───────────────────────────────────────────────────────
   {
     id: 'animejs',

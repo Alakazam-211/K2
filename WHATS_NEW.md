@@ -83,6 +83,14 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - Fixed: an agent was shown to other servers whenever 'Allow agents to create connections' was on. Now only 'Let agents on other servers message this agent' (or the master in Settings → K2 Connect) makes it visible. If a connected server's link to one of your agents stops working after updating, turn that switch on.
 - **A message sent while the agent works joins its turn.** It no longer ends the running turn and starts a new one; the activity strip keeps one turn and counts your messages in it.
 
+### Compute
+- **Runs from a worktree use the worktree.** `k2 compute run` inside `.claude/worktrees/x` finds its workspace (even with no K2 session), runs that worktree's own commit, and `--dirty` sends that worktree's changes. Each run prints which code it sent, and the "uncommitted changes" note no longer appears with `--sha`.
+- **Wait without the logs.** `k2 compute wait <job>…` blocks until jobs end and exits with the job's exit code. `--max-wait 9m` stops waiting first. `k2 compute run … --wait` prints the job id, then waits, and sends no second `[compute]` message.
+- **Cancel never hits the wrong job.** A cancel can no longer race a job starting. Cancelling a job that already started now needs `--force`, and `k2 compute get` shows who cancelled.
+- **See what's ahead.** A queued job shows its position, the jobs ahead of it and their age, and the CPU and memory numbers when it's waiting for resources. `k2 compute nodes` shows free CPU, free memory and your grant.
+- **`k2 compute status`.** Every node at a glance: state, foreign-lock waits, running and queued jobs, free CPU and memory, load, and disk against its floor, plus this Mac's free disk and Time Machine snapshot count.
+- **Limits up front.** A `--timeout` over the grant is refused before anything is sent, with the grant and the command to raise it. A job too big for its node is refused at submit; one already queued is failed with the reason and you get its message. A job killed for memory gets a hint.
+
 ### CLI fixes
 - **`k2 msg who <id>` only ever looks up a sender.** An id that didn't start with `m_` used to send a live message to a workspace named "who".
 - **Clear answers when a command is refused or finds nothing.** `k2 settings` from an agent now says it needs the owner or an admin instead of showing blank settings. `k2 inbox read` with an unknown id says so. `k2 users list` from an agent points to `k2 connections list --users`. `k2 compute get` with an unknown job exits 4. `k2 sources` shows one hint, not two.

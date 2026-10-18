@@ -19,6 +19,7 @@ import {
   federatedPeerHost,
   sortPeersForPicker,
   sortRosterForPicker,
+  emptyRosterNote,
   type RemoteConnectionEntry,
   type FederationPeer,
   type RosterAgent,
@@ -3674,6 +3675,9 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
   const [selectedPeerFp, setSelectedPeerFp] = useState('')
   const [rosterAgents, setRosterAgents] = useState<RosterAgent[]>([])
   const [rosterLoading, setRosterLoading] = useState(false)
+  /** The selected server answered its roster (false = no answer: offline,
+   *  unreachable or not trusted, never "a setting is off"). */
+  const [rosterAnswered, setRosterAnswered] = useState(true)
   const [remoteConns, setRemoteConns] = useState<RemoteConnectionEntry[]>([])
   const [remoteError, setRemoteError] = useState<string | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
@@ -3747,6 +3751,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
       const res = await fetchPeerRoster(selectedPeerFp)
       if (cancelled) return
       setRosterAgents(res.available ? res.data : [])
+      setRosterAnswered(res.available)
       setRosterLoading(false)
     })()
     return () => {
@@ -4118,9 +4123,7 @@ function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): React.J
                   <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">Loading agents…</div>
                 ) : availableRosterAgents.length === 0 ? (
                   <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
-                    No connectable agents on this server. On their side, turn on &quot;Let agents on other
-                    servers message this agent&quot; for an agent, or &quot;Let agents on other servers message
-                    every agent&quot; in Settings → K2 Connect.
+                    {emptyRosterNote(rosterAnswered, selectedPeer ? peerLabel(selectedPeer) : 'this server')}
                   </div>
                 ) : (
                   availableRosterAgents.map((a) => (

@@ -55,6 +55,7 @@ import {
   federatedPeerHost,
   sortPeersForPicker,
   sortRosterForPicker,
+  emptyRosterNote,
   type FederationPeer,
   type RosterAgent,
 } from '@/lib/federation'
@@ -883,5 +884,19 @@ describe('picker order (0.46.1): A to Z by the name shown, the address breaking 
     })
     const sorted = sortRosterForPicker([agent('sales', 'w3'), agent('Billing', 'w2'), agent('billing', 'w1'), agent('ops', 'w4')])
     expect(sorted.map((a) => a.address)).toEqual(['w1::billing', 'w2::Billing', 'w4::ops', 'w3::sales'])
+  })
+})
+
+describe('the federated agent picker with nothing to show (0.46.1)', () => {
+  it('no answer from the server says it is unreachable, never that a setting is off', () => {
+    const note = emptyRosterNote(false, 'rpm')
+    expect(note).toContain("Couldn't reach rpm")
+    expect(note).toContain('offline or unreachable')
+    expect(note).not.toContain('turn on')
+  })
+  it('an empty answer keeps the settings hint', () => {
+    const note = emptyRosterNote(true, 'rpm')
+    expect(note).toContain('No connectable agents on this server')
+    expect(note).toContain('Let agents on other servers message this agent')
   })
 })

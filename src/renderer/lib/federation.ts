@@ -154,6 +154,17 @@ export function sortPeersForPicker(peers: FederationPeer[]): FederationPeer[] {
   return byShownName(peers, (p) => [p.label || p.subdomain || p.fingerprint.slice(0, 12), federatedPeerHost(p) || p.fingerprint])
 }
 
+/** What the federated agent picker says when it has no agents to show.
+ *  `answered` = the server sent its roster (an empty one): only then is it a
+ *  setting on their side. No answer (offline, unreachable, no longer
+ *  trusted, federation off here) says so instead of blaming their settings. */
+export function emptyRosterNote(answered: boolean, server: string): string {
+  if (!answered) {
+    return `Couldn't reach ${server}: it's offline or unreachable, or no longer trusts this server. Try again later; Settings → K2 Server → Connections shows its pairing.`
+  }
+  return 'No connectable agents on this server. On their side, turn on "Let agents on other servers message this agent" for an agent, or "Let agents on other servers message every agent" in Settings → K2 Connect.'
+}
+
 /** A server's agents for a picker, A to Z by handle, then address. */
 export function sortRosterForPicker(agents: RosterAgent[]): RosterAgent[] {
   return byShownName(agents, (a) => [a.agent, a.address])

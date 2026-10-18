@@ -26,6 +26,20 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **People who log in can always message any agent.** The owner, Admins and Members can message every agent from its Thread or the terminal composer, whatever its remote switch says. The switch is now **Let agents on other servers message this agent** (and, for all agents at once, **Let agents on other servers message every agent** in Settings → K2 Connect): off means connected servers don't see the agent and their agents can't message it.
 - Fixed: an agent was shown to other servers whenever 'Allow agents to create connections' was on. Now only 'Let agents on other servers message this agent' (or the master in Settings → K2 Connect) makes it visible. If a connected server's link to one of your agents stops working after updating, turn that switch on.
 
+### Polish
+- **Apps know their public address.** Every App now gets `K2_APP_ORIGIN` (its main public https address: a custom domain bound to it, else `https://<app>.<you>.k2.dev`) and `K2_APP_ORIGINS` (all of them), so it can check where requests and websockets come from. Bind a custom domain to an App with `k2 domain name add app.example.com --role app:<app>`; the App sees changes on its next deploy or restart. An App with no public address gets neither.
+- **You hear when an agent moves secrets off the box.** When an agent with "Allow managing server-wide secrets" runs `k2 vault carry export`, you get a ticket naming the agent, the secrets (names only, never values) and where they went. Settings → Logs → Access Audit highlights the export.
+- **Meet gets its address.** `k2 hostchat meet bind <app>` points `meet.<you>.k2.dev` at your Meet App; `unbind` takes it back.
+- **Sew reminds you to set its public URL.** `k2 hostchat status` (and `enable`) warn until Sew's public URL is set, and show the command that sets it, so password setup links and invites open from outside the box.
+- **Hosted mail fixes its own certificate in more cases.** K2 now asks for a new mail certificate when the live one has expired or doesn't match the mail server's name, not only when it's self-signed. It checks every hour and waits longer between tries if it keeps failing. Certificate status now comes from what ports 443, 465 and 993 actually serve.
+- **Quieter App logs.** On some Linux boxes a guarded App's log filled with pasta "ERROR on epoll_ctl(): No such file or directory" lines. They're harmless, so K2 now shows the first and folds the rest into one line. Other errors are always shown.
+- **Message previews switch.** Owners and admins can turn message text in phone notifications on or off in Settings → Notifications. With it on, the text passes through K2's push relay and Apple or Google.
+- **Clone, smoother.** Threads that came with a cloned agent appear under "Imported Threads" in Chat History and open read-only. When an agent proposes a clone, you can review it on its Thread and open the Clone dialog already filled in, and approving takes a single Touch ID or password confirm, even when it copies secrets. The Clone dialog now uses the same controls as the rest of K2 and no longer freezes while it checks what to copy.
+- **Split view shows status.** Tabs in Split view panes show working and waiting marks, like the main tab strip. Zen themes get an "ok" colour for finished work.
+- **Garden widgets can't post without permission.** A Garden widget can send to an agent or answer a card only if its approved permissions include sending; K2's server now checks this as well as the app.
+- The "Which account is yours?" prompt uses the same square radio buttons as the rest of K2.
+- Hints and agent instructions now say `k2 hostmail create` (the old `k2 mail create` moved).
+
 ## 0.46.0 — Runtime for Apps
 
 **Getting your Apps ready for 0.46.1 (nothing is taken away yet)**

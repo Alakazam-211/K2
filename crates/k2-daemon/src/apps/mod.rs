@@ -19,6 +19,7 @@ pub mod exec;
 pub mod gateway;
 pub mod grace;
 pub mod grants;
+pub mod origins;
 pub mod guarded;
 pub mod podman_install;
 pub mod process_engine;

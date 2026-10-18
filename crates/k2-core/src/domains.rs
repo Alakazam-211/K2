@@ -17,18 +17,45 @@ pub const ROLE_OTHER: &str = "other";
 
 pub const ROLES: &[&str] = &[ROLE_MAIL, ROLE_PUBLISH, ROLE_DIRECT, ROLE_OTHER];
 
+/// A hostname bound to one App (or published `--cmd` service) by its
+/// name: role `app:<name>` (0.46.1). The App learns it as a public origin
+/// (`K2_APP_ORIGIN` / `K2_APP_ORIGINS`) on its next deploy or restart.
+pub const ROLE_APP_PREFIX: &str = "app:";
+
+/// The App a role binds its hostname to (`app:hearth` → `hearth`).
+pub fn app_of_role(role: &str) -> Option<&str> {
+    role.strip_prefix(ROLE_APP_PREFIX).filter(|n| !n.is_empty())
+}
+
 /// Normalize + validate a role. Empty/missing → `other`.
 pub fn normalize_role(raw: Option<&str>) -> Result<String, String> {
     let s = raw.map(str::trim).filter(|s| !s.is_empty()).unwrap_or(ROLE_OTHER);
     let lower = s.to_ascii_lowercase();
     if ROLES.iter().any(|r| *r == lower) {
-        Ok(lower)
-    } else {
-        Err(format!(
-            "role must be one of {} (got '{s}')",
-            ROLES.join("|")
-        ))
+        return Ok(lower);
     }
+    if let Some(name) = lower.strip_prefix(ROLE_APP_PREFIX) {
+        if crate::published_services::is_valid_name(name) {
+            return Ok(lower);
+        }
+        return Err(format!("role app:<name> needs an App or published service name (got '{s}')"));
+    }
+    Err(format!(
+        "role must be one of {}|app:<name> (got '{s}')",
+        ROLES.join("|")
+    ))
+}
+
+/// The custom hostnames bound to App `name` (role `app:<name>`) whose apex
+/// is still attached here. Sorted; a dangling apex is treated as missing.
+pub fn hostnames_for_app(conn: &Connection, name: &str) -> rusqlite::Result<Vec<String>> {
+    let role = format!("{ROLE_APP_PREFIX}{}", name.to_ascii_lowercase());
+    let mut stmt = conn.prepare(
+        "SELECT n.hostname FROM domain_names n JOIN domain_bindings b ON b.apex = n.apex \
+         WHERE n.role = ?1 ORDER BY n.hostname",
+    )?;
+    let rows = stmt.query_map(params![role], |row| row.get::<_, String>(0))?;
+    rows.collect()
 }
 
 /// True iff `hostname` is the apex or a label under it.
@@ -450,5 +477,28 @@ mod tests {
         assert_eq!(normalize_role(None).unwrap(), ROLE_OTHER);
         assert_eq!(normalize_role(Some("MAIL")).unwrap(), ROLE_MAIL);
         assert!(normalize_role(Some("wildcard")).is_err());
+        assert_eq!(normalize_role(Some("App:Hearth")).unwrap(), "app:hearth");
+        assert_eq!(app_of_role("app:hearth"), Some("hearth"));
+        assert_eq!(app_of_role(ROLE_PUBLISH), None);
+        let e = normalize_role(Some("app:")).unwrap_err();
+        assert!(e.contains("app:<name>"), "{e}");
+        assert!(normalize_role(Some("app:no_underscores")).is_err());
+    }
+
+    #[test]
+    fn hostnames_for_app_are_its_bound_names_on_attached_apexes() {
+        let conn = fresh();
+        upsert_binding(&conn, "example.com", None, false).unwrap();
+        upsert_name(&conn, "hearth.example.com", "example.com", "app:hearth").unwrap();
+        upsert_name(&conn, "chat.example.com", "example.com", "app:hearth").unwrap();
+        upsert_name(&conn, "other.example.com", "example.com", "app:other").unwrap();
+        upsert_name(&conn, "www.example.com", "example.com", ROLE_PUBLISH).unwrap();
+        // A dangling apex (no binding row) counts as missing.
+        upsert_name(&conn, "hearth.gone.test", "gone.test", "app:hearth").unwrap();
+        assert_eq!(
+            hostnames_for_app(&conn, "hearth").unwrap(),
+            vec!["chat.example.com".to_string(), "hearth.example.com".to_string()]
+        );
+        assert_eq!(hostnames_for_app(&conn, "nobody").unwrap(), Vec::<String>::new());
     }
 }

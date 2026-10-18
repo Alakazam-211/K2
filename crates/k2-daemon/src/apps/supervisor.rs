@@ -396,6 +396,8 @@ fn spec_for(app: &AppRow, m: &Manifest, dep: &str) -> AppSpec {
         drain_secs: m.host.drain_secs.unwrap_or(timings().drain_secs),
         io_max_json: app.io_max_json.clone(),
         devices: app.devices(),
+        // Read from the bindings at every start (deploy and restart).
+        public_origins: super::origins::for_service(&app.service_id, &app.app_id),
         data_dir: dir.join("data"),
         cache_dir: dir.join("cache"),
         home_dir: dir.join("home"),

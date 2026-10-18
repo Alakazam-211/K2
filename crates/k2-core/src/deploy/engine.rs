@@ -107,6 +107,9 @@ pub struct AppSpec {
     pub io_max_json: Option<String>,
     /// The `process` exception's device grants (enum tokens).
     pub devices: Vec<String>,
+    /// The App's public https origins, primary first (`K2_APP_ORIGIN` /
+    /// `K2_APP_ORIGINS`); empty = no public URL, neither is set.
+    pub public_origins: Vec<String>,
     /// The App folder's writable parts.
     pub data_dir: PathBuf,
     pub cache_dir: PathBuf,

@@ -53916,11 +53916,11 @@ CONTENT WIDGETS (in a column they need id, kind and column = n)
                 home = "<Home>" for the whole Home, or agent = "<name>"
                 for one agent (mode follows); home-picker, order,
                 server-tag, preview, status, pins,
-                pin-limit, settings, recent-first
+                pin-limit, settings, recent-first, unread
   conversation  one agent's Thread and a message box: agents = "<id of
                 an Agents widget>" to follow it, or agent = "<name>"
                 (with home) to pin one; compose, attachments, load-older,
-                activity-drawer
+                activity-drawer, mute
   nav-rail      My Home, Agents, Projects, Tickets: a strip at the left
                 of its column, or a row in a band or at a column edge;
                 orientation = "row" | "column"

@@ -3097,12 +3097,13 @@ mod tests {
     fn approved_widget_without_thread_post_is_refused_widget_cap_missing() {
         let g = WidgetGarden::new(&["agents:read", "thread:read"]);
         assert_eq!(refused_code(&g.post("nope", Some(g.origin("b1", "board")))), "widget_cap_missing");
-        // Sources taint (GV48): asking for sources:read drops thread:post.
-        g.set_caps(&["thread:post", "sources:read"]);
-        let resp = g.post("tainted", Some(g.origin("b1", "board")));
-        assert_eq!(refused_code(&resp), "widget_cap_missing");
-        assert!(json_body(&resp)["error"]["hint"].as_str().expect("hint").contains("data sources"), "{}", resp.body);
         assert!(g.bodies().is_empty(), "nothing refused was stored");
+        // 0.46.1 (Rosson 2026-10-17): a widget that reads sources keeps the
+        // thread:post it asks for (the old sources taint is gone).
+        g.set_caps(&["thread:post", "sources:read"]);
+        let resp = g.post("from sources", Some(g.origin("b1", "board")));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        assert_eq!(g.bodies(), vec!["from sources".to_string()], "only the allowed post was stored");
         let audit = k2_core::auth_audit::tail(200).expect("audit tail");
         assert!(
             audit.iter().any(|e| e["event"] == "zen.widget.post_refused"

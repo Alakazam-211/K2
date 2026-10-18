@@ -3,7 +3,7 @@
   "regen": "cargo run -p k2-core --bin contract-gen",
   "catalogVersion": 10,
   "catalogSha256": "0d482cbc779ec5e044d3784e2133682a1a12a117dd3addbb4e903a38bf5680d1",
-  "runtimeSha256": "3a4b6a97a1b29b52f8dcb05d0fddba5b482bbb71cb077fe2ca6d14b577842a5a",
+  "runtimeSha256": "fc07b62e2b4dfa5d288ef7e6ef737ae03429fb0dc41b59963172c887213f7cfa",
   "files": {
     "cli/k2": "a7cb963b697967018c5f491d3a48ac91fdcf581b21f61506a3df0072bc381ef4",
     "sdk/generated/k2-frame.js": "321f889df0d9dbad7d904218d0a22b35338a4855cbd674a3b5f59e86041e7a24",

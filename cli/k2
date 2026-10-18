@@ -12921,6 +12921,121 @@ cmd_root_helper() {
     esac
 }
 
+# ── k2 front — the box's :443 as an SNI pass-through router (front443) ──
+# (0.46.1, plan-turn-443-front-v1). The daemon holds :443 through a socket
+# the root helper installs (protocol 8, `front install`); TURN (Sew voice),
+# Skin Direct's Caddy and, opt-in, Stalwart sit behind it, each reached
+# without the front ending TLS. Owner/admin verbs: run them outside K2.
+_front_usage() {
+    cat <<'EOF'
+k2 front — the box's :443 as an SNI router (TURN on 443, Skin Direct, mail)
+
+  k2 front status [--json]          socket, routes, cap, per-outcome counters
+  k2 front enable [--mail] [--json] take :443 (root helper socket; the daemon restarts once)
+                                    voice moves to TURN on :443 (calls in progress drop once);
+                                    Skin Direct's Caddy moves to 127.0.0.1:38473 behind it
+                    --mail          also put Stalwart behind the front (tls-alpn boxes):
+                                    HTTPS moves to 127.0.0.1:8443 with PROXY v2, ACME
+                                    TLS-ALPN-01 keeps working; Stalwart restarts once
+  k2 front disable [--json]         give :443 back (voice to TCP 5349, Stalwart to :443)
+
+Linux boxes under systemd with k2-root-helper protocol 8 (k2 root-helper update).
+EOF
+}
+
+_front_render() {
+    # _front_render <as_json> <raw "body\ncode">
+    local as_json="$1" raw="$2" code body
+    code="${raw##*$'\n'}"
+    body="${raw%$'\n'*}"
+    if [ -z "$raw" ] || [ "$code" = "$raw" ] || [ "$code" = "000" ]; then
+        echo "k2 front: daemon unreachable" >&2
+        exit 1
+    fi
+    if [ "$as_json" = "1" ]; then
+        printf '%s\n' "$body"
+        [ "$code" = "200" ] || exit 1
+        return 0
+    fi
+    K2_FR_BODY="$body" K2_FR_CODE="$code" python3 -c '
+import json, os, sys
+raw, code = os.environ["K2_FR_BODY"], os.environ["K2_FR_CODE"]
+try:
+    d = json.loads(raw)
+except Exception:
+    print("k2 front: error: HTTP " + code + ": " + raw.strip()[:200], file=sys.stderr); sys.exit(1)
+if code != "200" or d.get("ok") is False or (isinstance(d.get("error"), str) and "serving" not in d):
+    e = d.get("error")
+    msg = d.get("message") or (e.get("hint") if isinstance(e, dict) else None) or ""
+    print("k2 front: error: " + str(e if not isinstance(e, dict) else e.get("code")) + (": " + msg if msg else ""), file=sys.stderr)
+    sys.exit(1)
+if "serving" in d:
+    print("front      :", "on" if d.get("enabled") else "off", "· serving" if d.get("serving") else "· not serving",
+          "(socket from " + str((d.get("socket") or {}).get("source")) + ")" if d.get("serving") else "")
+    if d.get("restartNeeded"):
+        print("note       : enabled but not serving: the daemon takes the socket at its next start")
+    print("mail       :", "behind the front" if d.get("mail") else "not behind the front")
+    print("cap        :", d.get("cap"), " (E2E listener", str(d.get("e2eCap")) + "; RLIMIT_NOFILE", str(d.get("nofileSoftLimit")) + ")")
+    for r in d.get("routes") or []:
+        print("route      :", r.get("host"), "->", r.get("kind"), r.get("backend"), "PROXY v2" if r.get("proxyV2") else "no PROXY")
+    c = d.get("connections")
+    if isinstance(c, dict):
+        cl = c.get("closed") or {}
+        print("conns      : accepted", c.get("accepted"), "· live", c.get("live"), "· over cap", c.get("overCap"))
+        print("closed     :", ", ".join("%s %s" % (k, v) for k, v in cl.items() if v))
+    if d.get("helper"):
+        print("helper     :", d.get("helper"))
+    sys.exit(0)
+print("front      :", "on" if d.get("enabled") else "off")
+if d.get("enabled"):
+    print("mail       :", "behind the front" if d.get("mail") else "not behind the front")
+    if d.get("restarting"):
+        print("restarting : the daemon restarts now to take the :443 socket")
+for w in d.get("warnings") or []:
+    print("warning    :", w)
+if d.get("next"):
+    print("next       :", d.get("next"))
+'
+}
+
+cmd_front() {
+    local sub="${1:-status}"
+    [ $# -gt 0 ] && shift
+    local as_json=0 mail=0 raw
+    case "$sub" in
+        help|--help|-h) _front_usage; return 0 ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --mail) mail=1; shift ;;
+            -h|--help) _front_usage; return 0 ;;
+            *) echo "usage: unknown argument '$1' (k2 front --help)" >&2; exit 2 ;;
+        esac
+    done
+    case "$sub" in
+        status)
+            raw="$(_sidecar_send GET /cli/front/status "")" || true
+            _front_render "$as_json" "$raw"
+            ;;
+        enable)
+            local body='{"mail":false}'
+            [ "$mail" = 1 ] && body='{"mail":true}'
+            raw="$(_sidecar_send POST /cli/front/enable "$body")" || true
+            _front_render "$as_json" "$raw"
+            ;;
+        disable)
+            [ "$mail" = 1 ] && { echo "usage: --mail is for enable (disable takes everything back)" >&2; exit 2; }
+            raw="$(_sidecar_send POST /cli/front/disable "{}")" || true
+            _front_render "$as_json" "$raw"
+            ;;
+        *)
+            echo "usage: unknown front verb '$sub' (status|enable|disable)" >&2
+            exit 2
+            ;;
+    esac
+}
+
 # ── k2 compute — run commands on your compute nodes ───────────────────
 # (prd-k2-compute-nodes-v1 §15.2). `compute` is an `id` tool and locked:
 # inside a K2 terminal the request carries this session's passport, so an
@@ -55565,6 +55680,10 @@ EOF
     root-helper)
         # K2's one root door on Linux (prd-k2-root-helper-v1 §8.3).
         shift; cmd_root_helper "$@"
+        ;;
+    front)
+        # front443: the box's :443 as an SNI router (0.46.1).
+        shift; cmd_front "$@"
         ;;
     compute)
         # K2 compute nodes (prd-k2-compute-nodes-v1).

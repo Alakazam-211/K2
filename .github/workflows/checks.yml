@@ -111,9 +111,10 @@ jobs:
           cargo test -p k2-root-proto --features test-signer
           cargo test -p k2-root-helper
           cargo check -p k2-root-helper --features test-keys --examples
-          cargo test -p k2-daemon --lib -- root_helper:: mail::helper:: update_routes::tests::daemon_update cell_server::
+          cargo test -p k2-daemon --lib -- root_helper:: mail::helper:: update_routes::tests::daemon_update cell_server:: front443:: mail::front_listener::
           bash tests/cli/install_root_helper.sh
           bash tests/cli/root_helper_cli.sh
+          bash tests/cli/front_cli.sh
           bash tests/cli/provision_mail_helper.sh
 
       # Zen v2 (prd-zen-user-widgets-v2 UWB28): the steps above only

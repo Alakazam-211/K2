@@ -460,6 +460,11 @@ pub const ROUTES: &[Route] = &[
     get("/cli/focus-groups/list", Member),
     post("/cli/focus-groups/reconcile", Member),
     post("/cli/focus-groups/update", Member),
+    // front443 (0.46.1): the box :443 SNI router. Enable/disable change who
+    // owns the box's :443 (a root-helper socket) and restart the daemon.
+    post("/cli/front/disable", Admin),
+    post("/cli/front/enable", Admin),
+    get("/cli/front/status", Admin),
     get("/cli/fs/clipboard-paths", Member),
     post("/cli/fs/compress", Member),
     post("/cli/fs/compress-cancel", Member),

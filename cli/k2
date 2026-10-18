@@ -6870,6 +6870,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         roles and channels are set in Sew. --target is optional (sew).
                                         A Connect login's first chat pass writes its own connect grant;
                                         switch it off (not rm) to keep that login out of chat.
+                                        The owner's linked Connect login is the owner in chat (k2:owner):
+                                        no connect grant; revoking k2:owner's Sew sessions ends its
+                                        sessions too (intended; one person, one member).
   k2 app grant set --id <grant-id> --scope <scope>
                                         Change a chat grant's scope (member↔guest, assistant re-pin).
   k2 app grant rm --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>

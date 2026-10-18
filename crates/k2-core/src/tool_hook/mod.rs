@@ -21,7 +21,9 @@
 //!   and admins included — are never provisioned by role: a Connect login
 //!   (`k2:connect:<id>`) becomes a member only through a `connect` chat
 //!   grant, written by the owner or by that login's own first chat-pass
-//!   mint ([`connect_chat_gate`]). Provisioning makes an install member
+//!   mint ([`connect_chat_gate`]). A login linked to the owner is the
+//!   owner person: it is `k2:owner` in chat, never a `k2:connect` member
+//!   (one person, one member). Provisioning makes an install member
 //!   only; App Space membership (K31) will come only from that App's
 //!   `kind=app` grants (Space adds stay explicit, rev 134/147).
 //! - **HC2:** `skipped` lives on the batch Space/channel member-add
@@ -140,6 +142,9 @@ pub enum Cause {
     ConnectUserDelete,
     /// A Connect login's chat-pass mint found no delivered member.
     PassMint,
+    /// A Connect login was linked to the owner: it is `k2:owner` in chat
+    /// now, so its own `k2:connect` member goes.
+    OwnerLinked,
 }
 
 impl Cause {
@@ -159,6 +164,7 @@ impl Cause {
             Cause::SessionRevoke => "session_revoke",
             Cause::ConnectUserDelete => "connect_user_delete",
             Cause::PassMint => "pass_mint",
+            Cause::OwnerLinked => "owner_linked",
         }
     }
 }
@@ -266,17 +272,31 @@ pub struct ConnectFacts {
     pub username: String,
     /// The login's "First Last", else its username.
     pub display_name: String,
+    /// Linked to the owner (`ownerAccounts`): this login IS the owner
+    /// person, so in chat it is `k2:owner` (its passes name `k2:owner`)
+    /// and never a separate `k2:connect` member. One person, one member.
+    pub owner_linked: bool,
 }
 
-/// Every Connect login with an id, keyed by id.
+/// Every Connect login with an id, keyed by id, with its owner link
+/// ([`crate::notify_prefs::People::is_linked`]).
 pub fn connect_facts() -> Result<HashMap<String, ConnectFacts>, String> {
+    let people = crate::notify_prefs::People {
+        users: Vec::new(),
+        linked: crate::app_settings::load().owner_accounts,
+    };
     Ok(crate::connect_users::chat_member_facts()?
         .into_iter()
         .map(|(id, username, display_name)| {
-            (id.clone(), ConnectFacts { id, username, display_name })
+            let owner_linked = people.is_linked(&username);
+            (id.clone(), ConnectFacts { id, username, display_name, owner_linked })
         })
         .collect())
 }
+
+/// Refusal for a `connect` chat grant aimed at an owner-linked login.
+pub const OWNER_CONNECT_IS_OWNER: &str =
+    "the owner's Connect login is the owner in chat (k2:owner); it gets no separate chat account";
 
 impl HookCtx {
     /// Load facts for `workspace_ids` (unknown ids are simply absent), the
@@ -668,6 +688,11 @@ pub fn connect_chat_gate(user_id: &str, username: &str) -> Result<ConnectChatGat
     }
     if !skin_store_exists() {
         return Ok(ConnectChatGate::Off);
+    }
+    // An owner-linked login mints as `k2:owner` and never reaches here;
+    // it must never get a `connect` grant or member if it does.
+    if connect_facts()?.get(user_id).is_some_and(|c| c.owner_linked) {
+        return Err(OWNER_CONNECT_IS_OWNER.to_string());
     }
     let step = crate::skin::with_skin_conn(|conn| {
         if !outbox::target_enabled(conn, CHAT_KIND)? {

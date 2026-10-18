@@ -593,6 +593,22 @@ fn browser_header_detection() {
     assert!(!mint::has_browser_headers("POST / HTTP/1.1\r\nHost: x\r\n\r\nOrigin: https://x\r\n"));
 }
 
+/// The owner's linked Connect login: `k2:owner` with its own `cu_` sid,
+/// provenance connect-login, no caps widening, no App.
+#[test]
+fn owner_linked_identity_names_k2_owner_with_the_connect_sid() {
+    let tok = "k2cu_owner_linked_session_token_for_tests";
+    let i = identity::owner_linked_identity("z3thon", tok);
+    assert_eq!(i.sub, identity::OWNER_SUB);
+    assert_eq!(i.sid, k2_core::connect_users::session_sid(tok));
+    assert!(i.sid.starts_with("cu_"), "{}", i.sid);
+    assert_eq!(i.actor, "user:z3thon");
+    assert_eq!(i.provenance, Provenance::ConnectLogin);
+    assert_eq!(i.sew_role, SewRole::InstallOwner);
+    assert!(i.caps.is_empty());
+    assert_eq!(i.app, None);
+}
+
 // ── SW2: a Connect login mints only once its member is delivered ─────
 
 /// Sew never invents members (a pass whose `sub` has no member gets 403

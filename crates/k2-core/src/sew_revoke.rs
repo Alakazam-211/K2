@@ -41,6 +41,11 @@ pub enum SewSessionRevoke {
     /// End the Sew sessions minted from one K2 session (`skn_…`, `cu_…`).
     K2Sid(String),
     /// End every Sew session of one external id (`k2:principal:<id>`).
+    ///
+    /// `k2:owner` ends EVERY owner session, including the ones minted from
+    /// the owner's linked Connect login (its passes name `k2:owner` with a
+    /// `cu_…` sid). That is intended: one person, one member. To end just
+    /// one of those, revoke its `K2Sid` (`cu_…`) instead.
     ExternalId(String),
 }
 

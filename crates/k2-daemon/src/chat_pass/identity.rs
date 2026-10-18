@@ -9,7 +9,15 @@
 //! | owner token | `k2:owner` | `own_<32 hex SHA-256(token)>` | `owner-token` |
 //! | App login session (`k2skn_`, `session=1`) + `chat` grant | `k2:principal:<id>` | `skn_<tokens.id>` | `app-session` |
 //! | Connect login (any role) | `k2:connect:<uuid>` | `cu_<32 hex SHA-256(token)>` | `connect-login` |
+//! | the owner's linked Connect login (`ownerAccounts`) | `k2:owner` | `cu_<32 hex SHA-256(token)>` | `connect-login` |
 //! | owner handoff code (no bearer) | `k2:owner` | `own_<32 hex SHA-256(code)>` | `owner-handoff` |
+//!
+//! **Owner-linked login (Sew 2026-10-18).** A Connect login the owner
+//! linked IS the owner person, so its pass names `k2:owner` (one person,
+//! one member) with its own `cu_` sid: a `k2_sid` revoke ends just that
+//! session, while an `external_id: k2:owner` revoke ends every owner
+//! session, this one included (intended). It never gets a `connect` grant
+//! or a `k2:connect` member.
 //!
 //! Refused: an App session without a `chat` grant (403 `no_chat_grant`),
 //! platform app passes (`session=0`), agent passports, `k2sk_` API keys
@@ -23,8 +31,9 @@
 //! its `sewRole` is `member` like every Connect login: K2 Connect Owner is
 //! server control only, not Sew install admin (pending Rosson; the field
 //! must not suggest admin). `k2:owner` comes only from the
-//! box owner token (provenance `owner-token`, never person proof) or a
-//! person-confirmed owner handoff.
+//! box owner token (provenance `owner-token`, never person proof), a
+//! person-confirmed owner handoff, or the owner's linked Connect login
+//! (above; linking is the owner's act, not a role).
 //!
 //! **No pass is person proof** (KM13 §19a): see the module doc of
 //! [`super`].
@@ -160,6 +169,24 @@ pub fn connect_identity(
     }
 }
 
+/// The owner's linked Connect login (`ownerAccounts`, Sew 2026-10-18): it
+/// IS the owner person, so its pass names `k2:owner` (one person, one
+/// member) with ITS Connect session as `sid` (`cu_…`), so revoking that
+/// sid ends just that session. It keeps a Connect pass's own caps ceiling
+/// (today none, as for every Connect login), never the owner token's. No
+/// `connect` grant or provision is ever made for it.
+pub fn owner_linked_identity(username: &str, session_token: &str) -> PassIdentity {
+    PassIdentity {
+        sub: OWNER_SUB.to_string(),
+        sid: k2_core::connect_users::session_sid(session_token),
+        actor: format!("user:{username}"),
+        provenance: Provenance::ConnectLogin,
+        sew_role: SewRole::InstallOwner,
+        caps: Vec::new(),
+        app: None,
+    }
+}
+
 /// Classify a Bearer credential (S28 §5) with the default ruling.
 pub fn classify(bearer: &str, owner_token: &str) -> Result<PassIdentity, Refusal> {
     classify_with(bearer, owner_token, OWNER_CONNECT_GETS_K2_OWNER)
@@ -221,6 +248,11 @@ pub fn classify_with(bearer: &str, owner_token: &str, owner_connect_is_k2_owner:
             Ok(_) => return Err(Refusal::Unauthenticated),
             Err(e) => return Err(Refusal::Unavailable(e)),
         };
+        // The owner's linked login IS the owner person: `k2:owner`.
+        let people = k2_core::notify_prefs::People::load().map_err(Refusal::Unavailable)?;
+        if people.is_linked(&username) {
+            return Ok(owner_linked_identity(&username, tok));
+        }
         return Ok(connect_identity(&username, role, &uuid, tok, owner_connect_is_k2_owner));
     }
     Err(Refusal::Unauthenticated)

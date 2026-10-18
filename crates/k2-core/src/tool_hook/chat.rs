@@ -19,7 +19,9 @@
 //! Subjects are skin principals, workspaces and Connect logins (SW2). A
 //! Connect login (any role) gets a Sew account only from its own `connect`
 //! chat grant, never by role (rev 147). Its username is its login
-//! ([`login_username`]), never its id.
+//! ([`login_username`]), never its id. A login linked to the owner is the
+//! owner person: it is `k2:owner` in chat and a `connect` grant for it is
+//! refused ([`super::OWNER_CONNECT_IS_OWNER`]).
 
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
@@ -213,10 +215,17 @@ pub fn connect_username(c: &super::ConnectFacts) -> Result<String, String> {
     Ok(u)
 }
 
+/// A Connect login that may be its own `k2:connect` member: known, and not
+/// linked to the owner (an owner-linked login is `k2:owner` in chat).
 fn connect_facts<'a>(ctx: &'a HookCtx, id: &str) -> Result<&'a super::ConnectFacts, String> {
-    ctx.connect
+    let c = ctx
+        .connect
         .get(id)
-        .ok_or_else(|| format!("unknown Connect user id '{id}'"))
+        .ok_or_else(|| format!("unknown Connect user id '{id}'"))?;
+    if c.owner_linked {
+        return Err(super::OWNER_CONNECT_IS_OWNER.to_string());
+    }
+    Ok(c)
 }
 
 /// §6.3.4: the name must fit Sew's handle grammar.

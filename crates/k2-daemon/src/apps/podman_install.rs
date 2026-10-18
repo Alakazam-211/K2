@@ -116,6 +116,10 @@ pub fn bundle_json(arch: Option<&str>, k2app_uid: Option<u32>, userns_restricted
         "arch": arch,
         "asset": art.map(|a| a.asset),
         "url": art.map(pb::download_url),
+        // K2 downloads only from its own mirror (Rosson 2026-10-17); the
+        // mirror copied the bytes from here (the sha256 pin is the same).
+        "mirror": pb::MIRROR_BASE,
+        "upstream": art.map(pb::upstream_url),
         "sha256": art.map(|a| a.sha256),
         "size": art.map(|a| a.size),
         "prefix": pb::PREFIX,
@@ -187,10 +191,11 @@ pub fn obtain(from: Option<&str>, art: &pb::PodmanArtifact) -> Result<Vec<u8>, S
         }
         None if k2_core::airgap::enabled() => {
             return Err(format!(
-                "air-gapped: copy {} (sha256 {}) from {} into a folder and prepare with --podman-from <folder>",
+                "air-gapped: copy {} (sha256 {}) from K2's mirror {} (the same bytes as {}) into a folder and prepare with --podman-from <folder>",
                 art.asset,
                 art.sha256,
-                pb::download_url(art)
+                pb::download_url(art),
+                pb::upstream_url(art)
             ))
         }
         None => fetch(&pb::download_url(art))?,

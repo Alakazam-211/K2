@@ -82,6 +82,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **People who log in can always message any agent.** The owner, Admins and Members can message every agent from its Thread or the terminal composer, whatever its remote switch says. The switch is now **Let agents on other servers message this agent** (and, for all agents at once, **Let agents on other servers message every agent** in Settings → K2 Connect): off means connected servers don't see the agent and their agents can't message it.
 - Fixed: an agent was shown to other servers whenever 'Allow agents to create connections' was on. Now only 'Let agents on other servers message this agent' (or the master in Settings → K2 Connect) makes it visible. If a connected server's link to one of your agents stops working after updating, turn that switch on.
 - **A message sent while the agent works joins its turn.** It no longer ends the running turn and starts a new one; the activity strip keeps one turn and counts your messages in it.
+- **File paths in a Thread are links** when they point inside the workspace. Click one (or press Enter) to open the file at its line, or to show a folder in Files. Paths outside the workspace stay plain text.
 
 ### Compute
 - **Runs from a worktree use the worktree.** `k2 compute run` inside `.claude/worktrees/x` finds its workspace (even with no K2 session), runs that worktree's own commit, and `--dirty` sends that worktree's changes. Each run prints which code it sent, and the "uncommitted changes" note no longer appears with `--sha`.

@@ -374,6 +374,9 @@ struct PtydSession {
     sid: String,
     io: crate::terminal::ptyd::io::PtydIo,
     owner: Arc<crate::terminal::ptyd::client::Owner>,
+    /// The meta last sent to ptyd (P28); label and pin fields are kept
+    /// current, the rest is fixed at spawn.
+    meta: Mutex<serde_json::Value>,
 }
 
 /// Trailing-debounce window for [`DaemonPtySession::request_resize`].
@@ -1160,7 +1163,7 @@ impl DaemonPtySession {
             cols: req.window_size.num_cols,
             rows: req.window_size.num_lines,
             ring_bytes: None,
-            meta,
+            meta: meta.clone(),
         }) {
             Ok(Reply::Spawned { pid, .. }) => pid,
             Ok(Reply::Error { code, detail }) => {
@@ -1220,7 +1223,7 @@ impl DaemonPtySession {
             killed: std::sync::atomic::AtomicBool::new(false),
             args: store_args,
             term,
-            pty_io: PtyIo::Ptyd(PtydSession { sid, io, owner }),
+            pty_io: PtyIo::Ptyd(PtydSession { sid, io, owner, meta: Mutex::new(meta) }),
             events_tx,
             child_exited: std::sync::atomic::AtomicBool::new(false),
             active_subscriber: std::sync::atomic::AtomicU64::new(0),
@@ -1330,6 +1333,7 @@ impl DaemonPtySession {
                 if session.pinned() == Some((cols, rows)) {
                     *session.pinned_set_by.lock() = set_by;
                     Self::request_resize(session, cols, rows);
+                    session.sync_ptyd_meta();
                     return;
                 }
                 // rows first, cols second: `pinned()` keys "pinned"
@@ -1384,6 +1388,7 @@ impl DaemonPtySession {
                 }
             }
         }
+        session.sync_ptyd_meta();
     }
 
     /// Companion T0 — the grid-WS subscriber id that owns the current
@@ -1489,7 +1494,31 @@ impl DaemonPtySession {
         // Best-effort broadcast — `send` returns `Err` only when
         // there are zero subscribers, which is fine.
         let _ = self.label_tx.send(label.clone());
+        self.sync_ptyd_meta();
         label
+    }
+
+    /// k2-ptyd P28: push the current label and pin into the session's
+    /// ptyd meta (what adoption will restore). Fire-and-forget; a no-op for
+    /// in-process sessions. PTY-title label changes are deliberately not
+    /// pushed (TUIs retitle constantly and re-emit after adoption anyway).
+    fn sync_ptyd_meta(&self) {
+        #[cfg(unix)]
+        if let PtyIo::Ptyd(p) = &self.pty_io {
+            let mut m = p.meta.lock();
+            if let Some(obj) = m.as_object_mut() {
+                obj.insert("label".into(), serde_json::Value::String(self.label()));
+                obj.insert("label_source".into(), serde_json::Value::String(format!("{:?}", self.label_source())));
+                obj.insert(
+                    "pin".into(),
+                    match self.pinned() {
+                        Some((c, r)) => serde_json::json!({"cols": c, "rows": r, "set_by": self.pinned_set_by()}),
+                        None => serde_json::Value::Null,
+                    },
+                );
+            }
+            p.owner.send_nowait(k2_ptyd::proto::Request::UpdateMeta { sid: p.sid.clone(), meta: m.clone() });
+        }
     }
 
     /// Whether the child is still alive for "is this session live?" probes.

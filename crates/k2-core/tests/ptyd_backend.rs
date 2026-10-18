@@ -1,8 +1,8 @@
 //! `DaemonPtySession` on the k2-ptyd backend (PRD prd-k2-ptyd-v1 S2).
 //!
 //! Needs the `k2-ptyd` binary: run as
-//! `cargo test -p k2-ptyd -p k2-core --test ptyd_backend` (cargo builds the
-//! ptyd bin for its own tests first), or set `K2_PTYD_BIN`. A missing
+//! `cargo build -p k2-ptyd --bin k2-ptyd && cargo test -p k2-core --test ptyd_backend`
+//! or set `K2_PTYD_BIN`. A missing
 //! binary fails loudly. This binary sets `K2_PTYD=1` and a temp `HOME` for
 //! itself only; it never touches the real `~/.k2`.
 
@@ -33,7 +33,7 @@ fn setup() -> std::sync::MutexGuard<'static, ()> {
     };
     SETUP.call_once(|| {
         let bin = ptyd_bin();
-        assert!(bin.is_file(), "k2-ptyd binary not found at {} — run `cargo test -p k2-ptyd -p k2-core --test ptyd_backend` or set K2_PTYD_BIN", bin.display());
+        assert!(bin.is_file(), "k2-ptyd binary not found at {} — run `cargo build -p k2-ptyd --bin k2-ptyd` first or set K2_PTYD_BIN", bin.display());
         let home = PathBuf::from(format!("/tmp/k2pb-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(".k2")).unwrap();
@@ -145,6 +145,33 @@ fn survive_session_runs_under_ptyd_and_kill_reaps_through_ptyd() {
     let t = Instant::now();
     s.kill();
     assert!(t.elapsed() < Duration::from_millis(50), "second kill is a no-op");
+}
+
+#[test]
+fn label_and_pin_changes_reach_ptyd_meta_without_secrets() {
+    let _g = setup();
+    std::env::set_var("K2_TEST_CANARY_SECRET", "canary-9c1e");
+    let s = DaemonPtySession::spawn(cfg("sleep 30")).expect("spawn");
+    std::env::remove_var("K2_TEST_CANARY_SECRET");
+    s.set_label("Renamed".into(), true);
+    DaemonPtySession::set_pinned(&s, Some((90, 30)), Some("owner".into()));
+    let owner = k2_core::terminal::ptyd::client::global().owner().unwrap();
+    let sid = s.session_id.to_string();
+    let t = Instant::now();
+    let meta = loop {
+        let k2_ptyd::proto::Reply::Sessions { sessions } = owner.request(k2_ptyd::proto::Request::List).unwrap() else { panic!() };
+        let m = sessions.into_iter().find(|x| x.sid == sid).expect("session listed").meta;
+        if m["label"] == "Renamed" && m["pin"]["cols"] == 90 {
+            break m;
+        }
+        assert!(t.elapsed() < Duration::from_secs(5), "meta never updated: {m}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(meta["label_source"], "Locked");
+    assert_eq!(meta["pin"]["set_by"], "owner");
+    assert_eq!(meta["session_id"], sid);
+    assert!(!meta.to_string().contains("canary-9c1e"), "P72: meta never carries env values");
+    s.kill();
 }
 
 #[test]

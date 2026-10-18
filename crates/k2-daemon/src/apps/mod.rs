@@ -22,6 +22,7 @@ pub mod grants;
 pub mod origins;
 pub mod guarded;
 pub mod guest_rooms;
+pub mod open;
 pub mod podman_install;
 pub mod process_engine;
 pub mod process_exception;

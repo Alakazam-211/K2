@@ -30,6 +30,27 @@ pub(crate) fn with_temp_home<F: FnOnce()>(f: F) {
     f();
 }
 
+/// A scratch folder under the system temp dir, removed on drop (no
+/// `$HOME` change, no lock: for tests that only need a few files).
+pub(crate) struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    pub(crate) fn new() -> Self {
+        let p = std::env::temp_dir().join(format!("k2-scratch-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&p).expect("scratch dir");
+        Scratch(p)
+    }
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Hold the shared env lock WITHOUT changing anything — for tests that
 /// set their own (deliberately SHORT) `$HOME` through
 /// `k2_core::test_env::EnvVar`, or only need `$HOME` to stay put.

@@ -42,6 +42,9 @@ pub struct Instance {
     pub seed: String,
     pub health_path: String,
     pub probe_as: ProbeAs,
+    /// The check is a TCP accept (K5: an old `--cmd` service on the open
+    /// path).
+    pub probe_tcp: bool,
     pub drain_secs: u64,
 }
 
@@ -96,17 +99,23 @@ pub fn engine_for_app(app: &AppRow) -> Option<&'static dyn RuntimeEngine> {
     if app.is_process_exception() {
         return cfg!(target_os = "linux").then(|| super::process_exception::engine() as &'static dyn RuntimeEngine);
     }
-    if app.path != "guarded" {
-        // The relaxed container (open path) arrives in 0.46.1: refuse,
-        // never run it behind a different wall (AR24).
-        return None;
+    if app.path == "open" {
+        // S13: the open path's relaxed container. `open` + `process`
+        // without the owner's exception has no engine (AR24: never run an
+        // App behind a different wall than asked).
+        return match Isolation::parse(&app.isolation) {
+            Some(Isolation::Container) if cfg!(target_os = "linux") => Some(super::open::engine()),
+            _ => None,
+        };
     }
     engine_for(Isolation::parse(&app.isolation).unwrap_or(Isolation::Process))
 }
 
 /// The engine that runs an instance (by its handle).
 pub fn engine_of(h: &RunHandle) -> &'static dyn RuntimeEngine {
-    if super::guarded::owns(h) {
+    if super::open::owns(h) {
+        super::open::engine()
+    } else if super::guarded::owns(h) {
         super::guarded::engine()
     } else if super::process_exception::owns(h) {
         super::process_exception::engine()
@@ -256,6 +265,7 @@ fn instance_for(h: RunHandle, seed: &str) -> Instance {
         seed: seed.to_string(),
         health_path: m.as_ref().map(|m| m.health_path()).unwrap_or_else(|| "/".into()),
         probe_as: if m.as_ref().is_some_and(|m| m.wants_test_guest_probe()) { ProbeAs::TestGuest } else { ProbeAs::Anonymous },
+        probe_tcp: m.as_ref().is_some_and(|m| m.tcp_health()),
         drain_secs: m.as_ref().and_then(|m| m.host.drain_secs).unwrap_or(timings().drain_secs),
     }
 }
@@ -489,7 +499,9 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
     let _ = db(|c| store::set_started(c, dep, port, h.pid.map(i64::from)));
     let path = m.health_path();
     let gate = Duration::from_secs(m.host.health.as_ref().and_then(|h| h.timeout_secs).unwrap_or(t.deploy_timeout_secs));
-    let healthy = health::wait_healthy(
+    let tcp = m.tcp_health();
+    let healthy = health::wait_healthy_as(
+        tcp,
         port,
         &path,
         &headers,
@@ -507,6 +519,7 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
         seed: seed.to_string(),
         health_path: path,
         probe_as,
+        probe_tcp: tcp,
         drain_secs: m.host.drain_secs.unwrap_or(t.drain_secs),
     };
     go_live(&app, dep, inst, kind, &t);
@@ -572,7 +585,7 @@ fn probe(inst: &Instance, t: &Timings) -> bool {
         Ok(h) => h,
         Err(_) => return false,
     };
-    health::probe_once(inst.handle.port, &inst.health_path, &headers, Duration::from_millis(t.probe_timeout_ms)).healthy()
+    health::probe_as(inst.probe_tcp, inst.handle.port, &inst.health_path, &headers, Duration::from_millis(t.probe_timeout_ms)).healthy()
 }
 
 fn tick() {

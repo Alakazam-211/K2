@@ -5,9 +5,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const activateTab = vi.fn()
 vi.mock('@/stores/panels', () => ({ usePanelsStore: { getState: () => ({ activateTab }) } }))
 
+// The window's project list: K2 (`/Users/me/Alakazam Labs/K2`) and Sew; the
+// test sets which one is showing. `setActiveProject` holds its
+// "workspace is showing" callback until the test runs it.
+const projectsState = vi.hoisted(() => ({
+  projects: [
+    { id: 'p-k2', path: '/Users/me/Alakazam Labs/K2', workspaces: [{ id: 'w-k2' }] },
+    { id: 'p-sew', path: '/Users/me/sew', workspaces: [{ id: 'w-sew' }] },
+  ],
+  activeProjectId: 'p-k2' as string | null,
+  setActiveProject: null as unknown as (id: string | null, afterShown?: () => void) => void,
+}))
+const switched: Array<{ id: string | null; afterShown?: () => void }> = []
+projectsState.setActiveProject = (id, afterShown) => {
+  switched.push({ id, afterShown })
+}
+
 import { openThreadFileLink } from './thread-file-link-open'
 import { lineColToPos, onFileLineRequest, onFileTreeReveal, takeFileLine, takeFileTreeReveal } from './file-open-requests'
 import { Text } from '@codemirror/state'
+import { registerPrimaryRoomProjects, type PrimaryProjectsStore } from '@/stores/room'
+
+// The window's projects store, as the primary room reads it.
+registerPrimaryRoomProjects({
+  getState: () => projectsState,
+  getInitialState: () => projectsState,
+  subscribe: () => () => {},
+} as unknown as PrimaryProjectsStore)
 
 function fakeRoom(isPrimary = true) {
   const openFileAsTab = vi.fn()
@@ -19,6 +43,8 @@ function fakeRoom(isPrimary = true) {
 
 beforeEach(() => {
   activateTab.mockClear()
+  switched.length = 0
+  projectsState.activeProjectId = 'p-k2'
   vi.useRealTimers()
 })
 afterEach(() => vi.useRealTimers())
@@ -65,6 +91,64 @@ describe('openThreadFileLink', () => {
     openThreadFileLink(room, { input: 'src/', linkable: true, kind: 'directory', rel: 'src', path: '/ws/src' })
     expect(activateTab).not.toHaveBeenCalled()
     expect(takeFileTreeReveal('local', '/ws')).toBe('/ws/src')
+  })
+})
+
+describe('openThreadFileLink opens in the Thread\'s own workspace', () => {
+  const K2 = '/Users/me/Alakazam Labs/K2'
+  const link = {
+    input: 'crates/k2-daemon/src/push_routes.rs',
+    linkable: true,
+    kind: 'file',
+    rel: 'crates/k2-daemon/src/push_routes.rs',
+    path: `${K2}/crates/k2-daemon/src/push_routes.rs`,
+    root: K2,
+  } as const
+
+  it('the Thread\'s workspace is showing: the tab opens there at once', () => {
+    const { room, openFileAsTab } = fakeRoom()
+    openThreadFileLink(room, link, 40)
+    expect(switched).toEqual([])
+    expect(openFileAsTab).toHaveBeenCalledWith(link.path)
+    expect(takeFileLine('local', link.path)).toEqual({ line: 40 })
+  })
+
+  it('another workspace is showing: it switches to the Thread\'s, then opens the tab there', () => {
+    projectsState.activeProjectId = 'p-sew'
+    const { room, openFileAsTab } = fakeRoom()
+    openThreadFileLink(room, { ...link, root: `${K2}/` }, 40)
+    expect(switched.map((s) => s.id)).toEqual(['p-k2'])
+    // Nothing opens in Sew's tab strip while the switch runs.
+    expect(openFileAsTab).not.toHaveBeenCalled()
+    switched[0].afterShown?.()
+    expect(openFileAsTab).toHaveBeenCalledWith(link.path)
+    expect(takeFileLine('local', link.path)).toEqual({ line: 40 })
+  })
+
+  it('a folder in another workspace switches first, then reveals it', () => {
+    projectsState.activeProjectId = 'p-sew'
+    const { room } = fakeRoom()
+    openThreadFileLink(room, { input: 'crates/', linkable: true, kind: 'directory', rel: 'crates', path: `${K2}/crates`, root: K2 })
+    expect(activateTab).not.toHaveBeenCalled()
+    switched[0].afterShown?.()
+    expect(activateTab).toHaveBeenCalledWith('files')
+    expect(takeFileTreeReveal('local', K2)).toBe(`${K2}/crates`)
+  })
+
+  it('a Home room shows one workspace (the Thread\'s): never switches the window', () => {
+    projectsState.activeProjectId = 'p-sew'
+    const { room, openFileAsTab } = fakeRoom(false)
+    openThreadFileLink(room, link)
+    expect(switched).toEqual([])
+    expect(openFileAsTab).toHaveBeenCalledWith(link.path)
+  })
+
+  it('a root the window does not list opens in place', () => {
+    projectsState.activeProjectId = 'p-sew'
+    const { room, openFileAsTab } = fakeRoom()
+    openThreadFileLink(room, { ...link, root: '/elsewhere' })
+    expect(switched).toEqual([])
+    expect(openFileAsTab).toHaveBeenCalledWith(link.path)
   })
 })
 

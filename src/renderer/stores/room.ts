@@ -155,11 +155,39 @@ export type PrimaryProjectsStore = Pick<
     projects: ProjectWithWorkspaces[]
     activeProjectId: string | null
     activeWorkspaceId: string | null
+    /** The window's project switch; `afterShown` runs once the project's
+     *  workspace is showing. Optional so test stand-ins may leave it out. */
+    setActiveProject?: (id: string | null, afterShown?: () => void) => void
   }>,
   'getState' | 'getInitialState' | 'subscribe'
 >
 
 let primaryProjects: PrimaryProjectsStore | null = null
+
+/** The window's project for a workspace root (its path, trailing slash
+ *  ignored), whether it is the one showing, and a way to show it, then run
+ *  `afterShown`. Null when the window's server does not list that root or
+ *  the projects store is not loaded. */
+export function primaryProjectForRoot(root: string): {
+  showing: boolean
+  show: (afterShown: () => void) => void
+} | null {
+  if (!primaryProjects) return null
+  const trim = (p: string): string => (p.length > 1 ? p.replace(/\/+$/, '') : p)
+  const ps = primaryProjects.getState()
+  const want = trim(root)
+  const project = ps.projects.find((p) => trim(p.path) === want)
+  if (!project) return null
+  const setActive = ps.setActiveProject
+  return {
+    showing: project.id === ps.activeProjectId,
+    show: (afterShown) => {
+      // A project with no workspace never reaches "showing": open in place.
+      if (!setActive || !project.workspaces?.[0]) return afterShown()
+      setActive(project.id, afterShown)
+    },
+  }
+}
 
 /** projects.ts registers the window's projects store. */
 export function registerPrimaryRoomProjects(store: PrimaryProjectsStore): void {

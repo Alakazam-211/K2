@@ -332,12 +332,15 @@ interface ProjectsState {
   fetchProjects: () => Promise<void>
   addProject: (path: string, opts?: { seedWiki?: boolean; seedAgentsMd?: boolean; fanout?: boolean }) => Promise<void>
   removeProject: (id: string) => Promise<void>
-  setActiveProject: (id: string | null) => void
+  /** `afterShown` runs once the project's workspace is showing (its tabs
+   *  restored), e.g. to open a file tab in it (a Thread file link from
+   *  another workspace's Thread). Not called when the leave guard cancels. */
+  setActiveProject: (id: string | null, afterShown?: () => void) => void
   setActiveWorkspace: (projectId: string, workspaceId: string) => void
   /** Internal: the unguarded project-switch body. Do not call directly —
    *  use `setActiveProject`, which fronts it with the unsaved-changes leave
    *  guard. Exposed on the store only so the guard can defer it. */
-  _doSetActiveProject: (id: string | null) => void
+  _doSetActiveProject: (id: string | null, afterShown?: () => void) => void
   /** Internal: the unguarded workspace-switch body. See `_doSetActiveProject`. */
   _doSetActiveWorkspace: (projectId: string, workspaceId: string) => void
   reorderProjects: (ids: string[]) => Promise<void>
@@ -704,7 +707,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     }
   },
 
-  setActiveProject: (id: string | null) => {
+  setActiveProject: (id: string | null, afterShown?: () => void) => {
     const state = get()
     const tabsStore = useTabsStore.getState()
 
@@ -722,19 +725,19 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
           if (choice === 'cancel') return // stay put
           if (choice === 'discard') tabsStore.markTabsDiscardPending(dirtyIds)
           // 'save' / 'discard' → proceed with the switch.
-          get()._doSetActiveProject(id)
+          get()._doSetActiveProject(id, afterShown)
         })
         return
       }
     }
 
-    get()._doSetActiveProject(id)
+    get()._doSetActiveProject(id, afterShown)
   },
 
   // The actual project-switch body. Extracted so the dirty-tab leave guard
   // in `setActiveProject` can defer it behind an async modal decision while
   // the common (no-dirty) path runs it synchronously with zero added latency.
-  _doSetActiveProject: (id: string | null) => {
+  _doSetActiveProject: (id: string | null, afterShown?: () => void) => {
     // [ws-switch] t0 for the retention show→painted metric (dev-only).
     markWorkspaceSwitch()
     const state = get()
@@ -789,6 +792,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         void tabsStore.restoreWorkspace(newKey, cwd).then(() => {
           ensurePinnedAgentTabForMode(project.agentMode, project.path)
           applyWorkspaceSwitchFocus()
+          afterShown?.()
         })
         applyWorkspaceSwitchFocus()
       }

@@ -10,8 +10,11 @@
 //     follows symlinks, and answers linkable (kind + path) or a bare
 //     "not linkable" for anything missing or outside. Candidates are
 //     batched (one request per tick per Thread) and cached per Thread.
+//   - A server without that route (before 0.46.1) answers from the routes
+//     it has (`lib/file-link-legacy.ts`), so its Threads link too.
 //   - `FileLink` draws a linkable candidate as a keyboard-reachable link;
-//     anything else stays plain text.
+//     anything else stays plain text. A click opens the file in the
+//     Thread's own workspace (`lib/thread-file-link-open.ts`).
 //
 // Only a message rendered under a `FileLinkProvider` gets links; every
 // other `ChatMessageBody` (tickets, project chat, Grok Bots, Zen) is
@@ -29,7 +32,8 @@ import {
   type ReactNode,
 } from 'react'
 import { findFilePaths, matchWholeFilePath } from '@/lib/file-link-match'
-import { daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { isMissingResolveLinksRoute, legacyResolveLinks, type LegacyResolveDeps } from '@/lib/file-link-legacy'
 import type { ServerScope } from '@/kessel/server-scope'
 
 /** One daemon answer (`k2_core::file_links::LinkAnswer`). */
@@ -39,6 +43,10 @@ export interface FileLinkAnswer {
   kind?: 'file' | 'directory'
   rel?: string
   path?: string
+  /** The Thread workspace's root as the server named it (set by the
+   *  resolver on a linkable answer), so a click opens the file in THAT
+   *  workspace even when the window shows another one. */
+  root?: string
 }
 
 interface ResolveLinksResponse {
@@ -116,7 +124,8 @@ export class FileLinkResolver {
         const byInput = new Map((res.links ?? []).map((a) => [a.input, a]))
         for (const p of batch) {
           const a = byInput.get(p)
-          this.answers.set(p, a ?? { input: p, linkable: false })
+          const root = typeof res.root === 'string' && res.root ? res.root : undefined
+          this.answers.set(p, a ? (a.linkable && root ? { ...a, root } : a) : { input: p, linkable: false })
         }
         const prefixes = Array.isArray(res.prefixes) ? res.prefixes.filter((p) => typeof p === 'string') : []
         if (prefixes.join('\n') !== this.prefixList.join('\n')) this.prefixList = prefixes
@@ -132,9 +141,57 @@ export class FileLinkResolver {
   }
 }
 
-/** The real transport: the room's own server. */
+/** The real transport: the room's own server. A server without
+ *  `fs/resolve-links` (before 0.46.1) answers from the routes it has
+ *  (`lib/file-link-legacy.ts`: workspace/resolve, fs/info, fs/read-dir), so
+ *  its paths still open instead of staying dead text. */
 export function scopeFileLinkTransport(scope: ServerScope): FileLinkTransport {
-  return (workspace, paths) => daemonCliPost<ResolveLinksResponse>(scope, 'fs/resolve-links', { workspace, paths })
+  const roots = new Map<string, Promise<string>>()
+  let home: Promise<string | null> | null = null
+  const deps: LegacyResolveDeps = {
+    resolveWorkspace: (workspace) => {
+      let p = roots.get(workspace)
+      if (!p) {
+        p = daemonCliGet<{ path?: unknown }>(scope, 'workspace/resolve', { q: workspace }).then((r) => {
+          if (typeof r?.path !== 'string' || !r.path) throw new Error(`workspace not found: ${workspace}`)
+          return r.path
+        })
+        p.catch(() => roots.delete(workspace))
+        roots.set(workspace, p)
+      }
+      return p
+    },
+    home: () => {
+      home ??= daemonCliGet<{ home?: unknown }>(scope, 'fs/info').then((r) =>
+        typeof r?.home === 'string' && r.home ? r.home : null,
+      )
+      return home
+    },
+    readDir: (path) =>
+      daemonCliGet<Array<{ name: string; isDirectory: boolean }>>(scope, 'fs/read-dir', { path, show_hidden: '1' }),
+  }
+  const post = (workspace: string, paths: string[]): Promise<ResolveLinksResponse> =>
+    daemonCliPost<ResolveLinksResponse>(scope, 'fs/resolve-links', { workspace, paths })
+  // The first request finds out whether the server has the route; calls
+  // made while it is in flight wait for that answer instead of each
+  // probing the server again.
+  let hasRoute: Promise<boolean> | null = null
+  return async (workspace, paths) => {
+    if (hasRoute === null) {
+      const first = post(workspace, paths)
+      hasRoute = first.then(
+        () => true,
+        (err: unknown) => !isMissingResolveLinksRoute(err),
+      )
+      try {
+        return await first
+      } catch (err) {
+        if (!isMissingResolveLinksRoute(err)) throw err
+        return legacyResolveLinks(deps, workspace, paths)
+      }
+    }
+    return (await hasRoute) ? post(workspace, paths) : legacyResolveLinks(deps, workspace, paths)
+  }
 }
 
 interface FileLinkContextValue {

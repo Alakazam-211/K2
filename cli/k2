@@ -13926,6 +13926,12 @@ k2 compute — run commands on your own machines (compute nodes)
 
 Agents:
   k2 compute nodes [--json]                  nodes granted to this workspace
+  k2 compute status [--json]                 every node at a glance: state, waits
+                 (foreign locks), run/queue and the jobs, free CPU/mem, load,
+                 disk free vs floor; plus this controller (disk, Time Machine
+                 local snapshots). Hand-run lock files, cache sizes and pinned
+                 long-runners need node reporting: compute B (0.46.2+).
+                 (k2 compute status <job> is get)
   k2 compute info <node> [--json]
   k2 compute run <node>|--any [--os linux] [--arch x86_64] [--label k=v]
                  [--detach] [--dirty] [--sha REV] [--no-source]
@@ -14712,6 +14718,82 @@ print("RC %d %s" % (rc or 0, " ".join(i for i in failed_ids if i)))' "$dir")"
     exit "${rc:-3}"
 }
 
+# k2 compute status [--json]: one block per node (state, waits such as a
+# foreign lock, run/queue, free CPU/memory under the caps, load, disk free
+# against the floor, the jobs running and queued) plus this controller
+# machine (disk, Time Machine local snapshots). Only what the controller
+# already knows; hand-run lock files, cache sizes and pinned long-runners
+# need node reporting (compute B, 0.46.2+).
+cmd_compute_status() {
+    local as_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            *) echo "usage: k2 compute status [--json]   (k2 compute status <job> = get)" >&2; exit 2 ;;
+        esac
+    done
+    local q="detail=1" sws
+    sws="$(_compute_ws "")"
+    [ -n "$sws" ] && q="$q&workspace=$(urlencode "$sws")"
+    _compute_call GET /cli/compute/nodes "$q"
+    [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+def gb(b):
+    return "-" if b is None else "%.0f GB" % (b / (1 << 30))
+def cores(m):
+    return "%g" % round((m or 0) / 1000, 1)
+def mmss(s):
+    return "-" if s is None else ("%dm%02ds" % (s // 60, s % 60) if s < 3600 else "%dh%02dm" % (s // 3600, (s % 3600) // 60))
+rows = v.get("nodes") or []
+if not rows:
+    print("(no compute nodes)")
+for n in rows:
+    st = n.get("status") or {}
+    parts = ["%-14s" % n.get("name"), "%s-%s" % (n.get("os") or "?", n.get("arch") or "?"), st.get("state") or "?"]
+    if st.get("controllerPause"):
+        parts.append("(server: %s)" % st["controllerPause"])
+    w = st.get("waiting")
+    if w:
+        parts.append("held: %s (%s)" % (w.get("code"), w.get("message")))
+    if st.get("unavailable"):
+        parts.append("unavailable: " + ",".join(st["unavailable"]))
+    parts.append("run %d/%s" % (len(st.get("running") or []), st.get("parallelMax") if st.get("parallelMax") is not None else "?"))
+    parts.append("queue %d" % len(st.get("queued") or []))
+    f, c = st.get("free") or {}, st.get("caps") or {}
+    if f:
+        parts.append("cpu %s/%s free" % (cores(f.get("cpuMillis")), cores(c.get("cpuMillis"))))
+        parts.append("mem %.1f/%s free" % ((f.get("memBytes") or 0) / (1 << 30), gb(c.get("memBytes"))))
+    if st.get("load"):
+        parts.append("load " + " ".join("%.1f" % x for x in st["load"]))
+    d = st.get("disk") or {}
+    if d.get("freeBytes") is not None:
+        s = "disk %s free" % gb(d["freeBytes"])
+        if d.get("floorBytes") is not None:
+            s += " (floor %s%s)" % (gb(d["floorBytes"]), ", default" if d.get("floorFrom") == "default" else "")
+        if d.get("belowFloor"):
+            s += " BELOW FLOOR"
+        parts.append(s)
+    print("  ".join(parts))
+    for j in st.get("running") or []:
+        print("    running %-9s %-8s %-12s %s" % (j.get("short") or "-", mmss(j.get("elapsedSecs")), j.get("workspace") or "(other)", j.get("argv") or ""))
+    for j in st.get("queued") or []:
+        print("    queued  %-9s #%-3s %-8s %-12s %s%s" % (j.get("short") or "-", j.get("position") or "?", mmss(j.get("ageSecs")), j.get("workspace") or "(other)",
+            j.get("argv") or "", "  (" + j["reason"] + ")" if j.get("reason") else ""))
+m = v.get("controllerMachine") or {}
+if m:
+    s = "controller %s: disk %s free of %s" % (m.get("name"), gb(m.get("diskFreeBytes")), gb(m.get("diskTotalBytes")))
+    if m.get("tmLocalSnapshots") is not None:
+        s += " · Time Machine local snapshots: %d" % m["tmLocalSnapshots"]
+    elif m.get("tmLocalSnapshotsError"):
+        s += " · Time Machine local snapshots: unknown (%s)" % m["tmLocalSnapshotsError"]
+    print(s)
+if v.get("notYet"):
+    print("not yet: " + v["notYet"])'
+    exit 0
+}
+
 cmd_compute_node() {
     local sub="${1:-}"
     shift 2>/dev/null || true
@@ -15253,6 +15335,10 @@ cmd_compute() {
             _compute_render jobs
             ;;
         get|status)
+            # `status` with no job: every node at a glance; `status <job>` = get.
+            if [ "$sub" = "status" ] && { [ -z "${1:-}" ] || [ "${1#-}" != "$1" ]; }; then
+                cmd_compute_status "$@"
+            fi
             [ -n "${1:-}" ] || { echo "usage: k2 compute get <job>" >&2; exit 2; }
             _CP_404_EXIT=4 _compute_call GET /cli/compute/jobs/get "job=$(urlencode "$1")"
             [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }

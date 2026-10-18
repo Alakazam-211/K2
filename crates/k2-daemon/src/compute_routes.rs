@@ -572,6 +572,8 @@ fn nodes_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Valu
         }
     };
     let show_sas = who.is_owner();
+    // `k2 compute status`: per node what the controller already knows.
+    let detail = params.get("detail").is_some_and(|d| d == "1" || d == "true");
     let nodes: Vec<_> = rows
         .iter()
         .map(|n| {
@@ -580,6 +582,9 @@ fn nodes_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Valu
                 let db = k2_core::db::shared();
                 let conn = db.lock();
                 v["grant"] = serde_json::to_value(store::grant(&conn, &n.id, ws)).unwrap_or_default();
+            }
+            if detail {
+                v["status"] = node_status(who, n);
             }
             v
         })
@@ -591,12 +596,112 @@ fn nodes_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Valu
     };
     // `ticketSupported`: this server trusts a one-click ticket key, so a
     // machine on the same Connect account can join it without a code.
-    Ok(serde_json::json!({
+    let mut out = serde_json::json!({
         "nodes": nodes,
         "waitingCodes": codes,
         "controller": compute_ws::controller_label(),
         "ticketSupported": compute::ticket::supported(),
-    }))
+    });
+    if detail {
+        out["controllerMachine"] = controller_machine();
+        out["notYet"] = "hand-run lock files (sew-ci, k2-release, runner) with holder and age, build-cache size against its cap, \
+            and pinned long-runners need node reporting: they come with compute B (0.46.2+). Locks a node already refuses \
+            on show as waiting: foreign_lock."
+            .into();
+    }
+    Ok(out)
+}
+
+/// What `status` shows for one node, from what the controller already has:
+/// the live offer (control, the node-wide refusal such as a foreign lock,
+/// free CPU/memory under the caps, free disk), the last health frame (load,
+/// disks), the cached policy (disk floor) and the job table.
+fn node_status(who: &Who, n: &store::NodeRow) -> serde_json::Value {
+    let now = compute::now();
+    let (online, route, live) = compute_ws::live_view(&n.id);
+    let offer = live.or_else(|| n.last_offer.clone());
+    let decision = compute_ws::decision_for(&n.id);
+    let (active, queued, health, cols) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        (
+            store::jobs_in_states(&conn, &n.id, store::ACTIVE_STATES),
+            store::jobs_in_states(&conn, &n.id, &["queued"]),
+            compute::admin::health(&conn, &n.id),
+            compute::admin::admin_cols(&conn, &n.id),
+        )
+    };
+    let viewer = who.passport();
+    let running: Vec<serde_json::Value> = active.iter().map(|r| job_entry(viewer, r, &decision, now)).collect();
+    let mut waiting_jobs: Vec<(usize, serde_json::Value)> = queued
+        .iter()
+        .map(|r| (decision.waiting.get(&r.id).map(|(p, _)| *p).unwrap_or(usize::MAX), job_entry(viewer, r, &decision, now)))
+        .collect();
+    waiting_jobs.sort_by_key(|(p, _)| *p);
+    let state = if n.state == "pending" {
+        "pending".to_string()
+    } else if !online {
+        "offline".to_string()
+    } else {
+        match offer.as_ref().map(|o| o.control) {
+            Some(c) if c != Control::Active => c.as_str().to_string(),
+            _ => format!("online/{}", route.unwrap_or("?")),
+        }
+    };
+    let gib = 1u64 << 30;
+    let home_disk = health.as_ref().and_then(|(_, h)| h.disks.iter().find(|d| d.name == "node_home").or_else(|| h.disks.first()).cloned());
+    let policy_floor = cols.policy.as_ref().and_then(|p| p.get("disk_floor_gb")).and_then(|g| g.as_u64()).map(|g| g * gib);
+    let (floor, floor_from) = match (policy_floor, &home_disk) {
+        (Some(f), _) => (Some(f), Some("policy")),
+        // The node's own default: max(10% of its disk, 30 GB).
+        (None, Some(d)) if d.total_bytes > 0 => (Some((d.total_bytes / 10 / gib).max(30) * gib), Some("default")),
+        _ => (None, None),
+    };
+    let disk_free = offer.as_ref().map(|o| o.free.disk_free_bytes).or(home_disk.as_ref().map(|d| d.free_bytes));
+    serde_json::json!({
+        "state": state,
+        "controllerPause": n.controller_pause,
+        "waiting": offer.as_ref().and_then(|o| o.refusal.as_ref()).map(|r| serde_json::json!({"code": r.code, "message": r.message})),
+        "unavailable": offer.as_ref().filter(|o| !o.availability.ok).map(|o| o.availability.reasons.clone()),
+        "disk": {
+            "freeBytes": disk_free,
+            "floorBytes": floor,
+            "floorFrom": floor_from,
+            "belowFloor": match (disk_free, floor) { (Some(f), Some(fl)) => Some(f < fl), _ => None },
+        },
+        "free": offer.as_ref().map(|o| serde_json::json!({"cpuMillis": o.free.cpu_millis, "memBytes": o.free.mem_bytes})),
+        "caps": offer.as_ref().map(|o| serde_json::json!({"cpuMillis": o.caps.cpu_millis, "memBytes": o.caps.mem_bytes, "hard": o.caps.hard})),
+        "parallelMax": offer.as_ref().map(|o| o.parallel_max),
+        "load": health.as_ref().and_then(|(_, h)| h.load_milli).map(|l| l.map(|x| x as f64 / 1000.0)),
+        "memAvailableBytes": health.as_ref().and_then(|(_, h)| h.mem_available_bytes),
+        "healthAt": health.as_ref().map(|(at, _)| *at),
+        "running": running,
+        "queued": waiting_jobs.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
+    })
+}
+
+/// The controller machine's own row for `status`: free disk on the home
+/// volume and, on macOS, how many Time Machine local snapshots hold space
+/// (`tmutil listlocalsnapshots /`).
+fn controller_machine() -> serde_json::Value {
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
+    let hw = compute::advertise::probe(&home);
+    let mut v = serde_json::json!({
+        "name": compute_ws::controller_label(),
+        "diskFreeBytes": hw.disk_free_bytes,
+        "diskTotalBytes": hw.disk_total_bytes,
+    });
+    if cfg!(target_os = "macos") {
+        match std::process::Command::new("tmutil").args(["listlocalsnapshots", "/"]).stdin(std::process::Stdio::null()).output() {
+            Ok(o) if o.status.success() => {
+                let n = String::from_utf8_lossy(&o.stdout).lines().filter(|l| l.contains("com.apple.TimeMachine")).count();
+                v["tmLocalSnapshots"] = n.into();
+            }
+            Ok(o) => v["tmLocalSnapshotsError"] = String::from_utf8_lossy(&o.stderr).trim().chars().take(200).collect::<String>().into(),
+            Err(e) => v["tmLocalSnapshotsError"] = e.to_string().into(),
+        }
+    }
+    v
 }
 
 fn node_visible(who: &Who, n: &store::NodeRow) -> R<()> {
@@ -1577,6 +1682,34 @@ fn job_summary(j: &store::JobRow) -> serde_json::Value {
     v
 }
 
+/// One job as another job's queue view (or `status`) shows it. `viewer` =
+/// the caller's passport: it sees ids and commands only for its own
+/// workspace; other workspaces' jobs carry state and age only.
+fn job_entry(viewer: Option<(&str, &str)>, r: &store::JobRow, decision: &scheduler::Decision, now: i64) -> serde_json::Value {
+    let mut e = serde_json::json!({"state": r.state, "ageSecs": (now - r.created_at).max(0)});
+    if viewer.is_none_or(|(ws, _)| ws == r.workspace_id) {
+        let mut argv = r.argv.join(" ");
+        if argv.chars().count() > 80 {
+            argv = argv.chars().take(79).collect::<String>() + "…";
+        }
+        e["short"] = compute::message::short(&r.id).into();
+        e["workspace"] = ws_handle(&r.workspace_id).into();
+        e["mine"] = viewer.is_some_and(|(_, sid)| r.session_id.as_deref() == Some(sid)).into();
+        e["argv"] = argv.into();
+    } else {
+        e["workspace"] = serde_json::Value::Null;
+        e["mine"] = false.into();
+    }
+    if let Some(t) = r.assigned_at.or(r.started_at) {
+        e["elapsedSecs"] = (now - t).max(0).into();
+    }
+    if let Some((p, w)) = decision.waiting.get(&r.id) {
+        e["reason"] = w.code.clone().into();
+        e["position"] = (*p).into();
+    }
+    e
+}
+
 /// The queue view of a queued job (prd-k2-compute-dx-v1 C21, without ETAs
 /// in 0.46.1): its position of how many, why it waits, and what is ahead
 /// of it — the node's active jobs plus the queued jobs in front (FIFO by
@@ -1597,29 +1730,7 @@ fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Decision) -> O
         )
     };
     let offer = compute_ws::live_view(&j.node_id).2.or(node_offer);
-    let entry = |r: &store::JobRow| -> serde_json::Value {
-        let mut e = serde_json::json!({"state": r.state, "ageSecs": (now - r.created_at).max(0)});
-        if viewer.is_none_or(|(ws, _)| ws == r.workspace_id) {
-            let mut argv = r.argv.join(" ");
-            if argv.chars().count() > 80 {
-                argv = argv.chars().take(79).collect::<String>() + "…";
-            }
-            e["short"] = compute::message::short(&r.id).into();
-            e["workspace"] = ws_handle(&r.workspace_id).into();
-            e["mine"] = viewer.is_some_and(|(_, sid)| r.session_id.as_deref() == Some(sid)).into();
-            e["argv"] = argv.into();
-        } else {
-            e["workspace"] = serde_json::Value::Null;
-            e["mine"] = false.into();
-        }
-        if let Some(t) = r.assigned_at.or(r.started_at) {
-            e["elapsedSecs"] = (now - t).max(0).into();
-        }
-        if let Some((_, w)) = decision.waiting.get(&r.id) {
-            e["reason"] = w.code.clone().into();
-        }
-        e
-    };
+    let entry = |r: &store::JobRow| job_entry(viewer, r, decision, now);
     let mut ahead: Vec<serde_json::Value> = active.iter().map(&entry).collect();
     let mut before: Vec<(usize, &store::JobRow)> = queued
         .iter()

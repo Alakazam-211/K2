@@ -1410,6 +1410,69 @@ async fn queue_view_shows_whats_ahead_and_the_numbers() {
     drop(env);
 }
 
+/// `k2 compute status` (nodes?detail=1): per node state, a foreign-lock
+/// wait, running and queued jobs, free CPU/memory and caps, disk free with
+/// a floor; plus the controller machine's own row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn status_detail_shows_waits_jobs_disk_and_the_controller() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "dxa-status");
+    let (agent, _) = passport(&ws);
+    let (running, _) = online_node_for(&env, port, "dxa-status", &ws).await;
+    let mut body = run_body("dxa-status", &["sleep", "20"], "client-dxa-status-001");
+    body["noSource"] = json!(true);
+    let r = post(port, "/cli/compute/run", &agent, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let long = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    wait_state(port, &agent, &long, "running").await;
+    let status_of = |tok: String| async move {
+        let r = get(port, "/cli/compute/nodes", &tok, "detail=1").await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        j(&r)
+    };
+    let v = status_of(agent.clone()).await;
+    let row = v["nodes"].as_array().expect("nodes").iter().find(|n| n["name"] == "dxa-status").cloned().expect("row");
+    let st = &row["status"];
+    assert_eq!(st["state"], "online/loopback", "{st}");
+    assert_eq!(st["running"][0]["short"], &long[..8], "{st}");
+    assert!(st["free"]["cpuMillis"].as_u64().is_some() && st["caps"]["memBytes"].as_u64().is_some(), "{st}");
+    assert!(st["disk"]["freeBytes"].as_u64().is_some_and(|b| b > 0), "{st}");
+    assert!(st["waiting"].is_null(), "{st}");
+    let m = &v["controllerMachine"];
+    assert!(m["diskFreeBytes"].as_u64().is_some_and(|b| b > 0) && m["diskTotalBytes"].as_u64().is_some_and(|b| b > 0), "{m}");
+    if cfg!(target_os = "macos") {
+        assert!(m.get("tmLocalSnapshots").is_some() || m.get("tmLocalSnapshotsError").is_some(), "{m}");
+    }
+    assert!(v["notYet"].as_str().is_some_and(|s| s.contains("compute B")), "{v}");
+    // A foreign lock on the node shows as the node's wait.
+    let lock = env.home.join("release.lock");
+    std::fs::write(&lock, "held").expect("lock");
+    std::fs::write(
+        running.layout.policy(),
+        format!(
+            "availability = \"always\"\nforeign_locks = [\"{}\"]\nwrite_smoke_lock = \"\"\ndisk_floor_gb = 0\nmax_parallel = 2\n",
+            lock.display()
+        ),
+    )
+    .expect("policy");
+    let a = agent.clone();
+    wait_for("foreign lock in status", 20, move || {
+        let a = a.clone();
+        Box::pin(async move {
+            let r = get(port, "/cli/compute/nodes", &a, "detail=1").await;
+            j(&r)["nodes"].as_array().is_some_and(|ns| ns.iter().any(|n| n["status"]["waiting"]["code"] == "foreign_lock"))
+        })
+    })
+    .await;
+    let r = post(port, "/cli/compute/jobs/cancel", OWNER, json!({"job": long})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    stop_node(port, "dxa-status", running).await;
+    drop(env);
+}
+
 /// A8: a --timeout over the grant is refused before anything is bundled,
 /// naming the whole grant and the owner's command (or the default when
 /// there's no grant); queue_full names the grant too; a mem_cap kill gets

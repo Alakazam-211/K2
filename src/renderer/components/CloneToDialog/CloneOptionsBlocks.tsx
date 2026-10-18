@@ -1,5 +1,7 @@
 import React from 'react'
 
+import { Button, Input, SquareCheckbox, SquareRadio } from '@/components/ui'
+import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { targetOf, useCloneToDialogStore } from '../../stores/clone-to-dialog'
 import type { CloneUnpackResult } from '../../lib/clone-to'
 import type { CloneVaultOutcome } from '../../lib/clone-vault'
@@ -18,7 +20,9 @@ import {
 // `.env` files option (D4, needs a person confirm) and the password field a
 // confirm asks for. All state lives in the clone-to-dialog store.
 
-function Tick({ checked, onChange, children, testId, disabled }: {
+/** A ticked option: the app's SquareCheckbox with its label (the shared
+ *  control Settings uses, not a one-off). */
+export function Tick({ checked, onChange, children, testId, disabled }: {
   checked: boolean
   onChange: (v: boolean) => void
   children: React.ReactNode
@@ -26,31 +30,25 @@ function Tick({ checked, onChange, children, testId, disabled }: {
   disabled?: boolean
 }): React.JSX.Element {
   return (
-    <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
-      <input
-        type="checkbox"
+    <label className={`flex items-start gap-2 select-none no-drag ${disabled ? 'opacity-50' : 'cursor-pointer'}`}>
+      <SquareCheckbox
         checked={checked}
         disabled={disabled}
         data-testid={testId}
         onChange={(e) => onChange(e.target.checked)}
-        className="peer sr-only"
+        className="mt-0.5 flex-shrink-0"
       />
-      <span
-        aria-hidden="true"
-        className="mt-0.5 w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-      >
-        {checked && (
-          <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-          </svg>
-        )}
-      </span>
       <span className="text-xs text-[var(--color-text-secondary)] leading-relaxed">{children}</span>
     </label>
   )
 }
 
 const muted = 'text-[11px] text-[var(--color-text-muted)] leading-relaxed'
+
+/** The dropdown's string value for a Thread window (null = all). */
+function sinceValue(days: number | null): string {
+  return days === null ? 'all' : String(days)
+}
 
 export function ThreadBlock(): React.JSX.Element {
   const bring = useCloneToDialogStore((s) => s.bringThread)
@@ -69,23 +67,15 @@ export function ThreadBlock(): React.JSX.Element {
         {people.length > 0 ? `Includes messages from: ${people.join(', ')}. ` : ''}Chatter never travels.
       </p>
       {bring && (
-        <div className={`${muted} pl-[22px] flex items-center gap-1.5`}>
+        <div className={`${muted} pl-[22px] flex items-center gap-2`} data-testid="clone-since">
           <span>Only the last</span>
-          {THREAD_SINCE_OPTIONS.map((o) => (
-            <button
-              key={o.label}
-              type="button"
-              data-testid={`clone-since-${o.value ?? 'all'}`}
-              onClick={() => setSinceDays(o.value)}
-              className={`px-1.5 py-0.5 border no-drag cursor-pointer ${
-                sinceDays === o.value
-                  ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                  : 'border-[var(--color-border)] text-[var(--color-text-muted)]'
-              }`}
-            >
-              {o.label}
-            </button>
-          ))}
+          <SettingDropdown
+            ariaLabel="How much Thread history to bring"
+            menuAlign="left"
+            value={sinceValue(sinceDays)}
+            options={THREAD_SINCE_OPTIONS.map((o) => ({ value: sinceValue(o.value), label: o.label }))}
+            onChange={(v) => setSinceDays(v === 'all' ? null : Number(v))}
+          />
         </div>
       )}
     </div>
@@ -132,9 +122,8 @@ export function SecretsBlock({ pull }: { pull: boolean }): React.JSX.Element | n
             {CHOICES.map((c) => {
               const disabled = c.value === 'copy' && !canCopyRow(row, callerCanCopy)
               return (
-                <label key={c.value} className={`flex items-center gap-1 no-drag ${disabled ? 'opacity-40' : 'cursor-pointer'}`}>
-                  <input
-                    type="radio"
+                <label key={c.value} className={`flex items-center gap-1.5 no-drag ${disabled ? 'opacity-40' : 'cursor-pointer'}`}>
+                  <SquareRadio
                     name={`clone-secret-${row.name}`}
                     value={c.value}
                     data-testid={`clone-secret-${row.name}-${c.value}`}
@@ -198,7 +187,7 @@ export function PasswordPromptBlock(): React.JSX.Element | null {
         {prompt.method === 'connect-password' ? 'Your login password' : 'Vault password'} to confirm: {prompt.label}
       </p>
       <div className="flex gap-2">
-        <input
+        <Input
           ref={ref}
           type="password"
           autoFocus
@@ -208,14 +197,14 @@ export function PasswordPromptBlock(): React.JSX.Element | null {
             if (e.key === 'Enter') submit()
             if (e.key === 'Escape') answer(null)
           }}
-          className="flex-1 px-2 py-1 text-xs bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+          className="flex-1"
         />
-        <button type="button" onClick={submit} className="px-2 py-1 text-[11px] border border-[var(--color-border)] no-drag cursor-pointer">
+        <Button variant="default" onClick={submit}>
           Confirm
-        </button>
-        <button type="button" onClick={() => answer(null)} className="px-2 py-1 text-[11px] text-[var(--color-text-muted)] no-drag cursor-pointer">
+        </Button>
+        <Button variant="ghost" onClick={() => answer(null)}>
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   )

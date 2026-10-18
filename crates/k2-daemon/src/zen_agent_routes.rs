@@ -12,6 +12,14 @@
 //! | GET  proposals, proposals/show| yes    | yes                   | yes         |
 //! | POST proposals/approve        | yes    | yes (audited)         | 403         |
 //! | POST proposals/reject         | yes    | yes (audited)         | own only (withdraw) |
+//! | POST widget/folder/put        | writes | writes (audited)      | proposes (code files, one per file) |
+//! | POST widget/folder/check, garden/check | yes | yes            | yes (writes nothing) |
+//! | POST widget/preview           | yes    | yes (audited)         | 403     |
+//!
+//! The widget dev loop (0.46.1 S3, no migration): a whole staged folder in
+//! one body (`k2 zen widget put <name> --dir`, `k2 zen validate --dir`,
+//! `k2 zen widget preview --dir`), read by the CLI, never by the daemon
+//! from a path. A preview lands on K2's own "Widget preview" Garden only.
 //!
 //! "The switch" is "Manage Gardens and data sources" (`gardens_manage`,
 //! [`crate::gardens_manage`]). A write is checked before it lands: the
@@ -22,21 +30,34 @@
 //! `proposal_stale`). Nothing here writes zen.toml, themes, sync state,
 //! `.defaults/` or a template.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::Deserialize;
 use serde_json::{json, Value as J};
 
 use k2_core::zen::agent_edit::{self, NewProposal, Proposal, ProposalKind};
+use k2_core::zen::widget_folder::{self, StagedFile};
 use k2_core::zen::{ZenError, ZenFiles};
 
 use crate::cli_response::CliResponse;
 use crate::sidecar_routes::Caller;
 
-pub const POST_ROUTES: &[&str] =
-    &["/cli/zen/garden/put", "/cli/zen/proposals/approve", "/cli/zen/proposals/reject", "/cli/zen/widget/put"];
+pub const POST_ROUTES: &[&str] = &[
+    "/cli/zen/garden/check",
+    "/cli/zen/garden/put",
+    "/cli/zen/proposals/approve",
+    "/cli/zen/proposals/reject",
+    "/cli/zen/widget/folder/check",
+    "/cli/zen/widget/folder/put",
+    "/cli/zen/widget/preview",
+    "/cli/zen/widget/put",
+];
 
 pub const GET_ROUTES: &[&str] = &["/cli/zen/proposals", "/cli/zen/proposals/show"];
+
+/// The widget dev loop's folder routes (0.46.1 S3): a whole staged folder
+/// in one body, so they take up to `widget_folder::MAX_FOLDER_BODY`.
+pub const FOLDER_ROUTES: &[&str] = &["/cli/zen/widget/folder/check", "/cli/zen/widget/folder/put", "/cli/zen/widget/preview"];
 
 pub fn is_route(p: &str) -> bool {
     POST_ROUTES.contains(&p) || GET_ROUTES.contains(&p)
@@ -155,7 +176,11 @@ pub fn handle(path: &str, owner_token: bool, caller: &Caller, params: &HashMap<S
     let r = role(owner_token, caller);
     match path {
         "/cli/zen/garden/put" => garden_put(r, caller, body),
+        "/cli/zen/garden/check" => garden_check(r, body),
         "/cli/zen/widget/put" => widget_put(r, caller, body),
+        "/cli/zen/widget/folder/check" => folder_check(body),
+        "/cli/zen/widget/folder/put" => folder_put(r, caller, body),
+        "/cli/zen/widget/preview" => preview(r, caller, body),
         "/cli/zen/proposals" => list(params),
         "/cli/zen/proposals/show" => show(params),
         "/cli/zen/proposals/approve" => approve(r, caller, body),
@@ -288,6 +313,222 @@ fn widget_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
             };
             propose(caller, ProposalKind::Widget, &name, Some(&b.file), &b.text, base.as_deref(), note.as_deref())
         }
+    }
+}
+
+// ── the widget dev loop (0.46.1 S3) ─────────────────────────────────────
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GardenCheck {
+    garden: String,
+    text: String,
+}
+
+/// `{widget?, fallback?, files}`: `widget` names it, else the manifest's
+/// `id`, else `fallback` (the staged folder's own name, from the CLI).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FolderCheck {
+    #[serde(default)]
+    widget: Option<String>,
+    #[serde(default)]
+    fallback: Option<String>,
+    files: Vec<StagedFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FolderPut {
+    widget: String,
+    files: Vec<StagedFile>,
+    #[serde(default)]
+    prune: bool,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreviewBody {
+    #[serde(default)]
+    widget: Option<String>,
+    #[serde(default)]
+    fallback: Option<String>,
+    #[serde(default)]
+    files: Vec<StagedFile>,
+    #[serde(default)]
+    config: BTreeMap<String, String>,
+    #[serde(default)]
+    clear: bool,
+}
+
+/// POST `garden/check {garden, text}`: check a staged Garden page against
+/// that Garden without writing it (`k2 zen validate --garden <g> --from
+/// <file>`). Any caller Zen admits; an agent naming a locked Garden gets
+/// 423 like a put would.
+fn garden_check(r: Role, body: &[u8]) -> CliResponse {
+    let b: GardenCheck = match parse(body, "garden/check takes {garden, text}") {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    let f = files();
+    match f.check_garden_put(&b.garden, &b.text, r == Role::Person) {
+        Ok(id) => resp(
+            "200 OK",
+            json!({ "ok": true, "status": "ok", "garden": id, "errors": [], "warnings": [], "files": [format!("staged gardens/{id}.toml")] }),
+        ),
+        Err(ZenError::BadRequest(m)) => resp(
+            "200 OK",
+            json!({ "ok": false, "status": "failed", "garden": b.garden, "errors": [{ "file": "staged", "line": 1, "col": 1, "message": m }], "warnings": [], "files": ["staged"] }),
+        ),
+        Err(e) => zen_err(e),
+    }
+}
+
+/// POST `widget/folder/check`: check a staged folder, write nothing. Zen
+/// needn't be set up (an agent checks before anything is added).
+fn folder_check(body: &[u8]) -> CliResponse {
+    let b: FolderCheck = match parse(body, "widget/folder/check takes {widget?, fallback?, files: [{name, text|base64}]}") {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    let staged = match widget_folder::staged_files(&b.files) {
+        Ok(s) => s,
+        Err(e) => return zen_err(e),
+    };
+    let name = match widget_folder::staged_name(b.widget.as_deref(), &staged, b.fallback.as_deref()) {
+        Ok(n) => n,
+        Err(e) => return zen_err(e),
+    };
+    resp("200 OK", widget_folder::check_staged(&name, &staged))
+}
+
+/// POST `widget/folder/put`: the whole folder in one checked write. The
+/// person and an agent with the switch write (a folder with errors is
+/// refused, nothing written); any other agent's put becomes one proposal
+/// per changed code file (images and fonts need a writer; no prune).
+fn folder_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
+    let b: FolderPut = match parse(body, "widget/folder/put takes {widget, files: [{name, text|base64}], prune?, note?}") {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    let note = match clean_note(b.note) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    let staged = match widget_folder::staged_files(&b.files) {
+        Ok(s) => s,
+        Err(e) => return zen_err(e),
+    };
+    let f = files();
+    match r {
+        Role::Person | Role::Manager => match f.put_widget_folder(&b.widget, &staged, b.prune) {
+            Ok(v) => {
+                after_write();
+                if r == Role::Manager {
+                    audit("zen-widget-folder-put", caller, v["file"].as_str().unwrap_or(&b.widget));
+                }
+                resp("200 OK", v)
+            }
+            Err(e) => zen_err(e),
+        },
+        Role::Agent => {
+            if b.prune {
+                return refuse(
+                    "400 Bad Request",
+                    "bad_request",
+                    "--prune removes files; a proposal can't. Leave it out (extra files stay), or ask a person or an agent with \"Manage Gardens and data sources\".",
+                );
+            }
+            let name = match f.check_widget_folder_put(&b.widget, &staged) {
+                Ok(n) => n,
+                Err(e) => return zen_err(e),
+            };
+            let changes = match f.widget_folder_changes(&name, &staged) {
+                Ok(c) => c,
+                Err(e) => return zen_err(e),
+            };
+            if changes.is_empty() {
+                return resp("200 OK", json!({ "ok": true, "widget": name, "proposed": false, "changed": false, "proposals": [] }));
+            }
+            let n = changes.len();
+            let mut proposals = Vec::new();
+            for (i, (file, text, base)) in changes.iter().enumerate() {
+                let part = format!("folder put {}/{n}", i + 1);
+                let note = Some(match &note {
+                    Some(t) => format!("{part}: {t}"),
+                    None => part,
+                });
+                let r = propose(caller, ProposalKind::Widget, &name, Some(file), text, base.as_deref(), note.as_deref());
+                let v: J = serde_json::from_str(&r.body).unwrap_or(J::Null);
+                if r.status != "200 OK" {
+                    return r;
+                }
+                proposals.push(v["proposal"].clone());
+            }
+            let ids: Vec<&str> = proposals.iter().filter_map(|p| p["id"].as_str()).collect();
+            resp(
+                "200 OK",
+                json!({
+                    "ok": true,
+                    "widget": name,
+                    "proposed": true,
+                    "proposals": proposals,
+                    "message": format!(
+                        "Proposed {n} file change(s) to widgets/{name}/ ({}). A person approves them (Settings → Gardens, or k2 zen proposals approve <id> outside K2), or an agent with \"Manage Gardens and data sources\". Until every one is approved the widget keeps running its last good version.",
+                        ids.join(", ")
+                    ),
+                }),
+            )
+        }
+    }
+}
+
+/// POST `widget/preview`: the folder on K2's own "Widget preview" Garden
+/// (never one of the person's Gardens), or `clear`. A preview places code
+/// where it runs, so it is the person's or an agent with the switch's.
+fn preview(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
+    if r == Role::Agent {
+        return refuse(
+            "403 Forbidden",
+            "person_only",
+            "A preview places the widget on a Garden where it runs. Ask a person, or an agent with \"Manage Gardens and data sources\". Meanwhile check it with k2 zen validate --dir <folder>.",
+        );
+    }
+    let b: PreviewBody = match parse(body, "widget/preview takes {widget?, fallback?, files, config?} or {clear: true}") {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    let f = files();
+    if b.clear {
+        if !b.files.is_empty() {
+            return refuse("400 Bad Request", "bad_request", "clear takes no files");
+        }
+        return match f.clear_widget_previews() {
+            Ok(v) => {
+                after_write();
+                if r == Role::Manager {
+                    audit("zen-widget-preview-clear", caller, widget_folder::PREVIEW_GARDEN);
+                }
+                resp("200 OK", v)
+            }
+            Err(e) => zen_err(e),
+        };
+    }
+    let staged = match widget_folder::staged_files(&b.files) {
+        Ok(s) => s,
+        Err(e) => return zen_err(e),
+    };
+    match f.preview_widget_folder(b.widget.as_deref(), b.fallback.as_deref(), &staged, &b.config, r == Role::Person) {
+        Ok(v) => {
+            after_write();
+            if r == Role::Manager {
+                audit("zen-widget-preview", caller, v["preview"].as_str().unwrap_or("-"));
+            }
+            resp("200 OK", v)
+        }
+        Err(e) => zen_err(e),
     }
 }
 

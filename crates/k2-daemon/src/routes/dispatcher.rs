@@ -7043,10 +7043,10 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             let body_bytes = if is_post {
-                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::zen_routes::MAX_BODY).await {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::zen_routes::max_body(p)).await {
                     Ok(b) => b,
                     Err(refused) => {
-                        let r = crate::zen_routes::too_large();
+                        let r = crate::zen_routes::too_large_for(p);
                         super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
                         return DispatchOutcome::Done;
                     }

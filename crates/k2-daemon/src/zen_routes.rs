@@ -65,6 +65,7 @@ pub const MAX_BODY: usize = 320 * 1024;
 /// The POST rows (G45, UW35). A GET on any of them is 405.
 /// `/cli/zen/lib/fetch` is `zen_lib_routes`'s (B3, UWB15).
 pub const POST_ROUTES: &[&str] = &[
+    "/cli/zen/garden/check",
     "/cli/zen/garden/delete",
     "/cli/zen/garden/lock",
     "/cli/zen/garden/new",
@@ -86,8 +87,11 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/theme/set",
     "/cli/zen/widget/check",
     "/cli/zen/widget/claim",
+    "/cli/zen/widget/folder/check",
+    "/cli/zen/widget/folder/put",
     "/cli/zen/widget/new",
     "/cli/zen/widget/pause",
+    "/cli/zen/widget/preview",
     "/cli/zen/widget/put",
     "/cli/zen/widget/resume",
     "/cli/zen/widget/run",
@@ -148,6 +152,28 @@ pub fn too_large() -> CliResponse {
         "413 Payload Too Large",
         json!({ "error": "body_too_large", "message": "Zen request bodies must be under 320 KB." }),
     )
+}
+
+/// The body cap for one `/cli/zen/*` path: [`MAX_BODY`], or a whole staged
+/// widget folder for the dev loop's folder routes (0.46.1 S3).
+pub fn max_body(path: &str) -> usize {
+    if crate::zen_agent_routes::FOLDER_ROUTES.contains(&path) {
+        k2_core::zen::widget_folder::MAX_FOLDER_BODY
+    } else {
+        MAX_BODY
+    }
+}
+
+/// [`too_large`] for `path`'s own cap.
+pub fn too_large_for(path: &str) -> CliResponse {
+    if crate::zen_agent_routes::FOLDER_ROUTES.contains(&path) {
+        resp(
+            "413 Payload Too Large",
+            json!({ "error": "body_too_large", "message": "A staged widget folder must be under 6 MB (4 MB of files)." }),
+        )
+    } else {
+        too_large()
+    }
 }
 
 /// A `ZenError` as its JSON answer (shared with `zen_agent_routes`).

@@ -55,6 +55,7 @@ pub mod stdlib;
 pub mod store;
 pub mod sync;
 pub mod widget_access;
+pub mod widget_folder;
 pub mod widget_store;
 pub mod widgets;
 

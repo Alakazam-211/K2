@@ -13932,7 +13932,8 @@ Agents:
   k2 compute info <node> [--json]
   k2 compute run <node>|--any [--os linux] [--arch x86_64] [--label k=v]
                  [--detach] [--dirty] [--sha REV] [--no-source]
-                 [--env K=V]... [--cpus N] [--mem 16G] [--timeout 2h]
+                 [--env K=V]... [--cpus N] [--mem 16G]
+                 [--timeout D (≤ the grant's max, default 2h; k2 compute nodes shows it)]
                  [--exclusive] [--retry-interrupted|--no-retry] [--raw] [--workspace WS]
                  [--wait [--failures] [--max-wait 9m]]
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
@@ -14005,7 +14006,9 @@ This computer (its owner):
 
 Attached runs stream output and exit with the job's exit code. Infra
 problems exit 3 with a code (node_offline, not_granted, compute_off,
-queue_full, owner_only, …). Read `k2 study compute` first.
+queue_full, owner_only, job_started, …). Jobs see K2_COMPUTE_JOB=<id>
+(set by the node; the only K2_* variable in a job). Read `k2 study
+compute` first.
 EOF
 }
 
@@ -14248,6 +14251,8 @@ elif verb == "get":
                 a.get("short") or "-", a.get("state"), a.get("workspace") or "(other)",
                 ("%dm%02ds" % (age // 60, age % 60)) if age is not None else "-",
                 a.get("argv") or "", "  (" + a["reason"] + ")" if a.get("reason") else ""))
+    if j.get("hint"):
+        print("  hint: %s" % j["hint"])
     cb = j.get("cancelledBy")
     if isinstance(cb, dict):
         print("  cancel asked by %s at %s" % (cb.get("by"), time.strftime("%H:%M:%S", time.localtime(cb.get("at") or 0))))
@@ -31442,16 +31447,51 @@ EXIT CODES
   3      infra: node_offline, node_paused, not_granted, compute_off,
          queue_full, owner_only, timeout, cancelled, interrupted, unknown,
          job_started (cancel without --force on a started job)
-  2      bad usage
+  2      bad usage (timeout_over_grant, exceeds_node_caps, dirty_needs_head, …)
+  4      k2 compute get / wait on a job that doesn't exist
 
 RECEIPTS
   k2 compute receipt <job>: the node signed what it ran and what came
   out. It proves which node said so, not that the node is honest.
 
 LIMITS
-  Per grant: time per job, parallel, queued, disk. The machine's owner
-  can pause or drain the node at any time; agents never pause, resume
-  or grant. Owner verbs inside a K2 terminal answer owner_only.
+  Per grant: time per job, parallel, queued, disk. See them BEFORE you
+  run: k2 compute nodes (grant 2h/job 1 parallel 10 queued) or
+  k2 compute info <node>. A --timeout over the grant is refused before
+  anything is sent (timeout_over_grant, exit 2) with the owner's command
+  to raise it. --cpus/--mem over a node's caps: exceeds_node_caps at
+  submit (exit 2). A job already queued over the caps (from before
+  0.46.1, or the node's policy shrank) is failed with exceeds_node_caps
+  and the caps in its detail, and you get its [compute] line; it never
+  holds the queue. Killed for memory (failed, mem_cap): get's hint says
+  try a bigger --mem or CARGO_BUILD_JOBS=2.
+  Queue: k2 compute get <job> shows position N of M, why it waits (with
+  the CPU/memory numbers for a resource wait) and the jobs ahead (id,
+  workspace, age; other workspaces' jobs are anonymous). nodes shows
+  free CPU (cap minus what K2 jobs reserved) and free memory per node.
+  The machine's owner can pause or drain the node at any time; agents
+  never pause, resume or grant. Owner verbs inside a K2 terminal answer
+  owner_only.
+
+WORKTREES
+  From a git worktree inside the workspace (.claude/worktrees/x) runs
+  just work, with K2_* unset too: the workspace is found from the
+  worktree, HEAD is the worktree's own, --dirty sends the worktree's
+  changes and untracked files, and the "uncommitted changes" note is
+  about that checkout (never shown with --sha). --dirty --sha X works
+  only when X is the worktree's HEAD (else dirty_needs_head). Each run
+  prints "source: worktree .claude/worktrees/x @ 1a2b3c4d +dirty (…)".
+  From a folder outside the workspace, pass --workspace <handle>.
+
+IN THE JOB
+  The node sets K2_COMPUTE_JOB=<job id> in every job. It's the only
+  K2_* variable a job sees, it reaches no daemon, and K2's own test
+  guard ignores it. If your command refuses any K2_* variable, exclude
+  it: env | grep -E '^K2(SO)?_' | grep -v '^K2_COMPUTE_JOB='
+  Chain steps with sh -ec 'a && b' (sh -c 'a; b' exits with b's code,
+  so a failing a looks green).
+  --exclusive waits for an idle node and holds other K2 jobs while it
+  runs; it doesn't stop non-K2 load (Sew VMs, hand-run builds).
 
 ADDING A MACHINE (owner, never an agent)
   On the machine itself: Settings → Compute → "Make this computer a

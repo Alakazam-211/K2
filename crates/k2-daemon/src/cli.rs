@@ -146,6 +146,17 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> CliResponse {
     if let Some(resp) = crate::feedback_routes::dispatch(path, params) {
         return resp;
     }
+    // thread-read-v1: the person routes are served only by the
+    // dispatcher's person arm. Anything reaching this chain (an agent's
+    // cell socket, the UDS) is not a person: GET on the POST routes 405,
+    // the read itself 403 (agents have no read state).
+    if crate::read_routes::is_read_route(path) {
+        return if crate::read_routes::is_post_only(path) {
+            CliResponse::method_not_allowed()
+        } else {
+            crate::read_routes::not_a_person()
+        };
+    }
     if let Some(resp) = crate::overlay_routes::dispatch(path, params) {
         return resp;
     }

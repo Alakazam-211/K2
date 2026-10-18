@@ -1064,6 +1064,9 @@ mod tests {
         let now = now_secs();
         assert_eq!(item(&conn, &owner(), KIND_THREAD, &old, now).expect("owner").unread, 2);
         assert_eq!(item(&conn, &alice(), KIND_THREAD, &old, now).expect("alice").unread, 2);
+        // The owner already has a cursor row on the old Thread (an upsert's
+        // conflict policy must not break the trigger on an existing row).
+        ack(&conn, "owner", KIND_THREAD, &old, Some(1)).expect("owner read one");
         // A fresh session takes the pin (an upsert, like the spawn path).
         crate::db::schema::WorkspaceSession::upsert(&conn, &format!("ws-{old}"), &project, None, Some(&new), "claude", "system", "running")
             .expect("pin new");

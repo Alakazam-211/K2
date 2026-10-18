@@ -2289,6 +2289,11 @@ pub fn dispatch_post_as(
     body: &[u8],
     session_author: &str,
 ) -> CliResponse {
+    // thread-read-v1: never served here (the dispatcher's person arm is
+    // the only door); an agent's cell POST is refused.
+    if crate::read_routes::is_read_route(path) {
+        return crate::read_routes::not_a_person();
+    }
     let mut params = params.clone();
     // Stamp is already on this map (cell and HTTP stamp, then enter here).
     // Capture before merge_body. Do not capture the cell's pre-stamp form.

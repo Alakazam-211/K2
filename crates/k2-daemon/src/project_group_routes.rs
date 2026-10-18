@@ -284,6 +284,8 @@ fn with_read_state(groups: Vec<project_groups::ProjectGroup>) -> Vec<serde_json:
 /// attribution when the body omits `author`.
 pub fn dispatch_post(path: &str, body: &[u8], session_author: &str) -> CliResponse {
     match path {
+        // thread-read-v1: only the dispatcher's person arm serves it.
+        crate::read_routes::PROJECT_READ_PATH => crate::read_routes::not_a_person(),
         "/cli/project-group/create" => handle_create(body),
         "/cli/project-group/rename" => handle_rename(body),
         "/cli/project-group/delete" => handle_delete(body),

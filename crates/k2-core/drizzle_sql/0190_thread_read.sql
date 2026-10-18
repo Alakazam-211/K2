@@ -95,8 +95,13 @@ BEGIN
            updated_at = CAST(strftime('%s', 'now') AS INTEGER)
      WHERE kind = 'thread' AND conv_id = OLD.session_id
        AND EXISTS (SELECT 1 FROM overlay_conversations WHERE conversation_id = OLD.session_id);
-    INSERT OR IGNORE INTO read_cursors (person, kind, conv_id, last_read_seq, updated_at)
+    -- No OR IGNORE: inside a trigger the outer statement's conflict policy
+    -- (an upsert on workspace_sessions) would override it. Skip existing
+    -- rows instead.
+    INSERT INTO read_cursors (person, kind, conv_id, last_read_seq, updated_at)
         SELECT p.person, 'thread', OLD.session_id, c.last_thread_seq, CAST(strftime('%s', 'now') AS INTEGER)
         FROM read_people p, overlay_conversations c
-        WHERE c.conversation_id = OLD.session_id;
+        WHERE c.conversation_id = OLD.session_id
+          AND NOT EXISTS (SELECT 1 FROM read_cursors r
+                          WHERE r.person = p.person AND r.kind = 'thread' AND r.conv_id = OLD.session_id);
 END;

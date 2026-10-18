@@ -235,7 +235,7 @@ pub struct ServiceJson {
     /// sent when true.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub helper_needs_restart: bool,
-    /// 0.46.0: the service runs in clean mode (the 0.46.1 behaviour, opted
+    /// 0.46.0: the service runs in clean mode (the 0.46.2 behaviour, opted
     /// into early: system PATH, its own HOME, owner-token calls refused).
     /// Only sent when true.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

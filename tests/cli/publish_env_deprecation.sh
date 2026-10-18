@@ -105,7 +105,7 @@ if grep -q "inherits\|deprecated" "$WORK/out"; then fail "clean start stdout: $(
 ok "k2 publish start <clean>: no warning"
 
 out="$(k2s publish env shop 2>&1)" || fail "publish env: $out"
-printf '%s' "$out" | grep -q "deprecated: inheriting the daemon environment ends in K2 0.46.0 — switch with: k2 publish env shop clean" \
+printf '%s' "$out" | grep -q "deprecated: inheriting the daemon environment ends in K2 0.46.2 — switch with: k2 publish env shop clean" \
 	|| fail "publish env lacks the notice: $out"
 ok "k2 publish env names the 0.46.0 end and the switch"
 

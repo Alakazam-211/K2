@@ -101,7 +101,7 @@ async fn warnings_name_what_breaks_and_clean_mode_narrows_now_widens_later() {
     let r = get(d.port, "/cli/app/warnings", OWNER, "app=nsi/jobsw").await;
     assert_eq!(r.status, 200, "{}", r.body);
     let v = r.json();
-    assert_eq!(v["cutover"], "0.46.1");
+    assert_eq!(v["cutover"], "0.46.2");
     assert_eq!(v["readyForCutover"], false);
     let codes: Vec<String> = v["warnings"].as_array().unwrap().iter().map(|w| w["code"].as_str().unwrap().to_string()).collect();
     for want in ["legacy_env", "inherited_env_read", "k2_internal_env", "daemon_port_file"] {

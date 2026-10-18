@@ -8788,15 +8788,16 @@ print(("revoked %s (shut at once)" % v["name"]) if v.get("revoked") else v.get("
 # Canonical family. Token is nested here; leftover mint is top-level k2 skin-token.
 # k2 app update is unknown (usage), not the desktop updater (k2 update --app).
 # ── 0.46.0 App grace (Rosson's cross-over plan, 2026-10-14) ─────────────
-# 0.46.0 adds the new ways and removes nothing; 0.46.1 is the cut-over.
+# 0.46.0 and 0.46.1 remove nothing for existing services; 0.46.2 is the
+# cut-over (with k2 app adopt).
 # These verbs are not behind the runtime preview flag: they serve every
 # published --cmd service (and every runtime App).
 
 _app_grace_usage() {
     cat <<'EOF'
-k2 app — getting existing Apps ready for K2 0.46.1 (0.46.0 removes nothing)
+k2 app — getting existing Apps ready for K2 0.46.2 (0.46.0 and 0.46.1 remove nothing)
 
-  k2 app warnings [<app>] [--json]     What breaks at the 0.46.1 cut-over: env
+  k2 app warnings [<app>] [--json]     What breaks at the 0.46.2 cut-over: env
                                        names the code reads that only the daemon
                                        gives it, K2 files it touches
                                        (daemon.token, heartbeat.port), programs
@@ -8804,7 +8805,7 @@ k2 app — getting existing Apps ready for K2 0.46.1 (0.46.0 removes nothing)
                                        K2 saw it make (Linux). No <app>: every
                                        --cmd service you can see.
   k2 app clean-mode <app> on|off [--restart]
-                                       Run it the 0.46.1 way now: clean env,
+                                       Run it the 0.46.2 way now: clean env,
                                        system PATH, its own HOME, owner-token
                                        calls refused (Linux). On narrows (agents
                                        may); off is the owner's (held otherwise).
@@ -18834,7 +18835,7 @@ for s in v.get("secrets") or []:
 if v.get("inheritedNames"):
     print("  inherits the daemon environment: %s" % ", ".join(v["inheritedNames"]))
 if v.get("mode") == "legacy":
-    print("  deprecated: inheriting the daemon environment ends in K2 0.46.0 — switch with: k2 publish env %s clean" % v.get("service"))
+    print("  deprecated: inheriting the daemon environment ends in K2 %s — switch with: k2 publish env %s clean" % (v.get("envRemovedIn") or "0.46.2", v.get("service")))
 if v.get("restart"): print(v["restart"])'
             ;;
         reveal)
@@ -20646,7 +20647,7 @@ def env_legacy(s):
     return bool(s.get("envDeprecation"))
 
 def env_ends(s):
-    return str((s.get("envRemovedIn") if isinstance(s, dict) else None) or "0.46.1")
+    return str((s.get("envRemovedIn") if isinstance(s, dict) else None) or "0.46.2")
 
 def env_warning(n, s):
     return ("warning: %s still inherits the daemon environment; this ends in K2 %s. "
@@ -20730,7 +20731,7 @@ if mode == "list":
     rows = []
     warnings = []
     legacy = []
-    ends = "0.46.1"
+    ends = "0.46.2"
     for s in services:
         if not isinstance(s, dict):
             continue

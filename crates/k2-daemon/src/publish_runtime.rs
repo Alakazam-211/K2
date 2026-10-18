@@ -432,7 +432,7 @@ fn spawn_prepared(
     c.stdin(Stdio::null()).stdout(out).stderr(err);
     // Clean mode (0.46.0 grace) sets the system PATH itself: no login-shell
     // enrichment, so a program found only through the daemon user's own
-    // bin folders shows up now, not at the 0.46.1 cut-over.
+    // bin folders shows up now, not at the 0.46.2 cut-over.
     if enrich {
         enrich_path(&mut c);
     }

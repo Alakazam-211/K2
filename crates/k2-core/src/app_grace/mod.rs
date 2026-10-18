@@ -1,9 +1,11 @@
 //! The 0.46.0 App "grace" release (Rosson's cross-over plan, 2026-10-14).
 //!
 //! 0.46.0 adds the new ways for existing Apps (`k2 publish run --cmd`
-//! services such as NSI's Jobs BFF) and removes nothing; 0.46.1 is the
-//! cut-over (the inherited environment ends, the owner token is out of
-//! reach, the wall goes on). This module is the daemon-shared part:
+//! services such as NSI's Jobs BFF) and removes nothing. The cut-over for
+//! EXISTING services (the inherited environment ends, the owner token is
+//! out of reach, the wall goes on) is 0.46.2, with `k2 app adopt` (Rosson
+//! 2026-10-18; it was 0.46.1). 0.46.1 changes only NEW `--cmd` services
+//! (the open path and the agent gate). This module is the daemon-shared part:
 //!
 //! - [`keys`]: the App-scoped key (vs-live 2 §6, S45): one App, a fixed
 //!   scope vocabulary, a room/role ceiling.
@@ -20,7 +22,8 @@ pub mod requests;
 pub mod scan;
 pub mod token_uses;
 
-/// The release that removes the old ways (inherited env, owner token,
-/// unwalled services). Warnings and notices name it.
-pub const CUTOVER_RELEASE: &str = "0.46.1";
+/// The release that removes the old ways for existing `--cmd` services
+/// (inherited env, owner token, unwalled), with `k2 app adopt`. Warnings
+/// and notices name it. Nothing in 0.46.1 removes them.
+pub const CUTOVER_RELEASE: &str = "0.46.2";
 

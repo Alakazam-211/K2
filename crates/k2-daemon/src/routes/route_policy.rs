@@ -276,7 +276,7 @@ pub const ROUTES: &[Route] = &[
     // Room-scope R16: an App's quotas and per-call counts from its audit.
     get("/cli/app/usage", Member),
     post("/cli/app/validate", Member),
-    // 0.46.0 grace: what breaks at the 0.46.1 cut-over, per service.
+    // 0.46.0 grace: what breaks at the 0.46.2 cut-over, per service.
     get("/cli/app/warnings", Member),
     post("/cli/auth/change-password", Member),
     post("/cli/auth/login", Public),

@@ -1158,7 +1158,7 @@ async fn handle_one_request(
 
     // 0.46.0 App grace: an owner-token call a published `--cmd` service
     // makes is counted per (service, route) for `k2 app warnings`, and
-    // refused when that service runs in clean mode (the 0.46.1 behaviour,
+    // refused when that service runs in clean mode (the 0.46.2 behaviour,
     // opted into early). Linux attribution; a cheap check skips the rest.
     if ingress == Ingress::Loopback && !cookie_only && super::http::token_is_owner(&query, state.token.as_str()) {
         if let (Ok(peer), Ok(local)) = (stream.peer_addr(), stream.local_addr()) {

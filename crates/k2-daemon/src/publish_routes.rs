@@ -166,8 +166,10 @@ fn caller_agent_ws() -> Option<String> {
 }
 
 /// The release the `--cmd` mapping is enforced from (§8.2: "before
-/// 0.46.1: unchanged").
-pub const PUBLISH_RUN_GATE_FROM: &str = k2_core::app_grace::CUTOVER_RELEASE;
+/// 0.46.1: unchanged"). Its own release, not the cut-over's: a NEW agent
+/// `--cmd` service is gated from 0.46.1, while existing services keep
+/// their environment until 0.46.2 ([`k2_core::app_grace::CUTOVER_RELEASE`]).
+pub const PUBLISH_RUN_GATE_FROM: &str = "0.46.1";
 
 /// 0.46.1 (lane 1, K5): the gate holds an agent's open-path run for the
 /// owner wherever the box has the open path. The daemon's own
@@ -1070,7 +1072,7 @@ mod tests {
             let row = |n: &str| rows.iter().find(|r| r["name"] == n).unwrap_or_else(|| panic!("{n} missing: {v}")).clone();
             let o = row("oldshop");
             assert_eq!(o["envMode"], "legacy", "{o}");
-            assert_eq!(o["envRemovedIn"], "0.46.1", "{o}");
+            assert_eq!(o["envRemovedIn"], "0.46.2", "{o}");
             assert!(o["envDeprecation"].as_str().expect("notice").contains("k2 publish env oldshop clean"), "{o}");
             let n = row("newshop");
             assert_eq!(n["envMode"], "clean", "{n}");

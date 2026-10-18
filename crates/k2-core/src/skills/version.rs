@@ -143,7 +143,9 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// `retryable`, handler-object subscriptions that re-subscribe on their own,
 /// `k2.shape` guards, `bad_args` / `bad_shape`, and pinned chart libraries
 /// (`uplot@1.6.32`).
-pub const SKILL_VERSION_ZEN: u32 = 23;
+/// v24 = the `k2:*@2` data-source cards (0.46.1): several sources per card
+/// (`config.sources`), soft crit, named lists, K2 Web's ops data.
+pub const SKILL_VERSION_ZEN: u32 = 24;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

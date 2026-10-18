@@ -196,7 +196,8 @@ pub const SKILL_VERSION_ZEN: u32 = 25;
 /// Bumped to 31 (k2 sidecar v1): the k2-cli skill gains a Sidecars block.
 /// Bumped to 32 (0.45.5, Thread cards): prose never closes a card; agents
 /// void their own obsolete cards with `k2 thread void`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 32;
+/// Bumped to 33 (0.46.1): "Your picture and color" (`k2 agent identity`).
+pub const SKILL_VERSION_WORKSPACE: u32 = 33;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

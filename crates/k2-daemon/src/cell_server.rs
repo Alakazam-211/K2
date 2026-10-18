@@ -662,6 +662,22 @@ mod unix_impl {
                 crate::hook_ingest::legacy_complete(params).to_string(),
             ),
             "/cli/workspace/msg" => from_cli(crate::cli::dispatch(path, params)),
+            // 0.46.1 `k2 agent identity`: this passport's own color and
+            // picture (the handler pins the workspace and refuses a name).
+            // Same body cap as TCP (413).
+            crate::agent_identity_routes::IDENTITY_PATH => {
+                if body.len() > crate::agent_identity_routes::MAX_BODY {
+                    return (
+                        "413 Payload Too Large".to_string(),
+                        "application/json",
+                        r#"{"error":"too_large","message":"body over the limit"}"#.to_string(),
+                    );
+                }
+                match crate::agent_identity_routes::caller_from_passport(this_session_id, principal) {
+                    Ok(caller) => from_cli(crate::agent_identity_routes::handle(method, path, params, body, caller)),
+                    Err(r) => from_cli(r),
+                }
+            }
             // Changes tab v1 (`k2 changes`): git status/diff/stage/commit/
             // discard on THIS passport's own workspace only. The workspace
             // comes from the passport, never the request; the handler
@@ -1504,6 +1520,70 @@ mod unix_impl {
             assert_eq!(status, "405 Method Not Allowed");
             let writes = seen.lock().expect("seen").iter().filter(|r| !r.starts_with("GET ")).count();
             assert_eq!(writes, 1, "refused calls sent nothing");
+        }
+
+        /// 0.46.1 `k2 agent identity` over the cell socket: served (not the
+        /// TCP sentinel), pinned to the passport's own workspace, color and
+        /// picture only.
+        #[test]
+        fn cell_dispatch_serves_own_agent_identity() {
+            let _home = crate::test_support::TempHome::new();
+            let _ = k2_core::db::init_for_tests();
+            let own = uuid::Uuid::new_v4().to_string();
+            let other = uuid::Uuid::new_v4().to_string();
+            let own_handle = format!("cellself{}", &own[..8]);
+            let other_handle = format!("cellother{}", &other[..8]);
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                for (id, handle) in [(&own, &own_handle), (&other, &other_handle)] {
+                    conn.execute(
+                        "INSERT INTO projects (id, path, name, handle) VALUES (?1, ?2, ?3, ?3)",
+                        rusqlite::params![id, format!("/tmp/k2-cell-identity-{id}"), handle],
+                    )
+                    .expect("insert project");
+                }
+            }
+            let p = HookPrincipal { workspace_uuid: own.clone(), agent_address: "agent".into() };
+            let params: HashMap<String, String> = HashMap::new();
+            let call = |method: &str, body: &str| {
+                dispatch_cell_verb(method, "/cli/agent/identity", &params, body.as_bytes(), &p, "sid-cell")
+            };
+            let color = |id: &str| -> String {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                conn.query_row("SELECT color FROM projects WHERE id = ?1", rusqlite::params![id], |r| r.get(0))
+                    .expect("color")
+            };
+
+            // Read: itself, with no workspace named.
+            let (status, _, out) = call("GET", "");
+            assert_eq!(status, "200 OK", "{out}");
+            let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+            assert_eq!(v["handle"], own_handle.as_str(), "{v}");
+            assert_eq!(v["canEditIdentity"], true, "{v}");
+            assert_eq!(v["canEditHandle"], false, "{v}");
+
+            // Write its own color.
+            let (status, _, out) = call("POST", r##"{"color":"#123456"}"##);
+            assert_eq!(status, "200 OK", "{out}");
+            assert!(!out.contains("not served on cell socket"), "{out}");
+            assert_eq!(color(&own), "#123456");
+
+            // Another workspace and a name are refused; nothing written.
+            let before = color(&other);
+            let (status, _, out) = call("POST", &format!(r##"{{"workspace":"{other_handle}","color":"#654321"}}"##));
+            assert_eq!(status, "403 Forbidden", "{out}");
+            assert!(out.contains("not_your_agent"), "{out}");
+            assert_eq!(color(&other), before, "nothing written to another workspace");
+            let (status, _, out) = call("POST", r#"{"displayName":"Renamed"}"#);
+            assert_eq!(status, "403 Forbidden", "{out}");
+            assert!(out.contains("agent_cannot_rename"), "{out}");
+
+            // The handle door never answers on the cell socket for a passport.
+            let (status, _, out) =
+                dispatch_cell_verb("POST", "/cli/agent/handle", &params, br#"{"handle":"x"}"#, &p, "sid-cell");
+            assert_ne!(status, "200 OK", "{out}");
         }
 
         #[test]

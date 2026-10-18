@@ -36,8 +36,20 @@
 //!   event every client patches from; `fields` names what was written),
 //!   plus `SyncProjects`. App sockets get it as the payload-free
 //!   `rooms_changed` (`activity_events_ws`).
-//! - **Rate limit (apps only).** [`WRITES_PER_PASS_MAX`] writes per pass
-//!   per room per [`WRITES_PER_PASS_WINDOW`]; 429 with `Retry-After`.
+//! - **Rate limit (apps and agents).** [`WRITES_PER_PASS_MAX`] writes per
+//!   pass per room per [`WRITES_PER_PASS_WINDOW`]; an agent's budget is
+//!   per workspace (every session of it shares one). 429 with `Retry-After`.
+//! - **An agent's own look (0.46.1).** `k2 agent identity` from an agent's
+//!   session sends its passport. [`caller_from_passport`] admits it on
+//!   `/cli/agent/identity` only (never `/cli/agent/handle`), for **its own
+//!   workspace** (no `workspace` = itself; any other target, real or not,
+//!   is one 403 `not_your_agent`, no oracle) and for **color and picture
+//!   only**: a name (or handle) is 403 `agent_cannot_rename`. Same checks,
+//!   same writes, same `agent_identity_changed` event; audit actor
+//!   `agent:<workspace>/<session>`. Sandboxed (microVM) sessions, API cells
+//!   and passports this daemon did not mint are refused. A K2 shell tab's
+//!   passport is a person (noun tiers NT5): owner rules, actor
+//!   `shell:<workspace>/<session>`.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::OnceLock;
@@ -78,15 +90,22 @@ pub enum Caller {
     /// An App pass (`k2skn_`): jailed to its rooms, caps per room.
     App(SkinPass),
     /// The owner token or a Connect login (any role at or above the route
-    /// floor). `actor` is the audit name.
-    Owner { actor: String },
+    /// floor), or a K2 shell tab's passport. `actor` is the audit name;
+    /// `home` is the shell tab's workspace, used when none is named.
+    Owner { actor: String, home: Option<String> },
+    /// An agent's own session passport: its own workspace, color and
+    /// picture only (see the module docs).
+    Agent { project_id: String, session_id: String },
 }
 
 impl Caller {
     fn actor(&self) -> String {
         match self {
             Caller::App(pass) => crate::routes::http::app_actor_label(pass),
-            Caller::Owner { actor } => actor.clone(),
+            Caller::Owner { actor, .. } => actor.clone(),
+            Caller::Agent { project_id, session_id } => {
+                format!("agent:{}/{session_id}", workspace_label(project_id))
+            }
         }
     }
 
@@ -94,7 +113,84 @@ impl Caller {
         match self {
             Caller::App(_) => "app",
             Caller::Owner { .. } => "cli",
+            Caller::Agent { .. } => "agent",
         }
+    }
+}
+
+/// The workspace's handle, else its name, else its id (audit labels).
+fn workspace_label(project_id: &str) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::Project::get(&conn, project_id)
+        .ok()
+        .map(|p| {
+            let h = p.handle.trim().to_string();
+            if h.is_empty() {
+                p.name.trim().to_string()
+            } else {
+                h
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| project_id.to_string())
+}
+
+// ── Agent passports ────────────────────────────────────────────────────
+
+fn forbidden(code: &str, message: &str) -> CliResponse {
+    json_response("403 Forbidden", json!({ "error": code, "message": message }))
+}
+
+/// What an agent sees when it names another agent (or one that does not
+/// exist: same answer, no oracle).
+fn not_your_agent() -> CliResponse {
+    forbidden(
+        "not_your_agent",
+        "an agent can change only its own picture and color; leave out the agent name",
+    )
+}
+
+/// What an agent sees when it tries to change its name or handle.
+pub fn agent_cannot_rename() -> CliResponse {
+    forbidden(
+        "agent_cannot_rename",
+        "agents can't rename themselves; ask your owner (k2 agent identity --name, from their terminal or Settings)",
+    )
+}
+
+/// Classify a passport this daemon validated (TCP bearer or the cell
+/// socket) for the identity door.
+pub fn caller_from_passport(
+    session_id: &str,
+    principal: &crate::session_token::HookPrincipal,
+) -> Result<Caller, CliResponse> {
+    classify_passport(
+        crate::sidecar_routes::caller_from_session(session_id, principal),
+        session_id,
+    )
+}
+
+fn classify_passport(c: crate::sidecar_routes::Caller, session_id: &str) -> Result<Caller, CliResponse> {
+    use crate::sidecar_routes::Caller as S;
+    match c {
+        S::Agent(a) if a.sandboxed => Err(forbidden(
+            "sandboxed",
+            "a sandboxed agent can't change its picture or color; ask your owner",
+        )),
+        S::Agent(a) => Ok(Caller::Agent {
+            project_id: a.project_id,
+            session_id: session_id.to_string(),
+        }),
+        // A K2 shell tab is a person typing in K2 (NT5).
+        S::Shell { project_id } => Ok(Caller::Owner {
+            actor: format!("shell:{}/{session_id}", workspace_label(&project_id)),
+            home: Some(project_id),
+        }),
+        S::Owner | S::Login { .. } | S::WrongCredential | S::Invalid => Err(forbidden(
+            "wrong_credential",
+            "this credential can't change an agent's look",
+        )),
     }
 }
 
@@ -197,43 +293,80 @@ fn workspace_token(params: &HashMap<String, String>, body: Option<&Value>) -> St
 
 /// App: the room on the pass (403 `skin_room` otherwise, no oracle).
 /// Owner: a handle or uuid, else a name or path.
+/// Agent: its own workspace; no token means itself, any other target
+/// (real or not) is 403 `not_your_agent`.
 fn resolve(caller: &Caller, token: &str) -> Result<SkinWorkspace, CliResponse> {
+    if let Caller::Agent { project_id, .. } = caller {
+        let own = workspace_by_id(project_id).ok_or_else(not_your_agent)?;
+        if token.is_empty() {
+            return Ok(own);
+        }
+        return match resolve_any(token) {
+            Ok(ws) if ws.project_id == own.project_id => Ok(own),
+            _ => Err(not_your_agent()),
+        };
+    }
     if token.is_empty() {
+        // A K2 shell tab with no agent named: its own workspace.
+        if let Caller::Owner { home: Some(home), .. } = caller {
+            return workspace_by_id(home).ok_or_else(|| {
+                json_response(
+                    "404 Not Found",
+                    json!({ "error": "workspace_not_found", "message": "this tab's workspace is gone" }),
+                )
+            });
+        }
         return Err(bad("usage", "missing workspace (the agent's handle)"));
     }
     match caller {
         Caller::App(pass) => crate::fs_routes::resolve_skin_workspace(pass, token),
-        Caller::Owner { .. } => {
-            if let Ok(ws) = crate::fs_routes::resolve_owner_workspace(token) {
-                return Ok(ws);
-            }
-            let Some(path) = crate::workspace_msg::resolve_workspace(token) else {
-                return Err(json_response(
-                    "404 Not Found",
-                    json!({ "error": "workspace_not_found", "message": format!("no workspace {token:?}") }),
-                ));
-            };
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            conn.query_row(
-                "SELECT id, path, COALESCE(handle, '') FROM projects WHERE path = ?1",
-                rusqlite::params![path],
-                |r| {
-                    Ok(SkinWorkspace {
-                        project_id: r.get(0)?,
-                        path: r.get(1)?,
-                        handle: r.get(2)?,
-                    })
-                },
-            )
-            .map_err(|_| {
-                json_response(
-                    "404 Not Found",
-                    json!({ "error": "workspace_not_found", "message": format!("no workspace {token:?}") }),
-                )
-            })
-        }
+        Caller::Owner { .. } | Caller::Agent { .. } => resolve_any(token),
     }
+}
+
+fn workspace_by_id(project_id: &str) -> Option<SkinWorkspace> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT id, path, COALESCE(handle, '') FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |r| {
+            Ok(SkinWorkspace {
+                project_id: r.get(0)?,
+                path: r.get(1)?,
+                handle: r.get(2)?,
+            })
+        },
+    )
+    .ok()
+}
+
+/// Owner resolution: a handle or uuid, else a name or path.
+fn resolve_any(token: &str) -> Result<SkinWorkspace, CliResponse> {
+    if let Ok(ws) = crate::fs_routes::resolve_owner_workspace(token) {
+        return Ok(ws);
+    }
+    let not_found = || {
+        json_response(
+            "404 Not Found",
+            json!({ "error": "workspace_not_found", "message": format!("no workspace {token:?}") }),
+        )
+    };
+    let path = crate::workspace_msg::resolve_workspace(token).ok_or_else(not_found)?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT id, path, COALESCE(handle, '') FROM projects WHERE path = ?1",
+        rusqlite::params![path],
+        |r| {
+            Ok(SkinWorkspace {
+                project_id: r.get(0)?,
+                path: r.get(1)?,
+                handle: r.get(2)?,
+            })
+        },
+    )
+    .map_err(|_| not_found())
 }
 
 fn need_cap(caller: &Caller, ws: &SkinWorkspace, cap: &str) -> Result<(), CliResponse> {
@@ -267,6 +400,8 @@ fn view(caller: &Caller, project_id: &str) -> Value {
             pass.has_cap_in_room(project_id, CAP_AGENT_HANDLE),
         ),
         Caller::Owner { .. } => (icon, true, true),
+        // Its own look, as stored; never its handle.
+        Caller::Agent { .. } => (icon, true, false),
     };
     json!({
         "workspace": handle,
@@ -349,6 +484,14 @@ fn post_identity(params: &HashMap<String, String>, body: &[u8], caller: &Caller)
     if let Err(r) = need_cap(caller, &ws, CAP_AGENT_IDENTITY) {
         return r;
     }
+    // An agent changes its color and picture, never its name or handle.
+    if matches!(caller, Caller::Agent { .. })
+        && ["displayName", "display_name", "name", "handle"]
+            .iter()
+            .any(|k| v.get(*k).is_some())
+    {
+        return agent_cannot_rename();
+    }
     // Accept the snake_case spelling too (the CLI's other routes use it).
     let name_key = if v.get("displayName").is_some() { "displayName" } else { "display_name" };
     let name = match opt_string(&v, name_key, false) {
@@ -410,8 +553,13 @@ fn post_identity(params: &HashMap<String, String>, body: &[u8], caller: &Caller)
         None => None,
     };
 
-    if let Caller::App(pass) = caller {
-        if let Err(secs) = take_write_slot(&pass.id, &ws.project_id) {
+    let budget = match caller {
+        Caller::App(pass) => Some(pass.id.clone()),
+        Caller::Agent { project_id, .. } => Some(format!("agent:{project_id}")),
+        Caller::Owner { .. } => None,
+    };
+    if let Some(key) = budget {
+        if let Err(secs) = take_write_slot(&key, &ws.project_id) {
             return rate_limited(secs);
         }
     }
@@ -485,6 +633,10 @@ fn post_handle(params: &HashMap<String, String>, body: &[u8], caller: &Caller) -
     if let Err(r) = need_cap(caller, &ws, CAP_AGENT_HANDLE) {
         return r;
     }
+    // The dispatcher never admits a passport here; belt.
+    if matches!(caller, Caller::Agent { .. }) {
+        return agent_cannot_rename();
+    }
     let requested = match v.get("handle") {
         Some(Value::String(s)) if !s.trim().is_empty() => s.trim().to_string(),
         _ => return bad("usage", "missing handle (a string)"),
@@ -541,7 +693,9 @@ fn post_handle(params: &HashMap<String, String>, body: &[u8], caller: &Caller) -
     if let Some(other) = taken {
         let message = match caller {
             Caller::App(_) => format!("handle {slug:?} is already used on this server"),
-            Caller::Owner { .. } => format!("Handle '{slug}' is already used by workspace '{other}'."),
+            Caller::Owner { .. } | Caller::Agent { .. } => {
+                format!("Handle '{slug}' is already used by workspace '{other}'.")
+            }
         };
         return json_response(
             "409 Conflict",
@@ -628,6 +782,53 @@ mod tests {
     fn retry_after_only_on_429() {
         assert_eq!(extra_headers(&rate_limited(42)), "Retry-After: 42\r\n");
         assert_eq!(extra_headers(&bad("usage", "x")), "");
+    }
+
+    #[test]
+    fn passport_classes() {
+        use crate::sidecar_routes::{AgentCaller, Caller as S};
+        let agent = |sandboxed| {
+            S::Agent(AgentCaller {
+                project_id: "ws-1".into(),
+                map_key: Some("k".into()),
+                args: Vec::new(),
+                sandboxed,
+            })
+        };
+        let refused = |r: Result<Caller, CliResponse>| match r {
+            Err(r) => r,
+            Ok(c) => panic!("expected a refusal, got {c:?}"),
+        };
+        match classify_passport(agent(false), "sid-1") {
+            Ok(Caller::Agent { project_id, session_id }) => {
+                assert_eq!((project_id.as_str(), session_id.as_str()), ("ws-1", "sid-1"));
+            }
+            Ok(c) => panic!("a harness passport is an agent: {c:?}"),
+            Err(r) => panic!("a harness passport is an agent: {}", r.body),
+        }
+        let r = refused(classify_passport(agent(true), "sid-1"));
+        assert!(r.status.starts_with("403") && r.body.contains("\"sandboxed\""), "{}", r.body);
+        for c in [S::WrongCredential, S::Invalid, S::Owner, S::Login { username: "x".into() }] {
+            let r = refused(classify_passport(c, "sid-1"));
+            assert!(r.status.starts_with("403") && r.body.contains("wrong_credential"), "{}", r.body);
+        }
+        match classify_passport(S::Shell { project_id: "no-such-ws".into() }, "sid-9") {
+            Ok(Caller::Owner { actor, home }) => {
+                assert_eq!(actor, "shell:no-such-ws/sid-9");
+                assert_eq!(home.as_deref(), Some("no-such-ws"));
+            }
+            Ok(c) => panic!("a shell tab is a person: {c:?}"),
+            Err(r) => panic!("a shell tab is a person: {}", r.body),
+        }
+    }
+
+    #[test]
+    fn agent_refusals_are_403_with_a_hint() {
+        let r = agent_cannot_rename();
+        assert!(r.status.starts_with("403"), "{}", r.status);
+        assert!(r.body.contains("agent_cannot_rename") && r.body.contains("ask your owner"), "{}", r.body);
+        let r = not_your_agent();
+        assert!(r.status.starts_with("403") && r.body.contains("not_your_agent"), "{}", r.body);
     }
 
     #[test]

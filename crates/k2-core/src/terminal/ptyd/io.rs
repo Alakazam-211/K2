@@ -1,0 +1,377 @@
+//! The K2-owned IO loop for ptyd sessions (S0 decision A1).
+//!
+//! In-process sessions keep alacritty's `EventLoop`. A ptyd session's
+//! "PTY" is a Unix-socket byte stream from ptyd plus control requests on
+//! the owner connection, so this loop is small: read → parse under the
+//! Term lock → `Wakeup`; queue input; honour the DEC 2026 sync timeout; on
+//! the child's exit send `ChildExit` + `Term::exit` + `Wakeup` exactly as
+//! alacritty's loop does (`event_loop.rs:258-271`).
+//!
+//! Owning the vte `Processor` is the point: when the loop is stopped
+//! ([`PtydIo::stop`]) it can `stop_sync` and report the exact replay offset
+//! (`Shadow::partial_start`), which alacritty's private `State` makes
+//! impossible (`ptyd-s0-results.md` §6).
+
+use std::borrow::Cow;
+use std::collections::VecDeque;
+use std::io::{self, Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use alacritty_terminal::event::{Event, EventListener};
+use alacritty_terminal::sync::FairMutex;
+use alacritty_terminal::vte::ansi::Processor;
+use alacritty_terminal::Term;
+use k2_ptyd::client::DataStream;
+use k2_ptyd::proto::Request;
+
+use super::client::{Owner, SessionEvent};
+use super::shadow::Shadow;
+
+pub enum IoMsg {
+    Input(Cow<'static, [u8]>),
+    /// Stop the loop without touching the child (detach).
+    Stop,
+}
+
+/// Cheap, cloneable handle for queueing input (also used by the
+/// query-reply sink).
+#[derive(Clone)]
+pub struct IoSender {
+    tx: mpsc::Sender<IoMsg>,
+    wake: Arc<OwnedFd>,
+}
+
+impl IoSender {
+    pub fn send(&self, msg: IoMsg) {
+        if self.tx.send(msg).is_ok() {
+            let b = 1u8;
+            // SAFETY: one byte to our non-blocking wake pipe; EAGAIN means a
+            // wake is already pending, which is fine.
+            unsafe { libc::write(self.wake.as_raw_fd(), &b as *const u8 as *const libc::c_void, 1) };
+        }
+    }
+}
+
+/// What the loop reports when it ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IoEnd {
+    /// Total stream bytes read (absolute offset of the next unread byte).
+    pub reader_pos: u64,
+    /// First byte NOT on the grid after `stop_sync` — the snapshot's
+    /// replay offset (S4).
+    pub safe_offset: u64,
+    /// The child exited (vs. the loop being stopped).
+    pub exited: bool,
+}
+
+pub struct PtydIo {
+    sender: IoSender,
+    join: Mutex<Option<JoinHandle<IoEnd>>>,
+    reader_pos: Arc<AtomicU64>,
+}
+
+impl PtydIo {
+    pub fn sender(&self) -> IoSender {
+        self.sender.clone()
+    }
+
+    pub fn write(&self, bytes: Cow<'static, [u8]>) {
+        self.sender.send(IoMsg::Input(bytes));
+    }
+
+    /// Bytes read so far (diagnostics/tests).
+    pub fn reader_pos(&self) -> u64 {
+        self.reader_pos.load(Ordering::Acquire)
+    }
+
+    /// Stop the loop (if still running) and join it. Idempotent; returns
+    /// the loop's end report the first time.
+    pub fn stop(&self) -> Option<IoEnd> {
+        self.sender.send(IoMsg::Stop);
+        let h = match self.join.lock() {
+            Ok(mut g) => g.take(),
+            Err(p) => p.into_inner().take(),
+        }?;
+        if h.thread().id() == std::thread::current().id() {
+            return None; // never join ourselves
+        }
+        h.join().ok()
+    }
+}
+
+fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
+    let mut p = [0 as RawFd; 2];
+    // SAFETY: pipe fills two fds.
+    if unsafe { libc::pipe(p.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    for fd in p {
+        // SAFETY: fcntl on our fresh fds.
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+            let fl = libc::fcntl(fd, libc::F_GETFL);
+            libc::fcntl(fd, libc::F_SETFL, fl | libc::O_NONBLOCK);
+        }
+    }
+    // SAFETY: both fresh and owned here.
+    Ok(unsafe { (OwnedFd::from_raw_fd(p[0]), OwnedFd::from_raw_fd(p[1])) })
+}
+
+/// Start the loop for one session. `install_sink` receives the input
+/// sender BEFORE the thread starts, so the terminal-query reply sink exists
+/// before the first byte is parsed (same guarantee as the in-process path).
+pub fn start<L>(
+    sid: String,
+    stream: DataStream,
+    term: Arc<FairMutex<Term<L>>>,
+    listener: L,
+    owner: Arc<Owner>,
+    events: mpsc::Receiver<SessionEvent>,
+    install_sink: impl FnOnce(IoSender),
+) -> io::Result<PtydIo>
+where
+    L: EventListener + Send + 'static,
+{
+    let (wake_r, wake_w) = pipe()?;
+    let (tx, rx) = mpsc::channel();
+    let sender = IoSender { tx, wake: Arc::new(wake_w) };
+    install_sink(sender.clone());
+    let reader_pos = Arc::new(AtomicU64::new(stream.start));
+    let pos = Arc::clone(&reader_pos);
+    let join = std::thread::Builder::new().name(format!("ptyd-io {sid}")).spawn(move || {
+        let mut l = Loop {
+            sid,
+            term,
+            listener,
+            owner,
+            events,
+            rx,
+            wake_r,
+            parser: Processor::new(),
+            shadow: Shadow::at(stream.start),
+            wq: VecDeque::new(),
+            pos,
+        };
+        l.run(stream)
+    })?;
+    Ok(PtydIo { sender, join: Mutex::new(Some(join)), reader_pos })
+}
+
+struct Loop<L: EventListener> {
+    sid: String,
+    term: Arc<FairMutex<Term<L>>>,
+    listener: L,
+    owner: Arc<Owner>,
+    events: mpsc::Receiver<SessionEvent>,
+    rx: mpsc::Receiver<IoMsg>,
+    wake_r: OwnedFd,
+    parser: Processor,
+    shadow: Shadow,
+    wq: VecDeque<u8>,
+    pos: Arc<AtomicU64>,
+}
+
+enum Step {
+    Continue,
+    Stopped,
+    Eof,
+}
+
+const READ_CHUNK: usize = 64 * 1024;
+const MAX_READ_PER_WAKE: usize = 1 << 20;
+
+impl<L: EventListener> Loop<L> {
+    fn run(&mut self, stream: DataStream) -> IoEnd {
+        let (pending, mut sock) = stream.into_parts();
+        if sock.set_nonblocking(true).is_err() {
+            return self.finish_exit(SessionEvent::OwnerLost);
+        }
+        if !pending.is_empty() {
+            self.process(&pending);
+        }
+        loop {
+            match self.turn(&mut sock) {
+                Step::Continue => {}
+                Step::Stopped => return self.finish_stop(),
+                Step::Eof => {
+                    // Stream EOF: the child exited (ptyd drains, then closes),
+                    // an overrun closed it, or ptyd is gone. Ask the event
+                    // channel which.
+                    match self.events.recv_timeout(Duration::from_secs(2)) {
+                        Ok(SessionEvent::Overrun { lost_bytes }) => {
+                            crate::log_debug!("[ptyd] session={} overrun lost={} — reattaching", self.sid, lost_bytes);
+                            match self.owner.attach(&self.sid, self.shadow.pos()) {
+                                Ok(s) => {
+                                    // Bytes were lost; restart the scanner at the new start.
+                                    self.shadow = Shadow::at(s.start);
+                                    self.pos.store(s.start, Ordering::Release);
+                                    let (p, ns) = s.into_parts();
+                                    sock = ns;
+                                    if sock.set_nonblocking(true).is_err() {
+                                        return self.finish_exit(SessionEvent::OwnerLost);
+                                    }
+                                    if !p.is_empty() {
+                                        self.process(&p);
+                                    }
+                                }
+                                Err(_) => return self.finish_exit(SessionEvent::OwnerLost),
+                            }
+                        }
+                        Ok(ev) => return self.finish_exit(ev),
+                        Err(_) => return self.finish_exit(SessionEvent::OwnerLost),
+                    }
+                }
+            }
+        }
+    }
+
+    fn turn(&mut self, sock: &mut UnixStream) -> Step {
+        let sync_deadline = self.parser.sync_timeout().sync_timeout();
+        let timeout_ms: i32 = match sync_deadline {
+            Some(d) => d.saturating_duration_since(Instant::now()).as_millis().min(i32::MAX as u128) as i32,
+            None => -1,
+        };
+        let mut fds = [
+            libc::pollfd { fd: sock.as_raw_fd(), events: libc::POLLIN | if self.wq.is_empty() { 0 } else { libc::POLLOUT }, revents: 0 },
+            libc::pollfd { fd: self.wake_r.as_raw_fd(), events: libc::POLLIN, revents: 0 },
+        ];
+        // SAFETY: two valid pollfds.
+        let n = unsafe { libc::poll(fds.as_mut_ptr(), 2, timeout_ms) };
+        if n < 0 {
+            return if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted { Step::Continue } else { Step::Eof };
+        }
+        if n == 0 {
+            // Synchronized-update timeout (same as alacritty's loop).
+            if self.parser.sync_timeout().sync_timeout().is_some() {
+                let mut t = self.term.lock();
+                self.parser.stop_sync(&mut *t);
+                drop(t);
+                self.listener.send_event(Event::Wakeup);
+            }
+            return Step::Continue;
+        }
+        if fds[1].revents != 0 {
+            let mut b = [0u8; 64];
+            // SAFETY: draining our non-blocking pipe.
+            while unsafe { libc::read(self.wake_r.as_raw_fd(), b.as_mut_ptr() as *mut libc::c_void, b.len()) } > 0 {}
+            while let Ok(m) = self.rx.try_recv() {
+                match m {
+                    IoMsg::Input(bytes) => self.wq.extend(bytes.iter()),
+                    IoMsg::Stop => return Step::Stopped,
+                }
+            }
+        }
+        let re = fds[0].revents;
+        if re & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+            let mut buf = [0u8; READ_CHUNK];
+            let mut total = 0usize;
+            loop {
+                match sock.read(&mut buf) {
+                    Ok(0) => {
+                        if total > 0 {
+                            self.wakeup_after(total);
+                        }
+                        return Step::Eof;
+                    }
+                    Ok(n) => {
+                        self.feed(&buf[..n]);
+                        total += n;
+                        if total >= MAX_READ_PER_WAKE {
+                            break;
+                        }
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => {
+                        if total > 0 {
+                            self.wakeup_after(total);
+                        }
+                        return Step::Eof;
+                    }
+                }
+            }
+            if total > 0 {
+                self.wakeup_after(total);
+            }
+        }
+        if !self.wq.is_empty() {
+            loop {
+                let (a, _) = self.wq.as_slices();
+                if a.is_empty() {
+                    break;
+                }
+                match sock.write(a) {
+                    Ok(n) => {
+                        self.wq.drain(..n);
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => {
+                        self.wq.clear();
+                        break;
+                    }
+                }
+            }
+        }
+        Step::Continue
+    }
+
+    fn feed(&mut self, bytes: &[u8]) {
+        {
+            let mut t = self.term.lock();
+            self.parser.advance(&mut *t, bytes);
+        }
+        self.shadow.feed(bytes);
+        self.pos.store(self.shadow.pos(), Ordering::Release);
+    }
+
+    fn process(&mut self, bytes: &[u8]) {
+        self.feed(bytes);
+        self.wakeup_after(bytes.len());
+    }
+
+    /// alacritty: "queue terminal redraw unless all processed bytes were
+    /// synchronized".
+    fn wakeup_after(&self, processed: usize) {
+        if self.parser.sync_bytes_count() < processed {
+            self.listener.send_event(Event::Wakeup);
+        }
+    }
+
+    fn finish_stop(&mut self) -> IoEnd {
+        let mut t = self.term.lock();
+        self.parser.stop_sync(&mut *t);
+        drop(t);
+        IoEnd { reader_pos: self.shadow.pos(), safe_offset: self.shadow.partial_start(), exited: false }
+    }
+
+    fn finish_exit(&mut self, ev: SessionEvent) -> IoEnd {
+        use std::os::unix::process::ExitStatusExt;
+        let status = match ev {
+            SessionEvent::Exited { code: Some(c), .. } => Some(std::process::ExitStatus::from_raw((c & 0xff) << 8)),
+            SessionEvent::Exited { signal: Some(s), .. } => Some(std::process::ExitStatus::from_raw(s & 0x7f)),
+            // ptyd vanished: its agents got SIGHUP from the master closing.
+            SessionEvent::OwnerLost => Some(std::process::ExitStatus::from_raw(libc::SIGHUP)),
+            _ => None,
+        };
+        {
+            let mut t = self.term.lock();
+            self.parser.stop_sync(&mut *t);
+        }
+        if let Some(st) = status {
+            self.listener.send_event(Event::ChildExit(st));
+        }
+        self.term.lock().exit();
+        self.listener.send_event(Event::Wakeup);
+        // The exit is consumed: drop ptyd's record (P25/P32).
+        let _ = self.owner.request(Request::AckExit { sid: self.sid.clone() });
+        self.owner.unwatch(&self.sid);
+        IoEnd { reader_pos: self.shadow.pos(), safe_offset: self.shadow.partial_start(), exited: true }
+    }
+}

@@ -258,6 +258,12 @@ impl Write for DataStream {
 }
 
 impl DataStream {
+    /// Build from an attached connection (`pending` = bytes read past the
+    /// `attached` frame).
+    pub fn from_parts(stream: UnixStream, start: u64, end: u64, pending: Vec<u8>) -> DataStream {
+        DataStream { stream, start, end, pending }
+    }
+
     /// Split into a reader that first yields the pending bytes, and the raw socket.
     pub fn into_parts(self) -> (Vec<u8>, UnixStream) {
         (self.pending, self.stream)

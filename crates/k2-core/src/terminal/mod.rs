@@ -20,6 +20,11 @@ pub mod daemon_pty;
 // `SandboxSpec::default() == Passthrough` keeps every existing path
 // byte-identical.
 pub mod sandbox;
+// k2-ptyd backend (PRD prd-k2-ptyd-v1, S2): agent PTYs hosted by the
+// separate k2-ptyd process so they can outlive the daemon. Behind the
+// dev-only `K2_PTYD=1` switch in 0.46.2; off ⇒ the in-process path is
+// untouched.
+pub mod ptyd;
 // Portable PATH split/join/prepend/merge (host separator: `:` / `;`).
 pub mod path_env;
 // PATH enrichment for daemon-spawned children (issue #15). Computes

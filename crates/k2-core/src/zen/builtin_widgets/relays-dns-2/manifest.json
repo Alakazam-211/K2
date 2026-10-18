@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "Relays & DNS",
+  "description": "Relay, DNS and edge health from K2 Web's fleet summary or ops edge, a Gatus endpoint, or status checks.",
+  "entry": "index.html",
+  "caps": [
+    "sources:read"
+  ],
+  "reasons": {
+    "sources:read": "to show the sources this card's config names (config.source, config.sources)"
+  },
+  "sources": "config"
+}

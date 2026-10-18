@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "Fleet grid",
+  "description": "One tile per box from one or several fleet sources: green when ready, red with its reason when it doesn't answer, its own colour when unknown, and whose go a box needs.",
+  "entry": "index.html",
+  "caps": [
+    "sources:read"
+  ],
+  "reasons": {
+    "sources:read": "to show the sources this card's config names (config.source, config.sources)"
+  },
+  "sources": "config"
+}

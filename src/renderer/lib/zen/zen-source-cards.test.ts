@@ -16,8 +16,21 @@ import type { SourceResult } from '@/lib/sources/sources-types'
 
 const ROOT = resolve(__dirname, '../../../../crates/k2-core/src/zen/builtin_widgets')
 const KIT = readFileSync(resolve(ROOT, 'sources-kit/kit.js'), 'utf8')
-const CARDS = ['fleet-grid-1', 'version-spread-1', 'relays-dns-1', 'deploys-1', 'money-alerts-1'] as const
+const KIT2 = readFileSync(resolve(ROOT, 'sources-kit-2/kit.js'), 'utf8')
+const CARDS = [
+  'fleet-grid-1',
+  'version-spread-1',
+  'relays-dns-1',
+  'deploys-1',
+  'money-alerts-1',
+  'fleet-grid-2',
+  'version-spread-2',
+  'relays-dns-2',
+  'deploys-2',
+  'money-alerts-2',
+] as const
 type Card = (typeof CARDS)[number]
+const kitFor = (card: Card): string => (card.endsWith('-2') ? KIT2 : KIT)
 
 interface Sub {
   address: string
@@ -62,7 +75,7 @@ async function mount(card: Card, config: Record<string, string | number | boolea
     },
   }
   vi.stubGlobal('k2', k2)
-  new Function(KIT)()
+  new Function(kitFor(card))()
   new Function(readFileSync(resolve(ROOT, card, 'card.js'), 'utf8'))()
   k2.config = config
   hello({})
@@ -88,6 +101,7 @@ const view = (over: Partial<SourceResult> = {}, address = 'fleet'): ZenSourceVie
 function healthy(card: Card): ZenSourceView {
   switch (card) {
     case 'relays-dns-1':
+    case 'relays-dns-2':
       return view({
         items: [
           fixtureItem('ohana', { fields: { version: '0.45.6', phase: 'ready', relay: 'k2e-01', up: true } }),
@@ -95,6 +109,7 @@ function healthy(card: Card): ZenSourceView {
         ],
       })
     case 'deploys-1':
+    case 'deploys-2':
       return view({
         items: [
           fixtureItem('dpl_a', { fields: { state: 'READY', url: 'app-a.vercel.app', created: (NOW - 120) * 1000, target: 'production' } }),
@@ -102,6 +117,7 @@ function healthy(card: Card): ZenSourceView {
         ],
       })
     case 'money-alerts-1':
+    case 'money-alerts-2':
       return view({ keep: 'states', fields: {}, items: [], counts: { ok: 0, warn: 0, crit: 0, unknown: 0 } })
     default:
       return view()
@@ -313,5 +329,232 @@ describe('card specifics', () => {
     expect(m.card.querySelector('.k2c-number-value')?.textContent).toBe('7')
     m.push(view({ keep: 'values', health: 'crit', display: 'crit', fields: { pastDue: 100, hasMore: true }, items: [] }))
     expect(m.card.querySelector('.k2c-number-value')?.textContent).toBe('100+')
+  })
+})
+
+// ── @2 (0.46.1): several sources, soft level, lists, K2 Web's ops shapes,
+// and a refused subscription that subscribes again by itself.
+
+/** A K2 Web ops boxes view (`/api/ops/fleet?part=boxes`), keyed by label. */
+function opsBoxes(over: Partial<SourceResult> = {}): ZenSourceView {
+  return view(
+    {
+      name: 'k2-ops-boxes',
+      label: 'Ops: boxes',
+      fields: { target_version: '0.46.0', behind: 2, far_behind: 1, boxes: 3, ts: NOW - 30 },
+      items: [
+        fixtureItem('ohana', { fields: { version: '0.44.4', online: true, phase: 'ready', customer: true, needs_go: 'rosson' } }),
+        fixtureItem('akzm', { fields: { version: '0.46.0', online: true, phase: 'ready', customer: false, needs_go: null } }),
+        fixtureItem('luzz', { health: 'warn', fields: { version: '0.45.9', online: true, phase: 'ready', customer: false, needs_go: null } }),
+      ],
+      counts: { ok: 2, warn: 1, crit: 0, unknown: 0 },
+      ...over,
+    },
+    'k2-ops-boxes',
+  )
+}
+
+describe('@2 cards', () => {
+  it('fleet grid @2 merges sources by box: fields filled in order, the worst health, whose go', async () => {
+    const m = await mount('fleet-grid-2', { source: 'fleet', sources: 'k2-ops-boxes, fleet' })
+    expect(m.subs.map((s) => s.address)).toEqual(['fleet', 'k2-ops-boxes'])
+    m.push(
+      view({
+        items: [
+          fixtureItem('ohana', { fields: { version: '0.44.4', phase: 'ready' } }),
+          fixtureItem('akzm', { health: 'crit', reason: 'timeout', fields: { version: null, phase: null } }),
+          fixtureItem('luzz', { fields: { version: '0.45.9', phase: 'ready' } }),
+        ],
+        counts: { ok: 2, warn: 0, crit: 1, unknown: 0 },
+      }),
+    )
+    // The second source hasn't answered: its own line, the first still draws.
+    expect(m.card.querySelector('[data-k2c-source="k2-ops-boxes"]')?.textContent).toContain('Loading')
+    m.push(opsBoxes(), 1)
+    const tile = (k: string) => m.card.querySelector(`[data-k2c-item="${k}"]`)
+    expect(tile('ohana')?.textContent).toContain('customer')
+    expect(tile('ohana')?.textContent).toContain('go: rosson')
+    expect(tile('akzm')?.getAttribute('data-k2c-state')).toBe('crit')
+    expect(tile('akzm')?.textContent).toContain('0.46.0')
+    expect(tile('luzz')?.getAttribute('data-k2c-state')).toBe('warn')
+    expect(m.card.querySelectorAll('[data-k2c-item]')).toHaveLength(3)
+    expect(m.card.querySelector('[data-k2c-banner]')?.textContent).toBe('1 down · 1 warning')
+    expect(m.card.textContent).toContain('2 sources')
+    expect(m.card.querySelector('[data-k2c-source]')).toBeNull()
+    // One source stale: its own line; the other's boxes still draw.
+    m.push(opsBoxes({ phase: 'stale', display: 'stale', reasonText: 'Timed out.' }), 1)
+    expect(m.card.querySelector('[data-k2c-source="k2-ops-boxes"]')?.textContent).toBe('k2-ops-boxes: Stale: Timed out.')
+    expect(m.card.querySelector('.k2c-greyed')).toBeNull()
+    expect(tile('ohana')?.getAttribute('data-k2c-state')).toBe('ok')
+    // Ask goes to the source the box came from.
+    ;(tile('akzm')?.querySelector('[data-k2c-ask]') as HTMLButtonElement).click()
+    expect(m.asks).toEqual([['fleet', 'akzm']])
+  })
+
+  it('@2 says "soft crit 2/3" from soft.level, on the card and on a tile', async () => {
+    const m = await mount('fleet-grid-2', { source: 'k2-ops-boxes' })
+    m.push(
+      opsBoxes({
+        soft: { count: 2, of: 3, level: 'crit' },
+        items: [fixtureItem('ohana', { health: 'warn', soft: { count: 2, of: 3, level: 'crit' }, fields: { version: '0.44.4' } })],
+      }),
+    )
+    expect(m.card.querySelector('.k2c-soft')?.textContent).toBe('soft crit 2/3')
+    expect(m.card.querySelector('.k2c-soft')?.getAttribute('data-k2c-level')).toBe('crit')
+    expect(m.card.querySelector('[data-k2c-item="ohana"]')?.textContent).toContain('soft crit 2/3')
+    expect(m.card.textContent).not.toContain('retrying')
+  })
+
+  it('@2 keeps named lists out of the grid; config.list shows one', async () => {
+    const certs = view({
+      name: 'k2-ops-certs',
+      items: [
+        fixtureItem('k2.dev', { fields: { days: 60 } }),
+        fixtureItem('certs/app.k2.dev', { list: 'certs', health: 'warn', fields: { cert_days: 12 } }),
+      ],
+    })
+    let m = await mount('fleet-grid-2', { source: 'k2-ops-certs' })
+    m.push(certs)
+    expect([...m.card.querySelectorAll('[data-k2c-item]')].map((t) => t.getAttribute('data-k2c-item'))).toEqual(['k2.dev'])
+    m = await mount('fleet-grid-2', { source: 'k2-ops-certs', list: 'certs', detailFields: 'cert_days' })
+    m.push(certs)
+    const t = m.card.querySelector('[data-k2c-item="certs/app.k2.dev"]')
+    expect(t?.getAttribute('data-k2c-state')).toBe('warn')
+    expect(t?.textContent).toContain('12')
+    expect(m.card.querySelector('[data-k2c-banner]')?.textContent).toBe('1 warning')
+  })
+
+  it('@2 subscribes again by itself after a refusal: 5 s, then 10 s, back to 5 s on a view', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'setTimeout', 'clearTimeout'] })
+    const m = await mount('fleet-grid-2', { source: 'fleet' })
+    expect(m.subs).toHaveLength(1)
+    m.fail({ code: 'not_bound', message: 'x' })
+    expect(m.card.textContent).toContain('Not bound to this card yet')
+    vi.advanceTimersByTime(4_999)
+    expect(m.subs).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    expect(m.subs).toHaveLength(2)
+    expect(m.subs[1].address).toBe('fleet')
+    m.fail({ code: 'not_bound', message: 'x' }, 1)
+    vi.advanceTimersByTime(9_999)
+    expect(m.subs).toHaveLength(2)
+    vi.advanceTimersByTime(1)
+    expect(m.subs).toHaveLength(3)
+    m.push(healthy('fleet-grid-2'), 2)
+    expect(m.card.querySelector('[data-k2c-item="alpha"]')).not.toBeNull()
+    m.fail({ code: 'removed', message: 'x' }, 2)
+    vi.advanceTimersByTime(5_000)
+    expect(m.subs).toHaveLength(4)
+  })
+
+  it('@1 never subscribes again (as shipped)', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'setTimeout', 'clearTimeout'] })
+    const m = await mount('fleet-grid-1', { source: 'fleet' })
+    m.fail({ code: 'removed', message: 'x' })
+    vi.advanceTimersByTime(120_000)
+    expect(m.subs).toHaveLength(1)
+  })
+
+  it('version spread @2: the fleet target from a source, its behind / far behind counts, rated boxes keep their health', async () => {
+    const m = await mount('version-spread-2', { source: 'k2-ops-boxes' })
+    m.push(opsBoxes())
+    await flush()
+    expect(m.card.querySelector('[data-k2c-target]')?.textContent).toBe('Fleet target: 0.46.0 · 2 behind · 1 far behind')
+    expect([...m.card.querySelectorAll('[data-k2c-version]')].map((b) => [b.getAttribute('data-k2c-version'), b.className.includes('k2c-warn')])).toEqual([
+      ['0.46.0', false],
+      ['0.45.9', true],
+      ['0.44.4', true],
+    ])
+    expect(m.card.querySelector('.k2c-number')?.className).toContain('k2c-crit')
+    expect(m.card.querySelector('[data-k2c-item="ohana"]')?.getAttribute('data-k2c-state')).toBe('warn')
+    expect(m.card.querySelector('[data-k2c-item="akzm"]')).toBeNull()
+  })
+
+  it('version spread @2: config.target when no source names one; a release still wins', async () => {
+    let m = await mount('version-spread-2', { source: 'fleet', target: '0.45.6' })
+    m.push(view())
+    await flush()
+    expect(m.card.querySelector('[data-k2c-target]')?.textContent).toBe('Target: 0.45.6')
+    m = await mount('version-spread-2', { source: 'k2-ops-boxes', latest: 'release' })
+    m.push(opsBoxes())
+    m.push(view({ name: 'release', fields: { newest: 'v0.46.1' }, items: [] }, 'release'), 1)
+    await flush()
+    expect(m.card.querySelector('[data-k2c-target]')?.textContent).toContain('Newest release: v0.46.1 · 3 behind')
+  })
+
+  it('relays & DNS @2: K2 Web ops edge relays, the DNS row and status-only checks', async () => {
+    const m = await mount('relays-dns-2', { source: 'k2-ops-edge', sources: 'k2-dev-site,k2-connect' })
+    m.push(
+      view({
+        name: 'k2-ops-edge',
+        fields: { wildcard_a: 'primary', failover_armed: true, relays_ts: NOW - 20 },
+        items: [
+          fixtureItem('k2e-01', { fields: { role: 'primary', tunnels: 41, cp: 'active', frps: 'active' } }),
+          fixtureItem('k2e-02', { health: 'crit', fields: { role: 'standby', tunnels: 0, cp: 'failed', frps: 'active' } }),
+        ],
+        counts: { ok: 1, warn: 0, crit: 1, unknown: 0 },
+      }, 'k2-ops-edge'),
+    )
+    m.push(view({ name: 'k2-dev-site', fields: {}, items: [], counts: { ok: 0, warn: 0, crit: 0, unknown: 0 }, httpStatus: 200 }, 'k2-dev-site'), 1)
+    m.push(view({ name: 'k2-connect', fields: {}, items: [], counts: { ok: 0, warn: 0, crit: 0, unknown: 0 }, httpStatus: 401 }, 'k2-connect'), 2)
+    const tile = (k: string) => m.card.querySelector(`[data-k2c-item="${k}"]`)
+    expect(tile('k2e-01')?.textContent).toContain('primary · 41 tunnels')
+    expect(tile('k2e-02')?.getAttribute('data-k2c-state')).toBe('crit')
+    expect(tile('dns')?.textContent).toContain('DNS: primary')
+    expect(tile('dns')?.textContent).toContain('failover armed')
+    expect(tile('k2-connect')?.textContent).toContain('HTTP 401')
+    expect(tile('k2-connect')?.getAttribute('data-k2c-state')).toBe('ok')
+    expect(tile('k2-dev-site')?.textContent).toContain('HTTP 200')
+    m.push(view({ name: 'k2-connect', health: 'crit', display: 'crit', fields: {}, items: [], httpStatus: 502, reason: 'http_5xx' }, 'k2-connect'), 2)
+    ;(tile('k2-connect')?.querySelector('[data-k2c-ask]') as HTMLButtonElement).click()
+    expect(m.asks).toEqual([['k2-connect', null]])
+  })
+
+  it('relays & DNS @2 says what it needs for a shape it can’t draw', async () => {
+    const m = await mount('relays-dns-2', { source: 'fleet' })
+    m.push(view())
+    expect(m.card.querySelector('[data-k2c-needs]')?.textContent).toContain('Needs K2 Web’s fleet-summary or ops edge')
+  })
+
+  it('deploys @2: what each part runs from K2 Web’s deploys fields', async () => {
+    const m = await mount('deploys-2', { source: 'k2-ops-edge' })
+    m.push(view({ fields: { web_sha: 'abcdef0123', cp_sha_k2e01: '1234567890', cp_sha_k2e02: '1234567890' }, items: [] }, 'k2-ops-edge'))
+    expect(m.card.querySelector('[data-k2c-item="web"]')?.textContent).toContain('abcdef0')
+    expect(m.card.querySelector('[data-k2c-item="cp_sha_k2e01"]')?.textContent).toContain('control plane k2e-01')
+    expect(m.card.querySelector('[data-k2c-banner]')).toBeNull()
+  })
+
+  it('money alerts @2: K2 Web billing: past due, not kept live, canceled still routing, reconcile', async () => {
+    const m = await mount('money-alerts-2', { source: 'k2-ops-billing' })
+    m.push(
+      view(
+        {
+          name: 'k2-ops-billing',
+          health: 'crit',
+          display: 'crit',
+          fields: { past_due: 2, past_due_not_kept: 1, canceled_routing: 1, reconcile_ok: true, ts: NOW - 10 },
+          items: [
+            fixtureItem('edf', { health: 'warn', fields: { keep_live: false } }),
+            fixtureItem('noir', { fields: { keep_live: true } }),
+            fixtureItem('canceled/quillify', { list: 'canceled', health: 'crit', fields: { canceled_label: 'quillify' } }),
+          ],
+          counts: { ok: 1, warn: 1, crit: 1, unknown: 0 },
+        },
+        'k2-ops-billing',
+      ),
+    )
+    const row = (k: string) => m.card.querySelector(`[data-k2c-item="${k}"]`)
+    expect(m.card.querySelector('[data-k2c-banner]')?.textContent).toBe('Money needs a person now')
+    expect(row('past_due')?.textContent).toContain('2 past due')
+    expect(row('past_due')?.textContent).toContain('1 not kept live')
+    expect(row('edf')?.getAttribute('data-k2c-state')).toBe('warn')
+    expect(row('canceled_routing')?.textContent).toContain('1 canceled but still routing')
+    expect(row('canceled/quillify')?.textContent).toContain('quillify')
+    expect(row('reconcile')?.getAttribute('data-k2c-state')).toBe('ok')
+    // Stripe's states-only source alone keeps @1's words.
+    const s = await mount('money-alerts-2', { source: 'money' })
+    s.push(view({ keep: 'states', health: 'crit', display: 'crit', fields: {}, items: [] }))
+    expect(s.card.querySelector('[data-k2c-banner]')?.textContent).toBe('Past-due subscriptions found')
+    expect(s.card.textContent).toContain('States only')
   })
 })

@@ -719,7 +719,8 @@ k2.connected.then(() => {\n\
 ```\n\n\
 Charts: name a pinned library in `requires.libs` (`uplot@1.6.32` for sparklines and\n\
 history lines; `chart.js`, `echarts`, `d3` too). They run offline; no CDN, no eval.\n\n\
-**Built-in cards** (place them with `widget = \"k2:<card>@1\"` and `config.source`):\n\n",
+**Built-in cards** (place them with `widget = \"k2:<card>@2\"`, `config.source` and, for\n\
+several sources, `config.sources = \"a, b\"`):\n\n",
     );
     for (id, presets) in super::builtin_widgets::SOURCE_CARDS {
         s.push_str(&format!("- `{id}` with {}\n", presets.iter().map(|p| format!("`--preset {p}`")).collect::<Vec<_>>().join(" or ")));
@@ -728,8 +729,13 @@ history lines; `chart.js`, `echarts`, `d3` too). They run offline; no CDN, no ev
         "\n`k2 sources propose --preset k2-fleet --preset-arg boxes=ohana,luzz --name fleet --label Fleet`\n\
 makes the fleet source; `config.source = \"fleet::<that server>\"` shows it on a Mac's Garden.\n\
 `k2-fleet-summary` (K2 Web's one route) gives the same item keys and fields, so a card\n\
-keeps working when the source switches. `k2:version-spread@1` takes `config.latest` (a\n\
-`github-latest-release` source); `k2:money-alerts@1` shows states only by default.\n\n",
+keeps working when the source switches. `k2:version-spread@2` measures boxes against\n\
+`config.latest` (a `github-latest-release` source), else a source's `target_version`, else\n\
+`config.target`; `k2:money-alerts@2` shows states only by default and K2 Web's ops billing.\n\
+`@2` (0.46.1) merges `config.source` + `config.sources` by item key (a box in two sources is\n\
+one tile, the worst health wins), says \"soft crit 2/3\", keeps `extract.lists` items out of\n\
+the main grid (`config.list = \"certs\"` shows one), and subscribes again by itself after a\n\
+refusal (5 s, doubling to 60 s). `k2:<card>@1` still runs as shipped.\n\n",
     );
     s
 }
@@ -1040,7 +1046,8 @@ mod tests {
             assert!(s.contains(needle), "the k2-zen skill lost {needle}");
         }
         for needle in ["### Cards that read data sources", "`sources:read`", "sources_needs_cap", "sources_reach_thread",
-            "server_not_saved", "err.last", "serverNow - updatedAt", "k2:fleet-grid@1", "k2:money-alerts@1", "--preset k2-fleet"]
+            "server_not_saved", "err.last", "serverNow - updatedAt", "k2:fleet-grid@2", "k2:money-alerts@2", "--preset k2-fleet",
+            "config.sources", "soft crit 2/3", "subscribes again by itself"]
         {
             assert!(s.contains(needle), "the k2-zen skill lost {needle}");
         }

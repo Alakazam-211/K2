@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "Source Trend",
+  "description": "One data source: its state, its items, and a sparkline of one of its numbers (config.source, config.series).",
+  "entry": "index.html",
+  "caps": ["sources:read"],
+  "reasons": {
+    "sources:read": "to show the state and history of the source named in this card's config"
+  },
+  "sources": "config",
+  "requires": { "libs": ["uplot@1.6.32"] }
+}

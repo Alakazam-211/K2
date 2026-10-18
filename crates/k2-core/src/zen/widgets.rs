@@ -873,6 +873,18 @@ pub const EXAMPLES: &[Example] = &[
             ("board-lite.css", include_str!("examples/board-lite/board-lite.css")),
         ],
     },
+    // The 0.46.1 widget SDK: one data source with a handler-object
+    // subscription (re-subscribes on its own), k2.shape guards and a pinned
+    // chart library (uplot@1.6.32); `k2 zen widget new trend --from source-trend`.
+    Example {
+        name: "source-trend",
+        files: &[
+            ("manifest.json", include_str!("examples/source-trend/manifest.json")),
+            ("index.html", include_str!("examples/source-trend/index.html")),
+            ("trend.js", include_str!("examples/source-trend/trend.js")),
+            ("trend.css", include_str!("examples/source-trend/trend.css")),
+        ],
+    },
 ];
 
 pub fn example(name: &str) -> Option<&'static Example> {
@@ -1060,6 +1072,14 @@ mod tests {
             assert!(m.caps.iter().all(|c| super::super::USER_WIDGET_CAPS.contains(&c.as_str())));
         }
         assert_eq!(example("hello").map(|e| e.name), Some("hello"));
+        // 0.46.1: the SDK example names a pinned chart library and the
+        // handler-object subscription.
+        let trend = example("source-trend").expect("source-trend example");
+        let manifest = trend.files.iter().find(|(n, _)| *n == "manifest.json").expect("manifest").1;
+        assert!(manifest.contains("\"uplot@1.6.32\""), "{manifest}");
+        let js = trend.files.iter().find(|(n, _)| *n == "trend.js").expect("trend.js").1;
+        assert!(js.contains("k2.sources.subscribe(source, {") && js.contains("err.retrying") && js.contains("new uPlot("));
+        assert!(!js.contains("setInterval") && !js.contains(".innerHTML"), "no hand-rolled retry, no innerHTML");
     }
 
     #[test]

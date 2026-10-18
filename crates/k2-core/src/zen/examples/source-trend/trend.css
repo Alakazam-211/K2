@@ -1,0 +1,68 @@
+/* K2 writes the Garden's --zen-* colours onto :root; the frame is
+   transparent, so the column shows through. */
+html, body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  color: var(--zen-text, #222);
+  font-family: var(--zen-font, system-ui, sans-serif);
+}
+
+.trend {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.title {
+  font-weight: 600;
+}
+
+.chip {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--zen-border, #ccc);
+}
+
+.chip[data-state="ok"] { color: var(--zen-accent, #2a7); }
+.chip[data-state="warn"] { color: var(--zen-needs-you, #b80); }
+.chip[data-state="crit"] { color: var(--zen-danger, #c33); }
+.chip[data-state="stale"],
+.chip[data-state="pending"] { opacity: 0.6; }
+
+.note {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.chart {
+  min-height: 60px;
+}
+
+.items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  overflow: auto;
+}
+
+.items li {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+
+.items li[data-health="warn"] { color: var(--zen-needs-you, #b80); }
+.items li[data-health="crit"] { color: var(--zen-danger, #c33); }

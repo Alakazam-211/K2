@@ -12,9 +12,19 @@
 // a REMOTE host over K2 Connect. The three STRUCTURAL reasons
 // (groups-changed / members-changed / poc-changed) coalesce-refetch the
 // group list on a trailing 300ms window (N rapid events → ONE fetch —
-// the FeedbackItemView idiom); every reason also bumps `revision`
-// immediately so the open Projects page refetches its selected group's
-// `show` view.
+// the FeedbackItemView idiom).
+//
+// Revisions (0.46.1 — eval-project-settings-v1 P4): a chat message is
+// NOT a project change. Before 0.46.1 every `message-created` bumped the
+// one store-wide `revision`, so with Settings → Projects open each chat
+// line in ANY project refetched the list, show, resources and the
+// 10-50 KB icon. Now:
+//   - `revision` — structural changes only (any project); the Projects
+//     page / nav / feedback filter refetch on it;
+//   - `groupRevisions[id]` (+ `unscopedRevision` for frames that name no
+//     project — older daemons) — read through `selectGroupRevision(id)`
+//     so a view refetches only for ITS project;
+//   - `messageRevision` — chat messages; only the chat panel listens.
 //
 // Unread (thread-read-v1, 0.46.1): the Projects-tab badge and the nav dots
 // are the DAEMON's per-person read cursors (`stores/unread.ts`), not a
@@ -31,6 +41,7 @@ import {
   fetchProjectGroups,
   fetchProjectGroupShow,
   type ProjectGroup,
+  type ProjectGroupShow,
 } from '@/components/Projects/projects-api'
 import { initUnreadEvents, unreadKey, useUnreadStore } from '@/stores/unread'
 import {
@@ -109,8 +120,18 @@ interface ProjectGroupsState {
   tagsByWorkspaceId: Record<string, ProjectNavTag[]>
   /** The nav's selected project (drives the main area + member drawer). */
   selectedGroupId: string | null
-  /** Bumped on every project-group event so open views refetch. */
+  /** Bumped on every STRUCTURAL project-group event (groups / members /
+   *  PoC / layout changed, any project) so open views refetch. Chat
+   *  messages do NOT bump it — see `messageRevision`. */
   revision: number
+  /** Per-project structural revision (0.46.1 frames name their project).
+   *  Read through `selectGroupRevision(id)`. */
+  groupRevisions: Record<string, number>
+  /** Bumped by structural frames that name NO project (older daemons) —
+   *  every project's `selectGroupRevision` moves with it. */
+  unscopedRevision: number
+  /** Bumped on `message-created` — the open chat panel refetches on it. */
+  messageRevision: number
   /** Pending open-member-pane click (P5 §6.2) — see MemberPaneRequest. */
   paneRequest: MemberPaneRequest | null
   /** P6 (§6.4) — the project chat panel (§6.7.3: a right-hand side
@@ -133,6 +154,10 @@ interface ProjectGroupsState {
    *  badge them. Session-only; {} while no dashboard is mounted. */
   dashPaneNumbers: Record<string, number>
   fetchGroups: () => Promise<void>
+  /** Optimistic edit (0.46.1): patch one row of `groups` in place (rename
+   *  / pin / PoC from Settings) — the daemon's answer or a rollback patch
+   *  follows. No-op when the row is not loaded. */
+  patchGroup: (groupId: string, patch: Partial<ProjectGroup>) => void
   /** Select a project in the nav; selecting marks it read (§4.4) —
    *  unless the chat panel is closed (its messages stay unread). */
   selectGroup: (groupId: string | null) => void
@@ -163,6 +188,9 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   tagsByWorkspaceId: {},
   selectedGroupId: null,
   revision: 0,
+  groupRevisions: {},
+  unscopedRevision: 0,
+  messageRevision: 0,
   paneRequest: null,
   chatCollapsed: readChatCollapsed(),
   chatWidth: readChatWidth(),
@@ -207,6 +235,12 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
       // onDaemonConnected / onAppHello can retry; a successful empty
       // list is the only path that writes `[]`.
     }
+  },
+  patchGroup: (groupId, patch) => {
+    set((s) => {
+      if (!s.groups || !s.groups.some((g) => g.id === groupId)) return {}
+      return { groups: s.groups.map((g) => (g.id === groupId ? { ...g, ...patch } : g)) }
+    })
   },
   selectGroup: (groupId) => {
     // Switching projects drops any pending pane request — it addressed
@@ -291,6 +325,56 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   clearPaneRequest: () => set({ paneRequest: null }),
 }))
 
+/** Selector: one project's structural revision (its own frames plus any
+ *  frame that named no project). Views key their refetch on it so a
+ *  change to ANOTHER project — or any chat line — costs them nothing. */
+export function selectGroupRevision(groupId: string | null | undefined) {
+  return (s: ProjectGroupsState): number =>
+    s.unscopedRevision + (groupId ? (s.groupRevisions[groupId] ?? 0) : 0)
+}
+
+/** True when the loaded list came from a 0.46.1+ daemon (rows carry
+ *  `iconKey`, possibly null). False before the list lands. */
+function daemonSendsIconKeys(): boolean {
+  const groups = useProjectGroupsStore.getState().groups
+  return !!groups && groups.length > 0 && groups.every((g) => g.iconKey !== undefined)
+}
+
+// ── Show-view cache (0.46.1) ────────────────────────────────────────────
+// The last `show` answer per (host, project), so Settings → Projects can
+// paint a project it has seen before at once while it revalidates
+// (stale-while-revalidate) instead of blanking to "Loading…". A
+// structural frame for a project drops its entry (the refetch it
+// triggers writes the fresh one); a host switch drops them all.
+
+const showCache = new Map<string, ProjectGroupShow>()
+
+function showKey(groupId: string): string {
+  return `${activeHostKey(useConnectHostStore.getState().activeHost)}:${groupId}`
+}
+
+export function getCachedShow(groupId: string): ProjectGroupShow | undefined {
+  return showCache.get(showKey(groupId))
+}
+
+export function setCachedShow(show: ProjectGroupShow): void {
+  showCache.set(showKey(show.id), show)
+}
+
+/** Drop one project's cached show (all of them when `groupId` is absent —
+ *  a frame from an older daemon names no project). */
+export function dropCachedShow(groupId?: string): void {
+  if (!groupId) {
+    showCache.clear()
+    return
+  }
+  showCache.delete(showKey(groupId))
+}
+
+export function clearCachedShows(): void {
+  showCache.clear()
+}
+
 // ── Event wiring ──────────────────────────────────────────────────────────
 
 let eventsInitialized = false
@@ -320,11 +404,13 @@ onActiveHostChange(() => {
     clearTimeout(refetchTimer)
     refetchTimer = null
   }
+  clearCachedShows()
   useProjectGroupsStore.setState((s) => ({
     groups: null,
     tagsByWorkspaceId: {},
     selectedGroupId: null,
     revision: s.revision + 1,
+    unscopedRevision: s.unscopedRevision + 1,
     paneRequest: null,
     lastFocusedPaneByDashboard: {},
     dashPaneNumbers: {},
@@ -339,11 +425,25 @@ onActiveHostChange(() => {
 onDaemonConnected(refetchGroupsIfNeeded)
 onAppHello(primaryScope(), refetchGroupsIfNeeded)
 
-/** Bump `revision` immediately (open views refetch on it) and schedule
- *  the list refetch on a trailing 300ms window — each new event resets
- *  the timer, so a burst fires ONE fetch. */
-function bumpAndCoalesceRefetch(): void {
-  useProjectGroupsStore.setState((s) => ({ revision: s.revision + 1 }))
+/** Bump the structural revisions: `revision` (any project) and either
+ *  that project's `groupRevisions` entry or — for a frame naming no
+ *  project — `unscopedRevision`. */
+function bumpStructural(groupId: string | undefined): void {
+  useProjectGroupsStore.setState((s) =>
+    groupId
+      ? {
+          revision: s.revision + 1,
+          groupRevisions: { ...s.groupRevisions, [groupId]: (s.groupRevisions[groupId] ?? 0) + 1 },
+        }
+      : { revision: s.revision + 1, unscopedRevision: s.unscopedRevision + 1 },
+  )
+}
+
+/** Bump the structural revisions immediately (open views refetch on
+ *  them) and schedule the list refetch on a trailing 300ms window — each
+ *  new event resets the timer, so a burst fires ONE fetch. */
+function bumpAndCoalesceRefetch(groupId: string | undefined): void {
+  bumpStructural(groupId)
   if (refetchTimer !== null) clearTimeout(refetchTimer)
   refetchTimer = setTimeout(() => {
     refetchTimer = null
@@ -371,21 +471,23 @@ export function initProjectGroupEvents(): void {
   void useProjectGroupsStore.getState().fetchGroups()
   initUnreadEvents()
 
-  onProjectGroupsChanged(primaryScope(), (reason) => {
+  onProjectGroupsChanged(primaryScope(), (reason, groupId) => {
     switch (reason) {
-      // Structural — coalesced nav refetch + revision. groups-changed
-      // also covers set-icon/set-color (§6.7.7) — drop the cached icons
-      // FIRST so the revision bump makes mounted avatars refetch a fresh
-      // upload. (The lean signal carries no groupId, so drop ALL cached
-      // icons — see group-icon-cache; coarser than the old payload-keyed
-      // drop but the next mount refetches each avatar anyway.)
+      // Structural — coalesced nav refetch + revisions. groups-changed
+      // also covers set-icon/set-color (§6.7.7). 0.46.1 daemons put an
+      // `iconKey` on every list/show row, so cached icons validate
+      // against it and nothing is dropped here (a rename or pin must not
+      // refetch the 10-50 KB blob). Older daemons: drop that project's
+      // icon (all icons when the frame names none) so avatars refetch.
       case 'groups-changed':
-        dropCachedGroupIcon()
-        bumpAndCoalesceRefetch()
+        if (!daemonSendsIconKeys()) dropCachedGroupIcon(groupId)
+        dropCachedShow(groupId)
+        bumpAndCoalesceRefetch(groupId)
         break
       case 'members-changed':
       case 'poc-changed':
-        bumpAndCoalesceRefetch()
+        dropCachedShow(groupId)
+        bumpAndCoalesceRefetch(groupId)
         break
       // P5 (§6.3) — a layout save (this client's or another's) → revision
       // bump ONLY, so the open page refetches its `show` view and the
@@ -394,19 +496,23 @@ export function initProjectGroupEvents(): void {
       // live rearrange — an open dashboard only marks itself stale;
       // the latest layout applies on project open/switch.
       case 'layout-changed':
-        useProjectGroupsStore.setState((s) => ({ revision: s.revision + 1 }))
+        dropCachedShow(groupId)
+        bumpStructural(groupId)
         break
-      // Chat messages → revision (the open chat panel refetches on it).
+      // Chat messages → `messageRevision` ONLY (the open chat panel
+      // refetches on it). No list refetch and no structural bump: a chat
+      // line changes nothing the list, show, resources or icon carry.
       // Unread is the daemon's: its `project_read` frame moves the badge,
       // and the open panel marks the new message read while it is on
       // screen (ProjectChatPanel → useAutoMarkRead).
       case 'message-created':
-        bumpAndCoalesceRefetch()
+        useProjectGroupsStore.setState((s) => ({ messageRevision: s.messageRevision + 1 }))
         break
       // Forward compat — an unknown reason from a newer daemon is still
       // a "something changed" signal; do the safe full refresh.
       default:
-        bumpAndCoalesceRefetch()
+        dropCachedShow(groupId)
+        bumpAndCoalesceRefetch(groupId)
     }
   })
 }

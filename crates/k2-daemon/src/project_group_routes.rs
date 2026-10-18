@@ -18,6 +18,10 @@
 //! "Manage K2 projects" switch (0162, default on) — see
 //! [`dispatch_post_as`], which also writes the create/delete/member audit
 //! lines.
+//! 0.46.1: deleting a project (it takes the chat with it) is owner or
+//! admin only, and never an agent; `dashboard/add-pane` /
+//! `dashboard/remove-pane` change one pane server-side so two clients
+//! can't overwrite each other (see [`handle_dashboard_pane`]).
 //! Project chat post (`msg`) is open to every login. The
 //! `dashboard/*` mutations — and the §6.7.7 `set-icon` / `set-color`
 //! appearance mutations — additionally require the owner-or-admin bit
@@ -230,7 +234,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/project-group/dashboard/rename"
         | "/cli/project-group/dashboard/create"
         | "/cli/project-group/dashboard/delete"
-        | "/cli/project-group/dashboard/reorder" => CliResponse::method_not_allowed(),
+        | "/cli/project-group/dashboard/reorder"
+        | "/cli/project-group/dashboard/add-pane"
+        | "/cli/project-group/dashboard/remove-pane" => CliResponse::method_not_allowed(),
 
         _ => return None,
     };
@@ -305,6 +311,8 @@ pub fn dispatch_post(path: &str, body: &[u8], session_author: &str) -> CliRespon
         "/cli/project-group/dashboard/create" => handle_dashboard_create(body),
         "/cli/project-group/dashboard/delete" => handle_dashboard_delete(body),
         "/cli/project-group/dashboard/reorder" => handle_dashboard_reorder(body),
+        "/cli/project-group/dashboard/add-pane" => handle_dashboard_pane(body, true),
+        "/cli/project-group/dashboard/remove-pane" => handle_dashboard_pane(body, false),
         _ => CliResponse::not_found(),
     }
 }
@@ -318,12 +326,23 @@ pub fn is_gated_mutation(path: &str) -> bool {
     path.starts_with("/cli/project-group/") && path != "/cli/project-group/msg"
 }
 
-/// Dashboards and project appearance (PRD §6.3 Q2, §6.7.7): owner or
+/// Dashboards and project appearance (PRD §6.3 Q2, §6.7.7), and
+/// deleting a project with its chat (Rosson 2026-10-18): owner or
 /// admin. A Member login sees them but cannot change them.
 fn is_admin_only(path: &str) -> bool {
     path.starts_with("/cli/project-group/dashboard/")
         || path == "/cli/project-group/set-icon"
         || path == "/cli/project-group/set-color"
+        || path == "/cli/project-group/delete"
+}
+
+/// The refusal a Member login or an agent gets for deleting a project.
+fn delete_needs_admin() -> CliResponse {
+    error_response(
+        "403 Forbidden",
+        "forbidden",
+        "only the owner or an admin can delete a project (it removes the project's chat too)",
+    )
 }
 
 /// The hint every `agent_permission_off` refusal carries.
@@ -498,13 +517,22 @@ pub fn dispatch_post_as(
                 Some(Role::Owner | Role::Admin)
             );
             if !admin {
-                return refuse(error_response(
-                    "403 Forbidden",
-                    "forbidden",
-                    "dashboards and project appearance can only be changed by the owner or an admin",
-                ));
+                return refuse(if path == "/cli/project-group/delete" {
+                    delete_needs_admin()
+                } else {
+                    error_response(
+                        "403 Forbidden",
+                        "forbidden",
+                        "dashboards and project appearance can only be changed by the owner or an admin",
+                    )
+                });
             }
         }
+    }
+    // Deleting a project and its chat is a person's call (owner or
+    // admin), never an agent's, whatever its "Manage K2 projects" switch.
+    if path == "/cli/project-group/delete" && matches!(caller, Caller::Agent(_)) {
+        return refuse(delete_needs_admin());
     }
     // Delete: the name is gone afterwards, so read it first.
     let pre_name = (path == "/cli/project-group/delete")
@@ -1481,6 +1509,130 @@ pub fn handle_save_layout(body: &[u8]) -> CliResponse {
             let mut v = serde_json::to_value(&saved).unwrap_or_else(|_| serde_json::json!({}));
             if let Some(map) = v.as_object_mut() {
                 map.insert("ok".to_string(), serde_json::json!(true));
+            }
+            CliResponse::ok_json(v.to_string())
+        }
+        Err(e) => core_error(e),
+    }
+}
+
+/// `POST /cli/project-group/dashboard/add-pane` / `remove-pane` body.
+/// `pane` is `{kind:"terminal", workspace}` (an agent) or
+/// `{kind:"htmlDoc", workspace, filePath}` (an HTML file); `workspace`
+/// is a name, path or id (`workspaceId` is accepted as a synonym).
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct DashboardPaneBody {
+    group: String,
+    dashboard_id: String,
+    pane: DashboardPaneSpecBody,
+}
+
+#[derive(Debug, serde::Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct DashboardPaneSpecBody {
+    kind: String,
+    workspace: String,
+    workspace_id: String,
+    file_path: String,
+}
+
+/// Handler for `POST /cli/project-group/dashboard/add-pane` and
+/// `remove-pane` (0.46.1, daemon-first D1): the client sends ONE pane,
+/// the daemon reads, edits and writes the layout under one DB lock
+/// (`k2_core::project_dashboard_layout`), so two clients adding at once
+/// both land instead of the last whole-layout save winning. Add puts the
+/// pane on the right edge and is idempotent (`changed:false` when it's
+/// already there); remove takes the first match (`changed:false` when
+/// absent). Added panes must belong to a member workspace. A change
+/// bumps the revision and fires `project-group:layout-changed`. Owner or
+/// admin (the `dashboard/` prefix in [`is_admin_only`]).
+pub fn handle_dashboard_pane(body: &[u8], add: bool) -> CliResponse {
+    use k2_core::project_dashboard_layout::{self as layout, PaneSpec};
+    let b: DashboardPaneBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    if b.group.is_empty() {
+        return usage_error("missing 'group' (a project name, id, or unique prefix)");
+    }
+    if b.dashboard_id.is_empty() {
+        return usage_error("missing 'dashboardId'");
+    }
+    let selector = if b.pane.workspace.is_empty() { &b.pane.workspace_id } else { &b.pane.workspace };
+    if selector.is_empty() {
+        return usage_error("missing 'pane.workspace' (an agent name, path or id)");
+    }
+    let group_id = match project_groups::resolve_group(&b.group) {
+        Ok(id) => id,
+        Err(e) => return resolve_error_response(&b.group, e),
+    };
+    let Some(dashboard) = project_groups::get_dashboard(&b.dashboard_id) else {
+        return error_response(
+            "404 Not Found",
+            "not_found",
+            format!("no dashboard with id {}", b.dashboard_id),
+        );
+    };
+    if dashboard.group_id != group_id {
+        return error_response(
+            "404 Not Found",
+            "not_found",
+            format!("dashboard {} does not belong to project '{}'", b.dashboard_id, b.group),
+        );
+    }
+    // A removed member's pane can still be taken off by its raw id, so
+    // only an add insists the workspace resolves and is a member.
+    let workspace_id = match resolve_member_workspace(selector) {
+        Ok((id, _)) => id,
+        Err(resp) if add => return resp,
+        Err(_) => selector.clone(),
+    };
+    let spec = match b.pane.kind.as_str() {
+        "terminal" => PaneSpec::Terminal { workspace_id },
+        "htmlDoc" => {
+            if b.pane.file_path.is_empty() {
+                return usage_error("an htmlDoc pane needs 'pane.filePath'");
+            }
+            if add && !(b.pane.file_path.ends_with(".html") || b.pane.file_path.ends_with(".htm")) {
+                return usage_error("only HTML files can show on a dashboard for now");
+            }
+            PaneSpec::HtmlDoc { workspace_id, file_path: b.pane.file_path.clone() }
+        }
+        "" => return usage_error("missing 'pane.kind' (terminal or htmlDoc)"),
+        other => return usage_error(format!("unknown pane kind '{other}' (terminal or htmlDoc)")),
+    };
+    if add {
+        let members = match project_groups::list_members(&group_id) {
+            Ok(m) => m,
+            Err(e) => return core_error(e),
+        };
+        if !members.iter().any(|m| m.workspace_id == spec.workspace_id()) {
+            return error_response(
+                "403 Forbidden",
+                "not_a_member",
+                "that agent isn't in this project; add it to the project first",
+            );
+        }
+    }
+    let result = if add { layout::add_pane(&dashboard.id, &spec) } else { layout::remove_pane(&dashboard.id, &spec) };
+    match result {
+        Ok(edit) => {
+            if edit.changed {
+                emit(
+                    k2_core::agent_hooks::HookEvent::ProjectGroupLayoutChanged,
+                    serde_json::json!({
+                        "groupId": group_id,
+                        "dashboardId": edit.dashboard.id,
+                        "revision": edit.dashboard.revision,
+                    }),
+                );
+            }
+            let mut v =
+                serde_json::to_value(&edit.dashboard).unwrap_or_else(|_| serde_json::json!({}));
+            if let Some(map) = v.as_object_mut() {
+                map.insert("ok".to_string(), serde_json::json!(true));
+                map.insert("changed".to_string(), serde_json::json!(edit.changed));
             }
             CliResponse::ok_json(v.to_string())
         }
@@ -3615,6 +3767,170 @@ mod agent_switch_tests {
         assert!(r.body.contains("owner or an admin"), "{}", r.body);
     }
 
+    /// Deleting a project (and its chat) is owner or admin only (Rosson
+    /// 2026-10-18): a Member login and an agent are refused and the
+    /// project survives; an admin login, a person in a shell tab and the
+    /// owner token may delete. Renaming stays open to a Member.
+    #[test]
+    fn members_and_agents_cannot_delete_a_project_but_admins_can() {
+        let _home = crate::test_support::TempHome::new();
+        use k2_core::connect_users::{add_user, role_for_user, set_role, Role};
+        let member = format!("pgdm{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let admin = format!("pgda{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        add_user(&member, "password123").expect("member");
+        add_user(&admin, "password123").expect("admin");
+        set_role(&admin, Role::Admin).expect("make admin");
+        assert_eq!(role_for_user(&member), Some(Role::Member));
+        let (a_id, _, _) = insert_workspace("del-agent");
+        assert!(k2_core::workspace::settings::agents_can_manage_projects(&a_id));
+
+        let mut gids = Vec::new();
+        for i in 0..3 {
+            let name = format!("pgs-del-{i}-{}", uuid::Uuid::new_v4());
+            let c = ok(post("/cli/project-group/create", serde_json::json!({ "name": name }), &Caller::Owner));
+            gids.push(c["id"].as_str().expect("id").to_string());
+        }
+
+        let as_member = Caller::Login { username: member.clone() };
+        let r = post("/cli/project-group/delete", serde_json::json!({ "group": gids[0] }), &as_member);
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert!(r.body.contains("owner or an admin"), "{}", r.body);
+        let r = post("/cli/project-group/delete", serde_json::json!({ "group": gids[0] }), &agent(&a_id));
+        assert_eq!(r.status, "403 Forbidden", "agent with the switch on: {}", r.body);
+        assert!(r.body.contains("owner or an admin"), "{}", r.body);
+        assert!(project_groups::get_group_by_id(&gids[0]).is_some(), "refusals delete nothing");
+        // A Member may still rename.
+        ok(post(
+            "/cli/project-group/rename",
+            serde_json::json!({ "group": gids[0], "name": format!("pgs-del-renamed-{}", uuid::Uuid::new_v4()) }),
+            &as_member,
+        ));
+
+        ok(post("/cli/project-group/delete", serde_json::json!({ "group": gids[0] }), &Caller::Login { username: admin }));
+        ok(post("/cli/project-group/delete", serde_json::json!({ "group": gids[1] }), &Caller::Shell { project_id: a_id.clone() }));
+        ok(post("/cli/project-group/delete", serde_json::json!({ "group": gids[2] }), &Caller::Owner));
+        for gid in &gids {
+            assert!(project_groups::get_group_by_id(gid).is_none(), "{gid} deleted");
+        }
+        // The route policy floor agrees with the arm.
+        for path in [
+            "/cli/project-group/delete",
+            "/cli/project-group/dashboard/add-pane",
+            "/cli/project-group/dashboard/remove-pane",
+        ] {
+            assert_eq!(
+                crate::routes::route_policy::lookup(path).and_then(|r| r.post),
+                Some(crate::routes::route_policy::Floor::Admin),
+                "{path}"
+            );
+        }
+    }
+
+    /// Two clients add a pane to the same dashboard at the same time:
+    /// both panes land (the old whole-layout save lost one). Remove takes
+    /// one pane off, the rest stay; non-members and non-HTML files are
+    /// refused; a Member login is refused; repeats are no-ops.
+    #[test]
+    fn dashboard_add_and_remove_pane_merge_concurrent_clients() {
+        let _home = crate::test_support::TempHome::new();
+        let (poc_id, poc_name, _) = insert_workspace("pane-poc");
+        let mut members = Vec::new();
+        let name = format!("pgs-pane-{}", uuid::Uuid::new_v4());
+        let created = ok(post("/cli/project-group/create", serde_json::json!({ "name": name }), &Caller::Owner));
+        let gid = created["id"].as_str().expect("id").to_string();
+        ok(post("/cli/project-group/add-member", serde_json::json!({ "group": gid, "workspace": poc_name }), &Caller::Owner));
+        for i in 0..6 {
+            let (id, wname, _) = insert_workspace(&format!("pane-{i}"));
+            ok(post("/cli/project-group/add-member", serde_json::json!({ "group": gid, "workspace": wname }), &Caller::Owner));
+            members.push((id, wname));
+        }
+        let dash = project_groups::list_dashboards(&gid).expect("dashboards").remove(0);
+        let start = dash.revision;
+
+        // Six clients at once, three adding agents and three adding files.
+        let handles: Vec<_> = members
+            .iter()
+            .enumerate()
+            .map(|(i, (id, _))| {
+                let pane = if i % 2 == 0 {
+                    serde_json::json!({ "kind": "terminal", "workspaceId": id })
+                } else {
+                    serde_json::json!({ "kind": "htmlDoc", "workspaceId": id, "filePath": format!("/tmp/doc-{i}.html") })
+                };
+                let body = serde_json::json!({ "group": gid, "dashboardId": dash.id, "pane": pane });
+                std::thread::spawn(move || post("/cli/project-group/dashboard/add-pane", body, &Caller::Owner))
+            })
+            .collect();
+        for h in handles {
+            let v = ok(h.join().expect("thread"));
+            assert_eq!(v["changed"], true, "{v}");
+        }
+        let after = project_groups::get_dashboard(&dash.id).expect("dashboard");
+        assert_eq!(after.revision, start + 6, "{}", after.layout_json);
+        for (i, (id, _)) in members.iter().enumerate() {
+            assert!(after.layout_json.contains(id.as_str()), "pane {i} lost: {}", after.layout_json);
+        }
+        assert!(after.layout_json.contains(&poc_id), "the PoC seed was kept: {}", after.layout_json);
+
+        // Repeat add is a no-op; no revision bump.
+        let again = ok(post(
+            "/cli/project-group/dashboard/add-pane",
+            serde_json::json!({ "group": gid, "dashboardId": dash.id, "pane": { "kind": "terminal", "workspace": members[0].1 } }),
+            &Caller::Owner,
+        ));
+        assert_eq!(again["changed"], false, "{again}");
+        assert_eq!(again["revision"], after.revision);
+
+        // Remove one terminal pane; everything else stays.
+        let removed = ok(post(
+            "/cli/project-group/dashboard/remove-pane",
+            serde_json::json!({ "group": gid, "dashboardId": dash.id, "pane": { "kind": "terminal", "workspaceId": members[0].0 } }),
+            &Caller::Owner,
+        ));
+        assert_eq!(removed["changed"], true, "{removed}");
+        let layout = removed["layoutJson"].as_str().expect("layoutJson");
+        assert!(!layout.contains(members[0].0.as_str()), "{layout}");
+        for (id, _) in &members[1..] {
+            assert!(layout.contains(id.as_str()), "{layout}");
+        }
+        let gone = ok(post(
+            "/cli/project-group/dashboard/remove-pane",
+            serde_json::json!({ "group": gid, "dashboardId": dash.id, "pane": { "kind": "terminal", "workspaceId": members[0].0 } }),
+            &Caller::Owner,
+        ));
+        assert_eq!(gone["changed"], false, "{gone}");
+
+        // Refusals: a non-member, a non-HTML file, a Member login.
+        let (_, outsider, _) = insert_workspace("pane-outsider");
+        let r = post(
+            "/cli/project-group/dashboard/add-pane",
+            serde_json::json!({ "group": gid, "dashboardId": dash.id, "pane": { "kind": "terminal", "workspace": outsider } }),
+            &Caller::Owner,
+        );
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert!(r.body.contains("not_a_member"), "{}", r.body);
+        let r = post(
+            "/cli/project-group/dashboard/add-pane",
+            serde_json::json!({ "group": gid, "dashboardId": dash.id, "pane": { "kind": "htmlDoc", "workspaceId": members[1].0, "filePath": "/tmp/notes.md" } }),
+            &Caller::Owner,
+        );
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        let member = format!("pgpm{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        k2_core::connect_users::add_user(&member, "password123").expect("member");
+        let r = post(
+            "/cli/project-group/dashboard/add-pane",
+            serde_json::json!({ "group": gid, "dashboardId": dash.id, "pane": { "kind": "terminal", "workspaceId": members[0].0 } }),
+            &Caller::Login { username: member },
+        );
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        let r = post(
+            "/cli/project-group/dashboard/add-pane",
+            serde_json::json!({ "group": gid, "dashboardId": "nope", "pane": { "kind": "terminal", "workspaceId": members[0].0 } }),
+            &Caller::Owner,
+        );
+        assert_eq!(r.status, "404 Not Found", "{}", r.body);
+    }
+
     /// The switch is written only by the owner/admin route; an agent can
     /// never flip it (its own or another's), and that route is not an
     /// agent verb, while the project routes are.
@@ -3689,6 +4005,8 @@ mod agent_switch_tests {
             "/cli/project-group/dashboard/create",
             "/cli/project-group/dashboard/delete",
             "/cli/project-group/dashboard/reorder",
+            "/cli/project-group/dashboard/add-pane",
+            "/cli/project-group/dashboard/remove-pane",
         ];
         for route in posts {
             assert!(is_gated_mutation(route), "{route} must be behind the switch");

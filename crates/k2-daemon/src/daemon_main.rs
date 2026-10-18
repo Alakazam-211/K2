@@ -1290,6 +1290,9 @@ async fn async_main() {
     // A Thread that moves on Codex/Hermes adoption (pane key -> provider
     // id) tells its live views to follow, and its open turn moves too.
     overlay_ws::install_move_listener();
+    // thread-read-v1: every known person starts fully read (the owner was
+    // seen by migration 0190; Connect users are seen here, once).
+    crate::read_routes::boot();
 
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");

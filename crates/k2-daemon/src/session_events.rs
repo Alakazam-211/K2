@@ -872,9 +872,78 @@ pub enum SessionEvent {
         seed: Option<String>,
         deployment: Option<String>,
     },
+    /// thread-read-v1 (0.46.1): one person's read state of one Thread
+    /// changed (they read or muted it on some device, someone else posted,
+    /// a card was answered / voided / expired, the Thread moved). PERSON-
+    /// SCOPED: `/cli/sessions/events` forwards it only to sockets of that
+    /// person (the owner token and every login the owner linked are one
+    /// person), so the desktop and the phone stay in step.
+    ///
+    /// Wire: `{ "kind": "thread_read", "id": conversationId, "projectId",
+    /// "seq" (= lastReadSeq), "lastReadSeq", "lastSeq", "unread",
+    /// "waiting", "muted", "mutedUntil"?, "total", "waitingTotal" }`.
+    ThreadRead(ReadFrame),
+
+    /// thread-read-v1: the same for one project chat (`id` = group id,
+    /// no `projectId`; `waiting` is always 0). Person-scoped.
+    ProjectRead(ReadFrame),
+}
+
+/// The body of a `thread_read` / `project_read` frame (thread-read-v1).
+/// `person` routes it and never goes on the wire.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadFrame {
+    #[serde(skip)]
+    pub person: String,
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// The person's read cursor (= `lastReadSeq`).
+    pub seq: i64,
+    pub last_read_seq: i64,
+    /// The conversation's newest seq.
+    pub last_seq: i64,
+    pub unread: i64,
+    pub waiting: i64,
+    pub muted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub muted_until: Option<i64>,
+    /// The person's badge total on this server.
+    pub total: i64,
+    pub waiting_total: i64,
+}
+
+impl ReadFrame {
+    /// A frame from one conversation's state and the person's totals.
+    pub fn of(person: &str, item: &k2_core::read_state::ReadItem, totals: k2_core::read_state::Totals) -> Self {
+        Self {
+            person: person.to_string(),
+            id: item.id.clone(),
+            project_id: item.project_id.clone(),
+            seq: item.last_read_seq,
+            last_read_seq: item.last_read_seq,
+            last_seq: item.last_seq,
+            unread: item.unread,
+            waiting: item.waiting,
+            muted: item.muted,
+            muted_until: item.muted_until,
+            total: totals.total,
+            waiting_total: totals.waiting_total,
+        }
+    }
 }
 
 impl SessionEvent {
+    /// The person a person-scoped event belongs to (thread-read-v1);
+    /// `None` for every other event.
+    pub fn person(&self) -> Option<&str> {
+        match self {
+            SessionEvent::ThreadRead(f) | SessionEvent::ProjectRead(f) => Some(f.person.as_str()),
+            _ => None,
+        }
+    }
+
     /// The wire `kind` tag serde writes for this variant.
     ///
     /// Home 0.43.2 (Z24): the shared registry
@@ -935,6 +1004,8 @@ impl SessionEvent {
             SessionEvent::OpenChanges { .. } => "open_changes",
             SessionEvent::RoomMembersChanged { .. } => "room_members_changed",
             SessionEvent::AppDeployed { .. } => "app_deployed",
+            SessionEvent::ThreadRead(_) => "thread_read",
+            SessionEvent::ProjectRead(_) => "project_read",
         }
     }
 }

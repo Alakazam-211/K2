@@ -130,6 +130,11 @@ pub mod notify_routes;
 pub mod thread_push;
 // `viewing` frames from the overlay WS: who looks at which Thread (S4).
 pub mod thread_viewers;
+// thread-read-v1 (0.46.1): unread/mute routes, live read frames, and the
+// silent badge-correction push.
+pub mod read_routes;
+pub mod read_live;
+pub mod badge_push;
 pub mod review_checklist_routes;
 pub mod routes;
 // K2 Cloud S2 — boot-time consume-once ~/.k2/seed-users.json. Exposed
@@ -389,6 +394,7 @@ pub mod test_harness {
         crate::thread_activity::spawn();
         crate::overlay_routes::spawn_card_expiry();
         crate::overlay_ws::install_move_listener();
+        crate::read_routes::boot();
 
         // The dispatcher 503s every real route until boot-status is
         // `ready`; flip it so auth tests see real status codes.

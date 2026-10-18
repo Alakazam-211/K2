@@ -35,6 +35,11 @@
 //! **Viewing (TP26).** Checked at FLUSH time, not post time: a `viewing`
 //! frame that lands before the window flushes still quiets the push.
 //!
+//! **Unread (thread-read-v1, 0.46.1).** A person who MUTED the Thread gets
+//! no push (checked at post and at flush). Every push carries that
+//! person's `unreadTotal` / `waitingTotal` (strings, read at flush) so the
+//! phone's badge is right; never `aps.badge` (TP27).
+//!
 //! The [`Coalescer`] is pure state + an injected [`PushEnv`], so tests drive
 //! it with a fake clock and a capture sink (no network, no sleeps). The
 //! daemon holds one global instance ticked once a second.
@@ -99,6 +104,10 @@ pub trait PushEnv {
     fn send(&self, event: PushEvent);
     /// Air-gap on: nothing is held or sent.
     fn airgap(&self) -> bool;
+    /// Has `person` muted `conversation_id`? (thread-read-v1: no push.)
+    fn muted(&self, person: &str, conversation_id: &str) -> bool;
+    /// `person`'s badge numbers now (thread-read-v1 `unreadTotal`).
+    fn totals(&self, person: &str) -> k2_core::read_state::Totals;
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +142,9 @@ impl Coalescer {
             return;
         }
         for r in env.recipients(&post.project_id) {
+            if env.muted(&r.person, &post.conversation_id) {
+                continue;
+            }
             let key = (post.conversation_id.clone(), r.person.clone());
             let w = self.windows.entry(key.clone()).or_insert_with(|| Window {
                 post: post.clone(),
@@ -213,6 +225,12 @@ impl Coalescer {
             w.viewed_since_push = true;
             return;
         }
+        // Muted while the window was open: nothing goes.
+        if env.muted(person, conversation) {
+            w.pending = 0;
+            w.open_until = None;
+            return;
+        }
         // Previews: the master switch, then this person's phones. A split
         // (some on, some off) is two gateway calls: one with the preview,
         // one generic.
@@ -244,6 +262,7 @@ impl Coalescer {
             return;
         }
         let len = if w.last_push.is_some() && !w.viewed_since_push { BACKOFF } else { WINDOW };
+        let totals = env.totals(person);
         let event = PushEvent::ThreadPost(ThreadPush {
             agent_name: w.post.agent_name.clone(),
             conversation_id: conversation.clone(),
@@ -254,6 +273,8 @@ impl Coalescer {
             count: w.pending,
             principal: person.clone(),
             device_usernames: w.devices.clone(),
+            unread_total: totals.total.to_string(),
+            waiting_total: totals.waiting_total.to_string(),
             // The latest post's look: a trailing push shows the current avatar.
             avatar_rev: w.post.avatar_rev.clone(),
             agent_color: w.post.agent_color.clone(),
@@ -265,6 +286,9 @@ impl Coalescer {
         w.viewed_since_push = false;
         w.open_until = Some(now + len);
         env.send(event);
+        // The phone now has these numbers: a badge push with the same ones
+        // is skipped.
+        crate::badge_push::note_told(person, totals);
     }
 }
 
@@ -324,6 +348,27 @@ impl PushEnv for DaemonEnv {
 
     fn airgap(&self) -> bool {
         crate::push_routes::airgap_blocks()
+    }
+
+    fn muted(&self, person: &str, conversation_id: &str) -> bool {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if !k2_core::read_state::tables_exist(&conn) {
+            return false;
+        }
+        k2_core::read_state::is_muted(&conn, person, k2_core::read_state::KIND_THREAD, conversation_id, k2_core::read_state::now_secs())
+            .unwrap_or(false)
+    }
+
+    fn totals(&self, person: &str) -> k2_core::read_state::Totals {
+        let Ok(people) = People::load() else { return Default::default() };
+        let p = k2_core::read_state::Person::of_login(&people, person);
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if !k2_core::read_state::tables_exist(&conn) {
+            return Default::default();
+        }
+        k2_core::read_state::totals(&conn, &p, k2_core::read_state::now_secs()).unwrap_or_default()
     }
 }
 
@@ -474,6 +519,8 @@ mod tests {
         previews_off_logins: RefCell<HashSet<String>>,
         /// Gateway calls taken from the budget, in order.
         calls_taken: RefCell<Vec<usize>>,
+        /// (person, conversation) pairs that are muted.
+        muted: RefCell<HashSet<(String, String)>>,
     }
 
     impl Fake {
@@ -534,6 +581,12 @@ mod tests {
         fn airgap(&self) -> bool {
             self.airgap.get()
         }
+        fn muted(&self, person: &str, conversation_id: &str) -> bool {
+            self.muted.borrow().contains(&(person.to_string(), conversation_id.to_string()))
+        }
+        fn totals(&self, person: &str) -> k2_core::read_state::Totals {
+            k2_core::read_state::Totals { total: person.len() as i64, waiting_total: 1 }
+        }
     }
 
     fn post(conv: &str, seq: i64, kind: ThreadMsgKind) -> Post {
@@ -556,6 +609,45 @@ mod tests {
 
     fn secs(n: u64) -> Duration {
         Duration::from_secs(n)
+    }
+
+    /// thread-read-v1: each push carries ITS person's totals as strings
+    /// (`unreadTotal`, `waitingTotal`), never another person's, and never
+    /// `aps.badge`.
+    #[test]
+    fn pushes_carry_each_persons_unread_and_waiting_totals() {
+        let env = Fake::with(&[("owner", &["owner"]), ("gina", &["gina"])]);
+        let mut c = Coalescer::new();
+        c.post(&env, post("c-totals", 1, ThreadMsgKind::Text), Instant::now());
+        let sent = env.sent();
+        assert_eq!(sent.len(), 2);
+        for t in &sent {
+            // The fake's totals are (person name length, 1).
+            assert_eq!(t.unread_total, t.principal.len().to_string(), "{t:?}");
+            assert_eq!(t.waiting_total, "1");
+            let data = PushEvent::ThreadPost(t.clone()).data();
+            assert_eq!(data.get("unreadTotal"), Some(t.principal.len().to_string().as_str()));
+            assert_eq!(data.get("waitingTotal"), Some("1"));
+        }
+    }
+
+    /// thread-read-v1 (Rosson: mute stops its pushes): a person who muted
+    /// the Thread gets no push, even one already held in a window; others
+    /// still do.
+    #[test]
+    fn a_muted_thread_never_pushes_that_person() {
+        let env = Fake::with(&[("owner", &["owner"]), ("gina", &["gina"])]);
+        env.muted.borrow_mut().insert(("gina".into(), "c-mute".into()));
+        let mut c = Coalescer::new();
+        let t0 = Instant::now();
+        c.post(&env, post("c-mute", 1, ThreadMsgKind::Text), t0);
+        let sent = env.sent();
+        assert_eq!(sent.iter().map(|t| t.principal.as_str()).collect::<Vec<_>>(), vec!["owner"], "gina muted it");
+        // The owner mutes while a post is held: the trailing push is dropped.
+        c.post(&env, post("c-mute", 2, ThreadMsgKind::Text), t0 + secs(5));
+        env.muted.borrow_mut().insert(("owner".into(), "c-mute".into()));
+        c.tick(&env, t0 + WINDOW);
+        assert_eq!(env.sent().len(), 1, "muted before the flush: nothing more");
     }
 
     /// Leading and trailing pushes carry the latest post's look, so a

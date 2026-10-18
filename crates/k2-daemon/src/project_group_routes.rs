@@ -86,9 +86,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // All groups + member counts + poc + pin/sort metadata, nav
         // order (pinned first, then sort_order, then name).
         "/cli/project-group/list" => match project_groups::list_groups() {
-            Ok(groups) => CliResponse::ok_json(
-                serde_json::json!({ "ok": true, "groups": groups }).to_string(),
-            ),
+            Ok(groups) => {
+                let groups = with_read_state(groups);
+                CliResponse::ok_json(serde_json::json!({ "ok": true, "groups": groups }).to_string())
+            }
             Err(e) => core_error(e),
         },
 
@@ -231,6 +232,46 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         _ => return None,
     };
     Some(resp)
+}
+
+/// thread-read-v1: for a person (the dispatcher bound their login), each
+/// group row gains their own `unread`, `waiting` (always 0), `muted`,
+/// `lastReadSeq` and `lastSeq`. An agent's list is unchanged.
+fn with_read_state(groups: Vec<project_groups::ProjectGroup>) -> Vec<serde_json::Value> {
+    let rows: Vec<serde_json::Value> = groups
+        .iter()
+        .map(|g| serde_json::to_value(g).unwrap_or_else(|_| serde_json::json!({ "id": g.id })))
+        .collect();
+    let Some(login) = crate::read_routes::request_login() else { return rows };
+    let person = match crate::read_routes::person_of_login(&login) {
+        Ok(p) => p,
+        Err(e) => {
+            k2_core::log_debug!("[project-group/list] read state: {e}");
+            return rows;
+        }
+    };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if !k2_core::read_state::tables_exist(&conn) {
+        return rows;
+    }
+    let now = k2_core::read_state::now_secs();
+    rows.into_iter()
+        .map(|mut row| {
+            let id = row["id"].as_str().unwrap_or_default().to_string();
+            match k2_core::read_state::item(&conn, &person, k2_core::read_state::KIND_PROJECT, &id, now) {
+                Ok(it) => {
+                    row["unread"] = serde_json::json!(it.unread);
+                    row["waiting"] = serde_json::json!(it.waiting);
+                    row["muted"] = serde_json::json!(it.muted);
+                    row["lastReadSeq"] = serde_json::json!(it.last_read_seq);
+                    row["lastSeq"] = serde_json::json!(it.last_seq);
+                }
+                Err(e) => k2_core::log_debug!("[project-group/list] read state for {id}: {e}"),
+            }
+            row
+        })
+        .collect()
 }
 
 /// Dispatch a `/cli/project-group/*` POST body to its handler.
@@ -1257,12 +1298,34 @@ pub fn handle_msg(body: &[u8], session_author: &str) -> CliResponse {
         }
     };
     let author = author_owned.as_str();
+    // thread-read-v1: a human line (session author or an explicit
+    // "owner") is a PERSON's; anything that resolved to a member
+    // workspace is an agent's.
+    let author_kind = if author_workspace_id.is_none() {
+        project_groups::AUTHOR_KIND_PERSON
+    } else {
+        project_groups::AUTHOR_KIND_AGENT
+    };
+    let author_person = (author_kind == project_groups::AUTHOR_KIND_PERSON).then(|| {
+        match k2_core::notify_prefs::People::load() {
+            Ok(people) => people.person_key(author),
+            Err(_) => author.to_ascii_lowercase(),
+        }
+    });
 
     // Store.
-    let msg = match project_groups::post_message(&group_id, author, &b.body) {
+    let msg = match project_groups::post_message_as(&group_id, author, author_kind, &b.body) {
         Ok(m) => m,
         Err(e) => return core_error(e),
     };
+    // A person's own line advances their own cursor (it never counts as
+    // unread for them), then every connected person's counts follow.
+    if let Some(person) = author_person.as_deref() {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        crate::read_routes::note_own_read(&conn, person, k2_core::read_state::KIND_PROJECT, &group_id, msg.seq);
+    }
+    crate::read_live::conversation_changed(k2_core::read_state::KIND_PROJECT, &group_id);
 
     // Emit BEFORE the injection so an open drawer / badge never waits
     // on a slow wake (the feedback_routes ordering).
@@ -1275,15 +1338,13 @@ pub fn handle_msg(body: &[u8], session_author: &str) -> CliResponse {
             "author": msg.author,
         }),
     );
-    // Companion C4 — mobile push, next to the emit, ONLY for
-    // non-owner authors (the rate-sanity rule: never push the owner
-    // their own message; agent posts are exactly what the phone
-    // wants to hear about). Content-free: project name + group id,
-    // NEVER the message text (§4.5). Dormant/fire-and-forget inside
-    // push_routes.
-    if msg.author != "owner" {
-        crate::push_routes::notify_project_message_created(&group.name, &group_id);
-    }
+    // Companion C4 — mobile push, next to the emit: one per person,
+    // never to the author's own person (thread-read-v1 fixed a Connect
+    // user's own post buzzing their own phone), never to a person who
+    // muted the chat, each with that person's totals. Content-free:
+    // project name + group id, NEVER the message text (§4.5).
+    // Dormant/fire-and-forget inside push_routes.
+    crate::push_routes::notify_project_message_created(&group.name, &group_id, author_person.as_deref());
 
     // §4.3 — best-effort PoC injection. PoC identity is read AT STORE
     // TIME (re-read after the insert, not from the pre-store snapshot).
@@ -1335,8 +1396,10 @@ pub fn handle_msg(body: &[u8], session_author: &str) -> CliResponse {
             "groupId": group_id,
             "groupName": group.name,
             "author": msg.author,
+            "authorKind": msg.author_kind,
             "body": msg.body,
             "createdAt": msg.created_at,
+            "seq": msg.seq,
             "delivered": delivered,
             "deliveryReason": delivery_reason,
             "deliveredSessionId": delivered_session,
@@ -3170,14 +3233,24 @@ mod tests {
     }
 
     /// Companion C4 trigger selection through the msg route: AGENT
-    /// posts (member and PoC alike — any author != "owner") push to
-    /// mobile, content-free (§4.5: project name + group id only,
-    /// never the message text); OWNER posts never push (the
-    /// rate-sanity rule — don't push the owner their own message).
+    /// posts (member and PoC alike) push to the owner's phone,
+    /// content-free (§4.5: project name + group id only, never the
+    /// message text) with the owner's totals; the owner's OWN post never
+    /// pushes the owner (thread-read-v1: per person, the author skipped).
     #[test]
     fn project_group_msg_pushes_for_agents_never_for_owner() {
         use k2_core::push::PushEvent;
         install_capture_sink();
+        let _home = crate::test_support::TempHome::new();
+        // Its own DB: the owner's totals count only this test's chats.
+        let _db = k2_core::db::scoped_for_test();
+        k2_core::push_devices::upsert_device(
+            &format!("pg-push-{}", uuid::Uuid::new_v4()),
+            "apns",
+            &format!("tok-pg-push-{}", uuid::Uuid::new_v4()),
+            "owner",
+        )
+        .expect("owner phone");
         let name = gname("push");
         let g = create_group_via_route(&name);
         let gid = g["id"].as_str().expect("id").to_string();
@@ -3195,9 +3268,7 @@ mod tests {
         let pushes_since = |mark: usize| -> Vec<PushEvent> {
             crate::push_routes::test_push_capture::since(mark)
                 .into_iter()
-                .filter(|e| {
-                    matches!(e, PushEvent::ProjectMessageCreated { group_id, .. } if group_id == &gid)
-                })
+                .filter(|e| matches!(e, PushEvent::ProjectPost(p) if p.group_id == gid && p.principal == "owner"))
                 .collect()
         };
 
@@ -3222,9 +3293,11 @@ mod tests {
             "message text must never ride the push (§4.5): {}",
             e.body()
         );
+        // The owner read up to their own kickoff (own post advances the
+        // cursor): the agent line is their one unread.
         assert_eq!(
             e.data(),
-            serde_json::json!({ "kind": "project", "groupId": gid })
+            serde_json::json!({ "kind": "project", "groupId": gid, "unreadTotal": "1", "waitingTotal": "0" })
         );
 
         // The PoC's own post is still an agent post → pushes too

@@ -828,6 +828,19 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
 /// `&mut TcpStream` so we keep ownership of the socket; on return
 /// we exit with [`DispatchOutcome::Done`] because the upgraded
 /// connection has no concept of a "next request."
+/// thread-read-v1: the PERSON login behind a credential — `"owner"` for
+/// the owner token, the username of a live Connect session — or `None`
+/// for anything else (agent passports, app passes, API keys, no token).
+fn read_person_login(query: &str, bearer: Option<&str>, owner_token: &str) -> Option<String> {
+    let tok = super::http::extract_token(query)
+        .filter(|t| !t.is_empty())
+        .or_else(|| bearer.filter(|t| !t.is_empty()))?;
+    if super::http::ct_eq_token(tok, owner_token) {
+        return Some("owner".to_string());
+    }
+    k2_core::connect_users::validate_session(tok)
+}
+
 async fn handle_one_request(
     stream: &mut TcpStream,
     state: &crate::DaemonState,
@@ -7255,6 +7268,33 @@ async fn handle_one_request(
         // connect-user session — connect users see + answer feedback,
         // PRD §4.3) + require_post per feedback_post_only_route_guards.
         // Handlers run in spawn_blocking (SQLite writes).
+        // thread-read-v1 (0.46.1): a PERSON's unread counts, read cursors
+        // and mutes (`read_routes`). Owner token → "owner", a live Connect
+        // session → its username; anything else (agent passports, app
+        // passes, API keys) is 403: agents have no read state. A GET on
+        // the POST-only routes was answered 405 above, before auth.
+        p if crate::read_routes::is_read_route(p) => {
+            let login = read_person_login(&query, bearer_token.as_deref(), state.token.as_str());
+            let body_bytes = if is_post {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let Some(login) = login else {
+                let r = crate::read_routes::not_a_person();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            };
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::read_routes::handle(is_post, &p_owned, &params, &body_bytes, &login)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
+        }
         p if is_post && post_allowed && p.starts_with("/cli/thread/") => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
@@ -11489,10 +11529,17 @@ async fn handle_one_request(
                 }
             }
             let p_owned = p.to_string();
+            // thread-read-v1: a person's `thread/latest` rows carry their
+            // own unread state (never an agent's or an app guest's).
+            let read_login = if skin_presented || scoped_principal.is_some() {
+                None
+            } else {
+                read_person_login(&query, bearer_token.as_deref(), state.token.as_str())
+            };
             let resp = tokio::task::spawn_blocking(move || {
                 crate::overlay_routes::with_request_skin(bound_skin, || {
                     crate::caller_workspace::with_request_principal(scoped_principal, || {
-                        crate::cli::dispatch(&p_owned, &params)
+                        crate::read_routes::with_read_login(read_login, || crate::cli::dispatch(&p_owned, &params))
                     })
                 })
             })
@@ -11994,14 +12041,21 @@ async fn handle_one_request(
             let params =
                 super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query)
                     .await;
-            let (auth_ok, _principal) =
+            let (auth_ok, principal) =
                 token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
             if !auth_ok {
                 let r = crate::cli::CliResponse::forbidden();
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
-            let resp = crate::cli::dispatch(p, &params);
+            // thread-read-v1: a person's project list carries their own
+            // unread state; an agent passport's does not.
+            let read_login = if principal.is_some() {
+                None
+            } else {
+                read_person_login(&query, bearer_token.as_deref(), state.token.as_str())
+            };
+            let resp = crate::read_routes::with_read_login(read_login, || crate::cli::dispatch(p, &params));
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body).await;
         }
         // Unified /cli/* dispatch. Auth + param validation +

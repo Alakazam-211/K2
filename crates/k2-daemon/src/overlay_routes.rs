@@ -587,6 +587,38 @@ fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
         ));
     }
     let principal = crate::caller_workspace::principal_from_params(params);
+    // thread-read-v1: a person (never an agent) also gets their own
+    // `unread` / `waiting` / `muted` / `lastReadSeq` on each row.
+    let reader = match crate::read_routes::request_login() {
+        Some(login) if principal.is_none() => crate::read_routes::person_of_login(&login).ok(),
+        _ => None,
+    };
+    let read_db = reader.as_ref().map(|_| k2_core::db::shared());
+    let read_conn = read_db.as_ref().map(|db| db.lock());
+    let read_ready = read_conn.as_ref().is_some_and(|c| k2_core::read_state::tables_exist(c));
+    let now = k2_core::read_state::now_secs();
+    let with_read = |mut row: serde_json::Value, conversation_id: &str| -> serde_json::Value {
+        let (Some(person), Some(conn), true) = (reader.as_ref(), read_conn.as_ref(), read_ready) else {
+            return row;
+        };
+        match k2_core::read_state::item(conn, person, k2_core::read_state::KIND_THREAD, conversation_id, now) {
+            Ok(it) => {
+                row["unread"] = serde_json::json!(it.unread);
+                row["waiting"] = serde_json::json!(it.waiting);
+                row["muted"] = serde_json::json!(it.muted);
+                row["lastReadSeq"] = serde_json::json!(it.last_read_seq);
+            }
+            // A Thread with no posts yet has no catalog row: nothing to read.
+            Err(k2_core::read_state::ReadError::NotFound(_)) => {
+                row["unread"] = serde_json::json!(0);
+                row["waiting"] = serde_json::json!(0);
+                row["muted"] = serde_json::json!(false);
+                row["lastReadSeq"] = serde_json::json!(0);
+            }
+            Err(e) => k2_core::log_debug!("[thread/latest] read state for {conversation_id}: {e}"),
+        }
+        row
+    };
     let error_of = |r: CliResponse| -> serde_json::Value {
         let v: serde_json::Value = serde_json::from_str(&r.body).unwrap_or_default();
         let code = v["error"]["code"].as_str().unwrap_or("error").to_string();
@@ -611,28 +643,34 @@ fn handle_get_thread_latest(params: &HashMap<String, String>) -> CliResponse {
             }
             match overlay::read_thread_page(&resolved.conversation_id, None, None, 1) {
                 Ok(page) => match page.items.last() {
-                    Some(item) => serde_json::json!({
-                        "addr": addr,
-                        "conversationId": resolved.conversation_id,
-                        "seq": item.seq,
-                        "at": item.doc.created_at,
-                        "from": item.doc.from,
-                        "via": item.doc.via,
-                        "author": item.doc.author,
-                        "kind": item.doc.kind,
-                        "preview": thread_preview(&item.doc),
-                    }),
-                    None => serde_json::json!({
-                        "addr": addr,
-                        "conversationId": resolved.conversation_id,
-                        "seq": null,
-                        "at": null,
-                        "from": null,
-                        "via": null,
-                        "author": null,
-                        "kind": null,
-                        "preview": null,
-                    }),
+                    Some(item) => with_read(
+                        serde_json::json!({
+                            "addr": addr,
+                            "conversationId": resolved.conversation_id,
+                            "seq": item.seq,
+                            "at": item.doc.created_at,
+                            "from": item.doc.from,
+                            "via": item.doc.via,
+                            "author": item.doc.author,
+                            "kind": item.doc.kind,
+                            "preview": thread_preview(&item.doc),
+                        }),
+                        &resolved.conversation_id,
+                    ),
+                    None => with_read(
+                        serde_json::json!({
+                            "addr": addr,
+                            "conversationId": resolved.conversation_id,
+                            "seq": null,
+                            "at": null,
+                            "from": null,
+                            "via": null,
+                            "author": null,
+                            "kind": null,
+                            "preview": null,
+                        }),
+                        &resolved.conversation_id,
+                    ),
                 },
                 Err(e) => serde_json::json!({
                     "addr": addr,
@@ -1054,6 +1092,10 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         author,
     ) {
         Ok((item, links)) => {
+            // thread-read-v1: a person's own post advances their own
+            // cursor (they have read up to what they answered), before
+            // the frames go out.
+            crate::read_routes::note_own_thread_read(&conn, item.doc.author.as_ref(), &resolved.conversation_id, item.seq);
             crate::overlay_ws::emit_links(&links, &item.doc);
             drop(conn);
             if !bound && via == "compose" {
@@ -1599,6 +1641,7 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         Err(e) => return error_json("409 Conflict", "card_not_pending", e),
     };
     let from = card_actor_from(params, resolved, session_author);
+    note_card_reader(params, session_author, &cb);
     fire_card_callbacks(&resolved.addr, &from, vec![cb.clone()], true);
     CliResponse::ok_json(
         serde_json::json!({
@@ -1695,6 +1738,7 @@ fn handle_answer(params: &HashMap<String, String>, session_author: &str) -> CliR
             // TW1: a person answering a card starts a Thread turn (an
             // agent's own answer does not).
             let from = card_actor_from(params, &resolved, session_author);
+            note_card_reader(params, session_author, &cb);
             fire_card_callbacks(&resolved.addr, &from, vec![cb.clone()], !principal_is_bound(params));
             let mut body = serde_json::json!({
                 "ok": true,
@@ -1779,6 +1823,7 @@ fn handle_void(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 void_vault_request(&card_id);
             }
             let from = card_actor_from(params, &resolved, session_author);
+            note_card_reader(params, session_author, &cb);
             fire_card_callbacks(&resolved.addr, &from, vec![cb.clone()], !principal_is_bound(params));
             let status = cb
                 .doc
@@ -1876,7 +1921,9 @@ fn inject_skin_thread(resolved: &ResolvedOverlay, from: &str, text: &str, turn: 
     );
 }
 
-/// A card's new status, to every open view of its Thread.
+/// A card's new status, to every open view of its Thread. Its `waiting`
+/// count changed for everyone (thread-read-v1): the overlay publish sends
+/// the read frames, and every person's phone may get a corrected badge.
 fn publish_card_frame(cb: &CardCallback) {
     crate::overlay_ws::publish(OverlayFrame {
         collection: "thread".to_string(),
@@ -1886,6 +1933,20 @@ fn publish_card_frame(cb: &CardCallback) {
         activity: None,
         conversation_id: Some(cb.conversation_id.clone()),
     });
+    crate::badge_push::trigger_everyone();
+}
+
+/// thread-read-v1: a person who answered or dismissed a card has read the
+/// Thread up to it (rounds toward read, like an own post). An agent's own
+/// answer or an app guest's moves nobody's cursor.
+fn note_card_reader(params: &HashMap<String, String>, session_author: &str, cb: &CardCallback) {
+    if request_skin().is_some() {
+        return;
+    }
+    let author = card_actor_author(params, session_author);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    crate::read_routes::note_own_thread_read(&conn, author.as_ref(), &cb.conversation_id, cb.seq);
 }
 
 /// `--expires 2h|3d|90m|3600` (from now), `--no-expiry` / `expires=never`
@@ -2236,6 +2297,7 @@ pub(crate) fn design_post(
         author,
     )
     .map_err(|e| error_json("500 Internal Server Error", "store", e))?;
+    crate::read_routes::note_own_thread_read(&conn, item.doc.author.as_ref(), &resolved.conversation_id, item.seq);
     crate::overlay_ws::emit_links(&links, &item.doc);
     drop(conn);
     audit_design("design.note.post", &origin, &from, &resolved.addr, text);

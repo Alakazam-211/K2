@@ -156,6 +156,13 @@ export const SESSION_EVENT_ROUTES = {
   // phone switch refetch (`onNotifyPrefsChanged`). Not carried: Settings
   // reads the window's own server.
   notify_prefs_changed: { class: 'app', app: true },
+  // homes-sync-v1 (0.46.1): person-scoped (the daemon sends them only to
+  // this person's sockets). The Homes sync runner pulls on `homes_changed`
+  // and stops on its own `homes_device_removed` (`onHomesChanged`,
+  // `onHomesDeviceRemoved`). Not carried: sync talks to this computer's
+  // daemon, and the runner also polls.
+  homes_changed: { class: 'app', app: true },
+  homes_device_removed: { class: 'app', app: true },
 } as const satisfies { readonly [K in SessionEventMessage['kind']]: SessionEventRoute }
 
 type Routes = typeof SESSION_EVENT_ROUTES

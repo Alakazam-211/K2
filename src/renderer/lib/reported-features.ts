@@ -63,6 +63,11 @@ export const REPORTED_FEATURES = {
    *  keeps its own live-session set and reads working from
    *  `counts.working`; a missing `live` is unknown, never 0. */
   'activity-live-busy': 'activity-live-busy',
+  /** homes-sync-v1 (0.46.1): `/cli/me/homes*` (a person's Homes synced
+   *  between their devices), the person-scoped `homes_changed` /
+   *  `homes_device_removed` frames and `serverId` on `/boot-status`. The
+   *  desktop syncs its Homes with its own daemon only when it lists this. */
+  'homes-sync-v1': 'homes-sync-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

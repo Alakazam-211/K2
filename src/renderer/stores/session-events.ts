@@ -319,6 +319,22 @@ export interface NotifyPrefsChangedEvent {
   kind: 'notify_prefs_changed'
 }
 
+/** APP-LEVEL, PERSON-SCOPED (homes-sync-v1) — this person's Homes changed
+ *  on this server (one of their devices pushed). Only the person's own
+ *  sockets get it; it carries no Home names. The sync runner pulls
+ *  `GET /cli/me/homes?since=` when `cursor` is past its own. */
+export interface HomesChangedEvent {
+  kind: 'homes_changed'
+  cursor: number
+}
+
+/** APP-LEVEL, PERSON-SCOPED (homes-sync-v1) — one of this person's devices
+ *  was removed from Homes sync (Server settings). */
+export interface HomesDeviceRemovedEvent {
+  kind: 'homes_device_removed'
+  deviceId: string
+}
+
 /** APP-LEVEL — a remote drive attempt was refused (owner audit). Ignored:
  *  no client surface shows it yet. Fields are snake_case on the wire. */
 export interface RemoteSessionAccessDeniedEvent {
@@ -763,6 +779,8 @@ export type SessionEventMessage =
   | DomainsChangedEvent
   | FederationPeersChangedEvent
   | NotifyPrefsChangedEvent
+  | HomesChangedEvent
+  | HomesDeviceRemovedEvent
   | RemoteSessionAccessDeniedEvent
   | SewChangedEvent
 
@@ -1245,6 +1263,9 @@ type DomainsChangedHandler = (e: DomainsChangedEvent) => void
 type FederationPeersChangedHandler = (e: FederationPeersChangedEvent) => void
 // Thread push §5.5 — Settings → Notifications' refetch signal.
 type NotifyPrefsChangedHandler = () => void
+// homes-sync-v1 — the Homes sync runner's pull signal and device removal.
+type HomesChangedHandler = (cursor: number) => void
+type HomesDeviceRemovedHandler = (deviceId: string) => void
 
 type SessionActivityHandler = (e: SessionActivityChangedEvent) => void
 
@@ -1293,6 +1314,8 @@ interface AppBusHandlers {
   domainsChanged: Set<DomainsChangedHandler>
   federationPeersChanged: Set<FederationPeersChangedHandler>
   notifyPrefsChanged: Set<NotifyPrefsChangedHandler>
+  homesChanged: Set<HomesChangedHandler>
+  homesDeviceRemoved: Set<HomesDeviceRemovedHandler>
   activeChanged: Set<ActiveChangedHandler>
   zenChanged: Set<ZenChangedHandler>
   sourcesChanged: Set<SourcesChangedHandler>
@@ -1343,6 +1366,8 @@ function createBusState(scopeId: string): BusState {
       domainsChanged: new Set(),
       federationPeersChanged: new Set(),
       notifyPrefsChanged: new Set(),
+      homesChanged: new Set(),
+      homesDeviceRemoved: new Set(),
       activeChanged: new Set(),
       zenChanged: new Set(),
       sourcesChanged: new Set(),
@@ -1660,6 +1685,17 @@ export function onNotifyPrefsChanged(scope: ServerScope, fn: NotifyPrefsChangedH
   return addHandler(busFor(scope).handlers.notifyPrefsChanged, fn)
 }
 
+/** homes-sync-v1 — subscribe to `homes_changed` on `scope`'s server (only
+ *  this person's sockets get it). `fn` gets the server's new cursor. */
+export function onHomesChanged(scope: ServerScope, fn: HomesChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.homesChanged, fn)
+}
+
+/** homes-sync-v1 — subscribe to `homes_device_removed` on `scope`'s server. */
+export function onHomesDeviceRemoved(scope: ServerScope, fn: HomesDeviceRemovedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.homesDeviceRemoved, fn)
+}
+
 /** Home M4: the server's whole Active set changed (`active_changed`).
  *  Fed by a pinned room's carrier socket; the window's own Active set
  *  stays on `subscribeToActiveState` → `useActiveStore`. */
@@ -1823,6 +1859,12 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   notify_prefs_changed: (h) => {
     for (const fn of h.notifyPrefsChanged) fn()
+  },
+  homes_changed: (h, m) => {
+    for (const fn of h.homesChanged) fn(m.cursor)
+  },
+  homes_device_removed: (h, m) => {
+    for (const fn of h.homesDeviceRemoved) fn(m.deviceId)
   },
   zen_changed: (h) => {
     for (const fn of h.zenChanged) fn()

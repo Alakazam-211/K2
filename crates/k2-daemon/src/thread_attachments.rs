@@ -123,6 +123,21 @@ fn error_json(status: &'static str, code: &str, hint: impl std::fmt::Display) ->
     }
 }
 
+/// This route's missing-permission refusal: a stable code (the App
+/// surfaces' `cap_not_granted`) so a phone never string-matches. The same
+/// body whether or not the file exists (no existence oracle).
+pub(crate) fn cap_refused(cap: &str) -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "cap_not_granted", "cap": cap, "hint": format!("missing capability {cap}") },
+        })
+        .to_string(),
+    }
+}
+
 fn gone() -> CliResponse {
     error_json("404 Not Found", "attachment_gone", "the file is no longer there (moved or deleted)")
 }
@@ -168,10 +183,16 @@ pub(crate) fn handle_get(params: &HashMap<String, String>, resolved: &ResolvedTh
         return gone();
     };
     // A pointer, not a grant: a guest opens only what their own file
-    // rights already cover; anything else is the uniform missing-cap 403.
+    // rights already cover. `meta` answers what `GET /cli/thread` shows
+    // (`hidden`); preview and range are the uniform `cap_not_granted` 403.
     if let Some(p) = pass {
         if !guest_sees(p, &resolved.project_id, &root, a) {
-            return crate::skin_routes::missing_cap_response(crate::skin_routes::FILES_READ);
+            if mode == "meta" {
+                return CliResponse::ok_json(
+                    serde_json::json!({ "ok": true, "kind": att::KIND_FILE, "state": att::STATE_HIDDEN }).to_string(),
+                );
+            }
+            return cap_refused(crate::skin_routes::FILES_READ);
         }
     }
     let Some(real) = att::resolve_now(&root, a) else {

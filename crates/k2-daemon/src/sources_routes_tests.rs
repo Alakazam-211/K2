@@ -123,7 +123,7 @@ fn viewers_floor_masking_and_ids() {
         st.health = Health::Ok;
         let p = Projection {
             fields: Default::default(),
-            items: vec![ProjectedItem { key: "d1".into(), fields: [("state".to_string(), json!("READY"))].into() }],
+            items: vec![ProjectedItem { key: "d1".into(), fields: [("state".to_string(), json!("READY"))].into(), list: None }],
         };
         store::save_state(&conn, &st, Some(&p)).unwrap();
     }
@@ -148,7 +148,8 @@ fn viewers_floor_masking_and_ids() {
     assert!(v["source"]["fetch"]["url"].as_str().unwrap().contains("team_x"));
     let (_, v) = get("/cli/sources/show", &agent("p1"), &[("name", "deploys")]);
     assert!(v["source"].get("id").is_none());
-    assert!(!v["source"]["fetch"]["url"].as_str().unwrap().contains("team_x"), "agents see masked query values");
+    // 0.46.1: only secret-looking query values are masked for agents.
+    assert!(v["source"]["fetch"]["url"].as_str().unwrap().contains("teamId=team_x&limit=5"), "plain query values stay");
     let (_, v) = get("/cli/sources/list", &login("m", Role::Member), &[]);
     assert!(v["sources"].as_array().unwrap().is_empty(), "unreadable rows are left out");
 }
@@ -280,6 +281,91 @@ fn pause_resume_status_changes_history_export() {
     assert_eq!(s, 200);
     assert_eq!(v["active"], 1);
     assert!(v["parkedOrigins"].is_array());
+}
+
+#[test]
+fn export_masks_only_secret_query_values_and_feeds_propose_back() {
+    let _e = env();
+    let src = json!({"name": "ops", "label": "Ops", "everySecs": 60,
+        "fetch": {"url": "https://k2.dev/api/ops/fleet?part=boxes&id=AbCdEf0123456789AbCdEf0123"},
+        "extract": {"fields": {"target_version": "/target_version"}}});
+    assert_eq!(call("/cli/sources/add", &Who::Owner, src).0, 200);
+    let (_, v) = get("/cli/sources/export", &agent("p1"), &[("name", "ops")]);
+    let url = v["fetch"]["url"].as_str().unwrap();
+    assert!(url.contains("part=boxes"), "{url}");
+    assert!(!url.contains("AbCdEf0123"), "a token-shaped value is masked: {url}");
+    // A plain export goes straight back into propose.
+    call("/cli/sources/add", &Who::Owner, json!({"name": "plain", "label": "Plain", "everySecs": 60,
+        "fetch": {"url": "https://k2.dev/api/ops/fleet?part=certs"}, "expect": {"status": [200, 401]},
+        "extract": {"lists": {"certs": {"pointer": "/certs", "itemKey": "/host", "itemFields": {"cert_days": "/days"}}}},
+        "rules": [{"field": "cert_days", "crit": {"lt": 7}, "warn": {"lt": 21}, "critAfter": 2}]}));
+    let (_, mut v) = get("/cli/sources/export", &agent("p1"), &[("name", "plain")]);
+    assert_eq!(v["fetch"]["url"], "https://k2.dev/api/ops/fleet?part=certs");
+    assert_eq!(v["expect"], json!({"status": [200, 401]}), "0.46.1 keys export");
+    assert_eq!(v["rules"][0]["critAfter"], 2);
+    v["name"] = "plain-copy".into();
+    let (s, r) = call("/cli/sources/propose", &agent("p1"), v);
+    assert_eq!((s, r["status"].as_str()), (200, Some("proposed")), "{r}");
+}
+
+#[test]
+fn history_reads_health_changes_and_any_count_or_aggregate() {
+    use k2_core::sources::{Transition, TransitionKind};
+    let _e = env();
+    call("/cli/sources/add", &Who::Owner, json!({"name": "ops", "label": "Ops", "everySecs": 60,
+        "fetch": {"url": "https://k2.dev/api/ops/fleet"},
+        "extract": {"counts": {"past_due_n": "/past_due"},
+                    "items": {"pointer": "/boxes", "itemKey": "/name", "itemFields": {"version": "/version"}},
+                    "aggregates": {"boxes": {"op": "count"}}, "trend": []}}));
+    let id = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let row = store::get_by_name(&conn, "ops").unwrap().unwrap();
+        let t0 = now() - 600;
+        let tr = |item: Option<&str>, from: Health, to: Health, kind| Transition {
+            scope_item: item.map(str::to_string), from, to, kind, incident_id: None, reason: None, hard: true,
+        };
+        store::insert_events(&conn, &row.id, t0, &[tr(None, Health::Unknown, Health::Ok, TransitionKind::WentOk)], false).unwrap();
+        store::insert_events(&conn, &row.id, t0 + 60, &[tr(None, Health::Ok, Health::Warn, TransitionKind::WentWarn),
+                                                        tr(Some("ohana"), Health::Ok, Health::Crit, TransitionKind::WentCrit)], false).unwrap();
+        store::insert_points(&conn, &row.id, t0, &[("past_due_n".into(), Some(0.0)), ("boxes".into(), Some(3.0))]).unwrap();
+        store::insert_points(&conn, &row.id, t0 + 60, &[("past_due_n".into(), Some(2.0))]).unwrap();
+        row.id
+    };
+    let (s, v) = get("/cli/sources/history", &agent("p1"), &[("name", "ops"), ("field", "health")]);
+    assert_eq!(s, 200, "{v}");
+    let kinds: Vec<&str> = v["events"].as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, vec!["went_ok", "went_warn"], "source-level changes, oldest first");
+    assert_eq!(v["events"][1]["to"], "warn");
+    let (_, v) = get("/cli/sources/history", &agent("p1"), &[("name", "ops"), ("field", "health"), ("item", "ohana")]);
+    assert_eq!(v["events"].as_array().unwrap().len(), 1);
+    assert_eq!(v["events"][0]["to"], "crit");
+    let (s, v) = get("/cli/sources/history", &agent("p1"), &[("name", "ops"), ("field", "past_due_n")]);
+    assert_eq!(s, 200, "a count has history without being a trend: {v}");
+    let vs: Vec<f64> = v["points"].as_array().unwrap().iter().map(|p| p["v"].as_f64().unwrap()).collect();
+    assert_eq!(vs, vec![0.0, 2.0]);
+    let (s, _) = get("/cli/sources/history", &agent("p1"), &[("name", "ops"), ("field", "boxes")]);
+    assert_eq!(s, 200, "an aggregate has history");
+    let (s, v) = get("/cli/sources/history", &agent("p1"), &[("name", "ops"), ("field", "version")]);
+    assert_eq!((s, err(&v)), (400, "bad_request"), "an item field has no series");
+    let _ = id;
+}
+
+#[test]
+fn an_agent_without_the_switch_lists_only_its_own_pending_proposals() {
+    let _e = env();
+    call("/cli/sources/propose", &agent("p1"), fleet("mine"));
+    call("/cli/sources/propose", &agent("p2"), fleet("theirs"));
+    let (s, v) = get("/cli/sources/pending", &agent("p1"), &[]);
+    assert_eq!(s, 200, "{v}");
+    let names: Vec<&str> = v["sources"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["mine"]);
+    assert_eq!(v["scope"], "own");
+    let (_, v) = get("/cli/sources/pending", &Who::Owner, &[]);
+    assert_eq!(v["sources"].as_array().unwrap().len(), 2);
+    assert_eq!(v["scope"], "all");
+    // Approving is still a person's (or the switch's).
+    assert_eq!(err(&call("/cli/sources/approve", &agent("p1"), json!({"name": "mine"})).1), "person_only");
 }
 
 #[test]

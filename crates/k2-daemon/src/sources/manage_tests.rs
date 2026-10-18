@@ -76,7 +76,10 @@ fn without_the_switch_an_agent_is_refused_as_today() {
     let _e = env();
     workspace(false, true);
     insert_source("fleet", "proposed", None, false, "member");
-    for path in ["/cli/sources/pending", "/cli/sources/approve", "/cli/sources/batch-approve", "/cli/sources/secret", "/cli/sources/pin"] {
+    // pending is no longer refused (0.46.1): it lists the agent's own.
+    let v = call("/cli/sources/pending", &agent(), json!({})).expect("own pending");
+    assert_eq!(v["scope"], "own");
+    for path in ["/cli/sources/approve", "/cli/sources/batch-approve", "/cli/sources/secret", "/cli/sources/pin"] {
         let e = call(path, &agent(), json!({"name": "fleet", "specHash": hash()})).unwrap_err();
         assert_eq!((e.code, e.status), ("person_only", 403), "{path}");
     }

@@ -45,5 +45,7 @@
   "grokbots_changed": "app",
   "hooks_install_failed": "app",
   "activity_changed": "app",
-  "notify_prefs_changed": "app"
+  "notify_prefs_changed": "app",
+  "room_members_changed": "app",
+  "app_deployed": "app"
 }

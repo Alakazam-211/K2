@@ -129,8 +129,12 @@ pub(super) fn lint_row(v: &VerbRow, out: &mut Vec<String>) {
     if v.bindings.renderer.is_some() {
         out.push(format!("{name}: an app row has no renderer binding (its transport is the live route)"));
     }
-    if v.exposed_to(Exposure::Widget) || v.exposed_to(Exposure::GardenLocal) {
-        out.push(format!("{name}: an app row is exposed to app only until G1 joins the two transports (Q29)"));
+    // One reveal = both surfaces (room-scope §0.2): an app row may also be
+    // `garden-local` (the Garden bridge, through this computer's daemon).
+    // The `widget` transport (the renderer's bridge) stays separate until
+    // G1 joins those verb sets (Q29).
+    if v.exposed_to(Exposure::Widget) {
+        out.push(format!("{name}: an app row is exposed to app and garden-local, never widget, until G1 joins those verbs (Q29)"));
     }
     match v.kind {
         VerbKind::Call => {
@@ -352,11 +356,13 @@ mod tests {
         assert!(link_allows_http("HEAD", "/cli/thread"));
         assert!(link_allows_http("POST", "/cli/thread/post"));
         assert!(!link_allows_http("GET", "/cli/thread/post"), "exact method");
+        let on_link = |p: &str| link_allows_http("GET", p) || link_allows_http("POST", p);
+        let on_helper = |p: &str| helper_allows_http("GET", p) || helper_allows_http("POST", p);
         for p in HELPER_ONLY_HTTP {
-            assert!(!link_allows_http("POST", p) && helper_allows_http("POST", p), "{p} is the helper's alone");
+            assert!(!on_link(p) && on_helper(p), "{p} is the helper's alone");
         }
         for p in LINK_ONLY_HTTP {
-            assert!(link_allows_http("POST", p) && !helper_allows_http("POST", p), "{p} is the link's alone");
+            assert!(on_link(p) && !on_helper(p), "{p} is the link's alone");
         }
         assert!(HELPER_ONLY_HTTP.contains(&"/cli/skin/password/change"));
         assert!(LINK_ONLY_HTTP.contains(&"/cli/skin/login"));
@@ -733,6 +739,29 @@ mod tests {
             let p = problems(&row);
             assert!(p.iter().any(|x| x.contains(want)), "want {want:?} in {p:#?}");
         }
+    }
+
+    /// One reveal = both surfaces (room-scope §0.2): an app row may also be
+    /// garden-local (it keeps its App route and stays portable); never
+    /// widget, and never the widget door as its binding.
+    #[test]
+    fn an_app_row_may_also_be_garden_local() {
+        let both = GOOD.replace(r#""exposure":["app"]"#, r#""exposure":["app","garden-local"]"#).replace(r#""cap":"files:read""#, r#""cap":null"#);
+        assert!(problems(&both).is_empty(), "{:#?}", problems(&both));
+        let widget = GOOD.replace(r#""exposure":["app"]"#, r#""exposure":["app","widget"]"#).replace(r#""cap":"files:read""#, r#""cap":null"#);
+        assert!(problems(&widget).iter().any(|x| x.contains("never widget")), "{:#?}", problems(&widget));
+        let door = both.replace(r#""method":"GET","route":"/cli/seed/read","params":{"relPath":"path"},"responseNames":{"relPath":"path"}"#, r#""method":"POST","route":"/cli/zen/call""#);
+        assert!(problems(&door).iter().any(|x| x.contains("binds its App route")), "{:#?}", problems(&door));
+        // A garden-local row alone still binds the door and is local.
+        let local = both.replace(r#""exposure":["app","garden-local"]"#, r#""exposure":["garden-local"]"#);
+        assert!(problems(&local).iter().any(|x| x.contains("binds http POST /cli/zen/call")), "{:#?}", problems(&local));
+        assert!(problems(&local).iter().any(|x| x.contains("reach local")), "{:#?}", problems(&local));
+        // The checked-in rows on both transports.
+        let c = catalog();
+        let mut dual: Vec<&str> =
+            rows(c).iter().filter(|v| v.exposed_to(Exposure::GardenLocal)).map(|v| v.verb.as_str()).collect();
+        dual.sort_unstable();
+        assert_eq!(dual, ["app.self", "app.usage", "room.members"]);
     }
 
     #[test]

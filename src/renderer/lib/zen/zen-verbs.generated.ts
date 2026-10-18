@@ -5,7 +5,7 @@
 import type { CatalogReach, CatalogVerbKind } from '../contract/catalog-types'
 
 /** The catalog version this table was generated from. */
-export const ZEN_CATALOG_VERSION = 10
+export const ZEN_CATALOG_VERSION = 11
 
 /**
  * Every catalog row with a `builtin` or `registered` renderer binding,
@@ -53,7 +53,7 @@ export const ZEN_VERBS = {
 
 /** One custom-widget verb: its cap, portable or local, and how it answers. */
 export interface ZenCustomVerbRow {
-  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'store:read' | 'store:write' | null
+  readonly cap: 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'store:read' | 'store:write' | 'room:members' | null
   readonly reach: CatalogReach
   readonly kind: CatalogVerbKind
 }
@@ -76,6 +76,9 @@ export const ZEN_CUSTOM_VERBS = {
   'save.remove': { cap: null, reach: 'local', kind: 'call' },
   'save.keys': { cap: null, reach: 'local', kind: 'call' },
   'viewer.get': { cap: null, reach: 'local', kind: 'call' },
+  'app.self': { cap: null, reach: 'portable', kind: 'call' },
+  'app.usage': { cap: null, reach: 'portable', kind: 'call' },
+  'widget.self': { cap: null, reach: 'local', kind: 'call' },
   'agents.list': { cap: 'agents:read', reach: 'portable', kind: 'call' },
   'agents.subscribe': { cap: 'agents:read', reach: 'portable', kind: 'subscribe' },
   'conversation.open': { cap: 'agents:read', reach: 'local', kind: 'call' },
@@ -103,6 +106,7 @@ export const ZEN_CUSTOM_VERBS = {
   'store.txAdd': { cap: 'store:write', reach: 'local', kind: 'call' },
   'store.txCommit': { cap: 'store:write', reach: 'local', kind: 'call' },
   'store.txAbort': { cap: 'store:write', reach: 'local', kind: 'call' },
+  'room.members': { cap: 'room:members', reach: 'portable', kind: 'call' },
 } as const satisfies Record<string, ZenCustomVerbRow>
 
 export type ZenCustomVerb = keyof typeof ZEN_CUSTOM_VERBS

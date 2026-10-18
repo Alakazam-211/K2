@@ -42,6 +42,12 @@ export const ZEN_STORE_VERBS: ReadonlySet<string> = new Set([
   'save.remove',
   'save.keys',
   'viewer.get',
+  // Room-scope surfaces (0.46.1, one reveal = App gateway + Garden bridge):
+  // the same daemon door answers them, as the owner.
+  'room.members',
+  'app.self',
+  'app.usage',
+  'widget.self',
 ])
 
 /** How long the person's name is reused before `viewer.get` again. */

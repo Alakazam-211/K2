@@ -352,3 +352,36 @@ fn agent_transactions_are_bound_to_their_caller_and_checked_per_part() {
     let r = ok(&o, "POST", "/cli/zen/data/tx/commit", json!({"txId": id}), &[]);
     assert_eq!(r["ops"], 2);
 }
+
+/// Room-scope 0.46.1 through the widget door: `widget.self` (no cap; its
+/// id, live hash, maker and 7-day saves), `room.members` behind the
+/// manifest's `room:members`, and `app.*` for a local App (the owner's view).
+#[test]
+fn room_scope_verbs_through_the_widget_door() {
+    use k2_core::garden_data::backend::StoreBackend;
+    use k2_core::garden_data::{Actor, Space};
+    let d = door(&["store:read"]);
+    d.stamp(builder());
+    let me = d.call("widget.self", json!([]));
+    assert_eq!((me["widget"].as_str(), me["placement"].as_str(), me["garden"].as_str()), (Some("board"), Some("b1"), Some(d.garden.as_str())));
+    assert_eq!(me["hash"], d.hash());
+    assert_eq!(me["author"], json!({ "kind": "agent", "handle": "board-builder" }));
+    assert_eq!(me["uses7d"], json!({ "writes": 0, "changes": 0 }));
+    let s = crate::garden_data::store();
+    let space = Space::data("board").unwrap();
+    s.put(&space, "a", &json!(1), None, &Actor::Widget { widget: "board".into() }).unwrap();
+    s.put(&space, "b", &json!(2), None, &Actor::Agent { project_id: "w-keeper".into() }).unwrap();
+    assert_eq!(d.call("widget.self", json!([]))["uses7d"], json!({ "writes": 1, "changes": 2 }), "its own saves and everyone's");
+    // room.members needs the cap in the manifest.
+    assert_eq!(d.refuse("room.members", json!([{ "workspace": "board-keeper" }])), "cap_not_granted");
+    set_caps(&d.f, &["store:read", "room:members"]);
+    let v = d.call("room.members", json!([{ "workspace": "board-keeper" }]));
+    assert_eq!((v["workspace"].as_str(), v["count"].as_i64(), v["admins"].as_str()), (Some("board-keeper"), Some(0), Some("admins of this box")));
+    assert_eq!(d.refuse("room.members", json!([{ "workspace": "nowhere" }])), "not_bound");
+    // app.* need no cap; an unknown App is not_found.
+    assert_eq!(d.refuse("app.self", json!([{ "app": "ghost" }])), "not_found");
+    assert_eq!(d.refuse("app.usage", json!([{ "app": "ghost" }])), "not_found");
+    // A stale frame is refused before any of them.
+    let (code, v) = d.raw(&"0".repeat(64), "widget.self", json!([]));
+    assert_eq!((code, v["error"]["code"].as_str()), (409, Some("stale_widget")));
+}

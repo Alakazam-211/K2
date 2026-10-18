@@ -527,6 +527,7 @@ fn go_live(app: &AppRow, dep: &str, inst: Instance, kind: &str, t: &Timings) {
         "system",
         json!({ "deployment": dep, "kind": kind, "seed": inst.seed, "port": inst.handle.port, "warm": prev_live.as_ref().map(|p| p.handle.deployment_id.clone()) }),
     );
+    super::surfaces::emit_deployed(&app.app_id);
     // Old connections drain in the background; the old instance stays up.
     if let Some(be) = prev_be {
         let drain = prev_live.as_ref().map(|p| p.drain_secs).unwrap_or(t.drain_secs);
@@ -662,6 +663,7 @@ fn auto_rollback(app_id: &str, w: &Watch, bad: Instance, prev: Instance, why: &s
         Ok(id)
     });
     audit(app_id, "auto_rollback", "system", json!({ "deployment": row.as_ref().ok(), "from": bad.seed, "to": prev.seed, "why": why }));
+    super::surfaces::emit_deployed(app_id);
     if let Some(be) = bad_be {
         let d = bad.drain_secs;
         let _ = std::thread::Builder::new().name("app-drain".into()).spawn(move || {
@@ -865,6 +867,7 @@ pub fn rollback_to_warm(app: &AppRow, target: &str, actor: &str) -> Result<Optio
         Ok(id)
     })?;
     audit(&app.app_id, "rollback", actor, json!({ "deployment": id, "to": target, "instant": true }));
+    super::surfaces::emit_deployed(&app.app_id);
     if let Some(be) = bad_be {
         let d = bad.as_ref().map(|b| b.drain_secs).unwrap_or(t.drain_secs);
         let _ = std::thread::Builder::new().name("app-drain".into()).spawn(move || {

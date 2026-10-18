@@ -257,8 +257,20 @@ pub const BRIDGE_CAPS: &[&str] = &[
 /// §7.2) are `garden-local`: their verbs run in this computer's daemon
 /// through `/cli/zen/call`, with the widget maker's rights. A widget that
 /// asks for `sources:read` never runs with `store:write` either.
-pub const USER_WIDGET_CAPS: &[&str] =
-    &["agents:read", "presence:read", "thread:read", "thread:post", "sources:read", "store:read", "store:write"];
+///
+/// `room:members` (room-scope R9, 0.46.1) is `garden-local` too: one reveal
+/// with the App gateway's `room.members` row. A Garden acts as the owner,
+/// so it sees every name (the owner's hide-names switch is for guests).
+pub const USER_WIDGET_CAPS: &[&str] = &[
+    "agents:read",
+    "presence:read",
+    "thread:read",
+    "thread:post",
+    "sources:read",
+    "store:read",
+    "store:write",
+    "room:members",
+];
 
 /// The caps K2 grants each built-in widget kind (`source: "builtin"`). A
 /// Garden file never names caps (G38); these are the only ones.

@@ -48,6 +48,90 @@ export interface Viewer {
   readonly name: string
 }
 
+export interface AppSelf {
+  /** The App id. */
+  readonly app: string
+  /** When the live deployment went live, seconds since the epoch. */
+  readonly deployedAt: number | null
+  /** The live deployment id. */
+  readonly deployment: string | null
+  readonly health: 'running' | 'starting' | 'crashlooping' | 'exited' | 'stopped' | 'suspended'
+  /** The live Seed's hash; null before the first deploy. */
+  readonly liveSeed: string | null
+  /** The App row's state (running, stopped, crashlooping, failed, installing). */
+  readonly state: string
+  /** The handle of the workspace that owns the App. */
+  readonly workspace: string
+}
+
+export interface AppLiveUse {
+  readonly connections: number
+  readonly subscriptions: number
+}
+
+export interface AppQuotas {
+  readonly bodyBytes: number
+  readonly burst: number
+  /** Sustained calls per second. */
+  readonly rps: number
+  readonly sockets: number
+  readonly subscriptions: number
+  readonly uploadBytes: number
+}
+
+export interface AppCallTotals {
+  readonly bytesIn: number
+  readonly bytesOut: number
+  readonly calls: number
+  readonly denied: number
+}
+
+export interface AppVerbUse {
+  readonly calls: number
+  /** Refused calls (status 400 or more). */
+  readonly denied: number
+  /** METHOD /path, as the gateway recorded it. */
+  readonly route: string
+  /** The catalog verb, or null for a call that isn't one (a refused route). */
+  readonly verb: string | null
+}
+
+export interface AppUsage {
+  /** The App id. */
+  readonly app: string
+  /** The window the counts cover, in hours. */
+  readonly hours: number
+  readonly live: AppLiveUse
+  readonly quotas: AppQuotas
+  readonly totals: AppCallTotals
+  readonly verbs: AppVerbUse[]
+}
+
+export interface WidgetAuthor {
+  /** agent: the agent's handle. */
+  readonly handle: string | null
+  readonly kind: 'owner' | 'agent' | 'k2' | 'unclaimed'
+}
+
+export interface WidgetUses {
+  /** Every change to its data in the last 7 days: this widget, you and agents. */
+  readonly changes: number
+  /** Saves this widget made to its data in the last 7 days. */
+  readonly writes: number
+}
+
+export interface WidgetSelf {
+  readonly author: WidgetAuthor
+  /** The Garden it is placed on. */
+  readonly garden: string
+  /** The live version's hash (the code this frame runs). */
+  readonly hash: string
+  readonly placement: string
+  readonly uses7d: WidgetUses
+  /** The widget's folder name (k2:<name> for a built-in). */
+  readonly widget: string
+}
+
 export interface AgentCounts {
   /** The shell commands among them. */
   readonly commands: number
@@ -373,8 +457,36 @@ export interface StoreTxAborted {
   readonly aborted: boolean
 }
 
+export interface RoomMember {
+  /** host (the box login) or the App id the grant is for. */
+  readonly app: string
+  readonly caps: string[]
+  /** The full name when set, else the username; null when names are hidden. */
+  readonly displayName: string | null
+  /** agent: a login marked as an agent (k2 app user agent). */
+  readonly kind: 'guest' | 'agent'
+  /** The role on the grant; null = a grant with rooms only (Thread). */
+  readonly role: string | null
+  /** null when the owner hides names in this room (App callers only). */
+  readonly username: string | null
+}
+
+export interface RoomMembers {
+  /** Connect logins have no rooms: always the one line "admins of this box". */
+  readonly admins: string
+  /** How many members. */
+  readonly count: number
+  readonly members: RoomMember[]
+  /** The owner hides guests' names in this room: an App sees null names. A Garden (the owner) always sees them. */
+  readonly namesHidden: boolean
+  /** The room's project id. */
+  readonly room: string
+  /** The room's handle. */
+  readonly workspace: string
+}
+
 /** A cap a widget may ask for. */
-export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'store:read' | 'store:write'
+export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'store:read' | 'store:write' | 'room:members'
 
 /** What k2.store.subscribe delivers: the changed keys (value null = deleted), or after a gap the whole list again. `by` names the writer: you (by your name), `<you> via <widget>`, or `agent:<handle>`. */
 export type StoreDelivery = Array<{ key: string; rev: number; value: unknown; by: string }> | { resync: true; items: StoreEntry[] }
@@ -424,6 +536,9 @@ export interface K2Verbs {
   'save.remove': { args: [key: string]; value: null }
   'save.keys': { args: [opts?: { prefix?: string }]; value: string[] }
   'viewer.get': { args: []; value: Viewer }
+  'app.self': { args: [args?: { app?: string }]; value: AppSelf }
+  'app.usage': { args: [args?: { app?: string; hours?: number }]; value: AppUsage }
+  'widget.self': { args: []; value: WidgetSelf }
   'agents.list': { args: []; value: AgentRow[] }
   'agents.subscribe': { args: []; value: AgentRow[] }
   'conversation.open': { args: [address: string]; value: null }
@@ -451,10 +566,11 @@ export interface K2Verbs {
   'store.txAdd': { args: [txId: string, ops: StoreOp[]]; value: StoreTxStatus }
   'store.txCommit': { args: [txId: string]; value: StoreCommit }
   'store.txAbort': { args: [txId: string]; value: StoreTxAborted }
+  'room.members': { args: [args: { app?: string; workspace: string }]; value: RoomMembers }
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.self' | 'app.usage' | 'widget.self' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'presence.get' | 'thread.read' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'store.get' | 'store.list' | 'store.changes' | 'store.put' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'room.members'
 export type K2SubscribeVerb = 'theme.changed' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'sources.subscribe'
 
 export interface K2 {
@@ -495,6 +611,20 @@ export interface K2 {
     get(): Promise<Viewer>
     /** Same as `k2.viewer.get()`. */
     (): Promise<Viewer>
+  }
+  readonly app: {
+    /** This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest). This computer only. no cap · portable · app-self-v1. e.g. `const me = await k2.asApp().app.self()` */
+    self(args?: { app?: string }): Promise<AppSelf>
+    /** This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest). This computer only. no cap · portable · app-self-v1. e.g. `const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})` */
+    usage(args?: { app?: string; hours?: number }): Promise<AppUsage>
+  }
+  readonly widget: {
+    /** This widget: its id, live hash, who made it and its last 7 days of use. This computer only. no cap · local · app-self-v1. e.g. `const me = await k2.widget.self()` */
+    self(): Promise<WidgetSelf>
+    /** The widget's folder name (or k2:<name>), once `connected` resolves. */
+    readonly id: string
+    readonly name: string
+    readonly garden: string
   }
   readonly agents: {
     /** The agents in the widget's scope, with live status. cap agents:read · portable · zen-v1. e.g. `const rows = await k2.agents.list()` */
@@ -572,6 +702,10 @@ export interface K2 {
     /** Read a putChunked value back (null when missing). A part that doesn't match fails with reason chunk_mismatch. This computer only. */
     getChunked(key: string): Promise<string | null>
   }
+  readonly room: {
+    /** Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line. This computer only. cap room:members · portable · room-members-v1. e.g. `const {members} = await k2.room.members({workspace})` */
+    members(args: { app?: string; workspace: string }): Promise<RoomMembers>
+  }
   /** Any widget verb by name; a refused call rejects with K2Error. */
   call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>
   /** Subscribe by name; returns the unsubscribe. A refused subscription ends and calls `onError` (the function after `cb`) once with a K2Error; with no `onError` K2 logs it as an uncaught error. */
@@ -591,7 +725,6 @@ export interface K2 {
   ready(): void
   /** The placement's `config` table from the Garden file (empty until `connected`). */
   readonly config: Readonly<Record<string, string | number | boolean>>
-  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }
   /** A file in the widget's folder as a data: URL, or null. */
   asset(name: string): string | null
   readonly motion: { readonly reduced: boolean }

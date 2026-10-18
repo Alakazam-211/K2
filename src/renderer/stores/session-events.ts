@@ -611,6 +611,25 @@ export interface GardenDataChangedEvent {
   rev: number
 }
 
+/** APP-LEVEL — room-scope R9 (0.46.1): a room's access list may have
+ *  changed (grants, roles, guests, or the owner's hide-names switch).
+ *  `room` is null for "any room". Refetch `room.members`. */
+export interface RoomMembersChangedEvent {
+  kind: 'room_members_changed'
+  room: string | null
+}
+
+/** APP-LEVEL — room-scope R16 (0.46.1): an App's live deployment changed.
+ *  Refetch `app.self`. */
+export interface AppDeployedEvent {
+  kind: 'app_deployed'
+  appId: string
+  serviceId: string
+  projectId: string
+  seed: string | null
+  deployment: string | null
+}
+
 /** APP-LEVEL — Local Grok Bots (0.45.7): the roster or status changed
  *  (`roster`), or these agents' chats grew (`agents`, ids only). */
 export interface GrokbotsChangedEvent {
@@ -765,6 +784,8 @@ export type SessionEventMessage =
   | NotifyPrefsChangedEvent
   | RemoteSessionAccessDeniedEvent
   | SewChangedEvent
+  | RoomMembersChangedEvent
+  | AppDeployedEvent
 
 export interface SessionEventHandlers {
   onAdded?: (event: SessionAddedEvent) => void

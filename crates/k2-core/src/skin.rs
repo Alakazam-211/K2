@@ -158,6 +158,7 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_AGENT_IDENTITY,
     CAP_AGENT_HANDLE,
     CAP_FILES_AGENT_CONFIG,
+    CAP_ROOM_MEMBERS,
 ];
 
 /// Connect / Server Access names — never a skin role. `viewer` stays

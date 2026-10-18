@@ -189,7 +189,12 @@ describe('TUWA6: the frame runtime', () => {
     expect(got).toEqual([[{ address: 'alice::local' }]])
     expect(heard).toContainEqual({ pong: 7 })
     expect(heard).toContainEqual({ ready: true })
-    expect(r.k2.widget).toEqual({ id: 'arcade', name: 'Agent Arcade', garden: 'g-test0001' })
+    // k2.widget is the hello's view plus the catalog's widget.* helpers
+    // (widget.self, room-scope R16).
+    expect({ ...r.k2.widget, self: undefined }).toEqual({ id: 'arcade', name: 'Agent Arcade', garden: 'g-test0001', self: undefined })
+    expect(typeof r.k2.widget.self).toBe('function')
+    expect(Object.isFrozen(r.k2.widget)).toBe(true)
+    expect(r.k2.widget).toBe(r.k2.widget)
     expect(r.k2.config).toEqual({ speed: 2 })
     expect(r.k2.motion).toEqual({ reduced: true })
   })
@@ -215,7 +220,8 @@ describe('TUWA6: the frame runtime', () => {
     expect(settled).toBe('pending')
     expect(r.k2.can('agents.list')).toBe(false)
     expect(r.k2.config).toEqual({})
-    expect(r.k2.widget).toBeNull()
+    expect(r.k2.widget.id, 'no hello yet: only the widget.* helpers').toBeUndefined()
+    expect(typeof r.k2.widget.self).toBe('function')
     connect(r)
     const hello = await r.k2.connected
     expect(hello).toEqual({

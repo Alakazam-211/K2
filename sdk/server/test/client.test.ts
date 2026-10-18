@@ -178,6 +178,66 @@ describe('the wire', () => {
   })
 })
 
+describe('room-scope surfaces (0.46.1): room.members, app.self, app.usage', () => {
+  it('room.members is a guest GET with its room; app.self/app.usage go as the App with the App pass', async () => {
+    const k2 = client()
+    answer = (s) => {
+      const u = new URL(s.url, gw.url)
+      if (u.pathname === '/cli/skin/members') {
+        return {
+          status: 200,
+          body: {
+            workspace: 'sales', room: 'p-1', namesHidden: true, admins: 'admins of this box', count: 1, secret: 'x',
+            members: [{ username: null, displayName: null, kind: 'guest', role: 'staff', app: 'jobs', caps: ['room:members'], principalId: 'p-9' }],
+          },
+        }
+      }
+      if (u.pathname === '/cli/skin/self') {
+        return { status: 200, body: { app: 'jobs', workspace: 'sales', liveSeed: 'ab', health: 'running', state: 'running', deployment: 'd-1', deployedAt: 1760000000, path: '/srv' } }
+      }
+      return {
+        status: 200,
+        body: {
+          app: 'jobs', hours: 24, quotas: { rps: 50, burst: 200, sockets: 64, bodyBytes: 1, uploadBytes: 2, subscriptions: 256 },
+          live: { connections: 1, subscriptions: 0 }, totals: { calls: 2, denied: 1, bytesIn: 3, bytesOut: 4 },
+          verbs: [{ verb: 'thread.page', route: 'GET /cli/thread', calls: 2, denied: 1 }],
+        },
+      }
+    }
+    const m = await k2.asGuest(GUEST).room.members({ workspace: 'sales' })
+    expect(m.members[0]?.username).toBeNull()
+    expect(m.admins).toBe('admins of this box')
+    expect('secret' in m, 'fields the catalog does not name are dropped').toBe(false)
+    expect('principalId' in (m.members[0] ?? {}), 'closed at every depth').toBe(false)
+    const me = await k2.asApp().app.self()
+    expect(me.health).toBe('running')
+    expect('path' in me).toBe(false)
+    const use = await k2.asApp().app.usage({ hours: 24 })
+    expect(use.verbs[0]?.verb).toBe('thread.page')
+    const [a, b, c] = gw.seen
+    expect(new URL(a?.url ?? '', gw.url).pathname + '?' + new URL(a?.url ?? '', gw.url).searchParams.toString()).toBe('/cli/skin/members?workspace=sales')
+    expect(bearer(a as Seen)).toBe(GUEST)
+    expect(b?.url).toBe('/cli/skin/self')
+    expect(new URL(c?.url ?? '', gw.url).searchParams.get('hours')).toBe('24')
+    expect([b, c].map((s) => bearer(s as Seen))).toEqual([APP1, APP1])
+    // The App's own data, never a guest's call by accident.
+    const err = await k2.app.self().catch((e: unknown) => e)
+    expect((err as K2Error).code).toBe('guest_required')
+  })
+
+  it('a not_found for another App and not_exposed for a guest come back as K2Error codes', async () => {
+    const k2 = client()
+    answer = (s) =>
+      s.url.startsWith('/cli/skin/self')
+        ? { status: 404, body: { ok: false, error: { code: 'not_found', hint: 'no such App' } } }
+        : { status: 403, body: { ok: false, error: { code: 'not_exposed', hint: 'never a guest' } } }
+    const nf = await k2.asApp().app.self({ app: 'other' }).catch((e: unknown) => e)
+    expect((nf as K2Error).code).toBe('not_found')
+    const ne = await k2.asGuest(GUEST).app.usage().catch((e: unknown) => e)
+    expect((ne as K2Error).code).toBe('not_exposed')
+  })
+})
+
 describe('the App pass rotates', () => {
   it('a rewritten pass file is used on the next call', async () => {
     const k2 = client()

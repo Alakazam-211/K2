@@ -63,11 +63,16 @@ export const K2_CAPS = {
   'agent:identity': { label: "Change the agent's name, color and picture", exposure: ['app'] },
   'agent:handle': { label: "Change the agent's handle (its address)", exposure: ['app'] },
   'files:agentconfig': { label: "Also allow writing the agent's .k2 folder (not recommended)", exposure: ['app'] },
+  'room:members': {
+    label: 'See who has access to the room',
+    sentence: 'See who has access to the agents on this computer: the App guests and agent logins with a grant on each room, and their roles.',
+    exposure: ['app', 'garden-local'],
+  },
 } as const satisfies Record<string, K2CapInfo>
 
 export type K2Cap = keyof typeof K2_CAPS
 
 /** Caps a custom widget may ask for (= the Rust `USER_WIDGET_CAPS`). */
-export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'store:read', 'store:write'] as const
+export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'store:read', 'store:write', 'room:members'] as const
 
 export type UserWidgetCap = (typeof USER_WIDGET_CAPS)[number]

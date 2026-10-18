@@ -1,17 +1,17 @@
 {
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
-  "catalogVersion": 10,
-  "catalogSha256": "c1908a88bfb0312ce08874f073a7e77c99cab951e2e69304d6308095ce10f4ca",
-  "runtimeSha256": "3a4b6a97a1b29b52f8dcb05d0fddba5b482bbb71cb077fe2ca6d14b577842a5a",
+  "catalogVersion": 11,
+  "catalogSha256": "c1ac1483a9be4d789622438f67e218a57aa0c5b86d79a45f265c199777d73ea5",
+  "runtimeSha256": "3e88aa597b5040456a01604dda00602c4f647ea41b496363cbed06075fba0887",
   "files": {
-    "cli/k2": "b4eb5bea43371fed4e49392b522bc2b3af2a341ab74c4bb1f1dee1b72c346ced",
-    "cli/k2#study app-api": "ca7dd777b7e954293c139505f4ed2a63821e495c8c57a9270a7e54235e3e5852",
-    "crates/k2-core/src/app_surface.rs": "8e7be62a0a28ccc37d3f781dd6f8bc19167a24fb20fb59a0547bc71620c538b5",
-    "sdk/generated/k2-frame.js": "5629b064a4d6844cb2b4da85bed034811042cb58bdfb8b86cc531a1a3e2edbe3",
-    "sdk/generated/k2.d.ts": "2f9de35b9c0fdd2fecf95f586898349493954e0c1659bb93681e924a0a1afecc",
-    "sdk/server/src/generated/verbs.ts": "84860e3f377731ceab34e1ae78d3d0b2d8e12747b3484f67bdd584142843c219",
-    "src/renderer/lib/k2-caps.generated.ts": "a2e55ac3077c7849759ab7a0484646405c33123f64e67c18b51b8ae44a6b3a43",
-    "src/renderer/lib/zen/zen-verbs.generated.ts": "f80b75146175b27c08b88b548b4720feb5f9a2caa667de2a5a05c18e13ec491e"
+    "cli/k2": "5937bce964562b9006c4de17e4acea543b23102ea803894de897434ed0e17f1d",
+    "cli/k2#study app-api": "1ba0f9b94a894debcabb6a9ffce85315b177f0123f7bc502bf4fd14c92451e48",
+    "crates/k2-core/src/app_surface.rs": "d9044cd17048e0592cd8d66c909f85b9f74c016cbdf404b11b8ebae97c67b9cb",
+    "sdk/generated/k2-frame.js": "848f424e95e055f5e3b9f82b0de612ba6d55de9dd0ffa274ca4e9d74e222fd34",
+    "sdk/generated/k2.d.ts": "b92a1063431ae50aa6814eacc5bb3a0905368d8e65ec9ee42b32db4237ccadb9",
+    "sdk/server/src/generated/verbs.ts": "b8ba941c3c54119b33a5a1e98adfe775210c714ed0571232c6ab4c2e619c40cb",
+    "src/renderer/lib/k2-caps.generated.ts": "e199e68a38297a8db7cdc9cad6d0229b4afddb9b45ad1b39a0e902f7d6ac4497",
+    "src/renderer/lib/zen/zen-verbs.generated.ts": "e0792a67464ed2c1926092cb64bdfedfa2020fc435cb6f3e781ad1f0cbc7c00b"
   }
 }

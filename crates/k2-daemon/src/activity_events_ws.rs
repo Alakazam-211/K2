@@ -82,15 +82,16 @@ pub const RESYNC_FRAME: &str = r#"{"kind":"resync"}"#;
 
 /// AH29 — the caps that open this socket (any one, in the room).
 /// `tickets:read` joined in 0.43.3 (prd-app-tickets-websocket-v1).
-pub const SOCKET_CAPS: [&str; 3] = [
+pub const SOCKET_CAPS: [&str; 4] = [
     crate::skin_routes::ACTIVITY_READ,
     k2_core::skin::CAP_HEARTBEATS_READ,
     crate::skin_routes::TICKETS_READ,
+    k2_core::skin::CAP_ROOM_MEMBERS,
 ];
 
 /// AH20/AH29 refusal cap text: names every socket cap, so the 403 says
-/// `missing capability activity:read, heartbeats:read or tickets:read`.
-pub const SOCKET_CAPS_TEXT: &str = "activity:read, heartbeats:read or tickets:read";
+/// `missing capability activity:read, heartbeats:read, tickets:read or room:members`.
+pub const SOCKET_CAPS_TEXT: &str = "activity:read, heartbeats:read, tickets:read or room:members";
 
 /// 0.45.2 — at most one counts-only `session_activity_changed` per session
 /// per this (ms); the last value always goes out (a trailing frame).
@@ -110,6 +111,35 @@ pub fn rooms_changed_reaches(skin_pass: Option<&SkinPass>, socket_room: &str, ch
         Some(pass) => pass.has_room(changed),
         None => changed == socket_room,
     }
+}
+
+/// Room-scope R9 (0.46.1) — the room's access list may have changed: a
+/// pass holding `room:members` in this room (or the owner) refetches
+/// `room.members`. A bus event for another room never reaches it; one for
+/// "any room" (`None`) reaches every room.
+pub fn members_changed_frame(socket_room: &str, wire_workspace: &str, event: &SessionEvent) -> Option<String> {
+    let SessionEvent::RoomMembersChanged { room } = event else { return None };
+    if room.as_deref().is_some_and(|r| r != socket_room) {
+        return None;
+    }
+    Some(serde_json::json!({ "kind": "room_members_changed", "workspace": wire_workspace }).to_string())
+}
+
+/// Room-scope R16 (0.46.1) — an App went live in this room: the frame for
+/// the App's own pass, its guests and the owner (never another App's), or
+/// `None`.
+pub fn app_deployed_frame(
+    socket_room: &str,
+    wire_workspace: &str,
+    skin_pass: Option<&SkinPass>,
+    link_app: Option<&str>,
+    event: &SessionEvent,
+) -> Option<String> {
+    let SessionEvent::AppDeployed { app_id, service_id, project_id, .. } = event else { return None };
+    if project_id != socket_room || !crate::apps::surfaces::deployed_reaches(skin_pass, link_app, app_id, service_id) {
+        return None;
+    }
+    Some(serde_json::json!({ "kind": "app_deployed", "workspace": wire_workspace, "app": app_id }).to_string())
 }
 
 /// AH31 — at most one roster-derived `heartbeat_changed` per room per this.
@@ -565,6 +595,10 @@ pub async fn serve_activity_events_connection(
         ),
         None => (true, true, true),
     };
+    // Room-scope R9/R16 (0.46.1).
+    let want_members = skin_pass.as_ref().is_none_or(|p| p.has_cap_in_room(&project_id, k2_core::skin::CAP_ROOM_MEMBERS));
+    let link_app = crate::apps::gateway::current().map(|l| l.app_id.clone());
+    crate::apps::surfaces::install_listener();
 
     let ws = match tokio_tungstenite::accept_async(&mut *stream).await {
         Ok(ws) => ws,
@@ -645,6 +679,30 @@ pub async fn serve_activity_events_connection(
                                     .await
                                     .is_err()
                             {
+                                break;
+                            }
+                            continue;
+                        }
+                        if let SessionEvent::RoomMembersChanged { .. } = event {
+                            // Fail closed: no room:members in this room, no frame.
+                            if !want_members {
+                                continue;
+                            }
+                            let Some(frame) = members_changed_frame(&project_id, &wire_workspace, &event) else {
+                                continue;
+                            };
+                            if write.send(Message::Text(frame)).await.is_err() {
+                                break;
+                            }
+                            continue;
+                        }
+                        if let SessionEvent::AppDeployed { .. } = event {
+                            let Some(frame) =
+                                app_deployed_frame(&project_id, &wire_workspace, skin_pass.as_ref(), link_app.as_deref(), &event)
+                            else {
+                                continue;
+                            };
+                            if write.send(Message::Text(frame)).await.is_err() {
                                 break;
                             }
                             continue;

@@ -380,13 +380,21 @@ mod tests {
         for v in c.widget_callable_verbs() {
             assert!(v.cap.as_deref().is_none_or(|cap| crate::zen::USER_WIDGET_CAPS.contains(&cap)), "{}", v.verb);
         }
-        // Garden data (contract-garden-data-v1 §7.2): every garden-local row
-        // is local, reaches the widget door, and has no renderer binding.
+        // Garden data (contract-garden-data-v1 §7.2): every garden-local-only
+        // row is local, reaches the widget door, and has no renderer binding.
+        // Room-scope 0.46.1: room.members, app.self and app.usage are on both
+        // transports (portable, their App route); widget.self is the Garden's.
         let local = c.verbs_exposed_to(Exposure::GardenLocal);
-        assert_eq!(local.len(), 15, "store.* ×10, save.* ×4, viewer.get");
+        assert_eq!(local.len(), 19, "store.* ×10, save.* ×4, viewer.get, room.members, app.self, app.usage, widget.self");
         for v in local {
+            if v.exposed_to(Exposure::App) {
+                assert_eq!(v.reach, Reach::Portable, "{}", v.verb);
+                assert!(["room-members-v1", "app-self-v1"].contains(&v.feature.as_str()), "{}", v.verb);
+                continue;
+            }
             assert_eq!(v.reach, Reach::Local, "{}", v.verb);
-            assert_eq!(v.feature, crate::garden_data::FEATURE, "{}", v.verb);
+            let room_scope = v.verb == "widget.self" && v.feature == "app-self-v1";
+            assert!(room_scope || v.feature == crate::garden_data::FEATURE, "{}", v.verb);
         }
         assert!(c.verb("theme.changed").is_some_and(|v| v.kind == VerbKind::Event));
         assert!(c.verb("thread.markRead").is_some_and(|v| v.exposure.is_empty()), "UW51: markRead stays none");
@@ -458,13 +466,13 @@ mod tests {
         );
         assert_eq!(
             c.widget_caps(),
-            ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read", "store:read", "store:write"]
+            ["agents:read", "presence:read", "thread:read", "thread:post", "sources:read", "store:read", "store:write", "room:members"]
         );
         for name in c.widget_caps() {
             let s = c.cap(name).and_then(|r| r.sentence.as_deref());
             let s = s.unwrap_or_else(|| panic!("widget cap {name} has no sentence"));
             assert!(
-                s.contains("{where}") || ["presence:read", "sources:read", "store:read", "store:write"].contains(&name),
+                s.contains("{where}") || ["presence:read", "sources:read", "store:read", "store:write", "room:members"].contains(&name),
                 "{name}: sentence names its scope: {s}"
             );
         }

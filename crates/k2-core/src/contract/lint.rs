@@ -195,15 +195,24 @@ fn lint_row(c: &Catalog, v: &VerbRow, out: &mut Vec<String>) {
     }
     // Garden data (contract-garden-data-v1 §7.2): a garden-local row runs
     // only in this computer's daemon, through the widget door.
+    //
+    // One reveal = both surfaces (room-scope §0.2, 0.46.1): a row exposed
+    // to `app` AND `garden-local` binds its App route (the App transport)
+    // and is reach portable; its Garden transport is the widget door by
+    // verb name (`/cli/zen/call {verb}`), which needs no binding of its own.
     if v.exposed_to(Exposure::GardenLocal) {
+        let both = v.exposed_to(Exposure::App);
         let door = v.bindings.http.as_ref().is_some_and(|h| h.method == HttpMethod::Post && h.route == GARDEN_LOCAL_ROUTE);
-        if !door {
+        if !both && !door {
             out.push(format!("{name}: a garden-local row binds http POST {GARDEN_LOCAL_ROUTE}"));
+        }
+        if both && door {
+            out.push(format!("{name}: a row on both transports binds its App route; the widget door needs no binding"));
         }
         if v.bindings.renderer.is_some() || v.bindings.socket.is_some() {
             out.push(format!("{name}: a garden-local row has no renderer or socket binding (the daemon answers it)"));
         }
-        if v.reach != super::Reach::Local {
+        if !both && v.reach != super::Reach::Local {
             out.push(format!("{name}: a garden-local row is reach local (this computer only)"));
         }
         if v.kind != VerbKind::Call {

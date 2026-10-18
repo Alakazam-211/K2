@@ -156,6 +156,17 @@ export const SESSION_EVENT_ROUTES = {
   // phone switch refetch (`onNotifyPrefsChanged`). Not carried: Settings
   // reads the window's own server.
   notify_prefs_changed: { class: 'app', app: true },
+  // Room-scope R9/R16 (0.46.1): refetch signals for room.members and
+  // app.self. Gardens read them through the bridge per call; no desktop
+  // surface subscribes yet.
+  room_members_changed: {
+    class: 'app',
+    ignored: 'Gardens call room.members when they draw; no desktop page lists room members yet.',
+  },
+  app_deployed: {
+    class: 'app',
+    ignored: 'Gardens call app.self when they draw; the Apps page refetches on publish_services_changed.',
+  },
 } as const satisfies { readonly [K in SessionEventMessage['kind']]: SessionEventRoute }
 
 type Routes = typeof SESSION_EVENT_ROUTES

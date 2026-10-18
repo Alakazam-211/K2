@@ -8,7 +8,7 @@
 import type { K2Error } from '../errors.ts'
 
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 10
+export const CATALOG_VERSION = 11
 
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = { readonly [key: string]: unknown }
@@ -652,7 +652,7 @@ export const APP_VERBS = {
     http: null,
     socket: { path: '/cli/activity/events', param: 'workspace', frame: 'session_activity_changed', refetch: 'activity.snapshot' },
     responseNames: {},
-    response: {"additionalProperties":false,"properties":{"agentName":{"type":"string"},"change":{"type":"string"},"counts":{"additionalProperties":false,"properties":{"commands":{"type":"integer"},"subagents":{"type":"integer"},"tools":{"type":"integer"}},"type":"object"},"hasBrief":{"type":"boolean"},"id":{"type":"string"},"kind":{"enum":["session_activity_changed","heartbeat_changed","ticket_changed","rooms_changed","resync"]},"live":{"type":"boolean"},"name":{"type":"string"},"paneGroupId":{"type":["string","null"]},"serverNow":{"type":"integer"},"since":{"type":["integer","null"]},"status":{"type":"string"},"via":{"type":["string","null"]},"workspace":{"type":"string"}},"type":"object"},
+    response: {"additionalProperties":false,"properties":{"agentName":{"type":"string"},"app":{"type":"string"},"change":{"type":"string"},"counts":{"additionalProperties":false,"properties":{"commands":{"type":"integer"},"subagents":{"type":"integer"},"tools":{"type":"integer"}},"type":"object"},"hasBrief":{"type":"boolean"},"id":{"type":"string"},"kind":{"enum":["session_activity_changed","heartbeat_changed","ticket_changed","rooms_changed","room_members_changed","app_deployed","resync"]},"live":{"type":"boolean"},"name":{"type":"string"},"paneGroupId":{"type":["string","null"]},"serverNow":{"type":"integer"},"since":{"type":["integer","null"]},"status":{"type":"string"},"via":{"type":["string","null"]},"workspace":{"type":"string"}},"type":"object"},
   },
   'agentIdentity.get': {
     cap: null,
@@ -686,6 +686,39 @@ export const APP_VERBS = {
     socket: null,
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"canEditHandle":{"type":"boolean"},"canEditIdentity":{"type":"boolean"},"changed":{"items":{"type":"string"},"type":"array"},"color":{"type":["string","null"]},"displayName":{"type":"string"},"handle":{"type":"string"},"image":{"type":["string","null"]},"ok":{"type":"boolean"},"previousHandle":{"type":"string"},"workspace":{"type":"string"}},"type":"object"},
+  },
+  'room.members': {
+    cap: 'room:members',
+    effect: 'read',
+    kind: 'call',
+    feature: 'room-members-v1',
+    door: 'both',
+    http: { method: 'GET', route: '/cli/skin/members', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"admins":{"type":"string"},"count":{"type":"integer"},"members":{"items":{"additionalProperties":false,"properties":{"app":{"type":"string"},"caps":{"items":{"type":"string"},"type":"array"},"displayName":{"type":["string","null"]},"kind":{"enum":["guest","agent"]},"role":{"type":["string","null"]},"username":{"type":["string","null"]}},"type":"object"},"type":"array"},"namesHidden":{"type":"boolean"},"room":{"type":"string"},"workspace":{"type":"string"}},"type":"object"},
+  },
+  'app.self': {
+    cap: null,
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-self-v1',
+    door: 'link',
+    http: { method: 'GET', route: '/cli/skin/self', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"deployedAt":{"type":["integer","null"]},"deployment":{"type":["string","null"]},"health":{"enum":["running","starting","crashlooping","exited","stopped","suspended"]},"liveSeed":{"type":["string","null"]},"state":{"type":"string"},"workspace":{"type":"string"}},"type":"object"},
+  },
+  'app.usage': {
+    cap: null,
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-self-v1',
+    door: 'link',
+    http: { method: 'GET', route: '/cli/skin/usage', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"hours":{"type":"integer"},"live":{"additionalProperties":false,"properties":{"connections":{"type":"integer"},"subscriptions":{"type":"integer"}},"type":"object"},"quotas":{"additionalProperties":false,"properties":{"bodyBytes":{"type":"integer"},"burst":{"type":"integer"},"rps":{"type":"integer"},"sockets":{"type":"integer"},"subscriptions":{"type":"integer"},"uploadBytes":{"type":"integer"}},"type":"object"},"totals":{"additionalProperties":false,"properties":{"bytesIn":{"type":"integer"},"bytesOut":{"type":"integer"},"calls":{"type":"integer"},"denied":{"type":"integer"}},"type":"object"},"verbs":{"items":{"additionalProperties":false,"properties":{"calls":{"type":"integer"},"denied":{"type":"integer"},"route":{"type":"string"},"verb":{"type":["string","null"]}},"type":"object"},"type":"array"}},"type":"object"},
   },
 } as const satisfies Record<string, AppVerbRow>
 
@@ -1340,12 +1373,14 @@ export interface AppActivity {
 
 export interface AppActivityFrame {
   readonly agentName?: string
+  /** app_deployed: the App that went live (refetch app.self). */
+  readonly app?: string
   readonly change?: string
   readonly counts?: AppActivityCounts
   readonly hasBrief?: boolean
   /** ticket_changed: the ticket. */
   readonly id?: string
-  readonly kind: 'session_activity_changed' | 'heartbeat_changed' | 'ticket_changed' | 'rooms_changed' | 'resync'
+  readonly kind: 'session_activity_changed' | 'heartbeat_changed' | 'ticket_changed' | 'rooms_changed' | 'room_members_changed' | 'app_deployed' | 'resync'
   readonly live?: boolean
   /** heartbeat_changed: the heartbeat. */
   readonly name?: string
@@ -1401,6 +1436,93 @@ export interface AppAgentHandleChanged {
   readonly previousHandle: string
   /** The agent's handle. */
   readonly workspace: string
+}
+
+export interface RoomMember {
+  /** host (the box login) or the App id the grant is for. */
+  readonly app: string
+  readonly caps: string[]
+  /** The full name when set, else the username; null when names are hidden. */
+  readonly displayName: string | null
+  /** agent: a login marked as an agent (k2 app user agent). */
+  readonly kind: 'guest' | 'agent'
+  /** The role on the grant; null = a grant with rooms only (Thread). */
+  readonly role: string | null
+  /** null when the owner hides names in this room (App callers only). */
+  readonly username: string | null
+}
+
+export interface RoomMembers {
+  /** Connect logins have no rooms: always the one line "admins of this box". */
+  readonly admins: string
+  /** How many members. */
+  readonly count: number
+  readonly members: RoomMember[]
+  /** The owner hides guests' names in this room: an App sees null names. A Garden (the owner) always sees them. */
+  readonly namesHidden: boolean
+  /** The room's project id. */
+  readonly room: string
+  /** The room's handle. */
+  readonly workspace: string
+}
+
+export interface AppSelf {
+  /** The App id. */
+  readonly app: string
+  /** When the live deployment went live, seconds since the epoch. */
+  readonly deployedAt: number | null
+  /** The live deployment id. */
+  readonly deployment: string | null
+  readonly health: 'running' | 'starting' | 'crashlooping' | 'exited' | 'stopped' | 'suspended'
+  /** The live Seed's hash; null before the first deploy. */
+  readonly liveSeed: string | null
+  /** The App row's state (running, stopped, crashlooping, failed, installing). */
+  readonly state: string
+  /** The handle of the workspace that owns the App. */
+  readonly workspace: string
+}
+
+export interface AppLiveUse {
+  readonly connections: number
+  readonly subscriptions: number
+}
+
+export interface AppQuotas {
+  readonly bodyBytes: number
+  readonly burst: number
+  /** Sustained calls per second. */
+  readonly rps: number
+  readonly sockets: number
+  readonly subscriptions: number
+  readonly uploadBytes: number
+}
+
+export interface AppCallTotals {
+  readonly bytesIn: number
+  readonly bytesOut: number
+  readonly calls: number
+  readonly denied: number
+}
+
+export interface AppVerbUse {
+  readonly calls: number
+  /** Refused calls (status 400 or more). */
+  readonly denied: number
+  /** METHOD /path, as the gateway recorded it. */
+  readonly route: string
+  /** The catalog verb, or null for a call that isn't one (a refused route). */
+  readonly verb: string | null
+}
+
+export interface AppUsage {
+  /** The App id. */
+  readonly app: string
+  /** The window the counts cover, in hours. */
+  readonly hours: number
+  readonly live: AppLiveUse
+  readonly quotas: AppQuotas
+  readonly totals: AppCallTotals
+  readonly verbs: AppVerbUse[]
 }
 
 /** The shared error codes (catalog `errors`). */
@@ -1469,9 +1591,12 @@ export interface AppVerbs {
   'agentIdentity.get': { args: { workspace: string }; value: AppAgentIdentity }
   'agentIdentity.set': { args: { color?: string; displayName?: string; image?: string | null; workspace: string }; value: AppAgentIdentityChanged }
   'agentIdentity.setHandle': { args: { handle: string; workspace: string }; value: AppAgentHandleChanged }
+  'room.members': { args: { app?: string; workspace: string }; value: RoomMembers }
+  'app.self': { args: { app?: string }; value: AppSelf }
+  'app.usage': { args: { app?: string; hours?: number }; value: AppUsage }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'thread.page' | 'thread.latest' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage'
 export type AppSubscribeVerb = 'thread.events' | 'files.events' | 'activity.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -1607,7 +1732,7 @@ export interface AppSurfaces {
   readonly activity: {
     /** Whether the room's agent is working now, per session. cap activity:read · GET /cli/activity/snapshot. e.g. `const {status} = await k2.activity.snapshot({workspace})` */
     snapshot(args: { workspace: string }): Promise<AppActivity>
-    /** Live room events: agent working, heartbeats, tickets, rooms_changed; resync then close 4008 when behind. cap activity:read · WS /cli/activity/events?workspace=. e.g. `const off = k2.activity.events({workspace}, (f) => f.kind === 'resync' ? reload() : apply(f))` */
+    /** Live room events: agent working, heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind. cap activity:read · WS /cli/activity/events?workspace=. e.g. `const off = k2.activity.events({workspace}, (f) => f.kind === 'resync' ? reload() : apply(f))` */
     events(args: { workspace: string }, onFrame: (frame: AppActivityFrame) => void, onError?: (error: K2Error) => void): () => void
   }
   readonly agentIdentity: {
@@ -1618,7 +1743,17 @@ export interface AppSurfaces {
     /** Change the room's agent's handle (its address). cap agent:handle · POST /cli/agent/handle. e.g. `await k2.agentIdentity.setHandle({workspace, handle: 'sales-desk'})` */
     setHandle(args: { handle: string; workspace: string }): Promise<AppAgentHandleChanged>
   }
+  readonly room: {
+    /** Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line. cap room:members · GET /cli/skin/members. e.g. `const {members} = await k2.room.members({workspace})` */
+    members(args: { app?: string; workspace: string }): Promise<RoomMembers>
+  }
+  readonly app: {
+    /** This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest). no cap · GET /cli/skin/self. e.g. `const me = await k2.asApp().app.self()` */
+    self(args?: { app?: string }): Promise<AppSelf>
+    /** This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest). no cap · GET /cli/skin/usage. e.g. `const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})` */
+    usage(args?: { app?: string; hours?: number }): Promise<AppUsage>
+  }
 }
 
 /** The surface names, in catalog order (the client builds one object each). */
-export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity'] as const
+export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'app'] as const

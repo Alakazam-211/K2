@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react'
 
-import { Callout, DialogScrim } from '@/components/ui'
+import { Button, Callout, DialogFrame, DialogScrim } from '@/components/ui'
 import { useCloneToDialogStore } from '../../stores/clone-to-dialog'
 import type { CloneStage } from '../../lib/clone-to'
 import {
@@ -10,6 +10,7 @@ import {
   PasswordPromptBlock,
   SecretsBlock,
   ThreadBlock,
+  Tick,
 } from './CloneOptionsBlocks'
 
 // Progress modal for "Clone to" (K2 Connect workspace migration). Driven
@@ -93,15 +94,21 @@ export default function CloneToDialog(): React.JSX.Element | null {
   const activeIdx = steps.findIndex((s) => s.stage === stage)
 
   return (
-    <DialogScrim
-      zIndex={50}
-      className="flex items-center justify-center no-drag"
-      style={{ backdropFilter: 'blur(4px)' }}
-      onClick={isClosable ? close : undefined}
-    >
-      <div
-        className="w-[560px] max-h-[85vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
+    <>
+      <DialogScrim
+        zIndex={50}
+        className="no-drag"
+        style={{ backdropFilter: 'blur(4px)' }}
+        onClick={isClosable ? close : undefined}
+        data-testid="clone-dialog-scrim"
+      />
+      <DialogFrame
+        zIndex={51}
+        className="w-[560px] max-w-[calc(100vw-32px)] max-h-[85vh] flex flex-col"
+        data-testid="clone-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Clone workspace"
       >
         {/* Header */}
         <div className="px-5 pt-5 pb-2">
@@ -145,27 +152,9 @@ export default function CloneToDialog(): React.JSX.Element | null {
               <SecretsBlock pull={pull} />
               <EnvFilesBlock pull={pull} />
 
-              <label className="flex items-start gap-2 cursor-pointer select-none no-drag">
-                <input
-                  type="checkbox"
-                  checked={includeAllHistory}
-                  onChange={(e) => setIncludeAllHistory(e.target.checked)}
-                  className="peer sr-only"
-                />
-                <span
-                  aria-hidden="true"
-                  className="mt-0.5 w-3.5 h-3.5 flex-shrink-0 flex items-center justify-center border transition-colors border-[var(--color-border)] bg-[var(--color-bg-elevated)] peer-checked:bg-[var(--color-accent)] peer-checked:border-[var(--color-accent)] peer-focus-visible:ring-1 peer-focus-visible:ring-[var(--color-accent)]"
-                >
-                  {includeAllHistory && (
-                    <svg viewBox="0 0 12 12" className="w-2.5 h-2.5" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M2.5 6.5 L5 9 L9.5 3.5" />
-                    </svg>
-                  )}
-                </span>
-                <span className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
-                  Include all chat history
-                </span>
-              </label>
+              <Tick checked={includeAllHistory} onChange={setIncludeAllHistory} testId="clone-all-history">
+                Include all chat history
+              </Tick>
               <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed pl-[22px]">
                 Migrates every Claude Code session transcript for this workspace.
                 Uncheck to carry only the most recent (live) session.
@@ -307,44 +296,35 @@ export default function CloneToDialog(): React.JSX.Element | null {
         <div className="px-5 pb-5 flex gap-2 justify-end border-t border-[var(--color-border)] pt-3">
           {isOptions ? (
             <>
-              <button
-                className="px-3 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)]"
-                onClick={close}
-              >
+              <Button variant="ghost" size="md" onClick={close}>
                 Cancel
-              </button>
-              <button
-                className="px-3 py-1.5 text-xs font-medium text-[var(--color-bg)] bg-[var(--color-text-primary)] hover:bg-[var(--color-text-secondary)] disabled:opacity-40"
+              </Button>
+              <Button
+                variant="accent"
+                size="md"
                 onClick={() => void confirm()}
                 disabled={confirming}
                 data-testid="clone-confirm-button"
               >
                 {cloneButtonLabel(secretChoices, carrySecrets, confirming)}
-              </button>
+              </Button>
             </>
           ) : (
             <>
               {/* On success, offer to jump straight into the freshly-cloned
                   workspace on the (still-active) destination host. */}
               {stage === 'done' && result?.project?.id && host && (
-                <button
-                  className="px-3 py-1.5 text-xs font-medium text-[var(--color-bg)] bg-[var(--color-text-primary)] hover:bg-[var(--color-text-secondary)]"
-                  onClick={() => void openResult()}
-                >
+                <Button variant="accent" size="md" onClick={() => void openResult()}>
                   Open on {host.label}
-                </button>
+                </Button>
               )}
-              <button
-                className="px-3 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:bg-[var(--color-bg-elevated)] disabled:opacity-40"
-                onClick={close}
-                disabled={!isTerminal}
-              >
+              <Button variant="ghost" size="md" onClick={close} disabled={!isTerminal}>
                 {isTerminal ? 'Close' : 'Working…'}
-              </button>
+              </Button>
             </>
           )}
         </div>
-      </div>
-    </DialogScrim>
+      </DialogFrame>
+    </>
   )
 }

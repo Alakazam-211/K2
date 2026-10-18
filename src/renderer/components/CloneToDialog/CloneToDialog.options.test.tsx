@@ -5,7 +5,10 @@
 // that turns into "Confirm and clone".
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, within } from '@testing-library/react'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { SQUARE_CHECK_CLASS, SQUARE_RADIO_CLASS } from '@/components/ui'
 
 vi.mock('@/stores/projects', () => ({
   useProjectsStore: { getState: () => ({ projects: [], fetchProjects: vi.fn(), setActiveProject: vi.fn() }) },
@@ -124,5 +127,64 @@ describe('CloneToDialog options (0.46.0)', () => {
     ])
     expect(doneCountsLine({}, { imported: [], blank: [], skipped: [], note: 'older K2' })).toEqual(['Secrets: older K2'])
     expect(doneCountsLine({})).toEqual([])
+  })
+})
+
+describe('CloneToDialog uses the app\'s shared form controls', () => {
+  it('checkboxes are SquareCheckbox, secret choices are SquareRadio, actions are Button, the frame is DialogFrame', async () => {
+    await open(preview(true))
+    render(<CloneToDialog />)
+    for (const id of ['clone-bring-thread', 'clone-own-box', 'clone-env-files', 'clone-all-history']) {
+      const el = screen.getByTestId(id) as HTMLInputElement
+      expect([id, el.type, el.classList.contains(SQUARE_CHECK_CLASS)]).toEqual([id, 'checkbox', true])
+    }
+    for (const c of ['copy', 'blank', 'skip']) {
+      const el = screen.getByTestId(`clone-secret-STRIPE_KEY-${c}`) as HTMLInputElement
+      expect([c, el.type, el.classList.contains(SQUARE_RADIO_CLASS)]).toEqual([c, 'radio', true])
+    }
+    // Button primitive: the themed field radius + ring, primary = accent.
+    const primary = screen.getByTestId('clone-confirm-button')
+    expect(primary.className).toContain('rounded-[var(--radius-field)]')
+    expect(primary.className).toContain('bg-[var(--color-accent)]')
+    const cancel = screen.getByRole('button', { name: 'Cancel' })
+    expect(cancel.className).toContain('rounded-[var(--radius-field)]')
+    // DialogFrame: a themed Surface with the dialog elevation.
+    const frame = screen.getByTestId('clone-dialog')
+    expect(frame.getAttribute('data-surface')).toBe('surface')
+    expect(frame.className).toContain('var(--shadow-5)')
+  })
+
+  it('the Thread window is the shared SettingDropdown and sets sinceDays', async () => {
+    await open(preview(true))
+    render(<CloneToDialog />)
+    const trigger = within(screen.getByTestId('clone-since')).getByRole('button', { name: 'How much Thread history to bring' })
+    expect(trigger.textContent).toBe('all')
+    fireEvent.click(trigger)
+    fireEvent.click(within(screen.getByTestId('setting-dropdown-menu')).getByText('30 days'))
+    expect(useCloneToDialogStore.getState().sinceDays).toBe(30)
+    expect(trigger.textContent).toBe('30 days')
+  })
+
+  it('the password prompt uses the shared Input and Buttons', async () => {
+    await open(preview(true))
+    useCloneToDialogStore.setState({ passwordPrompt: { method: 'vault-password', label: 'clone sales' } })
+    render(<CloneToDialog />)
+    const input = screen.getByTestId('clone-password-input')
+    expect(input.className).toContain('rounded-[var(--radius-field)]')
+    const prompt = screen.getByTestId('clone-password-prompt')
+    expect(within(prompt).getByRole('button', { name: 'Confirm' }).className).toContain('rounded-[var(--radius-field)]')
+  })
+
+  it('no one-off controls in the dialog sources: no native checkbox/radio, no hand-styled <button>', () => {
+    const dir = __dirname
+    const hits: string[] = []
+    for (const f of readdirSync(dir).filter((n) => n.endsWith('.tsx') && !n.includes('.test.'))) {
+      const src = readFileSync(join(dir, f), 'utf8')
+      for (const m of src.matchAll(/<input\b[\s\S]*?\/>/g)) {
+        if (/\btype=["'{]+(checkbox|radio)\b/.test(m[0])) hits.push(`${f}: native choice input`)
+      }
+      if (/<button\b/.test(src)) hits.push(`${f}: raw <button>`)
+    }
+    expect(hits).toEqual([])
   })
 })

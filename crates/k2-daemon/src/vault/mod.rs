@@ -209,6 +209,8 @@ fn start_ticker(v: Arc<LocalVault>) {
                     }
                     Err(e) => k2_core::log_debug!("[vault] tick: {}", e.code),
                 }
+                // Secret handoffs: pending copies past 7 days, --ttl copies (H13).
+                crate::vault_handoff_routes::tick(&v2);
                 let live: std::collections::HashSet<String> = crate::v2_session_map::snapshot()
                     .into_iter()
                     .map(|(_, s)| s.session_id.to_string())

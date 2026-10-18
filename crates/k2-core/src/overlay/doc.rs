@@ -296,6 +296,54 @@ pub struct OverlayDoc {
     /// and on docs written before this field.
     #[serde(default, rename = "deliveryId", skip_serializing_if = "Option::is_none")]
     pub delivery_id: Option<String>,
+    /// Kind `handoff` only (prd-agent-secret-handoff-v1 §10.1, H18): a
+    /// secret another agent sent, waiting for a person. Names only, never
+    /// a value. Answered through `/cli/vault/incoming/decide` (people
+    /// only), never the card answer route, so a passport can't take it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<HandoffCardBody>,
+}
+
+/// The body of a `handoff` card. `body` on the doc carries a plain line
+/// for renderers that don't draw the card (H18).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoffCardBody {
+    /// `hd_…`.
+    pub delivery_id: String,
+    /// The name it lands under.
+    pub name: String,
+    /// The sender: `sales` (this server) or `sales::rosson.k2.dev`.
+    pub from: String,
+    /// The sender's server, cross server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// `api_key` | `password` | …
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hosts: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+    /// Why it waits (`not_allowed`, `clash`, `person_given`, …).
+    #[serde(default)]
+    pub reason: String,
+    /// The receiving workspace already has a secret of that name.
+    #[serde(default)]
+    pub clash: bool,
+    /// `pending` | `landed` | `declined` | `expired`
+    pub status: String,
+    /// After it landed: the `k2v://` reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_by: Option<PostAuthor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
+    /// The receiving workspace's id.
+    #[serde(default)]
+    pub workspace: String,
 }
 
 /// Provenance of an imported Thread line (prd-clone-carries-threads-and-
@@ -403,6 +451,7 @@ impl OverlayDoc {
             external: None,
             imported: None,
             delivery_id: None,
+            handoff: None,
         }
     }
 
@@ -443,6 +492,7 @@ impl OverlayDoc {
             external: None,
             imported: None,
             delivery_id: None,
+            handoff: None,
         }
     }
 
@@ -483,6 +533,7 @@ impl OverlayDoc {
             external: None,
             imported: None,
             delivery_id: None,
+            handoff: None,
         }
     }
 
@@ -511,7 +562,35 @@ impl OverlayDoc {
             external: None,
             imported: None,
             delivery_id: None,
+            handoff: None,
         }
+    }
+
+    /// A `handoff` card (H18). `body` is the plain line older renderers show.
+    pub fn handoff_card(id: String, from: String, to: String, body: String, card: HandoffCardBody) -> Self {
+        Self {
+            id,
+            kind: "handoff".to_string(),
+            from,
+            to: Some(to),
+            created_at: now_secs(),
+            body: Some(crate::redaction::redact(&body)),
+            via: Some("card".to_string()),
+            inject: None,
+            choice: None,
+            secret: None,
+            widget: None,
+            design: None,
+            author: None,
+            external: None,
+            imported: None,
+            delivery_id: None,
+            handoff: Some(card),
+        }
+    }
+
+    pub fn is_pending_handoff(&self) -> bool {
+        self.kind == "handoff" && self.handoff.as_ref().is_some_and(|h| h.status == "pending")
     }
 
     pub fn is_pending_choice(&self) -> bool {

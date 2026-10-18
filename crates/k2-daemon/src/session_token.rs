@@ -521,6 +521,9 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/vault/restore",
         "/cli/vault/backup",
         "/cli/vault/legacy-export",
+        // Secret handoff (prd-agent-secret-handoff-v1 §13): a person
+        // accepts or declines; an `accept-from` POST is refused in the handler.
+        "/cli/vault/incoming/decide",
         // Sew on K2 (S29 K12): revealing the master recovery key is a
         // person's step (vault confirm). Purge and drop-prev ride routes an
         // agent may reach; their handlers refuse every passport.
@@ -651,6 +654,14 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/vault/recipient",
         "/cli/vault/carry/export",
         "/cli/vault/carry/import",
+        // Secret handoff (prd-agent-secret-handoff-v1 §13): an agent sends
+        // by name and reads its own workspace's incoming / sent and
+        // allow-list. `incoming/decide` is DENY; an `accept-from` POST is
+        // refused in the handler (people only, H19).
+        "/cli/vault/send",
+        "/cli/vault/incoming",
+        "/cli/vault/sent",
+        "/cli/vault/accept-from",
         "/cli/llm/accounts/login/status",
         "/cli/llm/accounts/add",
         "/cli/llm/accounts/login",

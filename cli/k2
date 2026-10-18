@@ -11754,8 +11754,14 @@ cmd_msg() {
     # `--wake-timeout` bounds the post-wake readiness wait.
     local wake="true"
     local wake_timeout=""
+    local secret_name=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --secret)
+                # `k2 msg <agent> "text" --secret NAME` (prd-agent-secret-
+                # handoff-v1 §4.2): a vault handoff whose note is the text.
+                [[ -n "${2:-}" ]] || { echo "usage: --secret NAME (a secret in your vault)" >&2; exit 2; }
+                secret_name="$2"; shift 2 ;;
             --from) explicit_from="$2"; shift 2 ;;
             --command) explicit_command="$2"; shift 2 ;;
             --wake)
@@ -11794,6 +11800,13 @@ cmd_msg() {
         echo "Usage: k2 msg <workspace> \"text\" [--from <name>] [--command \"<text>\"]" >&2
         exit 1
     }
+
+    # --secret: one handoff; the text rides as its note. If the send fails
+    # no message goes either, so the text never arrives without its secret.
+    if [[ -n "$secret_name" ]]; then
+        _vault_handoff send "$secret_name" --to "$target" --note "$text" --via msg
+        return $?
+    fi
 
     # Cross-server peer: `k2 msg <agent>::<host> "text"` (or legacy @)
     # routes a CONNECTED remote peer over federation (same verb as a local
@@ -17254,6 +17267,8 @@ k2 vault — secrets for agents, without showing them the value
   k2 vault service <service> [clean|legacy] [--env-file .env.k2]   a published service's environment
   k2 publish secret add|remove|list <service> NAME [--as file|env]   secrets a service gets at start
   k2 vault doctor                          plaintext .env files, due rotations, problems
+  k2 vault send NAME --to <agent>[::<host>] [--note …]   hand a secret to another agent by name
+  k2 vault incoming | sent | accept-from   handoffs to and from this agent (k2 vault send --help)
 
   People only (from your own terminal or SSH, not a K2 terminal):
   k2 vault reveal NAME                     show a value (asks for a confirm)
@@ -17592,6 +17607,260 @@ if st >= 400 and not inc:
 ' "$include"
 }
 
+_vault_handoff_usage() {
+    cat <<'EOF'
+k2 vault send — hand a vault secret to another agent by name (you never see the value)
+
+  k2 vault send NAME --to <agent>|<agent>::<host> [--as NEWNAME] [--note "…"] [--ttl 7d] [--json]
+                                    same server: vault to vault; another server: sealed to its vault
+  k2 vault incoming [--workspace <ws>] [--json]     secrets sent to this agent (names only)
+  k2 vault sent [--workspace <ws>] [--json]         what this agent sent
+  k2 vault accept-from list [--workspace <ws>]      who may land secrets here without asking
+  k2 msg <agent> "text" --secret NAME               the same send, the text is the note
+
+  People only (your own terminal, not a K2 terminal):
+  k2 vault incoming accept <id> [--as NEW] [--replace] [--always]
+  k2 vault incoming decline <id>
+  k2 vault accept-from add|remove <ws:agent|agent|agent::host|team:id> --workspace <ws>
+  printf '%s' "$KEY" | k2 vault send NAME --to <agent>::<host> --stdin [--kind api_key] [--for host]
+                                    a value you type in, to another server only
+
+Secrets arrive pending: a person on the receiving server accepts them,
+unless the receiving agent accepts from you (k2 vault accept-from) or you
+answer its ask. A same-named secret is never overwritten; re-sending the
+same secret makes a new version. A secret a person gave needs a person
+to send it to another server. Server-wide secrets aren't sent (the owner
+shares them with k2 vault grant).
+
+Exit codes: 0 landed · 3 a person must act (pending, held, declined, not
+connected, not allowed) · 2 bad request or the peer can't (peer_too_old,
+federation_off, never_sendable, send_by_name_only) · 4 no such secret or
+agent · 1 unreachable or internal. Don't retry on 3.
+More: k2 study vault
+EOF
+}
+
+# Exit code for a handoff answer: HTTP status + error code (PRD R6).
+_vault_handoff_exit() {
+    local status="$1" code="$2"
+    case "$code" in
+        pending|held|declined|not_connected|send_not_allowed|handoff_person_only|confirm_required|owner_only|too_many_pending|rate_limited|vault_not_yours|vault_owner_confirm_required) echo 3; return ;;
+        peer_too_old|federation_off|never_sendable|send_by_name_only|use_vault_set|note_has_value|note_too_long|value_too_large|same_workspace|name_taken|not_pending|no_wildcard|bad_sender|bad_ttl|bad_name|bad_address|to_required|name_required|bad_json|bad_action|workspace_required|secret_not_active|secret_expired) echo 2; return ;;
+    esac
+    case "$status" in
+        200) echo 0 ;;
+        400|413|422) echo 2 ;;
+        401|403|429) echo 3 ;;
+        404) echo 4 ;;
+        *) echo 1 ;;
+    esac
+}
+
+_vault_handoff_code() {
+    printf '%s' "$1" | python3 -c '
+import json, sys
+try:
+    v = json.loads(sys.stdin.read())
+    e = v.get("error")
+    print((e.get("code") if isinstance(e, dict) else v.get("code")) or "")
+except Exception:
+    print("")'
+}
+
+_vault_handoff_fail() {
+    local status="$1" body="$2" code
+    code="$(_vault_handoff_code "$body")"
+    printf '%s' "$body" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    v = json.loads(raw)
+    e = v.get("error")
+    if isinstance(e, dict):
+        print("%s: %s" % (e.get("code", "error"), e.get("hint", "")), file=sys.stderr)
+    else:
+        print(str(e or raw[:300]), file=sys.stderr)
+except Exception:
+    print(raw[:300] or "the daemon did not answer", file=sys.stderr)'
+    exit "$(_vault_handoff_exit "$status" "$code")"
+}
+
+# Inside a K2 terminal: the passport. Outside: the person channel
+# (vault.sock) when it's there, else the owner token.
+_vault_handoff_call() {
+    local method="$1" route="$2" payload="${3:-}"
+    if [ -z "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ] && [ -S "$(_vault_sock)" ]; then
+        if [ "$method" = "GET" ] && [ -n "$payload" ]; then
+            _vault_sock_call GET "${route}?${payload}"
+        else
+            _vault_sock_call "$method" "$route" "$payload"
+        fi
+    else
+        _sidecar_split "$(_sidecar_send "$method" "/cli/vault/${route}" "$payload")"
+    fi
+}
+
+_vault_handoff() {
+    local sub="$1"; shift
+    if _wants_help "$@"; then _vault_handoff_usage; return 0; fi
+    local to="" as_n="" note="" ttl="" reply="" scope="" workspace="" via="" kind="" hosts="" as_json=0 stdin=0 replace=0 always=0
+    local pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --stdin) stdin=1; shift ;;
+            --replace) replace=1; shift ;;
+            --always) always=1; shift ;;
+            --to|--as|--note|--ttl|--reply|--scope|--workspace|--via|--kind|--for)
+                [ $# -ge 2 ] || { echo "usage: $1 needs a value" >&2; exit 2; }
+                case "$1" in
+                    --to) to="$2" ;; --as) as_n="$2" ;; --note) note="$2" ;; --ttl) ttl="$2" ;; --reply) reply="$2" ;;
+                    --scope) scope="$2" ;; --workspace) workspace="$2" ;; --via) via="$2" ;; --kind) kind="$2" ;; --for) hosts="$2" ;;
+                esac
+                shift 2 ;;
+            --value|--value=*|--secret-value*)
+                echo "value_on_argv: values are read from stdin, never an argument" >&2; exit 2 ;;
+            --*) echo "usage: unknown flag '$1' (k2 vault send --help)" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    local q=""
+    [ -n "$workspace" ] && q="workspace=$(urlencode "$workspace")"
+    case "$sub" in
+        send)
+            local name="${pos[0]:-}"
+            [ -n "$name" ] && [ -n "$to" ] || { echo "usage: k2 vault send NAME --to <agent>|<agent>::<host> [--note …]" >&2; exit 2; }
+            [ "${#pos[@]}" -eq 1 ] || { echo "value_on_argv: name the secret only; values are read from stdin" >&2; exit 2; }
+            local body
+            body="$(python3 -c '
+import json, re, sys
+name, to, as_n, note, ttl, reply, scope, via, kind, hosts = sys.argv[1:11]
+o = {"name": name, "to": to}
+if as_n: o["as"] = as_n
+if note: o["note"] = note
+if ttl:
+    m = re.fullmatch(r"(\d+)([smhdw]?)", ttl.strip())
+    if not m:
+        print("usage: --ttl 7d | 12h | 3600", file=sys.stderr); sys.exit(2)
+    o["ttlSecs"] = int(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[m.group(2)]
+if reply: o["replyTo"] = reply
+if scope.startswith("ws:") or scope.startswith("workspace:"):
+    o["scope"] = "workspace"; o["workspace"] = scope.split(":", 1)[1]
+elif scope:
+    o["scope"] = scope
+if via: o["via"] = via
+if kind: o["kind"] = kind
+if hosts: o["hosts"] = [h.strip() for h in hosts.split(",") if h.strip()]
+print(json.dumps(o))' "$name" "$to" "$as_n" "$note" "$ttl" "$reply" "$scope" "$via" "$kind" "$hosts")" || exit 2
+            if [ "$stdin" = "1" ]; then
+                # A value a person types in: the person channel only (H15).
+                _vault_person_guard
+                body="$(_vault_body_with_value "$body")" || exit 2
+                _vault_sock_call POST send "$body"
+            else
+                _vault_handoff_call POST send "$body"
+            fi
+            if [ "$_SC_STATUS" = "403" ] && [ "$(_vault_handoff_code "$_SC_BODY")" = "confirm_required" ] && [ -z "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ] && [ -S "$(_vault_sock)" ]; then
+                # A person gave this secret: confirm sending it to another server.
+                local sid tok
+                sid="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("secretId") or "")')"
+                tok="$(_vault_confirm_token handoff-send "$sid" "send $name to $to")" || exit 3
+                body="$(python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["confirmToken"]=sys.argv[2]; print(json.dumps(o))' "$body" "$tok")"
+                _vault_sock_call POST send "$body"
+                tok=""
+            fi
+            body=""
+            [ "$_SC_STATUS" = "200" ] || _vault_handoff_fail "$_SC_STATUS" "$_SC_BODY"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; else
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+st = v.get("status")
+line = "sent %s to %s (%s): %s" % (v.get("name"), v.get("to"), v.get("deliveryId"), st)
+if st == "landed" and v.get("ref"): line += " → " + v["ref"]
+if v.get("landedName") and v.get("landedName") != v.get("name"): line += " as " + v["landedName"]
+print(line)
+if v.get("who"): print(v["who"], file=sys.stderr)
+if v.get("addressNote"): print("note: " + v["addressNote"], file=sys.stderr)'
+            fi
+            local st
+            st="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status") or "")')"
+            [ "$st" = "landed" ] && exit 0
+            exit 3
+            ;;
+        incoming|sent)
+            local verb="${pos[0]:-}"
+            if [ "$sub" = "incoming" ] && { [ "$verb" = "accept" ] || [ "$verb" = "decline" ]; }; then
+                local id="${pos[1]:-}"
+                [ -n "$id" ] || { echo "usage: k2 vault incoming $verb <delivery-id>" >&2; exit 2; }
+                _vault_person_guard
+                local body
+                body="$(python3 -c '
+import json, sys
+id_, action, as_n, replace, always = sys.argv[1:6]
+o = {"id": id_, "action": action}
+if as_n: o["as"] = as_n
+if replace == "1": o["replace"] = True
+if always == "1": o["always"] = True
+print(json.dumps(o))' "$id" "$verb" "$as_n" "$replace" "$always")"
+                _vault_sock_call POST "incoming/decide" "$body"
+                [ "$_SC_STATUS" = "200" ] || _vault_handoff_fail "$_SC_STATUS" "$_SC_BODY"
+                if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+                printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin); d = v.get("delivery") or {}
+print("%s %s from %s (%s)%s" % (d.get("status"), d.get("landedName") or d.get("name"), d.get("peer"), d.get("deliveryId"), (" → " + v["ref"]) if v.get("ref") else ""))
+if v.get("alwaysAdded"): print("always accepting from " + v["alwaysAdded"] + " now")'
+                exit 0
+            fi
+            [ -z "$verb" ] || { echo "usage: k2 vault $sub [--workspace <ws>] [--json]  (accept/decline: k2 vault incoming accept <id>)" >&2; exit 2; }
+            _vault_handoff_call GET "$sub" "$q"
+            [ "$_SC_STATUS" = "200" ] || _vault_handoff_fail "$_SC_STATUS" "$_SC_BODY"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+sub = sys.argv[1]
+v = json.load(sys.stdin)
+items = v.get("items") or []
+if not items:
+    print("nothing %s yet" % ("received" if sub == "incoming" else "sent"))
+for d in items:
+    who = ("from " if sub == "incoming" else "to ") + (d.get("peer") or "?")
+    extra = ""
+    if d.get("status") == "pending" and sub == "incoming":
+        extra = "  (k2 vault incoming accept %s — a person, from their own terminal)" % d.get("deliveryId")
+    if d.get("ref"): extra = "  " + d["ref"]
+    print("%-22s %-10s %-28s %-24s %s%s" % (d.get("landedName") or d.get("name"), d.get("status"), who, d.get("createdAt") or "", d.get("deliveryId"), extra))
+    if d.get("note"): print("    note: %s" % d["note"])' "$sub"
+            ;;
+        accept-from)
+            local verb="${pos[0]:-list}"
+            case "$verb" in
+                list)
+                    _vault_handoff_call GET "accept-from" "$q"
+                    [ "$_SC_STATUS" = "200" ] || _vault_handoff_fail "$_SC_STATUS" "$_SC_BODY"
+                    ;;
+                add|remove)
+                    local sender="${pos[1]:-}"
+                    [ -n "$sender" ] && [ -n "$workspace" ] || { echo "usage: k2 vault accept-from $verb <sender> --workspace <ws>" >&2; exit 2; }
+                    _vault_person_guard
+                    _vault_sock_call POST "accept-from" "$(python3 -c 'import json,sys; print(json.dumps({"workspace": sys.argv[1], "sender": sys.argv[2], "action": sys.argv[3]}))' "$workspace" "$sender" "$verb")"
+                    [ "$_SC_STATUS" = "200" ] || _vault_handoff_fail "$_SC_STATUS" "$_SC_BODY"
+                    ;;
+                *) echo "usage: k2 vault accept-from list|add|remove …" >&2; exit 2 ;;
+            esac
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+e = v.get("entries") or []
+if not e: print("accepts from no one yet (every secret waits for a person)")
+for a in e:
+    print("%-40s added by %s at %s" % (a.get("senderLabel") and ("%s (%s)" % (a["sender"], a["senderLabel"])) or a.get("sender"), a.get("addedBy"), a.get("addedAt")))'
+            ;;
+    esac
+}
+
 cmd_vault() {
     local sub="${1:-}"
     case "$sub" in
@@ -17602,6 +17871,9 @@ cmd_vault() {
         _vault_fetch "$@"
         return
     fi
+    case "$sub" in
+        send|incoming|sent|accept-from) _vault_handoff "$sub" "$@"; return ;;
+    esac
     if _wants_help "$@"; then
         _vault_usage
         return 0
@@ -28523,6 +28795,26 @@ MOVING TO ANOTHER BOX
   recovery key is never used for this. Every export is logged with who
   ran it, the secret names and the target key, and your owner sees it
   (k2 vault audit, Settings → Access).
+
+GIVING A SECRET TO ANOTHER AGENT
+  Never paste it into k2 msg (K2 now redacts known values there anyway).
+  Send it by name: k2 vault send STRIPE_KEY --to ops --note "refund job"
+  (or --to ops::luzz.k2.dev on another server; or k2 msg ops "…" --secret
+  STRIPE_KEY). You never handle the value; it moves vault to vault, sealed
+  to the other server's vault across servers.
+  It arrives pending: a person there accepts it (k2 vault incoming), unless
+  that agent accepts from you (k2 vault accept-from, set by a person). A
+  same-named secret is never overwritten; re-sending yours makes a new
+  version. A secret a person gave you needs a person to send it to
+  another server. Server-wide secrets aren't sent (the owner shares them
+  with k2 vault grant). The copy you get is fetch/file only, never api,
+  and you can't widen it: use it with k2 vault fetch --secret NAME.
+  Exit 3 = a person must act (pending, held, not connected): don't retry.
+  Unlike k2 msg (exit 2 on a declined federated message), a handoff that
+  waits or is declined is exit 3. Exit 2 = the request or the other server
+  can't (peer_too_old: it needs K2 0.46.1 with federation on). Exit 4 = no
+  such secret or agent. Every send, receive, accept, decline, expiry and
+  refusal is logged (Settings → Logs → Access Audit), names only.
 
 PUBLISHED SERVICES
   New services start clean (base env + granted secrets). Ones from before

@@ -327,7 +327,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // delivery use `k2so work send` (separate endpoint).
         "/cli/workspace/msg" => {
             let workspace = str_param(params, "workspace");
-            let text = str_param(params, "text");
+            // H14 (prd-agent-secret-handoff-v1) backstop: a known vault
+            // value (8+ characters) pasted into `k2 msg` never reaches the
+            // recipient's PTY, transcript or Chatter. `k2 vault send` is the
+            // way to hand a secret over.
+            let text = k2_core::redaction::redact(&str_param(params, "text"));
             // C2: display `from` may be free-text for humans, but PEER
             // IDENTITY is the stamped principal (or owner bypass) — never
             // free-text `--from` as the gate subject.

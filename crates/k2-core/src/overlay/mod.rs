@@ -15,7 +15,7 @@ pub mod vault;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-pub use doc::{ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin, WidgetPlacementClaim};
+pub use doc::{ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, WidgetOrigin, WidgetPlacementClaim};
 pub use options::{parse_options_value, split_options_csv};
 pub use store::{ExtTxn, OverlayPage, SeqRemap};
 pub use transfer::IMPORTED_READ_ONLY;
@@ -421,6 +421,61 @@ pub fn post_secret(
         store::index_card_expiry(&id, conversation_id, at)?;
     }
     Ok(item_and_thread_link(conversation_id, seq, id, doc))
+}
+
+/// Post a `handoff` card onto Thread (prd-agent-secret-handoff-v1 §10.1).
+/// Holds names and the delivery id only. The vault owns its expiry (7
+/// days), so no overlay expiry entry is indexed; the daemon closes the
+/// card with [`mark_handoff`].
+pub fn post_handoff(
+    conn: &Connection,
+    conversation_id: &str,
+    project_id: &str,
+    from: &str,
+    to: &str,
+    body: &str,
+    card: HandoffCardBody,
+) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
+    vault::validate_name(&card.name)?;
+    let _guard = WRITE.lock();
+    let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let doc = OverlayDoc::handoff_card(id.clone(), from.trim().to_string(), to.trim().to_string(), body.to_string(), card);
+    store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
+    Ok(item_and_thread_link(conversation_id, seq, id, doc))
+}
+
+/// Close a pending `handoff` card: `landed` (with the `k2v://` reference),
+/// `declined` or `expired`. `by` is the person who decided (None for the
+/// expiry sweep). Never takes a value.
+pub fn mark_handoff(
+    conversation_id: &str,
+    card_id: &str,
+    status: &str,
+    reference: Option<String>,
+    by: Option<PostAuthor>,
+) -> Result<CardCallback, String> {
+    let _guard = WRITE.lock();
+    let item = thread_item(conversation_id, card_id)?;
+    let mut doc = item.doc;
+    if !doc.is_pending_handoff() {
+        return Err(CARD_NOT_PENDING.to_string());
+    }
+    let name = doc.handoff.as_ref().map(|h| h.name.clone()).unwrap_or_default();
+    if let Some(h) = doc.handoff.as_mut() {
+        h.status = status.to_string();
+        h.reference = reference;
+        h.answered_by = by;
+        h.answered_at = Some(doc::now_secs());
+    }
+    store::put_doc(&doc)?;
+    Ok(CardCallback {
+        conversation_id: conversation_id.to_string(),
+        doc_id: doc.id.clone(),
+        seq: item.seq,
+        doc,
+        inject_line: format!("secret {name} {status}"),
+    })
 }
 
 fn item_and_thread_link(

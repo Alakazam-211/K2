@@ -295,6 +295,11 @@ export interface ZenThreadView {
   /** The conversation is on the window's server (the unread store only
    *  knows that server's Threads). Built-in widgets only. */
   windowServer?: boolean
+  /** The conversation's server, so a built-in conversation on ANOTHER
+   *  server marks its Thread read there (`markReadOnServer`). Null until
+   *  the conversation has a server. Built-in widgets only: never projected
+   *  to a custom widget (closed shapes, zen-custom-projection). */
+  scope?: ServerScope | null
 }
 
 /** `thread.post` options: files on this computer, or browser files. A
@@ -1551,6 +1556,7 @@ function threadView(address: string): ZenThreadView {
     viewer: viewerOf(address),
     conversationId: f?.conversationId ? f.conversationId : null,
     windowServer: c?.scope ? c.scope.isWindowHost() : false,
+    scope: c?.scope ?? null,
   }
 }
 

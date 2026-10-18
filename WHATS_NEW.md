@@ -64,6 +64,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Message previews in push.** A Thread push can show the start of the agent's message, per device and behind an owner switch; titles use the workspace's display name, and no push carries a person's name.
 - **Message previews switch.** Owners and admins can turn message text in phone notifications on or off in Settings → Notifications. With it on, the text passes through K2's push relay and Apple or Google.
 - **Unread counts from the server.** Threads and project chats keep one read cursor per person, so the desktop and the phone agree on what is unread and what is waiting on you; `k2 thread unread` shows yours, and a Thread or project chat can be muted.
+- Reading a Thread in a Home room from another server, or in a Garden conversation whose agent lives on another server, marks it read on that server too.
 - **Homes sync.** Your Homes sync with your own server, local-first, with a sync badge on Home and Settings → Homes Sync.
 
 ### Secrets between agents

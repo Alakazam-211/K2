@@ -12,9 +12,11 @@
 //     this Thread. A muted Thread keeps its count as a grey dot and leaves
 //     the badge totals; pushes stop.
 //
-// Only the window's server keeps an unread store; on another server, or
-// one without `thread-read-v1`, nothing is posted and the bell is hidden
-// (the waiting chip still counts the cards in view).
+// Only the window's server keeps an unread store. A conversation on
+// another server is still marked read while it is looked at, on that server
+// for this window's login there (`markReadOnServer`); its bell stays hidden
+// (no store holds its mute state here), and the waiting chip counts the
+// cards in view. A server without `thread-read-v1` gets no post.
 
 import { useCallback } from 'react'
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
@@ -36,14 +38,18 @@ export function zenNewestSeq(items: readonly OverlayThreadItem[]): number | null
   return max
 }
 
-/** Mark the shown Thread read while it is looked at (window server only). */
+/** Mark the shown Thread read while it is looked at: in the window's
+ *  unread store, or on the conversation's own server when it is another. */
 export function useZenThreadAutoRead(view: ZenThreadView | null, shown: boolean): void {
   const items = view?.items ?? []
+  const onWindow = view?.windowServer === true
+  const other = !onWindow && view?.scope ? view.scope : undefined
   useAutoMarkRead({
     kind: 'thread',
-    id: view?.windowServer ? (view.conversationId ?? null) : null,
+    id: onWindow || other ? (view?.conversationId ?? null) : null,
     newestSeq: zenNewestSeq(items),
-    visible: shown && view?.phase === 'ready' && view.windowServer === true,
+    visible: shown && view?.phase === 'ready' && (onWindow || other !== undefined),
+    scope: other,
   })
 }
 

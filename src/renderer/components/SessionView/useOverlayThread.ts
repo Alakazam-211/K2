@@ -49,7 +49,9 @@
 //   8. Read while looking (thread-read-v1, 0.46.1): under the same rule
 //      (`viewing`, the window visible and focused), the newest seq this
 //      view holds past the person's read cursor is posted as read
-//      (`useAutoMarkRead`, `stores/unread.ts`). Window's server only.
+//      (`useAutoMarkRead`, `stores/unread.ts`). A Home remote room's
+//      Thread is marked read on the room's server, for this window's login
+//      there (`markReadOnServer`; not on a view-only room).
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'

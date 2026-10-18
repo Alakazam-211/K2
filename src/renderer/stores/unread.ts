@@ -41,7 +41,7 @@ import {
   type ProjectReadEvent,
   type ThreadReadEvent,
 } from '@/stores/session-events'
-import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import { primaryScope, scopedKey, scopeMayWrite, type ServerScope } from '@/kessel/server-scope'
 
 export type UnreadKind = 'thread' | 'project'
 
@@ -279,6 +279,40 @@ export const useUnreadStore = create<UnreadStoreState>((set, get) => ({
   },
 }))
 
+// ── Other servers (Home remote rooms, Zen conversations on another server) ──
+
+/** The furthest seq this window has asked another server to mark read, per
+ *  `<hostKey>|<kind>:<id>`. This window keeps no unread store for other
+ *  servers (their badges are theirs); the map only stops a re-render or the
+ *  same seq from posting twice. */
+const otherServerRead = new Map<string, number>()
+
+/**
+ * Mark a conversation read up to `seq` on ANOTHER server (the room's or the
+ * conversation's), for the login this window holds there: the same
+ * `thread/read` route the window's own Threads use, sent through that
+ * server's scope. Skipped when that server has no `thread-read-v1`, when
+ * the scope may not write it (a view-only room), or when this window has
+ * already asked for `seq` or later. A failure forgets the ask, so the next
+ * look tries again.
+ */
+export async function markReadOnServer(scope: ServerScope, kind: UnreadKind, id: string, seq: number): Promise<void> {
+  if (!id || !(seq > 0) || kind !== 'thread') return
+  if (!scope.serverSupports('thread-read-v1') || !scopeMayWrite(scope, 'thread/read')) return
+  const key = scopedKey(scope, unreadKey(kind, id))
+  const asked = otherServerRead.get(key)
+  if (asked !== undefined && asked >= seq) return
+  otherServerRead.set(key, seq)
+  try {
+    const raw = await daemonCliPost<unknown>(scope, 'thread/read', { conversationId: id, seq })
+    const entry = parseUnreadEntry(raw, kind)
+    if (entry && entry.lastReadSeq > seq) otherServerRead.set(key, entry.lastReadSeq)
+  } catch (err) {
+    console.warn(`[unread] read ${key} on ${scope.label} failed:`, err)
+    if (otherServerRead.get(key) === seq) otherServerRead.delete(key)
+  }
+}
+
 // ── Selectors ─────────────────────────────────────────────────────────────
 
 /** The Projects tab badge: project chats with something unread or
@@ -386,19 +420,27 @@ export function useAutoMarkRead(opts: {
   /** The newest seq the view holds (0 / null = none yet). */
   newestSeq: number | null | undefined
   visible: boolean
-  /** The view's server; default the window's. Other servers are skipped. */
+  /** The view's server; default the window's. Another server's Thread is
+   *  marked read on that server (`markReadOnServer`). */
   scope?: ServerScope
 }): void {
   const { kind, id, newestSeq, visible, scope } = opts
   const lookedAt = useWindowLookedAt()
   const entry = useUnreadEntry(kind, id, scope)
   const lastReadSeq = entry?.lastReadSeq ?? null
+  const otherServer = scope !== undefined && !scope.isWindowHost()
   useEffect(() => {
-    if (!visible || !lookedAt || !id || lastReadSeq === null) return
-    if (typeof newestSeq !== 'number' || !(newestSeq > lastReadSeq)) return
-    if (scope !== undefined && !scope.isWindowHost()) return
+    if (!visible || !lookedAt || !id) return
+    if (typeof newestSeq !== 'number') return
+    if (otherServer) {
+      // Another server's Thread (a Home remote room, a Zen conversation on
+      // another server): read on THAT server, for this window's login there.
+      void markReadOnServer(scope as ServerScope, kind, id, newestSeq)
+      return
+    }
+    if (lastReadSeq === null || !(newestSeq > lastReadSeq)) return
     void useUnreadStore.getState().markRead(kind, id, newestSeq)
-  }, [visible, lookedAt, id, kind, newestSeq, lastReadSeq, scope])
+  }, [visible, lookedAt, id, kind, newestSeq, lastReadSeq, scope, otherServer])
 }
 
 // ── Event wiring ──────────────────────────────────────────────────────────
@@ -433,6 +475,7 @@ export function initUnreadEvents(): void {
 /** Test seam: forget the wiring flag and in-flight posts. */
 export function __resetUnreadForTests(): void {
   eventsInitialized = false
+  otherServerRead.clear()
   inflight.clear()
   useUnreadStore.setState({ byKey: {}, total: 0, waitingTotal: 0, loaded: false })
 }

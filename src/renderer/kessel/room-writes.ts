@@ -116,6 +116,8 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'thread/post': 'post a Thread message to the agent on B',
   'thread/answer': 'answer a Thread ask on B',
   'thread/void': 'void a Thread message on B',
+  'thread/read':
+    'reading the room’s Thread marks it read for your login on B (thread-read-v1), so B’s own clients and phone stop counting it',
 
   // Design mode (prd-browser-design-mode-v1 D-A15): the page renders here,
   // the notes go to the room's agent on B (one Thread item + one inject).

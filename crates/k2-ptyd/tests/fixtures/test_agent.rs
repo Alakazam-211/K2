@@ -8,9 +8,22 @@
 //! - `sleep`: print READY, sleep forever.
 //! - `exit <code>`: print BYE, exit with <code>.
 
+//!
+//! `#![no_main]`: Rust's normal startup ignores SIGPIPE and installs
+//! SIGSEGV/SIGBUS handlers before `main`, which would hide what ptyd handed
+//! the child. With a C `main` the probe sees the inherited dispositions.
+
+#![no_main]
+
 use std::io::{BufRead, Write};
 
-fn main() {
+#[no_mangle]
+pub extern "C" fn main(_argc: libc::c_int, _argv: *const *const libc::c_char) -> libc::c_int {
+    run();
+    0
+}
+
+fn run() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mode = args.first().map(String::as_str).unwrap_or("");
     let mut out = std::io::stdout();

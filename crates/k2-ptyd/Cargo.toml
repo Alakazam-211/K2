@@ -1,0 +1,35 @@
+[package]
+name = "k2-ptyd"
+# ptyd has its own version line, independent of the K2 release (PRD §7.1,
+# §7.10): the daemon compares it against MIN_PTYD_VERSION. release.sh does
+# not bump it; it changes only when ptyd itself changes.
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "K2 PTY host: owns agent PTYs so agents survive daemon restarts (PRD prd-k2-ptyd-v1)."
+
+# P1: deliberately tiny. No tokio, alacritty_terminal, rusqlite, network or
+# TLS crates — ptyd is a single point of failure for every agent (R1), so
+# its dependency surface stays small and auditable.
+[dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hmac = "0.12"
+sha2 = "0.10"
+getrandom = "0.2"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "k2-ptyd"
+path = "src/main.rs"
+
+# Fake agent used by the integration tests (PRD §12 harness). A plain bin so
+# `CARGO_BIN_EXE_k2-ptyd-test-agent` resolves; release.sh never ships it.
+[[bin]]
+name = "k2-ptyd-test-agent"
+path = "tests/fixtures/test_agent.rs"
+test = false
+doc = false

@@ -14,6 +14,7 @@ members = [
     # TEST ONLY: Google / Microsoft OAuth + Graph fakes for the headless
     # mail smokes (prd-app-mail-calendar-surfaces-v1 §8.2). Never shipped.
     "tests/fakes/oauth-providers",
+    "crates/k2-ptyd",
 ]
 
 # Dev profile: lightly optimized so PTY reads + LLM inference don't crawl.

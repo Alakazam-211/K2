@@ -1154,11 +1154,15 @@ fn own_target(vault: &LocalVault, label: Option<String>) -> Result<VaultTarget, 
 // ── routes ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Default, Deserialize)]
-struct ConfirmBody {
+pub(crate) struct ConfirmBody {
     #[serde(flatten)]
     ask: CarryAsk,
     method: Option<String>,
     password: Option<String>,
+    /// 0.46.1: an agent's clone proposal this clone runs (`cp_…`). The one
+    /// confirm then also approves it (see `confirm_route`).
+    #[serde(default)]
+    proposal: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1216,6 +1220,96 @@ pub fn plan_json(vault: &LocalVault, caller: &VaultCaller, ask: &CarryAsk) -> Re
     Ok(v)
 }
 
+/// `/cli/clone/vault/confirm`: one person confirm (Touch ID, the vault
+/// password or the Connect password), Owner or Admin people only (D1).
+///
+/// - Without `proposal`: the `clone-carry` token for the plan (CL14), as
+///   before. A plan with nothing to confirm is refused.
+/// - With `proposal` (0.46.1, one interaction instead of two): the same
+///   single check also mints the `clone-approve` token bound to that
+///   proposal (`approveToken`), and the macOS sheet's reason names both
+///   ("approve … and copy N secrets …"). Each token stays single-use,
+///   60 s, bound to this person and to its own action and id, so the
+///   approve route and the clone run check exactly what they checked
+///   before: the security level is unchanged, only the second prompt is
+///   gone. The proposal must be open, unexpired and for the plan's
+///   workspace. A plan with nothing to copy mints only `approveToken`
+///   (`token` null).
+pub(crate) fn confirm_route(vault: &LocalVault, c: &VaultCaller, b: &ConfirmBody, ingress: &str) -> Result<Value, VaultError> {
+    crate::vault_routes::human_admin(c)?;
+    let method = b.method.as_deref().unwrap_or("");
+    let Some(pid) = b.proposal.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        let (secret_id, reason, _) = confirm_binding(vault, c, &b.ask)?;
+        let token = crate::vault_routes::confirm_check(vault, c, CONFIRM_ACTION, Some(&secret_id), method, b.password.as_deref(), &reason, ingress)?;
+        return Ok(json!({ "ok": true, "token": token, "secretId": secret_id, "reason": reason, "expiresIn": 60 }));
+    };
+    confirm_for_proposal(vault, c, &b.ask, pid, method, b.password.as_deref(), ingress)
+}
+
+/// The one-interaction confirm for running an agent's clone proposal (see
+/// [`confirm_route`]). Also served by `/cli/vault/confirm/finish` (action
+/// `clone-carry` with `clonePlan` and `proposal`), which `k2 clone approve`
+/// reaches over vault.sock for Touch ID on this Mac.
+pub(crate) fn confirm_for_proposal(
+    vault: &LocalVault,
+    c: &VaultCaller,
+    ask: &CarryAsk,
+    pid: &str,
+    method: &str,
+    password: Option<&str>,
+    ingress: &str,
+) -> Result<Value, VaultError> {
+    crate::vault_routes::human_admin(c)?;
+    let proposal = open_proposal(pid)?;
+    let plan = plan_for(vault, c, ask)?;
+    if plan.source_workspace_id != proposal.project_id {
+        return Err(VaultError::bad_request("proposal_mismatch", "that proposal is for another workspace; open it from its own workspace"));
+    }
+    let to = if proposal.target == "here" { "a second copy on this server".to_string() } else { proposal.target.clone() };
+    let approve_reason = format!("approve the clone of {} to {to}", plan.source_workspace);
+    let approve_action = crate::clone_proposal_routes::CONFIRM_ACTION;
+    if !plan.needs_confirm() {
+        let approve = crate::vault_routes::confirm_check(vault, c, approve_action, Some(&proposal.id), method, password, &approve_reason, ingress)?;
+        return Ok(json!({ "ok": true, "token": Value::Null, "approveToken": approve, "proposal": proposal.id, "reason": approve_reason, "expiresIn": 60 }));
+    }
+    let digest = plan_digest(&plan, ask.vault_target.as_ref(), ask.clone_id.as_deref())?;
+    let secret_id = confirm_secret_id(&digest);
+    let reason = format!("{approve_reason} and {}", confirm_reason(&plan, ask.vault_target.as_ref()));
+    // The one person check (and its audit line) happens here; the approve
+    // token below is minted only after it passed, for the same person and
+    // method.
+    let token = crate::vault_routes::confirm_check(vault, c, CONFIRM_ACTION, Some(&secret_id), method, password, &reason, ingress)?;
+    let stamp = c.actor.stamp();
+    let approve = vault.confirm.mint(approve_action, Some(&proposal.id), &stamp, method);
+    crate::vault::auth_audit("vault-confirm", &stamp, &format!("ok {approve_action} via {method} (with {CONFIRM_ACTION})"), ingress);
+    Ok(json!({
+        "ok": true,
+        "token": token,
+        "approveToken": approve,
+        "proposal": proposal.id,
+        "secretId": secret_id,
+        "reason": reason,
+        "expiresIn": 60,
+    }))
+}
+
+/// An open, unexpired clone proposal by id (or unique prefix).
+fn open_proposal(token: &str) -> Result<k2_core::clone_proposals::Proposal, VaultError> {
+    let p = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::clone_proposals::find(&conn, token).map_err(|e| VaultError::new("db", 500, format!("database: {e}")))?
+    }
+    .ok_or_else(|| VaultError::not_found(format!("no clone proposal '{token}'")))?;
+    if p.status != k2_core::clone_proposals::STATUS_OPEN {
+        return Err(VaultError::conflict("proposal_not_open", "this proposal was already decided"));
+    }
+    if p.expires_at <= chrono::Utc::now().timestamp() {
+        return Err(VaultError::new("proposal_expired", 410, "this proposal expired (7 days); the agent can propose again"));
+    }
+    Ok(p)
+}
+
 /// `.env*` files that "Send .env files as files" would put in the bundle.
 fn env_files(dir: &str) -> Vec<String> {
     match k2_core::clone::inventory(dir, k2_core::clone::CloneOptions::default()) {
@@ -1233,22 +1327,7 @@ pub fn handle(path: &str, caller: Result<VaultCaller, VaultError>, body: &[u8], 
         let vault = crate::vault::get()?;
         match path {
             PLAN => plan_json(&vault, &c, &parse::<CarryAsk>(body)?),
-            CONFIRM => {
-                let b: ConfirmBody = parse(body)?;
-                crate::vault_routes::human_admin(&c)?;
-                let (secret_id, reason, _) = confirm_binding(&vault, &c, &b.ask)?;
-                let token = crate::vault_routes::confirm_check(
-                    &vault,
-                    &c,
-                    CONFIRM_ACTION,
-                    Some(&secret_id),
-                    b.method.as_deref().unwrap_or(""),
-                    b.password.as_deref(),
-                    &reason,
-                    ingress,
-                )?;
-                Ok(json!({ "ok": true, "token": token, "secretId": secret_id, "reason": reason, "expiresIn": 60 }))
-            }
+            CONFIRM => confirm_route(&vault, &c, &parse::<ConfirmBody>(body)?, ingress),
             EXPORT => {
                 let ask: CarryAsk = parse(body)?;
                 let target = ask.vault_target.clone().ok_or_else(|| VaultError::bad_request("target_required", "vault_target {recipient, vault_id}"))?;

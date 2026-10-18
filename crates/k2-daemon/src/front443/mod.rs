@@ -310,7 +310,20 @@ fn stalwart_routes(_cfg: &k2_core::front443::FrontConfig, _add: &mut Add) {}
 
 /// S4: Skin Direct's host (and the mail host while Caddy fronts mail) →
 /// Caddy on its loopback port; PROXY v2 only when that Caddy reads it.
-fn caddy_routes(_add: &mut Add) {}
+fn caddy_routes(add: &mut Add) {
+    if let Some(c) = k2_core::skin_door::front_routes() {
+        let addr = SocketAddr::from(([127, 0, 0, 1], c.port));
+        for h in &c.hosts {
+            add(h, Backend { kind: Kind::Caddy, addr, proxy: c.proxy_protocol, refuse_loopback_clients: false });
+        }
+    } else if !SKIN_SETTLED.load(Ordering::SeqCst) {
+        // Boot: this daemon hasn't re-applied Skin Direct yet (Caddy
+        // keeps running across the restart): keep its routes until it has.
+        for (h, b) in routes::current().entries().filter(|(_, b)| b.kind == Kind::Caddy) {
+            add(h, b.clone());
+        }
+    }
+}
 
 static SKIN_SETTLED: AtomicBool = AtomicBool::new(false);
 
@@ -385,6 +398,7 @@ pub fn status_json() -> Value {
             None => (false, None, None, Value::Null, cap()),
         }
     };
+    let caddy = k2_core::skin_door::front_routes();
     json!({
         "enabled": cfg.enabled,
         "mail": cfg.mail_behind_front(),
@@ -396,6 +410,7 @@ pub fn status_json() -> Value {
         "nofileSoftLimit": k2_core::nofile_soft_limit(),
         "connections": counters,
         "routes": routes::current().json(),
+        "caddy": caddy.map(|c| json!({"port": c.port, "hosts": c.hosts, "proxyV2": c.proxy_protocol})),
         "helper": helper_gate().err(),
     })
 }

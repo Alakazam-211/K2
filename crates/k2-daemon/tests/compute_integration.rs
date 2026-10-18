@@ -1079,3 +1079,105 @@ async fn agent_tab_switch_grants_every_machine_and_auto_grants_later_ones() {
     }
     drop(env);
 }
+
+// ── Slice A (prd-k2-compute-dx-v1) ───────────────────────────────────
+
+/// A real node `name` online with a first offer, and the workspace switch
+/// on for `ws` (which grants it the node).
+async fn online_node_for(env: &Env, port: u16, name: &str, ws: &Ws) -> (RunningNode, String) {
+    let layout = enrolled_node(env, port, name).await;
+    let running = start_node(&layout).await;
+    let nm = name.to_string();
+    wait_for("node offer", 20, move || {
+        let n = nm.clone();
+        Box::pin(async move { node_row(port, &n).await["offer"].is_object() })
+    })
+    .await;
+    let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "compute", "value": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let node_id = node_row(port, name).await["id"].as_str().expect("node id").to_string();
+    (running, node_id)
+}
+
+async fn job_json(port: u16, token: &str, job: &str) -> Value {
+    let r = get(port, "/cli/compute/jobs/get", token, &format!("job={job}")).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    j(&r)
+}
+
+async fn wait_state(port: u16, token: &str, job: &str, state: &'static str) {
+    let (t, jb) = (token.to_string(), job.to_string());
+    wait_for(state, 30, move || {
+        let (t, jb) = (t.clone(), jb.clone());
+        Box::pin(async move { job_json(port, &t, &jb).await["state"] == state })
+    })
+    .await;
+}
+
+async fn node_pause(port: u16, node: &str, action: &str) {
+    let r = post(port, "/cli/compute/nodes/pause", OWNER, json!({"node": node, "action": action})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+}
+
+async fn stop_node(port: u16, name: &str, running: RunningNode) {
+    let r = post(port, "/cli/compute/nodes/remove", OWNER, json!({"node": name})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    running.runner.abort();
+    running.node.stop_all(k2_node_proto::frames::JobState::Cancelled, "test_over");
+}
+
+/// A2 (G6 + V3): a job already queued over the node's caps (queued before
+/// 0.46.1's submit check, or the node's policy shrank) is failed by the
+/// next kick with the caps in its detail, and its requester gets its one
+/// `[compute]` message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn a_queued_job_over_caps_is_failed_and_finalized() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "dxa-caps");
+    let (agent, sid) = passport(&ws);
+    let (running, _) = online_node_for(&env, port, "dxa-caps", &ws).await;
+    // Hold assignments, queue a detached job, then make it ask for more
+    // memory than any node has (as an old queued row would).
+    node_pause(port, "dxa-caps", "pause").await;
+    k2_daemon::compute_ws::test_sink_register(&sid);
+    let mut body = run_body("dxa-caps", &["true"], "client-dxa-caps-00001");
+    body["detach"] = json!(true);
+    body["noSource"] = json!(true);
+    let r = post(port, "/cli/compute/run", &agent, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().expect("job id").to_string();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let n = conn
+            .execute(
+                "UPDATE compute_jobs SET plan_json = json_set(plan_json, '$.limits.mem_bytes', ?2) WHERE id = ?1 AND state = 'queued'",
+                params![job, 1i64 << 50],
+            )
+            .expect("update plan");
+        assert_eq!(n, 1, "the job was still queued");
+    }
+    node_pause(port, "dxa-caps", "resume").await;
+    wait_state(port, &agent, &job, "failed").await;
+    let fin = job_json(port, &agent, &job).await;
+    assert_eq!(fin["reason"], "exceeds_node_caps", "{fin}");
+    assert!(fin["detail"].as_str().is_some_and(|d| d.contains("the node allows at most")), "{fin}");
+    let s = sid.clone();
+    wait_for("completion message", 20, move || {
+        let s = s.clone();
+        Box::pin(async move { !k2_daemon::compute_ws::test_sink_peek(&s).is_empty() })
+    })
+    .await;
+    let msgs = k2_daemon::compute_ws::test_sink_take(&sid);
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(msgs[0].starts_with(&format!("[compute] job {} on dxa-caps: failed", &job[..8])), "{msgs:?}");
+    // Later kicks never message it again.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(k2_daemon::compute_ws::test_sink_take(&sid), Vec::<String>::new());
+
+    stop_node(port, "dxa-caps", running).await;
+    drop(env);
+}

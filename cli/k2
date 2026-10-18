@@ -17616,6 +17616,10 @@ k2 vault send — hand a vault secret to another agent by name (you never see th
   k2 vault incoming [--workspace <ws>] [--json]     secrets sent to this agent (names only)
   k2 vault sent [--workspace <ws>] [--json]         what this agent sent
   k2 vault accept-from list [--workspace <ws>]      who may land secrets here without asking
+  k2 vault ask <agent>|<agent>::<host> NAME [--note "…"]   ask an agent for a secret (no value travels)
+  k2 vault send NAME --to <agent> --reply <ask-id>  answer an ask: it lands straight in
+  k2 vault asks [--json]                            open and closed asks, in and out
+  k2 vault unsend <delivery-id>                     take a delivery back (not a revoke: rotate the key)
   k2 msg <agent> "text" --secret NAME               the same send, the text is the note
 
   People only (your own terminal, not a K2 terminal):
@@ -17644,8 +17648,8 @@ EOF
 _vault_handoff_exit() {
     local status="$1" code="$2"
     case "$code" in
-        pending|held|declined|not_connected|send_not_allowed|handoff_person_only|confirm_required|owner_only|too_many_pending|rate_limited|vault_not_yours|vault_owner_confirm_required) echo 3; return ;;
-        peer_too_old|federation_off|never_sendable|send_by_name_only|use_vault_set|note_has_value|note_too_long|value_too_large|same_workspace|name_taken|not_pending|no_wildcard|bad_sender|bad_ttl|bad_name|bad_address|to_required|name_required|bad_json|bad_action|workspace_required|secret_not_active|secret_expired) echo 2; return ;;
+        pending|held|declined|not_connected|send_not_allowed|handoff_person_only|confirm_required|owner_only|too_many_pending|rate_limited|vault_not_yours|vault_owner_confirm_required|not_yours) echo 3; return ;;
+        peer_too_old|federation_off|never_sendable|send_by_name_only|use_vault_set|note_has_value|note_too_long|value_too_large|same_workspace|name_taken|not_pending|not_unsendable|no_wildcard|bad_sender|bad_ttl|bad_name|bad_address|to_required|name_required|bad_json|bad_action|workspace_required|secret_not_active|secret_expired) echo 2; return ;;
     esac
     case "$status" in
         200) echo 0 ;;
@@ -17833,6 +17837,48 @@ for d in items:
     print("%-22s %-10s %-28s %-24s %s%s" % (d.get("landedName") or d.get("name"), d.get("status"), who, d.get("createdAt") or "", d.get("deliveryId"), extra))
     if d.get("note"): print("    note: %s" % d["note"])' "$sub"
             ;;
+        ask)
+            local to_a="${pos[0]:-}" aname="${pos[1]:-}"
+            [ -n "$to_a" ] && [ -n "$aname" ] || { echo "usage: k2 vault ask <agent>|<agent>::<host> NAME [--note …]" >&2; exit 2; }
+            _vault_handoff_call POST ask "$(python3 -c '
+import json, sys
+o = {"to": sys.argv[1], "name": sys.argv[2]}
+if sys.argv[3]: o["note"] = sys.argv[3]
+if sys.argv[4]: o["workspace"] = sys.argv[4]
+print(json.dumps(o))' "$to_a" "$aname" "$note" "$workspace")"
+            [ "$_SC_STATUS" = "200" ] || _vault_handoff_fail "$_SC_STATUS" "$_SC_BODY"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("asked %s for %s (%s)%s; open %s days" % (v.get("to"), v.get("name"), v.get("askId"), "" if v.get("delivered") else " (they get it when they wake)", v.get("expiresInDays")))'
+            ;;
+        asks)
+            _vault_handoff_call GET asks "$q"
+            [ "$_SC_STATUS" = "200" ] || _vault_handoff_fail "$_SC_STATUS" "$_SC_BODY"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+items = json.load(sys.stdin).get("items") or []
+if not items: print("no asks")
+for a in items:
+    arrow = "asked" if a.get("direction") == "out" else "asked by"
+    print("%-22s %-9s %s %-28s %s" % (a.get("name"), a.get("status"), arrow, a.get("peer"), a.get("askId")))'
+            ;;
+        unsend)
+            local uid="${pos[0]:-}"
+            [ -n "$uid" ] || { echo "usage: k2 vault unsend <delivery-id> (k2 vault sent)" >&2; exit 2; }
+            _vault_handoff_call POST unsend "$(python3 -c 'import json,sys; print(json.dumps({"id": sys.argv[1]}))' "$uid")"
+            [ "$_SC_STATUS" = "200" ] || _vault_handoff_fail "$_SC_STATUS" "$_SC_BODY"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("disabled"): print("took back %s: their copy is disabled" % v.get("deliveryId"))
+elif v.get("keptReplaced"): print("took back %s: their owner had replaced it, so it was left alone" % v.get("deliveryId"))
+else: print("took back %s" % v.get("deliveryId"))
+print(v.get("honest"), file=sys.stderr)'
+            ;;
         accept-from)
             local verb="${pos[0]:-list}"
             case "$verb" in
@@ -17872,7 +17918,7 @@ cmd_vault() {
         return
     fi
     case "$sub" in
-        send|incoming|sent|accept-from) _vault_handoff "$sub" "$@"; return ;;
+        send|incoming|sent|accept-from|ask|asks|unsend) _vault_handoff "$sub" "$@"; return ;;
     esac
     if _wants_help "$@"; then
         _vault_usage

@@ -1206,7 +1206,7 @@ pub fn handle_send_user_tray(
 
 /// The roster `agent` (handle) listed for `workspace_id` in a peer-roster
 /// route body, if any.
-fn handle_for_workspace_in_roster_body(body: &str, workspace_id: &str) -> Option<String> {
+pub(crate) fn handle_for_workspace_in_roster_body(body: &str, workspace_id: &str) -> Option<String> {
     let d: serde_json::Value = serde_json::from_str(body).ok()?;
     roster_entries_from_json(&d)?
         .into_iter()

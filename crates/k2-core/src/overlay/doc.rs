@@ -330,7 +330,7 @@ pub struct HandoffCardBody {
     /// The receiving workspace already has a secret of that name.
     #[serde(default)]
     pub clash: bool,
-    /// `pending` | `landed` | `declined` | `expired`
+    /// `pending` | `landed` | `declined` | `expired` | `unsent`
     pub status: String,
     /// After it landed: the `k2v://` reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]

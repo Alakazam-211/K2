@@ -511,3 +511,117 @@ async fn person_given_cross_server_needs_a_person_and_a_confirm_and_agents_need_
     assert_eq!((st, j["error"]["code"].as_str().unwrap_or("")), (403, "not_connected"), "{raw}");
     assert_eq!(seen.lock().unwrap().handoff_bodies.len(), 1, "only the confirmed send left this server");
 }
+
+// ── H5: a signed revoke ─────────────────────────────────────────────
+
+fn revoke_envelope(peer_key: &rcgen::KeyPair, to_ws: &str, delivery_id: &str) -> Vec<u8> {
+    let signal = AgentSignal::new(
+        AgentAddress::Agent { workspace: WorkspaceId("src-ws".into()), name: "cortana".into() },
+        AgentAddress::Agent { workspace: WorkspaceId(to_ws.into()), name: "vault".into() },
+        SignalKind::Custom { kind: REVOKE_KIND.into(), payload: json!({ "deliveryId": delivery_id }) },
+    );
+    federation::seal(&signal, peer_key, "peer", 8).unwrap()
+}
+
+#[test]
+fn only_the_sending_peer_can_unsend_and_it_disables_the_copy() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        let v = crate::vault::ensure_test_vault();
+        let (_d, sender) = other_vault("fed-revoke");
+        let (ws, path) = receiving_workspace();
+        k2_core::workspace::settings::update_project_setting(&path, "allow_remote_instruct", "1").expect("opt in");
+        let (key, peer) = pin_peer("peer");
+        let (other_key, _) = pin_peer("peer2");
+        let id = k2_vault::handoff::new_delivery_id();
+        let r = handle_vault_handoff(&sealed_envelope(&sender, &v, &key, &peer.fingerprint, &ws, &id, item("K_REVOKE"), &sentinel(), |_| {}));
+        assert_eq!(body(&r)["status"], "pending", "{}", r.body);
+        // Another pinned server can't take it back.
+        let r = handle_vault_handoff(&revoke_envelope(&other_key, &ws, &id));
+        assert_eq!((r.status, code_of(&r).as_str()), ("403 Forbidden", "not_yours"));
+        assert!(v.handoff_has_value(&id), "still pending");
+        // The sender can.
+        let r = handle_vault_handoff(&revoke_envelope(&key, &ws, &id));
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        assert_eq!(body(&r)["status"], "unsent");
+        assert!(!v.handoff_has_value(&id), "the pending value is gone");
+        let rec = v.handoff_get(&id, "in").unwrap();
+        assert_eq!(rec.status, "unsent");
+        let card = rec.card.expect("card");
+        let doc = k2_core::overlay::get_doc(card.rsplit_once('/').unwrap().1).unwrap().unwrap();
+        assert_eq!(doc.handoff.unwrap().status, "unsent", "the card closes");
+    });
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cross_server_ask_travels_as_a_message_and_its_reply_lands_straight_in() {
+    let _home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let v = crate::vault::ensure_test_vault();
+    let (_d, peer_vault) = other_vault("fed-ask-peer");
+    let peer_key = Arc::new(rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap());
+    let mut store = PeerStore::load().unwrap_or_default();
+    let fp = store.upsert(FederationPeer::pin("askbox", "askbox", peer_key.public_key_pem()).unwrap());
+    store.set_trust(&fp, PeerTrust::Trusted);
+    store.grant(&fp, "inbound");
+    store.grant(&fp, "roster");
+    store.save().unwrap();
+    let peer = store.get(&fp).unwrap().clone();
+    let (port, seen) = spawn_stub(false, peer_key.clone(), peer_vault.clone(), federation::local_fingerprint().unwrap());
+    let _base = k2_core::test_env::EnvVar::set("K2_FEDERATION_INBOUND_BASE", &format!("http://127.0.0.1:{port}"));
+    let _fed = k2_core::test_env::EnvVar::set("K2_FEDERATION", "1");
+    // The asking workspace (listed to peers, opted in) and its connection to bob there.
+    let (ws, path) = receiving_workspace();
+    k2_core::workspace::settings::update_project_setting(&path, "allow_remote_instruct", "1").unwrap();
+    let host = crate::federation_routes::peer_host(&peer);
+    let bob = format!("bob::{host}");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::WorkspaceRemoteConnection::create(&conn, &uuid::Uuid::new_v4().to_string(), &ws, &bob, &host, "bob", Some(&fp)).unwrap();
+    }
+    let owner = VaultCaller { actor: Actor::Owner, channel: Channel::Plain, session_id: None };
+    let (v2, ws2) = (v.clone(), ws.clone());
+    let r = tokio::task::spawn_blocking(move || {
+        crate::vault_handoff_routes::handle(
+            &v2,
+            crate::vault_handoff_routes::ASK,
+            &owner,
+            json!({ "to": "bob::askbox", "name": "K_ASKED", "workspace": ws2, "note": "for the deploy" }).to_string().as_bytes(),
+            &HashMap::new(),
+            "test",
+        )
+    })
+    .await
+    .unwrap();
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let j = body(&r);
+    let ask_id = j["askId"].as_str().unwrap().to_string();
+    assert_eq!(j["to"], bob.as_str());
+    assert_eq!(seen.lock().unwrap().inbound_hits, 1, "the ask is a plain federated message");
+    assert!(seen.lock().unwrap().handoff_bodies.is_empty(), "no secret moved");
+    assert_eq!(v.handoff_get(&ask_id, "ask_out").unwrap().peer_addr, bob);
+
+    // bob's server answers with --reply: a sealed handoff whose sender is bob.
+    let secret = sentinel();
+    let id = k2_vault::handoff::new_delivery_id();
+    let me = federation::local_fingerprint().unwrap();
+    let from = Party { fingerprint: fp.clone(), host: String::new(), workspace_id: "ws-b".into(), handle: "bob".into(), actor: "agent:ws-b/s".into(), vault_id: String::new() };
+    let to = Party { fingerprint: me, host: String::new(), workspace_id: ws.clone(), handle: "bob".into(), actor: String::new(), vault_id: v.vault_id().into() };
+    let mut p = HandoffPayload::new(&id, from, to, item("K_ASKED"), &SecretBytes::from_slice(secret.as_bytes()), String::new(), Some(ask_id.clone()));
+    let sealed = peer_vault.handoff_seal(&v.carry_recipient().unwrap(), &mut p).unwrap();
+    let signal = AgentSignal::new(
+        AgentAddress::Agent { workspace: WorkspaceId("ws-b".into()), name: "bob".into() },
+        AgentAddress::Agent { workspace: WorkspaceId(ws.clone()), name: "bob".into() },
+        SignalKind::Custom {
+            kind: vr::HANDOFF_KIND.into(),
+            payload: json!({ "deliveryId": id, "toWorkspaceId": ws, "sealedB64": base64::engine::general_purpose::STANDARD.encode(&sealed) }),
+        },
+    );
+    let bytes = federation::seal(&signal, &peer_key, "askbox", 8).unwrap();
+    let r = tokio::task::spawn_blocking(move || handle_vault_handoff(&bytes)).await.unwrap();
+    assert_eq!(body(&r)["status"], "landed", "a reply to our own ask lands straight in: {}", r.body);
+    assert_eq!(v.handoff_get(&ask_id, "ask_out").unwrap().status, "answered");
+    let got = v.resolve(&Selector::user(Scope::workspace(&ws), "K_ASKED"), Use::System, &Requester::System("t".into())).unwrap();
+    assert_eq!(got.value.expose(), secret.as_bytes());
+}

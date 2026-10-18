@@ -445,3 +445,66 @@ fn route_walk_policy_post_guard_and_passport_rows() {
         assert!(crate::routes::route_policy::lookup(p).is_some(), "{p} has a route_policy row");
     }
 }
+
+// ── H5: ask, reply, unsend ──────────────────────────────────────────
+
+#[test]
+fn a_reply_to_your_own_ask_lands_straight_in_and_unsend_takes_it_back() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        let v = crate::vault::ensure_test_vault();
+        let (sales, ops, other) = (workspace("sales"), workspace("ops"), workspace("other"));
+        link(&sales, &ops);
+        let me = Actor::Agent(AgentActor { workspace_id: sales.id.clone(), session_id: None, shell: false, vault_manage: false });
+        let secret = sentinel();
+        put(&v, &sales, "STRIPE_KEY", &secret, &me);
+        put(&v, &sales, "OTHER_KEY", &sentinel(), &me);
+
+        // ops asks sales (no accept-from list at all).
+        let (st, j, raw) = call(&v, ASK, &agent(&ops), json!({ "to": sales.name, "name": "STRIPE_KEY", "note": "for refunds" }));
+        assert_eq!(st, 200, "{raw}");
+        let ask_id = j["askId"].as_str().expect("ask id").to_string();
+        assert!(k2_vault::handoff::valid_ask_id(&ask_id));
+        let (_, asks_out, _) = call_p(&v, ASKS, &agent(&ops), Value::Null, HashMap::new());
+        assert_eq!(asks_out["items"][0]["status"], "open");
+        let (_, asks_in, _) = call_p(&v, ASKS, &agent(&sales), Value::Null, HashMap::new());
+        assert_eq!(asks_in["items"][0]["direction"], "in", "{asks_in}");
+        let text = ask_text(&ask_id, &sales.name, "STRIPE_KEY", "for refunds", &ops.name);
+        assert!(text.contains(&format!("k2 vault send STRIPE_KEY --to {} --reply {ask_id}", ops.name)), "{text}");
+
+        // A reply for another name doesn't ride the ask: pending.
+        let (_, j, _) = call(&v, SEND, &agent(&sales), json!({ "name": "OTHER_KEY", "to": ops.name, "replyTo": ask_id }));
+        assert_eq!(j["status"], "pending");
+        // The reply for the asked name lands straight in (R1) and closes the ask.
+        let (st, j, raw) = call(&v, SEND, &agent(&sales), json!({ "name": "STRIPE_KEY", "to": ops.name, "replyTo": ask_id }));
+        assert_eq!(st, 200, "{raw}");
+        assert_eq!(j["status"], "landed", "{raw}");
+        assert_eq!(value_of(&v, &ops, "STRIPE_KEY"), secret.as_bytes());
+        assert_eq!(v.handoff_get(&ask_id, "ask_out").expect("ask").status, "answered");
+        let id = j["deliveryId"].as_str().expect("id").to_string();
+        // A second reply to the same ask doesn't land.
+        let (_, j, _) = call(&v, SEND, &agent(&sales), json!({ "name": "STRIPE_KEY", "to": ops.name, "replyTo": ask_id }));
+        assert_ne!(j["status"], "landed", "an ask is answered once");
+
+        // Only the sender takes a delivery back.
+        let (st, j, _) = call(&v, UNSEND, &agent(&other), json!({ "id": id }));
+        assert_eq!((st, code(&j)), (403, "not_yours"));
+        let (st, j, raw) = call(&v, UNSEND, &agent(&sales), json!({ "id": id }));
+        assert_eq!(st, 200, "{raw}");
+        assert_eq!(j["disabled"], true);
+        assert!(j["honest"].as_str().expect("honest").contains("not a revoke"));
+        let m = v.meta(&Selector::user(Scope::workspace(&ops.id), "STRIPE_KEY"), &Actor::Owner).expect("meta");
+        assert_eq!(m.status, k2_vault::SecretStatus::Disabled);
+        assert_eq!(v.handoff_get(&id, "out").expect("out").status, "unsent");
+        let lines: Vec<String> = k2_core::auth_audit::tail(1000)
+            .expect("tail")
+            .into_iter()
+            .filter(|e| e["event"] == AUDIT_EVENT)
+            .map(|e| e["outcome"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert!(lines.iter().any(|l| l.starts_with("ok ask STRIPE_KEY") && l.ends_with(&ask_id)), "{lines:?}");
+        assert!(lines.iter().any(|l| l.starts_with("ok unsend STRIPE_KEY") && l.contains(&id)), "{lines:?}");
+        assert!(lines.iter().any(|l| l.starts_with("deny unsend STRIPE_KEY") && l.ends_with("not_yours")), "{lines:?}");
+        assert!(!surfaces(&v, &[&sales, &ops]).contains(&secret));
+    });
+}

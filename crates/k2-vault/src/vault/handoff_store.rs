@@ -226,6 +226,118 @@ impl LocalVault {
         Ok(r)
     }
 
+    // ── asks (H5, §4.3) ─────────────────────────────────────────────
+
+    /// Record an ask (`ask_out`: this workspace asked; `ask_in`: a local
+    /// agent asked this one). Open for [`h::PENDING_DAYS`].
+    pub fn handoff_record_ask(&self, mut r: HandoffRecord) -> Result<HandoffRecord> {
+        if r.direction != "ask_out" && r.direction != "ask_in" {
+            return Err(VaultError::internal("an ask row"));
+        }
+        validate_name(&r.name, true)?;
+        r.status = "open".into();
+        r.created_at = ts(now());
+        r.expires_at = Some(ts(now() + chrono::Duration::days(h::PENDING_DAYS)));
+        let r2 = r.clone();
+        let e = Entry::new("ask", &r.sender_actor, &format!("ok:{}", r.direction)).consumer(r.peer_addr.clone());
+        self.mutate(false, |tx, keys| {
+            self.handoff_insert(tx, keys, &r2)?;
+            Ok(((), vec![e]))
+        })?;
+        Ok(r)
+    }
+
+    /// Close an open ask (`answered` / `expired`); false when it wasn't open.
+    pub fn handoff_close_ask(&self, id: &str, dir: &str, status: &str) -> Result<bool> {
+        let mut r = match self.handoff_get(id, dir) {
+            Ok(r) => r,
+            Err(e) if e.status == 404 => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        if r.status != "open" {
+            return Ok(false);
+        }
+        r.status = status.to_string();
+        r.decided_at = Some(ts(now()));
+        self.mutate(false, |tx, keys| {
+            self.handoff_write(tx, keys, &r)?;
+            Ok(((), vec![]))
+        })?;
+        Ok(true)
+    }
+
+    /// Does `workspace` have an open ask `id` to `peer_addr` for `name`
+    /// (still within its 7 days)? A reply that matches lands straight in
+    /// (R1).
+    pub fn handoff_ask_matches(&self, id: &str, workspace: &str, peer_addr: &str, name: &str) -> bool {
+        self.handoff_get(id, "ask_out")
+            .map(|a| {
+                a.local_workspace_id == workspace
+                    && a.status == "open"
+                    && a.peer_addr.eq_ignore_ascii_case(peer_addr)
+                    && a.name == name
+                    && !a.expires_at.as_deref().and_then(parse_ts).is_some_and(|x| x < now())
+            })
+            .unwrap_or(false)
+    }
+
+    // ── unsend (H5, §9) ─────────────────────────────────────────────
+
+    /// The sender takes back a delivery (§9). On this vault's `in` row: a
+    /// pending copy is dropped; a landed copy is disabled only if it is
+    /// still the version that delivery wrote (a person's replacement is
+    /// left alone). `peer_fp`: cross server, the row must come from that
+    /// peer. Honest limit: unsend is not a revoke; the receiver may already
+    /// have used the key. Returns the row and whether a copy was disabled.
+    pub fn handoff_unsend(&self, id: &str, peer_fp: Option<&str>, actor_label: &str) -> Result<(HandoffRecord, bool)> {
+        let mut r = self.handoff_get(id, "in")?;
+        if let Some(fp) = peer_fp {
+            if r.peer_fp.as_deref() != Some(fp) {
+                return Err(VaultError::forbidden("not_yours", "only the server that sent a delivery can take it back"));
+            }
+        }
+        let consumer = format!("ws:{}", r.local_workspace_id);
+        let mut disabled = false;
+        match r.status.as_str() {
+            "pending" => {
+                r.status = "unsent".into();
+                r.reason = Some("unsent".into());
+            }
+            "landed" => {
+                let current = match (&r.secret_id, r.version) {
+                    (Some(sid), Some(v)) => {
+                        let keys = self.keys.read();
+                        let conn = self.conn.lock();
+                        self.find_row(&conn, &keys, &Selector::Id(sid.clone()))
+                            .ok()
+                            .filter(|row| row.meta.latest_version == v && row.meta.status == SecretStatus::Active)
+                            .map(|row| row.meta.id)
+                    }
+                    _ => None,
+                };
+                if let Some(sid) = current {
+                    self.set_status(&Selector::Id(sid), &Actor::System(h::SYSTEM_ACTOR.into()), SecretStatus::Disabled)?;
+                    disabled = true;
+                    r.reason = Some("unsent".into());
+                } else {
+                    r.reason = Some("unsent_kept_replaced".into());
+                }
+                r.status = "unsent".into();
+            }
+            other => return Err(VaultError::conflict("not_unsendable", format!("that delivery is {other}"))),
+        }
+        r.decided_at = Some(ts(now()));
+        r.decided_by = Some(actor_label.to_string());
+        let r2 = r.clone();
+        let outcome = if disabled { "ok:disabled" } else { "ok" };
+        self.mutate(false, |tx, keys| {
+            tx.execute("DELETE FROM handoff_value WHERE delivery_id = ?1", params![r2.delivery_id])?;
+            self.handoff_write(tx, keys, &r2)?;
+            Ok(((), vec![Entry::new("unsend", actor_label, outcome).consumer(consumer)]))
+        })?;
+        Ok((r, disabled))
+    }
+
     /// Remember the Thread card a pending copy posted.
     pub fn handoff_set_card(&self, id: &str, card: &str) -> Result<()> {
         let mut r = self.handoff_get(id, "in")?;
@@ -594,6 +706,17 @@ impl LocalVault {
         }
         if !expired.is_empty() {
             self.checkpoint();
+        }
+        // Asks close after their 7 days (a late reply then pends).
+        for dir in ["ask_out", "ask_in"] {
+            let open: Vec<HandoffRecord> = self
+                .handoffs(None, Some(dir))?
+                .into_iter()
+                .filter(|r| r.status == "open" && r.expires_at.as_deref().and_then(parse_ts).is_some_and(|x| x < nowt))
+                .collect();
+            for r in open {
+                self.handoff_close_ask(&r.delivery_id, dir, "expired")?;
+            }
         }
         let stale: Vec<String> = {
             let conn = self.conn.lock();

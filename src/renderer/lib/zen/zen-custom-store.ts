@@ -5,7 +5,7 @@
 // - Calls: every `garden-local` verb (`store.*`, `save.*`, `viewer.get`)
 //   goes to THIS computer's daemon as `POST /cli/zen/call {garden,
 //   placement, hash, verb, args}` with the owner token. The daemon checks
-//   the placement, the live hash, the caps (with the Sources taint) and the
+//   the placement, the live hash, the caps (the manifest's, no taint since 0.46.1) and the
 //   widget maker's rights; this file only carries the call and turns the
 //   daemon's error envelope into the shared error list.
 // - `by`: the daemon answers `you`, `you via <widget>` or `agent:<handle>`;

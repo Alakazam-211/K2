@@ -35,7 +35,7 @@ export const K2_CAPS = {
   },
   'sources:read': {
     label: 'Read data sources',
-    sentence: "Read the data sources this card names, on the servers you're signed in to. Cards with this can't post to the Thread.",
+    sentence: "Read the data sources this card names, on the servers you're signed in to. With thread:post or store:write too, what it shows can reach agents.",
     exposure: ['widget'],
   },
   'agents:add': { label: 'Open Add agent', exposure: [] },

@@ -63,27 +63,28 @@ impl WidgetOrigin {
 /// The caps a widget runs with: requested ∩ [`USER_WIDGET_CAPS`], in
 /// [`USER_WIDGET_CAPS`] order, for a [`WidgetOrigin::Local`] widget. Pure.
 ///
-/// **Static taint (Garden v3, GV48).** A widget that asks for
-/// `sources:read` never gets `thread:post` (so no `thread.post`,
-/// `thread.answer` or `compose.draft`): a card that reads a server's data
-/// could otherwise post it to an agent anywhere on your Homes. K2's own
-/// `sources.ask` still opens the Ask box, with a draft K2 writes. The
-/// renderer applies the same rule (`zen-custom-bridge.ts`), and
-/// `k2 zen validate` warns `sources_drops_thread_post`.
+/// **Sources widgets keep what they ask for (Rosson 2026-10-17, 0.46.1).**
+/// Garden v3 (GV48) dropped `thread:post` and `store:write` from a widget
+/// that asks for `sources:read`. That split Fleet Ops cards in two (the
+/// Decisions card couldn't read the k2-watch list and keep its Draft button
+/// and editable lists). Rosson's ruling: a widget that reads sources may
+/// also post to the Thread and write its own store, **within the caps its
+/// manifest asks for**: the manifest is the per-widget cap list the owner
+/// approves by placing the widget in their own Garden. What stays:
 ///
-/// **Garden data taint** (prd-gardens-local-services-v1 §5.6,
-/// contract-garden-data-v1 §7.1 step 4): the same widget never gets
-/// `store:write` either, so it can't copy source values into a keyspace an
-/// agent can read. It keeps `store:read`, `save.*` and `viewer.get`
-/// (`save:` is never granted to anyone). Validate warns
-/// `sources_drops_store_write`.
+/// - a cap the manifest doesn't ask for is refused (`cap_not_granted`);
+/// - the rails: the runaway guard and its pause, the per-placement write
+///   budgets and the runaway-writes pause (`garden_data::budget`), one
+///   audit line per widget post (`zen.widget.post`), and the maker's rights
+///   on its keyspace;
+/// - `k2 zen validate` and `k2 zen widget show` say plainly that source
+///   values can reach the Thread or the widget's shared data
+///   ([`sources_reach_note`]), so the person sees it before placing it.
 pub fn effective_caps(origin: WidgetOrigin, requested: &[String]) -> Vec<String> {
-    let reads_sources = requested.iter().any(|r| r == SOURCES_READ);
     match origin {
         WidgetOrigin::Local => USER_WIDGET_CAPS
             .iter()
             .filter(|c| requested.iter().any(|r| r == *c))
-            .filter(|c| !(reads_sources && TAINTED_BY_SOURCES_ALL.contains(*c)))
             .map(|c| c.to_string())
             .collect(),
     }
@@ -92,20 +93,39 @@ pub fn effective_caps(origin: WidgetOrigin, requested: &[String]) -> Vec<String>
 /// The cap that lets a card read data sources (contract-sources-v1 §6).
 pub const SOURCES_READ: &str = crate::sources::SOURCES_READ_CAP;
 
-/// The cap a `sources:read` widget never runs with (GV48).
-pub const TAINTED_BY_SOURCES: &str = "thread:post";
+/// The cap that lets a widget post to the Thread.
+pub const THREAD_POST: &str = "thread:post";
 
-/// The Garden data cap a `sources:read` widget never runs with.
-pub const STORE_WRITE_TAINTED: &str = "store:write";
+/// The Garden data write cap.
+pub const STORE_WRITE: &str = "store:write";
 
-/// Every cap a `sources:read` widget loses.
-pub const TAINTED_BY_SOURCES_ALL: &[&str] = &[TAINTED_BY_SOURCES, STORE_WRITE_TAINTED];
+/// The `k2 zen validate` note for `sources:read` + `thread:post` (allowed
+/// since 0.46.1; the note makes the reach plain).
+pub const SOURCES_REACH_THREAD: &str = "sources_reach_thread";
 
-/// The `k2 zen validate` warning code for a manifest that asks for both.
-pub const SOURCES_DROPS_THREAD_POST: &str = "sources_drops_thread_post";
+/// The `k2 zen validate` note for `sources:read` + `store:write`.
+pub const SOURCES_REACH_STORE: &str = "sources_reach_store";
 
-/// The `k2 zen validate` warning for `sources:read` + `store:write`.
-pub const SOURCES_DROPS_STORE_WRITE: &str = "sources_drops_store_write";
+/// What a sources widget can do with the values it reads, for
+/// `widget show`: `None` when it reads no sources or asks for neither cap.
+pub fn sources_reach_note(caps: &[String]) -> Option<String> {
+    let has = |c: &str| caps.iter().any(|x| x == c);
+    if !has(SOURCES_READ) {
+        return None;
+    }
+    match (has(THREAD_POST), has(STORE_WRITE)) {
+        (true, true) => Some(
+            "reads data sources and may post to the Thread and save to its shared data: source values it shows can reach agents (it asked for thread:post and store:write)".into(),
+        ),
+        (true, false) => Some(
+            "reads data sources and may post to the Thread: source values it shows can reach the agents it posts to (it asked for thread:post)".into(),
+        ),
+        (false, true) => Some(
+            "reads data sources and may save to its shared data: agents granted that data can read what it saves (it asked for store:write)".into(),
+        ),
+        (false, false) => None,
+    }
+}
 
 /// 403 code: the post names a placement this computer's Gardens don't
 /// hold, a widget that isn't the one placed there, or a hash that isn't the
@@ -266,23 +286,28 @@ mod tests {
         assert_eq!(effective_caps(WidgetOrigin::Local, &[]), Vec::<String>::new(), "asks for nothing, gets nothing");
     }
 
-    /// GV48: asking for sources:read drops thread:post, whatever else is asked.
+    /// 0.46.1 (Rosson 2026-10-17): a sources reader keeps thread:post and
+    /// store:write when its manifest asks for them, and nothing it didn't ask for.
     #[test]
-    fn sources_read_drops_thread_post() {
+    fn sources_read_keeps_thread_post_and_store_write_it_asked_for() {
         let caps = effective_caps(WidgetOrigin::Local, &s(&["thread:post", "sources:read", "thread:read", "agents:read"]));
-        assert_eq!(caps, s(&["agents:read", "thread:read", "sources:read"]));
-        let plain = effective_caps(WidgetOrigin::Local, &s(&["thread:post"]));
-        assert_eq!(plain, s(&["thread:post"]), "without sources:read nothing changes");
+        assert_eq!(caps, s(&["agents:read", "thread:read", "thread:post", "sources:read"]));
+        let caps = effective_caps(WidgetOrigin::Local, &s(&["store:write", "store:read", "sources:read"]));
+        assert_eq!(caps, s(&["sources:read", "store:read", "store:write"]));
+        let only = effective_caps(WidgetOrigin::Local, &s(&["sources:read"]));
+        assert_eq!(only, s(&["sources:read"]), "a sources reader gets no post or write it didn't ask for");
     }
 
-    /// Garden data: asking for sources:read drops store:write too, and keeps
-    /// store:read (contract-garden-data-v1 §7.1 step 4).
     #[test]
-    fn sources_read_drops_store_write_and_keeps_store_read() {
-        let caps = effective_caps(WidgetOrigin::Local, &s(&["store:write", "store:read", "sources:read"]));
-        assert_eq!(caps, s(&["sources:read", "store:read"]));
-        let plain = effective_caps(WidgetOrigin::Local, &s(&["store:write", "store:read"]));
-        assert_eq!(plain, s(&["store:read", "store:write"]), "without sources:read a widget keeps both");
+    fn the_reach_note_names_what_source_values_can_reach() {
+        assert_eq!(sources_reach_note(&s(&["thread:post", "store:write"])), None, "no sources, no note");
+        assert_eq!(sources_reach_note(&s(&["sources:read", "store:read"])), None);
+        let t = sources_reach_note(&s(&["sources:read", "thread:post"])).expect("thread note");
+        assert!(t.contains("post to the Thread") && !t.contains("shared data"), "{t}");
+        let w = sources_reach_note(&s(&["sources:read", "store:write"])).expect("store note");
+        assert!(w.contains("shared data") && !w.contains("Thread"), "{w}");
+        let both = sources_reach_note(&s(&["sources:read", "thread:post", "store:write"])).expect("both");
+        assert!(both.contains("Thread") && both.contains("shared data"), "{both}");
     }
 
     #[test]

@@ -663,13 +663,30 @@ function sourcesHarness(bound: string[] = ['fleet', 'deploys::akzm.k2.dev']): {
 }
 
 describe('Garden v3: sources.* verbs', () => {
-  it('GV48: asking for sources:read drops thread:post, even if the daemon sent it', async () => {
+  it('0.46.1: a sources reader posts to the Thread when it asked for thread:post, and is refused when it did not', async () => {
     const { h } = sourcesHarness()
-    h.widget.current = payload({ caps: ['thread:post', 'sources:read'] as never, requested: ['thread:post', 'sources:read'] as never })
+    h.widget.current = payload({
+      caps: ['thread:post', 'sources:read'] as never,
+      requested: ['thread:post', 'sources:read'] as never,
+      sourceAddresses: ['fleet'],
+    })
     const layer = createZenCustomLayer(h.deps)
-    expect(code(await call(layer, 'thread.post', 'alice::local', 'hi'))).toBe('cap_not_granted')
-    expect(code(await call(layer, 'compose.draft', 'alice::local', 'hi'))).toBe('cap_not_granted')
-    expect(zenEffectiveCaps({ caps: ['thread:post'] as never, requested: ['thread:post'] as never }).has('thread:post')).toBe(true)
+    expect(await call(layer, 'thread.post', 'alice::local', 'box ohana is behind target')).toMatchObject({ ok: true })
+    const posts = () => h.calls.filter((c) => c.verb === 'thread.post')
+    expect(posts().map((c) => c.args[1])).toEqual(['box ohana is behind target'])
+    expect(await call(layer, 'sources.read', 'fleet')).toMatchObject({ ok: true })
+    expect(zenEffectiveCaps({ caps: ['thread:post', 'sources:read'] as never, requested: ['thread:post', 'sources:read'] as never })).toEqual(
+      new Set(['thread:post', 'sources:read']),
+    )
+    // Outside its caps: no thread:post in the manifest → refused, nothing sent.
+    h.widget.current = payload({ caps: ['sources:read'] as never, requested: ['sources:read'] as never, sourceAddresses: ['fleet'] })
+    const plain = createZenCustomLayer(h.deps)
+    expect(code(await call(plain, 'thread.post', 'alice::local', 'hi'))).toBe('cap_not_granted')
+    expect(code(await call(plain, 'compose.draft', 'alice::local', 'hi'))).toBe('cap_not_granted')
+    // A cap the daemon sent but the manifest never asked for is dropped too.
+    h.widget.current = payload({ caps: ['thread:post', 'sources:read'] as never, requested: ['sources:read'] as never })
+    expect(code(await call(createZenCustomLayer(h.deps), 'thread.post', 'alice::local', 'hi'))).toBe('cap_not_granted')
+    expect(posts()).toHaveLength(1)
   })
 
   it('sources.read: a bound address answers its card view; others are not_bound', async () => {

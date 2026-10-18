@@ -2,21 +2,17 @@
 //! what one widget is doing, for the agent that builds it. Each placement
 //! with its Garden, whether that Garden is locked, whether the runaway
 //! guard paused it, and the source addresses it reads; the caps it asked
-//! for and the caps it runs with, with the taint note when `sources:read`
-//! dropped `thread:post` (GV48); and its runtime record for the version on
-//! disk now (`widget_runs`).
+//! for and the caps it runs with, with the reach note when a widget that
+//! reads sources may also post or save (0.46.1, `sources_reach_note`); and
+//! its runtime record for the version on disk now (`widget_runs`).
 
 use serde_json::{json, Value as J};
 
 use crate::zen::builtin_widgets::{parse_widget_ref, WidgetRef};
 use crate::zen::store::{ZenError, ZenFile, ZenFiles};
-use crate::zen::widget_access::{effective_caps, WidgetOrigin, WidgetPauses, SOURCES_READ, TAINTED_BY_SOURCES};
+use crate::zen::widget_access::{effective_caps, sources_reach_note, WidgetOrigin, WidgetPauses};
 use crate::zen::widget_store::widget_label;
 use crate::zen::widgets;
-
-/// The note `show` prints when `sources:read` dropped `thread:post`.
-pub const TAINT_NOTE: &str =
-    "thread:post is dropped: a widget that reads data sources can't post to the Thread (k2.sources.ask opens K2's Ask box instead)";
 
 impl ZenFiles {
     /// GET `/cli/zen/widget/show?widget=<name|k2:ref>`.
@@ -36,13 +32,9 @@ impl ZenFiles {
         let requested = st.requested();
         let origin = WidgetOrigin::of(&name);
         let caps = effective_caps(origin, &requested);
-        let dropped: Vec<&str> = requested
-            .iter()
-            .filter(|c| !caps.contains(c))
-            .map(String::as_str)
-            .filter(|c| *c == TAINTED_BY_SOURCES)
-            .collect();
-        let taint = requested.iter().any(|c| c == SOURCES_READ) && !dropped.is_empty();
+        // Asked for but not run with (a cap this K2 doesn't give widgets).
+        let dropped: Vec<&str> = requested.iter().filter(|c| !caps.contains(c)).map(String::as_str).collect();
+        let reach = sources_reach_note(&caps);
         let sources = st.manifest.as_ref().and_then(|m| m.sources.clone());
 
         let mut placements = Vec::new();
@@ -94,7 +86,7 @@ impl ZenFiles {
             "requested": requested,
             "caps": caps,
             "dropped": dropped,
-            "taint": if taint { J::String(TAINT_NOTE.into()) } else { J::Null },
+            "reach": reach,
             "sources": sources,
             "placements": placements,
             "runtime": runtime,

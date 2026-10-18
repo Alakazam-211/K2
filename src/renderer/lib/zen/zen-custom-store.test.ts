@@ -254,17 +254,22 @@ describe('the custom layer: Garden data verbs', () => {
     expect(new Set(seen)).toEqual(new Set([...ZEN_STORE_VERBS].filter((v) => v !== 'viewer.get')))
   })
 
-  it('caps: no store caps → cap_not_granted (saves still work); sources:read drops store:write; no store → verb_unavailable', async () => {
+  it('caps: no store caps → cap_not_granted (saves still work); sources:read keeps store:write it asked for; no store → verb_unavailable', async () => {
     const f = fake(() => null)
     const none = layerWith(createZenCustomStore(f.deps), payload({ caps: [], requested: [] }))
     expect(await ask(none.layer, 'store.get', 'k')).toMatchObject({ ok: false, error: { code: 'cap_not_granted', cap: 'store:read' } })
     expect(await ask(none.layer, 'save.set', 'k', 1)).toMatchObject({ ok: true })
-    const tainted = layerWith(
+    const reader = layerWith(
       createZenCustomStore(f.deps),
       payload({ caps: ['store:read', 'store:write', 'sources:read'], requested: ['store:read', 'store:write', 'sources:read'] }),
     )
-    expect(await ask(tainted.layer, 'store.put', 'k', 1)).toMatchObject({ ok: false, error: { code: 'cap_not_granted' } })
-    expect(await ask(tainted.layer, 'store.get', 'k')).toMatchObject({ ok: true })
+    expect(await ask(reader.layer, 'store.put', 'k', 1)).toMatchObject({ ok: true })
+    expect(await ask(reader.layer, 'store.get', 'k')).toMatchObject({ ok: true })
+    const readOnly = layerWith(
+      createZenCustomStore(f.deps),
+      payload({ caps: ['store:read', 'sources:read'], requested: ['store:read', 'sources:read'] }),
+    )
+    expect(await ask(readOnly.layer, 'store.put', 'k', 1)).toMatchObject({ ok: false, error: { code: 'cap_not_granted', cap: 'store:write' } })
     const bare = layerWith(undefined)
     expect(await ask(bare.layer, 'store.get', 'k')).toMatchObject({ ok: false, error: { code: 'verb_unavailable' } })
   })

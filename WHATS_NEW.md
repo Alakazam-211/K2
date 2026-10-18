@@ -93,6 +93,13 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Limits up front.** A `--timeout` over the grant is refused before anything is sent, with the grant and the command to raise it. A job too big for its node is refused at submit; one already queued is failed with the reason and you get its message. A job killed for memory gets a hint.
 - **Let an agent look after your compute machines.** A new Agent switch, "Allow managing compute nodes" (Settings → Workspaces → <agent> → Agent, or `k2 compute manage on --workspace <ws>`), lets that agent add and confirm machines, rename, pause, drain, resume, retire and route them, and grant or revoke them for any workspace, without asking you. Every act is in Access Audit, and adding or confirming a machine sends you an inbox note. Turning compute on or off, removing a machine and the switch itself stay yours. It's off by default, only you (the owner) can turn it on, and it only works for agents on this computer.
 
+### Project settings
+- **A calmer project settings page.** Settings → Projects now shows one project in two halves: General and Dashboards on the left, Agents on the right. Each half scrolls on its own, the dashboard picker stays in view, and on a narrow window the halves stack. The second row of tabs is gone.
+- **What you can change follows who you are.** Admins can change everything again, even with the window on the eye, and members see a short note saying what only the owner or an admin can change. Only the owner or an admin can delete a project, since that removes its chat too; agents can't.
+- **Adding a file to a dashboard no longer undoes someone else's change.** K2 adds or removes that one file itself, so two people editing a dashboard at the same time both keep their changes.
+- **No more dead ends.** If the project list can't load you get the reason and Retry, not an endless "Loading…". "Open project" takes you straight to it, and right-clicking a project (in the list or the narrow rail) offers Project Settings. Labels say "Point of contact" in full.
+- **`k2 project rename`, `pin` and `delete`.** Rename or pin a project from the terminal; `k2 project delete <project> --yes` deletes one (owner or admin only).
+
 ### CLI fixes
 - **`k2 msg who <id>` only ever looks up a sender.** An id that didn't start with `m_` used to send a live message to a workspace named "who".
 - **Clear answers when a command is refused or finds nothing.** `k2 settings` from an agent now says it needs the owner or an admin instead of showing blank settings. `k2 inbox read` with an unknown id says so. `k2 users list` from an agent points to `k2 connections list --users`. `k2 compute get` with an unknown job exits 4. `k2 sources` shows one hint, not two.

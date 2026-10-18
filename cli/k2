@@ -11306,6 +11306,7 @@ cmd_thread() {
         secret) cmd_thread_secret "$@"; return $? ;;
         void) cmd_thread_void "$@"; return $? ;;
         export|import|imports) cmd_thread_transfer "$@"; return $? ;;
+        unread) cmd_thread_unread "$@"; return $? ;;
         post)
             echo "Error: no 'post' subcommand — use  k2 thread <addr> \"text\"" >&2
             exit 1 ;;
@@ -11692,6 +11693,54 @@ print(d.get("id",""))
 '
 }
 
+# thread-read-v1 (0.46.1): `k2 thread unread` — read-only, a person's own
+# unread / waiting counts (GET /cli/thread/unread). Agent passports get 403.
+cmd_thread_unread() {
+    local kind="" json="false"
+    shift # "unread"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --kind) kind="$2"; shift 2 ;;
+            --json) json="true"; shift ;;
+            *) echo "Error: unknown argument '$1' (k2 thread unread [--kind thread|project] [--json])" >&2; exit 1 ;;
+        esac
+    done
+    local params=""
+    [[ -n "$kind" ]] && params="kind=$(urlencode "$kind")"
+    local response
+    response=$(cli_send cli_request "/cli/thread/unread" "$params")
+    local rc=$?
+    if [[ "$json" == "true" ]]; then
+        echo "$response"
+        return $rc
+    fi
+    echo "$response" | python3 -c 'import json,sys
+raw=sys.stdin.read()
+try:
+    d=json.loads(raw)
+except Exception:
+    sys.stdout.write(raw)
+    sys.exit(2)
+if d.get("ok") is not True:
+    err=d.get("error") or d
+    if isinstance(err, dict):
+        sys.stderr.write("%s: %s\n" % (err.get("code") or "error", err.get("hint") or err))
+    else:
+        sys.stderr.write(str(err)+"\n")
+    sys.exit(2)
+print("%s: %s unread+waiting (badge), %s waiting" % (d.get("person",""), d.get("total",0), d.get("waitingTotal",0)))
+for c in d.get("byConversation") or []:
+    n = c.get("unread",0)
+    shown = "99+" if n > 99 else str(n)
+    flags = []
+    if c.get("waiting"):
+        flags.append("%s waiting" % c["waiting"])
+    if c.get("muted"):
+        flags.append("muted")
+    print("  %-7s %s  unread=%s%s" % (c.get("kind",""), c.get("id",""), shown, ("  (" + ", ".join(flags) + ")") if flags else ""))
+'
+}
+
 cmd_help_thread() {
     cat <<'EOF'
 k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
@@ -11707,6 +11756,8 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
       `k2 vault fetch --secret NAME …`. The person can change the sites, the scope and
       how you get it. Exact hosts only. More: k2 study vault
   k2 thread void <addr> <card-id>                 # close your own card when it is obsolete
+  k2 thread unread [--kind thread|project] [--json]  # a PERSON's unread + waiting counts
+      (owner token or a K2 login; agents have no read state and get 403)
 
 <addr> is the same first-arg grammar as k2 msg: sales / sales/reviewer / sales/1.
 sales = live alias for pinned Chat now. sales/reviewer is durable.
@@ -26939,8 +26990,15 @@ WHO GETS IT
   Each person chooses: a bell per server, and a switch per workspace
   (Settings → Notifications, the workspace's Agent tab, or the phone).
   Admins set what new people get per workspace. Someone reading that
-  Thread right now (desktop or phone) is not pushed.
+  Thread right now (desktop or phone) is not pushed. Someone who muted
+  that Thread is never pushed by it.
   You can't see or change anyone's choice. There is no `k2 notify`.
+
+UNREAD AND WAITING (0.46.1)
+  Each person has their own unread count per Thread: your posts count
+  as unread for them until they read. A choice or secret card stays
+  "waiting on you" until it is answered, dismissed, voided or expires;
+  reading never clears it. Agents have no unread state of their own.
 
 POST LIKE IT RINGS
   Posts within 45 s fold into one push ("3 new messages · <latest>").

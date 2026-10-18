@@ -94,6 +94,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - The "Which account is yours?" prompt uses the same square radio buttons as the rest of K2.
 - **Completion sound volume and choice.** Settings → General → Workspaces sets the completion sound's volume and picks one of five chimes, the same on every client.
 - **Linux packages update in the app.** On Arch, deb and rpm installs, Install & Relaunch checks the package against the release's checksums, installs it with your password and restarts the local daemon.
+- Terminals no longer drop a character after an accented letter that lands on a read boundary ("ïcø" could show as "ïø"). K2 now ships a patched copy of the terminal parser.
+- On Linux, an agent killed for using too much memory no longer stops and restarts the whole K2 daemon. Only that agent stops, and your other sessions and the tunnel stay up. Existing servers pick this up when they update.
 
 ## 0.46.0 — Runtime for Apps
 

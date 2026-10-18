@@ -426,8 +426,9 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   export`). Every call needs a grant the person gave (Settings → Gardens → Local Data,\n\
   or `k2 zen data grant`), or one a grant admin gave. `k2 store grants --widget <w>`\n\
   says what you can touch and why.\n\
-- **After editing a widget, run `k2 zen validate --widget <w>`: it signs the widget as\n\
-  you, and the widget then reads and writes data with YOUR grants.** An unsigned\n\
+- **After editing a widget, run `k2 zen validate --widget <w> --sign`: it signs the widget as\n\
+  you, and the widget then reads and writes data with YOUR grants.** (`k2 zen widget sign\n\
+  <w>` signs alone; a plain validate never signs.) An unsigned\n\
   version gets no data (`author_unknown`). Never sign with the owner token (never use\n\
   `~/.k2/daemon.token`), and never edit a widget the person made unless they ask.\n\
 - **Project grants are a convenience; any agent can join a project.** Don't add yourself\n\
@@ -620,8 +621,23 @@ document.querySelector('#grip').addEventListener('mousedown', (e) => {\n\
    working example into `~/.k2/zen/widgets/<name>/`.\n\
 2. Edit the folder; place it in a Garden (`kind = \"custom\"`, `widget = \"<name>\"`).\n\
 3. `k2 zen validate --widget <name>` and `k2 zen validate --garden <id>` before you say\n\
-   it's done. A folder with errors keeps serving its last good version.\n\
+   it's done. A folder with errors keeps serving its last good version. A plain\n\
+   validate never signs; \"pending\" (placed, not run in a Zen window yet) exits 0\n\
+   (`--strict` exits 2).\n\
 4. Tell the human it's ready: it talks to their agents as soon as it's placed.\n\
+\n\
+**Keep the widget outside `~/.k2` (the dev loop).** Stage the folder in your\n\
+workspace and go through K2; never copy files into `~/.k2` yourself:\n\
+- `k2 zen validate --dir ./board` checks the staged folder like a widget folder and\n\
+  writes nothing (Zen needn't be set up).\n\
+- `k2 zen widget preview --dir ./board [--config sources=fleet,deploys]` places it\n\
+  alone on K2's own \"Widget preview\" Garden as `preview-<name>` (never one of the\n\
+  human's Gardens); `--clear` removes it. Person, or an agent with the switch.\n\
+- `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\n\
+  checked call (a folder with errors writes nothing). Without \"Manage Gardens and\n\
+  data sources\" it becomes one proposal per changed code file.\n\
+- `k2 zen validate --garden <id> --from page.toml` checks a staged Garden page;\n\
+  `k2 zen garden put <id> --from page.toml` writes it.\n\
 5. `k2 zen widget list` shows each widget's state and placements; `k2 zen history --widget\n\
    <name>` and `k2 zen reset --widget <name> --to <utc>` undo a bad edit. To stop a\n\
    widget, take its `[[widget]]` out of the Garden file.\n\n\
@@ -913,7 +929,7 @@ mod tests {
             "never inline data into the widget's code",
             "**Agents use `k2 store --widget <name>`**",
             "**A locked Garden's data still changes**",
-            "run `k2 zen validate --widget <w>`: it signs the widget as\nyou",
+            "run `k2 zen validate --widget <w> --sign`: it signs the widget as\nyou",
             "the widget then reads and writes data with YOUR grants.",
             "version gets no data (`author_unknown`)",
             "write Board data through `bin/board`",
@@ -925,6 +941,26 @@ mod tests {
             "never edit a widget the person made unless they ask",
             "`k2 zen guide example board-lite`",
             "- `board-lite`: sticky notes",
+        ] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+    }
+
+    /// v21: the widget dev loop (0.46.1 S3): stage outside ~/.k2, check,
+    /// preview, write whole; validate signs only with --sign.
+    #[test]
+    fn skill_documents_the_widget_dev_loop() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 21, "the dev loop needs a new skill version");
+        let s = generate_k2_zen_skill();
+        for needle in [
+            "**Keep the widget outside `~/.k2` (the dev loop).**",
+            "`k2 zen validate --dir ./board` checks the staged folder",
+            "`k2 zen widget preview --dir ./board [--config sources=fleet,deploys]`",
+            "(never one of the\nhuman's Gardens)",
+            "`k2 zen widget put board --dir ./board [--prune]` writes the whole folder",
+            "`k2 zen validate --garden <id> --from page.toml`",
+            "A plain\nvalidate never signs",
+            "`--strict` exits 2",
         ] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }

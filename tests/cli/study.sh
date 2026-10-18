@@ -104,6 +104,12 @@ python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="app-hea
 echo "  PASS: app-heartbeats --json id+body"
 pass=$((pass + 1))
 
+echo "== k2 study zen: the widget dev loop (0.46.1 S3) =="
+zen_out="$("$K2" study zen)"
+for needle in "THE WIDGET DEV LOOP (keep your widget outside ~/.k2)" "k2 zen validate --dir ./board" "k2 zen widget preview --dir ./board" "never one of the person's" "k2 zen widget put board --dir ./board" "--from page.toml" "validate never signs (--widget --sign does)" "--strict keeps exit 2"; do
+    assert_contains "study zen names $needle" "$zen_out" "$needle"
+done
+
 echo "== k2 study agent-hire (0.45.6 agent hire through the v1 API) =="
 ah_out="$("$K2" study agent-hire)"
 for needle in "POST /v1/agents/hire" "Idempotency-Key" "k2 api-key create --hire" "owner confirm" "managed_by_link" "k2 msg who" "app-asserted" "retire_blocked" "stay retired" "never the box login"; do

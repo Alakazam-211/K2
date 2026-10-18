@@ -8,6 +8,10 @@
 //   Projects  Zen's Projects view (coming soon);
 //   Tickets   Zen's Tickets view, with the top bar's waiting badge.
 //
+// 0.46.1 (thread-read-v1): Agents carries this person's Thread badge
+// (unread + cards waiting; needs-you colour when a card waits) and
+// Projects the project chats with something unread (`app.badges`).
+//
 // The view shown is the current item (`aria-current`). ZenPage draws a rail
 // kind at the left edge of its column, outside the column's box. About
 // 44px wide, icons only.
@@ -40,7 +44,7 @@ import { useEffect, useId, useState } from 'react'
 import { LayoutGroup, motion, type Transition } from 'motion/react'
 import { AgentsIcon, HomeIcon, ProjectsIcon, TicketsIcon, type K2IconProps } from '@/components/icons/K2Icons'
 import { badgeText, PAGE_TAB_LABELS } from '@/components/TopBar/PageTabs'
-import type { ZenAppBadges, ZenAppPage } from '@/lib/zen/zen-app-nav'
+import type { ZenAppBadges, ZenAppCountBadge, ZenAppPage } from '@/lib/zen/zen-app-nav'
 import { ZEN_GLASS_PROPS } from '@/lib/zen/zen-glass'
 import { ZEN_GLASS_PILL_PROPS } from '@/lib/zen/zen-materials'
 import { REDUCED_MOTION_QUERY, zenMediaMatches } from '@/lib/zen/zen-theme'
@@ -188,6 +192,39 @@ function SelectionPill({ scope, reducedMotion }: { scope: string; reducedMotion:
   )
 }
 
+/** 0.46.1: an unread count on Agents or Projects ("99+" past 99). */
+function CountBadge({ badge, page }: { badge: ZenAppCountBadge | undefined; page: 'agents' | 'projects' }): React.JSX.Element | null {
+  if (!badge || !(badge.badge > 0)) return null
+  const text = badge.badge > 99 ? '99+' : String(badge.badge)
+  const title =
+    page === 'agents'
+      ? `${badge.badge} unread or waiting in your Threads${badge.waiting ? ' (a card waits on you)' : ''}`
+      : `${badge.badge} project chat${badge.badge === 1 ? '' : 's'} with something unread`
+  return (
+    <span
+      data-zen-nav-count={page}
+      data-waiting={badge.waiting ? 'true' : 'false'}
+      title={title}
+      className="absolute flex items-center justify-center"
+      style={{
+        zIndex: 2,
+        top: -2,
+        right: -2,
+        minWidth: 14,
+        height: 14,
+        padding: '0 3px',
+        borderRadius: 999,
+        fontSize: 8,
+        fontWeight: 700,
+        background: badge.waiting ? 'var(--zen-needs-you)' : 'var(--zen-accent)',
+        color: 'var(--zen-accent-text)',
+      }}
+    >
+      {text}
+    </span>
+  )
+}
+
 export function ZenNavRailWidget({ bridge, decl }: ZenWidgetProps): React.JSX.Element {
   const badges = useBadges(bridge)
   const view = useCurrentView(bridge)
@@ -248,6 +285,7 @@ export function ZenNavRailWidget({ bridge, decl }: ZenWidgetProps): React.JSX.El
               <span className="relative flex items-center justify-center" style={{ zIndex: 1 }}>
                 <Icon />
               </span>
+              {(page === 'agents' || page === 'projects') && <CountBadge badge={badges[page]} page={page} />}
               {page === 'tickets' && tickets !== null && (
                 <span
                   data-zen-nav-badge=""

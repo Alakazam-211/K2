@@ -10,7 +10,8 @@
 // (`agent`: a row address, handle or name).
 //
 // Display props (the daemon sends every prop, defaults filled):
-// `server-tag`, `preview` and `status` (which live statuses show).
+// `server-tag`, `preview`, `status` (which live statuses show) and
+// `unread` (0.46.1: unread and waiting counts on rows and pins).
 //
 // One row per Home row, in Home order (⌘1–9 selects row N of the page's
 // first Agents widget). Each row: avatar (the agent's picture when it has
@@ -19,7 +20,9 @@
 // (working, monitoring, needs you, no update, idle — the daemon's display,
 // prd-daemon-activity-and-thread-working-v1 Q13; no status when its server
 // can't say), and the
-// start of its last message. No unread dots (answer 9). A row that can't be
+// start of its last message. 0.46.1 (thread-read-v1, supersedes answer 9):
+// this person's unread count and the cards waiting on them, on list rows
+// and on the pin grid's pictures (`unread`, on by default). A row that can't be
 // messaged says why ("Offline", "Sign in", "No access", "Update <server>").
 // Selecting a row opens its conversation in place (`conversation.open`):
 // never a window server switch. ⌘↑ / ⌘↓ move between conversations.
@@ -122,6 +125,7 @@ function displayRow(row: ZenAgentRow, props: Record<string, unknown>): ZenAgentR
     ...row,
     server: propOn(props, 'server-tag') ? row.server : null,
     preview: propOn(props, 'preview') ? row.preview : null,
+    unread: propOn(props, 'unread') ? (row.unread ?? null) : null,
     activity,
   }
 }
@@ -596,6 +600,12 @@ function PinCell({ row, avatarPx, onOpen }: { row: ZenAgentRow; avatarPx: number
           <span className="absolute" style={{ right: 1, bottom: 1, lineHeight: 0 }}>
             <ZenStatusDot row={row} size={dotPx} />
           </span>
+          {row.unread ? (
+            // 0.46.1: the unread / waiting counts at the picture's top right.
+            <span className="absolute" data-zen-pin-unread="" style={{ right: -6, top: -4 }}>
+              <ZenUnreadPills unread={row.unread} />
+            </span>
+          ) : null}
         </span>
         <span className="block w-full truncate" data-zen-pin-name="" style={{ fontSize: '0.8em', maxWidth: 110 }}>
           {row.label}

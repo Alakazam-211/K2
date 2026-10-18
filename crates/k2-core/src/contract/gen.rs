@@ -48,8 +48,9 @@ pub const CLI_END: &str = "# <<< generated";
 pub const REGEN: &str = "run `cargo run -p k2-core --bin contract-gen`";
 
 /// The frame script's size cap (UWA5; 16 KiB until Garden data's 15 rows
-/// and SDK helpers, contract-garden-data-v1 §7.2/§7.4, raised it).
-pub const FRAME_MAX_BYTES: usize = 24 * 1024;
+/// and SDK helpers, contract-garden-data-v1 §7.2/§7.4, raised it to 24;
+/// 0.46.1's resilient subscriptions, typed errors and shape guards to 28).
+pub const FRAME_MAX_BYTES: usize = 28 * 1024;
 
 /// The guide page's line cap (FC33; 80 until Garden data's 15 rows and
 /// their two cap groups, contract-garden-data-v1 §7.2).
@@ -460,7 +461,9 @@ pub const SDK_SURFACE_EXTRAS: &[(&str, &[&str])] = &[
         "store",
         &[
             "  /** Live changes under a prefix, from any writer (you, this widget, agents). The first delivery is the whole current state, then one per rev (never half of one). `since` resumes after a rev you have. Counts toward the 16 live subscriptions. This computer only. */",
-            "  subscribe(prefix: string | { prefix?: string; since?: number }, cb: (delivery: StoreDelivery) => void, onError?: (error: K2Error) => void): () => void",
+            "  subscribe(prefix: string | { prefix?: string; since?: number; from?: string }, cb: (delivery: StoreDelivery) => void, onError?: (error: K2Error) => void): () => void",
+            "  /** Handler object: re-subscribes on its own after a retryable refusal; a delivery that isn't a StoreDelivery reaches `error` as bad_shape. */",
+            "  subscribe(prefix: string | { prefix?: string; since?: number; from?: string }, handlers: K2Handlers<StoreDelivery>): () => void",
             "  /** A transaction: add op parts (1,000 ops and 1 MiB in all), then commit them as one rev, or abort. This computer only. */",
             "  tx(): StoreTxHandle",
             "  /** Save text over 60 KiB (at most 1 MiB) as parts `<key>/~0`… plus a header at `<key>`, in one transaction. This computer only. */",
@@ -506,7 +509,13 @@ fn k2_dts(c: &Catalog) -> Result<String, String> {
                     let mut a = args.clone();
                     a.push(format!("cb: (value: {value}) => void"));
                     a.push("onError?: (error: K2Error) => void".into());
-                    format!("  {action}({}): () => void", a.join(", "))
+                    let mut h = args.clone();
+                    h.push(format!("handlers: K2Handlers<{value}>"));
+                    format!(
+                        "  {action}({}): () => void\n  /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */\n  {action}({}): () => void",
+                        a.join(", "),
+                        h.join(", ")
+                    )
                 }
             };
             surfaces.entry(surface).or_default().push(format!("{}{method}", helper_doc(v)));
@@ -527,8 +536,10 @@ fn k2_dts(c: &Catalog) -> Result<String, String> {
     }
     let codes = c.errors.iter().map(|e| ts_str(&e.code)).collect::<Vec<_>>().join(" | ");
     s.push_str(&format!("/** The shared error codes (UWA10). */\nexport type K2ErrorCode = {codes}\n\n"));
+    let retry = c.errors.iter().filter(|e| e.retryable).map(|e| ts_str(&e.code)).collect::<Vec<_>>().join(" | ");
+    s.push_str(&format!("/** Codes worth retrying unchanged (catalog `retryable`); handler-object subscriptions retry these on their own. */\nexport type K2_RETRYABLE = {retry}\n\n"));
     s.push_str(
-        "/** What `k2.connected` resolves with: the hello K2 sent this frame. */\nexport interface K2Hello {\n  readonly caps: string[]\n  readonly features: string[]\n  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n  readonly config: Readonly<Record<string, string | number | boolean>>\n  readonly motion: { readonly reduced: boolean }\n}\n\n/** A refused call rejects with this. */\nexport interface K2Error extends Error {\n  readonly name: 'K2Error'\n  readonly code: K2ErrorCode\n  readonly verb: string\n  readonly cap?: string\n  readonly room?: string\n  readonly feature?: string\n  /** `unreachable` from a sources verb: the last view K2 has (phase stale). */\n  readonly last?: unknown\n}\n\n",
+        "/** What `k2.connected` resolves with: the hello K2 sent this frame. */\nexport interface K2Hello {\n  readonly caps: string[]\n  readonly features: string[]\n  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n  readonly config: Readonly<Record<string, string | number | boolean>>\n  readonly motion: { readonly reduced: boolean }\n}\n\n/** A refused call rejects with this; `k2.K2Error` is the class (`err instanceof k2.K2Error`). */\nexport interface K2Error extends Error {\n  readonly name: 'K2Error'\n  readonly code: K2ErrorCode\n  readonly verb: string\n  /** Worth trying again unchanged (`K2_RETRYABLE`). */\n  readonly retryable: boolean\n  readonly cap?: string\n  readonly room?: string\n  readonly feature?: string\n  /** `unreachable` from a sources verb: the last view K2 has (phase stale). */\n  readonly last?: unknown\n  /** Handler-object subscriptions: K2 will try again (true) or the subscription ended (false). */\n  readonly retrying?: boolean\n  /** Handler-object subscriptions: refusals in a row (1 = the first). */\n  readonly attempt?: number\n}\n\n/** A handler-object subscription (0.46.1). `data` gets each value, after the runtime's shape guard (a sources view is normalised: `items` is a list, `fields` an object). `error` gets every refusal: with `retrying` true K2 re-subscribes on its own after 1, 2, 4, 8, 16 then every 30 s; with `retrying` false (not retryable) it has ended. `state` hears `live`, `retrying` and `ended`. Nothing is called after the returned unsubscribe. */\nexport interface K2Handlers<T> {\n  data(value: T): void\n  error?(error: K2Error): void\n  state?(state: 'live' | 'retrying' | 'ended'): void\n}\n\n/** A card view after `k2.shape.view`: always the keys a card draws from. */\nexport interface K2SafeView {\n  name: string\n  label: string\n  health: 'ok' | 'warn' | 'crit' | 'unknown'\n  phase: 'pending' | 'live' | 'stale' | 'paused'\n  display: string\n  reason: string | null\n  reasonText: string | null\n  fields: Record<string, unknown>\n  items: Array<{ key: string; list?: string; health: 'ok' | 'warn' | 'crit' | 'unknown'; reason: string | null; fields: Record<string, unknown>; soft: { count: number; of: number; level: string | null } }>\n  counts: { ok: number; warn: number; crit: number; unknown: number }\n  soft: { count: number; of: number; level: string | null }\n  serverNow: number\n  updatedAt: number | null\n  [key: string]: unknown\n}\n\n/** Guards for data you didn't make (0.46.1): each returns a safe value, never throws. */\nexport interface K2Shape {\n  /** A sources card view, normalised; null when `v` isn't one. */\n  view(v: unknown): K2SafeView | null\n  /** `v` if it is a list, else []. */\n  list(v: unknown): unknown[]\n  /** `v` if it is a plain object, else {}. */\n  obj(v: unknown): Record<string, unknown>\n  /** A finite number, else `fallback` (0). */\n  num(v: unknown, fallback?: number): number\n  /** A string, else `fallback` (''); cut to `max` characters when given. */\n  str(v: unknown, fallback?: string, max?: number): string\n}\n\n",
     );
     s.push_str(&format!(
         "/** Every widget verb: its arguments and what it answers (or pushes). */\nexport interface K2Verbs {{\n{}\n}}\n\n",
@@ -572,7 +583,7 @@ const WIDGET_MEMBER_LINE: &str = "  readonly widget: { readonly id: string; read
 
 /// The end of `interface K2`: the runtime's own members.
 const K2_TAIL: &str =
-        "  /** Any widget verb by name; a refused call rejects with K2Error. */\n  call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>\n  /** Subscribe by name; returns the unsubscribe. A refused subscription ends and calls `onError` (the function after `cb`) once with a K2Error; with no `onError` K2 logs it as an uncaught error. */\n  subscribe<V extends K2SubscribeVerb>(\n    verb: V,\n    ...args:\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void]\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void, (error: K2Error) => void]\n  ): () => void\n  /** Alias of `subscribe`. */\n  on: K2['subscribe']\n  /** Resolves with the hello once K2 connects the frame (on its load, after your top-level script runs); rejects with K2Error `failed` \"not connected\" after 10 s. Await it before `can`, `config`, `widget` or `motion`: until then they read as empty. Calls wait for it on their own. */\n  readonly connected: Promise<K2Hello>\n  /** Drawing advice: the verb exists, its cap was allowed and K2 here has its feature. False until `connected` resolves. K2 still checks every call. */\n  can(verb: string): boolean\n  /** Tell K2 you have drawn (call once). */\n  ready(): void\n  /** The placement's `config` table from the Garden file (empty until `connected`). */\n  readonly config: Readonly<Record<string, string | number | boolean>>\n  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n  /** A file in the widget's folder as a data: URL, or null. */\n  asset(name: string): string | null\n  readonly motion: { readonly reduced: boolean }\n}\n\ndeclare global {\n  const k2: K2\n  interface Window {\n    readonly k2: K2\n  }\n}\n";
+        "  /** Any widget verb by name; a refused call rejects with K2Error. */\n  call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>\n  /** Subscribe by name; returns the unsubscribe. A refused subscription ends and calls `onError` (the function after `cb`) once with a K2Error; with no `onError` K2 logs it as an uncaught error. */\n  subscribe<V extends K2SubscribeVerb>(\n    verb: V,\n    ...args:\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void]\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void, (error: K2Error) => void]\n  ): () => void\n  /** Alias of `subscribe`. */\n  on: K2['subscribe']\n  /** Resolves with the hello once K2 connects the frame (on its load, after your top-level script runs); rejects with K2Error `failed` \"not connected\" after 10 s. Await it before `can`, `config`, `widget` or `motion`: until then they read as empty. Calls wait for it on their own. */\n  readonly connected: Promise<K2Hello>\n  /** Drawing advice: the verb exists, its cap was allowed and K2 here has its feature. False until `connected` resolves. K2 still checks every call. */\n  can(verb: string): boolean\n  /** Tell K2 you have drawn (call once). */\n  ready(): void\n  /** The placement's `config` table from the Garden file (empty until `connected`). */\n  readonly config: Readonly<Record<string, string | number | boolean>>\n  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n  /** A file in the widget's folder as a data: URL, or null. */\n  asset(name: string): string | null\n  readonly motion: { readonly reduced: boolean }\n  /** Guards for data you didn't make. */\n  readonly shape: K2Shape\n  /** The error class (for `instanceof`). */\n  readonly K2Error: { new (wire: { code: K2ErrorCode; message: string }, verb: string): K2Error }\n  /** The codes worth retrying unchanged. */\n  readonly retryable: readonly K2ErrorCode[]\n}\n\ndeclare global {\n  const k2: K2\n  interface Window {\n    readonly k2: K2\n  }\n}\n";
 
 // ── k2-frame.js ──────────────────────────────────────────────────────────
 
@@ -582,8 +593,9 @@ fn frame_js(c: &Catalog, runtime: Option<&str>) -> String {
         "// The shared runtime joined with the catalog's widget verb table: one\n// classic script, injected first in every custom widget frame and nonced\n// (UWA5). The runtime reads the table as `K2_CONTRACT`.\n(function () {\n  'use strict'\n",
     );
     let codes = c.errors.iter().map(|e| ts_str(&e.code)).collect::<Vec<_>>().join(", ");
+    let retry = c.errors.iter().filter(|e| e.retryable).map(|e| ts_str(&e.code)).collect::<Vec<_>>().join(", ");
     s.push_str(&format!(
-        "  var K2_CONTRACT = Object.freeze({{\n    catalogVersion: {},\n    errors: Object.freeze([{codes}]),\n    verbs: Object.freeze({{\n",
+        "  var K2_CONTRACT = Object.freeze({{\n    catalogVersion: {},\n    errors: Object.freeze([{codes}]),\n    retryable: Object.freeze([{retry}]),\n    verbs: Object.freeze({{\n",
         c.catalog_version
     ));
     for (_, rows) in widget_groups(c) {
@@ -875,9 +887,13 @@ mod tests {
         let dts = k2_dts(catalog()).expect("d.ts renders");
         let subs: Vec<&str> = dts.lines().filter(|l| l.contains("cb: (value:")).collect();
         assert!(!subs.is_empty(), "k2.d.ts has subscribe helpers");
-        for l in subs {
+        for l in &subs {
             assert!(l.contains("onError?: (error: K2Error) => void"), "subscribe helper without onError: {l}");
         }
+        let handler_forms = dts.lines().filter(|l| l.contains("handlers: K2Handlers<")).count();
+        assert!(handler_forms > subs.len(), "every subscribe helper (and store.subscribe) has a handler-object form");
+        assert!(dts.contains("readonly retryable: boolean"));
+        assert!(dts.contains("export type K2_RETRYABLE = 'not_bound' | 'rate_limited' | 'unreachable' | 'busy'"));
         assert!(dts.contains("(value: K2Verbs[V]['value']) => void, (error: K2Error) => void]"));
     }
 }

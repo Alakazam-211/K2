@@ -639,6 +639,8 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       if (id === null && typeof m.sub !== 'number') return null
       if (JSON.stringify(msg).length > ZEN_WIDGET_BUDGET.messageBytes) refuse('too_large', 'A message is over 64 KB.')
       takeToken()
+      // 0.46.1: args are a list when given (bad_args, not a guess).
+      if (m.args !== undefined && !Array.isArray(m.args)) refuse('bad_args', 'A call’s arguments are a list.')
       const args = Array.isArray(m.args) ? (m.args as unknown[]) : []
       const { verb, row } = lookup(m.verb)
       if (typeof m.sub === 'number') {

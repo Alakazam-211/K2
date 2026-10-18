@@ -19,6 +19,14 @@
 // `k2.connected` reject with K2Error `failed` "not connected". A refused
 // subscription gets `{sub, error}` once and ends: its onError (after cb)
 // runs or, with none, K2 hears of it.
+//
+// 0.46.1 (catalog 11): K2Error carries `retryable` (the catalog's flag). A
+// subscribe helper given a handler object `{data, error?, state?}` instead of
+// `cb, onError` re-subscribes on its own after a retryable refusal (1, 2, 4,
+// 8, 16, then every 30 s), runs the value through a shape guard first (a
+// sources view is normalised; a bad one reaches `error` as bad_shape), and
+// calls nothing after its unsubscribe. Arguments that aren't plain data are
+// refused in the frame as bad_args. `k2.shape` holds the guards.
 ;(function () {
   'use strict'
 
@@ -29,6 +37,9 @@
   /** @type {Record<string, VerbRow>} */
   // eslint-disable-next-line no-undef
   var TABLE = typeof K2_CONTRACT !== 'undefined' && K2_CONTRACT && K2_CONTRACT.verbs ? K2_CONTRACT.verbs : {}
+  /** @type {string[]} */
+  // eslint-disable-next-line no-undef
+  var RETRY = typeof K2_CONTRACT !== 'undefined' && K2_CONTRACT && K2_CONTRACT.retryable ? K2_CONTRACT.retryable : []
   if (g.k2) return
 
   class K2Error extends Error {
@@ -41,6 +52,7 @@
       this.name = 'K2Error'
       this.code = wire.code
       this.verb = verb
+      this.retryable = RETRY.indexOf(wire.code) >= 0
       if (wire.cap !== undefined) this.cap = wire.cap
       if (wire.room !== undefined) this.room = wire.room
       if (wire.feature !== undefined) this.feature = wire.feature
@@ -79,6 +91,30 @@
   function send(msg) {
     if (port) port.postMessage(msg)
     else if (early && early.length < 1000) early.push(msg)
+  }
+
+  // Plain data only: what a JSON round trip keeps (and undefined). Depth
+  // caps cycles.
+  /** @param {unknown} v @param {number} d @returns {boolean} */
+  function plain(v, d) {
+    if (d > 64) return false
+    if (v === null || v === undefined || typeof v === 'string' || typeof v === 'boolean') return true
+    if (typeof v === 'number') return isFinite(v)
+    if (typeof v !== 'object') return false
+    if (Array.isArray(v)) {
+      for (var i = 0; i < v.length; i++) if (!plain(v[i], d + 1)) return false
+      return true
+    }
+    // A plain object from any realm: its prototype is an Object.prototype.
+    var proto = Object.getPrototypeOf(v)
+    if (proto !== null && Object.getPrototypeOf(proto) !== null) return false
+    for (var k in v) if (Object.prototype.hasOwnProperty.call(v, k) && !plain(/** @type {any} */ (v)[k], d + 1)) return false
+    return true
+  }
+
+  /** @param {string} verb */
+  function badArgs(verb) {
+    return new K2Error({ code: 'bad_args', message: verb + ': arguments are plain data only (no functions, DOM nodes, class instances or cycles)' }, verb)
   }
 
   /** @param {string} verb */
@@ -125,6 +161,7 @@
    */
   var transport = {
     call: function (verb, args) {
+      if (!plain(args, 0)) return Promise.reject(badArgs(verb))
       if (!port && !early) return Promise.reject(notConnected(verb))
       var id = nextId++
       return new Promise(function (resolve, reject) {
@@ -134,6 +171,7 @@
     },
     subscribe: function (verb, args, cb, onError) {
       if (typeof cb !== 'function') throw new TypeError('k2.subscribe: the callback must be a function')
+      if (!plain(args, 0)) throw badArgs(verb)
       if (!port && !early) throw notConnected(verb)
       var sub = nextId++
       subs.set(sub, { cb: cb, onError: onError, verb: verb })
@@ -566,12 +604,187 @@
     return transport.call(verb, args)
   }
 
-  /**
-   * Trailing function args are cb, onError?.
-   * @param {string} verb
-   * @param {unknown[]} rest
-   */
+  // ── Guards for data the widget didn't make (k2.shape) ───────────────────
+
+  var HEALTH = ['ok', 'warn', 'crit', 'unknown']
+  var PHASE = ['pending', 'live', 'stale', 'paused']
+  /** @param {unknown} v @returns {v is Record<string, any>} */
+  function isObj(v) {
+    return !!v && typeof v === 'object' && !Array.isArray(v)
+  }
+  /** @param {unknown} v */
+  function obj(v) {
+    return isObj(v) ? v : {}
+  }
+  /** @param {unknown} v @returns {unknown[]} */
+  function list(v) {
+    return Array.isArray(v) ? v : []
+  }
+  /** @param {unknown} v @param {number} [f] */
+  function num(v, f) {
+    return typeof v === 'number' && isFinite(v) ? v : f === undefined ? 0 : f
+  }
+  /** @param {unknown} v @param {string} [f] @param {number} [max] */
+  function str(v, f, max) {
+    var t = typeof v === 'string' ? v : f === undefined ? '' : f
+    return max !== undefined && t.length > max ? t.slice(0, max) : t
+  }
+  /** @param {unknown} v @param {string[]} set @param {string} f */
+  function oneOf(v, set, f) {
+    return typeof v === 'string' && set.indexOf(v) >= 0 ? v : f
+  }
+  /** @param {unknown} v */
+  function strOrNull(v) {
+    return typeof v === 'string' ? v : null
+  }
+  /** @param {unknown} v */
+  function numOrNull(v) {
+    return typeof v === 'number' && isFinite(v) ? v : null
+  }
+  /** @param {unknown} v */
+  function soft(v) {
+    var o = obj(v)
+    return { count: num(o.count), of: num(o.of, 1), level: strOrNull(o.level) }
+  }
+  // A sources card view with every key a card draws from; null when `v`
+  // isn't one. Unknown keys are kept.
+  /** @param {unknown} v */
+  function view(v) {
+    if (!isObj(v) || (typeof v.display !== 'string' && typeof v.health !== 'string')) return null
+    var out = Object.assign({}, v)
+    var health = oneOf(v.health, HEALTH, 'unknown')
+    out.name = str(v.name)
+    out.label = str(v.label, out.name)
+    out.health = health
+    out.phase = oneOf(v.phase, PHASE, 'pending')
+    out.display = str(v.display, health)
+    out.reason = strOrNull(v.reason)
+    out.reasonText = strOrNull(v.reasonText)
+    out.fields = obj(v.fields)
+    out.items = list(v.items)
+      .filter(isObj)
+      .map(function (/** @type {any} */ it) {
+        var i = Object.assign({}, it)
+        i.key = typeof it.key === 'string' || typeof it.key === 'number' ? String(it.key) : ''
+        i.health = oneOf(it.health, HEALTH, 'unknown')
+        i.reason = strOrNull(it.reason)
+        i.fields = obj(it.fields)
+        i.soft = soft(it.soft)
+        return i
+      })
+    var c = obj(v.counts)
+    out.counts = { ok: num(c.ok), warn: num(c.warn), crit: num(c.crit), unknown: num(c.unknown) }
+    out.soft = soft(v.soft)
+    out.serverNow = num(v.serverNow, Math.floor(Date.now() / 1000))
+    out.updatedAt = numOrNull(v.updatedAt)
+    return out
+  }
+  /** A store delivery: changed keys, or a resync list. @param {unknown} v */
+  function delivery(v) {
+    if (Array.isArray(v)) return v.filter(isObj)
+    if (isObj(v) && v.resync === true && Array.isArray(v.items)) return v
+    return null
+  }
+  /** @type {Record<string, (v: unknown) => unknown>} */
+  var SHAPES = { 'sources.subscribe': view, 'store.changes': delivery }
+
+  // A handler-object subscription: retries retryable refusals with capped
+  // backoff; nothing runs after its unsubscribe.
+  /** @param {string} verb @param {unknown[]} args @param {{data: (v: unknown) => void, error?: (e: K2Error) => void, state?: (s: string) => void}} h */
+  function watch(verb, args, h) {
+    var live = true
+    var attempt = 0
+    var now = ''
+    /** @type {(() => void) | null} */
+    var off = null
+    /** @type {unknown} */
+    var timer = null
+    var guard = SHAPES[verb]
+    /** @param {string} st */
+    function state(st) {
+      if (!live || st === now) return
+      now = st
+      if (h.state) {
+        try {
+          h.state(st)
+        } catch (e) {
+          report(e)
+        }
+      }
+    }
+    /** @param {K2Error} err */
+    function fault(err) {
+      if (!live) return
+      if (!h.error) return send({ error: { message: 'k2: ' + verb + ' (' + err.code + '): ' + err.message } })
+      try {
+        h.error(err)
+      } catch (e) {
+        report(e)
+      }
+    }
+    /** @param {unknown} v */
+    function data(v) {
+      if (!live) return
+      var safe = guard ? guard(v) : v
+      if (guard && safe === null) {
+        var bad = /** @type {any} */ (new K2Error({ code: 'bad_shape', message: verb + ' delivered a value that isn’t its shape; keep your last good data' }, verb))
+        bad.retrying = true
+        bad.attempt = attempt
+        return fault(bad)
+      }
+      attempt = 0
+      state('live')
+      try {
+        h.data(safe)
+      } catch (e) {
+        report(e)
+      }
+    }
+    /** @param {K2Error} err */
+    function refusal(err) {
+      if (!live) return
+      off = null
+      attempt++
+      var e = /** @type {any} */ (err)
+      e.attempt = attempt
+      if (err.retryable) {
+        if (e.last !== undefined && guard) e.last = guard(e.last)
+        e.retrying = true
+        fault(err)
+        state('retrying')
+        timer = g.setTimeout(start, Math.min(30000, 1000 * Math.pow(2, Math.min(attempt - 1, 5))))
+        return
+      }
+      e.retrying = false
+      fault(err)
+      state('ended')
+      live = false
+    }
+    function start() {
+      timer = null
+      if (!live) return
+      try {
+        off = transport.subscribe(verb, args, data, refusal)
+      } catch (e) {
+        refusal(e instanceof K2Error ? e : new K2Error({ code: 'failed', message: String(e && /** @type {any} */ (e).message ? /** @type {any} */ (e).message : e) }, verb))
+      }
+    }
+    start()
+    return function unsubscribe() {
+      if (!live) return
+      live = false
+      if (timer !== null && g.clearTimeout) g.clearTimeout(timer)
+      timer = null
+      if (off) off()
+      off = null
+    }
+  }
+
+  // Trailing function args are cb, onError?; or one handler object.
+  /** @param {string} verb @param {unknown[]} rest */
   function subscribe(verb, rest) {
+    var last = /** @type {any} */ (rest[rest.length - 1])
+    if (isObj(last) && typeof last.data === 'function') return watch(verb, rest.slice(0, -1), last)
     var n = rest.length
     var two = n >= 2 && typeof rest[n - 1] === 'function' && typeof rest[n - 2] === 'function'
     var cb = two ? rest[n - 2] : rest[n - 1]
@@ -628,6 +841,9 @@
     },
   })
   Object.defineProperty(k2, 'motion', { enumerable: true, get: function () { return hello ? hello.motion : Object.freeze({ reduced: false }) } })
+  k2.shape = Object.freeze({ view: view, list: list, obj: obj, num: num, str: str })
+  k2.K2Error = K2Error
+  k2.retryable = Object.freeze(RETRY.slice())
 
   // Named helpers, one per row (`surface.action` → k2.surface.action).
   /** @type {Record<string, Record<string, Function>>} */

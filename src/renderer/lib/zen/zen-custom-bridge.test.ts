@@ -243,6 +243,20 @@ describe('TUW3.3: caps, binding and refusals', () => {
     expect(h.calls).toEqual([])
   })
 
+  it('0.46.1: arguments that aren’t a list are bad_args, a missing list is none; nothing runs', async () => {
+    const h = harness()
+    const layer = createZenCustomLayer(h.deps)
+    for (const args of ['alice::local', { 0: 'alice::local' }, 7, null]) {
+      const r = (await layer.handle({ id: 9, verb: 'agents.list', args })) as ZenFrameReply
+      expect(code(r), JSON.stringify(args)).toBe('bad_args')
+    }
+    const sub = await layer.handle({ sub: 3, verb: 'agents.subscribe', args: 'x' })
+    expect(sub).toEqual({ sub: 3, error: expect.objectContaining({ code: 'bad_args' }) })
+    expect(h.calls).toEqual([])
+    const none = (await layer.handle({ id: 10, verb: 'agents.list' })) as ZenFrameReply
+    expect('ok' in none && (none.ok || none.error.code !== 'bad_args')).toBe(true)
+  })
+
   it('K2-only verbs are not_exposed; a made-up verb is unknown_verb (UWA10)', async () => {
     const h = harness()
     const layer = createZenCustomLayer(h.deps)

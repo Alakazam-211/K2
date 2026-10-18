@@ -109,6 +109,9 @@ export const CATALOG_ERROR_CODES = [
   'tx_expired',
   'busy',
   'paused',
+  // Widget SDK guards (0.46.1, catalog 11).
+  'bad_args',
+  'bad_shape',
   // The App transport (runtime S23): gateway and App-route refusals, plus
   // the server SDK's own two.
   'pass_required',
@@ -144,6 +147,8 @@ export interface CatalogErrorRow {
   code: CatalogErrorCode
   /** Extra fields the error carries: `cap`, `room`, `feature`. */
   fields?: Array<'cap' | 'room' | 'feature'>
+  /** Worth trying again unchanged (catalog 11). */
+  retryable?: boolean
   doc: string
 }
 

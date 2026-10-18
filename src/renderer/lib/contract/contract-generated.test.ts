@@ -83,8 +83,8 @@ describe('TUWA4 twin: generated files match the catalog', () => {
     }
   })
 
-  it('the frame script stays under 24 KB (UWA5, raised for Garden data)', () => {
-    expect(Buffer.byteLength(read('sdk/generated/k2-frame.js'), 'utf8')).toBeLessThanOrEqual(24 * 1024)
+  it('the frame script stays under 28 KB (UWA5, raised for Garden data, then the 0.46.1 SDK)', () => {
+    expect(Buffer.byteLength(read('sdk/generated/k2-frame.js'), 'utf8')).toBeLessThanOrEqual(28 * 1024)
   })
 })
 

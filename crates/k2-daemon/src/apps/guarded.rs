@@ -449,7 +449,67 @@ pub fn logs(app: &str, deployment: &str, lines: u32) -> Result<String> {
     let out = crate::root_helper::call_text(&["apps".into(), "logs".into(), app.into(), deployment.into(), lines.clamp(1, 5000).to_string()], None)
         .map_err(|e| eng_err(codes::ENGINE_UNAVAILABLE, e))?;
     let v: Value = serde_json::from_str(&out).map_err(|_| eng_err(codes::ENGINE_UNAVAILABLE, "apps logs: not JSON"))?;
-    Ok(v["text"].as_str().unwrap_or("").to_string())
+    Ok(fold_pasta_noise(v["text"].as_str().unwrap_or("")))
+}
+
+/// The one pasta line [`fold_pasta_noise`] folds (both parts must match).
+const PASTA_SPLICED: &str = "(TCP connection (spliced)): ERROR on epoll_ctl(): No such file or directory";
+
+/// Fold pasta's spliced-flow `epoll_ctl` ENOENT spam in a guarded App's
+/// journal (field report 2026-10: Debian 13, Podman 5.4.2, its passt).
+///
+/// Why it is safe to fold: pasta splices loopback TCP between the App and
+/// its `-T` forwards (the gateway link, the egress proxy, box services).
+/// When both ends of a spliced flow close, pasta tears the flow down and
+/// can then ask epoll to modify or drop a socket that is already out of
+/// its epoll set; the kernel answers ENOENT and pasta logs it as an
+/// ERROR. The flow is already gone and nothing is lost: it's log noise
+/// from a race on closed flows (the passt versions Debian 13 ships), and a
+/// busy App writes one per closed connection, burying its own output.
+/// There is no pasta option that silences one message class without its
+/// real errors (`--quiet` only drops informational ones), so K2 folds it
+/// when it shows the log instead.
+///
+/// Only this exact line is folded: any other pasta error (another errno,
+/// a non-spliced flow, a failed forward) stays as it is. The first one
+/// stays verbatim; the rest become one `[k2]` line with the count.
+pub fn fold_pasta_noise(text: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut hidden = 0usize;
+    let mut first_at: Option<usize> = None;
+    for line in text.lines() {
+        if line.contains(PASTA_SPLICED) && line.contains("Flow ") {
+            if first_at.is_none() {
+                first_at = Some(out.len());
+                out.push(line);
+            } else {
+                hidden += 1;
+            }
+            continue;
+        }
+        out.push(line);
+    }
+    let note = (hidden > 0).then(|| {
+        format!(
+            "[k2] {hidden} more pasta \"ERROR on epoll_ctl(): No such file or directory\" lines for closed spliced flows hidden \
+             (a harmless pasta race when a loopback connection closes; other pasta errors are shown)"
+        )
+    });
+    let mut s = String::with_capacity(text.len());
+    for (i, l) in out.iter().enumerate() {
+        s.push_str(l);
+        s.push('\n');
+        if Some(i) == first_at {
+            if let Some(n) = &note {
+                s.push_str(n);
+                s.push('\n');
+            }
+        }
+    }
+    if !text.ends_with('\n') && s.ends_with('\n') && note.is_none() {
+        s.pop();
+    }
+    s
 }
 
 /// Uninstall: every instance stopped; `purge` also deletes its data and
@@ -859,6 +919,37 @@ mod tests {
         assert_eq!(e["LANG"], "C.UTF-8");
         assert_eq!(e["NODE_ENV"], "production");
         assert!(!e.contains_key("K2_APP_ORIGIN") && !e.contains_key("K2_APP_ORIGINS"), "no public URL: unset");
+    }
+
+    #[test]
+    fn pasta_spliced_flow_noise_folds_and_real_errors_stay() {
+        let spam = |n: u32| format!("Oct 17 10:00:0{} box pasta[812]: Flow {n} (TCP connection (spliced)): ERROR on epoll_ctl(): No such file or directory", n % 10);
+        let text = [
+            "Oct 17 10:00:00 box node[900]: listening on 3000".to_string(),
+            spam(41),
+            spam(42),
+            "Oct 17 10:00:02 box node[900]: GET / 200".to_string(),
+            spam(43),
+            "Oct 17 10:00:03 box pasta[812]: Flow 44 (TCP connection (spliced)): ERROR on epoll_ctl(): Bad file descriptor".to_string(),
+            "Oct 17 10:00:03 box pasta[812]: Flow 45 (TCP connection): ERROR on epoll_ctl(): No such file or directory".to_string(),
+            "Oct 17 10:00:04 box pasta[812]: Failed to bind port 8730".to_string(),
+        ]
+        .join("\n")
+            + "\n";
+        let out = fold_pasta_noise(&text);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 7, "8 lines in, two folded into one note: {out}");
+        assert_eq!(lines[1], spam(41), "the first one stays verbatim");
+        assert!(lines[2].starts_with("[k2] 2 more pasta"), "{out}");
+        assert_eq!(lines[3], "Oct 17 10:00:02 box node[900]: GET / 200", "App output keeps its order");
+        assert!(!out.contains("Flow 42") && !out.contains("Flow 43"), "{out}");
+        for real in ["Bad file descriptor", "Flow 45 (TCP connection): ERROR", "Failed to bind port 8730"] {
+            assert!(out.contains(real), "a real pasta error was hidden: {real}\n{out}");
+        }
+        // Nothing to fold: the text comes back unchanged.
+        let plain = "a\nb";
+        assert_eq!(fold_pasta_noise(plain), plain);
+        assert_eq!(fold_pasta_noise(&format!("{}\n", spam(1))), format!("{}\n", spam(1)), "one alone stays");
     }
 
     #[test]

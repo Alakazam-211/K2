@@ -41,6 +41,8 @@ pub const ROUTES: &[&str] = &[
     "/cli/sew/backups",
     "/cli/sew/job",
     "/cli/sew/media/install",
+    "/cli/sew/meet/bind",
+    "/cli/sew/meet/unbind",
     "/cli/sew/media/preflight",
     "/cli/sew/media/probe",
     "/cli/sew/media/renew",
@@ -70,6 +72,8 @@ pub const ROUTES: &[&str] = &[
 
 pub const POST_ROUTES: &[&str] = &[
     "/cli/sew/media/install",
+    "/cli/sew/meet/bind",
+    "/cli/sew/meet/unbind",
     "/cli/sew/media/probe",
     "/cli/sew/media/renew",
     "/cli/sew/media/uninstall",
@@ -464,6 +468,15 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         "/cli/sew/media/uninstall" => {
             need_manage(who)?;
             super::voice::uninstall(&env)
+        }
+        "/cli/sew/meet/bind" => {
+            need_manage(who)?;
+            let v = json_body(body)?;
+            super::meet::bind(&env, s(&v, "app").unwrap_or(""))
+        }
+        "/cli/sew/meet/unbind" => {
+            need_manage(who)?;
+            super::meet::unbind(&env)
         }
         "/cli/sew/users" => {
             need_manage(who)?;

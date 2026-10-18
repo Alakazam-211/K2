@@ -951,6 +951,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sew/media/renew", Admin),
     post("/cli/sew/media/uninstall", Admin),
     post("/cli/sew/media/url", Admin),
+    // K-M2: the reserved `meet` label → an App's front port.
+    post("/cli/sew/meet/bind", Admin),
+    post("/cli/sew/meet/unbind", Admin),
     get("/cli/sew/preflight", Member),
     post("/cli/sew/server/backup", Admin),
     post("/cli/sew/server/config", Admin),

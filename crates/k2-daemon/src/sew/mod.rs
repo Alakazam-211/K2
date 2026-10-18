@@ -32,6 +32,7 @@
 //! (S27 K2–K4), the chat pass link (S28 K6/K7), host / mirror / ship /
 //! app-url routes (S32).
 
+pub mod meet;
 pub mod ops;
 pub mod routes;
 pub mod secrets;

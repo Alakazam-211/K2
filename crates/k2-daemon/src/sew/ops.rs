@@ -114,6 +114,11 @@ pub trait SewOps: Send + Sync {
     fn voice_load(&self) -> Option<Value>;
     /// Write the voice record (`None` removes it).
     fn voice_save(&self, v: Option<&Value>) -> Result<(), String>;
+    /// One of K2's small Sew records (`~/.k2/sew/<name>.json`, 0600):
+    /// `server` (the public URL K2 set), `meet` (the `meet` label bind).
+    fn record_load(&self, name: &str) -> Option<Value>;
+    /// Write a record (`None` removes it).
+    fn record_save(&self, name: &str, v: Option<&Value>) -> Result<(), String>;
 
     /// This build pins a published Sew release
     /// (`k2_root_proto::sew::sew_release_pinned`). While false every
@@ -195,6 +200,28 @@ pub fn cp_answer(status: u16, text: &str) -> Result<Value, CpError> {
 /// `~/.k2/sew/voice.json`.
 pub fn voice_state_path() -> std::path::PathBuf {
     k2_core::paths::k2_home().join("sew").join("voice.json")
+}
+
+/// `~/.k2/sew/<name>.json` for [`SewOps::record_load`] (`name` is one of
+/// K2's fixed record names, never input).
+pub fn record_path(name: &str) -> std::path::PathBuf {
+    k2_core::paths::k2_home().join("sew").join(format!("{name}.json"))
+}
+
+fn write_json_file(p: &std::path::Path, v: Option<&Value>) -> Result<(), String> {
+    match v {
+        Some(v) => {
+            if let Some(d) = p.parent() {
+                std::fs::create_dir_all(d).map_err(|e| format!("mkdir {}: {e}", d.display()))?;
+            }
+            k2_core::fs_atomic::atomic_write_mode(p, v.to_string().as_bytes(), 0o600).map_err(|e| format!("write {}: {e}", p.display()))
+        }
+        None => match std::fs::remove_file(p) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("remove {}: {e}", p.display())),
+        },
+    }
 }
 
 // ── production ───────────────────────────────────────────────────────────
@@ -388,6 +415,13 @@ impl SewOps for RealOps {
     fn voice_load(&self) -> Option<Value> {
         let text = std::fs::read_to_string(voice_state_path()).ok()?;
         serde_json::from_str(&text).ok()
+    }
+    fn record_load(&self, name: &str) -> Option<Value> {
+        let text = std::fs::read_to_string(record_path(name)).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+    fn record_save(&self, name: &str, v: Option<&Value>) -> Result<(), String> {
+        write_json_file(&record_path(name), v)
     }
     fn voice_save(&self, v: Option<&Value>) -> Result<(), String> {
         let p = voice_state_path();
@@ -588,6 +622,8 @@ pub mod fake {
         pub serves_ours: Mutex<Option<bool>>,
         pub logins: Mutex<u64>,
         pub voice: Mutex<Option<Value>>,
+        /// [`SewOps::record_load`] records by name.
+        pub records: Mutex<HashMap<String, Value>>,
         /// The leaf sha256 of the last canned turn cert.
         pub last_leaf: Mutex<Option<String>>,
         /// `engine sew stage-media` happened (status reports it staged).
@@ -668,6 +704,7 @@ pub mod fake {
                 serves_ours: Mutex::new(Some(true)),
                 logins: Mutex::new(1),
                 voice: Mutex::new(None),
+                records: Mutex::new(HashMap::new()),
                 last_leaf: Mutex::new(None),
                 media_staged: Mutex::new(false),
                 media_state: Mutex::new(json!({"installed": true, "enabled": true, "state": "running", "alarms": ["port_443_unavailable"]})),
@@ -1065,6 +1102,17 @@ pub mod fake {
         }
         fn voice_save(&self, v: Option<&Value>) -> Result<(), String> {
             *self.voice.lock().unwrap() = v.cloned();
+            Ok(())
+        }
+        fn record_load(&self, name: &str) -> Option<Value> {
+            self.records.lock().unwrap().get(name).cloned()
+        }
+        fn record_save(&self, name: &str, v: Option<&Value>) -> Result<(), String> {
+            let mut r = self.records.lock().unwrap();
+            match v {
+                Some(v) => r.insert(name.to_string(), v.clone()),
+                None => r.remove(name),
+            };
             Ok(())
         }
     }

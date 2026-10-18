@@ -1001,6 +1001,8 @@ pub fn purge_hostname(env: &Env, row: &Row) -> String {
 /// plainly instead of an error.
 pub fn status(env: &Env, with_health: bool) -> Value {
     let mut body = status_body(env, with_health);
+    // The meet label binds without Sew installed (Meet can run standalone).
+    body["meet"] = super::meet::status(env);
     let released = env.ops.sew_released();
     body["released"] = json!(released);
     if !released {
@@ -1051,6 +1053,10 @@ fn status_body(env: &Env, with_health: bool) -> Value {
     }
     alarms.extend(k2_alarms(env, &row, sew_status.as_ref(), now));
     let mut warnings = warnings;
+    let public_url = public_url(env);
+    if public_url.is_none() {
+        warnings.push(public_url_warning(env));
+    }
     let (voice, voice_alarms, voice_warnings) = if up { super::voice::status(env, with_health) } else { super::voice::status_offline(env) };
     alarms.extend(voice_alarms);
     warnings.extend(voice_warnings);
@@ -1083,6 +1089,7 @@ fn status_body(env: &Env, with_health: bool) -> Value {
         "drill": drill_status(sew_status.as_ref()),
         "host": {"hostname": row.host, "mode": row.host_mode},
         "appUrl": row.app_url,
+        "publicUrl": public_url,
         "helper": helper_json,
         "enableProgress": row.enable_progress,
         "upgradeProgress": row.upgrade_progress,
@@ -1301,6 +1308,36 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
 /// 0.46.0 demo `https://<hearth origin>` points them at the App. The
 /// setup-link key is not on Sew's settable list and is never sent;
 /// `voice.public_url` goes through `sew media install` (voice::set_url).
+/// K2's record of what it set with [`server_config`] (`publicUrl`).
+pub const SERVER_RECORD: &str = "server";
+
+/// The `server.public_url` K2 set (`None` = never set through K2).
+pub fn public_url(env: &Env) -> Option<String> {
+    env.ops
+        .record_load(SERVER_RECORD)
+        .and_then(|v| v.get("publicUrl").and_then(Value::as_str).map(str::to_string))
+        .filter(|u| !u.is_empty())
+}
+
+/// The warning while Sew's public URL is unset: setup links and invites
+/// would carry Sew's loopback address. Names the fix.
+pub fn public_url_warning(env: &Env) -> Value {
+    let host = env
+        .ops
+        .box_label()
+        .map(|l| format!("<app>.{l}.k2.dev"))
+        .unwrap_or_else(|| "<host>".into());
+    json!({
+        "code": "public_url_unset",
+        "message": format!(
+            "Sew's public URL isn't set, so password setup links and invites won't open from outside this box. \
+             Set it to the https origin people use (your chat App, a host on this box's k2.dev label or a bound custom domain): \
+             k2 hostchat config --public-url https://{host}"
+        ),
+        "fix": format!("k2 hostchat config --public-url https://{host}"),
+    })
+}
+
 pub fn server_config(env: &Env, public_url: &str) -> R<Value> {
     if !env.ops.linux() {
         return Err(unsupported());
@@ -1327,6 +1364,11 @@ pub fn server_config(env: &Env, public_url: &str) -> R<Value> {
     } else {
         false
     };
+    // K2 remembers what it set (Sew's status doesn't report it), so
+    // status can warn while it's unset.
+    if let Err(e) = env.ops.record_save(SERVER_RECORD, Some(&json!({"publicUrl": public_url, "setAt": env.ops.now()}))) {
+        k2_core::log_debug!("[sew] server record: {e}");
+    }
     changed("config");
     Ok(json!({"ok": true, "set": body, "restarted": restarted, "setupLinks": format!("{public_url}/setup")}))
 }

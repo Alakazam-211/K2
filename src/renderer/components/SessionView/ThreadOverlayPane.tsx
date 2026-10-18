@@ -1,4 +1,6 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react'
+import { FileLinkProvider, scopeFileLinkTransport, type FileLinkOpen } from '@/components/common/file-links'
+import { openThreadFileLink } from '@/lib/thread-file-link-open'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { isEffectivelyHidden } from '@/lib/workspace-switch-focus'
@@ -91,7 +93,12 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   onTurn,
   bottomInset = 0,
 }: ThreadOverlayPaneProps): JSX.Element {
-  const roomScope = useRoom().scope
+  const room = useRoom()
+  const roomScope = room.scope
+  // Thread file links: the room's own server decides which printed paths
+  // are files in this Thread's workspace; a click opens them in this room.
+  const fileLinkTransport = useMemo(() => scopeFileLinkTransport(roomScope), [roomScope])
+  const openFileLink = useCallback<FileLinkOpen>((link, line, col) => openThreadFileLink(room, link, line, col), [room])
   // A Thread is shared: "You" only on this viewer's own posts.
   const viewer = useThreadViewer(roomScope)
   const isTabVisible = useIsTabVisible()
@@ -272,28 +279,30 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
             <div className="max-w-[40ch]">{zenEmptyThreadText(agentName?.trim() || 'the agent')}</div>
           </div>
         )}
-        <div ref={contentRef} className="flex flex-col" style={{ gap: THREAD_LIST_GAP }}>
-          {hasMore && (
-            <ThreadLoadOlder loading={loadingOlder} onClick={() => requestOlder()} testId="overlay-load-older" />
-          )}
-          {error && (
-            <div style={{ color: 'var(--zen-text-muted)', fontSize: '0.85em', textAlign: 'center' }}>{error}</div>
-          )}
-          {visible.map((it) => (
-            <ThreadItemRow
-              key={it.id}
-              item={it}
-              viewer={viewer}
-              nowSec={nowSec}
-              currentAddr={currentAddr}
-              pastAddresses={pastAddresses}
-              onAnswer={(payload) => answer(it.id, payload)}
-              onVoid={() => void voidCard(it.id)}
-              cardContext={{ workspace: addr.split('/')[0], server: roomScope.label }}
-              onHandoffDecide={(body) => handoffApi.decide(body, roomScope)}
-            />
-          ))}
-        </div>
+        <FileLinkProvider workspace={addr} transport={fileLinkTransport} open={openFileLink}>
+          <div ref={contentRef} className="flex flex-col" style={{ gap: THREAD_LIST_GAP }}>
+            {hasMore && (
+              <ThreadLoadOlder loading={loadingOlder} onClick={() => requestOlder()} testId="overlay-load-older" />
+            )}
+            {error && (
+              <div style={{ color: 'var(--zen-text-muted)', fontSize: '0.85em', textAlign: 'center' }}>{error}</div>
+            )}
+            {visible.map((it) => (
+              <ThreadItemRow
+                key={it.id}
+                item={it}
+                viewer={viewer}
+                nowSec={nowSec}
+                currentAddr={currentAddr}
+                pastAddresses={pastAddresses}
+                onAnswer={(payload) => answer(it.id, payload)}
+                onVoid={() => void voidCard(it.id)}
+                cardContext={{ workspace: addr.split('/')[0], server: roomScope.label }}
+                onHandoffDecide={(body) => handoffApi.decide(body, roomScope)}
+              />
+            ))}
+          </div>
+        </FileLinkProvider>
       </div>
       {/* TW12: live only, never stored (TW13). With a message box the
           column draws it on the box's top edge (`onTurn`). */}

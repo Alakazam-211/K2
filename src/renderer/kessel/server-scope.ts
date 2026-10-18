@@ -286,8 +286,9 @@ export function scopeForHost(ref: HostRef): ServerScope {
 // allowed past M4 is M5's decision.
 
 /** POST routes a view-only room may still send: the keep-alive (MS39), and
- *  file search, which is a read the daemon takes as POST (`fs/search-tree`). */
-export const VIEW_ONLY_POST_ROUTES: ReadonlySet<string> = new Set(['projects/activate', 'fs/search-tree'])
+ *  file search and Thread file links, reads the daemon takes as POST
+ *  (`fs/search-tree`, `fs/resolve-links`). */
+export const VIEW_ONLY_POST_ROUTES: ReadonlySet<string> = new Set(['projects/activate', 'fs/search-tree', 'fs/resolve-links'])
 
 /** A write was attempted from a view-only (M4 preview) room. */
 export class ViewOnlyWriteError extends Error {

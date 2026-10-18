@@ -1340,6 +1340,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/fs/read-range" => crate::fs_routes::handle_read_range(params),
         // R3 / files.stat: one path's kind, size and times.
         "/cli/fs/stat" => crate::fs_routes::handle_stat(params),
+        // Thread file links: POST-only (the batch is a body).
+        "/cli/fs/resolve-links" => CliResponse::method_not_allowed(),
         // `/cli/clone/pack-status` has its own gated arm in the dispatcher
         // (clone gate, prd-clone-carries-threads-and-vault-v1 CL4).
 

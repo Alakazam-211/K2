@@ -12337,6 +12337,7 @@ fn dispatch_unit6_post(path: &str, body: &[u8]) -> crate::cli::CliResponse {
     match path {
         // Filesystem
         "/cli/fs/search-tree" => crate::fs_routes::handle_search_tree(body),
+        "/cli/fs/resolve-links" => crate::fs_routes::handle_resolve_links(body),
         "/cli/fs/write-file" => crate::fs_routes::handle_write_file(body),
         "/cli/fs/move" => crate::fs_routes::handle_move(body),
         "/cli/fs/copy" => crate::fs_routes::handle_copy(body),

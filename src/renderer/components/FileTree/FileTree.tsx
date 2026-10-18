@@ -15,6 +15,7 @@ import { useFileClipboardStore } from '@/stores/file-clipboard'
 import { fileUndoFor } from '@/stores/file-undo'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { FILE_TREE_EXTERNAL_DROP_EVENT } from '@/lib/external-drop-router'
+import { onFileTreeReveal, takeFileTreeReveal } from '@/lib/file-open-requests'
 import { compressFolder, downloadFile, extractArchive } from '@/lib/fs-transfer'
 import { isWebClient } from '@/lib/is-web'
 import { normalizeFsReadDir } from '@/lib/fs-read-dir'
@@ -1131,6 +1132,37 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
   rootPathRef.current = rootPath
   const loadDirRef = useRef(loadDir)
   loadDirRef.current = loadDir
+
+  // Thread file links: a folder link asks this server's Files drawer to
+  // expand down to the folder, select it and scroll it into view.
+  const revealHostKey = room.scope.hostKey
+  useEffect(() => {
+    const reveal = (): void => {
+      const root = rootPathRef.current
+      if (!root || !root.startsWith('/')) return
+      const target = takeFileTreeReveal(revealHostKey, root)
+      if (!target) return
+      const chain: string[] = [root]
+      for (const seg of target.slice(root.length).split('/').filter(Boolean)) {
+        chain.push(`${chain[chain.length - 1]}/${seg}`)
+      }
+      setExpandedDirs((prev) => {
+        const next = new Set(prev)
+        for (const dir of chain) next.add(dir)
+        return next
+      })
+      useFileSelectionStore.getState().select(target)
+      void (async () => {
+        for (const dir of chain) await loadDirRef.current(dir)
+        requestAnimationFrame(() => {
+          const el = treeRef.current?.querySelector(`[data-path="${CSS.escape(target)}"]`)
+          el?.scrollIntoView({ block: 'nearest' })
+        })
+      })()
+    }
+    reveal()
+    return onFileTreeReveal(revealHostKey, reveal)
+  }, [revealHostKey])
 
   useEffect(() => {
     const unlisteners: Array<() => void> = []

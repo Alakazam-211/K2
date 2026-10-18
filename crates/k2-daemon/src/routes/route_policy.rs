@@ -525,6 +525,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/fs/read-file", Member),
     get("/cli/fs/read-range", Member),
     post("/cli/fs/rename", Member),
+    post("/cli/fs/resolve-links", Member),
     post("/cli/fs/search-tree", Member),
     get("/cli/fs/stat", Member),
     post("/cli/fs/upload-binary", Member),

@@ -41,12 +41,20 @@ pub const BUNDLE_VERSION: &str = "5.8.8";
 /// K2's own download mirror (Rosson, 2026-10-17: "our own mirror from the
 /// start"): pinned, checksummed and signed copies of every third-party
 /// binary K2 installs, with the source tarballs for the GPL parts beside
-/// them. The **one** place the base lives; nothing downloads from
-/// upstream. The bytes are upstream's (the sha256 pins below are the trust
-/// root, checked by the daemon and again by the signed root helper), so a
-/// mirror outage can't change what installs, only whether it can.
-/// Air-gapped boxes skip it: `k2 app box prepare --podman-from <folder>`.
-pub const MIRROR_BASE: &str = "https://mirror.k2.dev";
+/// them. The **one** place the bases live; nothing downloads from
+/// upstream. Tried in order: the custom domain on akzm (independent of the
+/// tunnel; port 8443 is deliberate), then akzm's K2 name.
+///
+/// The host is not the trust anchor: a box takes a tarball only when its
+/// sha256 equals the pin below (checked by the daemon and again by the
+/// signed root helper) AND its `.minisig` verifies with a K2 release key
+/// over [`bundle_trusted_comment`] (the primary key `18DB69584200F795`;
+/// the backup `E9C2D2CAD052297A` is accepted and flagged). Air-gapped
+/// boxes skip the mirror: `k2 app box prepare --podman-from <folder>`
+/// (the folder holds the tarball and its `.minisig`).
+pub const MIRROR_BASES: &[&str] = &["https://mirror.alakazamlabs.com:8443", "https://mirror.akzm.k2.dev"];
+/// The first mirror (the default; [`MIRROR_BASES`] is the fallback list).
+pub const MIRROR_BASE: &str = MIRROR_BASES[0];
 /// The bundle's folder on the mirror: `<MIRROR_BASE>/podman/v<version>/`.
 pub const MIRROR_PODMAN_DIR: &str = "podman";
 /// Where the tarballs were taken from (upstream's release; for docs, the
@@ -108,15 +116,36 @@ pub fn artifact_for_arch(arch: &str) -> Result<&'static PodmanArtifact, String> 
     Ok(a)
 }
 
-/// The download URL for a pinned tarball: K2's mirror
-/// (`<MIRROR_BASE>/podman/v<version>/<asset>`).
-pub fn download_url(a: &PodmanArtifact) -> String {
-    mirror_url(&format!("{MIRROR_PODMAN_DIR}/v{BUNDLE_VERSION}/{}", a.asset))
+// ── the mirror ──────────────────────────────────────────────────────────
+
+/// The bundle's folder on every mirror: `<base>/podman/v<version>/`.
+pub fn mirror_dir() -> String {
+    format!("{MIRROR_PODMAN_DIR}/v{BUNDLE_VERSION}")
 }
 
-/// A file on K2's mirror.
+/// A file on one mirror.
+pub fn mirror_url_at(base: &str, rel: &str) -> String {
+    format!("{}/{}", base.trim_end_matches('/'), rel.trim_start_matches('/'))
+}
+
+/// A file on the first mirror.
 pub fn mirror_url(rel: &str) -> String {
-    format!("{MIRROR_BASE}/{}", rel.trim_start_matches('/'))
+    mirror_url_at(MIRROR_BASE, rel)
+}
+
+/// The tarball's URL on every mirror, in the order they are tried.
+pub fn download_urls(a: &PodmanArtifact) -> Vec<String> {
+    MIRROR_BASES.iter().map(|b| mirror_url_at(b, &format!("{}/{}", mirror_dir(), a.asset))).collect()
+}
+
+/// The tarball's URL on the first mirror.
+pub fn download_url(a: &PodmanArtifact) -> String {
+    mirror_url(&format!("{}/{}", mirror_dir(), a.asset))
+}
+
+/// The tarball's K2 signature beside it.
+pub fn signature_name(a: &PodmanArtifact) -> String {
+    format!("{}.minisig", a.asset)
 }
 
 /// Where the mirror copied a tarball from (upstream's release asset).
@@ -124,25 +153,39 @@ pub fn upstream_url(a: &PodmanArtifact) -> String {
     format!("{UPSTREAM_URL_BASE}/v{BUNDLE_VERSION}/{}", a.asset)
 }
 
-/// Every file the mirror must hold for this bundle, relative to
-/// [`MIRROR_BASE`]: per arch the tarball, its `.sha256` and its K2
-/// `.minisig` (the release key, trusted comment naming the file), then
-/// `SHA256SUMS`, upstream's signature over the release, and the sources of
-/// the GPL/LGPL parts K2 ships out of the tarball ([`GPL_SOURCES`]).
-pub fn mirror_assets() -> Vec<String> {
-    let dir = format!("{MIRROR_PODMAN_DIR}/v{BUNDLE_VERSION}");
-    let mut v = Vec::new();
-    for a in BUNDLE {
-        v.push(format!("{dir}/{}", a.asset));
-        v.push(format!("{dir}/{}.sha256", a.asset));
-        v.push(format!("{dir}/{}.minisig", a.asset));
+/// The trusted comment a mirror tarball's `.minisig` must carry, exactly:
+/// it names the file, the bundle version and the pinned sha256, so a
+/// signature can't be replayed onto another file or version. Signed on
+/// z3mbpZ with `minisign -S -s <primary.key> -t "<this>" -m <asset>`.
+pub fn bundle_trusted_comment(a: &PodmanArtifact) -> String {
+    format!("file:{} version:{BUNDLE_VERSION} sha256:{}", a.asset, a.sha256)
+}
+
+/// Which key signed a mirror tarball.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundleSigner {
+    pub role: &'static str,
+    pub key_id: String,
+    /// Signed with the backup key: accepted, and said out loud.
+    pub flagged: bool,
+}
+
+/// The tarball's `.minisig`: valid for one of `keys` over `bytes`, with
+/// [`bundle_trusted_comment`] exactly. Static refusal strings only.
+pub fn verify_bundle_sig(bytes: &[u8], sig_text: &str, keys: &[crate::keys::TrustedKey], a: &PodmanArtifact) -> Result<BundleSigner, &'static str> {
+    let sig = minisign_verify::Signature::decode(sig_text).map_err(|_| "signature unreadable")?;
+    let key = keys
+        .iter()
+        .find(|k| minisign_verify::PublicKey::from_base64(k.public_key_b64).is_ok_and(|pk| pk.verify(bytes, &sig, false).is_ok()))
+        .ok_or("signature not valid for any trusted key")?;
+    if sig.trusted_comment() != bundle_trusted_comment(a) {
+        return Err("trusted comment doesn't name this tarball, version and sha256");
     }
-    v.push(format!("{dir}/SHA256SUMS"));
-    v.push(format!("{dir}/UPSTREAM-SIGNATURES.asc"));
-    for s in GPL_SOURCES {
-        v.push(format!("{dir}/sources/{}", s.tarball));
-    }
-    v
+    Ok(BundleSigner {
+        role: key.role,
+        key_id: crate::keys::key_id_of(key.public_key_b64).unwrap_or_else(|| key.key_id.to_string()),
+        flagged: key.role == "backup",
+    })
 }
 
 /// A copyleft component inside the bundle that K2 installs (passt/pasta,
@@ -154,25 +197,96 @@ pub struct GplSource {
     pub component: &'static str,
     pub licence: &'static str,
     pub tarball: &'static str,
+    /// Where the mirror took it from.
+    pub from: &'static str,
+    pub sha256: &'static str,
+    pub size: u64,
 }
 
-/// The copyleft parts of the members K2 takes ([`MEMBERS`]): pasta (passt,
-/// GPL-2.0-or-later), crun (GPL-2.0-or-later; libcrun LGPL-2.1-or-later),
-/// catatonit (GPL-2.0-or-later), libseccomp (LGPL-2.1, linked statically
-/// into crun and podman), and podman-static's own build recipe at the tag
-/// (how the static binaries were made). Versions are the ones in the
-/// pinned tarball, read from each binary's `--version` on 2026-10-17
-/// (podman 5.8.8, crun 1.28, pasta 2026_06_11.a9c61ff, catatonit 0.2.1,
-/// conmon 2.2.1, netavark 1.17.2, aardvark-dns 1.17.1; static, musl).
-/// libseccomp's version is the Alpine package podman-static's recipe
-/// pinned at the tag: the mirror records it in the file's name.
+/// The copyleft parts of the members K2 takes ([`MEMBERS`]), at the
+/// versions in the pinned tarball (read from each binary's `--version`
+/// and podman-static's recipe at v5.8.8, 2026-10-18: podman 5.8.8, crun
+/// 1.28, pasta 2026_06_11.a9c61ff, catatonit 0.2.1, conmon 2.2.1, netavark
+/// 1.17.2, aardvark-dns 1.17.1; static, musl, Alpine 3.22, whose
+/// libseccomp-static is 2.6.1), plus the recipe itself. sha256 and sizes
+/// of the files as downloaded from `from` on 2026-10-18.
 pub const GPL_SOURCES: &[GplSource] = &[
-    GplSource { component: "passt (pasta)", licence: "GPL-2.0-or-later", tarball: "passt-2026_06_11.a9c61ff.tar.xz" },
-    GplSource { component: "crun", licence: "GPL-2.0-or-later (libcrun LGPL-2.1-or-later)", tarball: "crun-1.28.tar.gz" },
-    GplSource { component: "catatonit", licence: "GPL-2.0-or-later", tarball: "catatonit-0.2.1.tar.gz" },
-    GplSource { component: "libseccomp", licence: "LGPL-2.1-only", tarball: "libseccomp-source.tar.gz" },
-    GplSource { component: "podman-static build recipe", licence: "Apache-2.0", tarball: "podman-static-v5.8.8-source.tar.gz" },
+    GplSource {
+        component: "passt (pasta)",
+        licence: "GPL-2.0-or-later",
+        tarball: "passt-2026_06_11.a9c61ff.tar.xz",
+        from: "https://passt.top/passt/snapshot/passt-2026_06_11.a9c61ff.tar.xz",
+        sha256: "b94b235cb96ce1b7aeab6552b7e0b4c9a780e5d700ced500c65e429b2d8b8450",
+        size: 295_200,
+    },
+    GplSource {
+        component: "crun",
+        licence: "GPL-2.0-or-later (libcrun LGPL-2.1-or-later)",
+        tarball: "crun-1.28.tar.gz",
+        from: "https://github.com/containers/crun/releases/download/1.28/crun-1.28.tar.gz",
+        sha256: "eb8fe73ffe44d868b14bb94fa6c295bd57e8bf023de43b61579da826c07cc406",
+        size: 1_585_077,
+    },
+    GplSource {
+        component: "catatonit",
+        licence: "GPL-2.0-or-later",
+        tarball: "catatonit-0.2.1.tar.gz",
+        from: "https://github.com/openSUSE/catatonit/archive/refs/tags/v0.2.1.tar.gz",
+        sha256: "771385049516fdd561fbb9164eddf376075c4c7de3900a8b18654660172748f1",
+        size: 18_479,
+    },
+    GplSource {
+        component: "libseccomp",
+        licence: "LGPL-2.1-only",
+        tarball: "libseccomp-2.6.1.tar.gz",
+        from: "https://github.com/seccomp/libseccomp/releases/download/v2.6.1/libseccomp-2.6.1.tar.gz",
+        sha256: "501f66c667225d53791b97e1d7cf85ab764c297d04881f60f38f451c4b0ee1be",
+        size: 656_231,
+    },
+    GplSource {
+        component: "podman-static build recipe",
+        licence: "Apache-2.0",
+        tarball: "podman-static-v5.8.8-source.tar.gz",
+        from: "https://github.com/mgoltzsche/podman-static/archive/refs/tags/v5.8.8.tar.gz",
+        sha256: "79cd0d30dad4ecb7a526f0b92c8a9a453a18fa12c9ffc76d032d2468c858ca78",
+        size: 20_288,
+    },
 ];
+
+/// One file the mirror holds: its path under the base, and its sha256
+/// when K2 knows it ahead (`None`: made when the mirror is filled, like
+/// the signatures and the checksum list).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirrorFile {
+    pub path: String,
+    pub sha256: Option<&'static str>,
+}
+
+/// Every file the mirror must hold for this bundle: per arch the tarball,
+/// its `.sha256` (`<hex>  <asset>`), its K2 `.minisig` (over
+/// [`bundle_trusted_comment`]) and upstream's `.asc` (its maintainer's GPG
+/// signature, for provenance); then `SHA256SUMS` and the sources of the
+/// copyleft parts ([`GPL_SOURCES`]).
+pub fn mirror_files() -> Vec<MirrorFile> {
+    let dir = mirror_dir();
+    let mut v = Vec::new();
+    for a in BUNDLE {
+        v.push(MirrorFile { path: format!("{dir}/{}", a.asset), sha256: Some(a.sha256) });
+        v.push(MirrorFile { path: format!("{dir}/{}.sha256", a.asset), sha256: None });
+        v.push(MirrorFile { path: format!("{dir}/{}", signature_name(a)), sha256: None });
+        v.push(MirrorFile { path: format!("{dir}/{}.asc", a.asset), sha256: None });
+    }
+    v.push(MirrorFile { path: format!("{dir}/SHA256SUMS"), sha256: None });
+    for s in GPL_SOURCES {
+        v.push(MirrorFile { path: format!("{dir}/sources/{}", s.tarball), sha256: Some(s.sha256) });
+    }
+    v
+}
+
+/// The paths alone.
+pub fn mirror_assets() -> Vec<String> {
+    mirror_files().into_iter().map(|f| f.path).collect()
+}
 
 /// Largest tarball the helper takes on stdin.
 pub const CAP_BUNDLE: usize = 128 * 1024 * 1024;
@@ -426,7 +540,11 @@ mod tests {
             assert!(!checksum_is_placeholder(a), "{arch}");
             assert!(a.asset.starts_with(a.top), "{arch}");
             // Rosson 2026-10-17: K2's own mirror, never upstream.
-            assert!(download_url(a).starts_with("https://mirror.k2.dev/podman/v5.8.8/podman-linux-"), "{}", download_url(a));
+            assert!(download_url(a).starts_with("https://mirror.alakazamlabs.com:8443/podman/v5.8.8/podman-linux-"), "{}", download_url(a));
+            let all = download_urls(a);
+            assert_eq!(all.len(), 2);
+            assert_eq!(all[0], download_url(a));
+            assert!(all[1].starts_with("https://mirror.akzm.k2.dev/podman/v5.8.8/podman-linux-"), "{all:?}");
             assert!(!download_url(a).contains("github.com"));
             assert!(upstream_url(a).starts_with("https://github.com/mgoltzsche/podman-static/releases/download/v5.8.8/podman-linux-"));
             assert!(a.size > 1_000_000 && (a.size as usize) < CAP_BUNDLE, "{arch}");
@@ -434,7 +552,8 @@ mod tests {
         assert!(artifact_for_arch("riscv64").is_err());
         assert!(!MIRROR_BASE.contains("latest") && !UPSTREAM_URL_BASE.contains("latest"), "never latest");
         assert!(MIRROR_BASE.starts_with("https://") && !MIRROR_BASE.ends_with('/'));
-        assert_eq!(mirror_url("/x/y"), "https://mirror.k2.dev/x/y");
+        assert_eq!(mirror_url("/x/y"), "https://mirror.alakazamlabs.com:8443/x/y");
+        assert!(MIRROR_BASES.iter().all(|b| b.starts_with("https://") && !b.ends_with('/')));
         for bad in [
             "TODO",
             "e0e12f9de61bdb054d19a77df0e84ddd51cadfee13688e0fb607d61b6833e8c",
@@ -458,17 +577,24 @@ mod tests {
             "podman/v5.8.8/podman-linux-arm64.tar.gz",
             "podman/v5.8.8/podman-linux-arm64.tar.gz.sha256",
             "podman/v5.8.8/podman-linux-arm64.tar.gz.minisig",
+            "podman/v5.8.8/podman-linux-amd64.tar.gz.asc",
+            "podman/v5.8.8/podman-linux-arm64.tar.gz.asc",
             "podman/v5.8.8/SHA256SUMS",
-            "podman/v5.8.8/UPSTREAM-SIGNATURES.asc",
             "podman/v5.8.8/sources/passt-2026_06_11.a9c61ff.tar.xz",
             "podman/v5.8.8/sources/crun-1.28.tar.gz",
             "podman/v5.8.8/sources/catatonit-0.2.1.tar.gz",
-            "podman/v5.8.8/sources/libseccomp-source.tar.gz",
+            "podman/v5.8.8/sources/libseccomp-2.6.1.tar.gz",
             "podman/v5.8.8/sources/podman-static-v5.8.8-source.tar.gz",
         ] {
             assert!(a.iter().any(|x| x == want), "missing {want}: {a:?}");
         }
-        assert_eq!(a.len(), 2 * 3 + 2 + GPL_SOURCES.len());
+        assert_eq!(a.len(), 2 * 4 + 1 + GPL_SOURCES.len());
+        let f = mirror_files();
+        assert_eq!(f.iter().find(|x| x.path.ends_with("amd64.tar.gz")).unwrap().sha256, Some(BUNDLE[0].sha256));
+        for s in GPL_SOURCES {
+            assert!(s.sha256.len() == 64 && s.sha256.bytes().all(|b| b.is_ascii_hexdigit()), "{s:?}");
+            assert!(s.size > 1000 && s.from.starts_with("https://"), "{s:?}");
+        }
         // Every binary K2 takes that is copyleft has its source listed.
         for m in MEMBERS {
             let name = m.dest.rsplit('/').next().unwrap();
@@ -478,6 +604,39 @@ mod tests {
                 assert!(GPL_SOURCES.iter().any(|s| s.component.starts_with(comp)), "{name} needs its source on the mirror");
             }
         }
+    }
+
+    /// The host is not the trust anchor: a mirror tarball needs a K2
+    /// signature over the exact trusted comment; the backup key is taken
+    /// and flagged; anything else is refused.
+    #[cfg(feature = "test-signer")]
+    #[test]
+    fn a_mirror_tarball_needs_a_k2_signature_naming_it() {
+        use crate::keys::{TrustedKey, TEST_KEY};
+        use crate::testsign::{public_key_b64, sign, sign_with_test_key};
+        let a = &BUNDLE[0];
+        assert_eq!(bundle_trusted_comment(a), format!("file:podman-linux-amd64.tar.gz version:5.8.8 sha256:{}", a.sha256));
+        let bytes = b"pretend tarball";
+        let good = sign_with_test_key(bytes, &bundle_trusted_comment(a));
+        let s = verify_bundle_sig(bytes, &good, &[TEST_KEY], a).unwrap();
+        assert_eq!((s.role, s.flagged), ("test", false));
+        assert_eq!(verify_bundle_sig(bytes, &good, crate::keys::RELEASE_KEYS, a), Err("signature not valid for any trusted key"));
+        assert_eq!(verify_bundle_sig(b"other bytes", &good, &[TEST_KEY], a), Err("signature not valid for any trusted key"));
+        let other_file = sign_with_test_key(bytes, &bundle_trusted_comment(&BUNDLE[1]));
+        assert_eq!(verify_bundle_sig(bytes, &other_file, &[TEST_KEY], a), Err("trusted comment doesn't name this tarball, version and sha256"));
+        assert!(verify_bundle_sig(bytes, "junk", &[TEST_KEY], a).is_err());
+        // A backup-role key: accepted, flagged.
+        let seed = [7u8; 32];
+        let id = [1, 2, 3, 4, 5, 6, 7, 8];
+        let pk = public_key_b64(&seed, id);
+        let pk: &'static str = Box::leak(pk.into_boxed_str());
+        let backup = TrustedKey { role: "backup", key_id: "0807060504030201", public_key_b64: pk };
+        let sig = sign(&seed, id, bytes, &bundle_trusted_comment(a));
+        let s = verify_bundle_sig(bytes, &sig, &[TEST_KEY, backup], a).unwrap();
+        assert_eq!((s.role, s.flagged), ("backup", true));
+        // The release keys are the ceremony's, primary first.
+        assert_eq!(crate::keys::RELEASE_KEYS[0].key_id, "18DB69584200F795");
+        assert_eq!(crate::keys::RELEASE_KEYS[1].key_id, "E9C2D2CAD052297A");
     }
 
     #[test]

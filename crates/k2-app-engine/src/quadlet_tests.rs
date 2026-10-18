@@ -191,7 +191,6 @@ fn a_build_runs_under_the_floor_with_only_the_proxy() {
         px_port: 38_902,
         argv: &argv,
         resources: &RES_NOCAP,
-        log_file: "/var/lib/k2app/engine/builds/hearth/b-0123456789ab.log",
         timeout_secs: 900,
     };
     let u = render_build(&b);
@@ -205,10 +204,9 @@ fn a_build_runs_under_the_floor_with_only_the_proxy() {
         "\nReadOnly=true\n",
         "\nVolume=/var/lib/k2app/apps/hearth/build/b-0123456789ab:/app:rw\n",
         "\nNetwork=pasta:-T,38902\n",
-        "\nExec=\"npm\" \"ci\"\n",
+        "\nExec=\"/bin/sh\" \"-c\" \"exec \\\"$$@\\\" > /app/.k2-build.log 2>&1\" \"k2-build\" \"npm\" \"ci\"\n",
         "\nSlice=k2apps-hearth.slice\n",
         "\nRuntimeMaxSec=900\n",
-        "\nStandardOutput=truncate:/var/lib/k2app/engine/builds/hearth/b-0123456789ab.log\n",
         "\nLogDriver=passthrough\n",
     ] {
         assert!(u.contains(want), "missing {want:?} in\n{u}");

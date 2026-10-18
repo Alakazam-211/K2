@@ -74,9 +74,18 @@ fn unit_state(e: &Engine, unit: &str) -> R<(String, Option<i32>, String)> {
     Ok((get("ActiveState"), get("ExecMainStatus").parse().ok(), get("Result")))
 }
 
-/// The last `MAX_OUTPUT` bytes of the build's log.
-fn tail(path: &Path) -> String {
-    let b = std::fs::read(path).unwrap_or_default();
+/// The last `MAX_OUTPUT` bytes of the build's log (written by the App's
+/// ids: read in k2app's namespace when the mode bits don't let k2app in).
+fn tail(e: &Engine, path: &Path) -> String {
+    let b = std::fs::read(path)
+        .ok()
+        .or_else(|| {
+            e.run(crate::server::podman_bin(), &["unshare", "cat", &path.to_string_lossy()], None, 60)
+                .ok()
+                .filter(|o| o.ok())
+                .map(|o| o.stdout)
+        })
+        .unwrap_or_default();
     let start = b.len().saturating_sub(MAX_OUTPUT);
     String::from_utf8_lossy(&b[start..]).to_string()
 }
@@ -97,7 +106,7 @@ pub fn run(e: &Engine, s: &BuildSpec) -> R<Built> {
     }
     let work = e.work_copy(&app, &seed_dir, &format!("build/{}", s.build), base)?;
     let env_file = dir.join(format!("{}.env", s.build));
-    let log_file = dir.join(format!("{}.log", s.build));
+    let log_file = work.join(quadlet::BUILD_LOG_NAME);
     let stem = quadlet::build_stem(&app, &s.build);
     let unit = format!("{stem}.service");
     let qfile = e.quadlets().join(format!("{stem}.container"));
@@ -116,7 +125,6 @@ pub fn run(e: &Engine, s: &BuildSpec) -> R<Built> {
     let env_text: String = build_env(s, px).iter().map(|(k, v)| format!("{k}={v}\n")).collect();
     let work_s = work.to_string_lossy().to_string();
     let env_s = env_file.to_string_lossy().to_string();
-    let log_s = log_file.to_string_lossy().to_string();
     let sec_s = e.seccomp_path().to_string_lossy().to_string();
     let runtime = e.runtime_arg();
     let text = quadlet::render_build(&quadlet::BuildRender {
@@ -131,13 +139,11 @@ pub fn run(e: &Engine, s: &BuildSpec) -> R<Built> {
         px_port: px,
         argv: &s.argv,
         resources: &s.resources,
-        log_file: &log_s,
         timeout_secs: s.timeout_secs,
     });
     {
         let _g = e.locked();
         let w = sys::write_atomic(&env_file, env_text.as_bytes(), 0o600)
-            .and_then(|_| sys::write_atomic(&log_file, b"", 0o600))
             .and_then(|_| sys::write_atomic(&qfile, text.as_bytes(), 0o600));
         if let Err(er) = w {
             drop(_g);
@@ -158,7 +164,14 @@ pub fn run(e: &Engine, s: &BuildSpec) -> R<Built> {
     let (code, timed_out) = loop {
         let (active, status, result) = unit_state(e, &unit)?;
         if matches!(active.as_str(), "inactive" | "failed") {
-            let code = if result == "success" { Some(0) } else { status.filter(|c| *c != 0).or(Some(-1)) };
+            // The build's own exit status (a failed cleanup step of the
+            // unit doesn't fail a build that succeeded).
+            let code = match (result.as_str(), status) {
+                ("timeout", _) => None,
+                (_, Some(c)) => Some(c),
+                ("success", None) => Some(0),
+                _ => Some(-1),
+            };
             break (code, result == "timeout");
         }
         if t0.elapsed() > deadline {
@@ -166,9 +179,10 @@ pub fn run(e: &Engine, s: &BuildSpec) -> R<Built> {
         }
         std::thread::sleep(Duration::from_millis(500));
     };
-    let output = tail(&log_file);
+    let output = tail(e, &log_file);
     let ms = t0.elapsed().as_millis() as u64;
-    let _ = std::fs::remove_file(&log_file);
+    // The log is no part of the built tree.
+    let _ = e.run(crate::server::podman_bin(), &["unshare", "rm", "-f", &log_file.to_string_lossy()], None, 60);
     if code != Some(0) {
         cleanup(e);
         return Ok(Built { answer: json!({ "exitCode": code, "timedOut": timed_out, "output": output, "ms": ms, "tarLen": null }), tar: None });

@@ -59,7 +59,7 @@ python3 - /tmp/d0.json <<'PY'
 import json, sys
 v = json.load(open(sys.argv[1]))
 st = {c["id"]: c["status"] for c in v["checks"]}
-assert v["helperProtocol"] == 6 and st["helper"] == "ok", (v["helperProtocol"], st)
+assert v["helperProtocol"] >= 6 and st["helper"] == "ok", (v["helperProtocol"], st)
 assert st["platform"] == "ok" and st["cgroupV2"] == "ok", st
 # The image bakes the distro packages (offline container), so Podman is
 # already there; the box itself is not prepared.

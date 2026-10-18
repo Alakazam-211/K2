@@ -103,8 +103,8 @@ pub struct Render<'a> {
 /// One in-wall build (S16): the guarded floor around the manifest's build
 /// argv, in the App's slot and slice (so its egress proxy and nft rule
 /// apply), with the work copy writable at `/app`. No gateway link, no
-/// pass, no secrets, no published port. Its output goes to `log_file`
-/// through the unit's stdout (the container is removed when it exits).
+/// pass, no secrets, no published port. Its output goes to a file in the work tree
+/// (`BUILD_LOG_IN_WALL`; the container is removed when it exits).
 #[derive(Debug, Clone)]
 pub struct BuildRender<'a> {
     pub app: &'a AppId,
@@ -118,9 +118,13 @@ pub struct BuildRender<'a> {
     pub px_port: u16,
     pub argv: &'a [String],
     pub resources: &'a Resources,
-    pub log_file: &'a str,
     pub timeout_secs: u64,
 }
+
+/// Where a build writes its output, inside its work tree (`/app`).
+pub const BUILD_LOG_IN_WALL: &str = "/app/.k2-build.log";
+/// The same file's name in the work tree on the host.
+pub const BUILD_LOG_NAME: &str = ".k2-build.log";
 
 /// The build's container, unit and Quadlet file stem.
 pub fn build_stem(app: &AppId, build: &str) -> String {
@@ -167,15 +171,18 @@ pub fn render_build(r: &BuildRender) -> String {
     }
     line("LogDriver=passthrough".into());
     line(format!("EnvironmentFile={}", r.env_file));
-    line(format!("Exec={}", r.argv.iter().map(|a| sd_quote(a)).collect::<Vec<_>>().join(" ")));
+    // The build's output goes to a file in its own work tree (the engine
+    // reads it, then drops it from the tree before the tar): no unit
+    // stdout redirection (systemd reopens that for every control process).
+    let mut words = vec!["/bin/sh".to_string(), "-c".to_string(), format!("exec \"$@\" > {BUILD_LOG_IN_WALL} 2>&1"), "k2-build".to_string()];
+    words.extend(r.argv.iter().cloned());
+    line(format!("Exec={}", words.iter().map(|a| sd_quote(a)).collect::<Vec<_>>().join(" ")));
     line(String::new());
     line("[Service]".into());
     line(format!("Slice={}", app_slice(r.app)));
     line("Restart=no".into());
     line(format!("TimeoutStartSec={}", r.timeout_secs + 60));
     line(format!("RuntimeMaxSec={}", r.timeout_secs));
-    line(format!("StandardOutput=truncate:{}", r.log_file));
-    line("StandardError=inherit".into());
     line("OOMPolicy=kill".into());
     line("MemorySwapMax=0".into());
     o

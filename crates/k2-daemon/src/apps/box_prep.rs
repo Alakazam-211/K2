@@ -965,7 +965,7 @@ pub(crate) fn prepare_route(who: &Who, body: &J) -> R<J> {
         None => plan(&opts),
     };
     let res = prepare_steps(steps, |argv| match (&tarball, pi::is_install(argv)) {
-        (Some(b), true) => root_helper::call_text(argv, Some(b)),
+        (Some(t), true) => root_helper::call_text(argv, Some(&t.bytes)),
         _ => root_helper::call_text(argv, None),
     });
     root_helper::invalidate();
@@ -978,7 +978,8 @@ pub(crate) fn prepare_route(who: &Who, body: &J) -> R<J> {
             ),
             Err(_) => "ok (a later box prep step failed)".to_string(),
         };
-        pi::audit("app-podman-install", who, &format!("{r} version={}", k2_root_proto::podman::BUNDLE_VERSION));
+        let signed = tarball.as_ref().map(|t| format!(" from={} signedBy={} key={}", t.from, t.signer.role, t.signer.key_id)).unwrap_or_default();
+        pi::audit("app-podman-install", who, &format!("{r} version={}{signed}", k2_root_proto::podman::BUNDLE_VERSION));
     }
     let doc = doctor(&gather());
     match res {
@@ -986,7 +987,11 @@ pub(crate) fn prepare_route(who: &Who, body: &J) -> R<J> {
             v["ok"] = json!(true);
             v["runtime"] = json!(opts.runtime.as_str());
             v["podman"] = match (&tarball, &d) {
-                (Some(_), _) => json!({"action": "installed", "version": k2_root_proto::podman::BUNDLE_VERSION, "prefix": k2_root_proto::podman::PREFIX}),
+                (Some(t), _) => json!({
+                    "action": "installed", "version": k2_root_proto::podman::BUNDLE_VERSION, "prefix": k2_root_proto::podman::PREFIX,
+                    "from": t.from, "signedBy": t.signer.role, "keyId": t.signer.key_id,
+                    "warning": t.signer.flagged.then_some("signed with K2's BACKUP release key (accepted): the primary key should sign the mirror"),
+                }),
                 (None, pi::Decision::Keep { version, source }) => json!({"action": "keep", "have": version, "source": source}),
                 (None, _) => json!({"action": "distro"}),
             };

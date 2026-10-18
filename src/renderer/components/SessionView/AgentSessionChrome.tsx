@@ -19,6 +19,7 @@ import type { SessionViewTab, SplitPaneView } from './sessionViewTab'
 import { useRoom } from '@/components/Room/RoomContext'
 import { SessionTokenPicker } from '@/components/Settings/shared/LlmLoginPicker'
 import { roomProjectForCwd } from '@/stores/room'
+import type { ServerScope } from '@/kessel/server-scope'
 
 interface AgentSessionChromeProps {
   /** Sidecar handle (`sales/reviewer`) or pinned workspace handle. */
@@ -162,6 +163,8 @@ export function AgentSessionChrome({
           onSplitLeft={setSplitLeft}
           onSplitRight={setSplitRight}
           chatEligible={Boolean(chatProvider)}
+          threadConversationId={conversationId}
+          threadScope={room.scope}
           onRefresh={() => void handleRefresh()}
           refreshing={refreshing}
           tokenPicker={
@@ -209,6 +212,8 @@ export function SidecarSessionHeader({
   onRefresh,
   refreshing,
   tokenPicker,
+  threadConversationId,
+  threadScope,
 }: {
   title: string
   viewTab: SessionViewTab
@@ -222,6 +227,9 @@ export function SidecarSessionHeader({
   refreshing: boolean
   /** The chat's Token control, left of refresh (agent chat tabs). */
   tokenPicker?: ReactNode
+  /** thread-read-v1: this chat's Thread, for the view menu's unread + mute. */
+  threadConversationId?: string | null
+  threadScope?: ServerScope
 }): JSX.Element {
   return (
     <div
@@ -237,6 +245,8 @@ export function SidecarSessionHeader({
           onChange={onViewTabChange}
           onSplitLeft={onSplitLeft}
           onSplitRight={onSplitRight}
+          threadConversationId={threadConversationId}
+          threadScope={threadScope}
         />
         </div>
         <span

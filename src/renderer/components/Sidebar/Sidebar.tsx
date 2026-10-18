@@ -42,6 +42,7 @@ import { KeyCombo } from '@/components/KeySymbol'
 import { primaryScope } from '@/kessel/server-scope'
 import { GrokBotSidebarSection } from '@/components/GrokBots/GrokBotRows'
 import { closeGrokChat } from '@/stores/grokbots'
+import { WorkspaceThreadUnreadBadge } from '@/components/common/UnreadBadge'
 
 // ── Nav-visible worktrees (DB-backed via workspace.navVisible field) ─────────
 
@@ -328,7 +329,13 @@ export function SingleProjectItem({
           />
         }
         name={project.name}
-        nameAside={<PresenceWorkspaceAvatars path={project.path} />}
+        nameAside={
+          <>
+            {/* thread-read-v1: this workspace's Threads, unread / waiting on you. */}
+            <WorkspaceThreadUnreadBadge projectId={project.id} className="mr-1" />
+            <PresenceWorkspaceAvatars path={project.path} />
+          </>
+        }
         subline={
           <>
             <NavProjectTags workspaceId={project.id} />

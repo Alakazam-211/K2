@@ -24,7 +24,7 @@
 // focus.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, DialogFrame, DialogScrim } from '@/components/ui'
+import { Button, DialogFrame, DialogScrim, SquareRadio } from '@/components/ui'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
 import { getWindowLabel } from '@/lib/window-chrome'
@@ -354,13 +354,12 @@ export default function OwnerAccountPrompt(): React.JSX.Element | null {
                     data-testid={`owner-account-option-${c.username}`}
                     className="flex items-center gap-3 py-2 border-b border-[var(--color-border)] cursor-pointer"
                   >
-                    <input
-                      type="radio"
+                    <SquareRadio
                       name="owner-account"
                       value={c.username}
                       checked={on}
                       onChange={() => setPicked(c.username)}
-                      className="accent-[var(--color-accent)]"
+                      className="flex-none"
                     />
                     <span
                       aria-hidden
@@ -385,7 +384,7 @@ export default function OwnerAccountPrompt(): React.JSX.Element | null {
                 }}
                 className="flex items-center gap-3 py-2 border-b border-[var(--color-border)] text-left text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer"
               >
-                <span aria-hidden className="w-[13px] text-center">+</span>
+                <span aria-hidden className="w-[14px] text-center">+</span>
                 Create a new account
               </button>
             </div>

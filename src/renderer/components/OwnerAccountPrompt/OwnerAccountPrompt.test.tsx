@@ -46,6 +46,7 @@ vi.mock('@/lib/daemon-cli', () => ({
 import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import OwnerAccountPrompt, { CREATE_TITLE, PROMPT_TITLE, PROMPT_WHY, parsePromptView } from './OwnerAccountPrompt'
+import { SQUARE_RADIO_CLASS } from '@/components/ui'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -86,6 +87,8 @@ function radio(username: string): HTMLInputElement {
   const row = screen.getByTestId(`owner-account-option-${username}`)
   const input = row.querySelector('input[type="radio"]')
   if (!(input instanceof HTMLInputElement)) throw new Error(`no radio for ${username}`)
+  // The shared square radio (components/ui/SquareRadio), not the browser's round one.
+  if (!input.classList.contains(SQUARE_RADIO_CLASS)) throw new Error(`${username}: not a SquareRadio`)
   return input
 }
 
@@ -161,6 +164,24 @@ describe('owner account prompt: pre-select', () => {
     await shown()
     expect([radio('z3thon').checked, radio('julie').checked]).toEqual([false, false])
     expect((screen.getByRole('button', { name: 'Use this account' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('the choices are the shared square radios: one group, each labelled by its account, keyboard-selectable', async () => {
+    await shown()
+    const group = screen.getByRole('radiogroup', { name: 'Your account' })
+    const radios = Array.from(group.querySelectorAll('input[type="radio"]')) as HTMLInputElement[]
+    expect(radios.map((r) => [r.name, r.value, r.classList.contains(SQUARE_RADIO_CLASS)])).toEqual([
+      ['owner-account', 'z3thon', true],
+      ['owner-account', 'julie', true],
+    ])
+    // The label still names it (a real radio inside its label).
+    expect(screen.getByRole('radio', { name: /Rosson Long/ })).toBe(radio('z3thon'))
+    // Focusable, and Space/arrow selection is the browser's own radio:
+    // a change event picks it like a click does.
+    radio('julie').focus()
+    expect(document.activeElement).toBe(radio('julie'))
+    act(() => void fireEvent.click(radio('julie')))
+    expect([radio('z3thon').checked, radio('julie').checked]).toEqual([false, true])
   })
 
   it('ignores a pre-selection that is not in the list', () => {

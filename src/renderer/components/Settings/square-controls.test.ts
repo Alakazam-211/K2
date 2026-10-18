@@ -70,3 +70,35 @@ describe('Settings square controls', () => {
     expect(before.lastIndexOf('<input')).toBeLessThan(lastSquare)
   })
 })
+
+// Rosson 2026-10-18: a raw radio anywhere in the app's components paints
+// the browser's round control. Every `type="radio"` must be the shared
+// SquareRadio (components/ui/SquareRadio.tsx), the one file allowed to
+// spell it. Tests are skipped; no sr-only exception for radios.
+const COMPONENTS = join(__dirname, '..')
+
+/** Every raw radio under `src/renderer/components`, as `file:line`. */
+function rawRadios(): string[] {
+  const allowed = join(COMPONENTS, 'ui', 'SquareRadio.tsx')
+  const hits: string[] = []
+  for (const f of tsxFiles(COMPONENTS)) {
+    if (f === allowed) continue
+    const src = readFileSync(f, 'utf8')
+    for (const m of src.matchAll(/<input\b[\s\S]*?\/>/g)) {
+      if (!/\btype=["'{]+radio\b/.test(m[0])) continue
+      hits.push(`${relative(COMPONENTS, f)}:${src.slice(0, m.index).split('\n').length}`)
+    }
+  }
+  return hits
+}
+
+describe('square radios across the app', () => {
+  it('walks every component source, including the Owner account prompt and the Clone dialog', () => {
+    const files = tsxFiles(COMPONENTS).map((f) => relative(COMPONENTS, f))
+    expect(files).toEqual(expect.arrayContaining([join('OwnerAccountPrompt', 'OwnerAccountPrompt.tsx'), join('CloneToDialog', 'CloneOptionsBlocks.tsx')]))
+  })
+
+  it('has no raw type="radio" outside ui/SquareRadio.tsx', () => {
+    expect(rawRadios()).toEqual([])
+  })
+})

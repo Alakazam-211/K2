@@ -1526,6 +1526,8 @@ async fn limits_up_front_and_the_mem_cap_hint() {
     let r = post(port, "/cli/compute/run", &agent, body).await;
     assert_eq!((r.status, code(&r)), (409, "queue_full".to_string()), "{}", r.body);
     let hint = j(&r)["error"]["hint"].as_str().expect("hint").to_string();
+    // grants/set fills limits it isn't given with the store defaults: read the disk again.
+    let disk = grant_of(&ws.id, &node_id).expect("grant")["maxDiskGb"].as_i64().expect("maxDiskGb");
     assert!(hint.contains(&format!("(grant: 2h/job, 1 parallel, 1 queued, {disk} GB disk)")) && hint.contains("--max-queued 2"), "{hint}");
     // A mem_cap end gets a hint naming the --mem it ran with.
     {

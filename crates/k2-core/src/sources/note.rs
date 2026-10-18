@@ -323,6 +323,7 @@ mod tests {
                     ("version".to_string(), Json::from("0.44.4")),
                     ("url".to_string(), Json::from("https://luzz.k2.dev/x?token=abc")),
                 ]),
+                list: None,
             }],
         };
         (r, st, proj)

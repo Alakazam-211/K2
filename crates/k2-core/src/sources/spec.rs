@@ -100,6 +100,16 @@ pub struct Extract {
     pub fields: BTreeMap<String, String>,
     #[serde(default)]
     pub items: Option<ItemsSpec>,
+    /// More item lists next to `items` (0.46.1), by name. Single-URL
+    /// sources only; each needs a `pointer`. Their items carry `list` and
+    /// the key `<list>/<itemKey>`; item field names are unique across
+    /// `items` and every list, so a rule's field says which list it rates.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lists: BTreeMap<String, ItemsSpec>,
+    /// name -> JSON Pointer to an array or object; the kept value is its
+    /// length (null when the pointer isn't an array or object). 0.46.1.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub counts: BTreeMap<String, String>,
     #[serde(default)]
     pub aggregates: BTreeMap<String, Aggregate>,
     /// Field/aggregate names, <= 8.
@@ -121,7 +131,11 @@ pub struct ItemsSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
 pub enum Aggregate {
-    Count,
+    /// Items in `items` (or in the named list).
+    Count {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        list: Option<String>,
+    },
     CountWhere { field: String, cond: Cond },
     Sum { field: String },
     Min { field: String },
@@ -138,19 +152,125 @@ pub struct Rule {
     pub crit: Option<Cond>,
     pub warn: Option<Cond>,
     pub ok: Option<Cond>,
+    /// Checks in a row that aren't ok before this rule's warn goes hard
+    /// (1-20, default 1: at once). 0.46.1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warn_after: Option<u8>,
+    /// Checks in a row that aren't ok, the last one crit, before this
+    /// rule's crit goes hard (1-20, default `warnAfter`). Until then a crit
+    /// reading shows as warn. 0.46.1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crit_after: Option<u8>,
 }
 
+impl Rule {
+    pub fn warn_after(&self) -> u32 {
+        u32::from(self.warn_after.unwrap_or(1).max(1))
+    }
+    pub fn crit_after(&self) -> u32 {
+        self.crit_after.map_or(self.warn_after(), |n| u32::from(n.max(1)))
+    }
+}
+
+/// A condition on one value. `eq`/`ne` and the number comparisons also take
+/// `{"field": "<name>"}`: another field of the same item, else a source
+/// field (0.46.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Cond {
     Eq(Json),
     Ne(Json),
     In(Vec<Json>),
-    Lt(f64),
-    Lte(f64),
-    Gt(f64),
-    Gte(f64),
+    Lt(Operand),
+    Lte(Operand),
+    Gt(Operand),
+    Gte(Operand),
     Exists(bool),
+    /// The value is a time (epoch seconds, epoch milliseconds, or an
+    /// RFC 3339 string) more than this many seconds ago. 0.46.1.
+    AgeGt(f64),
+    /// The value is a time less than this many seconds ago. 0.46.1.
+    AgeLt(f64),
+    /// The value is a version (`0.45.7`, `v1.2`, `0.46.0-rc1`) older than
+    /// the target. 0.46.1.
+    VersionBehind(VersionRef),
+    /// The value is a version at or past the target. 0.46.1.
+    VersionAtLeast(VersionRef),
+}
+
+/// A number, or `{"field": "<name>"}`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Operand {
+    Num(f64),
+    Field(FieldRef),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldRef {
+    pub field: String,
+}
+
+/// `"0.45.7"`, or `{"field": "target_version"}` / `{"value": "0.45.7"}`
+/// with at most one of `major`/`minor`/`patch`: behind by at least that
+/// many at that level (any older major or minor counts for `patch`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum VersionRef {
+    Value(String),
+    Spec(VersionSpec),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VersionSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub major: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minor: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patch: Option<u32>,
+}
+
+/// A field reference inside `eq`/`ne`: exactly `{"field": "<name>"}`.
+pub fn json_field_ref(v: &Json) -> Option<&str> {
+    let m = v.as_object()?;
+    if m.len() != 1 {
+        return None;
+    }
+    m.get("field")?.as_str()
+}
+
+impl Cond {
+    /// Field names this condition reads besides its own value.
+    pub fn refs(&self) -> Vec<&str> {
+        match self {
+            Cond::Eq(j) | Cond::Ne(j) => json_field_ref(j).into_iter().collect(),
+            Cond::Lt(o) | Cond::Lte(o) | Cond::Gt(o) | Cond::Gte(o) => match o {
+                Operand::Field(f) => vec![f.field.as_str()],
+                Operand::Num(_) => vec![],
+            },
+            Cond::VersionBehind(VersionRef::Spec(s)) | Cond::VersionAtLeast(VersionRef::Spec(s)) => {
+                s.field.as_deref().into_iter().collect()
+            }
+            _ => vec![],
+        }
+    }
+}
+
+/// What a source expects back (0.46.1). `status`: the HTTP statuses that
+/// count as an answer (200-299, 400-599; up to 10). With `expect`, any
+/// listed status is healthy and the body may be anything: JSON is still
+/// read when it parses, anything else reads as null.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Expect {
+    pub status: Vec<u16>,
 }
 
 fn kind_default() -> SourceKind {
@@ -209,6 +329,9 @@ pub struct SourceSpec {
     pub viewers: Option<Viewers>,
     #[serde(default = "keep_default")]
     pub keep: Keep,
+    /// Status-only checks (0.46.1); see [`Expect`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<Expect>,
 }
 
 /// Field, item-field and aggregate names: `[A-Za-z0-9_]{1,40}`.
@@ -221,6 +344,46 @@ fn check_field_name(n: &str, field: &str) -> Result<(), SpecError> {
         });
     }
     Ok(())
+}
+
+/// Shape checks on one condition (references are checked by the caller).
+fn check_cond(c: &Cond, field: &str) -> Result<(), SpecError> {
+    let e = |hint: &str| SpecError { code: "bad_rule", field: field.into(), hint: hint.into() };
+    match c {
+        Cond::AgeGt(n) | Cond::AgeLt(n) if !n.is_finite() || *n < 0.0 => Err(e("an age is a number of seconds, 0 or more")),
+        Cond::VersionBehind(v) | Cond::VersionAtLeast(v) => {
+            let (value, levels) = match v {
+                VersionRef::Value(s) => (Some(s.as_str()), 0),
+                VersionRef::Spec(s) => {
+                    if s.field.is_some() == s.value.is_some() {
+                        return Err(e("name exactly one of field or value"));
+                    }
+                    if let Some(f) = &s.field {
+                        check_field_name(f, field)?;
+                    }
+                    (s.value.as_deref(), [s.major, s.minor, s.patch].iter().filter(|x| x.is_some()).count())
+                }
+            };
+            if levels > 1 {
+                return Err(e("use at most one of major, minor, patch"));
+            }
+            if matches!(c, Cond::VersionAtLeast(_)) && levels > 0 {
+                return Err(e("versionAtLeast takes no major/minor/patch distance"));
+            }
+            if let Some(v) = value {
+                if super::rules::parse_version(v).is_none() {
+                    return Err(e("that isn't a version like 0.45.7"));
+                }
+            }
+            Ok(())
+        }
+        _ => {
+            for f in c.refs() {
+                check_field_name(f, field)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Sorted keys at every level, so the bytes don't depend on serde_json's
@@ -393,14 +556,73 @@ impl SourceSpec {
                 item_names.push(n);
             }
         }
+        // Item field -> its list (None = `items`).
+        let mut item_list: BTreeMap<&str, Option<&str>> = item_names.iter().map(|n| (*n, None)).collect();
+        if !ex.lists.is_empty() && fanout {
+            return Err(e("bad_pointer", "extract.lists", "lists read one answer; a source with targets has one item per target"));
+        }
+        if ex.lists.len() > 8 {
+            return Err(e("unknown_field", "extract.lists", "at most 8 lists"));
+        }
+        for (ln, l) in &ex.lists {
+            check_field_name(ln, "extract.lists")?;
+            let base = format!("extract.lists.{ln}");
+            match &l.pointer {
+                Some(p) => lint::check_pointer(p, &format!("{base}.pointer"))?,
+                None => return Err(e("bad_pointer", &format!("{base}.pointer"), "name where this list is (a JSON Pointer)")),
+            }
+            if let Some(k) = &l.item_key {
+                lint::check_pointer(k, &format!("{base}.itemKey"))?;
+            }
+            for (n, p) in &l.item_fields {
+                check_field_name(n, &format!("{base}.itemFields"))?;
+                lint::check_pointer(p, &format!("{base}.itemFields.{n}"))?;
+                if item_list.contains_key(n.as_str()) {
+                    return Err(e(
+                        "ambiguous_field",
+                        &format!("{base}.itemFields.{n}"),
+                        "item field names are unique across items and every list",
+                    ));
+                }
+                item_list.insert(n, Some(ln));
+                item_names.push(n);
+            }
+        }
         let mut source_names: Vec<&str> = ex.fields.keys().map(String::as_str).collect();
+        for (n, p) in &ex.counts {
+            check_field_name(n, "extract.counts")?;
+            lint::check_pointer(p, &format!("extract.counts.{n}"))?;
+            if source_names.contains(&n.as_str()) {
+                return Err(e("ambiguous_field", &format!("extract.counts.{n}"), "a field and a count share this name"));
+            }
+            source_names.push(n);
+        }
         for (n, agg) in &ex.aggregates {
             check_field_name(n, "extract.aggregates")?;
-            if ex.fields.contains_key(n) {
+            if source_names.contains(&n.as_str()) {
                 return Err(e("ambiguous_field", &format!("extract.aggregates.{n}"), "a field and an aggregate share this name"));
             }
+            if let Aggregate::Count { list: Some(l) } = agg {
+                if !ex.lists.contains_key(l) {
+                    return Err(e("unknown_field", &format!("extract.aggregates.{n}.list"), "count names a list from extract.lists"));
+                }
+            }
+            if let Aggregate::CountWhere { field, cond } = agg {
+                let own = item_list.get(field.as_str()).copied().flatten();
+                for r in cond.refs() {
+                    let same_list = item_list.get(r).is_some_and(|l| *l == own);
+                    if !same_list && !ex.fields.contains_key(r) && !ex.counts.contains_key(r) {
+                        return Err(e(
+                            "unknown_field",
+                            &format!("extract.aggregates.{n}.cond"),
+                            "a field reference names an item field of the same list, a field or a count",
+                        ));
+                    }
+                }
+                check_cond(cond, &format!("extract.aggregates.{n}.cond"))?;
+            }
             let f = match agg {
-                Aggregate::Count => None,
+                Aggregate::Count { .. } => None,
                 Aggregate::CountWhere { field, .. }
                 | Aggregate::Sum { field }
                 | Aggregate::Min { field }
@@ -433,6 +655,38 @@ impl SourceSpec {
             }
             if r.crit.is_none() && r.warn.is_none() && r.ok.is_none() {
                 return Err(e("unknown_field", &format!("rules[{i}]"), "a rule has at least one of crit, warn, ok"));
+            }
+            let own = item_list.get(r.field.as_str()).copied();
+            for (which, c) in [("crit", &r.crit), ("warn", &r.warn), ("ok", &r.ok)] {
+                let Some(c) = c else { continue };
+                let at = format!("rules[{i}].{which}");
+                check_cond(c, &at)?;
+                for f in c.refs() {
+                    let ok = source_names.contains(&f) || (own.is_some() && item_list.get(f).copied() == own);
+                    if !ok {
+                        return Err(e(
+                            "unknown_field",
+                            &at,
+                            "a field reference names a field, a count, an aggregate, or an item field of the same list",
+                        ));
+                    }
+                }
+            }
+            for (which, n) in [("warnAfter", r.warn_after), ("critAfter", r.crit_after)] {
+                if n.is_some_and(|n| !(1..=20).contains(&n)) {
+                    return Err(e("bad_fail_after", &format!("rules[{i}].{which}"), "warnAfter and critAfter are 1-20 checks"));
+                }
+            }
+            if r.crit_after.is_some_and(|c| c < r.warn_after.unwrap_or(1)) {
+                return Err(e("bad_fail_after", &format!("rules[{i}].critAfter"), "critAfter is at least warnAfter"));
+            }
+        }
+        if let Some(x) = &self.expect {
+            if x.status.is_empty() || x.status.len() > 10 {
+                return Err(e("bad_expect", "expect.status", "list 1-10 HTTP statuses that count as an answer"));
+            }
+            if let Some(bad) = x.status.iter().find(|s| !matches!(s, 200..=299 | 400..=599)) {
+                return Err(e("bad_expect", "expect.status", &format!("{bad} can't be expected: use 200-299 or 400-599")));
             }
         }
         if self.rules.len() > 32 {
@@ -471,14 +725,18 @@ impl SourceSpec {
         }
     }
 
-    /// The `spec_json` column: `{fetch, headers, extract, rules}`.
+    /// The `spec_json` column: `{fetch, headers, extract, rules}` plus
+    /// `expect` when set.
     pub fn stored_json(&self) -> String {
-        let v = serde_json::json!({
+        let mut v = serde_json::json!({
             "fetch": self.fetch,
             "headers": self.headers,
             "extract": self.extract,
             "rules": self.rules,
         });
+        if let Some(e) = &self.expect {
+            v["expect"] = serde_json::json!(e);
+        }
         let mut out = String::new();
         canonical(&v, &mut out);
         out
@@ -521,7 +779,8 @@ pub struct Validated {
 /// `lan_owner_only`, `too_many_targets`, `duplicate_target_key`,
 /// `mixed_origins_with_secret`, `bad_pointer`, `ambiguous_field`,
 /// `unknown_field`, `too_many_trends`, `every_too_short`, `bad_timeout`,
-/// `bad_max_bytes`, `bad_fail_after`, `bad_link`, `bad_preset`.
+/// `bad_max_bytes`, `bad_fail_after`, `bad_link`, `bad_preset`, `bad_rule`,
+/// `bad_expect`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpecError {
@@ -666,6 +925,81 @@ mod tests {
         s.viewers = None;
         let v = s.validate(false).unwrap();
         assert_eq!((v.spec.agent_access, v.spec.viewers), (Some(AgentAccess::Shape), Some(Viewers::Admin)), "secret → shape/admin");
+    }
+
+    #[test]
+    fn legacy_specs_keep_their_hash_and_stored_json() {
+        // 0.46.1 keys only appear when used, so approved sources don't need
+        // approving again.
+        let s = sample();
+        for k in ["expect", "lists", "counts", "warnAfter", "critAfter", "\"list\""] {
+            assert!(!s.canonical_json().contains(k), "{k} in a legacy canonical spec");
+            assert!(!s.stored_json().contains(k), "{k} in a legacy stored spec");
+        }
+        let v = parse(fleet(2));
+        assert!(v.canonical_json().contains("\"aggregates\":{\"versions\":{\"field\":\"version\",\"op\":\"distinct\"}}"));
+        let count = parse(serde_json::json!({"name": "x", "label": "X", "fetch": {"url": "https://a.example/"}, "everySecs": 60,
+            "extract": {"items": {"pointer": "", "itemKey": null}, "aggregates": {"n": {"op": "count"}}}}));
+        assert!(count.canonical_json().contains("\"n\":{\"op\":\"count\"}"), "count stays {{op: count}}");
+        let mut e = sample();
+        e.expect = Some(Expect { status: vec![200, 401] });
+        assert!(e.stored_json().contains("\"expect\":{\"status\":[200,401]}"));
+        assert_ne!(e.hash(), s.hash(), "expect is part of what an approval binds to");
+    }
+
+    #[test]
+    fn new_rule_shapes_validate_and_refuse_with_codes() {
+        let base = || serde_json::json!({
+            "name": "ops", "label": "Ops", "fetch": {"url": "https://k2.dev/api/ops/fleet"}, "everySecs": 60,
+            "extract": {
+                "fields": {"target_version": "/target_version", "ts": "/ts"},
+                "counts": {"past_due_n": "/past_due"},
+                "items": {"pointer": "/boxes", "itemKey": "/name", "itemFields": {"version": "/version"}},
+                "lists": {"certs": {"pointer": "/certs", "itemKey": "/host", "itemFields": {"cert_days": "/days"}}},
+                "aggregates": {"certs_n": {"op": "count", "list": "certs"},
+                               "behind": {"op": "countWhere", "field": "version", "cond": {"versionBehind": {"field": "target_version"}}}}
+            },
+            "rules": [
+                {"field": "ts", "warn": {"ageGt": 300}, "crit": {"ageGt": 900}},
+                {"field": "version", "warn": {"versionBehind": {"field": "target_version"}},
+                 "crit": {"versionBehind": {"field": "target_version", "minor": 1}}, "ok": {"versionAtLeast": {"field": "target_version"}},
+                 "warnAfter": 1, "critAfter": 3},
+                {"field": "cert_days", "crit": {"lt": 7}, "warn": {"lt": {"field": "past_due_n"}}},
+                {"field": "past_due_n", "warn": {"gt": 0}}
+            ],
+            "expect": {"status": [200, 401]}
+        });
+        let v = parse(base()).validate(false).expect("valid 0.46.1 spec");
+        assert_eq!(v.spec.expect, Some(Expect { status: vec![200, 401] }));
+        let code = |f: &dyn Fn(&mut serde_json::Value)| {
+            let mut b = base();
+            f(&mut b);
+            parse(b).validate(false).unwrap_err()
+        };
+        assert_eq!(code(&|b| b["rules"][1]["critAfter"] = 21.into()).code, "bad_fail_after");
+        assert_eq!(code(&|b| b["rules"][1]["warnAfter"] = 0.into()).code, "bad_fail_after");
+        let e = code(&|b| { b["rules"][1]["warnAfter"] = 4.into(); b["rules"][1]["critAfter"] = 2.into(); });
+        assert_eq!((e.code, e.field.as_str()), ("bad_fail_after", "rules[1].critAfter"));
+        assert_eq!(code(&|b| b["rules"][0]["warn"] = serde_json::json!({"ageGt": -1})).code, "bad_rule");
+        assert_eq!(code(&|b| b["rules"][1]["warn"] = serde_json::json!({"versionBehind": "latest"})).code, "bad_rule");
+        assert_eq!(code(&|b| b["rules"][1]["warn"] = serde_json::json!({"versionBehind": {"field": "target_version", "minor": 1, "patch": 2}})).code, "bad_rule");
+        assert_eq!(code(&|b| b["rules"][1]["warn"] = serde_json::json!({"versionBehind": {"field": "a", "value": "1.0"}})).code, "bad_rule");
+        assert_eq!(code(&|b| b["rules"][1]["ok"] = serde_json::json!({"versionAtLeast": {"field": "target_version", "minor": 1}})).code, "bad_rule");
+        let e = code(&|b| b["rules"][1]["warn"] = serde_json::json!({"versionBehind": {"field": "nope"}}));
+        assert_eq!((e.code, e.field.as_str()), ("unknown_field", "rules[1].warn"));
+        // A list's rule can't reference another list's item field.
+        assert_eq!(code(&|b| b["rules"][2]["warn"] = serde_json::json!({"lt": {"field": "version"}})).code, "unknown_field");
+        // A source rule can't reference an item field.
+        assert_eq!(code(&|b| b["rules"][3]["warn"] = serde_json::json!({"gt": {"field": "cert_days"}})).code, "unknown_field");
+        assert_eq!(code(&|b| b["extract"]["lists"]["certs"]["itemFields"]["version"] = "/v".into()).code, "ambiguous_field");
+        assert_eq!(code(&|b| b["extract"]["lists"]["certs"]["pointer"] = serde_json::Value::Null).code, "bad_pointer");
+        assert_eq!(code(&|b| b["extract"]["counts"]["ts"] = "/x".into()).code, "ambiguous_field");
+        assert_eq!(code(&|b| b["extract"]["aggregates"]["certs_n"]["list"] = "nope".into()).code, "unknown_field");
+        assert_eq!(code(&|b| b["expect"]["status"] = serde_json::json!([302])).code, "bad_expect");
+        assert_eq!(code(&|b| b["expect"]["status"] = serde_json::json!([])).code, "bad_expect");
+        let mut f = fleet(2);
+        f["extract"]["lists"] = serde_json::json!({"x": {"pointer": "/x", "itemFields": {"y": "/y"}}});
+        assert_eq!(parse(f).validate(false).unwrap_err().code, "bad_pointer", "lists need a single URL");
     }
 
     #[test]

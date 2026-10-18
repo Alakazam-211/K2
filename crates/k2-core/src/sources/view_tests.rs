@@ -62,7 +62,7 @@ fn state() -> (SourceState, Projection) {
     st.items.insert("gone-from-projection".into(), ItemState::new("gone-from-projection", true));
     let p = Projection {
         fields: [("count".to_string(), json!(4)), ("team".to_string(), json!("acme"))].into(),
-        items: vec![ProjectedItem { key: "d1".into(), fields: [("state".to_string(), json!("ERROR"))].into() }],
+        items: vec![ProjectedItem { key: "d1".into(), fields: [("state".to_string(), json!("ERROR"))].into(), list: None }],
     };
     (st, p)
 }

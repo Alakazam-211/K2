@@ -185,6 +185,7 @@ describe('helpers', () => {
       'https://api.vercel.com/v6/deployments?teamId=•••&limit=•••',
     )
     expect(stateText(row({}, { display: 'ok', soft: { count: 2, of: 3 } }))).toBe('ok · retrying 2/3')
+    expect(stateText(row({}, { display: 'warn', soft: { count: 2, of: 3, level: 'crit' } }))).toBe('warn · soft crit 2/3')
     expect(stateText(row({}, { display: 'stale', reasonText: 'The site did not answer in time.' }))).toBe(
       'stale · The site did not answer in time.',
     )

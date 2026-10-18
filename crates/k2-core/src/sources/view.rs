@@ -11,10 +11,14 @@ use super::state::{GapKind, Health, Phase, Reason, SourceState};
 pub use super::state::Counts;
 use super::store::SourceRow;
 
+/// A reading waiting to go hard: `count` checks in a row of the `of` it
+/// needs, and the waiting reading (`level`, 0.46.1). All zero / null when
+/// nothing waits.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct Soft {
     pub count: u32,
     pub of: u32,
+    pub level: Option<Health>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -79,6 +83,9 @@ pub struct SourceResult {
 #[serde(rename_all = "camelCase")]
 pub struct ItemView {
     pub key: String,
+    /// The `extract.lists` entry (0.46.1); absent for `items`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub list: Option<String>,
     pub health: Health,
     pub reason: Option<Reason>,
     pub since: Option<i64>,
@@ -152,7 +159,28 @@ pub fn build(row: &SourceRow, st: &SourceState, proj: Option<&Projection>, viewe
         Phase::Stale => "stale",
         Phase::Live => health.code(),
     };
-    let soft_of = u32::from(row.fail_after);
+    let fail_after = u32::from(row.fail_after);
+    // Thresholds for "soft crit 2/3": re-rate the stored projection with the
+    // source's own rules (display only).
+    let spec = super::store::spec_of(row).ok();
+    let rated_items = match (&spec, proj) {
+        (Some(s), Some(p)) => super::rules::rate_items(s, p, server_now),
+        _ => BTreeMap::new(),
+    };
+    let rated_self = match (&spec, proj) {
+        (Some(s), Some(p)) => super::rules::rate_source(s, p, server_now),
+        _ => None,
+    };
+    let soft_item = |key: &str, it: Option<&super::state::ItemState>| -> Soft {
+        match it {
+            Some(i) if i.soft_health.is_some() => Soft {
+                count: i.soft_count,
+                of: super::state::soft_of(i.soft_health, rated_items.get(key).copied(), i.reason.is_some(), fail_after),
+                level: i.soft_health,
+            },
+            _ => Soft { count: 0, of: fail_after, level: None },
+        }
+    };
     let empty = BTreeMap::new();
     let fields = shown(proj.map(|p| &p.fields).unwrap_or(&empty), row.keep, masked);
     let mut items: Vec<ItemView> = Vec::new();
@@ -163,10 +191,11 @@ pub fn build(row: &SourceRow, st: &SourceState, proj: Option<&Projection>, viewe
             seen.insert(pi.key.clone());
             items.push(ItemView {
                 key: pi.key.clone(),
+                list: pi.list.clone(),
                 health: it.map_or(Health::Unknown, |i| i.health),
                 reason: it.and_then(|i| i.reason),
                 since: it.and_then(|i| i.hard_since),
-                soft: Soft { count: it.map_or(0, |i| i.soft_count), of: soft_of },
+                soft: soft_item(&pi.key, it),
                 fields: shown(&pi.fields, row.keep, masked),
             });
         }
@@ -181,10 +210,11 @@ pub fn build(row: &SourceRow, st: &SourceState, proj: Option<&Projection>, viewe
         }
         items.push(ItemView {
             key: key.clone(),
+            list: None,
             health: it.health,
             reason: it.reason,
             since: it.hard_since,
-            soft: Soft { count: it.soft_count, of: soft_of },
+            soft: soft_item(key, Some(it)),
             fields: BTreeMap::new(),
         });
     }
@@ -204,7 +234,15 @@ pub fn build(row: &SourceRow, st: &SourceState, proj: Option<&Projection>, viewe
         reason: st.reason,
         reason_text: st.reason.map(Reason::sentence),
         http_status: st.http_status,
-        soft: Soft { count: st.soft_count, of: soft_of },
+        soft: if st.soft_health.is_some() {
+            Soft {
+                count: st.soft_count,
+                of: super::state::soft_of(st.soft_health, rated_self, st.fetch_failures > 0, fail_after),
+                level: st.soft_health,
+            }
+        } else {
+            Soft { count: 0, of: fail_after, level: None }
+        },
         server_now,
         updated_at: st.updated_at,
         checked_at: st.checked_at,

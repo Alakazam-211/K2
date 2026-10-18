@@ -226,6 +226,14 @@ describe('the dashboard selector', () => {
     expect(selector.className).toContain('sticky')
     expect(selector.className).toContain('top-0')
     expect(selector.className).toContain('bottom-0')
+    // A direct child of the left half (so its sticky range is the whole
+    // half, not just the dashboards part), between General and the
+    // dashboard itself.
+    expect(selector.parentElement).toBe(left)
+    const general = within(left).getByRole('region', { name: 'General' })
+    const dashboards = within(left).getByRole('region', { name: 'Dashboards' })
+    expect(general.compareDocumentPosition(selector) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(selector.compareDocumentPosition(dashboards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     // Its nearest scrolling ancestor is the left half itself.
     let scroller: HTMLElement | null = selector.parentElement
     while (scroller && !scroller.className.includes('overflow-y-auto')) scroller = scroller.parentElement
@@ -248,6 +256,7 @@ describe('the dashboard selector', () => {
     let scroller: HTMLElement | null = selector.parentElement
     while (scroller && !scroller.className.includes('overflow-y-auto')) scroller = scroller.parentElement
     expect(scroller).toBe(halves)
+    expect(selector.parentElement).toBe(screen.getByTestId('project-settings-left'))
   })
 
   it('"Add to Main" sends one pane to the daemon, not a whole layout', async () => {

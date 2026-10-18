@@ -3465,6 +3465,7 @@ mod tests {
             sandbox: k2_core::terminal::SandboxSpec::Passthrough,
             cell_uid: None,
             overlay: None,
+            survive: false,
         };
         let s = DaemonPtySession::spawn(cfg).expect("spawn cat");
         session_lookup::LiveSession(s)

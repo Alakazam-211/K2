@@ -4042,6 +4042,7 @@ dependencies = [
  "image",
  "k2-core",
  "k2-node-proto",
+ "k2-ptyd",
  "libc",
  "llama-cpp-2",
  "mio",

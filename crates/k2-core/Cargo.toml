@@ -173,6 +173,11 @@ qoi = "0.4"
 # the data URL the renderer caches on Project.icon_url.
 image = { version = "0.25", default-features = false, features = ["ico", "png", "jpeg", "webp"] }
 
+# k2-ptyd (PRD prd-k2-ptyd-v1): the PTY host's wire types, auth, paths and
+# blocking client, shared with the daemon's ptyd backend. The lib is tiny
+# (libc/serde/hmac/sha2/getrandom), no tokio or alacritty.
+k2-ptyd = { path = "../k2-ptyd" }
+
 # Low-level primitives used by the alacritty PTY event loop.
 libc = "0.2"
 polling = "3"

@@ -453,6 +453,10 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         // per-session uid is allocated for them.
         cell_uid: None,
         overlay: None,
+        // k2-ptyd (PRD P76): canonical pinned chats, heartbeats, agents
+        // routes, providers and remote sessions may be ptyd-hosted. Inert
+        // unless the dev-only `K2_PTYD=1` switch is on.
+        survive: true,
     };
     let session_id = cfg.session_id;
     let mut cfg = cfg;

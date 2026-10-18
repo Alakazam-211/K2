@@ -5,6 +5,16 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ## 0.46.1
 
+### Wall (lane 1)
+- **New `--cmd` services run in a wall.** On a server with the App runtime set up, a new `k2 publish run <name> --cmd …` becomes an open-path App: a container with a fresh copy of your folder at each start. Keep anything that must last in `$K2_APP_DATA` (`/data`). Your `--port` stays the port inside, it can go out to the internet through its own proxy (every host it reaches is logged), and it reaches K2 through its own door. Run it again to deploy your changes; `k2 publish stop|start|rm` work as before. `k2 app list` labels it **Open (container)** and says how to move it to guarded. Services you already published keep running exactly as they do today. On a Mac, or a server not set up for Apps, `--cmd` works as before and says why.
+- **Agents ask before publishing open Apps.** An agent's new `--cmd` service needs "Allow this agent to manage Apps" and "…and publish open Apps" on its workspace; without them it waits for you in `k2 app approvals`.
+- **Builds run inside the wall.** When an App's manifest declares a `build`, `k2 app build` and `k2 app deploy --folder` run it in a container, never on the server itself: only the command you declared, a lockfile is required next to a `package.json`, only the package registries are reachable, and on guarded Apps a dependency's install scripts never run.
+- **Memory is yours to decide.** Apps have no memory limit unless you set one (`k2 app config <app> --memory 1G`); with a limit, Node's heap gets half of it. An App that runs out of memory stops whole and restarts, it never swaps, and each deployment's log is capped at 50 MB (`k2 app logs`).
+- **Agents can't starve the server.** On a prepared server, agent sessions get their own memory budget (75% of the server by default), so a runaway one slows down instead of crowding out K2, Postgres and mail. `k2 app doctor` shows it.
+- **Box services answer at once.** A box service that's waiting for you or was revoked now refuses straight away instead of hanging, and revoking one cuts the connections it had open.
+- **Podman from K2's own mirror.** `k2 app box prepare --install-podman` downloads K2's Podman bundle from K2's mirror (the same pinned, checksummed files), with the source code of its GPL parts beside it.
+- After updating, reinstall the App engine (`k2 app engine install`): this release speaks a new engine protocol, and `k2 app doctor` says so until you do.
+
 ### Door (lane 2)
 - **Stop an App in one step.** `k2 app suspend <app>` ends every pass the App holds at once, so its very next call to K2 is refused, stops it and freezes its deploys and starts. Anyone who can see the App may do it, its agent included; only you bring it back, with `k2 app resume <app>` from a terminal outside K2.
 - **See every call an App makes.** Each call an App makes through its door is recorded: who, what, which room, the answer, the bytes and how long it took. `k2 app audit <app>` shows them (`--since 1h`, `--denied`, `--verb`), and `--verify` checks that no line was changed or removed. The record lives in its own file, `~/.k2/apps/app-audit.db`; after 30 days it is kept as daily totals for a year.

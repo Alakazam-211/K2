@@ -276,7 +276,7 @@ impl LocalVault {
                     && a.status == "open"
                     && a.peer_addr.eq_ignore_ascii_case(peer_addr)
                     && a.name == name
-                    && !a.expires_at.as_deref().and_then(parse_ts).is_some_and(|x| x < now())
+                    && a.expires_at.as_deref().and_then(parse_ts).is_none_or(|x| x >= now())
             })
             .unwrap_or(false)
     }

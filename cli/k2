@@ -13965,7 +13965,8 @@ Agents:
                  (or was just assigned) needs --force (else job_started, exit 3)
   k2 compute retry <job>
   k2 compute receipt <job>
-Owner / admin (refused for agents and inside K2 terminals):
+Owner / admin (refused for agents and inside K2 terminals, except where
+"Allow managing compute nodes" is on for that agent: see k2 compute manage):
   k2 compute preview on|off|status             turn the preview on for this server (owner)
   k2 compute node add <name> [--url URL]       mint a 10-minute enroll code
   k2 compute node confirm <name> <code>        the 6 digits the node shows
@@ -14003,6 +14004,11 @@ Node admin, owner only (refused for agents and inside K2 terminals):
   k2 compute node alerts --to <workspace>|none      where alerts go (an IT agent)
   k2 compute operate on|off --workspace WS
                    the Agent switch "Allow this agent to operate compute nodes"
+  k2 compute manage on|off --workspace WS      (owner only)
+                   the Agent switch "Allow managing compute nodes": that agent may
+                   node add/confirm/rename/pause/drain/resume/retire/route and
+                   grant/revoke any workspace (each act in Access Audit). Still
+                   yours: preview on|off, node remove, and this switch
 This computer (its owner):
   k2 compute local status|pause [--now]|drain|resume
   k2 compute local policy key=value...    (cpu_cap_percent, mem_cap_gb, availability, …)
@@ -15505,6 +15511,29 @@ print("Allow compute nodes: %s for %s%s" % ("on" if on else "off", v["workspace"
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
 v=json.load(sys.stdin)
 print("Allow this agent to operate compute nodes: %s for %s%s" % ("on" if v["agentsCanOperateCompute"] else "off", v["workspace"], " (narrow, pause, update, restart; root actions still wait for you)" if v["agentsCanOperateCompute"] else ""))'
+            ;;
+        manage)
+            # "Allow managing compute nodes" (0194): owner only. Inside a K2
+            # terminal this sends the passport, which the daemon refuses
+            # (an agent never turns it on, for itself or anyone).
+            local action="${1:-}" workspace=""
+            shift 2>/dev/null || true
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --workspace) workspace="${2:-}"; shift 2 ;;
+                    *) echo "usage: k2 compute manage on|off --workspace WS" >&2; exit 2 ;;
+                esac
+            done
+            [ -z "$workspace" ] && workspace="$(_compute_ws "")"
+            case "$action" in
+                on|off) ;;
+                *) echo "usage: k2 compute manage on|off --workspace WS" >&2; exit 2 ;;
+            esac
+            _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$workspace" K2_CJ_toggle=compute_manage K2_CJ_value_b="$([ "$action" = on ] && echo 1 || echo 0)")" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+on=v["agentsCanManageCompute"]
+print("Allow managing compute nodes: %s for %s%s" % ("on" if on else "off", v["workspace"], " (node add/confirm/rename/pause/retire/route, grant/revoke; each act is in Access Audit; preview and node remove stay yours)" if on else ""))'
             ;;
         usage)
             local days=7
@@ -31556,8 +31585,8 @@ LIMITS
   workspace, age; other workspaces' jobs are anonymous). nodes shows
   free CPU (cap minus what K2 jobs reserved) and free memory per node.
   The machine's owner can pause or drain the node at any time; agents
-  never pause, resume or grant. Owner verbs inside a K2 terminal answer
-  owner_only.
+  never pause, resume or grant (unless "Allow managing compute nodes" is
+  on, below). Owner verbs inside a K2 terminal answer owner_only.
 
 WORKTREES
   From a git worktree inside the workspace (.claude/worktrees/x) runs
@@ -31579,7 +31608,7 @@ IN THE JOB
   --exclusive waits for an idle node and holds other K2 jobs while it
   runs; it doesn't stop non-K2 load (Sew VMs, hand-run builds).
 
-ADDING A MACHINE (owner, never an agent)
+ADDING A MACHINE (owner, or an agent with "Allow managing compute nodes")
   On the machine itself: Settings → Compute → "Make this computer a
   compute node", or in a terminal outside K2:
     k2 compute local enable --controller https://you.k2.dev \
@@ -31627,6 +31656,25 @@ operate compute nodes", which your owner turns on — separate from
   Needs a person at the machine: the first install, raising a node's
   remote-admin level, macOS OS updates, FileVault unlock after a power cut.
 
+MANAGING THE MACHINES (Agent switch "Allow managing compute nodes",
+which only your owner turns on: Settings → Workspaces → <you> → Agent,
+or k2 compute manage on --workspace <you> outside K2)
+  With it on, from this computer (never over LAN, the tunnel or an App):
+    k2 compute node add <name>            mint the enroll code (owner gets a note)
+    k2 compute node confirm <name> <code> the 6 digits the NODE shows (read
+                                          them off the machine; this server
+                                          never tells you, so the check holds)
+    k2 compute node rename|pause|drain|resume|retire <name>
+    k2 compute node route add|rm <name> <url>
+    k2 compute grant <node> --workspace <any>
+    k2 compute revoke <node> --workspace <any>
+    k2 compute nodes / info / grants       every node and grant, not just yours
+  Every act is a line in the owner's Access Audit (Settings → Logs) with
+  your workspace and session; add and confirm also drop an inbox note.
+  Still the owner's: k2 compute preview on|off, k2 compute node remove,
+  "Allow compute nodes" (agents set), and this switch. Off: owner_only.
+  Running jobs still needs "Allow compute nodes" and a grant.
+
 SERVICES
   Long-running workloads a node supervises (Lima VMs, runners) are
   privileged to create or change: k2 compute node admin propose <node>
@@ -31649,6 +31697,7 @@ COMMON ERRORS
   package_not_approved   ask the owner: sudo k2-node packages allow <name>
   private_home_choice    enable: say --private-home or --no-private-home
   owner_only             owner verb from an agent or a K2 terminal: use Settings
+                         (or ask for "Allow managing compute nodes")
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF

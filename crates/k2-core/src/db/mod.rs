@@ -1440,6 +1440,12 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // floor), `homes_devices`. New tables only. 0188–0192 belong to the
         // other 0.46.1 lanes (0190 = unread); renumber freely on a slip.
         ("0193_homes_sync", include_str!("../../drizzle_sql/0193_homes_sync.sql")),
+        // 0194 — agents manage compute nodes (0.46.1, Rosson 2026-10-18):
+        // the per-agent "Allow managing compute nodes" switch
+        // (projects.agents_can_manage_compute, DEFAULT 0). Additive only:
+        // 0182–0193 are held by other 0.46.1 lanes; renumber freely on a
+        // slip (and edit the migration-order tests below).
+        ("0194_compute_manage", include_str!("../../drizzle_sql/0194_compute_manage.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2103,7 +2109,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0193_homes_sync",
+            last_name, "0194_compute_manage",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2152,6 +2158,7 @@ mod tests {
                 "0189_push_device_previews",
                 "0190_thread_read",
                 "0193_homes_sync",
+                "0194_compute_manage",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2204,6 +2211,7 @@ mod tests {
                 "0189_push_device_previews",
                 "0190_thread_read",
                 "0193_homes_sync",
+                "0194_compute_manage",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2693,7 +2701,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0193 (Homes sync) is the newest; its tables go first.
+            // 0194 (compute manage, 0.46.1) is the newest: its record goes
+            // (its projects column stays; re-adding it is skipped as a
+            // duplicate column).
+            conn.execute("DELETE FROM _migrations WHERE name = '0194_compute_manage'", []).unwrap();
+            // 0193 (Homes sync) came before it; its tables go next.
             conn.execute_batch("DROP TABLE homes_items; DROP TABLE homes_people; DROP TABLE homes_devices;")
                 .unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0193_homes_sync'", []).unwrap();

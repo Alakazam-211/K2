@@ -6852,7 +6852,10 @@ async fn handle_one_request(
             let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
             let params = super::http::parse_params(&path, &query);
             let p_owned = p.to_string();
-            let r = tokio::task::spawn_blocking(move || crate::compute_routes::handle(&p_owned, who, &body_bytes, &params))
+            // "Allow managing compute nodes" only for passports on the
+            // loopback listener (never LAN, tunnel, App link or a proxy).
+            let local = ingress == Ingress::Loopback;
+            let r = tokio::task::spawn_blocking(move || crate::compute_routes::handle_from(&p_owned, who, &body_bytes, &params, local))
                 .await
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;

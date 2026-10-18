@@ -210,6 +210,12 @@ pub struct Project {
     /// /cli/agent-access/set {toggle: "gardens_manage"}` (Owner/Admin).
     #[serde(default)]
     pub agents_can_manage_gardens: i64,
+    /// Agents manage compute nodes (migration 0194) — "Allow managing
+    /// compute nodes" (`compute_manage`). DEFAULT 0 (off). Read-only here
+    /// (the Agent tab shows it); written only by `POST
+    /// /cli/agent-access/set {toggle: "compute_manage"}` (the owner only).
+    #[serde(default)]
+    pub agents_can_manage_compute: i64,
 }
 
 fn project_switch_default_on() -> i64 {
@@ -229,7 +235,7 @@ impl Project {
         let mut stmt = conn.prepare(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects, agents_can_manage_chat, design_mode_enabled, agents_can_manage_gardens \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects, agents_can_manage_chat, design_mode_enabled, agents_can_manage_gardens, agents_can_manage_compute \
              FROM projects ORDER BY tab_order",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -282,6 +288,7 @@ impl Project {
                 agents_can_manage_chat: row.get(37).unwrap_or(0),
                 design_mode_enabled: row.get(38).unwrap_or(1),
                 agents_can_manage_gardens: row.get(39).unwrap_or(0),
+                agents_can_manage_compute: row.get(40).unwrap_or(0),
             })
         })?;
         rows.collect()
@@ -292,7 +299,7 @@ impl Project {
         conn.query_row(
             "SELECT id, name, path, color, tab_order, last_opened_at, worktree_mode, icon_url, focus_group_id, pinned, manually_active, last_interaction_at, created_at, agent_enabled, \
              (EXISTS(SELECT 1 FROM workspace_heartbeats wh WHERE wh.project_id = projects.id AND wh.enabled = 1 AND wh.archived_at IS NULL)) AS heartbeat_enabled, \
-             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects, agents_can_manage_chat, design_mode_enabled, agents_can_manage_gardens \
+             agent_mode, tier_id, heartbeat_mode, heartbeat_schedule, heartbeat_last_fire, allow_remote_instruct, dns_manage_enabled, agents_can_create_connections, default_agent, hide_api_sessions, completion_sound_enabled, handle, default_model, force_model_on_resume, db_agent_access, agents_can_manage_skin, mail_manage_enabled, agents_can_manage_agents, agents_can_manage_vault, agents_can_use_compute, agents_can_operate_compute, agents_can_manage_projects, agents_can_manage_chat, design_mode_enabled, agents_can_manage_gardens, agents_can_manage_compute \
              FROM projects WHERE id = ?1",
             params![id],
             |row| {
@@ -345,6 +352,7 @@ impl Project {
                 agents_can_manage_chat: row.get(37).unwrap_or(0),
                 design_mode_enabled: row.get(38).unwrap_or(1),
                 agents_can_manage_gardens: row.get(39).unwrap_or(0),
+                agents_can_manage_compute: row.get(40).unwrap_or(0),
                 })
             },
         )
@@ -5098,6 +5106,22 @@ mod unit_tests {
         assert_eq!(p.agents_can_manage_gardens, 1);
         let json = serde_json::to_value(&p).unwrap();
         assert_eq!(json["agentsCanManageGardens"], 1, "{json}");
+    }
+
+    #[test]
+    fn project_agents_can_manage_compute_defaults_off_and_serializes_camel_case() {
+        let conn = fresh();
+        let id = make_project_row(&conn, "/tmp/proj-agents-manage-compute");
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.agents_can_manage_compute, 0, "0194 default is OFF");
+        let listed = Project::list(&conn).unwrap();
+        assert_eq!(listed.iter().find(|x| x.id == id).expect("listed").agents_can_manage_compute, 0);
+        conn.execute("UPDATE projects SET agents_can_manage_compute = 1 WHERE id = ?1", params![id]).unwrap();
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.agents_can_manage_compute, 1);
+        assert_eq!(p.agents_can_manage_gardens, 0, "a neighbouring switch is untouched");
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["agentsCanManageCompute"], 1, "{json}");
     }
 
     #[test]

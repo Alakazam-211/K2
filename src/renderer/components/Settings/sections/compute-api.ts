@@ -400,6 +400,25 @@ export async function setWorkspaceComputeOperate(
   return daemonCliPost(primaryScope(), 'agent-access/set', { toggle: 'compute_operate', value, workspace })
 }
 
+/** "Allow managing compute nodes" (`compute_manage`, 0194): a local agent
+ *  from the workspace may add, confirm, rename, pause/drain/resume, retire
+ *  and route nodes and grant/revoke any workspace, each act audited. The
+ *  daemon lets only the owner flip it (an Admin login is refused). Same
+ *  route as the CLI (`k2 compute manage on|off`). */
+export interface ComputeManageSetResult {
+  ok: boolean
+  workspace?: string
+  toggle?: string
+  agentsCanManageCompute?: boolean
+}
+
+export async function setWorkspaceComputeManage(
+  workspace: string,
+  value: boolean,
+): Promise<ComputeManageSetResult> {
+  return daemonCliPost(primaryScope(), 'agent-access/set', { toggle: 'compute_manage', value, workspace })
+}
+
 // ── This computer (local daemon) ────────────────────────────────────────
 
 export async function fetchLocalStatus(): Promise<LocalStatus> {

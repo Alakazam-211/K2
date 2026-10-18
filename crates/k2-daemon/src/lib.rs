@@ -213,6 +213,8 @@ pub mod ticket_settings_routes;
 pub mod compute_admin;
 pub mod compute_advertise;
 pub mod compute_local;
+// "Allow managing compute nodes" (`compute_manage`, 0194).
+pub mod compute_manage;
 pub mod compute_routes;
 /// App runtime stage 1 (prd-k2-app-runtime-v1): `/cli/app/*` routes.
 pub mod apps;

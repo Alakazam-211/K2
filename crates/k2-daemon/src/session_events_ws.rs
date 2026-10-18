@@ -660,6 +660,7 @@ mod tests {
         // signals are daemon-global, same routing class.
         let project_groups = SessionEvent::ProjectGroupsChanged {
             reason: "members-changed".into(),
+            group_id: Some("g-1".into()),
         };
         let feedback = SessionEvent::FeedbackChanged {
             reason: "created".into(),
@@ -866,7 +867,7 @@ mod tests {
             },
             SessionEvent::PresenceChanged { roster: vec![], colors: Default::default(), names: Default::default() },
             SessionEvent::OpenUrl { url: "https://example.com".into(), source: "shim".into() },
-            SessionEvent::ProjectGroupsChanged { reason: "groups-changed".into() },
+            SessionEvent::ProjectGroupsChanged { reason: "groups-changed".into(), group_id: None },
             SessionEvent::FeedbackChanged { reason: "created".into() },
             SessionEvent::TicketChanged {
                 project_id: "p".into(),

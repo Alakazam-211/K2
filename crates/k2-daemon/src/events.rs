@@ -129,8 +129,14 @@ impl AgentHookEventSink for DaemonBroadcastSink {
                 let name = event.event_name();
                 let reason =
                     name.strip_prefix("project-group:").unwrap_or(name).to_string();
+                // 0.46.1 — carry the project id (every project-group hook
+                // payload has `groupId`) so open views filter on it.
+                let group_id = payload
+                    .get("groupId")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
                 let _ = crate::session_events::emit(
-                    crate::session_events::SessionEvent::ProjectGroupsChanged { reason },
+                    crate::session_events::SessionEvent::ProjectGroupsChanged { reason, group_id },
                 );
             }
             // 0.40.38 — project SETTINGS mutations (mode/worktree/states/
@@ -421,13 +427,19 @@ mod tests {
             while let Ok(got) = rx.try_recv() {
                 let hit = match (&got, hook) {
                     (
-                        SessionEvent::ProjectGroupsChanged { reason },
+                        SessionEvent::ProjectGroupsChanged { reason, group_id },
                         HookEvent::ProjectGroupsChanged
                         | HookEvent::ProjectGroupMembersChanged
                         | HookEvent::ProjectGroupPocChanged
                         | HookEvent::ProjectGroupLayoutChanged
                         | HookEvent::ProjectGroupMessageCreated,
-                    ) => reason == want_reason,
+                    ) => {
+                        if reason == want_reason {
+                            // An empty payload carries no project id.
+                            assert_eq!(group_id, &None, "{hook:?}: no groupId in, none out");
+                        }
+                        reason == want_reason
+                    }
                     (
                         SessionEvent::FeedbackChanged { reason },
                         HookEvent::FeedbackCreated
@@ -465,6 +477,39 @@ mod tests {
             ) {
                 panic!("SyncProjects must not mirror as a project-group/feedback/mail signal");
             }
+        }
+    }
+
+    /// 0.46.1 — the mirror carries the hook payload's `groupId`, so an
+    /// open Settings → Projects view refetches only for ITS project (and
+    /// a chat line is told apart from a project change by `reason`).
+    #[test]
+    fn project_group_mirror_carries_the_group_id() {
+        use crate::session_events::SessionEvent;
+        let tx = broadcast::Sender::<WireEvent>::new(16);
+        let sink = DaemonBroadcastSink::new(tx);
+        let cases: &[(HookEvent, &str)] = &[
+            (HookEvent::ProjectGroupsChanged, "groups-changed"),
+            (HookEvent::ProjectGroupMembersChanged, "members-changed"),
+            (HookEvent::ProjectGroupPocChanged, "poc-changed"),
+            (HookEvent::ProjectGroupLayoutChanged, "layout-changed"),
+            (HookEvent::ProjectGroupMessageCreated, "message-created"),
+        ];
+        for (hook, want_reason) in cases {
+            let gid = format!("mirror-gid-{want_reason}");
+            let mut rx = crate::session_events::subscribe();
+            sink.emit(hook.clone(), serde_json::json!({ "groupId": gid, "messageId": "m" }));
+            let mut found = false;
+            while let Ok(got) = rx.try_recv() {
+                if let SessionEvent::ProjectGroupsChanged { reason, group_id } = got {
+                    if group_id.as_deref() == Some(gid.as_str()) {
+                        assert_eq!(reason, *want_reason);
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            assert!(found, "no project_groups_changed with groupId {gid} for {hook:?}");
         }
     }
 

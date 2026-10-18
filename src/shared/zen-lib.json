@@ -196,6 +196,29 @@
       ]
     },
     {
+      "id": "uplot",
+      "version": "1.6.32",
+      "title": "uPlot",
+      "global": "uPlot",
+      "license": "MIT",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright (c) 2022 Leon Sorokin",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "uPlot.iife.min.js",
+          "bytes": 51081,
+          "sha256": "19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f"
+        },
+        {
+          "name": "uplot-style.js",
+          "bytes": 2102,
+          "sha256": "fa2184990360f8b3c3ea6b964e268c36ee46851e6dad62dbc55edc96dd0828d9"
+        }
+      ],
+      "notes": "Small and fast time series (about 50 KB): sparklines and history lines for source trends. Give it a width and height; data is [xs, ...ys] with xs in seconds."
+    },
+    {
       "id": "animejs",
       "version": "4.5.0",
       "title": "Anime.js",

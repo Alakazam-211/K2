@@ -213,6 +213,7 @@ text in `LICENSE.txt` (Apache-2.0 libraries include their upstream NOTICE).
 | D3 (`d3`) | 7.9.0 | ISC | Copyright 2010-2023 Mike Bostock | shipped in the app, `src/renderer/zen-lib/d3@7.9.0/` |
 | Chart.js (`chart.js`) | 4.5.1 | MIT | Copyright (c) 2014-2024 Chart.js Contributors | shipped in the app, `src/renderer/zen-lib/chart.js@4.5.1/` |
 | Apache ECharts (`echarts`) | 6.1.0 | Apache-2.0 | Copyright 2017-2026 The Apache Software Foundation; This product includes software developed at The Apache Software Foundation (https://www.apache.org/). | shipped in the app, `src/renderer/zen-lib/echarts@6.1.0/` |
+| uPlot (`uplot`) | 1.6.32 | MIT | Copyright (c) 2022 Leon Sorokin | shipped in the app, `src/renderer/zen-lib/uplot@1.6.32/` |
 | Anime.js (`animejs`) | 4.5.0 | MIT | Copyright (c) 2025 Julian Garnier | shipped in the app, `src/renderer/zen-lib/animejs@4.5.0/` |
 | Lottie (`lottie-web`) | 5.13.0 | MIT | Copyright (c) 2015 Bodymovin | shipped in the app, `src/renderer/zen-lib/lottie-web@5.13.0/` |
 | perfect-freehand (`perfect-freehand`) | 1.2.3 | MIT | Copyright (c) 2021 Stephen Ruiz Ltd | shipped in the app, `src/renderer/zen-lib/perfect-freehand@1.2.3/` |

@@ -212,14 +212,14 @@ pub fn link_admits(ident: &PassIdentity, link: OnLink<'_>) -> bool {
 
 /// `POST /cli/sew/pass` with the live keyring, link and limiter.
 pub fn handle_pass(req: &PassRequest<'_>) -> Reply {
-    let status = super::link::status_source();
+    let status = super::link::SewRow;
     let sign = |c: &ChatPassClaims| super::sign_chat_pass(c);
     handle_pass_with(
         req,
         &Deps {
             now: super::keyring::now(),
             owner_connect_is_k2_owner: identity::OWNER_CONNECT_GETS_K2_OWNER,
-            status: status.as_ref(),
+            status: &status,
             sign: &sign,
             limiter: &ratelimit::MINTS,
             codes: &handoff::CODES,
@@ -345,7 +345,7 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
         }
     };
 
-    let install_id = match super::link::install_id_for_mint(d.now, d.status) {
+    let install_id = match super::link::install_id_for_mint(d.status) {
         Ok(id) => id,
         Err(e) => {
             super::keyring::klog(format!("pass mint: no install id: {e}"));

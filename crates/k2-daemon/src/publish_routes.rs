@@ -166,16 +166,47 @@ fn caller_agent_ws() -> Option<String> {
 }
 
 /// The release the `--cmd` mapping is enforced from (§8.2: "before
-/// 0.46.1: unchanged"). An owner opts in early with
-/// `K2_OPEN_APPS_GATE=enforce` in the daemon's environment.
+/// 0.46.1: unchanged").
 pub const PUBLISH_RUN_GATE_FROM: &str = k2_core::app_grace::CUTOVER_RELEASE;
 
-fn publish_run_gate_enforced() -> bool {
-    std::env::var("K2_OPEN_APPS_GATE").is_ok_and(|v| v.trim() == "enforce")
+/// 0.46.1 (lane 1, K5): the gate holds an agent's open-path run for the
+/// owner wherever the box has the open path. The daemon's own
+/// environment (the owner's, never an agent's) can change that:
+/// `K2_OPEN_APPS_GATE=warn` puts back 0.46.0's warn-only answer
+/// everywhere; `=enforce` holds an agent's new `--cmd` run even where the
+/// open path isn't ready (it then runs as before once approved).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GateMode {
+    Warn,
+    OpenPath,
+    Always,
 }
 
-/// The warn-only answer a gated run carries in 0.46.0: the run went
-/// through (`held: false`); `message` says so, then what changes.
+fn gate_mode() -> GateMode {
+    gate_mode_by(std::env::var("K2_OPEN_APPS_GATE").ok().as_deref())
+}
+
+fn gate_mode_by(v: Option<&str>) -> GateMode {
+    match v.map(str::trim) {
+        Some("warn") => GateMode::Warn,
+        Some("enforce") => GateMode::Always,
+        _ => GateMode::OpenPath,
+    }
+}
+
+/// Does the gate hold this run (given where it would go)?
+fn gate_holds(mode: GateMode, route: &CmdRoute) -> bool {
+    match mode {
+        GateMode::Warn => false,
+        GateMode::Always => true,
+        GateMode::OpenPath => matches!(route, CmdRoute::Open),
+    }
+}
+
+/// The warn-only answer a gated run carries where the gate doesn't hold
+/// (the open path isn't ready on this box, or the owner set
+/// `K2_OPEN_APPS_GATE=warn`): the run went through (`held: false`);
+/// `message` says so, then what the gate asks for.
 fn crossover_notice(name: &str, why: &str) -> serde_json::Value {
     let mut c = why.chars();
     let why_sentence: String = c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default();
@@ -185,25 +216,31 @@ fn crossover_notice(name: &str, why: &str) -> serde_json::Value {
         "held": false,
         "wouldHold": true,
         "hint": why,
-        "message": format!("{name} ran: this release only warns. {why_sentence}"),
+        "message": format!("{name} ran unwalled, without the open-path gate (this box has no open path, or the owner set the gate to warn). {why_sentence}"),
     })
 }
 
 /// §8.2 / §5.11.5: a **new** `--cmd` service from an agent is an open-path
 /// App, so it needs "Allow this agent to manage Apps" and "…and publish
-/// open Apps". `None` = no gate applies (a human, `--skin`, a re-run of an
-/// existing label, or both switches on).
+/// open Apps"; so does a re-run of one (it deploys the open path again).
+/// `None` = no gate applies (a human, `--skin`, a re-run of an existing
+/// legacy service, or both switches on).
 fn publish_run_gate(project_id: &str, name: &str, skin: bool) -> Option<String> {
     let ws = caller_agent_ws()?;
     if skin || ws != project_id {
         return None;
     }
-    let exists = {
+    let legacy = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        k2_core::published_services::get_by_project_name(&conn, project_id, name).ok().flatten().is_some()
+        k2_core::published_services::get_by_project_name(&conn, project_id, name)
+            .ok()
+            .flatten()
+            .is_some_and(|r| r.cmd != k2_core::published_services::CMD_APP_SENTINEL)
     };
-    if exists {
+    if legacy {
+        // An existing --cmd service keeps running as before in 0.46.1
+        // (Rosson: its environment ends in 0.46.2, with `k2 app adopt`).
         return None;
     }
     let manage = resolve_project_path(project_id).is_some_and(|p| k2_core::workspace::settings::agents_can_manage_skin_for_path(&p));
@@ -218,9 +255,22 @@ fn publish_run_gate(project_id: &str, name: &str, skin: bool) -> Option<String> 
     ))
 }
 
-/// Run a publish request the owner approved (a held `publish_run`).
+/// Run a publish request the owner approved (a held `publish_run`): on
+/// the open path when this box has it (K5), else as in 0.46.0.
 pub(crate) fn run_approved(body: &serde_json::Value) -> Result<serde_json::Value, crate::apps::routes::Refusal> {
     let g = |k: &str| body.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if cmd_route(&g("projectId"), &g("name")) == CmdRoute::Open {
+        let run = crate::apps::open::Run {
+            project_id: g("projectId"),
+            name: g("name"),
+            cmd: g("cmd"),
+            cwd: PathBuf::from(g("cwd")),
+            port: body.get("port").and_then(|v| v.as_u64()).and_then(|p| u16::try_from(p).ok()).unwrap_or(0),
+            no_tunnel: body.get("noTunnel").and_then(|v| v.as_bool()).unwrap_or(false),
+        };
+        // The owner approved it in person: the run is theirs.
+        return crate::apps::open::publish_run(&crate::compute_routes::Who::Owner, &run);
+    }
     let probe_timeout = match body.get("probeTimeout").and_then(|v| v.as_str()) {
         None => ProbeTimeout::Keep,
         Some(v) if v.trim().eq_ignore_ascii_case("default") => ProbeTimeout::Default,
@@ -629,11 +679,17 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         .map(PathBuf::from)
         .or_else(|| resolve_project_path(&project_id).map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from(&project));
-    // S13 (§8.2): an agent's new --cmd service is an open-path App.
+    // K5 (§8.2): a NEW --cmd label, or a re-run of an open-path folder App,
+    // runs on the open path when this box has it; an existing --cmd
+    // service is untouched in 0.46.1.
+    let route = if skin { CmdRoute::Legacy } else { cmd_route(&project_id, &name) };
+    // S13 / §5.11.5: an agent's open-path run needs both switches, or it
+    // is held for the owner. Where the open path isn't ready (macOS, an
+    // unprepared box) the run stays as in 0.46.0, with the notice.
     let gate = publish_run_gate(&project_id, &name, skin);
+    let who = CALLER.with(|c| c.borrow().clone()).unwrap_or(crate::compute_routes::Who::Invalid);
     if let Some(why) = gate.as_deref() {
-        if publish_run_gate_enforced() {
-            let who = CALLER.with(|c| c.borrow().clone()).unwrap_or(crate::compute_routes::Who::Invalid);
+        if gate_holds(gate_mode(), &route) {
             let body = serde_json::json!({
                 "projectId": project_id, "name": name, "cmd": cmd, "cwd": cwd.display().to_string(),
                 "port": port, "noTunnel": no_tunnel, "cwdExplicit": cwd_explicit,
@@ -652,6 +708,14 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
             ));
         }
     }
+    if matches!(route, CmdRoute::Open) {
+        let run = crate::apps::open::Run { project_id, name, cmd, cwd, port, no_tunnel };
+        return crate::apps::routes::respond(crate::apps::open::publish_run(&who, &run));
+    }
+    let not_ready = match &route {
+        CmdRoute::NotReady(why) => Some(why.clone()),
+        _ => None,
+    };
     match publish_runtime::run(RunSpec {
         project_id,
         name,
@@ -668,16 +732,77 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
     }) {
         Ok(svc) => {
             let mut v = serde_json::to_value(&svc).unwrap_or(serde_json::Value::Null);
-            if let (Some(why), Some(o)) = (gate, v.as_object_mut()) {
-                // 0.46.0 removes nothing: the run goes through, with the
-                // notice of what changes at the cut-over (warn-only,
-                // Rosson 2026-10-16).
-                let name = o.get("name").and_then(|n| n.as_str()).unwrap_or("this service").to_string();
-                o.insert("crossover".into(), crossover_notice(&name, &why));
+            if let Some(o) = v.as_object_mut() {
+                if let Some(why) = gate {
+                    // Where the open path isn't ready (or the owner set
+                    // K2_OPEN_APPS_GATE=warn) the run goes through, with
+                    // the notice of what the gate would do.
+                    let name = o.get("name").and_then(|n| n.as_str()).unwrap_or("this service").to_string();
+                    o.insert("crossover".into(), crossover_notice(&name, &why));
+                }
+                if let Some(why) = not_ready {
+                    o.insert(
+                        "wall".into(),
+                        serde_json::json!({
+                            "path": "legacy",
+                            "label": "Unwalled (the open path isn't ready on this box)",
+                            "why": why,
+                        }),
+                    );
+                }
             }
             CliResponse::ok_json(v.to_string())
         }
         Err(e) => err_to_resp(e),
+    }
+}
+
+/// `k2 publish stop|start|rm` on an open-path folder App: the App's own
+/// routes (§8.2), with the caller's rights there. `None` = not one.
+fn open_path_verb(verb: &str, project_id: &str, name: &str, keep_hostname: bool) -> Option<CliResponse> {
+    let app = crate::apps::open::folder_app(project_id, name)?;
+    let who = CALLER.with(|c| c.borrow().clone()).unwrap_or(crate::compute_routes::Who::Invalid);
+    Some(crate::apps::routes::respond(crate::apps::open::publish_verb(&who, verb, &app, keep_hostname)))
+}
+
+/// Where a `--cmd` run goes (K5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CmdRoute {
+    /// An existing `--cmd` service: unchanged in 0.46.1.
+    Legacy,
+    /// A new label (or an open-path folder App's re-run) on a box with the
+    /// open path.
+    Open,
+    /// A new label where the open path isn't ready: 0.46.0's behaviour.
+    NotReady(String),
+}
+
+fn cmd_route(project_id: &str, name: &str) -> CmdRoute {
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::get_by_project_name(&conn, project_id, name).ok().flatten()
+    };
+    let open_app = crate::apps::open::folder_app(project_id, name).is_some();
+    route_for(row.map(|r| r.cmd != k2_core::published_services::CMD_APP_SENTINEL), open_app, crate::apps::open::ready())
+}
+
+/// The pure part of [`cmd_route`]: `legacy_row` = this workspace has a row
+/// under the name (`Some(true)` a `--cmd` service, `Some(false)` an App's).
+fn route_for(legacy_row: Option<bool>, open_app: bool, ready: Result<(), String>) -> CmdRoute {
+    match (legacy_row, open_app) {
+        (Some(true), _) => CmdRoute::Legacy,
+        (_, true) => match ready {
+            Ok(()) => CmdRoute::Open,
+            Err(why) => CmdRoute::NotReady(why),
+        },
+        // Another kind of App under the name: publish_runtime refuses it
+        // (`is_an_app`), as in 0.46.0.
+        (Some(false), false) => CmdRoute::Legacy,
+        (None, false) => match ready {
+            Ok(()) => CmdRoute::Open,
+            Err(why) => CmdRoute::NotReady(why),
+        },
     }
 }
 
@@ -694,6 +819,9 @@ fn handle_start(params: &HashMap<String, String>) -> CliResponse {
         Ok(id) => id,
         Err(e) => return CliResponse::bad_request(e),
     };
+    if let Some(resp) = open_path_verb("start", &project_id, &name, false) {
+        return resp;
+    }
     match publish_runtime::start(&project_id, &name) {
         Ok(svc) => {
             CliResponse::ok_json(serde_json::to_string(&svc).unwrap_or_else(|_| "{}".into()))
@@ -715,6 +843,9 @@ fn handle_stop(params: &HashMap<String, String>) -> CliResponse {
         Ok(id) => id,
         Err(e) => return CliResponse::bad_request(e),
     };
+    if let Some(resp) = open_path_verb("stop", &project_id, &name, false) {
+        return resp;
+    }
     match publish_runtime::stop(&project_id, &name) {
         Ok(svc) => {
             CliResponse::ok_json(serde_json::to_string(&svc).unwrap_or_else(|_| "{}".into()))
@@ -737,6 +868,9 @@ fn handle_rm(params: &HashMap<String, String>) -> CliResponse {
         Ok(id) => id,
         Err(e) => return CliResponse::bad_request(e),
     };
+    if let Some(resp) = open_path_verb("rm", &project_id, &name, keep) {
+        return resp;
+    }
     match publish_runtime::rm(&project_id, &name, keep) {
         Ok(()) => CliResponse::ok_json(serde_json::json!({ "ok": true, "name": name }).to_string()),
         Err(e) => err_to_resp(e),
@@ -830,17 +964,41 @@ fn handle_frame(params: &HashMap<String, String>) -> CliResponse {
 mod tests {
     use super::*;
 
+    /// 0.46.1 (lane 1, K5): the gate holds by default; only the owner's
+    /// own daemon environment can put back 0.46.0's warn-only answer.
     #[test]
-    fn the_publish_run_gate_only_warns_unless_the_owner_opts_in() {
-        // Rosson 2026-10-16: warn-only in 0.46.0; enforcing is the
-        // K2_OPEN_APPS_GATE=enforce opt-in (the 0.46.1 behaviour).
-        if std::env::var("K2_OPEN_APPS_GATE").is_err() {
-            assert!(!publish_run_gate_enforced());
-        }
+    fn the_publish_run_gate_holds_unless_the_owner_set_warn() {
+        let open = CmdRoute::Open;
+        let not = CmdRoute::NotReady("no engine".into());
+        assert_eq!(gate_mode_by(None), GateMode::OpenPath, "0.46.1's default");
+        assert_eq!(gate_mode_by(Some("")), GateMode::OpenPath);
+        assert_eq!(gate_mode_by(Some(" warn ")), GateMode::Warn);
+        assert_eq!(gate_mode_by(Some("enforce")), GateMode::Always);
+        assert!(gate_holds(GateMode::OpenPath, &open), "held where the run would be an open-path App");
+        assert!(!gate_holds(GateMode::OpenPath, &not), "not held where the box has no open path (macOS, unprepared)");
+        assert!(!gate_holds(GateMode::OpenPath, &CmdRoute::Legacy));
+        assert!(!gate_holds(GateMode::Warn, &open));
+        assert!(gate_holds(GateMode::Always, &not));
         assert_eq!(PUBLISH_RUN_GATE_FROM, "0.46.1");
         let n = crossover_notice("shop", "from K2 0.46.1 a new --cmd service from an agent is an open-path App: …");
         assert_eq!((n["mode"].as_str(), n["held"].as_bool(), n["wouldHold"].as_bool()), (Some("warn"), Some(false), Some(true)));
-        assert_eq!(n["message"], "shop ran: this release only warns. From K2 0.46.1 a new --cmd service from an agent is an open-path App: …");
+        assert!(n["message"].as_str().unwrap().starts_with("shop ran unwalled, without the open-path gate"), "{n}");
+    }
+
+    /// K5: where a `--cmd` run goes. An existing `--cmd` service stays as
+    /// it is in 0.46.1 (NSI's Jobs keeps working untouched); a new label
+    /// goes on the open path only where the box has it.
+    #[test]
+    fn cmd_runs_route_to_the_open_path_only_for_new_labels_on_a_ready_box() {
+        let ready = || Ok(());
+        let not = || Err("the App runtime is off on this box".to_string());
+        assert_eq!(route_for(Some(true), false, ready()), CmdRoute::Legacy, "an existing --cmd service: untouched");
+        assert_eq!(route_for(Some(true), false, not()), CmdRoute::Legacy);
+        assert_eq!(route_for(None, false, ready()), CmdRoute::Open, "a new label on a ready box");
+        assert_eq!(route_for(None, false, not()), CmdRoute::NotReady("the App runtime is off on this box".into()));
+        assert_eq!(route_for(Some(false), true, ready()), CmdRoute::Open, "a re-run of an open-path folder App redeploys it");
+        assert!(matches!(route_for(Some(false), true, not()), CmdRoute::NotReady(_)));
+        assert_eq!(route_for(Some(false), false, ready()), CmdRoute::Legacy, "another kind of App: publish refuses it as before");
     }
 
     #[test]

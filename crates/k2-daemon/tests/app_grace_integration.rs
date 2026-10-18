@@ -426,22 +426,25 @@ async fn publish_run_mapping_notice_now_held_when_enforced_and_the_admin_switche
     let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_open", "value": true})).await;
     assert_eq!((r.status, r.code()), (409, "parent_switch_off".to_string()), "{}", r.body);
 
-    // 0.46.0: an agent's new --cmd runs, with the cut-over notice.
+    // No open path in this harness (no engine, no root helper): an agent's
+    // new --cmd runs as in 0.46.0, with the notice of what the gate asks
+    // for (0.46.1 holds only where the run would be an open-path App).
     let r = post(d.port, "/cli/publish/run", &agent, run("svc-a", free())).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["crossover"]["wouldHold"], true, "{}", r.body);
     assert_eq!(r.json()["crossover"]["from"], "0.46.1");
-    // Warn-only (Rosson 2026-10-16): it ran, and the notice says so first.
     assert_eq!((r.json()["crossover"]["mode"].clone(), r.json()["crossover"]["held"].clone()), (json!("warn"), json!(false)), "{}", r.body);
     assert!(
-        r.json()["crossover"]["message"].as_str().unwrap().starts_with("svc-a ran: this release only warns. From K2 0.46.1"),
+        r.json()["crossover"]["message"].as_str().unwrap().starts_with("svc-a ran unwalled, without the open-path gate"),
         "{}",
         r.body
     );
+    assert_eq!(r.json()["wall"]["path"], "legacy", "it says why it isn't walled: {}", r.body);
     let r = post(d.port, "/cli/publish/rm", &agent, json!({"name": "svc-a"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
 
-    // Enforced (the 0.46.1 behaviour, opted into early): held; the owner approves.
+    // K2_OPEN_APPS_GATE=enforce (the owner's choice): held even without
+    // an open path; the owner approves and it runs as before.
     {
         let _gate = EnvVar::set("K2_OPEN_APPS_GATE", "enforce");
         let port = free();

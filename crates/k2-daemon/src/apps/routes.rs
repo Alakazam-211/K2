@@ -1308,18 +1308,9 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
 /// Largest framed log or error text returned (the tail is kept).
 const LOG_CAP: usize = 256 * 1024;
 
-/// What a stage-1 App's wall is (the §4.5 label function arrives with the
-/// walls in S13; preview Apps are always this).
-pub(crate) fn label(app: &AppRow) -> &'static str {
-    if app.is_process_exception() {
-        return "Open (process)";
-    }
-    match app.isolation.as_str() {
-        "process" => "Preview, unwalled (process)",
-        "container" => "Guarded (container)",
-        "none" => "Dev (no wall)",
-        _ => "Preview",
-    }
+/// The App's wall label (§4.5, S13): computed by `open::label`, never set.
+pub(crate) fn label(app: &AppRow) -> String {
+    super::open::label_of(app).text
 }
 
 fn url_for(app: &AppRow) -> Option<String> {
@@ -1331,6 +1322,7 @@ fn url_for(app: &AppRow) -> Option<String> {
 }
 
 fn app_summary(app: &AppRow) -> J {
+    let lab = super::open::label_of(app);
     json!({
         "appId": app.app_id,
         "serviceId": app.service_id,
@@ -1344,7 +1336,11 @@ fn app_summary(app: &AppRow) -> J {
         "memoryLimitBytes": app.memory_limit_bytes,
         "isolation": app.isolation,
         "path": app.path,
-        "label": label(app),
+        "source": app.source,
+        "folder": app.folder_path,
+        "label": lab.text,
+        "labelReason": lab.reason,
+        "labelBack": lab.back,
         "io": k2_root_proto::apps::IoMax::from_column(app.io_max_json.as_deref()),
         "devices": app.devices(),
         "exception": app.exception_json.as_deref().and_then(|e| serde_json::from_str::<J>(e).ok()),

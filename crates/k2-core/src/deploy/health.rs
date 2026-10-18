@@ -107,6 +107,45 @@ pub fn probe_once(port: u16, path: &str, headers: &[(String, String)], timeout: 
     }
 }
 
+/// The open path's probe for an old `--cmd` service (K5): something
+/// listens on the port, as `k2 publish run` always checked. Those services
+/// weren't written for an HTTP health check (an API may answer `/` with
+/// 404), so a manifest synthesized for one asks for this
+/// (`host.health.tcp`).
+///
+/// A container's published port accepts on the host side before the App
+/// listens inside (pasta answers, then closes when the App's port
+/// refuses), so an accept alone proves nothing: the probe sends a plain
+/// `GET /` and counts any byte back, or a connection still open and quiet
+/// after a moment, as listening; a close or reset before any byte is not.
+pub fn probe_tcp(port: u16, timeout: Duration) -> Probe {
+    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    let mut s = match TcpStream::connect_timeout(&addr, timeout) {
+        Ok(s) => s,
+        Err(e) => return Probe::NoAnswer(format!("connect: {e}")),
+    };
+    let quiet = timeout.min(Duration::from_millis(1500));
+    let _ = s.set_read_timeout(Some(quiet));
+    let _ = s.set_write_timeout(Some(quiet));
+    let _ = s.write_all(format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUser-Agent: k2-health/1\r\nConnection: close\r\n\r\n").as_bytes());
+    let mut b = [0u8; 1];
+    match s.read(&mut b) {
+        Ok(n) if n > 0 => Probe::Status(200),
+        Ok(_) => Probe::NoAnswer("the port accepted and closed at once (nothing listens behind it yet)".into()),
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => Probe::Status(200),
+        Err(e) => Probe::NoAnswer(format!("read: {e}")),
+    }
+}
+
+/// One probe the way the manifest asks: TCP accept or `GET path` 2xx.
+pub fn probe_as(tcp: bool, port: u16, path: &str, headers: &[(String, String)], timeout: Duration) -> Probe {
+    if tcp {
+        probe_tcp(port, timeout)
+    } else {
+        probe_once(port, path, headers, timeout)
+    }
+}
+
 /// Why the gate failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateFailure {
@@ -123,8 +162,24 @@ pub fn wait_healthy(
     every: Duration,
     probe_timeout: Duration,
     gate: Duration,
+    alive: impl FnMut() -> bool,
+) -> Result<u32, GateFailure> {
+    wait_healthy_as(false, port, path, headers, every, probe_timeout, gate, alive)
+}
+
+/// [`wait_healthy`] with the probe kind ([`probe_as`]).
+#[allow(clippy::too_many_arguments)]
+pub fn wait_healthy_as(
+    tcp: bool,
+    port: u16,
+    path: &str,
+    headers: &[(String, String)],
+    every: Duration,
+    probe_timeout: Duration,
+    gate: Duration,
     mut alive: impl FnMut() -> bool,
 ) -> Result<u32, GateFailure> {
+    let what = if tcp { format!("a connection on port {port}") } else { format!("GET {path}") };
     let deadline = Instant::now() + gate;
     let mut n = 0u32;
     let mut last = Probe::NoAnswer("no probe yet".into());
@@ -132,22 +187,22 @@ pub fn wait_healthy(
         if !alive() {
             return Err(GateFailure {
                 code: super::codes::HEALTH_FAILED,
-                message: format!("the instance exited before it answered GET {path} (last probe: {})", describe(&last)),
+                message: format!("the instance exited before it answered {what} (last probe: {})", describe(&last)),
             });
         }
         n += 1;
-        last = probe_once(port, path, headers, probe_timeout);
+        last = probe_as(tcp, port, path, headers, probe_timeout);
         if last.healthy() {
             return Ok(n);
         }
         if Instant::now() + every >= deadline {
             return Err(GateFailure {
                 code: super::codes::HEALTH_FAILED,
-                message: format!(
-                    "GET {path} never answered 2xx within {}s (last probe: {})",
-                    gate.as_secs(),
-                    describe(&last)
-                ),
+                message: if tcp {
+                    format!("nothing accepted {what} within {}s (last probe: {})", gate.as_secs(), describe(&last))
+                } else {
+                    format!("{what} never answered 2xx within {}s (last probe: {})", gate.as_secs(), describe(&last))
+                },
             });
         }
         std::thread::sleep(every);
@@ -198,6 +253,42 @@ mod tests {
         assert!(e.message.contains("HTTP 500"), "{e:?}");
         let e = wait_healthy(sick, "/h", &[], Duration::from_millis(20), Duration::from_secs(1), Duration::from_secs(5), || false).unwrap_err();
         assert!(e.message.contains("exited"), "{e:?}");
+    }
+
+    /// K5: an old `--cmd` service on the open path is healthy when its port
+    /// accepts (a 404 on `/` still passes), and the gate says so in words.
+    #[test]
+    fn the_tcp_probe_for_open_path_folders() {
+        let api = serve("HTTP/1.1 404 Not Found");
+        assert!(!probe_as(false, api, "/", &[], Duration::from_secs(2)).healthy());
+        assert!(probe_as(true, api, "/", &[], Duration::from_secs(2)).healthy());
+        assert_eq!(wait_healthy_as(true, api, "/", &[], Duration::from_millis(20), Duration::from_secs(1), Duration::from_secs(2), || true), Ok(1));
+        let dead = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert!(!probe_tcp(dead, Duration::from_millis(300)).healthy());
+        let e = wait_healthy_as(true, dead, "/", &[], Duration::from_millis(20), Duration::from_millis(300), Duration::from_millis(200), || true).unwrap_err();
+        assert!(e.message.starts_with(&format!("nothing accepted a connection on port {dead}")), "{e:?}");
+        // pasta in front of an App that isn't listening yet: accept, then
+        // close before any byte. Not healthy.
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let shut = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for c in l.incoming().flatten() {
+                drop(c);
+            }
+        });
+        let p = probe_tcp(shut, Duration::from_secs(2));
+        assert!(matches!(&p, Probe::NoAnswer(m) if m.contains("closed at once") || m.starts_with("read:")), "{p:?}");
+        // A raw TCP service that waits for the client to speak first: open
+        // and quiet is listening.
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let quiet = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut keep = Vec::new();
+            for c in l.incoming().flatten() {
+                keep.push(c);
+            }
+        });
+        assert!(probe_tcp(quiet, Duration::from_millis(400)).healthy());
     }
 
     #[test]

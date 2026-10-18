@@ -153,6 +153,11 @@ pub struct Health {
     /// until then.
     #[serde(default)]
     pub as_test_guest: bool,
+    /// The port accepting a connection is the whole check (0.46.1, K5):
+    /// what `k2 publish run --cmd` always checked, for an old service
+    /// moved onto the open path. `path` is ignored.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub tcp: bool,
 }
 
 impl Manifest {
@@ -167,6 +172,11 @@ impl Manifest {
 
     pub fn wants_test_guest_probe(&self) -> bool {
         self.host.health.as_ref().is_some_and(|h| h.as_test_guest)
+    }
+
+    /// The health check is a TCP accept (K5's folder manifests).
+    pub fn tcp_health(&self) -> bool {
+        self.host.health.as_ref().is_some_and(|h| h.tcp)
     }
 }
 

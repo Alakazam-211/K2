@@ -96,19 +96,23 @@ pub fn is_lower_uuid(s: &str) -> bool {
 // ── ExternalId (`sew_proto::external_id`) ────────────────────────────
 
 /// Who a member is outside Sew. Wire forms: `k2:principal:<uuid>`,
-/// `k2:workspace:<uuid>`, `k2:owner`, `local:<handle>`.
+/// `k2:workspace:<uuid>`, `k2:connect:<uuid>` (SW2: a Connect login, by
+/// its never-reused K7 id), `k2:owner`, `local:<handle>`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ExternalId {
     K2Principal(String),
     K2Workspace(String),
+    /// A K2 Connect login (its `connect_users` id). Provisioned only from
+    /// a `connect` chat grant (written by the owner, or by the login's own
+    /// first chat-pass mint), never by role (rev 147).
+    K2Connect(String),
     K2Owner,
     Local(String),
-    /// Not in sew-proto: a form this mirror does not know yet (e.g. SW2's
-    /// `k2:connect:<uuid>`, or a Meet link guest `link:<channel>:<id>`,
-    /// K-M6). Only produced by lenient deserialization, so a newer Sew's
-    /// member list still parses; reconcile ignores it. **Keep this lenient
-    /// arm when K1 swaps in the vendored sew-proto**, whose `ExternalId`
-    /// refuses unknown forms.
+    /// Not in sew-proto: a form this mirror does not know yet (e.g. a
+    /// Meet link guest `link:<channel>:<id>`, K-M6). Only produced by
+    /// lenient deserialization, so a newer Sew's member list still parses;
+    /// reconcile ignores it. **Keep this lenient arm when K1 swaps in the
+    /// vendored sew-proto**, whose `ExternalId` refuses unknown forms.
     Other(String),
 }
 
@@ -116,9 +120,16 @@ impl ExternalId {
     pub fn parse(s: &str) -> Result<ExternalId, String> {
         let bad = || {
             format!(
-                "invalid external id {s:?}: expected k2:principal:<uuid>, k2:workspace:<uuid>, k2:owner or local:<handle>"
+                "invalid external id {s:?}: expected k2:principal:<uuid>, k2:workspace:<uuid>, k2:connect:<uuid>, k2:owner or local:<handle>"
             )
         };
+        if let Some(u) = s.strip_prefix("k2:connect:") {
+            return if is_lower_uuid(u) {
+                Ok(ExternalId::K2Connect(u.to_string()))
+            } else {
+                Err(bad())
+            };
+        }
         if s == "k2:owner" {
             return Ok(ExternalId::K2Owner);
         }
@@ -162,6 +173,7 @@ impl fmt::Display for ExternalId {
         match self {
             ExternalId::K2Principal(u) => write!(f, "k2:principal:{u}"),
             ExternalId::K2Workspace(u) => write!(f, "k2:workspace:{u}"),
+            ExternalId::K2Connect(u) => write!(f, "k2:connect:{u}"),
             ExternalId::K2Owner => f.write_str("k2:owner"),
             ExternalId::Local(h) => write!(f, "local:{h}"),
             ExternalId::Other(raw) => f.write_str(raw),
@@ -597,6 +609,7 @@ mod tests {
         for raw in [
             format!("k2:principal:{u}"),
             format!("k2:workspace:{u}"),
+            format!("k2:connect:{u}"),
             "k2:owner".to_string(),
             "local:alice".to_string(),
         ] {
@@ -606,6 +619,10 @@ mod tests {
             assert_eq!(json, format!("\"{raw}\""));
             assert_eq!(serde_json::from_str::<ExternalId>(&json).unwrap(), id);
         }
+        assert_eq!(
+            ExternalId::parse(&format!("k2:connect:{u}")).unwrap(),
+            ExternalId::K2Connect(u.into())
+        );
         for bad in [
             "k2:principal:p1",
             "k2:principal:0F8FAD5B-D9CB-469F-A165-70867728950E",
@@ -617,13 +634,9 @@ mod tests {
             assert!(ExternalId::parse(bad).is_err(), "{bad:?} must be refused");
         }
         // Lenient on the way IN (a newer Sew's list must still parse).
-        let other: ExternalId =
-            serde_json::from_str("\"k2:connect:0f8fad5b-d9cb-469f-a165-70867728950e\"").unwrap();
+        let other: ExternalId = serde_json::from_str("\"link:4242:AB3DEFGHIJKLMNOP\"").unwrap();
         assert!(!other.is_known());
-        assert_eq!(
-            other.to_string(),
-            "k2:connect:0f8fad5b-d9cb-469f-a165-70867728950e"
-        );
+        assert_eq!(other.to_string(), "link:4242:AB3DEFGHIJKLMNOP");
     }
 
     #[test]

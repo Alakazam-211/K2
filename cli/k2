@@ -6865,8 +6865,11 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Other kinds need --scope and no --role (recorded, not enforced).
   k2 app grant add --kind chat --subject-kind principal --subject <username|id> [--scope member|guest]
   k2 app grant add --kind chat --subject-kind workspace --subject <handle|id> --scope coworker|assistant:<username|owner>
+  k2 app grant add --kind chat --subject-kind connect --subject <login|id> [--scope member|guest]
                                         chat grants create the person's or agent's Sew account (Linux, Sew enabled);
                                         roles and channels are set in Sew. --target is optional (sew).
+                                        A Connect login's first chat pass writes its own connect grant;
+                                        switch it off (not rm) to keep that login out of chat.
   k2 app grant set --id <grant-id> --scope <scope>
                                         Change a chat grant's scope (member↔guest, assistant re-pin).
   k2 app grant rm --subject-kind principal|workspace --subject <id> --kind <kind> --target <id>
@@ -9593,7 +9596,7 @@ for g in grants:
                             --room=*) rooms_nl="${rooms_nl}${1#--room=}"$'\n'; shift ;;
                             --help|-h)
                                 echo "Usage: k2 app grant add --subject-kind principal|workspace --subject <id> --kind app|mailbox|database|cli|chat --target <id> [--role <role> | --room <handle>…] [--scope <text>]" >&2
-                                echo "       k2 app grant add --kind chat --subject-kind principal|workspace --subject <name|handle|id> [--scope member|guest|coworker|assistant:<person>]" >&2
+                                echo "       k2 app grant add --kind chat --subject-kind principal|workspace|connect --subject <name|handle|login|id> [--scope member|guest|coworker|assistant:<person>]" >&2
                                 echo "       chat grants create the Sew account; roles and channels are set in Sew." >&2
                                 exit 0 ;;
                             -*) echo "Unknown flag: $1" >&2; exit 1 ;;

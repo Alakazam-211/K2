@@ -4114,8 +4114,19 @@ fn grant_subject_kind(raw: &str) -> Result<String, String> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "principal" => Ok("principal".to_string()),
         "workspace" => Ok("workspace".to_string()),
-        _ => Err("subjectKind must be principal or workspace".to_string()),
+        // Sew S27: a K2 Connect login (stored by its K7 id), kind=chat only.
+        "connect" => Ok("connect".to_string()),
+        _ => Err("subjectKind must be principal, workspace or connect".to_string()),
     }
+}
+
+/// A Connect login token (its K7 id, or its username) → its id.
+fn resolve_connect_subject(token: &str) -> Result<String, String> {
+    let t = token.trim();
+    if crate::tool_hook::sew_wire::is_lower_uuid(t) {
+        return Ok(t.to_string());
+    }
+    crate::connect_users::user_uuid(t)?.ok_or_else(|| format!("unknown Connect user '{t}'"))
 }
 
 fn grant_kind(raw: &str) -> Result<String, String> {
@@ -4219,6 +4230,9 @@ pub fn create_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
 
 fn create_plain_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
     let subject_kind = grant_subject_kind(&write.subject_kind)?;
+    if subject_kind == "connect" {
+        return Err("subjectKind connect is only for kind=chat".to_string());
+    }
     let subject_id = write.subject_id.trim().to_string();
     if subject_id.is_empty() {
         return Err("missing subject id".to_string());
@@ -4388,6 +4402,8 @@ fn create_hooked_grant(
     if subject_kind == "workspace" {
         write.subject_id = resolve_workspace_subject(&write.subject_id)?;
         ws_ids.push(write.subject_id.clone());
+    } else if subject_kind == "connect" {
+        write.subject_id = resolve_connect_subject(&write.subject_id)?;
     } else if write.subject_id.trim().is_empty() {
         return Err("missing subject id".to_string());
     }
@@ -4583,6 +4599,8 @@ pub fn delete_grant_by_key_with_cascade(
     let mut subject_id = subject_id.trim().to_string();
     if subject_kind == "workspace" {
         subject_id = resolve_workspace_subject(&subject_id)?;
+    } else if subject_kind == "connect" {
+        subject_id = resolve_connect_subject(&subject_id)?;
     }
     let target = match target_id.trim() {
         "" => p.default_target().to_string(),

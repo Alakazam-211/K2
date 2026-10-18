@@ -673,11 +673,244 @@ async fn owner_username_and_fallback_both_taken_blocks_with_a_clear_error() {
         .find(|r| r.subject_key == "k2:owner" && r.op == "provision")
         .expect("owner provision row");
     assert_eq!(row.state, "blocked");
-    let err = row.last_error.clone().unwrap_or_default();
+    let err = row.last_error.clone().expect("a blocked row carries its error");
     assert!(
         err.starts_with(&format!("username '{fallback}' is taken in chat (the fallback")),
         "{err}"
     );
+}
+
+// ── k2:connect:<id> members (SW2: Sew never invents members) ─────────
+
+fn cext(uuid: &str) -> String {
+    format!("k2:connect:{uuid}")
+}
+
+/// A Connect login (Member role) and its K7 id.
+fn connect_login(name: &str, first: Option<&str>, last: Option<&str>) -> String {
+    k2_core::connect_users::add_user_with_names(name, "pw-connect-long-1", first, last)
+        .expect("add Connect login");
+    k2_core::connect_users::user_uuid(name)
+        .expect("uuid")
+        .expect("login exists")
+}
+
+fn connect_grant(uuid: &str) -> Option<skin::SkinGrant> {
+    skin::list_grants()
+        .expect("grants")
+        .into_iter()
+        .find(|g| g.subject_kind == "connect" && g.subject_id == uuid && g.kind == "chat")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_grant_provisions_a_person_with_the_login_as_username() {
+    let env = setup().await;
+    enable(&env);
+    drain(&env).await;
+    let bob = connect_login("bob", Some("Bob"), Some("Stone"));
+    let g = chat("connect", "bob", None, "owner-token");
+    assert_eq!(
+        (g.subject_id.as_str(), g.scope.as_deref()),
+        (bob.as_str(), Some("member")),
+        "stored by the login's id"
+    );
+    drain(&env).await;
+    let m = env.sew.member(&cext(&bob)).expect("k2:connect member provisioned");
+    assert_eq!(m.kind, MemberKind::Person);
+    assert_eq!(m.username, "bob", "the login, never the id");
+    assert_eq!(m.display_name, "Bob Stone");
+    assert!(!m.guest && !m.deactivated);
+    let post = env
+        .sew
+        .posts()
+        .into_iter()
+        .find(|c| c.path == hook::sew_wire::MGMT_PROVISION && c.body["external_id"] == cext(&bob))
+        .expect("provision call");
+    assert_eq!(post.actor.as_deref(), Some("owner-token"));
+    assert_eq!(post.body["profile"]["username"], "bob");
+    assert_eq!(post.body["kind"], "person");
+
+    // A reserved word is moved off (granted by id this time); Space
+    // membership is not touched (provision makes an install member only).
+    let all = connect_login("all", None, None);
+    chat("connect", &all, None, "owner-token");
+    drain(&env).await;
+    assert_eq!(env.sew.member(&cext(&all)).expect("all provisioned").username, "all-k2");
+    let member_ops = [
+        hook::sew_wire::MGMT_PROVISION,
+        hook::sew_wire::MGMT_UPDATE,
+        hook::sew_wire::MGMT_DEPROVISION,
+        hook::sew_wire::MGMT_OWNER_SET,
+    ];
+    assert!(
+        env.sew.posts().iter().all(|c| member_ops.contains(&c.path.as_str())),
+        "no Space or channel calls: {}",
+        env.sew.log()
+    );
+    // The display name follows the login's First/Last (reconcile).
+    k2_core::connect_users::set_names("bob", Some("Robert"), Some("Stone")).expect("names");
+    worker::reconcile_once().await.unwrap();
+    drain(&env).await;
+    assert_eq!(env.sew.member(&cext(&bob)).unwrap().display_name, "Robert Stone");
+    assert_eq!(env.sew.member(&cext(&bob)).unwrap().username, "bob");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_username_taken_falls_back_and_sticks_and_a_stale_name_is_renamed_once() {
+    let env = setup().await;
+    enable(&env);
+    drain(&env).await;
+    let bob = connect_login("bob", None, None);
+    env.sew
+        .seed("local:bob", MemberKind::Person, "bob", "Local Bob", false);
+    chat("connect", "bob", None, "owner-token");
+    drain(&env).await;
+    let fallback = hook::chat::suffixed_username("bob", &cext(&bob));
+    assert_eq!(env.sew.member(&cext(&bob)).expect("provisioned").username, fallback);
+    let tries: Vec<String> = env
+        .sew
+        .posts()
+        .into_iter()
+        .filter(|c| c.path == hook::sew_wire::MGMT_PROVISION && c.body["external_id"] == cext(&bob))
+        .map(|c| format!("{} {}", c.status, c.body["profile"]["username"].as_str().unwrap()))
+        .collect();
+    assert_eq!(tries, ["409 bob".to_string(), format!("200 {fallback}")]);
+    // Sticky: two reconciles send nothing.
+    let before = env.sew.posts().len();
+    for _ in 0..2 {
+        worker::reconcile_once().await.unwrap();
+        drain(&env).await;
+    }
+    assert_eq!(env.sew.posts().len(), before, "no rename: {}", env.sew.log());
+
+    // Sew holds a name that is neither the login nor its fallback (e.g.
+    // from before the login rule): exactly one rename to the login.
+    let cara = connect_login("cara", None, None);
+    chat("connect", "cara", None, "owner-token");
+    drain(&env).await;
+    env.sew.with_members(|ms| {
+        ms.get_mut(&cext(&cara)).expect("cara member").username = "cara-old".into();
+    });
+    for _ in 0..2 {
+        worker::reconcile_once().await.unwrap();
+        drain(&env).await;
+    }
+    let ups = updates_for(&env, &cext(&cara));
+    assert_eq!(ups.len(), 1, "exactly one rename: {}", env.sew.log());
+    assert_eq!(ups[0].body["profile"]["username"], "cara");
+    assert_eq!(env.sew.member(&cext(&cara)).unwrap().username, "cara");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_user_delete_and_grant_delete_deprovision_and_reconcile_owns_connect_members() {
+    let env = setup().await;
+    enable(&env);
+    drain(&env).await;
+    let bob = connect_login("bob", None, None);
+    chat("connect", "bob", None, "owner-token");
+    let dee = connect_login("dee", None, None);
+    let dee_grant = chat("connect", "dee", None, "owner-token");
+    drain(&env).await;
+    assert!(!env.sew.member(&cext(&bob)).expect("bob").deactivated);
+
+    // The login is removed: its grant goes and the member is deprovisioned.
+    k2_core::connect_users::remove_user("bob").expect("remove login");
+    assert!(connect_grant(&bob).is_none(), "grant deleted with the login");
+    drain(&env).await;
+    assert!(env.sew.member(&cext(&bob)).unwrap().deactivated, "{}", env.sew.log());
+    let dep = rows()
+        .into_iter()
+        .find(|r| r.subject_key == cext(&bob) && r.op == "deprovision")
+        .expect("deprovision row");
+    assert_eq!(dep.state, "done");
+
+    // The grant is deleted: deprovision, as for a principal.
+    skin::delete_grant_by_id(&dee_grant.id).expect("delete grant");
+    drain(&env).await;
+    assert!(env.sew.member(&cext(&dee)).unwrap().deactivated);
+
+    // Reconcile: an active k2:connect member with no grant is removed;
+    // a Connect login with no grant is never provisioned (rev 147).
+    let eve = connect_login("eve", None, None);
+    let stray = uuid::Uuid::new_v4().to_string();
+    env.sew.seed(&cext(&stray), MemberKind::Person, "stray", "Stray", false);
+    worker::reconcile_once().await.unwrap();
+    drain(&env).await;
+    assert!(env.sew.member(&cext(&stray)).unwrap().deactivated, "{}", env.sew.log());
+    assert!(env.sew.member(&cext(&eve)).is_none(), "no member by role or by existing");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_pass_gate_queues_the_provision_then_lets_the_mint_through() {
+    let env = setup().await;
+    let cara = connect_login("cara", Some("Cara"), Some("Lin"));
+    // Sew off: nothing is written.
+    assert_eq!(
+        hook::connect_chat_gate(&cara, "cara").unwrap(),
+        hook::ConnectChatGate::Off
+    );
+    enable(&env);
+    drain(&env).await;
+
+    // First mint: the login's own chat grant is written and the provision
+    // queued; the mint must wait.
+    assert_eq!(
+        hook::connect_chat_gate(&cara, "cara").unwrap(),
+        hook::ConnectChatGate::Pending
+    );
+    let g = connect_grant(&cara).expect("grant written by the first mint");
+    assert_eq!(g.created_by.as_deref(), Some("user:cara"));
+    assert_eq!(g.scope.as_deref(), Some("member"));
+    // A retry before delivery queues nothing more.
+    assert_eq!(
+        hook::connect_chat_gate(&cara, "cara").unwrap(),
+        hook::ConnectChatGate::Pending
+    );
+    let queued: Vec<_> = rows().into_iter().filter(|r| r.subject_key == cext(&cara)).collect();
+    assert_eq!(queued.len(), 1, "{queued:?}");
+    assert_eq!((queued[0].op.as_str(), queued[0].state.as_str()), ("provision", "pending"));
+    assert_eq!(queued[0].actor, "user:cara");
+
+    drain(&env).await;
+    assert_eq!(
+        hook::connect_chat_gate(&cara, "cara").unwrap(),
+        hook::ConnectChatGate::Ready
+    );
+    let m = env.sew.member(&cext(&cara)).expect("member before the first pass");
+    assert_eq!((m.username.as_str(), m.display_name.as_str()), ("cara", "Cara Lin"));
+
+    // Rows pruned (done rows age out): the gate re-queues an idempotent
+    // provision rather than minting on no evidence.
+    let skin_db = rusqlite::Connection::open(k2_core::paths::k2_home().join("skin.db"))
+        .expect("open skin.db");
+    let pruned = skin_db
+        .execute(
+            "DELETE FROM tool_outbox WHERE subject_key = ?1",
+            rusqlite::params![cext(&cara)],
+        )
+        .expect("prune rows");
+    assert_eq!(pruned, 1);
+    drop(skin_db);
+    assert_eq!(
+        hook::connect_chat_gate(&cara, "cara").unwrap(),
+        hook::ConnectChatGate::Pending
+    );
+    let row = rows().into_iter().find(|r| r.subject_key == cext(&cara)).expect("re-queued");
+    assert_eq!(row.cause, "pass_mint");
+    drain(&env).await;
+    assert_eq!(
+        hook::connect_chat_gate(&cara, "cara").unwrap(),
+        hook::ConnectChatGate::Ready
+    );
+
+    // The owner switches the grant off: no pass.
+    skin::set_grant_enabled_as(&g.id, false, "owner-token").expect("disable");
+    assert_eq!(
+        hook::connect_chat_gate(&cara, "cara").unwrap(),
+        hook::ConnectChatGate::Disabled
+    );
+    drain(&env).await;
+    assert!(env.sew.member(&cext(&cara)).unwrap().deactivated);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

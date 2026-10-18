@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use k2_core::tool_hook::ConnectChatGate;
 use k2_vault::keystore::fake::FakeKeyStore;
 use k2_vault::{Actor, AgentActor, KeyStore, LocalVault, Role, VaultError};
 use serde_json::Value;
@@ -64,6 +65,11 @@ fn code(r: &mint::Reply) -> String {
     body(r)["error"]["code"].as_str().unwrap_or_else(|| panic!("no error code: {}", r.response.body)).to_string()
 }
 
+/// The Connect member gate as "already delivered" (tests of other gates).
+fn ready_gate(_: &str, _: &str) -> Result<ConnectChatGate, String> {
+    Ok(ConnectChatGate::Ready)
+}
+
 fn req<'a>(bearer: Option<&'a str>, body: &'a [u8]) -> PassRequest<'a> {
     PassRequest { ingress: "loopback", ip: "127.0.0.1", browser: false, bearer, owner_token: OWNER, body, link: None }
 }
@@ -75,7 +81,7 @@ fn with_deps<R>(r: &Ring, now: i64, flip: bool, f: impl FnOnce(&Deps<'_>) -> R) 
     let limiter = Limiter::new(PER_SID, PER_DAEMON);
     let codes = handoff::Store::default();
     let sign = |c: &ChatPassClaims| r.ring.sign(c, now);
-    f(&Deps { now, owner_connect_is_k2_owner: flip, status: &status, sign: &sign, limiter: &limiter, codes: &codes })
+    f(&Deps { now, owner_connect_is_k2_owner: flip, status: &status, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate })
 }
 
 fn audit_text() -> String {
@@ -280,7 +286,7 @@ fn install_id_cache_fresh_stale_missing_and_mint_503() {
     let limiter = Limiter::new(PER_SID, PER_DAEMON);
     let codes = handoff::Store::default();
     let sign = |c: &ChatPassClaims| r.ring.sign(c, T0);
-    let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &dead, sign: &sign, limiter: &limiter, codes: &codes };
+    let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &dead, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate };
     let x = mint::handle_pass_with(&req(Some(OWNER), b""), &d);
     assert_eq!((x.response.status, code(&x).as_str()), ("503 Service Unavailable", "chat_unavailable"));
     // Keys unavailable → 503 too.
@@ -358,7 +364,7 @@ fn handoff_redeem_single_use_expiry_cap_and_bearer_exclusive() {
     let limiter = Limiter::new(PER_SID, PER_DAEMON);
     let codes = handoff::Store::default();
     let sign = |c: &ChatPassClaims| r.ring.sign(c, T0);
-    let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &status, sign: &sign, limiter: &limiter, codes: &codes };
+    let d = Deps { now: T0, owner_connect_is_k2_owner: false, status: &status, sign: &sign, limiter: &limiter, codes: &codes, connect_gate: &ready_gate };
 
     let c = codes.mint(T0, "owner-token").expect("mint");
     let b = serde_json::json!({ "handoff": c }).to_string();
@@ -585,4 +591,76 @@ fn browser_header_detection() {
     assert!(!mint::has_browser_headers(node), "@k2/server's fetch is not a browser");
     // Only the head counts, never the body.
     assert!(!mint::has_browser_headers("POST / HTTP/1.1\r\nHost: x\r\n\r\nOrigin: https://x\r\n"));
+}
+
+// ── SW2: a Connect login mints only once its member is delivered ─────
+
+/// Sew never invents members (a pass whose `sub` has no member gets 403
+/// `not_provisioned`), so a Connect login's mint asks the member gate
+/// first: queued → 503 `chat_member_pending` + `Retry-After`, never a
+/// pass; blocked → 503; grant off → 403 `no_chat_grant`; Sew off → 503.
+/// Retries do not spend the BFF's mint budget. The owner token never
+/// reaches the gate.
+#[test]
+fn connect_login_mints_only_after_its_member_is_delivered() {
+    let _home = TempHome::new();
+    let r = ring("k7-connect-gate");
+    k2_core::connect_users::add_user("mia", "password-for-tests-1").expect("add login");
+    let tok = k2_core::connect_users::create_session("mia");
+    let uuid = k2_core::connect_users::user_uuid("mia").expect("uuid").expect("exists");
+    let status = FixedStatus(Ok(INSTALL.into()));
+    let limiter = Limiter::new(PER_SID, PER_DAEMON);
+    let codes = handoff::Store::default();
+    let sign = |c: &ChatPassClaims| r.ring.sign(c, T0);
+    let seen = std::sync::Mutex::new(Vec::<(String, String)>::new());
+    let state = std::sync::Mutex::new(ConnectChatGate::Pending);
+    let gate = |id: &str, login: &str| -> Result<ConnectChatGate, String> {
+        seen.lock().unwrap().push((id.to_string(), login.to_string()));
+        Ok(state.lock().unwrap().clone())
+    };
+    let d = Deps {
+        now: T0,
+        owner_connect_is_k2_owner: false,
+        status: &status,
+        sign: &sign,
+        limiter: &limiter,
+        codes: &codes,
+        connect_gate: &gate,
+    };
+    let mint = || mint::handle_pass_with(&req(Some(&tok), b"{}"), &d);
+
+    // Queued: more retries than the per-sid budget, none of them a pass.
+    for _ in 0..PER_SID + 2 {
+        let x = mint();
+        assert_eq!((x.response.status, code(&x).as_str()), ("503 Service Unavailable", "chat_member_pending"));
+        assert_eq!(x.retry_after_secs, Some(mint::MEMBER_PENDING_RETRY_SECS));
+        assert_eq!(body(&x)["error"]["details"]["retry_after_ms"], 2000);
+        assert!(!x.response.body.contains("\"pass\""), "{}", x.response.body);
+    }
+    assert_eq!(seen.lock().unwrap()[0], (uuid.clone(), "mia".to_string()), "gate gets the id and the login");
+
+    *state.lock().unwrap() = ConnectChatGate::Blocked("username 'mia-1a2b' is taken in chat".into());
+    let x = mint();
+    assert_eq!((x.response.status, code(&x).as_str()), ("503 Service Unavailable", "chat_member_blocked"));
+    assert!(x.response.body.contains("is taken in chat"), "{}", x.response.body);
+    *state.lock().unwrap() = ConnectChatGate::Disabled;
+    let x = mint();
+    assert_eq!((x.response.status, code(&x).as_str()), ("403 Forbidden", "no_chat_grant"));
+    *state.lock().unwrap() = ConnectChatGate::Off;
+    assert_eq!(code(&mint()), "chat_unavailable");
+
+    // Delivered: the pass names the login's own member. The pending
+    // retries above spent nothing of the per-sid budget.
+    *state.lock().unwrap() = ConnectChatGate::Ready;
+    let x = mint();
+    assert_eq!(x.response.status, "200 OK", "{}", x.response.body);
+    assert_eq!(body(&x)["sub"], format!("k2:connect:{uuid}"));
+
+    // The owner token never asks the Connect gate.
+    let before = seen.lock().unwrap().len();
+    let x = mint::handle_pass_with(&req(Some(OWNER), b"{}"), &d);
+    assert_eq!(x.response.status, "200 OK", "{}", x.response.body);
+    assert_eq!(seen.lock().unwrap().len(), before);
+    let audit = audit_text();
+    assert!(audit.contains("chat_member_pending") && audit.contains("chat_member_blocked"), "{audit}");
 }

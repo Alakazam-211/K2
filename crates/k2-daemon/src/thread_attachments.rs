@@ -9,7 +9,9 @@
 //!   A guest sees it only when their `files:read` and R3 folder scope in
 //!   that room already cover the path; otherwise it is
 //!   `{kind:"file", state:"hidden"}`, with no name, path or size. Applied
-//!   to `GET /cli/thread` and to each guest's overlay WS frames.
+//!   to `GET /cli/thread` (the page, and the thread-delta-v1 `after_seq`
+//!   read's `items` and `changed`, through `overlay_routes::
+//!   thread_items_view`) and to each guest's overlay WS frames.
 //! - **The read door** `GET /cli/thread/attachment` (previews and ranged
 //!   downloads for the phone): Thread read rights plus the viewer's own
 //!   file rights. POST is 405 (central guard).

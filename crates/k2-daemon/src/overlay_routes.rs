@@ -441,13 +441,24 @@ fn authorize_write(
     Ok(())
 }
 
+/// Thread items as THIS caller may see them (thread-attachments-v1): each
+/// attachment gains its live `state`, and an App guest sees only the files
+/// its own file rights cover (the rest are `{kind, state:"hidden"}`, with
+/// no name, path or size). Every Thread read that returns items goes
+/// through here: the page (`snapshot_json`) and the thread-delta-v1
+/// `items` and `changed` (`thread_delta_json`), so the two can't drift.
+fn thread_items_view(items: &[overlay::OverlayItem], resolved: &ResolvedOverlay, pass: Option<&SkinPass>) -> serde_json::Value {
+    let mut v = serde_json::to_value(items).unwrap_or_else(|_| serde_json::json!([]));
+    crate::thread_attachments::rewrite_items(&mut v, &resolved.project_id, pass);
+    v
+}
+
 fn snapshot_json(collection: &str, resolved: &ResolvedOverlay, page: OverlayPage) -> String {
-    let mut items = serde_json::to_value(&page.items).unwrap_or_else(|_| serde_json::json!([]));
-    if collection == "thread" {
-        // thread-attachments-v1: live state per file; a guest sees only
-        // the files their own file rights cover (the rest are `hidden`).
-        crate::thread_attachments::rewrite_items(&mut items, &resolved.project_id, request_skin().as_ref());
-    }
+    let items = if collection == "thread" {
+        thread_items_view(&page.items, resolved, request_skin().as_ref())
+    } else {
+        serde_json::to_value(&page.items).unwrap_or_else(|_| serde_json::json!([]))
+    };
     let body = serde_json::json!({
         "ok": true,
         "collection": collection,
@@ -505,16 +516,21 @@ pub(crate) fn parse_after_seq(params: &HashMap<String, String>) -> Result<Option
 /// `items` OLDEST first after N and `has_more` meaning NEWER items remain,
 /// plus `after_seq`, `changed` (items at or below N in their current
 /// state) and `removed` (`{id, seq}` of items that left this Thread).
+///
+/// `items` and `changed` carry the same per-caller attachment view as the
+/// page ([`thread_items_view`]: live `state`, the App guest strip);
+/// `removed` is `{id, seq}` only.
 fn thread_delta_json(resolved: &ResolvedOverlay, after_seq: i64, delta: overlay::ThreadDelta) -> String {
+    let pass = request_skin();
     let body = serde_json::json!({
         "ok": true,
         "collection": "thread",
         "addr": resolved.addr,
         "conversation_id": resolved.conversation_id,
         "after_seq": after_seq,
-        "items": delta.items,
+        "items": thread_items_view(&delta.items, resolved, pass.as_ref()),
         "has_more": delta.has_more,
-        "changed": delta.changed,
+        "changed": thread_items_view(&delta.changed, resolved, pass.as_ref()),
         "removed": removed_json(&delta.removed),
         "pastAddresses": past_addresses(resolved),
     });

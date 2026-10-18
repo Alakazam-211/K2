@@ -195,8 +195,13 @@ pub fn box_env_name(n: &str) -> String {
 pub const NFT_TABLE: &str = "k2app";
 /// The chain name doubles as the ruleset version marker (v2: gateway
 /// ports only through per-App rules, runtime slice 3; v3: the egress
-/// proxy ports too, S15, so no App reaches another App's proxy).
-pub const NFT_CHAIN: &str = "k2app_v3";
+/// proxy ports too, S15, so no App reaches another App's proxy; v4, 0.46.1
+/// lane 1: loopback TCP an App isn't admitted to is **refused** (a TCP
+/// reset) instead of dropped, so a held or revoked box service answers at
+/// once instead of stalling, and the per-App rules are checked before the
+/// established shortcut, so revoking a box service cuts its open
+/// connections too).
+pub const NFT_CHAIN: &str = "k2app_v4";
 /// The per-App chain (`apps nft app`): one accept per App for its own
 /// gateway port, matched on the App's cgroup.
 pub const NFT_APPS_CHAIN: &str = "k2app_apps";
@@ -1104,16 +1109,18 @@ fn app_rule_line(r: &AppRule) -> String {
 
 /// The `inet k2app` table (§10.4, W §5.6): for sockets owned by `k2app`
 /// (container Apps reach the host through pasta, which runs as `k2app`)
-/// or by `k2appx` (process Apps), allow replies, each App's own gateway
-/// and egress proxy ports (per-App cgroup rules, [`NFT_APPS_CHAIN`]) and
-/// the box's Postgres on loopback, and drop everything else: other
-/// loopback ports (other Apps' gateway and proxy ports included), any
-/// address of this host (`host.containers.internal` reached a 0.0.0.0
-/// service in W), DNS, private and link-local nets, and the internet
-/// (egress goes through the App's own proxy on loopback, S15). The
-/// leading `table` + `delete table` make `nft -f` replace it atomically.
-/// `gw` and `px` are the ranges per-App ports sit in; nothing accepts
-/// either as a whole.
+/// or by `k2appx` (process Apps), allow each App's own gateway and egress
+/// proxy ports and its approved box services (per-App cgroup rules,
+/// [`NFT_APPS_CHAIN`], in any connection state, so a revoked one is cut
+/// mid-connection), the box's Postgres on loopback, and the reply side of
+/// connections into the App (its published ports); **refuse** (TCP reset)
+/// every other loopback TCP port at once (other Apps' doors, a held or
+/// revoked box service: no stall); and drop everything else: any address
+/// of this host (`host.containers.internal` reached a 0.0.0.0 service in
+/// W), DNS, private and link-local nets, and the internet (egress goes
+/// through the App's own proxy on loopback, S15). The leading `table` +
+/// `delete table` make `nft -f` replace it atomically. `gw` and `px` are
+/// the ranges per-App ports sit in; nothing accepts either as a whole.
 pub fn nft_ruleset(uid: u32, process_uid: Option<u32>, gw: PortRange, px: PortRange, db: PortRange, apps: &[AppRule]) -> String {
     let _ = (gw, px);
     let app_lines: String = apps.iter().map(|r| format!("\t\t{}\n", app_rule_line(r))).collect();
@@ -1133,9 +1140,11 @@ pub fn nft_ruleset(uid: u32, process_uid: Option<u32>, gw: PortRange, px: PortRa
          {app_lines}\
          \t}}\n\
          \tchain {c} {{\n\
-         \t\tct state established,related accept\n\
          \t\tjump {a}\n\
          \t\toifname \"lo\" tcp dport {db} accept\n\
+         \t\tct direction reply accept\n\
+         \t\tct state related accept\n\
+         \t\toifname \"lo\" meta l4proto tcp counter reject with tcp reset\n\
          \t\tfib daddr type local counter drop\n\
          \t\tmeta l4proto {{ tcp, udp }} th dport 53 counter drop\n\
          \t\tip daddr {{ 10.0.0.0/8, 100.64.0.0/10, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16 }} counter drop\n\
@@ -1503,9 +1512,9 @@ mod tests {
         assert_eq!(cg[1].0, "k2apps.slice/k2app-process@nsi-skin.service");
         let rule = AppRule { cgroup: cg[0].0.clone(), level: cg[0].1, gw_port: 38_601, box_ports: vec![] };
         let r = nft_ruleset(997, Some(998), GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, std::slice::from_ref(&rule));
-        assert!(r.contains("meta skuid 998 jump k2app_v3"), "process Apps' user gets the same chain");
+        assert!(r.contains("meta skuid 998 jump k2app_v4"), "process Apps' user gets the same chain");
         assert!(r.starts_with("table inet k2app\ndelete table inet k2app\n"));
-        assert!(r.contains("meta skuid 997 jump k2app_v3"));
+        assert!(r.contains("meta skuid 997 jump k2app_v4"));
         // No App reaches the whole gateway or proxy range: only its own
         // gateway and proxy ports, by cgroup (S15).
         assert!(!r.contains("38600-38899"), "{r}");
@@ -1515,11 +1524,18 @@ mod tests {
         ));
         assert!(r.contains("oifname \"lo\" tcp dport 5432 accept"));
         assert!(r.contains("fib daddr type local counter drop"));
-        // Established first, then the per-App chain, the catch-all drop last.
-        let est = r.find("ct state established").unwrap();
+        // v4: the per-App chain first (any state: a revoked box service is
+        // cut mid-connection), then Postgres, then the reply side of
+        // connections into the App, then a TCP reset for every other
+        // loopback port (refused at once, never a stall), the drops last.
+        assert!(!r.contains("ct state established"), "no established shortcut ahead of the per-App rules: {r}");
         let jump = r.find("jump k2app_apps").unwrap();
         let db = r.find("tcp dport 5432").unwrap();
-        assert!(est < jump && jump < db);
+        let reply = r.find("ct direction reply accept").unwrap();
+        let related = r.find("ct state related accept").unwrap();
+        let reset = r.find("oifname \"lo\" meta l4proto tcp counter reject with tcp reset").unwrap();
+        let local = r.find("fib daddr type local counter drop").unwrap();
+        assert!(jump < db && db < reply && reply < related && related < reset && reset < local, "{r}");
         assert!(r.trim_end().ends_with("counter drop\n\t}\n}"));
         let empty = nft_ruleset(997, None, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
         assert_eq!(empty.matches("meta skuid").count(), 1);

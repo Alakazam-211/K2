@@ -198,6 +198,28 @@ function upgrade(p, ms = 6000) {
     s.on("error", (e) => { clearTimeout(t); res({ status: 0, echo: "", err: e.code || "error" }); });
   });
 }
+// Lane 1 (nft v4): an upgraded connection to a box service held open with
+// a ping every 300 ms, for `ms`; says whether (and when) it was cut.
+function hold(p, ms) {
+  return new Promise((res) => {
+    const s = net.connect({ host: "127.0.0.1", port: p });
+    const t0 = Date.now();
+    let up = false, done = false, b = "";
+    const fin = (r) => { if (done) return; done = true; clearInterval(iv); clearTimeout(t); s.destroy(); res(r); };
+    s.on("connect", () => s.write("GET /ws HTTP/1.1\r\nHost: box\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"));
+    s.on("data", (d) => {
+      b += d;
+      if (!up && b.includes("\r\n\r\n")) {
+        up = b.startsWith("HTTP/1.1 101");
+        if (!up) fin({ upgraded: false, cutAfterMs: null, err: "no upgrade" });
+      }
+    });
+    const iv = setInterval(() => { if (up) s.write("ping"); }, 300);
+    const t = setTimeout(() => fin({ upgraded: up, cutAfterMs: null }), ms);
+    s.on("error", (e) => fin({ upgraded: up, cutAfterMs: Date.now() - t0, err: e.code || "error" }));
+    s.on("close", () => fin({ upgraded: up, cutAfterMs: Date.now() - t0 }));
+  });
+}
 async function box(p, bytes) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith("K2_BOX_")));
   return { env, get: await get(`http://127.0.0.1:${p}/hello`, 4000), upload: await upload(p, bytes), upgrade: await upgrade(p) };
@@ -215,6 +237,9 @@ const server = http.createServer(async (req, res) => {
     } else if (u.pathname === "/egress") {
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify(await egress(u.searchParams.get("target") || "example.com:443")));
+    } else if (u.pathname === "/hold") {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(await hold(Number(u.searchParams.get("port")), Number(u.searchParams.get("ms") || 10000))));
     } else if (u.pathname === "/box") {
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify(await box(Number(u.searchParams.get("port")), Number(u.searchParams.get("bytes") || 0))));

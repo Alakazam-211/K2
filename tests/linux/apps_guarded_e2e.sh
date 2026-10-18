@@ -377,8 +377,8 @@ NETL="$(grep -h '^Network=' /var/lib/k2app/.config/containers/systemd/k2app-esc-
 	|| fail "the unit's pasta forwards: $(grep -h '^Network=' /var/lib/k2app/.config/containers/systemd/k2app-esc-a--*.container)"
 ! nft list chain inet k2app k2app_apps | grep 'k2apps-esc_a.slice' | grep -q 8470 || fail "a held service's port is admitted: $(nft list chain inet k2app k2app_apps)"
 boxprobe "$FA" >/tmp/bx1.json
-jq_ 'assert v["env"].get("K2_BOX_SEW_API")=="127.0.0.1:8470", v["env"]; assert v["get"]["status"]==0 and v["upgrade"]["status"]==0, ("held: the door is shut", v)' /tmp/bx1.json
-ok "held: the forward is in the wall (pasta -T 8470:8470, K2_BOX_SEW_API set) but the App's nft rule doesn't admit 8470"
+jq_ 'assert v["env"].get("K2_BOX_SEW_API")=="127.0.0.1:8470", v["env"]; assert v["get"]["status"]==0 and v["upgrade"]["status"]==0, ("held: the door is shut", v); assert v["get"]["body"]!="timeout", ("nft v4: refused at once, never a stall", v["get"])' /tmp/bx1.json
+ok "held: the forward is in the wall (pasta -T 8470:8470, K2_BOX_SEW_API set) but the App's nft rule doesn't admit 8470: refused at once ($(jq_ 'print(v["get"]["body"])' /tmp/bx1.json)), no stall"
 
 # The owner's approval. The confirm needs the owner in person (a vault
 # password on a terminal); try it on a pty, else apply the approval as the
@@ -430,10 +430,17 @@ K2 app inspect esc-a --json | python3 -c 'import json,sys; b=json.load(sys.stdin
 K2 app box-service esc-a | grep -q 'allowed  sew-api' || fail "k2 app box-service text"
 ok "status: k2 app box-service and k2 app inspect show it (allowed, forwarded, door open)"
 
+# nft v4 (lane 1): revoking cuts a connection already open, too.
+curl -s -m 40 "http://127.0.0.1:$FA/hold?port=8470&ms=15000" >/tmp/bxh.json &
+HOLD=$!
+sleep 3
 K2 app box-service revoke esc-a sew-api | grep -q "revoked sew-api" || fail "revoke"
+wait "$HOLD" || true
+jq_ 'assert v["upgraded"] is True, v; assert v["cutAfterMs"] is not None and v["cutAfterMs"] < 13000, ("revoke cuts the open connection", v)' /tmp/bxh.json
+ok "revoke cut an upgraded connection that was open (after $(jq_ 'print(v["cutAfterMs"])' /tmp/bxh.json) ms of a 15 s hold)"
 ! nft list chain inet k2app k2app_apps | grep 'k2apps-esc_a.slice' | grep -q 8470 || fail "revoked: still admitted: $(nft list chain inet k2app k2app_apps)"
 boxprobe "$FA" >/tmp/bx3.json
-jq_ 'assert v["get"]["status"]==0 and v["upgrade"]["status"]==0, ("revoked: refused at once, no restart", v)' /tmp/bx3.json
+jq_ 'assert v["get"]["status"]==0 and v["upgrade"]["status"]==0, ("revoked: refused at once, no restart", v); assert v["get"]["body"]!="timeout", ("nft v4: a reset, not a stall", v["get"])' /tmp/bx3.json
 DBF="$K2HOME/.k2/k2.db"; [ -f "$DBF" ] || DBF="$K2HOME/.k2/k2so.db"
 python3 - "$DBF" <<'PY'
 import sqlite3, sys

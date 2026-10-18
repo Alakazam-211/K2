@@ -153,7 +153,7 @@ fn nft_lists_both(t: &T) {
         NFT,
         "list",
         0,
-        "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v3\n\t\tmeta skuid 995 jump k2app_v3\n\t}\n\tchain k2app_v3 {\n\t}\n}\n",
+        "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v4\n\t\tmeta skuid 995 jump k2app_v4\n\t}\n\tchain k2app_v4 {\n\t}\n}\n",
     );
 }
 
@@ -227,7 +227,7 @@ fn nft_covers_process_apps_once_their_user_exists() {
         .collect();
     let want = nft_ruleset(APP_UID, Some(PROC_UID), GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
     assert_eq!(fed[0].2.as_deref(), Some(want.as_bytes()));
-    assert!(want.contains("meta skuid 995 jump k2app_v3"));
+    assert!(want.contains("meta skuid 995 jump k2app_v4"));
 }
 
 #[test]
@@ -707,7 +707,7 @@ fn nft_apply_feeds_the_canned_ruleset_for_the_looked_up_uid() {
     assert_eq!(fed.len(), 1);
     let want = nft_ruleset(APP_UID, None, GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, &[]);
     assert_eq!(fed[0].2.as_deref(), Some(want.as_bytes()));
-    assert!(want.contains("meta skuid 996 jump k2app_v3"));
+    assert!(want.contains("meta skuid 996 jump k2app_v4"));
 
     // Removing it is the daemon's, and so is any other set of ranges (an
     // agent can't open more loopback ports to Apps).
@@ -1554,7 +1554,7 @@ fn hba_app_is_daemon_only_and_refuses_links_and_damage_before_writing() {
 // ── per-App gateway rules (slice 3) ─────────────────────────────────────
 
 fn current_table(t: &T) {
-    rule(t, NFT, "list", 0, "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v3\n\t}\n\tchain k2app_v3 {\n\t}\n}\n");
+    rule(t, NFT, "list", 0, "table inet k2app {\n\tchain output {\n\t\tmeta skuid 996 jump k2app_v4\n\t}\n\tchain k2app_v4 {\n\t}\n}\n");
 }
 
 fn container_cgroup(t: &T, id: &str) -> String {

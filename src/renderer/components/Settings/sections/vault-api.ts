@@ -79,6 +79,9 @@ export interface VaultSecret {
   /** The workspace's handle, for workspace scope. */
   workspace?: string
   hostsDisplay?: VaultHostDisplay[]
+  /** A copy another agent sent (`origin` = `handoff:<delivery id>`, 0.46.1):
+   *  who sent it and when. Names only. */
+  handoff?: { deliveryId: string; from: string; at?: string | null; decidedBy?: string | null } | null
 }
 
 export interface VaultAuditRow {

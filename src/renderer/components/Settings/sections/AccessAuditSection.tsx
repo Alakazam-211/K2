@@ -14,6 +14,7 @@ import {
   fetchWhoamiRole,
   formatAuditTimeUtc,
   isSuccessLogin,
+  isVaultHandoff,
   newestFirst,
   type AuthAuditEvent,
 } from './access-audit-api'
@@ -23,8 +24,8 @@ export const ACCESS_AUDIT_MANIFEST: SettingEntry[] = [
     id: 'k2-connect.access-audit',
     section: 'access-audit',
     label: 'Access Audit',
-    description: 'Login history for this host — who got in, from where, when',
-    keywords: ['access audit', 'login history', 'audit', 'sign-in', 'compromised'],
+    description: 'Login history and vault handoffs for this host — who got in, from where, when; which secrets agents sent each other',
+    keywords: ['access audit', 'login history', 'audit', 'sign-in', 'compromised', 'vault handoff', 'secret sent'],
   },
 ]
 
@@ -33,7 +34,13 @@ const EMPTY_COPY =
 const OLD_HOST_COPY = 'This host predates login history — update it to v0.40.144.'
 const OWNER_ONLY_COPY = 'Login history is visible to the server owner.'
 
-type FilterMode = 'successes' | 'all'
+type FilterMode = 'successes' | 'handoffs' | 'all'
+
+const FILTERS: { mode: FilterMode; label: string }[] = [
+  { mode: 'successes', label: 'Successes' },
+  { mode: 'handoffs', label: 'Vault handoffs' },
+  { mode: 'all', label: 'All' },
+]
 
 type ViewState =
   | { kind: 'loading' }
@@ -121,6 +128,7 @@ export function AccessAuditSection(): React.JSX.Element {
     const q = userFilter.trim().toLowerCase()
     return view.events.filter((ev) => {
       if (filter === 'successes' && !isSuccessLogin(ev)) return false
+      if (filter === 'handoffs' && !isVaultHandoff(ev)) return false
       if (q && !ev.user.toLowerCase().includes(q)) return false
       return true
     })
@@ -135,8 +143,9 @@ export function AccessAuditSection(): React.JSX.Element {
         <div>
           <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">Access Audit</h2>
           <p className="text-xs text-[var(--color-text-muted)] mt-1">
-            Login history for this host. A successful sign-in is the account that got in —
-            passwords are never stored in this log.
+            Login history and vault handoffs for this host. A successful sign-in is the account
+            that got in; a handoff line names the secret, who sent it and to whom — passwords and
+            secret values are never stored in this log.
           </p>
         </div>
       </div>
@@ -164,33 +173,24 @@ export function AccessAuditSection(): React.JSX.Element {
           <div className="flex flex-wrap items-end justify-between gap-3 mt-6 mb-3">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-semibold text-[var(--color-text-primary)]">
-                Login history
+                Records
               </span>
               <div className="flex gap-1">
-                <button
-                  type="button"
-                  aria-pressed={filter === 'successes'}
-                  onClick={() => setFilter('successes')}
-                  className={`text-[10px] px-2 py-0.5 border cursor-pointer no-drag ${
-                    filter === 'successes'
-                      ? 'border-[var(--color-accent)] text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]'
-                      : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]'
-                  }`}
-                >
-                  Successes
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={filter === 'all'}
-                  onClick={() => setFilter('all')}
-                  className={`text-[10px] px-2 py-0.5 border cursor-pointer no-drag ${
-                    filter === 'all'
-                      ? 'border-[var(--color-accent)] text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]'
-                      : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]'
-                  }`}
-                >
-                  All
-                </button>
+                {FILTERS.map(({ mode, label }) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    aria-pressed={filter === mode}
+                    onClick={() => setFilter(mode)}
+                    className={`text-[10px] px-2 py-0.5 border cursor-pointer no-drag ${
+                      filter === mode
+                        ? 'border-[var(--color-accent)] text-[var(--color-text-primary)] bg-[var(--color-bg-elevated)]'
+                        : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)]'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
               <label className="text-[10px] text-[var(--color-text-muted)] flex items-center gap-1">
                 User
@@ -261,7 +261,9 @@ export function AccessAuditSection(): React.JSX.Element {
                           {formatAuditTimeUtc(ev.ts)}
                         </td>
                         <td className="py-1.5 pr-3">{ev.event || '—'}</td>
-                        <td className={`py-1.5 pr-3 font-mono ${outcomeClass(ev.outcome)}`}>
+                        <td
+                          className={`py-1.5 pr-3 font-mono whitespace-pre-wrap break-words max-w-[28rem] ${outcomeClass(ev.outcome)}`}
+                        >
                           {ev.outcome || '—'}
                         </td>
                         <td className="py-1.5 pr-3">{ev.user || '—'}</td>

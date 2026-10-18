@@ -69,6 +69,14 @@ export function newestFirst(events: AuthAuditEvent[]): AuthAuditEvent[] {
   return events.slice().reverse()
 }
 
+/** A secret handoff line (send, receive, accept, decline, expire, refused;
+ *  prd-agent-secret-handoff-v1, daemon 0.46.1). Names only, never values. */
+export const VAULT_HANDOFF_EVENT = 'vault-handoff'
+
+export function isVaultHandoff(ev: AuthAuditEvent): boolean {
+  return ev.event === VAULT_HANDOFF_EVENT
+}
+
 export function isSuccessLogin(ev: AuthAuditEvent): boolean {
   return ev.event === 'login' && ev.outcome === 'ok'
 }

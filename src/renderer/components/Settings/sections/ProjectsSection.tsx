@@ -72,6 +72,7 @@ import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
 import { computeErrorMessage, setWorkspaceComputeOperate, setWorkspaceComputeSwitch } from './compute-api'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import { reorderedZoneIds } from '@/components/Sidebar/row-drag-reorder'
+import { AgentHandoffAcceptFrom } from './HandoffAcceptFrom'
 
 /**
  * Plan B cross-window sync: the old Tauri `projects_update` /
@@ -103,6 +104,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.db-agent-create', section: 'projects', label: 'Allow this agent to create databases', description: 'Per-workspace passport for k2 db create (create-only; existing DBs stay usable)', keywords: ['db_agent_access', 'create', 'passport', 'agent', 'write', 'database', 'sql'] },
   { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Allow this agent to manage Apps', description: 'Per-workspace passport for k2 app / leftover k2 skin / k2 skin-token mutations (guests, roles, platform tokens for this box)', keywords: ['agents_can_manage_skin', 'skin', 'app', 'passport', 'agent', 'guests', 'roles', 'skin-token'] },
   { id: 'projects.agents-can-manage-agents', section: 'projects', label: 'Allow hiring and managing agents', description: 'Lets this workspace\'s main agent open and stop sidecars (k2 sidecar); later also hire and retire agents', keywords: ['agents_can_manage_agents', 'sidecar', 'hire', 'agent', 'passport', 'manage agents'] },
+  { id: 'projects.handoff-accept-from', section: 'projects', label: 'Secrets from other agents', description: 'Agents whose secrets go straight into this agent\'s vault; everything else waits for you', keywords: ['handoff', 'accept from', 'vault', 'secret', 'send secret', 'agent to agent'] },
   { id: 'projects.agents-can-manage-vault', section: 'projects', label: 'Allow managing server-wide secrets', description: 'Lets this workspace\'s main agent share server secrets with other workspaces and look after them (k2 vault); never with itself, and never loosen a secret it uses', keywords: ['vault_manage', 'vault', 'secret', 'secrets', 'passport', 'agent', 'it agent'] },
   { id: 'projects.agents-can-use-compute', section: 'projects', label: 'Allow compute nodes', description: 'Lets this workspace\'s agents run builds and tests on the machines switched on in Settings → Compute (k2 compute run); on grants every machine, and ones added later', keywords: ['agents_can_use_compute', 'compute', 'compute nodes', 'node', 'machines', 'build', 'tests', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Allow this agent to operate compute nodes', description: 'Lets this workspace\'s agent pause, drain, resume, narrow, update and restart services on your compute machines without asking each time; root actions still wait for you (k2 compute operate)', keywords: ['agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
@@ -1405,6 +1407,7 @@ function ProjectDetail({
             <SettingsGroup title="Agents">
               <AgentsManageAgentsToggle project={project} />
               <AgentsManageVaultToggle project={project} />
+              <AgentHandoffAcceptFrom project={project} />
               <AgentsUseComputeToggle project={project} />
               <AgentsOperateComputeToggle project={project} />
               <AgentsManageProjectsToggle project={project} />

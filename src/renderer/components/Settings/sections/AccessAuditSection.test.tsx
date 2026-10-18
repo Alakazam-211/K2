@@ -156,6 +156,34 @@ describe('AccessAuditSection', () => {
     expect(ipCells[0]?.textContent).toBe('203.0.113.9')
   })
 
+  it('Vault handoffs shows only vault-handoff lines, with their long outcomes', async () => {
+    const SEND: AuthAuditEvent = {
+      ts: '2026-10-17T09:00:00.000Z',
+      event: 'vault-handoff',
+      user: 'agent:ws-sales/s9',
+      outcome: 'ok send STRIPE_KEY to ops hd_7f3c0000000000000000000000000000 pending',
+      ingress: '-',
+      ip: '-',
+      client: 'vault',
+    }
+    const DENY: AuthAuditEvent = { ...SEND, ts: '2026-10-17T09:01:00.000Z', outcome: 'deny send LOGIN to ops: never_sendable' }
+    h.fetchWhoamiRole.mockResolvedValue('owner')
+    h.fetchUsersAudit.mockResolvedValue({ kind: 'ok', events: [OK, SEND, DENY], tail: 200 })
+    render(<AccessAuditSection />)
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    // Successes (the default) is logins only.
+    expect(screen.queryByText(SEND.outcome)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Vault handoffs' }))
+    expect(screen.getByRole('button', { name: 'Vault handoffs' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByText(SEND.outcome)).toBeTruthy()
+    expect(screen.getByText(DENY.outcome)).toBeTruthy()
+    expect(screen.queryByText('203.0.113.9')).toBeNull()
+    expect(screen.getByText(SEND.outcome).className).toContain('break-words')
+    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    expect(screen.getByText('203.0.113.9')).toBeTruthy()
+    expect(screen.getByText(SEND.outcome)).toBeTruthy()
+  })
+
   it('admin: owner-only note and no audit fetch', async () => {
     h.fetchWhoamiRole.mockResolvedValue('admin')
     render(<AccessAuditSection />)

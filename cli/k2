@@ -30995,7 +30995,6 @@ THE FULL GUIDE
   k2 zen guide                       short pages; no daemon needed
   k2 zen guide gardens               start here
   k2 zen guide example --list        whole files you can pipe
-  The k2-zen skill has every widget prop and theme token.
 
 USING THE WHOLE CANVAS
   On a full canvas ([layout] canvas = "full") K2's top band floats over
@@ -31050,7 +31049,7 @@ THE WIDGET SDK (0.46.1, catalog 11)
   Guards for data you didn't make: k2.shape.view/list/obj/num/str.
   Charts, offline and pinned: "requires": {"libs": ["uplot@1.6.32"]} (or
   chart.js@4.5.1, echarts@6.1.0, d3@7.9.0). No CDN, no eval, no imports.
-  Types: sdk/generated/k2.d.ts. Full contract: docs/zen-contract.md.
+  Types: sdk/generated/k2.d.ts · docs/zen-contract.md · props: k2-zen skill
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
@@ -56393,6 +56392,9 @@ The dev loop for a widget kept outside ~/.k2:
 
 Exit: 0 clean (or pending without --strict) · 1 errors · 2 usage, or pending
 with --strict · 3 Zen isn't set up, or the Garden is locked.
+
+New to Gardens? k2 zen guide.
+  k2 zen guide [<topic>] [--json]    short pages; no daemon needed
 EOF
 }
 

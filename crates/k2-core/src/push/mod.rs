@@ -90,12 +90,61 @@ pub enum PushEvent {
         project_name: String,
         group_id: String,
     },
+    /// thread-read-v1 (0.46.1): a project chat line for ONE person (never
+    /// its author, never a person who muted the chat), with their badge
+    /// numbers. Content-free like [`Self::ProjectMessageCreated`].
+    ProjectPost(ProjectPush),
+    /// thread-read-v1 (0.46.1): a SILENT push that corrects one person's
+    /// app badge after they read, muted or answered on another device.
+    /// No title, body or sound: the relay sends it as an APNs background
+    /// push (`content-available`) / FCM data message.
+    Badge(BadgePush),
     /// Thread push (prd-thread-push-notifications-v1 §7): an agent posted
     /// in a Thread. The title is the agent's name. The body is a preview
     /// of the message (0.46.1, [`ThreadPush::preview`]) when there is one,
     /// else a fixed line by message kind or count. A secret card's name
     /// and prompt never ride a push.
     ThreadPost(ThreadPush),
+}
+
+/// One person's project chat push (thread-read-v1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectPush {
+    pub project_name: String,
+    pub group_id: String,
+    /// The recipient person key (TP29).
+    pub principal: String,
+    /// That person's device logins. Empty = nobody, never "everyone".
+    pub device_usernames: Vec<String>,
+    /// `data.unreadTotal`: the person's badge total on this server.
+    pub unread_total: String,
+    /// `data.waitingTotal`: cards waiting on the person.
+    pub waiting_total: String,
+}
+
+/// One person's silent badge correction (thread-read-v1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BadgePush {
+    pub principal: String,
+    pub device_usernames: Vec<String>,
+    pub unread_total: String,
+    pub waiting_total: String,
+}
+
+/// `data.badgeKey`: a stable, opaque key per (server, person) — the relay
+/// uses it as the APNs collapse id so a queued badge push is replaced by
+/// the next one. The first 32 hex chars of
+/// `sha256("k2-badge\0" + subdomain + "\0" + principal)`; never the raw
+/// username.
+pub fn badge_key(subdomain: &str, principal: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(b"k2-badge\0");
+    h.update(subdomain.trim().to_ascii_lowercase().as_bytes());
+    h.update(b"\0");
+    h.update(principal.trim().as_bytes());
+    let digest = h.finalize();
+    digest.iter().take(16).map(|b| format!("{b:02x}")).collect()
 }
 
 /// The kind of Thread post a push announces (`data.msgKind`).
@@ -143,6 +192,13 @@ pub struct ThreadPush {
     /// That person's `push_devices.username` values (their logins).
     /// Empty = nobody, never "everyone".
     pub device_usernames: Vec<String>,
+    /// `data.unreadTotal` (thread-read-v1): the recipient's badge total on
+    /// this server at dispatch (unmuted unread + every waiting card), a
+    /// decimal string. The PHONE sets the icon badge (summing servers);
+    /// the server never sends `aps.badge` (TP27).
+    pub unread_total: String,
+    /// `data.waitingTotal`: cards waiting on the recipient.
+    pub waiting_total: String,
     /// `data.avatarRev`: [`crate::projects_ops::project_icon_rev`] of the
     /// workspace (`projectId`) — the same value its `GET
     /// /cli/projects/list` row carries as `iconRev`. `""` = no avatar
@@ -253,7 +309,10 @@ impl PushEvent {
             // carries the (still content-free) attribution line.
             Self::FeedbackCreated { .. }
             | Self::FeedbackCommented { .. }
-            | Self::ProjectMessageCreated { .. } => "K2".to_string(),
+            | Self::ProjectMessageCreated { .. }
+            | Self::ProjectPost(_) => "K2".to_string(),
+            // Silent: no visible text.
+            Self::Badge(_) => String::new(),
             // §7: the agent's display name; name-only.
             Self::ThreadPost(t) => t.agent_name.clone(),
         }
@@ -268,9 +327,11 @@ impl PushEvent {
                 format!("{agent_name} needs you on a ticket")
             }
             Self::FeedbackCommented { .. } => "New reply on a ticket".to_string(),
-            Self::ProjectMessageCreated { project_name, .. } => {
+            Self::ProjectMessageCreated { project_name, .. }
+            | Self::ProjectPost(ProjectPush { project_name, .. }) => {
                 format!("New message in {project_name}")
             }
+            Self::Badge(_) => String::new(),
             Self::ThreadPost(t) => thread_body(t.msg_kind, t.count, t.shown_preview()),
         }
     }
@@ -283,6 +344,8 @@ impl PushEvent {
             | Self::FeedbackCreated { .. }
             | Self::FeedbackCommented { .. }
             | Self::ProjectMessageCreated { .. }
+            | Self::ProjectPost(_)
+            | Self::Badge(_)
             | Self::ThreadPost(_) => "",
         }
     }
@@ -300,6 +363,8 @@ impl PushEvent {
                 Some(assignees.as_slice())
             }
             Self::ThreadPost(t) => Some(t.device_usernames.as_slice()),
+            Self::ProjectPost(p) => Some(p.device_usernames.as_slice()),
+            Self::Badge(b) => Some(b.device_usernames.as_slice()),
             _ => None,
         }
     }
@@ -328,6 +393,7 @@ impl PushEvent {
     pub fn budget_class(&self) -> budget::BudgetClass {
         match self {
             Self::ThreadPost(_) => budget::BudgetClass::Thread,
+            Self::Badge(_) => budget::BudgetClass::Badge,
             _ => budget::BudgetClass::Other,
         }
     }
@@ -372,6 +438,17 @@ impl PushEvent {
                 ("kind", PUSH_KIND_PROJECT.to_string()),
                 ("groupId", group_id.clone()),
             ]),
+            Self::ProjectPost(p) => PushData::of(&[
+                ("kind", PUSH_KIND_PROJECT.to_string()),
+                ("groupId", p.group_id.clone()),
+                ("unreadTotal", p.unread_total.clone()),
+                ("waitingTotal", p.waiting_total.clone()),
+            ]),
+            Self::Badge(b) => PushData::of(&[
+                ("kind", PUSH_KIND_BADGE.to_string()),
+                ("unreadTotal", b.unread_total.clone()),
+                ("waitingTotal", b.waiting_total.clone()),
+            ]),
             Self::ThreadPost(t) => PushData::of(&[
                 ("kind", PUSH_KIND_THREAD.to_string()),
                 ("addr", t.addr.clone()),
@@ -382,6 +459,8 @@ impl PushEvent {
                 ("msgKind", t.msg_kind.as_wire().to_string()),
                 ("count", t.count.to_string()),
                 ("principal", t.principal.clone()),
+                ("unreadTotal", t.unread_total.clone()),
+                ("waitingTotal", t.waiting_total.clone()),
                 // iOS Communication Notifications: the phone's Notification
                 // Service Extension draws the agent's avatar (cached by
                 // rev, compared with the list's `iconRev`) and colour.
@@ -444,6 +523,9 @@ pub const PUSH_KIND_PROJECT: &str = "project";
 
 /// Push `data.kind` for an agent's Thread post (prd-thread-push-notifications-v1).
 pub const PUSH_KIND_THREAD: &str = "thread";
+
+/// Push `data.kind` for a silent badge correction (thread-read-v1).
+pub const PUSH_KIND_BADGE: &str = "badge";
 
 /// What happens when a push attempt fails. Adapters return `Err` after
 /// exhausting their own retry policy; the daemon does not queue events for
@@ -1041,6 +1123,12 @@ impl K2Cloud {
                 data.insert("instanceId", stamp.instance_id.clone());
             }
         }
+        if let PushEvent::Badge(b) = event {
+            // Silent (thread-read-v1): no title, body or sound; the relay
+            // sends it as a background push and collapses on `badgeKey`.
+            data.insert("badgeKey", badge_key(&stamp.subdomain, &b.principal));
+            return serde_json::json!({ "data": data });
+        }
         let mut payload = serde_json::json!({
             "title": event.title(),
             "body": event.body(),
@@ -1240,6 +1328,8 @@ impl PushTarget for K2Cloud {
         for (login, group) in by_login {
             let principal = match event {
                 PushEvent::ThreadPost(t) => t.principal.clone(),
+                PushEvent::ProjectPost(p) => p.principal.clone(),
+                PushEvent::Badge(b) => b.principal.clone(),
                 _ => login,
             };
             self.dispatch(event, &principal, &group)?;
@@ -1581,10 +1671,98 @@ mod tests {
             count,
             principal: "owner".into(),
             device_usernames: vec!["owner".into()],
+            unread_total: "4".into(),
+            waiting_total: "1".into(),
             avatar_rev: "ba7816bf8f01cfea".into(),
             agent_color: "#3b82f6".into(),
             preview: String::new(),
         })
+    }
+
+    fn project_post(principal: &str) -> PushEvent {
+        PushEvent::ProjectPost(ProjectPush {
+            project_name: "Apollo".into(),
+            group_id: "pg-9".into(),
+            principal: principal.into(),
+            device_usernames: vec![principal.into()],
+            unread_total: "7".into(),
+            waiting_total: "2".into(),
+        })
+    }
+
+    fn badge_push(principal: &str) -> PushEvent {
+        PushEvent::Badge(BadgePush {
+            principal: principal.into(),
+            device_usernames: vec![principal.into()],
+            unread_total: "3".into(),
+            waiting_total: "1".into(),
+        })
+    }
+
+    /// thread-read-v1: a project push is one person's, targeted, with
+    /// their totals as strings, and content-free.
+    #[test]
+    fn project_post_is_targeted_with_totals_and_no_text() {
+        let e = project_post("gina");
+        assert_eq!(e.target_usernames(), Some(&["gina".to_string()][..]));
+        let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
+        let p = K2Cloud::payload(&e, &stamp, "gina");
+        assert_eq!(
+            p,
+            serde_json::json!({
+                "title": "K2",
+                "body": "New message in Apollo",
+                "sound": "default",
+                "data": {
+                    "kind": "project",
+                    "groupId": "pg-9",
+                    "unreadTotal": "7",
+                    "waitingTotal": "2",
+                    "principal": "gina",
+                    "subdomain": "rosson",
+                    "instanceId": TEST_INSTANCE,
+                },
+            })
+        );
+        assert_eq!(e.budget_class(), budget::BudgetClass::Other, "projects keep the ticket/project bucket");
+    }
+
+    /// thread-read-v1: the silent badge push has no alert fields at all
+    /// (no title, body, sound, threadId, collapseId, badge), carries the
+    /// totals, the stamp and an opaque per-person `badgeKey`, and draws
+    /// from its own budget.
+    #[test]
+    fn badge_push_is_silent_with_totals_and_an_opaque_key() {
+        let e = badge_push("gina");
+        let stamp = PushStamp { subdomain: "rosson".into(), instance_id: TEST_INSTANCE.into() };
+        let p = K2Cloud::payload(&e, &stamp, "gina");
+        let key = badge_key("rosson", "gina");
+        assert_eq!(
+            p,
+            serde_json::json!({
+                "data": {
+                    "kind": "badge",
+                    "unreadTotal": "3",
+                    "waitingTotal": "1",
+                    "principal": "gina",
+                    "subdomain": "rosson",
+                    "instanceId": TEST_INSTANCE,
+                    "badgeKey": key,
+                },
+            })
+        );
+        for absent in ["title", "body", "sound", "threadId", "collapseId", "badge", "aps"] {
+            assert!(p.get(absent).is_none(), "badge push carries {absent}: {p}");
+        }
+        assert_eq!(key.len(), 32);
+        assert!(key.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "{key}");
+        assert!(!key.contains("gina"), "never the raw username");
+        assert_eq!(key, badge_key(" Rosson ", "gina"), "stable per (server, person)");
+        assert_ne!(key, badge_key("rosson", "owner"), "per person");
+        assert_ne!(key, badge_key("other", "gina"), "per server");
+        assert_eq!(e.budget_class(), budget::BudgetClass::Badge);
+        assert_eq!(e.target_usernames(), Some(&["gina".to_string()][..]));
+        assert!(!e.has_preview());
     }
 
     fn dev(token: &str) -> crate::push_devices::PushDevice {
@@ -1610,6 +1788,8 @@ mod tests {
             PushEvent::FeedbackCreated { agent_name: "a".into(), feedback_id: "f".into(), assignees: vec![] },
             PushEvent::FeedbackCommented { feedback_id: "f".into(), assignees: vec!["gina".into()] },
             PushEvent::ProjectMessageCreated { project_name: "p".into(), group_id: "g".into() },
+            project_post("gina"),
+            badge_push("gina"),
             thread_event(ThreadMsgKind::Text, 1, "c"),
             thread_event(ThreadMsgKind::Secret, 3, "c"),
         ];
@@ -1649,6 +1829,8 @@ mod tests {
                     "msgKind": "text",
                     "count": "1",
                     "principal": "owner",
+                    "unreadTotal": "4",
+                    "waitingTotal": "1",
                     "avatarRev": "ba7816bf8f01cfea",
                     "agentColor": "#3b82f6",
                 },
@@ -1661,7 +1843,7 @@ mod tests {
         assert_eq!(thread_event(ThreadMsgKind::Secret, 3, cid).body(), "3 new messages");
         let secret = K2Cloud::payload(&thread_event(ThreadMsgKind::Secret, 1, cid), &stamp, "owner");
         assert_eq!(secret["data"]["msgKind"], "secret");
-        assert_eq!(secret["data"].as_object().expect("data").len(), 13, "no extra secret fields");
+        assert_eq!(secret["data"].as_object().expect("data").len(), 15, "no extra secret fields");
         // A Thread push is always targeted, never "every device".
         let empty = PushEvent::ThreadPost(ThreadPush {
             device_usernames: vec![],

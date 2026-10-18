@@ -27,6 +27,10 @@ pub const THREAD_PER_HOUR: usize = 30;
 pub const THREAD_PER_HOUR_SHARED: usize = 5;
 /// Ticket + project calls an hour.
 pub const OTHER_PER_HOUR: usize = 30;
+/// Silent badge corrections an hour (thread-read-v1). Their own bucket:
+/// a person reading on several devices can never starve a Thread or
+/// ticket push. The relay allows 600/h per server.
+pub const BADGE_PER_HOUR: usize = 240;
 /// The sliding window.
 pub const WINDOW: Duration = Duration::from_secs(60 * 60);
 
@@ -35,6 +39,8 @@ pub const WINDOW: Duration = Duration::from_secs(60 * 60);
 pub enum BudgetClass {
     Thread,
     Other,
+    /// Silent badge corrections (thread-read-v1).
+    Badge,
 }
 
 /// Two independent sliding windows of send instants.
@@ -42,6 +48,7 @@ pub enum BudgetClass {
 pub struct Budgets {
     thread: Mutex<VecDeque<Instant>>,
     other: Mutex<VecDeque<Instant>>,
+    badge: Mutex<VecDeque<Instant>>,
 }
 
 impl Budgets {
@@ -53,6 +60,7 @@ impl Budgets {
         match class {
             BudgetClass::Thread => &self.thread,
             BudgetClass::Other => &self.other,
+            BudgetClass::Badge => &self.badge,
         }
     }
 
@@ -133,6 +141,28 @@ mod tests {
         let t0 = Instant::now();
         assert!(!b.try_take(BudgetClass::Thread, 0, t0), "zero budget refuses");
         assert_eq!(b.used(BudgetClass::Thread, t0), 0);
+    }
+
+    /// thread-read-v1: badge corrections have their own bucket; spending
+    /// it never touches the Thread or ticket/project budgets, and theirs
+    /// never blocks a badge.
+    #[test]
+    fn badge_budget_is_isolated_both_ways() {
+        let b = Budgets::new();
+        let t0 = Instant::now();
+        for i in 0..BADGE_PER_HOUR {
+            assert!(b.try_take(BudgetClass::Badge, BADGE_PER_HOUR, t0), "badge send {i}");
+        }
+        assert!(!b.try_take(BudgetClass::Badge, BADGE_PER_HOUR, t0), "over the badge budget");
+        assert_eq!(b.used(BudgetClass::Thread, t0), 0);
+        assert_eq!(b.used(BudgetClass::Other, t0), 0);
+        assert!(b.try_take(BudgetClass::Thread, THREAD_PER_HOUR, t0), "a Thread push still goes");
+        assert!(b.try_take(BudgetClass::Other, OTHER_PER_HOUR, t0), "a ticket push still goes");
+        let fresh = Budgets::new();
+        for _ in 0..THREAD_PER_HOUR {
+            assert!(fresh.try_take(BudgetClass::Thread, THREAD_PER_HOUR, t0));
+        }
+        assert!(fresh.try_take(BudgetClass::Badge, BADGE_PER_HOUR, t0), "a spent Thread bucket never blocks a badge");
     }
 
     /// A two-call take (a preview split) is all or nothing.

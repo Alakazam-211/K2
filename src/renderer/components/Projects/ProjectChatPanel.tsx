@@ -26,9 +26,17 @@
 //     unchanged — a mounted panel means the messages are on screen.
 //   - Connect role gates the composer (not window-mode): Owner/Admin/
 //     Member can post; Viewer reads only. Fail-closed while role loads.
+//   - Unread (thread-read-v1, 0.46.1): while the panel is on screen (the
+//     Projects page open on this group, the panel open) and the window is
+//     focused, the newest message's seq past the daemon's read cursor is
+//     posted as read (`useAutoMarkRead`). The header's bell mutes the
+//     chat for this person (a grey dot, out of the badge).
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useProjectGroupsStore } from '@/stores/project-groups'
+import { usePageViewStore } from '@/stores/page-view'
+import { useAutoMarkRead } from '@/stores/unread'
+import { MuteToggleButton } from '@/components/common/UnreadBadge'
 import { useSettingsStore } from '@/stores/settings'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { KeyCombo } from '@/components/KeySymbol'
@@ -139,6 +147,16 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     return () => clearInterval(id)
   }, [])
 
+  // thread-read-v1: read while on screen (page + group + panel open; the
+  // hook adds the window's focus). Never in render: an effect posts.
+  const panelShown = useProjectGroupsStore(
+    (s) => s.selectedGroupId === show.id && !s.chatCollapsed,
+  )
+  const pageShown = usePageViewStore((s) => s.page === 'projects')
+  const onScreen = panelShown && pageShown
+  const newestSeq = newestMessageSeq(messages)
+  useAutoMarkRead({ kind: 'project', id: show.id, newestSeq, visible: onScreen })
+
   const scrollRef = useRef<HTMLDivElement>(null)
   const limitRef = useRef(limit)
   limitRef.current = limit
@@ -243,10 +261,12 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
               author: posted.author,
               body: posted.body,
               createdAt: posted.createdAt,
+              ...(typeof posted.seq === 'number' ? { seq: posted.seq } : {}),
+              ...(posted.authorKind ? { authorKind: posted.authorKind } : {}),
             },
           ]),
         )
-        useProjectGroupsStore.getState().markGroupSeen(show.id)
+        // The person's own post moves their read cursor on the daemon.
       })
       .catch((e) => setSendError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -325,6 +345,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
             PoC: {poc}
           </span>
         )}
+        <MuteToggleButton kind="project" id={show.id} noun="project chat" />
       </div>
 
       <div className="flex-1 flex flex-col min-h-0">
@@ -466,4 +487,13 @@ function HideChatButton(): React.JSX.Element {
       onToggle={() => useProjectGroupsStore.getState().setChatCollapsed(true)}
     />
   )
+}
+
+/** The newest per-group seq among loaded messages (0 = none / an older
+ *  server without seqs). */
+export function newestMessageSeq(messages: ProjectGroupMessage[] | null): number {
+  if (!messages) return 0
+  let max = 0
+  for (const m of messages) if (typeof m.seq === 'number' && m.seq > max) max = m.seq
+  return max
 }

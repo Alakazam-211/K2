@@ -46,6 +46,8 @@ import {
   togglePinnedResource,
 } from './member-pins'
 import { primaryScope } from '@/kessel/server-scope'
+import { ConversationUnreadBadge, muteMenuState, toggleMute } from '@/components/common/UnreadBadge'
+import { unreadKey, unreadSupported, useUnreadStore } from '@/stores/unread'
 
 export const PROJECT_NAV_WIDTH = 280
 /** Collapsed-rail width (IconRail's RAIL_WIDTH). */
@@ -71,15 +73,21 @@ function PinGlyph({ filled }: { filled: boolean }): React.JSX.Element {
   )
 }
 
+/** The project row menu's mute item (thread-read-v1), or null on a server
+ *  without it. Reads the store at click time, never in render. */
+function groupMuteItem(groupId: string): { label: string; next: boolean } | null {
+  if (!unreadSupported()) return null
+  const muted = useUnreadStore.getState().byKey[unreadKey('project', groupId)]?.muted === true
+  return muteMenuState(muted, 'chat')
+}
+
 function GroupRow({
   group,
   selected,
-  unread,
   onSelect,
 }: {
   group: ProjectGroup
   selected: boolean
-  unread: boolean
   onSelect: () => void
 }): React.JSX.Element {
   const [hovered, setHovered] = useState(false)
@@ -112,12 +120,16 @@ function GroupRow({
   // hover pin button (which stays).
   const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
     e.preventDefault()
+    const mute = groupMuteItem(group.id)
     const clickedId = await showContextMenu([
       { id: 'group-settings', label: 'Project Settings' },
       { id: 'separator-pin', label: '', type: 'separator' },
       { id: 'toggle-pin', label: group.pinned ? 'Unpin' : 'Pin to Top' },
+      ...(mute ? [{ id: 'toggle-mute', label: mute.label }] : []),
     ])
-    if (clickedId === 'group-settings') {
+    if (clickedId === 'toggle-mute' && mute) {
+      await toggleMute('project', group.id, mute.next, 'project chat')
+    } else if (clickedId === 'group-settings') {
       useSettingsStore.getState().openSettings('project-groups', group.id)
     } else if (clickedId === 'toggle-pin') {
       await togglePin()
@@ -154,12 +166,7 @@ function GroupRow({
         <div className="flex flex-col justify-center min-w-0 flex-1">
           <div className="flex items-center gap-2 w-full">
             <span className="truncate flex-1">{group.name}</span>
-            {unread && (
-              <span
-                className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]"
-                title="New project messages"
-              />
-            )}
+            <ConversationUnreadBadge kind="project" id={group.id} label="project messages" />
             {(hovered || group.pinned) && (
               <span
                 onClick={(e) => void togglePin(e)}
@@ -787,12 +794,10 @@ export function ProjectNavCollapseButton(): React.JSX.Element {
 function RailIcon({
   group,
   selected,
-  unread,
   onSelect,
 }: {
   group: ProjectGroup
   selected: boolean
-  unread: boolean
   onSelect: () => void
 }): React.JSX.Element {
   // Same menu as expanded GroupRow — collapsed rail had no onContextMenu,
@@ -800,12 +805,16 @@ function RailIcon({
   const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
     e.preventDefault()
     e.stopPropagation()
+    const mute = groupMuteItem(group.id)
     const clickedId = await showContextMenu([
       { id: 'group-settings', label: 'Project Settings' },
       { id: 'separator-pin', label: '', type: 'separator' },
       { id: 'toggle-pin', label: group.pinned ? 'Unpin' : 'Pin to Top' },
+      ...(mute ? [{ id: 'toggle-mute', label: mute.label }] : []),
     ])
-    if (clickedId === 'group-settings') {
+    if (clickedId === 'toggle-mute' && mute) {
+      await toggleMute('project', group.id, mute.next, 'project chat')
+    } else if (clickedId === 'group-settings') {
       useSettingsStore.getState().openSettings('project-groups', group.id)
     } else if (clickedId === 'toggle-pin') {
       try {
@@ -835,12 +844,13 @@ function RailIcon({
       title={`${group.name} • ${group.memberCount} ${group.memberCount === 1 ? 'member' : 'members'}`}
     >
       <ProjectGroupAvatar name={group.name} groupId={group.id} size={20} color={group.color} />
-      {unread && (
-        <span
-          className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]"
-          title="New project messages"
-        />
-      )}
+      <ConversationUnreadBadge
+        kind="project"
+        id={group.id}
+        variant="dot"
+        className="absolute top-0.5 right-0.5"
+        label="project messages"
+      />
     </button>
   )
 }
@@ -990,7 +1000,6 @@ export function ProjectNavRail({
   const groups = useProjectGroupsStore((s) => s.groups)
   const selectedGroupId = useProjectGroupsStore((s) => s.selectedGroupId)
   const selectGroup = useProjectGroupsStore((s) => s.selectGroup)
-  const unreadGroupIds = useProjectGroupsStore((s) => s.unreadGroupIds)
 
   const { pinned, unpinned } = useMemo(() => partitionPinned(groups ?? []), [groups])
 
@@ -1066,7 +1075,6 @@ export function ProjectNavRail({
               key={group.id}
               group={group}
               selected={group.id === selectedGroupId}
-              unread={unreadGroupIds.has(group.id)}
               onSelect={() => selectGroup(group.id)}
             />
           ))}
@@ -1080,7 +1088,6 @@ export function ProjectNavRail({
             key={group.id}
             group={group}
             selected={group.id === selectedGroupId}
-            unread={unreadGroupIds.has(group.id)}
             onSelect={() => selectGroup(group.id)}
           />
         ))}
@@ -1264,7 +1271,6 @@ export default function ProjectNav({
   const groups = useProjectGroupsStore((s) => s.groups)
   const selectedGroupId = useProjectGroupsStore((s) => s.selectedGroupId)
   const selectGroup = useProjectGroupsStore((s) => s.selectGroup)
-  const unreadGroupIds = useProjectGroupsStore((s) => s.unreadGroupIds)
 
   // Pinned-section collapse persists across launches (Sidebar's
   // agentsPinnedCollapsed idiom).
@@ -1330,7 +1336,6 @@ export default function ProjectNav({
                 key={group.id}
                 group={group}
                 selected={group.id === selectedGroupId}
-                unread={unreadGroupIds.has(group.id)}
                 onSelect={() => selectGroup(group.id)}
               />
             ))}
@@ -1352,7 +1357,6 @@ export default function ProjectNav({
             <GroupRow
               group={group}
               selected={group.id === selectedGroupId}
-              unread={unreadGroupIds.has(group.id)}
               onSelect={() => selectGroup(group.id)}
             />
             {idx < unpinned.length - 1 && <div className="border-b border-[var(--color-border)]" />}

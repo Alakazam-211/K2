@@ -12,7 +12,8 @@ import { useEffect, type ReactNode } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { usePageViewStore, type AppPage } from '@/stores/page-view'
 import { useFeedbackStore, initFeedbackEvents } from '@/stores/feedback'
-import { useProjectGroupsStore, initProjectGroupEvents } from '@/stores/project-groups'
+import { selectProjectBadgeCount, useUnreadStore } from '@/stores/unread'
+import { initProjectGroupEvents } from '@/stores/project-groups'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { withChord } from '@/lib/shortcut-label'
@@ -157,7 +158,8 @@ export default function PageTabs(): React.JSX.Element {
   const waitingStale = useFeedbackStore((s) => s.waitingStale)
   const waitingUnsupported = useFeedbackStore((s) => s.waitingUnsupported)
   const ticketsBadge = ticketsBadgeProps({ waitingCount, waitingStale, waitingUnsupported })
-  const projectsUnread = useProjectGroupsStore((s) => s.unreadGroupIds.size)
+  // thread-read-v1: project chats with unread (unmuted) or waiting, per the daemon.
+  const projectsUnread = useUnreadStore(selectProjectBadgeCount)
   const projects = useProjectsStore((s) => s.projects)
   // Membership only — reorder/color must not re-fan-out waiting-count
   // (that N+1 over E2E is the Settings-drag disconnect on large remotes).

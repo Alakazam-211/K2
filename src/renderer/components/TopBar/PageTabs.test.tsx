@@ -24,8 +24,9 @@ const h = vi.hoisted(() => {
     waitingUnsupported: false,
     refreshWaitingCount: async () => undefined,
   }
-  const groups = { unreadGroupIds: new Set<string>() }
-  return { settings, feedback, groups }
+  // thread-read-v1: the daemon's unread entries (`stores/unread.ts` shape).
+  const unread = { byKey: {} as Record<string, { kind: string; id: string; unread: number; waiting: number; muted: boolean }> }
+  return { settings, feedback, unread }
 })
 
 function hookOf<T extends object>(state: T): ((sel: (s: T) => unknown) => unknown) & { getState: () => T } {
@@ -47,9 +48,12 @@ vi.mock('@/stores/feedback', () => ({
   initFeedbackEvents: vi.fn(),
 }))
 vi.mock('@/stores/project-groups', () => ({
-  useProjectGroupsStore: hookOf(h.groups),
   initProjectGroupEvents: vi.fn(),
 }))
+vi.mock('@/stores/unread', async () => {
+  const actual = await vi.importActual<typeof import('@/stores/unread')>('@/stores/unread')
+  return { selectProjectBadgeCount: actual.selectProjectBadgeCount, useUnreadStore: hookOf(h.unread) }
+})
 vi.mock('@/stores/projects', () => ({
   useProjectsStore: hookOf({ projects: [] as { id: string }[] }),
 }))
@@ -61,7 +65,7 @@ afterEach(() => {
   cleanup()
   h.settings.settingsOpen = false
   h.feedback.waitingCount = 0
-  h.groups.unreadGroupIds = new Set<string>()
+  h.unread.byKey = {}
   usePageViewStore.getState().setPage('agents')
 })
 
@@ -166,7 +170,14 @@ describe('PageTabs — Home tab', () => {
 
   it('badges stay on the icon tabs: Projects unread, Tickets waiting on you (needs-you colour)', () => {
     h.feedback.waitingCount = 3
-    h.groups.unreadGroupIds = new Set(['g1', 'g2'])
+    // One project chat unread, one waiting on you, one muted (grey, out
+    // of the badge) and a Thread (not a project): badge 2.
+    h.unread.byKey = {
+      'project:g1': { kind: 'project', id: 'g1', unread: 4, waiting: 0, muted: false },
+      'project:g2': { kind: 'project', id: 'g2', unread: 0, waiting: 1, muted: false },
+      'project:g3': { kind: 'project', id: 'g3', unread: 9, waiting: 0, muted: true },
+      'thread:c1': { kind: 'thread', id: 'c1', unread: 3, waiting: 0, muted: false },
+    }
     const { container } = render(<PageTabs />)
     const list = tabs(container)
     const projectsBadge = list[3].querySelector('[data-testid="page-tab-badge"]')

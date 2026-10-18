@@ -54,6 +54,8 @@ import {
 } from './project-tabs'
 import { requestPaneShortcut } from './dashboard-dnd'
 import { primaryScope } from '@/kessel/server-scope'
+import { useUnreadEntry } from '@/stores/unread'
+import { UnreadBadge } from '@/components/common/UnreadBadge'
 
 const TOPBAR_HEIGHT = 38
 
@@ -83,9 +85,9 @@ function SelectedProjectView({
   // (per-project, never per-dashboard); open/closed is the persisted
   // store flag the top-bar toggle flips.
   const chatOpen = useProjectGroupsStore((s) => !s.chatCollapsed)
-  const selectedUnread = useProjectGroupsStore((s) =>
-    s.selectedGroupId !== null && s.unreadGroupIds.has(s.selectedGroupId),
-  )
+  // thread-read-v1: the selected project's chat state, per the daemon.
+  const selectedId = useProjectGroupsStore((s) => s.selectedGroupId)
+  const selectedUnread = useUnreadEntry('project', selectedId)
 
   // P5 — a member-row click (open/focus its canonical pane) lands on a
   // DASHBOARD tab (the first one when Feedback is active); the mounted
@@ -171,12 +173,16 @@ function SelectedProjectView({
                   name="project chat"
                   onToggle={() => useProjectGroupsStore.getState().setChatCollapsed(false)}
                 >
-                  {selectedUnread && (
-                    <span
-                      className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-[var(--color-accent)]"
-                      title="New project messages"
-                      data-project-chat-unread=""
-                    />
+                  {selectedUnread && (selectedUnread.unread > 0 || selectedUnread.waiting > 0) && (
+                    <span className="absolute top-1 right-1 flex" data-project-chat-unread="">
+                      <UnreadBadge
+                        unread={selectedUnread.unread}
+                        waiting={selectedUnread.waiting}
+                        muted={selectedUnread.muted}
+                        variant="dot"
+                        label="project messages"
+                      />
+                    </span>
                   )}
                 </DrawerToggleButton>
               </div>

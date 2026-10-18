@@ -68,6 +68,11 @@ export interface ProjectGroupMessage {
   author: string
   body: string
   createdAt: number
+  /** Per-group sequence, 1..n (thread-read-v1 servers; absent before). The
+   *  read cursor compares against it. */
+  seq?: number
+  /** `person` | `agent` (thread-read-v1 servers). */
+  authorKind?: string
 }
 
 /** One page of the chat stream, oldest-first (`MessagePage` wire shape).
@@ -89,6 +94,9 @@ export interface PostedProjectGroupMessage {
   delivered: boolean
   deliveryReason: string | null
   deliveredSessionId: string | null
+  /** thread-read-v1 servers: the stored line's per-group seq. */
+  seq?: number
+  authorKind?: string
 }
 
 /** GET /cli/project-group/list — all groups, pinned-first then
@@ -352,32 +360,6 @@ export async function postProjectGroupMessage(
   body: string,
 ): Promise<PostedProjectGroupMessage> {
   return daemonCliPost<PostedProjectGroupMessage>(scope, 'project-group/msg', { group, body })
-}
-
-/** §4.4 badge reconciliation: a group is UNREAD when it has ≥1 chat
- *  message newer than the per-client last-seen cursor. One
- *  `messages?after=&limit=1` probe per group (the feedback waiting-count
- *  fan-out idiom); a failed probe counts as read — the badge is advisory
- *  and must never block or error the nav. */
-export async function fetchUnreadGroupIds(
-  scope: ServerScope,
-  groups: Array<{ id: string }>,
-  lastSeenFor: (groupId: string) => number,
-): Promise<string[]> {
-  const flags = await Promise.all(
-    groups.map(async (g) => {
-      try {
-        const res = await daemonCliGet<{ ok: boolean; messages: ProjectGroupMessage[] }>(scope,
-          'project-group/messages',
-          { group: g.id, after: lastSeenFor(g.id), limit: 1 },
-        )
-        return (res.messages?.length ?? 0) > 0 ? g.id : null
-      } catch {
-        return null
-      }
-    }),
-  )
-  return flags.filter((id): id is string => id !== null)
 }
 
 // ── Pure helpers (unit-tested in projects-api.test.ts) ────────────────────

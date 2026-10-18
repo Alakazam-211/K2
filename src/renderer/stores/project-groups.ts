@@ -16,23 +16,23 @@
 // immediately so the open Projects page refetches its selected group's
 // `show` view.
 //
-// `message-created` drives the Projects-tab unread badge (§4.4): a
-// per-client last-seen read cursor per group (localStorage —
-// canonical-structure vs per-client-view principle) — the badge counts
-// groups with messages newer than last-seen. Viewing a group marks it
-// seen; boot/refetch reconciles via a messages?after=&limit=1 probe.
+// Unread (thread-read-v1, 0.46.1): the Projects-tab badge and the nav dots
+// are the DAEMON's per-person read cursors (`stores/unread.ts`), not a
+// per-client localStorage cursor any more. Selecting a group / opening its
+// chat posts `/cli/project-group/read` (`markGroupSeen`); the open chat
+// panel marks new messages read while it is on screen
+// (`useAutoMarkRead`). Every device of the person sees the same dots.
 
 import { create } from 'zustand'
 import { onDaemonConnected } from '@/lib/daemon-reconnect'
 import { activeHostKey, onActiveHostChange, useConnectHostStore } from '@/stores/connect-host'
 import { onAppHello, onProjectGroupsChanged } from '@/stores/session-events'
-import { usePageViewStore } from '@/stores/page-view'
 import {
   fetchProjectGroups,
   fetchProjectGroupShow,
-  fetchUnreadGroupIds,
   type ProjectGroup,
 } from '@/components/Projects/projects-api'
+import { initUnreadEvents, unreadKey, useUnreadStore } from '@/stores/unread'
 import {
   buildTagsByWorkspaceId,
   type ProjectNavTag,
@@ -42,30 +42,7 @@ import {
   CHAT_PANEL_DEFAULT_WIDTH,
   clampChatPanelWidth,
 } from '@/components/Projects/project-chat'
-import { primaryScope, scopedKey } from '@/kessel/server-scope'
-
-// ── Per-client last-seen read cursor (§4.4, resolved Q5) ─────────────────
-// Keyed per host + group so remoting doesn't cross-contaminate cursors.
-
-function lastSeenKey(groupId: string): string {
-  return scopedKey(primaryScope(), `k2:project-groups:last-seen:${groupId}`)
-}
-
-export function getLastSeen(groupId: string): number {
-  try {
-    return parseInt(localStorage.getItem(lastSeenKey(groupId)) ?? '0', 10) || 0
-  } catch {
-    return 0
-  }
-}
-
-function stampLastSeen(groupId: string): void {
-  try {
-    localStorage.setItem(lastSeenKey(groupId), String(Math.floor(Date.now() / 1000)))
-  } catch {
-    /* ignore — badge degrades to per-session */
-  }
-}
+import { primaryScope } from '@/kessel/server-scope'
 
 // ── P6 (§6.4) — per-client chat-drawer collapse state ─────────────────────
 // A plain client preference (not host-keyed, not canonical): whether the
@@ -132,9 +109,6 @@ interface ProjectGroupsState {
   tagsByWorkspaceId: Record<string, ProjectNavTag[]>
   /** The nav's selected project (drives the main area + member drawer). */
   selectedGroupId: string | null
-  /** Groups with chat messages newer than their last-seen cursor —
-   *  `.size` is the Projects-tab badge count. */
-  unreadGroupIds: Set<string>
   /** Bumped on every project-group event so open views refetch. */
   revision: number
   /** Pending open-member-pane click (P5 §6.2) — see MemberPaneRequest. */
@@ -159,9 +133,11 @@ interface ProjectGroupsState {
    *  badge them. Session-only; {} while no dashboard is mounted. */
   dashPaneNumbers: Record<string, number>
   fetchGroups: () => Promise<void>
-  /** Select a project in the nav; selecting marks it seen (§4.4) —
-   *  unless the chat panel is closed (its messages stay unseen). */
+  /** Select a project in the nav; selecting marks it read (§4.4) —
+   *  unless the chat panel is closed (its messages stay unread). */
   selectGroup: (groupId: string | null) => void
+  /** Read the group's chat up to its newest message: POST
+   *  `/cli/project-group/read` when the daemon says it has unread. */
   markGroupSeen: (groupId: string) => void
   /** Close/open the chat panel (persisted per client); opening marks
    *  the selected group seen — its messages are now on screen. */
@@ -186,7 +162,6 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   groups: null,
   tagsByWorkspaceId: {},
   selectedGroupId: null,
-  unreadGroupIds: new Set<string>(),
   revision: 0,
   paneRequest: null,
   chatCollapsed: readChatCollapsed(),
@@ -226,10 +201,6 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
       // Drop a selection whose group vanished (delete on another client).
       const sel = get().selectedGroupId
       if (sel && !groups.some((g) => g.id === sel)) set({ selectedGroupId: null })
-      // §4.4 reconciliation — advisory; failures leave the set as-is.
-      const unread = await fetchUnreadGroupIds(primaryScope(), groups, getLastSeen)
-      if (activeHostKey(useConnectHostStore.getState().activeHost) !== hostKey) return
-      set({ unreadGroupIds: new Set(unread) })
     } catch (err) {
       console.warn('[project-groups] list fetch failed:', err)
       // Leave `groups` as-is. First load stays `null` (loading) so
@@ -246,13 +217,10 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
     if (groupId && !get().chatCollapsed) get().markGroupSeen(groupId)
   },
   markGroupSeen: (groupId) => {
-    stampLastSeen(groupId)
-    set((s) => {
-      if (!s.unreadGroupIds.has(groupId)) return {}
-      const next = new Set(s.unreadGroupIds)
-      next.delete(groupId)
-      return { unreadGroupIds: next }
-    })
+    // Absent from the unread store = nothing unread: no request.
+    const entry = useUnreadStore.getState().byKey[unreadKey('project', groupId)]
+    if (!entry || entry.unread <= 0) return
+    void useUnreadStore.getState().markRead('project', groupId)
   },
   setChatCollapsed: (collapsed) => {
     try {
@@ -356,7 +324,6 @@ onActiveHostChange(() => {
     groups: null,
     tagsByWorkspaceId: {},
     selectedGroupId: null,
-    unreadGroupIds: new Set<string>(),
     revision: s.revision + 1,
     paneRequest: null,
     lastFocusedPaneByDashboard: {},
@@ -399,9 +366,10 @@ export function initProjectGroupEvents(): void {
   if (eventsInitialized) return
   eventsInitialized = true
 
-  // Boot reconciliation: the Projects-tab badge (§4.4) must be right
-  // before the page is ever opened — one list fetch + the unread probe.
+  // Boot: the nav chips, and the daemon's unread summary (the Projects-tab
+  // badge must be right before the page is ever opened).
   void useProjectGroupsStore.getState().fetchGroups()
+  initUnreadEvents()
 
   onProjectGroupsChanged(primaryScope(), (reason) => {
     switch (reason) {
@@ -428,25 +396,13 @@ export function initProjectGroupEvents(): void {
       case 'layout-changed':
         useProjectGroupsStore.setState((s) => ({ revision: s.revision + 1 }))
         break
-      // Chat messages → unread bookkeeping (badge) + revision (the P6
-      // drawer refetches on it). The lean signal carries no groupId, so
-      // the §4.4 split works in two steps: if the user is viewing a
-      // group's chat right now (Projects page open, a group selected,
-      // drawer expanded — §6.4), stamp THAT group seen immediately (its
-      // messages are on screen; the revision-driven refetch renders the
-      // new one). Which OTHER group went unread is reconciled by the
-      // coalesced fetchGroups — its fetchUnreadGroupIds probe flags any
-      // group with messages newer than its last-seen cursor.
-      case 'message-created': {
-        const store = useProjectGroupsStore.getState()
-        const viewing =
-          usePageViewStore.getState().page === 'projects' &&
-          store.selectedGroupId !== null &&
-          !store.chatCollapsed
-        if (viewing && store.selectedGroupId) store.markGroupSeen(store.selectedGroupId)
+      // Chat messages → revision (the open chat panel refetches on it).
+      // Unread is the daemon's: its `project_read` frame moves the badge,
+      // and the open panel marks the new message read while it is on
+      // screen (ProjectChatPanel → useAutoMarkRead).
+      case 'message-created':
         bumpAndCoalesceRefetch()
         break
-      }
       // Forward compat — an unknown reason from a newer daemon is still
       // a "something changed" signal; do the safe full refresh.
       default:

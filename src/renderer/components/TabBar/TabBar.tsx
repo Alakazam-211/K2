@@ -16,12 +16,10 @@ import {
   highestDisplay,
   isBusyDisplay,
   rowForAgentName,
-  rowForTerminal,
   type ActivityDisplay,
-  type ActivityRow,
 } from '@/stores/activity'
-import { sessionsStatus, worseUnseen, type UnseenOutcome } from '@/lib/agent-status'
-import { PinnedChatStatus, TAB_MAX_PX, TAB_MIN_PX, TabSlotRest } from '@/components/TabBar/TabStatus'
+import { sessionsStatus, worseUnseen } from '@/lib/agent-status'
+import { PinnedChatStatus, TAB_MAX_PX, TAB_MIN_PX, TabSlotRest, terminalsStatus } from '@/components/TabBar/TabStatus'
 import { pinOf, sessionsOf, usePinnedSizeStore } from '@/stores/pinned-size'
 import { applyPinSize, resolvePinSessionId } from '@/components/PaneLayout/pinSizeMenu'
 import PinDimensionsModal from '@/components/PaneLayout/PinDimensionsModal'
@@ -960,16 +958,10 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
           // plan-agent-status-unify-v1 S5: the tab draws the same status
           // model as the agent rows, folded over ITS sessions' rows only
           // (`sessionsStatus`), plus this window's not-viewed mark (RL11).
-          const tabRows: ActivityRow[] = []
-          let tabUnseen: UnseenOutcome | null = null
-          for (const d of terminalItems) {
-            const row = rowForTerminal(activity, d)
-            if (row) tabRows.push(row)
-            tabUnseen = worseUnseen(tabUnseen, agentUnseenOutcome(activity, agentNameForTerminal(d), d.sessionId))
-          }
+          // (`terminalsStatus`, shared with the Split panes' small tabs).
+          const { view: tabView, rows: tabRows, unseen: tabUnseen } = terminalsStatus(activity, terminalItems)
           const tabDisplay: ActivityDisplay = highestDisplay(tabRows.map((r) => r.display))
           const isAgentActive = isBusyDisplay(tabDisplay)
-          const tabView = sessionsStatus({ rows: tabRows, unseen: tabUnseen, daemonRows: activity.supported, skewMs: activity.skewMs })
           const isSessionTab = terminalItems.length > 0
           const isDragged = reorderDragIndex === index
           const showDropBefore = reorderDropIndex === index

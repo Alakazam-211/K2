@@ -13,6 +13,8 @@ import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { beginBrowserMotion } from '@/lib/browser-overlay'
 import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
 import { PaletteIcon } from '@/components/icons/K2Icons'
+import { useStore } from 'zustand'
+import { TAB_SLOT_PX, TabSlotRest, terminalsStatus, type StatusTerminal } from '@/components/TabBar/TabStatus'
 
 // ── Types (from tabs store — will be available after store refactor) ──
 
@@ -21,6 +23,8 @@ interface TerminalItemData {
   cwd: string
   command?: string
   args?: string[]
+  sessionId?: string
+  attachAgentName?: string
 }
 
 interface FileViewerItemData {
@@ -111,6 +115,13 @@ function paneItemIcon(item: Item): React.JSX.Element | null {
   return null
 }
 
+const paneCloseGlyph = (
+  <svg width="7" height="7" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <line x1="1" y1="1" x2="7" y2="7" />
+    <line x1="7" y1="1" x2="1" y2="7" />
+  </svg>
+)
+
 // ── Props ────────────────────────────────────────────────────────────────
 
 interface PaneTabBarProps {
@@ -135,6 +146,11 @@ export function PaneTabBar({
   paneGroupId
 }: PaneTabBarProps): React.JSX.Element {
   const room = useRoom()
+  // The room's server's activity rows: each terminal pane tab wears the
+  // same working / waiting / done marks as the room tab strip
+  // (`terminalsStatus` + `TabSlotRest`, TabStatus.tsx), folded over its one
+  // session.
+  const activity = useStore(room.activityView)
   const handleClose = useCallback(
     (e: React.MouseEvent, itemId: string) => {
       e.stopPropagation()
@@ -307,10 +323,15 @@ export function PaneTabBar({
           // Kessel session (the store mapping doubles as the gate).
           const pinSessionId = resolvePinSessionId(item, pinSessions, projects)
           const glyph = paneItemIcon(item)
+          const statusView =
+            item.type === 'terminal' ? terminalsStatus(activity, [item.data as StatusTerminal]).view : null
+          const rest = statusView ? <TabSlotRest view={statusView} /> : null
           return (
             <div
               key={item.id}
-              className={`flex items-center cursor-pointer select-none shrink-0 ${
+              data-pane-tab-id={item.id}
+              data-pane-tab-status={statusView ? statusView.status : undefined}
+              className={`group/panetab flex items-center cursor-pointer select-none shrink-0 ${
                 isActive
                   ? 'text-[var(--color-text-primary)]'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
@@ -321,8 +342,11 @@ export function PaneTabBar({
                 paddingRight: '4px',
                 background: isActive ? 'var(--color-bg-inset)' : 'transparent',
                 borderBottom: isActive ? '1px solid var(--color-accent)' : '1px solid transparent',
-                maxWidth: '160px'
-              }}
+                maxWidth: '160px',
+                // The working badge's mask (TabSlotRest) sits on this tab's
+                // resting background.
+                '--tab-bg': isActive ? 'var(--color-bg-inset)' : 'var(--color-bg-stripe)',
+              } as React.CSSProperties}
               onClick={() => onActivate(index)}
               onMouseDown={(e) => handleItemMouseDown(e, item.id)}
               onContextMenu={(e) => void handleItemContextMenu(e, item, pinSessionId)}
@@ -334,23 +358,28 @@ export function PaneTabBar({
                 {getTabLabel(item)}
               </span>
 
+              {/* One 14px slot, like the room tab strip: the status at rest
+                  (working = the 3×3 grid, its status a corner badge), ×
+                  on hover. No status = the × alone. */}
               <button
                 className="ml-1.5 flex items-center justify-center shrink-0 hover:bg-[var(--color-wash-2)]"
-                style={{ width: '14px', height: '14px' }}
+                style={{ width: TAB_SLOT_PX, height: TAB_SLOT_PX }}
+                data-pane-tab-close-slot=""
                 onClick={(e) => handleClose(e, item.id)}
                 title="Close tab"
               >
-                <svg
-                  width="7"
-                  height="7"
-                  viewBox="0 0 8 8"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                >
-                  <line x1="1" y1="1" x2="7" y2="7" />
-                  <line x1="7" y1="1" x2="1" y2="7" />
-                </svg>
+                {rest ? (
+                  <>
+                    <span data-tab-slot-rest="" className="flex group-hover/panetab:hidden">
+                      {rest}
+                    </span>
+                    <span data-tab-slot-hover="" className="hidden group-hover/panetab:flex">
+                      {paneCloseGlyph}
+                    </span>
+                  </>
+                ) : (
+                  paneCloseGlyph
+                )}
               </button>
             </div>
           )

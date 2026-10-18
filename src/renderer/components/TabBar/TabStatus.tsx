@@ -23,7 +23,34 @@
 
 import { StatusSlot, WorkingSlot } from '@/components/AgentStatus/AgentStatusCluster'
 import { PinnedTabMark } from '@/components/TabBar/TabPin'
-import { isRankedStatus, type AgentStatusView } from '@/lib/agent-status'
+import { isRankedStatus, sessionsStatus, worseUnseen, type AgentStatusView, type UnseenOutcome } from '@/lib/agent-status'
+import { agentNameForTerminal, agentUnseenOutcome, rowForTerminal, type ActivityRow, type ScopeActivity } from '@/stores/activity'
+
+/** The terminal fields a session's status is looked up by (RL10). */
+export interface StatusTerminal {
+  terminalId: string
+  sessionId?: string
+  attachAgentName?: string
+}
+
+/** The status a set of terminals draws: the shared model folded over THEIR
+ *  sessions' daemon rows only, plus this window's not-viewed mark (RL11).
+ *  The room tab strip folds a tab's terminals; a Split pane's small tab
+ *  folds its one terminal, so the two strips can never disagree. */
+export function terminalsStatus(
+  activity: Pick<ScopeActivity, 'rows' | 'unseenDone' | 'supported' | 'skewMs'>,
+  terminals: readonly StatusTerminal[],
+): { view: AgentStatusView; rows: ActivityRow[]; unseen: UnseenOutcome | null } {
+  const rows: ActivityRow[] = []
+  let unseen: UnseenOutcome | null = null
+  for (const d of terminals) {
+    const row = rowForTerminal(activity, d)
+    if (row) rows.push(row)
+    unseen = worseUnseen(unseen, agentUnseenOutcome(activity, agentNameForTerminal(d), d.sessionId))
+  }
+  const view = sessionsStatus({ rows, unseen, daemonRows: activity.supported, skewMs: activity.skewMs })
+  return { view, rows, unseen }
+}
 
 /** The status slot (px): the cluster's 14px slot. */
 export const TAB_SLOT_PX = 14

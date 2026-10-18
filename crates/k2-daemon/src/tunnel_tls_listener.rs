@@ -207,20 +207,32 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// the per-connection task. Short by design — this is a same-host dial.
 const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Process-global cap on concurrently-served E2E TLS connections. Each
-/// accepted connection takes one permit BEFORE its task is spawned and
-/// holds it for the connection's life (handshake + splice), so the
-/// listener can't be driven to FD exhaustion / unbounded task growth by a
-/// flood of connections. A few hundred is ample for a single-user remote
-/// daemon (real concurrency is a handful of browser tabs + WS streams)
-/// while still leaving plenty of FD headroom under the default rlimit.
-const MAX_E2E_CONNECTIONS: usize = 256;
+/// Floor and ceiling of the process-global cap on concurrently-served E2E
+/// TLS connections. Each accepted connection takes one permit BEFORE its
+/// task is spawned and holds it for the connection's life (handshake +
+/// splice), so the listener can't be driven to FD exhaustion / unbounded
+/// task growth by a flood of connections.
+///
+/// K-M13 (0.46.1): the cap was a fixed 256. Published services, skin
+/// gateways and Apps all ride this listener now, so it is sized from
+/// `RLIMIT_NOFILE` (raised to the hard limit at boot):
+/// [`k2_core::connection_cap`] — an eighth of the soft limit, never below
+/// the old 256, at most 16384.
+const E2E_CAP_FLOOR: usize = 256;
+const E2E_CAP_CEILING: usize = 16_384;
+
+/// The E2E connection cap for this process (fixed at first use, which is
+/// after boot raised the soft limit).
+pub fn max_e2e_connections() -> usize {
+    static CAP: OnceLock<usize> = OnceLock::new();
+    *CAP.get_or_init(|| k2_core::connection_cap(E2E_CAP_FLOOR, E2E_CAP_CEILING))
+}
 
 /// The global E2E connection semaphore (lazily created, lives for the
 /// process). Shared by every accept loop (there is normally exactly one).
 fn conn_semaphore() -> &'static Arc<Semaphore> {
     static SEM: OnceLock<Arc<Semaphore>> = OnceLock::new();
-    SEM.get_or_init(|| Arc::new(Semaphore::new(MAX_E2E_CONNECTIONS)))
+    SEM.get_or_init(|| Arc::new(Semaphore::new(max_e2e_connections())))
 }
 
 /// Spawn the E2E HTTPS listener when the `K2_E2E` flag is on. Returns the
@@ -534,8 +546,9 @@ async fn accept_loop(
                     Ok(p) => p,
                     Err(_) => {
                         log_debug!(
-                            "[daemon/e2e] connection cap ({MAX_E2E_CONNECTIONS}) reached \
-                             — dropping inbound connection from {peer}"
+                            "[daemon/e2e] connection cap ({}) reached \
+                             — dropping inbound connection from {peer}",
+                            max_e2e_connections()
                         );
                         drop(tcp); // close the FD now; do not spawn.
                         continue;
@@ -1415,7 +1428,7 @@ mod tests {
     // ── H2: global connection-cap semaphore ─────────────────────────
 
     /// The process-global connection semaphore is the FD-exhaustion cap:
-    /// it must hand out exactly `MAX_E2E_CONNECTIONS` permits and then
+    /// it must hand out exactly `max_e2e_connections()` permits and then
     /// refuse `try_acquire_owned` (the accept loop drops the connection on
     /// that refusal). Releasing a permit must let the next acquire succeed.
     /// We use a fresh local `Semaphore` of the same size so the assertion
@@ -1423,11 +1436,11 @@ mod tests {
     /// on the real process-global one.
     #[test]
     fn connection_cap_semaphore_blocks_past_limit_and_recovers() {
-        let sem = Arc::new(Semaphore::new(MAX_E2E_CONNECTIONS));
+        let sem = Arc::new(Semaphore::new(max_e2e_connections()));
 
         // Drain every permit.
         let mut held = Vec::new();
-        for _ in 0..MAX_E2E_CONNECTIONS {
+        for _ in 0..max_e2e_connections() {
             held.push(
                 Arc::clone(&sem)
                     .try_acquire_owned()
@@ -1462,7 +1475,7 @@ mod tests {
         // Total capacity (available, since nothing is held here in isolation
         // under single-threaded test runs) equals the configured cap.
         assert!(
-            a.available_permits() <= MAX_E2E_CONNECTIONS,
+            a.available_permits() <= max_e2e_connections(),
             "semaphore must never exceed the configured cap"
         );
     }

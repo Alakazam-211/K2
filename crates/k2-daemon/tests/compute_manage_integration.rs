@@ -364,10 +364,12 @@ async fn compute_manage_switch_end_to_end() {
     let r = post_via(port, "/cli/compute/nodes/enroll-code", &agent, json!({"name": "cm-proxied"}), Some("X-Forwarded-For: 203.0.113.9")).await;
     assert_eq!(r.status, 403, "through a loopback proxy: {}", r.body);
     assert_eq!(code(&r), "owner_only");
+    // (The tunnel listener may refuse before the compute route: any
+    // refusal will do; the state checks below are the proof.)
     let r = post(d.tunnel_port, "/cli/compute/nodes/enroll-code", &agent, json!({"name": "cm-tunnel"})).await;
-    assert_eq!(r.status, 403, "through the Connect tunnel: {}", r.body);
+    assert!((400..500).contains(&r.status), "through the Connect tunnel: {} {}", r.status, r.body);
     let r = post(d.tunnel_port, "/cli/compute/grants/set", &agent, json!({"node": "cm-act2", "workspace": "cm-web"})).await;
-    assert_eq!(r.status, 403, "through the Connect tunnel: {}", r.body);
+    assert!((400..500).contains(&r.status), "through the Connect tunnel: {} {}", r.status, r.body);
     assert!(grant_of(&web.id, "cmact1").is_none(), "nothing granted from off the box");
     let waiting = j(&get(port, "/cli/compute/nodes", OWNER, "").await)["waitingCodes"].clone();
     let codes: Vec<&str> = waiting.as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();

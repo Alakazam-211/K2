@@ -52,6 +52,8 @@ pub const SUDO_EXES: &[&str] = &[
 // ── Programs the helper spawns (absolute, env cleared) ──────────────────
 
 pub const SYSTEMCTL: &str = "/usr/bin/systemctl";
+/// `front install` schedules the daemon unit's one restart through it.
+pub const SYSTEMD_RUN: &str = "/usr/bin/systemd-run";
 pub const USERADD: &str = "/usr/sbin/useradd";
 pub const ID: &str = "/usr/bin/id";
 pub const RUNUSER: &str = "/usr/sbin/runuser";
@@ -115,6 +117,12 @@ pub const FRONT_SOCKET_FILE: &str = "k2-front-443.socket";
 pub const FRONT_DROPIN_FILE: &str = "k2-front.conf";
 /// `FileDescriptorName=`: how the daemon finds the fd in `LISTEN_FDNAMES`.
 pub const FRONT_FD_NAME: &str = "k2-front-443";
+/// The transient unit `front install` uses to restart the daemon's unit a
+/// few seconds later (`k2-front-restart.timer` + `.service`).
+pub const FRONT_RESTART_UNIT: &str = "k2-front-restart";
+/// How long after `front install` the daemon's unit restarts (its HTTP
+/// answer goes out first).
+pub const FRONT_RESTART_DELAY_SECS: u32 = 3;
 
 // ── Postgres sidecar ────────────────────────────────────────────────────
 

@@ -131,7 +131,7 @@ echo "== enable / enable --mail / disable =="
 run front enable
 assert_eq "enable: exit 0" "$rc" "0"
 assert_eq "enable: POST, mail false" "$(last_request)" 'POST /cli/front/enable {"mail":false}'
-assert_contains "enable: restarting" "$out" "restarting : the daemon restarts now"
+assert_contains "enable: restarting" "$out" "restarting : K2 will restart its daemon once to take port 443"
 run front enable --mail
 assert_eq "enable --mail: body" "$(last_request)" 'POST /cli/front/enable {"mail":true}'
 assert_contains "enable --mail: mail line" "$out" "mail       : behind the front"

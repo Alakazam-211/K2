@@ -13,6 +13,7 @@ import { createZenSourcesReader } from './zen-sources'
 import { fakeSources, fixtureView, settle } from './zen-sources-fixtures'
 import { projectZenRow, projectZenThreadItem, ZEN_WIDGET_ROW_KEYS } from './zen-custom-projection'
 import { ZenCanvasError } from './zen-canvas'
+import { ZenWidgetError } from './zen-widget-routes'
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 
 function row(address: string, over: Partial<ZenAgentRow> = {}): ZenAgentRow {
@@ -189,8 +190,47 @@ describe('TUW3.3: caps, binding and refusals', () => {
     expect(await call(layer, 'thread.post', 'bob::box.example.test', 'hello')).toEqual({ id: 1, ok: true, value: { id: 'm1', seq: 9 } })
     expect(ensured).toEqual(['bob::box.example.test'])
     expect(h.calls).toEqual([
-      { verb: 'thread.post', args: ['bob::box.example.test', 'hello', { origin: { widget: 'agent-arcade', garden: 'g-test0001' } }] },
+      {
+        verb: 'thread.post',
+        args: [
+          'bob::box.example.test',
+          'hello',
+          { origin: { widget: 'agent-arcade', garden: 'g-test0001', placement: 'arcade', hash: 'h1' } },
+        ],
+      },
     ])
+  })
+
+  // 0.46.1: every widget post and card answer names its placement and the
+  // hash its frame runs, so the daemon holding the Garden checks thread:post.
+  it('posts and answers carry the placement and the frame hash (the frame never sets them)', async () => {
+    const h = harness({ frameHash: () => 'framehash2' })
+    const layer = createZenCustomLayer(h.deps)
+    const origin = { widget: 'agent-arcade', garden: 'g-test0001', placement: 'arcade', hash: 'framehash2' }
+    // A frame's own `origin` option is never passed through (options are refused).
+    expect(code(await call(layer, 'thread.post', 'alice::local', 'hi', { origin: { placement: 'x', hash: 'y' } }))).toBe('failed')
+    expect(await call(layer, 'thread.post', 'alice::local', 'hi')).toMatchObject({ ok: true })
+    expect(await call(layer, 'thread.answer', 'alice::local', 'c1', 'Yes')).toMatchObject({ ok: true })
+    expect(h.calls).toEqual([
+      { verb: 'thread.post', args: ['alice::local', 'hi', { origin }] },
+      { verb: 'thread.answer', args: ['alice::local', 'c1', { answer: 'Yes', origin }] },
+    ])
+    // Without a loaded frame hash, the placement's hash.
+    const h2 = harness()
+    await call(createZenCustomLayer(h2.deps), 'thread.post', 'alice::local', 'hi')
+    expect(h2.calls[0].args[2]).toEqual({ origin: { ...origin, hash: 'h1' } })
+  })
+
+  it("the daemon's widget_cap_missing reaches the widget as cap_not_granted", async () => {
+    const h = harness({}, {
+      'thread.post': () => Promise.reject(new ZenWidgetError('widget_cap_missing', 'needs thread:post')),
+    })
+    const r = await call(createZenCustomLayer(h.deps), 'thread.post', 'alice::local', 'hi')
+    expect(r).toMatchObject({ ok: false, error: { code: 'cap_not_granted', cap: 'thread:post' } })
+    const h2 = harness({}, {
+      'thread.post': () => Promise.reject(new ZenWidgetError('widget_not_approved', 'stale')),
+    })
+    expect(code(await call(createZenCustomLayer(h2.deps), 'thread.post', 'alice::local', 'hi'))).toBe('failed')
   })
 
   it('thread.post with paths or files is refused before any upload; a secret answer is refused', async () => {

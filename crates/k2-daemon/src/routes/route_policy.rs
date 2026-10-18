@@ -1364,6 +1364,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/zen/theme/set", Member),
     get("/cli/zen/validate", Member),
     get("/cli/zen/widget/bundle", Member),
+    // 0.46.1: the app checks a widget's approved cap before a post to
+    // another server (owner token only, checked in zen_routes).
+    post("/cli/zen/widget/check", Member),
     // Authorship (contract-garden-data-v1 §4.3, BG3): claim takes the
     // owner token only; sign takes it or a local agent/shell passport.
     post("/cli/zen/widget/claim", Member),

@@ -8,6 +8,9 @@
 //   POST /cli/zen/widget/resume                the person's Resume click
 //                                              (owner token only)
 //   POST /cli/zen/widget/run                   a frame's ready or uncaught error
+//   POST /cli/zen/widget/check                 may this placement's widget use a
+//                                              cap (0.46.1: before a widget's post
+//                                              to an agent on another server)
 // Every body is parsed here. Errors carry a code the UI words.
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -19,6 +22,8 @@ export type ZenWidgetErrorCode =
   | 'widget_broken' // 409: no good bundle yet (UW11)
   | 'unknown_widget' // 404
   | 'owner_only' // 403: Resume from anything but the owner's own app
+  | 'widget_not_approved' // 403 (check): not this placement's live widget
+  | 'widget_cap_missing' // 403 (check): its approved caps lack the cap
   | 'failed'
 
 export class ZenWidgetError extends Error {
@@ -34,6 +39,8 @@ const CODES: ReadonlyArray<[RegExp, ZenWidgetErrorCode]> = [
   [/widget_broken/, 'widget_broken'],
   [/unknown_widget/, 'unknown_widget'],
   [/owner_only/, 'owner_only'],
+  [/widget_not_approved/, 'widget_not_approved'],
+  [/widget_cap_missing/, 'widget_cap_missing'],
 ]
 
 /** The words a person reads for each refusal. */
@@ -47,6 +54,10 @@ export function zenWidgetErrorText(code: ZenWidgetErrorCode, raw: string): strin
       return 'This widget’s folder is gone.'
     case 'owner_only':
       return 'Only you can resume a widget, from the K2 app on this computer.'
+    case 'widget_not_approved':
+      return 'This widget changed or isn’t in this Garden any more. K2 reloads it.'
+    case 'widget_cap_missing':
+      return 'This widget can’t send to agents: thread:post isn’t in its approved caps.'
     default:
       return raw || 'Something went wrong.'
   }
@@ -108,6 +119,25 @@ async function post(route: string, body: object): Promise<unknown> {
   } catch (err) {
     throw zenWidgetError(err)
   }
+}
+
+/** `POST zen/widget/check` (0.46.1). */
+export interface ZenWidgetCheckRequest {
+  garden: string
+  placement: string
+  /** The folder name or `k2:<name>@<n>` the placement holds. */
+  widget: string
+  /** The bundle hash the widget's frame runs. */
+  hash: string
+  cap: 'thread:post'
+}
+
+/** Ask this computer's daemon (it holds the Garden) whether the placement's
+ *  approved widget may use `cap`. Resolves when it may; throws a
+ *  `ZenWidgetError` (`widget_not_approved` / `widget_cap_missing`) when not. */
+export async function checkZenWidgetCap(req: ZenWidgetCheckRequest): Promise<void> {
+  const r = await post('zen/widget/check', req)
+  if (!isObj(r) || r.ok !== true) throw new ZenWidgetError('failed', 'The widget check answer is not readable.')
 }
 
 /** The runaway guard tripped (R6): posting pauses in every window. */

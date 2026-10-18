@@ -21,7 +21,11 @@
 //      computer's agents plus your Homes' rows now, `zenWidgetReachRows`)
 //      → `not_bound`. Thread verbs take any of them (UWB10);
 //   6. posting: text only, ≤ 4,000 characters, never files or secrets
-//      (UW19, UW50); the runaway guard (more than 120 posts, or 20
+//      (UW19, UW50); every post and card answer carries the widget's
+//      Garden, placement and frame hash, and the daemon holding the Garden
+//      refuses it (`widget_not_approved` / `widget_cap_missing`) unless
+//      that placement's approved caps include `thread:post` (0.46.1); the
+//      runaway guard (more than 120 posts, or 20
 //      identical texts to one agent, in 10 minutes; R6) pauses posting
 //      (`sending_off`) until the person clicks Resume on the widget. The
 //      frame keeps running;
@@ -55,6 +59,7 @@ import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 import { canonicalSourceAddress, ZenSourceError, type ZenSourcesReader } from './zen-sources'
 import { ZEN_STORE_VERBS, ZenStoreError, type ZenCustomStore } from './zen-custom-store'
 import { ZEN_GUEST_VERBS, ZenGuestsError, type ZenCustomGuests } from './zen-custom-guests'
+import { ZenWidgetError } from './zen-widget-routes'
 
 /** UW29 budgets. */
 export const ZEN_WIDGET_BUDGET = {
@@ -93,6 +98,11 @@ export interface ZenCustomLayerDeps {
   /** The placement as the daemon resolved it (live: re-read each call). */
   widget(): ZenCustomWidgetPayload
   gardenId(): string
+  /** The bundle hash this frame runs (`widget/bundle`), else the
+   *  placement's `hash`. Every Thread post and card answer names it with
+   *  the placement, so the daemon holding the Garden can check the
+   *  widget's approved `thread:post` (0.46.1). */
+  frameHash?(): string
   /** The widget's inner bridge, built with its caps. */
   inner: ZenWidgetBridge
   /** The rows it reaches now (never a fallback). */
@@ -317,6 +327,16 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     posts.push({ at: now, key })
   }
 
+  /** Every Thread post and card answer is marked with where the widget
+   *  sits (Garden + placement) and the hash its frame runs (0.46.1). The
+   *  frame never sees or sets this: it comes from the port the message
+   *  arrived on, so a widget can't drop or forge it, and the daemon holding
+   *  the Garden checks the placement's approved `thread:post`. */
+  const origin = (): { widget: string; garden: string; placement: string; hash: string } => {
+    const w = deps.widget()
+    return { widget: w.widget, garden: deps.gardenId(), placement: w.id, hash: deps.frameHash?.() || w.hash }
+  }
+
   const inner = (verb: string, ...args: unknown[]): unknown => {
     try {
       return deps.inner.call(verb as never, ...args)
@@ -386,8 +406,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       needSending()
       guard(address, text)
       await deps.ensureConversation(address)
-      const origin = { widget: deps.widget().widget, garden: deps.gardenId() }
-      const r = (await inner('thread.post', address, text, { origin })) as { id: string | null; seq: number | null }
+      const r = (await inner('thread.post', address, text, { origin: origin() })) as { id: string | null; seq: number | null }
       return { id: r.id, seq: r.seq }
     },
     'thread.answer': async (args) => {
@@ -399,7 +418,7 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       needText('thread.answer', args[2])
       needSending()
       await deps.ensureConversation(address)
-      await inner('thread.answer', address, cardId, args[2])
+      await inner('thread.answer', address, cardId, { answer: args[2], origin: origin() })
       return null
     },
     'compose.draft': (args) => {
@@ -649,6 +668,10 @@ export function toRefusal(err: unknown): ZenCustomRefusal {
   }
   if (err instanceof ZenGuestsError) return new ZenCustomRefusal(err.wire.code, err.wire.message)
   if (err instanceof ZenCanvasError) return new ZenCustomRefusal(err.code, err.message)
+  // The daemon's own `thread:post` check (0.46.1, `zen/widget/check`).
+  if (err instanceof ZenWidgetError && err.code === 'widget_cap_missing') {
+    return new ZenCustomRefusal('cap_not_granted', err.message, { cap: 'thread:post' })
+  }
   if (err instanceof ZenBridgeError) {
     if (err.code === 'cap_not_granted') return new ZenCustomRefusal('cap_not_granted', err.message)
     if (err.code === 'verb_unavailable') return new ZenCustomRefusal('verb_unavailable', err.message)

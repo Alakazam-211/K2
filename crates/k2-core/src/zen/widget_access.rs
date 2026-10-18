@@ -107,6 +107,79 @@ pub const SOURCES_DROPS_THREAD_POST: &str = "sources_drops_thread_post";
 /// The `k2 zen validate` warning for `sources:read` + `store:write`.
 pub const SOURCES_DROPS_STORE_WRITE: &str = "sources_drops_store_write";
 
+/// 403 code: the post names a placement this computer's Gardens don't
+/// hold, a widget that isn't the one placed there, or a hash that isn't the
+/// placement's live (approved) bundle.
+pub const WIDGET_NOT_APPROVED: &str = "widget_not_approved";
+
+/// 403 code: the placement's approved caps ([`effective_caps`] of its live
+/// manifest, after the Sources taint) don't include the cap the call needs.
+pub const WIDGET_CAP_MISSING: &str = "widget_cap_missing";
+
+/// Why the daemon refused a widget's portable call (a Thread post or
+/// answer) on the placement it claimed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlacementRefusal {
+    /// [`WIDGET_NOT_APPROVED`] or [`WIDGET_CAP_MISSING`].
+    pub code: &'static str,
+    pub message: String,
+}
+
+/// Does this computer's Zen folder hold the Garden with this exact id?
+/// (A widget post naming another computer's Garden was checked by that
+/// computer's daemon; see `overlay_routes::widget_post_gate`.)
+pub fn holds_garden(f: &super::ZenFiles, garden: &str) -> bool {
+    f.is_set_up() && f.gardens().iter().any(|g| g.id == garden)
+}
+
+/// The daemon's own check of a widget's portable call (0.46.1 polish):
+/// the placement `garden`/`placement` must exist on this computer, place
+/// `widget`, and run the live bundle `hash` (a locked Garden's frozen
+/// copy); its approved caps ([`effective_caps`] of that manifest) must
+/// include `cap`. Returns the approved caps. Same resolution as the Garden
+/// data door (`/cli/zen/call`), so a widget is judged the same way
+/// whichever door it uses. K2's built-in `k2:<name>@<n>` widgets are
+/// placements like any other and pass on their own manifests' caps.
+pub fn check_placement_cap(
+    f: &super::ZenFiles,
+    garden: &str,
+    placement: &str,
+    widget: &str,
+    hash: &str,
+    cap: &str,
+) -> Result<Vec<String>, PlacementRefusal> {
+    let not_approved = |message: String| PlacementRefusal { code: WIDGET_NOT_APPROVED, message };
+    if !holds_garden(f, garden) {
+        return Err(not_approved(format!("no Garden '{garden}' on this computer holds that widget")));
+    }
+    let p = f
+        .custom_placements()
+        .into_iter()
+        .find(|p| p.garden == garden && p.placement == placement)
+        .ok_or_else(|| not_approved(format!("Garden '{garden}' has no custom widget '{placement}'")))?;
+    if p.widget != widget {
+        return Err(not_approved(format!("'{placement}' places '{}', not '{widget}'", p.widget)));
+    }
+    let st = f.garden_widget_status(garden, &p.widget);
+    let live = st.hash();
+    if live.is_empty() {
+        return Err(not_approved(format!("'{widget}' has no good version now")));
+    }
+    if live != hash {
+        return Err(not_approved(format!("'{widget}' changed since its frame loaded; K2 reloads the widget")));
+    }
+    let caps = effective_caps(WidgetOrigin::of(&p.widget), &st.requested());
+    if !caps.iter().any(|c| c == cap) {
+        let why = if cap == TAINTED_BY_SOURCES && st.requested().iter().any(|r| r == SOURCES_READ) {
+            format!("'{widget}' reads data sources, so it runs without {cap}")
+        } else {
+            format!("'{widget}' needs {cap} in its manifest caps")
+        };
+        return Err(PlacementRefusal { code: WIDGET_CAP_MISSING, message: why });
+    }
+    Ok(caps)
+}
+
 /// Why posting is paused (R6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

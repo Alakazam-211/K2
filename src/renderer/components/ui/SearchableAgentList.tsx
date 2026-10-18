@@ -1,6 +1,7 @@
 // SearchableAgentList — the searchable agent / workspace list shared by the
-// Tickets + Wiki workspace filter (`Feedback/WorkspaceFilterDropdown`) and
-// Home's Add Agent picker (`Home/HomeAddPanels`).
+// Tickets + Wiki workspace filter (`Feedback/WorkspaceFilterDropdown`),
+// Home's Add Agent picker (`Home/HomeAddPanels`) and the workspace
+// Connections picker (`Settings/sections/AddConnectionPicker`, 0.46.1).
 // prd-home-picker-and-remote-avatars-v1 P3/P4/P7, vs-live P25/P26/P35.
 //
 // What it draws: a search box, then sections (optional header with a color
@@ -71,6 +72,13 @@ export interface AgentListSection {
   /** Shown under the header (loading, offline, sign in…). A section with
    *  no rows left to show and no status is hidden. */
   status?: React.ReactNode
+  /** Muted text after the label, not upper-cased (a server's host). */
+  sub?: string | null
+  /** Inline content after the label (a "re-pair" hint). */
+  headerExtra?: React.ReactNode
+  /** Grey the header and rows (an offline server); the status stays
+   *  readable so its Retry is easy to see. */
+  dim?: boolean
   rows: AgentListRow[]
 }
 
@@ -102,6 +110,16 @@ export function matchesAgentRow(row: AgentListRow, query: string): boolean {
   const q = query.trim().toLowerCase()
   if (!q) return true
   return [row.label, ...(row.keywords ?? [])].some((t) => t.toLowerCase().includes(q))
+}
+
+/** Fuzzy-ish match (0.46.1): every whitespace-separated token of the query
+ *  is a substring of the label or some keyword, in any order, ignoring
+ *  case. So "rpm cort" finds Cortana on rpm. An empty query matches. */
+export function tokenAndMatch(row: AgentListRow, query: string): boolean {
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return true
+  const fields = [row.label, ...(row.keywords ?? [])].map((t) => t.toLowerCase())
+  return tokens.every((t) => fields.some((f) => f.includes(t)))
 }
 
 /** The sections as shown for `query`: rows filtered by `matches` (when
@@ -139,8 +157,8 @@ function rowClass(row: AgentListRow, isKeyboard: boolean): string {
     row.selected
       ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
       : isKeyboard
-        ? 'bg-white/[0.06] text-[var(--color-text-primary)]'
-        : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)]'
+        ? 'bg-[var(--color-wash-2)] text-[var(--color-text-primary)]'
+        : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]'
   }`
 }
 
@@ -223,9 +241,15 @@ export function SearchableAgentList({
 
       <div ref={listRef} id={listId} role="listbox" aria-label={ariaLabel} className={listClassName}>
         {shown.map((section) => (
-          <div key={section.key} role="group" aria-label={section.label ?? undefined} data-agent-list-section={section.key}>
+          <div
+            key={section.key}
+            role="group"
+            aria-label={section.label ?? undefined}
+            data-agent-list-section={section.key}
+            data-dim={section.dim ? '' : undefined}
+          >
             {section.label !== null && (
-              <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 select-none">
+              <div className={`flex items-center gap-1.5 px-2 pt-2 pb-1 select-none${section.dim ? ' opacity-50' : ''}`}>
                 {section.accent ? (
                   <span className="w-1 h-3 flex-shrink-0 bg-[var(--color-accent)]" />
                 ) : (
@@ -233,9 +257,22 @@ export function SearchableAgentList({
                     <span className="w-1 h-3 flex-shrink-0" style={{ backgroundColor: section.color }} />
                   )
                 )}
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] flex-1 truncate">
+                <span
+                  className={`text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] ${
+                    section.sub || section.headerExtra ? 'flex-shrink-0 max-w-[50%]' : 'flex-1'
+                  } truncate`}
+                >
                   {section.label}
                 </span>
+                {section.sub && (
+                  <span
+                    className={`text-[10px] text-[var(--color-text-muted)] truncate${section.headerExtra ? ' min-w-0' : ' flex-1'}`}
+                    data-agent-list-sub=""
+                  >
+                    · {section.sub}
+                  </span>
+                )}
+                {section.headerExtra && <span className="flex-1 min-w-0 flex items-center">{section.headerExtra}</span>}
                 {section.count !== null && (
                   <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">
                     {section.count ?? section.rows.length}
@@ -260,7 +297,7 @@ export function SearchableAgentList({
                   onClick={() => {
                     if (pickable) onPick(row.value)
                   }}
-                  className={rowClass(row, isKeyboard)}
+                  className={`${rowClass(row, isKeyboard)}${section.dim ? ' opacity-50' : ''}`}
                   title={row.title}
                 >
                   {row.avatar.kind === 'workspace' ? (

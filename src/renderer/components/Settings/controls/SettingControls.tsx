@@ -320,7 +320,7 @@ export function SettingDropdown({
                     ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
                     : isActive
                       ? 'text-[var(--color-accent)] bg-[var(--color-accent)]/10 cursor-pointer'
-                      : 'text-[var(--color-text-secondary)] hover:bg-white/[0.04] hover:text-[var(--color-text-primary)] cursor-pointer'
+                      : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)] cursor-pointer'
                 }`}
               >
                 {option.leading}

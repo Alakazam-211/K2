@@ -1276,6 +1276,46 @@ fn media_reconfigure_sets_the_voice_url_without_a_tarball() {
     );
 }
 
+/// front443: `passthrough` reaches only a Sew that knows it (0.2.1+). An
+/// older Sew (the fixture pin here; 0.2.0 on the fleet) is refused before
+/// anything is staged or run, so sew-media is never left half-moved.
+#[test]
+fn passthrough_is_refused_unless_the_sew_knows_it() {
+    let t = box_root();
+    with_pin_installed(&t);
+    ok(&t.call_in(&["engine", "sew", "stage-media"], &media_tarball()));
+    let seen = capture_turn_files(&t);
+    let install = serde_json::json!({
+        "public_url": "wss://hearth.box.k2.dev", "turn_tls": "passthrough", "turn_domain": "turn-box.k2.dev",
+        "turn_cert_pem": TEST_CERT, "turn_key_pem": TEST_KEY,
+    });
+    let reconf = serde_json::json!({
+        "turn_tls": "passthrough", "turn_domain": "turn-box.k2.dev", "turn_cert_pem": TEST_CERT, "turn_key_pem": TEST_KEY,
+    });
+    for (argv, body) in [
+        (vec!["engine", "sew", "media", "install"], &install),
+        (vec!["engine", "sew", "media", "reconfigure", "restart-now"], &reconf),
+    ] {
+        let o = t.call_in(&argv, body.to_string().as_bytes());
+        assert_eq!(o.code, exit::STATE, "{argv:?}: {}", o.stderr);
+        assert!(o.stderr.contains("sew_passthrough_unsupported"), "{}", o.stderr);
+        assert!(o.stderr.contains("0.2.1"), "names the version it needs: {}", o.stderr);
+    }
+    assert!(sew_calls(&t).is_empty(), "sew never ran");
+    assert!(seen.borrow().is_empty());
+    assert!(!t.p(SEW_STAGE_TURN_KEY).exists() && !t.p(SEW_STAGE_MEDIA_JSON).exists(), "nothing staged");
+
+    // The gate itself: 0.2.0 no, 0.2.1+ yes, both the installed sew and the
+    // pinned sew-media; other tiers always pass.
+    let pt: k2_root_proto::sew::MediaRequest = serde_json::from_value(reconf.clone()).unwrap();
+    assert!(crate::sew::passthrough_gate(&pt, "0.2.0", None).is_err());
+    assert!(crate::sew::passthrough_gate(&pt, "0.2.1", None).is_ok());
+    assert!(crate::sew::passthrough_gate(&pt, "0.2.1", Some("0.2.0")).is_err(), "an old pinned sew-media is refused too");
+    assert!(crate::sew::passthrough_gate(&pt, "0.3.0", Some("0.2.1")).is_ok());
+    let direct: k2_root_proto::sew::MediaRequest = serde_json::from_value(serde_json::json!({"turn_tls": "direct"})).unwrap();
+    assert!(crate::sew::passthrough_gate(&direct, "0.2.0", Some("0.2.0")).is_ok());
+}
+
 #[test]
 fn media_turn_cert_renews_through_staged_files_when_idle() {
     let t = box_root();

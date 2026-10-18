@@ -95,8 +95,11 @@ pub const UNIT_MEDIA: &str = "sew-media.service";
 /// Sew's client API on loopback (C5).
 pub const SEW_CLIENT_PORT: u16 = 8470;
 /// Voice: sew-media's loopback signalling port and its public ports
-/// (TCP 7881, UDP 7882, TURN-TLS TCP 5349). TURN on :443 only when :443 is
-/// free (never on a box where Stalwart holds it, Rosson 2026-10-15).
+/// (TCP 7881, UDP 7882, TURN-TLS TCP 5349). TURN on :443 goes through
+/// K2's front443 SNI router (0.46.1, `passthrough` tier: sew-media on
+/// 127.0.0.1:5349, PROXY v2 first); Stalwart may sit behind the same front
+/// (opt-in; Rosson 2026-10-17 reversed the 2026-10-15 "never on a box where
+/// Stalwart holds :443" ruling for the front).
 pub const SEW_MEDIA_LOOPBACK_PORT: u16 = 7880;
 pub const SEW_MEDIA_TCP_PORT: u16 = 7881;
 pub const SEW_MEDIA_UDP_PORT: u16 = 7882;
@@ -448,6 +451,33 @@ pub fn releases() -> &'static [SewRelease] {
 /// The pin: the last release.
 pub fn pinned() -> &'static SewRelease {
     releases().last().expect("the Sew pin table is never empty")
+}
+
+/// front443: the first Sew release whose `sew media install` knows the
+/// `passthrough` TURN tier (Sew TURN-PT, rev 168; 0.2.0 does not).
+pub const PASSTHROUGH_MIN_VERSION: crate::version::Semver = crate::version::Semver(0, 2, 1);
+/// The refusal code for a `passthrough` request to a Sew that predates it.
+pub const SEW_PASSTHROUGH_UNSUPPORTED: &str = "sew_passthrough_unsupported";
+
+/// Does Sew `version` (`x.y.z`) support the `passthrough` TURN tier?
+/// Anything unparsable is "no".
+pub fn version_supports_passthrough(version: &str) -> bool {
+    crate::version::Semver::parse(version).is_some_and(|v| v >= PASSTHROUGH_MIN_VERSION)
+}
+
+/// The pinned `sew-media` (what voice installs) supports `passthrough`.
+/// Follows the test pins in a `sew-test-pins` build (K-M14: a test helper
+/// pinning a newer Sew than the release pin gets the tier).
+pub fn pinned_media_supports_passthrough() -> bool {
+    pinned().media.as_ref().is_some_and(|m| version_supports_passthrough(m.version))
+}
+
+/// The one-line refusal for `version`.
+pub fn passthrough_unsupported_message(version: &str) -> String {
+    format!(
+        "{SEW_PASSTHROUGH_UNSUPPORTED}: Sew {version} has no passthrough TURN tier (needs Sew {PASSTHROUGH_MIN_VERSION} or later); \
+         sew-media was left as it is (TURN stays on TCP 5349)"
+    )
 }
 
 /// The refusal code and words every Sew install path uses while this K2
@@ -872,7 +902,9 @@ pub struct MediaRequest {
     pub udp_port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tcp_port: Option<u16>,
-    /// `off`, `plain`, `external` or `direct`.
+    /// `off`, `plain`, `external`, `direct` or `passthrough` (Sew TURN-PT,
+    /// rev 168: rustls on 127.0.0.1:5349 behind K2's :443 front, PROXY v2
+    /// first; cert and key staged as for `direct`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_tls: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -923,7 +955,7 @@ impl MediaRequest {
                 return Err("media refused: port");
             }
         }
-        if self.turn_tls.as_deref().is_some_and(|t| !matches!(t, "off" | "plain" | "external" | "direct")) {
+        if self.turn_tls.as_deref().is_some_and(|t| !matches!(t, "off" | "plain" | "external" | "direct" | "passthrough")) {
             return Err("media refused: turn_tls");
         }
         if self.turn_domain.as_deref().is_some_and(|d| !hostname_ok(d)) {
@@ -1393,6 +1425,21 @@ mod tests {
         assert_eq!(inputs["turn_cert"], "/s/c.pem");
         assert_eq!(inputs["turn_key"], "/s/k.pem");
         assert_eq!(inputs["profile"], "shared");
+        let pt = MediaRequest { turn_tls: Some("passthrough".into()), ..m.clone() };
+        pt.validate().unwrap();
+        pt.validate_reconfigure().unwrap();
+        assert_eq!(pt.sew_inputs(None, Some(("/s/c.pem", "/s/k.pem")))["turn_tls"], "passthrough");
+        for bad in ["PASSTHROUGH", "pass-through", "sni", ""] {
+            let r = MediaRequest { turn_tls: Some(bad.into()), ..m.clone() };
+            assert!(r.validate().is_err(), "{bad:?}");
+        }
+        // Only Sew 0.2.1+ knows the tier (0.2.0, the release pin, does not).
+        assert!(!version_supports_passthrough("0.2.0"));
+        assert!(!version_supports_passthrough("0.1.1"));
+        assert!(version_supports_passthrough("0.2.1"));
+        assert!(version_supports_passthrough("0.3.0"));
+        assert!(!version_supports_passthrough("0.2.1-rc1"), "unparsable is no");
+        assert!(passthrough_unsupported_message("0.2.0").starts_with("sew_passthrough_unsupported: Sew 0.2.0"));
         let half = MediaRequest { turn_key_pem: None, ..m.clone() };
         assert!(half.validate().is_err(), "cert without key");
         let t = TurnCertRequest { cert_pem: chain, key_pem: key };

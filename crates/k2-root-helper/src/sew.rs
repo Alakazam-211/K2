@@ -1079,11 +1079,29 @@ fn media_run(ctx: &Ctx, req: &MediaRequest, tarball: Option<&str>, reconfigure: 
     res
 }
 
+/// front443: `turn_tls: "passthrough"` only reaches a Sew that knows it
+/// (0.2.1+). Checked before anything is staged, so an older Sew is never
+/// handed a tier it would reject halfway (sew-media stays as it is).
+/// `installed`: the on-disk `sew` that runs the command; `media`: the
+/// pinned sew-media an install puts in place.
+pub(crate) fn passthrough_gate(req: &MediaRequest, installed: &str, media: Option<&str>) -> HResult<()> {
+    if req.turn_tls.as_deref() != Some("passthrough") {
+        return Ok(());
+    }
+    for v in std::iter::once(installed).chain(media) {
+        if !k2_root_proto::sew::version_supports_passthrough(v) {
+            return Err(Fail::state(k2_root_proto::sew::passthrough_unsupported_message(v)));
+        }
+    }
+    Ok(())
+}
+
 fn media_install(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
     let req: MediaRequest = parse_json(stdin, "media refused: input")?;
     req.validate().map_err(Fail::argv)?;
-    require_known(ctx)?;
-    let (_, art) = pinned_media_artifact(ctx.arch).map_err(Fail::state)?;
+    let installed = require_known(ctx)?;
+    let (media_v, art) = pinned_media_artifact(ctx.arch).map_err(Fail::state)?;
+    passthrough_gate(&req, installed, Some(media_v))?;
     let bytes = read_staged(ctx, SEW_STAGE_MEDIA_TARBALL)?
         .ok_or_else(|| Fail::state("no staged sew-media tarball (engine sew stage-media first)"))?;
     if !sha256_hex(&bytes).eq_ignore_ascii_case(art.tarball_sha256) {
@@ -1109,7 +1127,8 @@ fn media_install(ctx: &Ctx, stdin: &[u8]) -> HResult<J> {
 fn media_reconfigure(ctx: &Ctx, stdin: &[u8], restart_now: bool) -> HResult<J> {
     let req: MediaRequest = parse_json(stdin, "media refused: input")?;
     req.validate_reconfigure().map_err(Fail::argv)?;
-    require_known(ctx)?;
+    let installed = require_known(ctx)?;
+    passthrough_gate(&req, installed, None)?;
     media_run(ctx, &req, None, true, restart_now)
 }
 

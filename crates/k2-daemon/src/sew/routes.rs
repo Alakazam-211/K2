@@ -293,12 +293,15 @@ fn voice_install(env: Env<'static>, req: &super::voice::InstallRequest, backgrou
                 if let Err(f) = super::voice::install_machine(&env, &req) {
                     k2_core::log_debug!("[sew] voice install: {}", f.code);
                 }
+                // front443: a passthrough install adds the TURN route.
+                crate::front443::rebuild();
             })
             .map_err(|e| no("spawn", 500, e.to_string()))?;
         return Ok(json!({"ok": true, "voice": "installing", "hint": "poll GET /cli/sew/status (voice.progress)"}));
     }
     let r = super::voice::install_machine(&env, req);
     drop(latch);
+    crate::front443::rebuild();
     r
 }
 

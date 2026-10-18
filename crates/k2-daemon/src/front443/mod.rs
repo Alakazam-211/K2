@@ -186,7 +186,13 @@ type Add<'a> = dyn FnMut(&str, Backend) + 'a;
 
 /// S3: `turn-<label>.k2.dev` → sew-media's passthrough listener, once
 /// voice runs on that tier (PROXY v2 always: Sew's contract).
-fn turn_routes(_add: &mut Add) {}
+fn turn_routes(add: &mut Add) {
+    let host = crate::sew::voice::front_route_host(&crate::sew::supervisor::live())
+        .or_else(|| TURN_PENDING.lock().unwrap_or_else(|p| p.into_inner()).clone());
+    if let Some(h) = host {
+        add(&h, Backend { kind: Kind::Turn, addr: TURN_BACKEND, proxy: true, refuse_loopback_clients: false });
+    }
+}
 
 /// The TURN name routed BEFORE voice moves to the passthrough tier (Sew's
 /// order: the front must route the TURN SNI before sew-media leaves public
@@ -249,7 +255,53 @@ pub fn probe_through(front: &server::Front, addr: SocketAddr, host: &str) -> Res
 /// of that leaves (or puts) voice back on `direct`. A no-op when voice is
 /// not installed or already on passthrough.
 fn voice_to_passthrough() -> Result<Value, Refusal> {
-    voice_tier(true)
+    if !serving() {
+        return Err((409, "front_not_serving", "the :443 front must be serving before TURN moves behind it".into()));
+    }
+    let env = crate::sew::supervisor::live();
+    let st = crate::sew::voice::load(&env);
+    if !st.installed || crate::sew::voice::tier(&st) == crate::sew::voice::TIER_PASSTHROUGH {
+        return voice_tier(true);
+    }
+    if !env.ops.passthrough_supported() {
+        return voice_tier(true); // the refusal, worded once (voice::set_tier)
+    }
+    let host = st.turn_host.clone().ok_or((409, "voice_not_installed", "no TURN host recorded".to_string()))?;
+    set_turn_pending(Some(host.clone()));
+    if let Err(e) = probe_route(&host) {
+        set_turn_pending(None);
+        return Err((409, "front_turn_route_unverified", format!("TURN stays on TCP 5349: {e}")));
+    }
+    let moved = voice_tier(true);
+    set_turn_pending(None);
+    let mut v = moved?;
+    // Verify: the TURN name through the front on loopback serves K2's leaf.
+    let port = live_front().map(|(_, a)| a.port()).unwrap_or(443);
+    let ours = st.cert_leaf_sha256.clone();
+    let mut served = None;
+    for _ in 0..40 {
+        served = env.ops.served_leaf("127.0.0.1", &host, port);
+        if served.is_some() && served == ours {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    if served.is_none() || served != ours {
+        let back = voice_tier(false);
+        rebuild_logged();
+        return Err((
+            500,
+            "turn_passthrough_unverified",
+            format!(
+                "sew-media did not serve the TURN certificate through the front ({}); voice was moved back to TCP 5349{}",
+                if served.is_some() { "another certificate" } else { "no TLS answer" },
+                back.err().map(|(_, c, m)| format!(" — the move back failed too: {c}: {m}")).unwrap_or_default()
+            ),
+        ));
+    }
+    rebuild_logged();
+    v["verified"] = json!({"through": format!("127.0.0.1:{port}"), "leafSha256": ours});
+    Ok(v)
 }
 
 /// S5 (opt-in): the mail names → Stalwart's HTTPS on 127.0.0.1:8443, with
@@ -286,7 +338,8 @@ fn mail_names() -> Vec<String> {
 /// S3: move voice to `passthrough` (behind the serving front) or back to
 /// `direct`.
 fn voice_tier(passthrough: bool) -> Result<Value, Refusal> {
-    Ok(json!({"changed": false, "turnTier": if passthrough { "passthrough" } else { "direct" }}))
+    let env = crate::sew::supervisor::live();
+    crate::sew::voice::set_tier(&env, passthrough).map_err(|f| (500, "voice_tier_failed", format!("{}: {}", f.code, f.hint)))
 }
 
 /// S5: may Stalwart move behind the front?

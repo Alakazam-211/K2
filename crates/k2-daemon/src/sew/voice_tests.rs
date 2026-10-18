@@ -664,3 +664,96 @@ fn users_need_a_running_server() {
     assert_eq!(crate::sew::users::list(&t.env()).unwrap_err().code, "not_running");
     let _ = INSTALL_ID;
 }
+
+// ── front443: the passthrough TURN tier ──────────────────────────────────
+
+/// Behind the :443 front (S3): sew-media gets `turn_tls: "passthrough"`
+/// with the same staged cert and key as direct, no advertise port (Sew's
+/// passthrough default is 443, the only ICE URL), and K2 checks the served
+/// leaf on 443.
+#[test]
+fn behind_the_front_voice_installs_on_the_passthrough_tier() {
+    let t = t();
+    *t.ops.front.lock().unwrap() = true;
+    t.chat();
+    let out = t.install(InstallRequest { tarball_path: Some(MEDIA.into()), ..Default::default() }).unwrap();
+    assert_eq!(out["turnTier"], "passthrough");
+    assert_eq!(out["turnTls"]["port"], 443);
+    assert_eq!(out["ports"]["turnTls"], 443);
+    let body = t.stdin_of("engine sew media install");
+    assert_eq!(body["turn_tls"], "passthrough");
+    assert_eq!(body["turn_domain"], "turn-lztek.k2.dev");
+    assert!(body.get("turn_advertise_port").is_none(), "passthrough advertises 443 by Sew's default, never 5349");
+    assert!(body["turn_cert_pem"].as_str().unwrap().contains("BEGIN CERTIFICATE"));
+    assert!(body["turn_key_pem"].as_str().unwrap().contains("PRIVATE KEY"));
+    let req: k2_root_proto::sew::MediaRequest = serde_json::from_value(body).unwrap();
+    req.validate().expect("the helper accepts passthrough");
+    assert_eq!(*t.ops.served_ports.lock().unwrap(), vec![443], "the served check probes :443");
+    let st = t.state();
+    assert_eq!(st.turn_tier.as_deref(), Some("passthrough"));
+    assert_eq!(front_route_host(&t.env()).as_deref(), Some("turn-lztek.k2.dev"), "the front routes the TURN host");
+    let (s, _, _) = status(&t.env(), true);
+    assert_eq!(s["turnTier"], "passthrough");
+    assert_eq!(s["turnTls"]["port"], 443);
+}
+
+/// `set_tier` moves an installed engine: one `media reconfigure
+/// restart-now` with the tier, host and the SAME cert and key (no new
+/// issuance), recorded; a second call is a no-op; back to direct restores
+/// the 5349 advertise port.
+#[test]
+fn set_tier_moves_an_installed_engine_both_ways_without_reissuing() {
+    let t = t();
+    assert_eq!(set_tier(&t.env(), true).unwrap()["changed"], false, "nothing installed: nothing to move");
+    t.voice();
+    assert_eq!(t.state().turn_tier.as_deref(), Some("direct"));
+    assert_eq!(front_route_host(&t.env()), None, "direct: no front route");
+    let chain = t.state().cert_pem.unwrap();
+
+    let v = set_tier(&t.env(), true).unwrap();
+    assert_eq!(v["changed"], true);
+    assert_eq!(v["turnTlsPort"], 443);
+    assert_eq!(t.ops.effects(), vec!["engine sew media reconfigure restart-now"]);
+    let body = t.stdin_of("engine sew media reconfigure restart-now");
+    assert_eq!(body["turn_tls"], "passthrough");
+    assert_eq!(body["turn_domain"], "turn-lztek.k2.dev");
+    assert_eq!(body["turn_cert_pem"].as_str(), Some(chain.as_str()), "the cert K2 already holds");
+    assert!(body.get("turn_advertise_port").is_none());
+    let req: k2_root_proto::sew::MediaRequest = serde_json::from_value(body).unwrap();
+    req.validate_reconfigure().expect("the helper accepts the reconfigure");
+    assert!(t.ops.cp_log().is_empty(), "no TURN DNS or cert call: no issuance spent");
+    assert_eq!(t.state().turn_tier.as_deref(), Some("passthrough"));
+
+    t.ops.clear();
+    assert_eq!(set_tier(&t.env(), true).unwrap()["changed"], false);
+    assert!(t.ops.effects().is_empty(), "already there: no helper call");
+
+    let v = set_tier(&t.env(), false).unwrap();
+    assert_eq!(v["changed"], true);
+    let body = t.stdin_of("engine sew media reconfigure restart-now");
+    assert_eq!(body["turn_tls"], "direct");
+    assert_eq!(body["turn_advertise_port"], 5349);
+    assert_eq!(t.state().turn_tier.as_deref(), Some("direct"));
+}
+
+/// Sew 0.2.0 has no passthrough tier (it arrives in 0.2.1): behind the
+/// front, voice installs on `direct` with a warning, and a move to
+/// passthrough is refused with a clear code, never a half-moved engine.
+#[test]
+fn a_sew_without_passthrough_keeps_turn_on_5349() {
+    let t = t();
+    *t.ops.front.lock().unwrap() = true;
+    *t.ops.passthrough.lock().unwrap() = false;
+    t.chat();
+    let out = t.install(InstallRequest { tarball_path: Some(MEDIA.into()), ..Default::default() }).unwrap();
+    assert_eq!(out["turnTier"], "direct");
+    assert_eq!(t.stdin_of("engine sew media install")["turn_tls"], "direct");
+    let w = out["warnings"].as_array().unwrap();
+    assert!(w.iter().any(|x| x.as_str().unwrap().contains("no passthrough TURN tier")), "{w:?}");
+    t.ops.clear();
+    let f = set_tier(&t.env(), true).unwrap_err();
+    assert_eq!(f.code, "sew_passthrough_unsupported");
+    assert!(f.hint.contains("0.2.1"), "{}", f.hint);
+    assert!(t.ops.effects().is_empty(), "no helper call");
+    assert_eq!(t.state().turn_tier.as_deref(), Some("direct"));
+}

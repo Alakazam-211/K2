@@ -133,6 +133,15 @@ fn survive_session_runs_under_ptyd_and_kill_reaps_through_ptyd() {
     s.kill();
     assert!(!alive(pid), "child gone after kill()");
     assert!(!s.is_child_alive());
+    // Twin of kill_releases_pty_master_fd_with_arc_retained: with the Arc
+    // still held, ptyd has dropped the session (stream closed, exit acked).
+    let owner = k2_core::terminal::ptyd::client::global().owner().unwrap();
+    match owner.request(k2_ptyd::proto::Request::List).unwrap() {
+        k2_ptyd::proto::Reply::Sessions { sessions } => {
+            assert!(sessions.iter().all(|x| x.pid != pid), "ptyd still holds the killed session: {sessions:?}")
+        }
+        other => panic!("{other:?}"),
+    }
     let t = Instant::now();
     s.kill();
     assert!(t.elapsed() < Duration::from_millis(50), "second kill is a no-op");
@@ -185,6 +194,51 @@ fn resize_reaches_the_child() {
     s.resize(100, 40);
     assert_eq!(wait_file(&out, Duration::from_secs(10)).trim(), "40 100");
     s.kill();
+}
+
+/// 0.46.2 has no adoption: a new daemon's first owner connection ends the
+/// sessions a previous daemon left in ptyd (today's restart semantics).
+#[test]
+fn first_owner_connection_ends_sessions_left_by_a_previous_daemon() {
+    let _g = setup();
+    use k2_ptyd::proto::{Reply, Request};
+    let home2 = PathBuf::from(format!("/tmp/k2pb2-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home2);
+    std::fs::create_dir_all(&home2).unwrap();
+    k2_ptyd::launch::spawn_detached(&ptyd_bin(), &home2, &[]).expect("launch ptyd for home2");
+    let paths = k2_ptyd::paths::Paths::from_home(&home2);
+    let mut old = k2_ptyd::client::Client::connect_owner(&paths, "previous-daemon", true).expect("old owner");
+    let pid = match old
+        .request(Request::Spawn {
+            sid: "left-behind".into(),
+            argv: vec!["/bin/sleep".into(), "60".into()],
+            env: vec![("PATH".into(), "/usr/bin:/bin".into())],
+            cwd: None,
+            cols: 80,
+            rows: 24,
+            ring_bytes: None,
+            meta: serde_json::Value::Null,
+        })
+        .unwrap()
+    {
+        Reply::Spawned { pid, .. } => pid,
+        other => panic!("{other:?}"),
+    };
+    drop(old); // the previous daemon exits; its agent keeps running in ptyd
+    assert!(alive(pid));
+    let fresh = k2_core::terminal::ptyd::client::Ptyd::for_home(&home2);
+    let owner = fresh.owner().expect("new daemon connects");
+    let t = Instant::now();
+    while alive(pid) {
+        assert!(t.elapsed() < Duration::from_secs(5), "leftover session not ended");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    match owner.request(Request::List).unwrap() {
+        Reply::Sessions { sessions } => assert!(sessions.is_empty(), "{sessions:?}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(owner.request(Request::Shutdown { end_sessions: true }).unwrap(), Reply::Ok);
+    let _ = std::fs::remove_dir_all(&home2);
 }
 
 #[test]

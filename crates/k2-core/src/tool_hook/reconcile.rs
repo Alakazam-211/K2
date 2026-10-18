@@ -10,7 +10,9 @@
 //! particular no Connect user by role (rev 147: App Space membership only
 //! from App grants; Connect owners/admins are never provisioned by role).
 //! An active `k2:connect:*` member with no enabled grant is deprovisioned,
-//! as a principal's is.
+//! as a principal's is. A Connect login linked to the owner is `k2:owner`:
+//! its `connect` grant is removed as an orphan and any `k2:connect` member
+//! it had is deprovisioned.
 
 use std::collections::{HashMap, HashSet};
 
@@ -137,8 +139,15 @@ pub fn build_desired(conn: &Connection, ctx: &HookCtx) -> Result<DesiredBuild, S
                 (!ctx.workspaces.contains_key(&g.subject_id)).then_some(Cause::WorkspaceRemoved)
             }
             // An unreadable Connect store is never "every login is gone".
-            "connect" => (!ctx.connect_unreadable && !ctx.connect.contains_key(&g.subject_id))
-                .then_some(Cause::ConnectUserDelete),
+            "connect" if ctx.connect_unreadable => None,
+            "connect" => match ctx.connect.get(&g.subject_id) {
+                None => Some(Cause::ConnectUserDelete),
+                // Linked to the owner since: it is `k2:owner` in chat now,
+                // so its own member goes (no merge in v1; history stays
+                // under the old member id).
+                Some(c) if c.owner_linked => Some(Cause::OwnerLinked),
+                Some(_) => None,
+            },
             _ => None,
         };
         if let Some(cause) = gone {

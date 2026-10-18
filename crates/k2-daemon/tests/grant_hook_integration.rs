@@ -913,6 +913,99 @@ async fn connect_pass_gate_queues_the_provision_then_lets_the_mint_through() {
     assert!(env.sew.member(&cext(&cara)).unwrap().deactivated);
 }
 
+// ── the owner's linked Connect login is k2:owner (Sew 2026-10-18) ────
+
+fn link_owner_to(login: &str) {
+    k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": [login] }))
+        .expect("link owner account");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owner_linked_connect_login_never_gets_its_own_member() {
+    let env = setup().await;
+    enable(&env);
+    drain(&env).await;
+    let z = connect_login("z3thon", Some("Rosson"), Some("Long"));
+    link_owner_to("z3thon");
+
+    // A connect grant for it is refused, by login or by id.
+    for subject in ["z3thon", z.as_str()] {
+        let e = skin::create_grant(&SkinGrantWrite {
+            subject_kind: "connect".into(),
+            subject_id: subject.into(),
+            kind: "chat".into(),
+            target_id: String::new(),
+            role: None,
+            scope: None,
+            created_by: Some("owner-token".into()),
+        })
+        .expect_err("owner-linked login is the owner in chat");
+        assert_eq!(e, hook::OWNER_CONNECT_IS_OWNER, "{subject}");
+    }
+    // The mint gate never writes a grant or a row for it either.
+    let e = hook::connect_chat_gate(&z, "z3thon").expect_err("owner-linked");
+    assert_eq!(e, hook::OWNER_CONNECT_IS_OWNER);
+    assert!(connect_grant(&z).is_none());
+
+    // A stray k2:connect member for it (e.g. from before the link) is
+    // deprovisioned by reconcile; k2:owner stays.
+    env.sew.seed(&cext(&z), MemberKind::Person, "z3thon-old", "Rosson Long", false);
+    worker::reconcile_once().await.unwrap();
+    drain(&env).await;
+    assert!(env.sew.member(&cext(&z)).unwrap().deactivated, "{}", env.sew.log());
+    let owner = env.sew.member("k2:owner").expect("owner member");
+    assert!(!owner.deactivated);
+    assert_eq!((owner.username.as_str(), owner.display_name.as_str()), ("z3thon", "Rosson Long"));
+    assert!(
+        rows().iter().all(|r| r.subject_key != cext(&z) || r.op == "deprovision"),
+        "never a provision for the owner-linked login: {:?}",
+        rows()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn moving_the_owner_link_swaps_which_login_is_a_member() {
+    let env = setup().await;
+    enable(&env);
+    drain(&env).await;
+    let a = connect_login("anna", None, None);
+    let b = connect_login("bert", None, None);
+    link_owner_to("anna");
+    // bert is a normal Connect user with a member.
+    chat("connect", "bert", None, "owner-token");
+    drain(&env).await;
+    assert!(!env.sew.member(&cext(&b)).expect("bert member").deactivated);
+    assert!(env.sew.member(&cext(&a)).is_none(), "anna is k2:owner");
+
+    // The link moves to bert: bert stops being a separate member (its
+    // grant is removed as an orphan, its member deprovisioned) ...
+    link_owner_to("bert");
+    worker::reconcile_once().await.unwrap();
+    drain(&env).await;
+    assert!(env.sew.member(&cext(&b)).unwrap().deactivated, "{}", env.sew.log());
+    assert!(connect_grant(&b).is_none(), "bert's connect grant is gone");
+    let dep = rows()
+        .into_iter()
+        .find(|r| r.subject_key == cext(&b) && r.op == "deprovision")
+        .expect("bert deprovision");
+    assert_eq!(dep.cause, "owner_linked");
+    // ... and the owner member is renamed to the newly linked login.
+    assert_eq!(env.sew.member("k2:owner").unwrap().username, "bert");
+
+    // anna is a normal Connect user now: provisioned on her first mint.
+    assert_eq!(
+        hook::connect_chat_gate(&a, "anna").unwrap(),
+        hook::ConnectChatGate::Pending
+    );
+    drain(&env).await;
+    assert_eq!(
+        hook::connect_chat_gate(&a, "anna").unwrap(),
+        hook::ConnectChatGate::Ready
+    );
+    let m = env.sew.member(&cext(&a)).expect("anna member");
+    assert_eq!((m.username.as_str(), m.deactivated), ("anna", false));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rate_limited_honors_retry_after_and_bad_token_keeps_rows_pending() {
     let env = setup().await;

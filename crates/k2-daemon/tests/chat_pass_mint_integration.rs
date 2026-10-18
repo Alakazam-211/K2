@@ -434,6 +434,51 @@ async fn owner_handoff_needs_a_person_and_redeems_once_for_k2_owner() {
     drop(env);
 }
 
+/// Sew 2026-10-18: the owner's linked Connect login IS the owner person,
+/// so its pass names `k2:owner` (one person, one member) with ITS `cu_`
+/// sid, minted at once: no `connect` grant, no `k2:connect` provision, no
+/// "retry shortly". An unlinked login on the same box still gets its own
+/// `k2:connect` member.
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_linked_connect_login_mints_k2_owner_with_its_cu_sid() {
+    let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (env, d) = boot().await;
+    k2_core::tool_hook::allow_target_off_linux_for_tests(true);
+    k2_core::tool_hook::set_target("chat", true, Some("/tmp/k2-mint-sew.sock"), Some("/tmp/k2-mint-sew.token"), "owner-token")
+        .expect("enable chat target");
+    let tok = login("z3thon", Role::Member);
+    let uuid = connect_users::user_uuid("z3thon").expect("uuid").expect("exists");
+    k2_core::app_settings::update(json!({ "ownerAccounts": ["z3thon"] })).expect("link owner account");
+
+    let r = pass(d.port, Some(&tok), "{}");
+    let c = verified(d.port, &r);
+    assert_eq!(c.sub, "k2:owner");
+    assert_eq!(c.sid, connect_users::session_sid(&tok), "the Connect session's own sid");
+    assert!(c.sid.starts_with("cu_"), "{}", c.sid);
+    assert_eq!(r.body["provenance"], "connect-login");
+    assert_eq!(r.body["sewRole"], "install-owner");
+    assert_eq!(c.caps, None, "a Connect pass's own ceiling (none today), not widened");
+    assert_eq!(c.app, None);
+    // Never a connect grant or a k2:connect row for it.
+    let ext = format!("k2:connect:{uuid}");
+    assert!(k2_core::tool_hook::log(50, Some(&ext)).expect("log").is_empty(), "no k2:connect rows");
+    assert!(
+        k2_core::skin::list_grants().expect("grants").iter().all(|g| g.subject_kind != "connect"),
+        "no connect grant"
+    );
+    // A second session of the same login gets its own cu_ sid.
+    let tok2 = connect_users::create_session("z3thon");
+    let c2 = verified(d.port, &pass(d.port, Some(&tok2), "{}"));
+    assert_eq!((c2.sub.as_str(), c2.sid.clone()), ("k2:owner", connect_users::session_sid(&tok2)));
+    assert_ne!(c2.sid, c.sid);
+
+    // Unlinked: its own member, queued first.
+    let other = login("mia", Role::Member);
+    let r = pass(d.port, Some(&other), "{}");
+    assert_eq!((r.status, err_code(&r).as_str()), (503, "chat_member_pending"), "{}", r.raw_body);
+    drop(env);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn revocations_reach_sew_as_ops() {
     let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());

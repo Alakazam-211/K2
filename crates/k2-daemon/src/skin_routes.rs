@@ -1626,7 +1626,10 @@ pub fn handle_front_door_post(body: &[u8], actor: &str, daemon_port: u16) -> Cli
                 d.mode
             );
             if apply {
-                match skin_door::apply(daemon_port) {
+                let applied = skin_door::apply(daemon_port);
+                // front443: Skin Direct's routes follow the Caddy just applied.
+                crate::front443::rebuild();
+                match applied {
                     Ok(st) => CliResponse::ok_json(
                         serde_json::to_string(&st).unwrap_or_else(|_| "{}".into()),
                     ),

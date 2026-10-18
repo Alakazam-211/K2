@@ -99,7 +99,7 @@ pub struct SkinFrontDoorStatus {
 }
 
 /// Inputs for the pure Caddyfile renderer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CaddyfileSpec {
     pub daemon_port: u16,
     pub loopback_port: u16,
@@ -113,6 +113,16 @@ pub struct CaddyfileSpec {
     pub mail_host: Option<String>,
     /// Also bind :80 on Host sites so Caddy HTTP-01 can work.
     pub bind_http80: bool,
+    /// front443 (0.46.1): the box's :443 is the daemon's SNI front, so the
+    /// Host sites serve HTTPS on `127.0.0.1:<port>` behind it
+    /// ([`crate::front443::CADDY_FRONT_PORT`]); TLS-ALPN-01 passes through
+    /// the front untouched. `None` = Caddy claims :443 itself (or not at all).
+    pub front_port: Option<u16>,
+    /// With `front_port`: read the front's PROXY v2 header (Caddy ≥ 2.7's
+    /// `proxy_protocol` listener wrapper, loopback only), so Caddy sees the
+    /// real client address. Ubuntu/Debian's Caddy 2.6.2 has no wrapper:
+    /// then the front sends none and Caddy sees 127.0.0.1.
+    pub proxy_protocol: bool,
 }
 
 struct LiveCaddy {
@@ -121,6 +131,17 @@ struct LiveCaddy {
     binary: PathBuf,
     listen: String,
     nested: NestedStatus,
+    /// front443: the Host names this Caddy serves behind the front, and
+    /// whether it reads the front's PROXY header.
+    front: Option<FrontCaddy>,
+}
+
+/// What the front routes to this Caddy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrontCaddy {
+    pub port: u16,
+    pub hosts: Vec<String>,
+    pub proxy_protocol: bool,
 }
 
 fn live() -> &'static Mutex<Option<LiveCaddy>> {
@@ -179,13 +200,35 @@ pub fn render_caddyfile(spec: &CaddyfileSpec) -> String {
         .as_deref()
         .and_then(host_from_front_door_url)
         .filter(|h| skin_host.as_ref() != Some(h));
-    let https_hosts = claiming_443 && (skin_host.is_some() || mail_host.is_some());
+    let behind_front = spec.front_port.filter(|_| !claiming_443);
+    let https_hosts = (claiming_443 || behind_front.is_some()) && (skin_host.is_some() || mail_host.is_some());
 
     let mut out = String::new();
     out.push_str("{\n");
     out.push_str("\tadmin off\n");
     if !https_hosts {
         out.push_str("\tauto_https off\n");
+    }
+    if let (Some(port), true) = (behind_front, https_hosts) {
+        // HTTPS (and TLS-ALPN-01 answers) on the loopback port the front
+        // splices to; no :80 redirect server unless :80 can be bound.
+        out.push_str(&format!("\thttps_port {port}\n"));
+        if !spec.bind_http80 {
+            out.push_str("\tauto_https disable_redirects\n");
+        }
+        if spec.proxy_protocol {
+            // Scoped to the front's server: the 38472 path filter (frpc,
+            // the daemon) never takes a PROXY header.
+            out.push_str(&format!("\tservers 127.0.0.1:{port} {{\n"));
+            out.push_str("\t\tlistener_wrappers {\n");
+            out.push_str("\t\t\tproxy_protocol {\n");
+            out.push_str("\t\t\t\ttimeout 5s\n");
+            out.push_str("\t\t\t\tallow 127.0.0.1/32 ::1/128\n");
+            out.push_str("\t\t\t}\n");
+            out.push_str("\t\t\ttls\n");
+            out.push_str("\t\t}\n");
+            out.push_str("\t}\n");
+        }
     }
     out.push_str("}\n\n");
 
@@ -208,27 +251,66 @@ pub fn render_caddyfile(spec: &CaddyfileSpec) -> String {
         if let Some(host) = mail_host.as_deref() {
             out.push('\n');
             out.push_str(&host_site_address(host, spec.bind_http80));
-            out.push_str(" {\n");
-            out.push_str("\treverse_proxy ");
-            out.push_str(MAIL_HTTPS_UPSTREAM);
-            out.push_str(" {\n");
-            out.push_str("\t\ttransport http {\n");
-            out.push_str("\t\t\ttls\n");
-            out.push_str("\t\t\ttls_insecure_skip_verify\n");
-            out.push_str("\t\t}\n");
-            out.push_str("\t}\n");
-            // Stalwart's web admin has no reason to be framed. After the
-            // reverse_proxy line: `caddyfile_has_mail_site` reads that one
-            // first. `?` keeps any header Stalwart sets itself.
-            push_frame_headers(&mut out, "\t", &FramePolicy::deny_all());
-            out.push_str("}\n");
+            push_mail_site(&mut out);
         }
         // Unknown Host on :443 → 403. Not `http://:443` skin allowlist.
         out.push_str("\n:443 {\n");
         push_unknown_host_handle(&mut out);
         out.push_str("}\n");
+    } else if let Some(port) = behind_front {
+        // Behind the front: the front only splices names it routes here,
+        // so there is no catch-all; every site binds loopback only.
+        if let Some(host) = skin_host.as_deref() {
+            out.push('\n');
+            out.push_str(&format!("https://{host}:{port}"));
+            let mut site = String::new();
+            push_path_filter_site(&mut site, &daemon, spec.ui_port);
+            push_bound_site(&mut out, &site);
+            push_http80_redirect(&mut out, host, spec.bind_http80);
+        }
+        if let Some(host) = mail_host.as_deref() {
+            out.push('\n');
+            out.push_str(&format!("https://{host}:{port}"));
+            let mut site = String::new();
+            push_mail_site(&mut site);
+            push_bound_site(&mut out, &site);
+            push_http80_redirect(&mut out, host, spec.bind_http80);
+        }
     }
     out
+}
+
+/// `site` starts with ` {\n`: insert `bind 127.0.0.1` as its first line.
+fn push_bound_site(out: &mut String, site: &str) {
+    out.push_str(" {\n\tbind 127.0.0.1\n");
+    out.push_str(site.strip_prefix(" {\n").unwrap_or(site));
+}
+
+/// HTTP-01 behind the front: a plain-HTTP site on :80 (Caddy answers ACME
+/// HTTP challenges there before any handler) that sends people to https.
+fn push_http80_redirect(out: &mut String, host: &str, bind_http80: bool) {
+    if !bind_http80 {
+        return;
+    }
+    out.push_str(&format!("\nhttp://{host}:80 {{\n\tredir https://{host}{{uri}} 308\n}}\n"));
+}
+
+/// The mail Host site body (` {` … `}`): every path to Stalwart's HTTPS.
+fn push_mail_site(out: &mut String) {
+    out.push_str(" {\n");
+    out.push_str("\treverse_proxy ");
+    out.push_str(MAIL_HTTPS_UPSTREAM);
+    out.push_str(" {\n");
+    out.push_str("\t\ttransport http {\n");
+    out.push_str("\t\t\ttls\n");
+    out.push_str("\t\t\ttls_insecure_skip_verify\n");
+    out.push_str("\t\t}\n");
+    out.push_str("\t}\n");
+    // Stalwart's web admin has no reason to be framed. After the
+    // reverse_proxy line: `caddyfile_has_mail_site` reads that one first.
+    // `?` keeps any header Stalwart sets itself.
+    push_frame_headers(out, "\t", &FramePolicy::deny_all());
+    out.push_str("}\n");
 }
 
 /// True when `caddyfile` (as [`render_caddyfile`] writes it) carries the
@@ -246,14 +328,15 @@ pub fn caddyfile_has_mail_site(caddyfile: &str, host: &str) -> bool {
         let Some(addrs) = line.strip_suffix('{') else {
             continue;
         };
+        let front = format!("https://{want}:{}", crate::front443::CADDY_FRONT_PORT);
         let names_host = addrs
             .split(',')
             .map(|a| a.trim().to_ascii_lowercase())
-            .any(|a| a == format!("{want}:443"));
+            .any(|a| a == format!("{want}:443") || a == front);
         if !names_host {
             continue;
         }
-        let next = lines[i + 1..].iter().find(|l| !l.is_empty());
+        let next = lines[i + 1..].iter().find(|l| !l.is_empty() && !l.starts_with("bind "));
         if next.is_some_and(|l| {
             l.starts_with("reverse_proxy ") && l.contains(MAIL_HTTPS_UPSTREAM)
         }) {
@@ -424,6 +507,15 @@ pub fn can_bind_80() -> bool {
 /// fails (HTTP-01 needs :80 — documented in the hint). Fallback is
 /// 0.0.0.0:38472 — mail never rides that bind.
 fn direct_listen_plan() -> (String, bool, Option<String>) {
+    if crate::front443::caddy_behind_front() {
+        // The daemon's front owns :443 (systemd socket) and splices the
+        // Skin Direct host here.
+        return (
+            format!("127.0.0.1:{}", crate::front443::CADDY_FRONT_PORT),
+            can_bind_80(),
+            None,
+        );
+    }
     if can_bind_443() {
         if can_bind_80() {
             (":443".to_string(), true, None)
@@ -505,6 +597,42 @@ fn is_executable(p: &Path) -> bool {
 #[cfg(not(unix))]
 fn is_executable(p: &Path) -> bool {
     p.is_file()
+}
+
+/// `caddy version` → `(major, minor, patch)`. Accepts `v2.7.6 h1:…`
+/// (upstream builds) and `2.6.2` (Debian/Ubuntu packaging).
+pub fn parse_caddy_version(out: &str) -> Option<(u32, u32, u32)> {
+    let tok = out.split_whitespace().next()?;
+    let tok = tok.strip_prefix('v').unwrap_or(tok);
+    let core = tok.split(['-', '+']).next()?;
+    let mut it = core.split('.');
+    let a = it.next()?.parse().ok()?;
+    let b = it.next()?.parse().ok()?;
+    let c = it.next().unwrap_or("0").parse().ok()?;
+    Some((a, b, c))
+}
+
+/// Caddy grew the `proxy_protocol` listener wrapper in 2.7.0.
+pub fn caddy_has_proxy_protocol(version: Option<(u32, u32, u32)>) -> bool {
+    version.is_some_and(|v| v >= (2, 7, 0))
+}
+
+/// The installed Caddy's version (`caddy version`), `None` when it won't say.
+pub fn caddy_version(bin: &Path) -> Option<(u32, u32, u32)> {
+    let out = Command::new(bin).arg("version").stdin(Stdio::null()).output().ok()?;
+    parse_caddy_version(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// front443: the Host names Caddy serves behind the front right now, its
+/// loopback port and whether it reads PROXY v2 (`None` when Caddy is not
+/// running behind the front).
+pub fn front_routes() -> Option<FrontCaddy> {
+    let g = live().lock();
+    let st = g.as_ref()?;
+    if !pid_alive(st.pid) {
+        return None;
+    }
+    st.front.clone()
 }
 
 /// PATH-only. Do not bundle Caddy; do not search brew prefixes off PATH.
@@ -645,6 +773,7 @@ fn restart_caddy(
     cfg: &Path,
     listen: String,
     nested: NestedStatus,
+    front: Option<FrontCaddy>,
 ) -> Result<(), String> {
     stop_caddy();
     let mut child = spawn_caddy(bin, cfg)?;
@@ -678,6 +807,7 @@ fn restart_caddy(
         binary: bin.to_path_buf(),
         listen,
         nested,
+        front,
     });
     Ok(())
 }
@@ -912,7 +1042,8 @@ pub fn apply(daemon_port: u16) -> Result<SkinFrontDoorStatus, String> {
         return Err("bind_failed: daemon port must not be the Caddy loopback (38472)".into());
     }
     let door = skin::effective_front_door()?;
-    if door.mode == "direct" && mail_tls_alpn_holds_443() {
+    let behind_front = crate::front443::caddy_behind_front();
+    if door.mode == "direct" && !behind_front && mail_tls_alpn_holds_443() {
         return Err(MAIL_TLS_ALPN_BLOCKS_DIRECT.to_string());
     }
     let bin = resolve_caddy()?;
@@ -928,11 +1059,20 @@ pub fn apply(daemon_port: u16) -> Result<SkinFrontDoorStatus, String> {
         (None, false, None)
     };
     let claiming_443 = extra_is_443(extra.as_deref());
-    let mail_host = if claiming_443 {
+    let front_port = (door.mode == "direct" && behind_front).then_some(crate::front443::CADDY_FRONT_PORT);
+    // Stalwart behind the front gets the mail name straight from the front
+    // (pass-through): Caddy then carries no mail site.
+    let mail_host = if (claiming_443 || front_port.is_some()) && !crate::front443::mail_behind_front() {
         mail_hostname_if_enabled()
     } else {
         None
     };
+    let proxy_protocol = front_port.is_some() && caddy_has_proxy_protocol(caddy_version(&bin));
+    let front = front_port.map(|port| FrontCaddy {
+        port,
+        hosts: [skin_host.clone(), mail_host.clone()].into_iter().flatten().collect(),
+        proxy_protocol,
+    });
     let spec = CaddyfileSpec {
         daemon_port,
         loopback_port: LOOPBACK_PORT,
@@ -941,6 +1081,8 @@ pub fn apply(daemon_port: u16) -> Result<SkinFrontDoorStatus, String> {
         skin_host,
         mail_host,
         bind_http80,
+        front_port,
+        proxy_protocol,
     };
     let rendered = render_caddyfile(&spec);
     let cfg_path = write_caddyfile(&rendered)?;
@@ -961,7 +1103,7 @@ pub fn apply(daemon_port: u16) -> Result<SkinFrontDoorStatus, String> {
     } else {
         empty_nested()
     };
-    restart_caddy(&bin, &cfg_path, listen.clone(), nested_placeholder.clone())?;
+    restart_caddy(&bin, &cfg_path, listen.clone(), nested_placeholder.clone(), front)?;
     let nested = if door.mode == "connect" {
         match register_nested(LOOPBACK_PORT) {
             Ok(n) => {
@@ -1029,6 +1171,7 @@ mod tests {
             skin_host: None,
             mail_host: None,
             bind_http80: extra == Some(":443"),
+            ..Default::default()
         }
     }
 
@@ -1046,7 +1189,81 @@ mod tests {
             skin_host: skin.map(|s| s.to_string()),
             mail_host: mail.map(|s| s.to_string()),
             bind_http80: bind80,
+            ..Default::default()
         }
+    }
+
+    fn spec_front(skin: Option<&str>, mail: Option<&str>, bind80: bool, proxy: bool) -> CaddyfileSpec {
+        CaddyfileSpec {
+            front_port: Some(crate::front443::CADDY_FRONT_PORT),
+            proxy_protocol: proxy,
+            ..spec_hosts(skin, mail, "127.0.0.1:38473", bind80)
+        }
+    }
+
+    /// front443 S4: behind the daemon's :443 front, Skin Direct's Host
+    /// sites serve HTTPS on loopback 38473 only — never :443, never a
+    /// catch-all — and read PROXY v2 only on Caddy >= 2.7, scoped to that
+    /// one server (the 38472 path filter never parses a PROXY header).
+    #[test]
+    fn behind_the_front_host_sites_are_loopback_and_proxy_is_scoped() {
+        let f = render_caddyfile(&spec_front(Some("https://skin.acme.dev"), None, false, true));
+        assert!(f.contains("\thttps_port 38473\n"), "{f}");
+        assert!(f.contains("\tauto_https disable_redirects\n"), "no :80 → no redirect server: {f}");
+        assert!(f.contains("https://skin.acme.dev:38473 {\n\tbind 127.0.0.1\n"), "{f}");
+        assert!(!f.contains(":443"), "the front owns :443: {f}");
+        assert!(f.contains("\tservers 127.0.0.1:38473 {\n\t\tlistener_wrappers {\n\t\t\tproxy_protocol {\n"), "{f}");
+        assert!(f.contains("\t\t\t\tallow 127.0.0.1/32 ::1/128\n"), "{f}");
+        assert!(f.contains("\t\t\ttls\n\t\t}\n"), "tls after proxy_protocol: {f}");
+        // The skin site is still the path filter (403 catch-all inside).
+        assert!(f.contains(PATH_FILTER_ERROR), "{f}");
+        assert!(f.contains("http://127.0.0.1:38472 {"), "the loopback door is untouched: {f}");
+        assert_eq!(f.matches("proxy_protocol").count(), 1);
+        assert_no_daemon_loop_via_38472(&f);
+
+        // Caddy 2.6 (distro): no wrapper at all; :80 bindable → HTTP-01 site.
+        let f = render_caddyfile(&spec_front(Some("skin.acme.dev"), Some("mail.acme.dev"), true, false));
+        assert!(!f.contains("proxy_protocol") && !f.contains("servers "), "{f}");
+        assert!(!f.contains("disable_redirects"), "{f}");
+        assert!(f.contains("\nhttp://skin.acme.dev:80 {\n\tredir https://skin.acme.dev{uri} 308\n}\n"), "{f}");
+        assert!(f.contains("https://mail.acme.dev:38473 {\n\tbind 127.0.0.1\n\treverse_proxy 127.0.0.1:8443 {"), "{f}");
+        assert!(caddyfile_has_mail_site(&f, "mail.acme.dev"), "{f}");
+        assert!(!f.contains(":443"), "{f}");
+
+        // Acceptance tooling: `K2_FRONT443_CADDYFILE_DIR=<dir>` writes the
+        // two rendered files for `caddy adapt` / `caddy run` on a Linux box
+        // (tests/linux/front443_caddy.sh).
+        if let Some(dir) = std::env::var_os("K2_FRONT443_CADDYFILE_DIR") {
+            let dir = std::path::PathBuf::from(dir);
+            std::fs::write(
+                dir.join("front-proxy.Caddyfile"),
+                render_caddyfile(&spec_front(Some("skin.acme.dev"), None, false, true)),
+            )
+            .unwrap();
+            std::fs::write(
+                dir.join("front-noproxy.Caddyfile"),
+                render_caddyfile(&spec_front(Some("skin.acme.dev"), Some("mail.acme.dev"), false, false)),
+            )
+            .unwrap();
+        }
+
+        // Not behind the front: byte-identical to before (front_port unset).
+        let before = render_caddyfile(&spec_hosts(Some("skin.acme.dev"), None, ":443", true));
+        assert!(before.contains("skin.acme.dev:443, http://skin.acme.dev:80 {"), "{before}");
+        assert!(!before.contains("https_port") && !before.contains("bind 127.0.0.1"), "{before}");
+    }
+
+    #[test]
+    fn caddy_versions_parse_and_gate_proxy_protocol() {
+        assert_eq!(parse_caddy_version("v2.7.6 h1:w0NymbG2m9PcvKWsrXO6EEkY9Ru4FJK8uQbYcev1p3A="), Some((2, 7, 6)));
+        assert_eq!(parse_caddy_version("2.6.2\n"), Some((2, 6, 2)));
+        assert_eq!(parse_caddy_version("v2.10.0-beta.3 h1:x"), Some((2, 10, 0)));
+        assert_eq!(parse_caddy_version(""), None);
+        assert_eq!(parse_caddy_version("caddy: command not found"), None);
+        assert!(!caddy_has_proxy_protocol(Some((2, 6, 2))), "Ubuntu 24.04 / Debian 12");
+        assert!(caddy_has_proxy_protocol(Some((2, 7, 0))));
+        assert!(caddy_has_proxy_protocol(Some((2, 10, 0))));
+        assert!(!caddy_has_proxy_protocol(None), "unknown version: never send PROXY");
     }
 
     fn assert_no_daemon_loop_via_38472(file: &str) {

@@ -168,6 +168,20 @@ impl SqliteStore {
         }
     }
 
+    /// Writes to `space` since `since` (seconds) from its change log, kept
+    /// [`CHANGE_LOG_KEEP_SECS`] (7 days): `(by, all)`, where `by` counts the
+    /// ops stored by `by` (an [`Actor::stored`] string) and `all` every op
+    /// from anyone (room-scope R16, `widget.self`).
+    pub fn writes_since(&self, space: &Space, by: &str, since: i64) -> Result<(i64, i64), DataError> {
+        self.with(|conn| {
+            Ok(conn.query_row(
+                "SELECT COALESCE(SUM(by = ?2), 0), COUNT(*) FROM changes WHERE space = ?1 AND at >= ?3",
+                params![space.as_str(), by, since],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+    }
+
     /// True while a connection is open (tests of idle close).
     pub fn is_open(&self) -> bool {
         self.open.lock().unwrap_or_else(|e| e.into_inner()).is_some()

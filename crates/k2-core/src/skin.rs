@@ -74,6 +74,9 @@ pub const SKIN_SCHEMA_VERSION: i64 = 4;
 #[path = "skin_link.rs"]
 pub mod link;
 
+#[path = "skin_members.rs"]
+pub mod members;
+
 /// `grants.created_by` on rows the 0.45.5 upgrade wrote (S24-10 backfill).
 pub const UPGRADE_CREATED_BY: &str = "upgrade:0.45.5";
 
@@ -127,6 +130,12 @@ pub const CAP_AGENT_HANDLE: &str = "agent:handle";
 /// unaffected. Owner tooling only: an agent with "manage Apps" can never
 /// add it (`skin_routes` refuses with 403 `owner_only`).
 pub const CAP_FILES_AGENT_CONFIG: &str = "files:agentconfig";
+/// The room access list (room-scope R9, 0.46.1): `GET /cli/skin/members`
+/// (`room.members`), the guests and agent logins that hold a grant on the
+/// room, and `room_members_changed` frames on `WS /cli/activity/events`.
+/// Never in the defaults; meant for staff roles. Names can be hidden from
+/// guests per room by the owner.
+pub const CAP_ROOM_MEMBERS: &str = "room:members";
 
 const KEY_BODY_LEN: usize = 43;
 const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -1933,6 +1942,7 @@ pub fn add_principal_with_email(
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    members::changed(None);
     Ok(r)
 }
 
@@ -2074,6 +2084,7 @@ pub fn remove_principal(username: &str) -> Result<bool, String> {
     if r {
         crate::workspace::context_layers::refresh_skin_roster_after_people_change();
     }
+    members::changed(None);
     Ok(r)
 }
 
@@ -2461,7 +2472,7 @@ pub fn set_principal_full_name(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    with_conn(|conn| {
+    members::notify_ok(with_conn(|conn| {
         let Some(p) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
@@ -2484,7 +2495,7 @@ pub fn set_principal_full_name(
             agent_workspace: p.agent_workspace,
             agent_handle: None,
         })
-    })
+    }))
     .map(attach_principal_handles)
 }
 
@@ -2508,7 +2519,7 @@ pub fn set_principal_agent(
             }
         }
     };
-    with_conn(|conn| {
+    members::notify_ok(with_conn(|conn| {
         let Some(p) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
@@ -2522,7 +2533,7 @@ pub fn set_principal_agent(
             agent_handle: None,
             ..p
         })
-    })
+    }))
     .map(attach_principal_handles)
 }
 
@@ -3154,7 +3165,7 @@ pub fn set_principal_default_rooms(
     let username = normalize_username(username)?;
     let rooms = normalize_room_ids(rooms);
     let stored = rooms_json(&rooms);
-    with_conn(|conn| {
+    members::notify_ok(with_conn(|conn| {
         let Some(p) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
@@ -3198,7 +3209,7 @@ pub fn set_principal_default_rooms(
             agent_workspace: p.agent_workspace,
             agent_handle: None,
         })
-    })
+    }))
     .map(attach_principal_handles)
 }
 
@@ -3256,6 +3267,7 @@ fn persist_role_policy(
         ],
     )
     .map_err(|e| format!("skin role update: {e}"))?;
+    members::changed(None);
     Ok(())
 }
 
@@ -3636,6 +3648,7 @@ pub fn remove_role(id_or_name: &str) -> Result<bool, String> {
     if r {
         crate::workspace::context_layers::refresh_skin_roster_after_people_change();
     }
+    members::changed(None);
     Ok(r)
 }
 
@@ -3683,6 +3696,7 @@ pub fn assign_role(username: &str, role: &str) -> Result<SkinPrincipal, String> 
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    members::changed(None);
     Ok(attach_principal_handles(p))
 }
 
@@ -3726,6 +3740,7 @@ pub fn unassign_role(username: &str) -> Result<SkinPrincipal, String> {
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    members::changed(None);
     Ok(attach_principal_handles(p))
 }
 
@@ -3896,7 +3911,7 @@ pub fn create_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    with_conn(|conn| {
+    members::notify_ok(with_conn(|conn| {
         if subject_kind == "principal" && !principal_id_exists(conn, &subject_id)? {
             return Err(format!("unknown principal id '{subject_id}'"));
         }
@@ -3981,7 +3996,7 @@ pub fn create_grant(write: &SkinGrantWrite) -> Result<SkinGrant, String> {
             enabled: true,
             created_by,
         })
-    })
+    }))
 }
 
 pub fn list_grants() -> Result<Vec<SkinGrant>, String> {
@@ -4033,7 +4048,7 @@ pub fn delete_grant_by_id(id: &str) -> Result<bool, String> {
     if id.is_empty() {
         return Err("missing grant id".to_string());
     }
-    with_conn(|conn| {
+    members::notify_ok(with_conn(|conn| {
         let Some(grant) = grant_by_id(conn, id)? else {
             return Ok(false);
         };
@@ -4050,7 +4065,7 @@ pub fn delete_grant_by_id(id: &str) -> Result<bool, String> {
             )?;
         }
         Ok(n > 0)
-    })
+    }))
 }
 
 /// Delete by the unique (subject, kind, target) key. The role stays.
@@ -4071,7 +4086,7 @@ pub fn delete_grant_by_key(
     if target_id.is_empty() {
         return Err("missing target id".to_string());
     }
-    with_conn(|conn| {
+    members::notify_ok(with_conn(|conn| {
         let n = conn
             .execute(
                 "DELETE FROM grants
@@ -4083,7 +4098,7 @@ pub fn delete_grant_by_key(
             revoke_sessions_for_grant(conn, &subject_kind, subject_id, &kind, target_id)?;
         }
         Ok(n > 0)
-    })
+    }))
 }
 
 fn grant_by_id(conn: &Connection, id: &str) -> Result<Option<SkinGrant>, String> {
@@ -4105,7 +4120,7 @@ pub fn set_grant_enabled(id: &str, enabled: bool) -> Result<SkinGrant, String> {
         return Err("missing grant id".to_string());
     }
     let flag: i64 = if enabled { 1 } else { 0 };
-    with_conn(|conn| {
+    members::notify_ok(with_conn(|conn| {
         let n = conn
             .execute(
                 "UPDATE grants SET enabled = ?1 WHERE id = ?2",
@@ -4126,7 +4141,7 @@ pub fn set_grant_enabled(id: &str, enabled: bool) -> Result<SkinGrant, String> {
             )?;
         }
         Ok(grant)
-    })
+    }))
 }
 
 /// Present inserts one host grant (`enabled` 1) carrying the guest's current
@@ -4137,7 +4152,7 @@ pub fn set_grant_enabled(id: &str, enabled: bool) -> Result<SkinGrant, String> {
 /// host ones. An existing row is left as the owner wrote it.
 pub fn set_host_login(username: &str, present: bool) -> Result<bool, String> {
     let username = normalize_username(username)?;
-    with_conn(|conn| {
+    members::notify_ok(with_conn(|conn| {
         let Some(p) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
@@ -4163,7 +4178,7 @@ pub fn set_host_login(username: &str, present: bool) -> Result<bool, String> {
             }
             Ok(n > 0)
         }
-    })
+    }))
 }
 
 // ── Per-App logins (S24) ─────────────────────────────────────────────
@@ -4331,6 +4346,7 @@ pub fn copy_host_grants_to_app(
         Ok(report)
     })?;
     audit_copy_host_report("app_grant_copy_host", created_by, &report);
+    members::changed(None);
     Ok(report)
 }
 
@@ -4494,6 +4510,7 @@ pub fn add_principal_for_app(
         })
     })?;
     crate::workspace::context_layers::refresh_skin_roster_after_people_change();
+    members::changed(None);
     Ok(r)
 }
 
@@ -4521,7 +4538,7 @@ pub fn set_app_grant_rooms(
     }
     let rooms = normalize_room_ids(rooms);
     let stored = rooms_json(&rooms);
-    with_conn(|conn| {
+    members::notify_ok(with_conn(|conn| {
         let Some(p) = principal_by_username(conn, &username)? else {
             return Err(format!("unknown skin user '{username}'"));
         };
@@ -4561,7 +4578,7 @@ pub fn set_app_grant_rooms(
             narrow_live_sessions(conn, &p.id, &app, &rooms)?;
         }
         app_grant(conn, &p.id, &app)?.ok_or_else(|| "app grant vanished".to_string())
-    })
+    }))
 }
 
 // S24-19 (agent hire S5, 0.45.6): an App login a hire makes calls

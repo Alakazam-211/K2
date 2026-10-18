@@ -279,6 +279,28 @@ pub fn totals(conn: &Connection, app_id: &str, since_ms: i64) -> rusqlite::Resul
     )
 }
 
+/// One verb's calls since a time (room-scope R16, `app.usage`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerbCount {
+    /// `METHOD /path`, as the gateway recorded it.
+    pub verb: String,
+    pub calls: i64,
+    /// Refused (status 400 or more).
+    pub denied: i64,
+}
+
+/// Per-verb call counts for an App since a time, most-called first (ties
+/// by verb). Only this App's rows.
+pub fn verb_counts(conn: &Connection, app_id: &str, since_ms: i64) -> rusqlite::Result<Vec<VerbCount>> {
+    let mut st = conn.prepare(
+        "SELECT verb, COUNT(*), COALESCE(SUM(result >= 400), 0) FROM calls WHERE app_id = ?1 AND at_ms >= ?2 \
+         GROUP BY verb ORDER BY COUNT(*) DESC, verb",
+    )?;
+    let rows = st.query_map(params![app_id, since_ms], |r| Ok(VerbCount { verb: r.get(0)?, calls: r.get(1)?, denied: r.get(2)? }))?;
+    rows.collect()
+}
+
 /// Daily summaries for an App, newest first.
 pub fn summaries(conn: &Connection, app_id: &str, limit: i64) -> rusqlite::Result<Vec<serde_json::Value>> {
     let mut st = conn.prepare(
@@ -455,5 +477,32 @@ mod tests {
         let c = open(&p).unwrap();
         assert_eq!(list(&c, &Query { app_id: "jobs", limit: 5, ..Default::default() }).unwrap().len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn verb_counts_are_per_app_since_a_time() {
+        let c = mem();
+        append(
+            &c,
+            &[
+                call(DAY1, "jobs", "GET /cli/thread", 200),
+                call(DAY1 + 1, "jobs", "GET /cli/thread", 403),
+                call(DAY1 + 2, "jobs", "POST /cli/thread/post", 200),
+                call(DAY1 + 3, "other", "GET /cli/thread", 200),
+                call(DAY1 - DAY, "jobs", "GET /cli/skin/me", 200),
+            ],
+        )
+        .unwrap();
+        let got = verb_counts(&c, "jobs", DAY1).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                VerbCount { verb: "GET /cli/thread".into(), calls: 2, denied: 1 },
+                VerbCount { verb: "POST /cli/thread/post".into(), calls: 1, denied: 0 },
+            ],
+            "only this App's rows, only since the time, most-called first"
+        );
+        assert_eq!(verb_counts(&c, "jobs", 0).unwrap().len(), 3);
+        assert!(verb_counts(&c, "nobody", 0).unwrap().is_empty());
     }
 }

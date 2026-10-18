@@ -334,3 +334,20 @@ fn drop_move_and_orphans() {
     let s = f.store.spaces().unwrap();
     assert_eq!(s.iter().map(|i| i.widget.as_str()).collect::<Vec<_>>(), vec!["board"]);
 }
+
+#[test]
+fn writes_since_counts_one_actor_and_everyone_from_the_change_log() {
+    let f = fixture();
+    let s = board();
+    let w = Actor::Widget { widget: "board".into() };
+    f.store.put(&s, "obj/1", &json!(1), None, &w).unwrap();
+    f.store.put(&s, "obj/2", &json!(2), None, &w).unwrap();
+    f.store.put(&s, "obj/3", &json!(3), None, &Actor::Agent { project_id: "w-1".into() }).unwrap();
+    f.store.put(&Space::data("other").unwrap(), "obj/1", &json!(1), None, &w).unwrap();
+    let start = f.store.now();
+    assert_eq!(f.store.writes_since(&s, &w.stored(), start - 10).unwrap(), (2, 3), "this space only");
+    f.clock.store(start + 100, Ordering::SeqCst);
+    f.store.delete(&s, "obj/1", None, &w).unwrap();
+    assert_eq!(f.store.writes_since(&s, &w.stored(), start + 50).unwrap(), (1, 1), "only since the time");
+    assert_eq!(f.store.writes_since(&board(), "widget:nobody", 0).unwrap(), (0, 4));
+}

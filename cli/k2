@@ -29162,7 +29162,8 @@ SEND GOVERNANCE (human's choice)
   `submitted` means accepted-for-delivery — never claim delivered.
 
 AGENT SURFACE
-  k2 mail create / addresses / domains / messages / read / attachments
+  k2 hostmail create (mint) · k2 mail addresses / domains / messages /
+  read / attachments
   k2 mail wait     block for a match (verification codes). Loop on
                    exit 2; do not fan out parallel waits (max 900s).
   k2 mail send / reply / outbox
@@ -39567,7 +39568,7 @@ def _level_word(lvl):
 
 def print_inboxes(rows, agent_view):
     if not rows:
-        print("No inboxes you can access — mint a hosted address (k2 mail create) "
+        print("No inboxes you can access — mint a hosted address (k2 hostmail create) "
               "or ask your human to link/grant one." if agent_view
               else "No inboxes yet — mint one (k2 hostmail create) or link one (k2 mail link add).")
         return
@@ -39674,7 +39675,7 @@ elif verb == "addresses":
     if as_json:
         print(dumps(d))
     elif not rows:
-        print("No addresses yet — mint one: k2 mail create <localpart>   (%s)"
+        print("No addresses yet — mint one: k2 hostmail create <localpart>   (%s)"
               % cap_str(d.get("cap")))
     else:
         w = max(max(len(r.get("address", "")) for r in rows), len("ADDRESS")) + 2
@@ -39703,7 +39704,7 @@ elif verb == "domains":
         for r in rows:
             print("%s%s" % (r.get("domain", "?"), "   (default)" if r.get("isDefault") else ""))
         print()
-        print("mint here: k2 mail create <localpart>[@<domain>]")
+        print("mint here: k2 hostmail create <localpart>[@<domain>]")
         if pending:
             print("pending (not mintable): k2 hostmail domain list")
 
@@ -41882,7 +41883,7 @@ cmd_mail_create() {
             --person) person=true; shift ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail create <localpart>[@<domain>] [--domain <d>] [--id <client-id>] [--person] [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail create <localpart>[@<domain>] [--domain <d>] [--id <client-id>] [--person] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$local_part" ]; then local_part="$1"; else
@@ -46615,7 +46616,6 @@ an IT agent (a workspace allowed to manage hosted mail) sees the password
 once, to hand to that person; agents without mail-manage can't use it.
 
 USAGE
-  k2 mail create <localpart>[@<domain>] [flags]
   k2 hostmail create <localpart>[@<domain>] [flags]
 
 ARGUMENTS
@@ -46643,8 +46643,8 @@ TIP — plus addressing
   signups.
 
 EXAMPLES
-  k2 mail create research-bot
-  k2 mail create research-bot@acme.dev --id signup-saasco
+  k2 hostmail create research-bot
+  k2 hostmail create research-bot@acme.dev --id signup-saasco
 EOF
 }
 

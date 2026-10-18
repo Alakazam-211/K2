@@ -1286,7 +1286,7 @@ pub fn resolve_default_domain(configured: &str, verified: &[String]) -> Option<S
 }
 
 /// Agent `domains` view (comprehension-gate §11.1.2): ONLY Verified
-/// domains (what `k2 mail create` can mint on) + the workspace default
+/// domains (what `k2 hostmail create` can mint on) + the workspace default
 /// — resolved from the GLOBAL `mail_default_domain` setting, empty =
 /// first-verified.
 pub fn list_agent_json() -> serde_json::Value {

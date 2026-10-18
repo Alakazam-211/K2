@@ -329,7 +329,7 @@ pub fn resolve_inbox(
                         "404 Not Found",
                         "not_found",
                         "no hosted inbox in this workspace — name one you have access to \
-                         ('k2 mail inboxes'), or mint one with 'k2 mail create'",
+                         ('k2 mail inboxes'), or mint one with 'k2 hostmail create'",
                     ))
                 }
                 1 => owned.into_iter().next().unwrap_or_default(),

@@ -1284,7 +1284,7 @@ function AddressesPanel({
         <h2 className="text-base font-medium text-[var(--color-text-primary)]">Addresses</h2>
         <p className="text-[11px] text-[var(--color-text-muted)] mt-1">
           Agent mailboxes across every domain. Agents mint their own with{' '}
-          <span className="font-mono">k2 mail create</span> (default cap: 5 active addresses per
+          <span className="font-mono">k2 hostmail create</span> (default cap: 5 active addresses per
           agent, 0 = unlimited); plus-addressing gives unlimited tags without new addresses.
         </p>
         {capNote && <p className="text-[10px] text-[var(--color-text-muted)] italic mt-1">{capNote}</p>}
@@ -1297,7 +1297,7 @@ function AddressesPanel({
       ) : groups.length === 0 ? (
         <p className="text-[11px] text-[var(--color-text-muted)] italic">
           No addresses yet — agents mint them on verified domains with{' '}
-          <span className="font-mono">k2 mail create &lt;name&gt;@&lt;domain&gt;</span>, or add a
+          <span className="font-mono">k2 hostmail create &lt;name&gt;@&lt;domain&gt;</span>, or add a
           domain first.
         </p>
       ) : (

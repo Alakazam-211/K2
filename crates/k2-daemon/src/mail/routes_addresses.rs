@@ -85,7 +85,7 @@ fn resolve_caller(project: &str) -> Result<(String, String), CliResponse> {
 
 // ── POST handlers ───────────────────────────────────────────────────────
 
-/// `POST /cli/mail/address/create` body (`k2 mail create
+/// `POST /cli/mail/address/create` body (`k2 hostmail create
 /// <localpart>[@<domain>] [--id <client-id>]`). `localPart` may carry
 /// the `name@domain` spelling; `domain` is the explicit `--domain`
 /// form; neither = the workspace default domain (S2's resolution).

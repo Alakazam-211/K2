@@ -419,7 +419,7 @@ k2so project msg [<name>] "..."   # post to it
 ### Email (k2 mail)
 Your server can host real email (Linux daemons; your human enables it in Settings → Email). You mint addresses on verified domains, read what arrives, block on `wait` for verification codes, and send/reply under your human's governance.
 ```
-k2 mail create <local>[@<domain>] [--id <key>]  # mint an address (--id = idempotency key: retrying the same --id returns the existing address)
+k2 hostmail create <local>[@<domain>] [--id <key>]  # mint an address (--id = idempotency key: retrying the same --id returns the existing address)
 k2 mail addresses                               # your ACTIVE addresses + cap usage (incoming mail is `messages`)
 k2 mail domains                                 # verified domains you can mint on (workspace default marked)
 k2 mail messages [<address>] [--unread]         # newest-first summaries
@@ -579,7 +579,7 @@ k2so project msg [<name>] "..."   # post to it
 Your server can host real email (Linux daemons; your human enables it in Settings → Email). You mint addresses on verified domains, read what arrives, block on `wait` for verification codes, and send/reply under your human's governance.
 
 ```
-k2 mail create <local>[@<domain>] [--id <key>]  # mint an address (--id = idempotency key: retrying the same --id returns the existing address)
+k2 hostmail create <local>[@<domain>] [--id <key>]  # mint an address (--id = idempotency key: retrying the same --id returns the existing address)
 k2 mail addresses                               # your ACTIVE addresses + cap usage (incoming mail is `messages`)
 k2 mail domains                                 # verified domains you can mint on (workspace default marked)
 k2 mail messages [<address>] [--unread]         # newest-first summaries
@@ -795,7 +795,7 @@ k2so project msg [<name>] "..."   # post to it
 Your server can host real email (Linux daemons; your human enables it in Settings → Email). You mint addresses on verified domains, read what arrives, block on `wait` for verification codes, and send/reply under your human's governance.
 
 ```
-k2 mail create <local>[@<domain>] [--id <key>]  # mint an address (--id = idempotency key: retrying the same --id returns the existing address)
+k2 hostmail create <local>[@<domain>] [--id <key>]  # mint an address (--id = idempotency key: retrying the same --id returns the existing address)
 k2 mail addresses                               # your ACTIVE addresses + cap usage (incoming mail is `messages`)
 k2 mail domains                                 # verified domains you can mint on (workspace default marked)
 k2 mail messages [<address>] [--unread]         # newest-first summaries
@@ -1824,8 +1824,8 @@ mod tests {
         ];
         for (generator, body) in &cases {
             assert!(
-                body.contains("k2 mail create"),
-                "{generator} must teach `k2 mail create`"
+                body.contains("k2 hostmail create"),
+                "{generator} must teach `k2 hostmail create`"
             );
             assert!(
                 body.contains("--id = idempotency key"),

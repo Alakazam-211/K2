@@ -169,7 +169,7 @@ fn resolve_from_inbox(
         0 => Err(error_response(
             "404 Not Found",
             "not_found",
-            "this workspace has no address it can send FROM — mint one with 'k2 mail create', \
+            "this workspace has no address it can send FROM — mint one with 'k2 hostmail create', \
              ask the primary for 'send' access (k2 mail inboxes shows yourLevel), or pass \
              'from' with a linked address you can send from",
         )),
@@ -2230,7 +2230,7 @@ mod tests {
         assert!(body_json(&resp)["error"]["hint"]
             .as_str()
             .unwrap()
-            .contains("k2 mail create"));
+            .contains("k2 hostmail create"));
 
         // A FOREIGN from → masked.
         let (name2, path2) = unique("from-f");

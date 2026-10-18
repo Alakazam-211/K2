@@ -33,6 +33,7 @@ import {
   ThreadZenStyles,
   zenEmptyThreadText,
 } from '@/components/Thread/ThreadZenKit'
+import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { handoffApi, type HandoffDecideBody, type HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
 
@@ -295,7 +296,8 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         )}
         <ThreadFileActionsProvider value={fileActions}>
         <FileLinkProvider workspace={addr} transport={fileLinkTransport} open={openFileLink}>
-          <div ref={contentRef} className="flex flex-col" style={{ gap: THREAD_LIST_GAP }}>
+          {/* Narrow (< 480px): bubbles use the column (ThreadColumn). */}
+          <ThreadMessageColumn ref={contentRef} gap={THREAD_LIST_GAP} testId="thread-overlay-column">
             {hasMore && (
               <ThreadLoadOlder loading={loadingOlder} onClick={() => requestOlder()} testId="overlay-load-older" />
             )}
@@ -316,7 +318,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
                 onHandoffDecide={(body) => handoffApi.decide(body, roomScope)}
               />
             ))}
-          </div>
+          </ThreadMessageColumn>
         </FileLinkProvider>
         </ThreadFileActionsProvider>
       </div>

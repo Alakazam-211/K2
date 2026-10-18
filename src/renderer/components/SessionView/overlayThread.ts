@@ -185,6 +185,30 @@ export interface OverlayDoc {
   /** Chatter only: the `m_…` id of this live message's `msg_deliveries`
    *  receipt (`k2 msg who <id>`). Absent on unrecorded sends and older docs. */
   deliveryId?: string | null
+  /** File objects riding the message (0.46.1, daemon feature
+   *  `thread-attachments-v1`): pointers to files in the Thread's workspace,
+   *  set only by the daemon. Absent on older docs and servers. */
+  attachments?: ThreadFileObject[] | null
+}
+
+/** Live state of a Thread file object, computed by the daemon on each read
+ *  (`ok` on a frame sent at post time). `hidden`: an App guest whose own
+ *  file rights don't cover the path; it carries no name or path. */
+export type ThreadFileState = 'ok' | 'changed' | 'gone' | 'hidden'
+
+/** One file object on a Thread message (`k2_core::overlay::attachments`). */
+export interface ThreadFileObject {
+  kind: 'file' | string
+  state?: ThreadFileState
+  /** Workspace-relative, `/` separators. Absent when `hidden`. */
+  path?: string
+  name?: string
+  size?: number
+  mime?: string
+  modifiedAt?: number
+  sha256?: string | null
+  line?: number
+  lineEnd?: number
 }
 
 export interface OverlayThreadItem {

@@ -157,15 +157,33 @@ export function SecretsBlock({ pull }: { pull: boolean }): React.JSX.Element | n
 export function EnvFilesBlock({ pull }: { pull: boolean }): React.JSX.Element {
   const carrySecrets = useCloneToDialogStore((s) => s.carrySecrets)
   const setCarrySecrets = useCloneToDialogStore((s) => s.setCarrySecrets)
-  const envFiles = useCloneToDialogStore((s) => s.preview?.envFiles) ?? NO_ENV_FILES
+  // Every file the shared secret list holds back (an older daemon only
+  // names its .env files).
+  const files = useCloneToDialogStore((s) => s.preview?.secretFiles ?? s.preview?.envFiles) ?? NO_ENV_FILES
+  const n = files.length
   return (
     <div className="space-y-1" data-testid="clone-env-block">
       <Tick checked={carrySecrets} onChange={setCarrySecrets} testId="clone-env-files">
-        Send <span className="font-mono text-[11px]">.env</span> files as files
-        {envFiles.length > 0 ? ` (${envFiles.length})` : ''}
+        <span className="font-semibold">Send secret files</span>{' '}
+        <span className="font-mono text-[11px]">(.env, keys, .ssh, .npmrc, .netrc)</span>
+        {n > 0 ? ` (${n})` : ''}
       </Tick>
-      {envFiles.length > 0 && (
-        <p className={`${muted} pl-[22px] font-mono break-all`}>{envFiles.join(', ')}</p>
+      {n > 0 && (
+        <ul className={`${muted} pl-[22px] font-mono break-all`} data-testid="clone-secret-files">
+          {files.map((f) => (
+            <li key={f}>{f}</li>
+          ))}
+        </ul>
+      )}
+      {n > 0 && !carrySecrets && (
+        <p
+          className="pl-[22px] text-[11px] leading-relaxed text-[var(--color-status-warn)]"
+          data-testid="clone-secret-files-warning"
+        >
+          {n === 1
+            ? 'This file stays behind; tick to send it (needs Touch ID or your vault password).'
+            : `These ${n} files stay behind; tick to send them (needs Touch ID or your vault password).`}
+        </p>
       )}
       <p className={`${muted} pl-[22px]`}>
         Their values travel inside the bundle and need your Touch ID or vault password. Unticked, they stay behind and

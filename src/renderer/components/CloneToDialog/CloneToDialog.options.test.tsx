@@ -101,16 +101,35 @@ describe('CloneToDialog options (0.46.0)', () => {
     expect(screen.getByTestId('clone-confirm-button').textContent).toBe('Clone')
   })
 
-  it('the .env option is relabelled, lists the files, offers the vault, and needs a confirm', async () => {
-    await open(preview(false))
+  it('the secret-files option names every file left behind, warns while unticked, and needs a confirm', async () => {
+    await open({ ...preview(false), secretFiles: ['.env', '.ssh/id_ed25519', 'app/.env.local', 'deploy/server.pem'] })
     render(<CloneToDialog />)
-    expect(screen.getByText(/files as files \(2\)/)).toBeTruthy()
-    expect(screen.getByText('.env, app/.env.local')).toBeTruthy()
+    expect(screen.getByText('Send secret files')).toBeTruthy()
+    expect(screen.getByText(/\(4\)/)).toBeTruthy()
+    const list = screen.getByTestId('clone-secret-files')
+    expect(Array.from(list.querySelectorAll('li')).map((li) => li.textContent)).toEqual([
+      '.env',
+      '.ssh/id_ed25519',
+      'app/.env.local',
+      'deploy/server.pem',
+    ])
+    expect(screen.getByTestId('clone-secret-files-warning').textContent).toBe(
+      'These 4 files stay behind; tick to send them (needs Touch ID or your vault password).',
+    )
     expect(screen.getByText('k2 vault import .env')).toBeTruthy()
     const env = screen.getByTestId('clone-env-files') as HTMLInputElement
     expect(env.checked).toBe(false)
     fireEvent.click(env)
+    expect(screen.queryByTestId('clone-secret-files-warning')).toBeNull()
     expect(screen.getByTestId('clone-confirm-button').textContent).toBe('Confirm and clone')
+  })
+
+  it('an older daemon without secretFiles still lists its .env files', async () => {
+    await open(preview(false))
+    render(<CloneToDialog />)
+    const list = screen.getByTestId('clone-secret-files')
+    expect(Array.from(list.querySelectorAll('li')).map((li) => li.textContent)).toEqual(['.env', 'app/.env.local'])
+    expect(screen.getByTestId('clone-secret-files-warning').textContent).toContain('These 2 files stay behind')
   })
 
   it('the done screen: Thread import report and the vault outcome, names only', () => {

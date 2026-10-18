@@ -10,8 +10,13 @@
 //!     threads:{available, conversations, docs, dropped, participants[], roles{}},
 //!     secrets:{available, rows:[{name,kind,group,default,choice,copyable,note?,envNames?}],
 //!              notCarried:["NAME (reason)"], plan, needsConfirm, confirm?},
-//!     envFiles:[rel paths], envFilesHint, callerCanCopySecrets }
+//!     secretFiles:[rel paths], envFiles (the same list, for older clients),
+//!     envFilesHint, callerCanCopySecrets }
 //! ```
+//!
+//! `secretFiles` is every file the clone leaves behind unless secrets are
+//! carried: the shared secret list (`.env*`, key files, `.ssh/`, `.npmrc`,
+//! `.netrc`, a file with a credential in it), not only `.env` files.
 //!
 //! Gated by the clone gate (door `preview`) in the dispatcher. Never a
 //! value: secret rows are names/kinds/choices, `.env` files are paths.
@@ -186,8 +191,9 @@ fn preview(who: &Who, caller: Option<&VaultCaller>, body: &[u8]) -> R<J> {
         .filter(|e| matches!(e.class, DestinationClass::Session | DestinationClass::Provider))
         .count();
     let files = inv.entries.iter().filter(|e| e.class == DestinationClass::Workspace).count();
-    let mut env_files: Vec<String> = inv.scrubbed_secrets.clone();
-    env_files.sort();
+    // Every file the shared secret list holds back (not only `.env`).
+    let mut secret_files: Vec<String> = inv.scrubbed_secrets.clone();
+    secret_files.sort();
     let can_copy = caller_can_copy_secrets(who);
     let threads = match sources::threads(&ws.id, b.since_days) {
         Some(mut t) => {
@@ -209,7 +215,52 @@ fn preview(who: &Who, caller: Option<&VaultCaller>, body: &[u8]) -> R<J> {
         "history": { "sessions": sessions, "files": files, "entries": inv.entries.len() },
         "threads": threads,
         "secrets": secrets,
-        "envFiles": env_files,
+        "secretFiles": secret_files,
+        // 0.46.0 clients read this name; it is the same list.
+        "envFiles": secret_files,
         "callerCanCopySecrets": can_copy,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The preview names every file the clone would leave behind as a
+    /// secret, not only `.env`: key files, `.ssh/`, `.npmrc`, `.netrc`
+    /// (the shared secret list). `envFiles` stays the same list for 0.46.0
+    /// clients; ordinary files are never in it.
+    #[test]
+    fn preview_lists_every_secret_file_the_clone_leaves_behind() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        let id = format!("cp-secret-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let dir = std::env::temp_dir().join(format!("k2-clone-preview-{id}"));
+        let w = |rel: &str, body: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        };
+        w(".env", "API_KEY=x\n");
+        w("deploy/server.pem", "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n");
+        w(".ssh/id_ed25519", "not really a key\n");
+        w(".npmrc", "//registry.npmjs.org/:_authToken=abc\n");
+        w(".netrc", "machine example.com login a password b\n");
+        w("README.md", "hello\n");
+        let path = dir.to_string_lossy().to_string();
+        {
+            let h = k2_core::db::shared();
+            let conn = h.lock();
+            conn.execute("INSERT INTO projects (id, name, path, handle) VALUES (?1, ?1, ?2, ?1)", rusqlite::params![id, path])
+                .expect("project");
+        }
+        let v = preview(&Who::Owner, None, json!({ "project_path": path }).to_string().as_bytes()).expect("preview");
+        let files: Vec<&str> = v["secretFiles"].as_array().expect("secretFiles").iter().filter_map(J::as_str).collect();
+        for want in [".env", "deploy/server.pem", ".ssh/id_ed25519", ".npmrc", ".netrc"] {
+            assert!(files.contains(&want), "{want} missing from {files:?}");
+        }
+        assert!(!files.contains(&"README.md"), "{files:?}");
+        assert_eq!(v["envFiles"], v["secretFiles"], "envFiles is the same list for older clients");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -65,6 +65,11 @@ export interface ClonePreview {
     confirm?: ClonePreviewConfirm | null
     envFilesHint?: string | null
   }
+  /** Every file the clone leaves behind unless secrets are carried (the
+   *  shared secret list: .env*, keys, .ssh/, .npmrc, .netrc, a credential
+   *  in a file). Older daemons only send `envFiles`. */
+  secretFiles: string[]
+  /** The same list under its 0.46.0 name. */
   envFiles: string[]
   callerCanCopySecrets: boolean
 }
@@ -119,6 +124,7 @@ export function normalizePreview(raw: unknown): ClonePreview {
       notCarried: Array.isArray(secrets.notCarried) ? secrets.notCarried : [],
       confirm: secrets.confirm ?? null,
     },
+    secretFiles: Array.isArray(r.secretFiles) ? r.secretFiles : Array.isArray(r.envFiles) ? r.envFiles : [],
     envFiles: Array.isArray(r.envFiles) ? r.envFiles : [],
     callerCanCopySecrets: r.callerCanCopySecrets === true,
   }

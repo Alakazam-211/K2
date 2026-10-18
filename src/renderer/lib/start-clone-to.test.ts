@@ -55,7 +55,7 @@ describe('startCloneTo → runClone post-clone refresh', () => {
   it('hands the dialog\'s vault run and extras to cloneWorkspaceTo in order', async () => {
     const stub: CloneOptionDeps = {
       lookupTarget: async () => ({ note: 'no vault in this test' }),
-      fetchPreview: async () => ({ threads: { available: false }, secrets: { available: false, rows: [], notCarried: [] }, envFiles: [], callerCanCopySecrets: true }),
+      fetchPreview: async () => ({ threads: { available: false }, secrets: { available: false, rows: [], notCarried: [] }, secretFiles: [], envFiles: [], callerCanCopySecrets: true }),
       carryConfirm: async () => 't',
     }
     startCloneTo('/local/ws', 'ws', HOST, undefined, stub)

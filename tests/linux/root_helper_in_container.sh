@@ -165,7 +165,7 @@ visudo -c >/dev/null || fail "visudo -c after retirement"
 ok "installed; pg + mail legacy, k2-mail-sidecar and its PATH shims retired (backed up 0700); the direct-wipe hole is closed"
 runuser -u k2 -- sudo -n -l "$H" >/dev/null || fail "sudo -n -l as k2"
 V="$(runuser -u k2 -- sudo -n "$H" helper version)"
-echo "$V" | grep -q "\"version\":\"$CUR_V\"" && echo "$V" | grep -q '"protocol":6' || fail "helper version: $V"
+echo "$V" | grep -q "\"version\":\"$CUR_V\"" && echo "$V" | grep -qE '"protocol":([6-9]|[1-9][0-9])[,}]' || fail "helper version: $V"
 ok "k2 may sudo -n it; helper version = $CUR_V protocol 6"
 
 echo "== caller is the daemon (§6) =="

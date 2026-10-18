@@ -197,7 +197,7 @@ def no(k): assert v[k] not in ("open",), (k, v[k])
 assert v["tag"] == "a1"
 assert v["uid"] == 0, v["uid"]
 assert v["daemonHome"] is False and v["ownerToken"] is False and v["k2appHome"] is False, v
-assert v["writeApp"]["ok"] is False and v["writeRoot"]["ok"] is False, (v["writeApp"], v["writeRoot"])
+assert v["writeApp"]["ok"] is False and v["writeRoot"]["ok"] is False and v["writeUsr"]["ok"] is False, (v["writeApp"], v["writeRoot"], v["writeUsr"])
 assert v["writeData"]["ok"] is True and v["writeData"]["out"] == "a1", v["writeData"]
 assert v["capEff"] == "0000000000000000" and v["capBnd"] == "0000000000000000", (v["capEff"], v["capBnd"])
 assert v["noNewPrivs"] == "1" and v["seccomp"] == "2", (v["noNewPrivs"], v["seccomp"])
@@ -483,7 +483,7 @@ UNIT="$(asapp podman ps --format '{{.Names}}' | grep '^k2app-esc-a--' | head -n1
 # The App's output goes to its own k8s-file log (max-size 50 MiB, S17),
 # never to the journal: a flood can't fill the disk or the journal.
 LC="$(asapp podman inspect "${UNIT%.service}" --format '{{.HostConfig.LogConfig.Type}} {{.HostConfig.LogConfig.Size}} {{.HostConfig.LogConfig.Path}}')"
-case "$LC" in "k8s-file 50MiB "* | "k8s-file 52428800 "* | "k8s-file 50MB "*) ;; *) fail "log config: $LC" ;; esac
+case "$LC" in "k8s-file 50MiB "* | "k8s-file 52428800 "* | "k8s-file 50MB "* | "k8s-file 52.43MB "*) ;; *) fail "log config: $LC" ;; esac
 LP="$(printf '%s' "$LC" | awk '{print $3}')"
 n="$(grep -c 'flood a2' "$LP" || true)"
 [ "$n" -ge 1 ] || fail "flood lines in the App's log file: $n"

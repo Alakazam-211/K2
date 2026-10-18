@@ -693,8 +693,11 @@ the source's **card view** from the server that runs it. Make and inspect source
 - Its runtime errors reach you as class, code and line only, never message text\n\
   (`k2 zen widget errors <name>`), so don't put values in thrown errors.\n\
 - Draw from the view: `display` (pending / paused / stale / ok / warn / crit /\n\
-  unknown), `items[]` with `health` and `reason`, `fields`, `counts`, `soft` (\"retrying\n\
-  2/3\"), `gap`, `muted`, `simulated` (a TEST badge). Ages are `serverNow - updatedAt`\n\
+  unknown), `items[]` with `health`, `reason` and `list` (an `extract.lists` item, key\n\
+  `<list>/<key>`), `fields`, `counts`, `soft` (`{count, of, level}`: \"soft crit 2/3\"\n\
+  is a reading waiting to go hard), `gap`, `muted`, `simulated` (a TEST badge). Prefer\n\
+  the item's `health` (the source's rules: age, version vs target, thresholds) over\n\
+  re-deriving it in widget code. Ages are `serverNow - updatedAt`\n\
   (seconds), never `Date.now()`. Unknown gets its own colour; never draw a blank card.\n\
 - Refusals: `not_bound` (not in the placement's config), `server_not_saved`,\n\
   `cap_not_granted` (the human's login there can't read it), `removed`, `no_history`,\n\

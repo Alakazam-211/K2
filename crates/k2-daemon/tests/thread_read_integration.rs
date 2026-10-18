@@ -621,16 +621,21 @@ async fn pushes_carry_totals_skip_muted_people_and_never_the_author() {
         let gina = login(port, "trpgina");
         let owner_dev = register(port, OWNER_TOKEN, "owner");
         let gina_dev = register(port, &gina, "gina");
+        // Pushes say whose they are with `badgeKey`, never a name.
+        let owner_key = unread(port, OWNER_TOKEN)["badgeKey"].as_str().expect("owner badgeKey").to_string();
+        let gina_key = unread(port, &gina)["badgeKey"].as_str().expect("gina badgeKey").to_string();
+        assert_ne!(owner_key, gina_key);
+        let test_start = gateway_mark();
 
         // A Thread push per person, each with that person's totals.
         let mark = gateway_mark();
         agent_post(port, &h, "build is green");
-        let thread_push = |p: &J, principal: &str, c: &str| {
-            p["data"]["kind"] == "thread" && p["data"]["principal"] == principal && p["data"]["conversationId"] == c
+        let thread_push = |p: &J, key: &str, c: &str| {
+            p["data"]["kind"] == "thread" && p["data"]["badgeKey"] == key && p["data"]["conversationId"] == c
         };
         let got = wait_pushes(mark, 2, |p| p["data"]["conversationId"] == conv.as_str());
-        let owner_p = got.iter().find(|p| thread_push(p, "owner", &conv)).unwrap_or_else(|| panic!("owner push: {got:?}"));
-        let gina_p = got.iter().find(|p| thread_push(p, "trpgina", &conv)).unwrap_or_else(|| panic!("gina push: {got:?}"));
+        let owner_p = got.iter().find(|p| thread_push(p, &owner_key, &conv)).unwrap_or_else(|| panic!("owner push: {got:?}"));
+        let gina_p = got.iter().find(|p| thread_push(p, &gina_key, &conv)).unwrap_or_else(|| panic!("gina push: {got:?}"));
         for p in [owner_p, gina_p] {
             assert_eq!(p["data"]["unreadTotal"], "1", "one unread Thread line: {p}");
             assert_eq!(p["data"]["waitingTotal"], "0", "{p}");
@@ -652,10 +657,10 @@ async fn pushes_carry_totals_skip_muted_people_and_never_the_author() {
         agent_post(port, &h2, "deploying now");
         let got = wait_pushes(mark, 1, |p| p["data"]["conversationId"] == conv2.as_str());
         assert_eq!(got.len(), 1, "{got:?}");
-        assert_eq!(got[0]["data"]["principal"], "owner", "{}", got[0]);
+        assert_eq!(got[0]["data"]["badgeKey"], owner_key.as_str(), "{}", got[0]);
         assert_eq!(got[0]["data"]["unreadTotal"], "2", "the owner has 1 + 1 unread across both Threads: {}", got[0]);
         std::thread::sleep(Duration::from_millis(1500));
-        let muted = wait_pushes(mark, 0, |p| p["data"]["conversationId"] == conv2.as_str() && p["data"]["principal"] == "trpgina");
+        let muted = wait_pushes(mark, 0, |p| p["data"]["conversationId"] == conv2.as_str() && p["data"]["badgeKey"] == gina_key.as_str());
         assert!(muted.is_empty(), "a muted Thread never pushes the person who muted it: {muted:?}");
 
         // Project chat: gina's OWN post never pushes her phone; the owner's does.
@@ -664,14 +669,14 @@ async fn pushes_carry_totals_skip_muted_people_and_never_the_author() {
         let mark = gateway_mark();
         ok(port, "POST", &format!("/cli/project-group/msg?token={gina}"), Some(serde_json::json!({ "group": gid, "body": "hi all" })));
         let project_push = |p: &J| p["data"]["kind"] == "project" && p["data"]["groupId"] == gid.as_str();
-        let got = wait_pushes(mark, 1, |p| project_push(p) && p["data"]["principal"] == "owner");
+        let got = wait_pushes(mark, 1, |p| project_push(p) && p["data"]["badgeKey"] == owner_key.as_str());
         assert_eq!(got.len(), 1, "the owner's phone hears gina's post: {got:?}");
         assert_eq!(got[0]["title"], "K2");
         assert!(!got[0].to_string().contains("hi all"), "content-free: {}", got[0]);
         assert!(got[0]["data"]["unreadTotal"].as_str().is_some_and(|t| t.parse::<i64>().is_ok_and(|n| n >= 1)), "{}", got[0]);
         assert_eq!(got[0]["data"]["waitingTotal"], "0");
         std::thread::sleep(Duration::from_millis(1500));
-        let mine = wait_pushes(mark, 0, |p| project_push(p) && p["data"]["principal"] == "trpgina");
+        let mine = wait_pushes(mark, 0, |p| project_push(p) && p["data"]["badgeKey"] == gina_key.as_str());
         assert!(mine.is_empty(), "a person's own project post never pushes their own phone: {mine:?}");
 
         // The owner mutes the chat: gina's next post pushes nobody.
@@ -686,11 +691,72 @@ async fn pushes_carry_totals_skip_muted_people_and_never_the_author() {
         ok(port, "POST", &format!("/cli/project-group/msg?token={OWNER_TOKEN}"), Some(serde_json::json!({ "group": gid, "body": "here" })));
         let got = wait_pushes(mark, 1, |p| project_push(p));
         assert_eq!(got.len(), 1, "{got:?}");
-        assert_eq!(got[0]["data"]["principal"], "trpgina", "{}", got[0]);
+        assert_eq!(got[0]["data"]["badgeKey"], gina_key.as_str(), "{}", got[0]);
+
+        // Privacy (0.46.1): nothing this test sent through the relay names a
+        // person: no `principal` key, no username, not the owner.
+        let all: Vec<J> = gateway_calls().lock().expect("calls")[test_start..].iter().map(|c| c["payload"].clone()).collect();
+        assert_eq!(all.len(), 5, "2 Thread + 1 muted-Thread + 2 project pushes");
+        for p in &all {
+            assert!(p["data"].get("principal").is_none(), "principal in {p}");
+            let wire = p.to_string();
+            assert!(!wire.contains("trpgina") && !wire.contains("\"owner\""), "a name rides the push: {wire}");
+            assert!(p["data"]["badgeKey"].as_str().is_some_and(|k| k == owner_key || k == gina_key), "{p}");
+        }
 
         // Leave no phones behind for other tests in this process.
         for (tok, id) in [(OWNER_TOKEN, owner_dev), (gina.as_str(), gina_dev)] {
             ok(port, "POST", &format!("/cli/push/unregister-device?token={tok}"), Some(serde_json::json!({ "deviceId": id })));
         }
+    });
+}
+
+// ── 5. badgeKey: one per person per server, never a name ──────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn badge_key_is_one_per_person_across_logins_and_never_a_name() {
+    let _g = lock();
+    with_temp_home(|| {
+        let d = futures_block(test_harness::start(OWNER_TOKEN));
+        let port = d.port;
+        isolate_read_state();
+        let phone = login(port, "trkphone");
+        ok(port, "POST", &format!("/cli/owner/accounts?token={OWNER_TOKEN}"), Some(serde_json::json!({ "accounts": ["trkphone"] })));
+        // Connect usernames are [a-z0-9_-] only; an email-like name is
+        // covered by the k2-core privacy test.
+        let mail = login(port, "rosson_long-2");
+        let key_of = |tok: &str| unread(port, tok)["badgeKey"].as_str().expect("badgeKey").to_string();
+        let owner_key = key_of(OWNER_TOKEN);
+        assert_eq!(owner_key.len(), 32);
+        assert!(owner_key.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "{owner_key}");
+        assert_eq!(key_of(&phone), owner_key, "the owner token and a linked login are one person: one key");
+        let mail_key = key_of(&mail);
+        assert_ne!(mail_key, owner_key, "another person, another key");
+        assert!(!mail_key.contains("rosson") && !owner_key.contains("owner") && !owner_key.contains("trkphone"));
+
+        // Stable across a fresh session of the same login, and handed back
+        // on register-device and GET /cli/push/device.
+        let r = ok(port, "POST", "/cli/auth/login", Some(serde_json::json!({ "username": "trkphone", "password": "password123" })));
+        let phone2 = r["token"].as_str().expect("token").to_string();
+        assert_ne!(phone2, phone);
+        assert_eq!(key_of(&phone2), owner_key, "a re-login keeps the key");
+        let dev = format!("dev-trk-{}", uuid::Uuid::new_v4());
+        let reg = ok(
+            port,
+            "POST",
+            &format!("/cli/push/register-device?token={phone2}"),
+            Some(serde_json::json!({ "deviceId": dev, "platform": "apns", "token": format!("apns-trk-{}", uuid::Uuid::new_v4()) })),
+        );
+        assert_eq!(reg["badgeKey"], owner_key.as_str(), "register reply: {reg}");
+        let again = ok(
+            port,
+            "POST",
+            &format!("/cli/push/register-device?token={phone2}"),
+            Some(serde_json::json!({ "deviceId": dev, "platform": "apns", "token": format!("apns-trk-rot-{}", uuid::Uuid::new_v4()) })),
+        );
+        assert_eq!(again["badgeKey"], owner_key.as_str(), "a re-registration (token rotation) keeps it");
+        let got = ok(port, "GET", &format!("/cli/push/device?token={phone2}&deviceId={dev}"), None);
+        assert_eq!(got["badgeKey"], owner_key.as_str(), "device read-back: {got}");
+        ok(port, "POST", &format!("/cli/push/unregister-device?token={phone2}"), Some(serde_json::json!({ "deviceId": dev })));
     });
 }

@@ -38,6 +38,18 @@ CREATE TABLE IF NOT EXISTS read_cursors (
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_read_cursors_conv ON read_cursors (kind, conv_id);
 --> statement-breakpoint
+-- This server's badge salt: badgeKey = sha256(salt, person key) (see
+-- k2_core::push::badge_key). Minted once here and never shown, so a
+-- person's badgeKey stays the same across restarts, upgrades, token
+-- refreshes, re-logins and device re-registration, and can't be guessed
+-- from a username. Pushes carry badgeKey instead of the person's name.
+CREATE TABLE IF NOT EXISTS read_server (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    badge_salt TEXT NOT NULL
+);
+--> statement-breakpoint
+INSERT OR IGNORE INTO read_server (id, badge_salt) VALUES (1, lower(hex(randomblob(16))));
+--> statement-breakpoint
 -- Project chat gains a per-group seq (the public cursor) and who wrote
 -- each line: 'person' (owner token / a Connect login) or 'agent'.
 ALTER TABLE project_group_messages ADD COLUMN seq INTEGER NOT NULL DEFAULT 0;

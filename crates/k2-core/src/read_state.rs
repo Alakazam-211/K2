@@ -545,6 +545,46 @@ pub fn summary(conn: &Connection, person: &Person, now: i64) -> Result<Summary, 
     Ok(out)
 }
 
+/// This server's badge salt (`read_server.badge_salt`, minted once by
+/// migration 0190). Never leaves the daemon.
+fn badge_salt(conn: &Connection) -> Result<String, ReadError> {
+    conn.query_row("SELECT badge_salt FROM read_server WHERE id = 1", [], |r| r.get::<_, String>(0))
+        .optional()
+        .map_err(store_err)?
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| ReadError::Store("read state: no badge salt (migration 0190)".into()))
+}
+
+/// The person's `badgeKey` on this server ([`crate::push::badge_key`] of
+/// the server's badge salt and the person key). Stable for the same person
+/// on the same server across restarts, upgrades, token refreshes, re-logins
+/// and device re-registration; different for every person. `person` is a
+/// person key ([`People::person_key`]): the owner token and every linked
+/// login give the same key.
+pub fn badge_key_for(conn: &Connection, person: &str) -> Result<String, ReadError> {
+    let person = person.trim();
+    if person.is_empty() {
+        return Err(ReadError::Usage("a badge key belongs to a person".into()));
+    }
+    Ok(crate::push::badge_key(&badge_salt(conn)?, person))
+}
+
+/// [`badge_key_for`] on the shared DB, for a person key or a login (a
+/// login is mapped to its person). `""` when it can't be computed (no DB
+/// or no salt): a push then carries no key rather than a name.
+pub fn badge_key_for_shared(login_or_person: &str) -> String {
+    let person = match People::load() {
+        Ok(p) => p.person_key(login_or_person),
+        Err(_) => login_or_person.trim().to_string(),
+    };
+    let Some(db) = crate::db::try_shared() else { return String::new() };
+    let conn = db.lock();
+    badge_key_for(&conn, &person).unwrap_or_else(|e| {
+        crate::log_debug!("[read] badge key: {e}");
+        String::new()
+    })
+}
+
 /// Every person this server has seen (they get frames and remaps).
 pub fn known_people(conn: &Connection) -> Result<Vec<String>, ReadError> {
     let mut stmt = conn.prepare("SELECT person FROM read_people ORDER BY person").map_err(store_err)?;
@@ -1080,6 +1120,40 @@ mod tests {
         // Clearing the pin (a reset) retires it too.
         conn.execute("UPDATE workspace_sessions SET session_id = NULL WHERE project_id = ?1", params![project]).expect("clear");
         assert_eq!(item(&conn, &owner(), KIND_THREAD, &new, now).expect("owner new").unread, 0);
+    }
+
+    /// badgeKey: one per person per server, stable across reads (and so
+    /// across restarts: the salt is stored), 32 lowercase hex, never the
+    /// person's name; the owner token and a linked login share one.
+    #[test]
+    fn badge_keys_are_stable_per_person_and_never_the_name() {
+        let (g, _) = db();
+        let h = g.handle();
+        let conn = h.lock();
+        let owner = badge_key_for(&conn, "owner").expect("owner key");
+        assert_eq!(owner, badge_key_for(&conn, "owner").expect("again"), "stable");
+        assert_eq!(owner.len(), 32);
+        assert!(owner.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "{owner}");
+        for name in ["gina", "rosson.long@lztek.io"] {
+            let k = badge_key_for(&conn, name).expect("key");
+            assert_ne!(k, owner, "a different person, a different key");
+            assert!(!k.contains(name) && !k.contains("owner"), "{k}");
+        }
+        let linked = People { users: Vec::new(), linked: vec!["z3thon".into()] };
+        assert_eq!(
+            badge_key_for(&conn, &linked.person_key("z3thon")).expect("linked"),
+            owner,
+            "a linked login is the owner person: same key"
+        );
+        // The salt is minted once and kept: re-running the migration keeps it.
+        let salt = badge_salt(&conn).expect("salt");
+        conn.execute(
+            "INSERT OR IGNORE INTO read_server (id, badge_salt) VALUES (1, lower(hex(randomblob(16))))",
+            [],
+        )
+        .expect("re-run insert");
+        assert_eq!(badge_salt(&conn).expect("salt again"), salt);
+        assert!(matches!(badge_key_for(&conn, "  "), Err(ReadError::Usage(_))));
     }
 
     #[test]

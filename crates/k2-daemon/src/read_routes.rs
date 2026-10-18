@@ -3,7 +3,7 @@
 //! live in [`k2_core::read_state`]; this module is the HTTP face.
 //!
 //! - `GET  /cli/thread/unread[?kind=thread|project]` →
-//!   `{ok, person, total, waitingTotal, byConversation:[State…], muted:[{kind,id,mutedUntil?}…]}`
+//!   `{ok, person, badgeKey, total, waitingTotal, byConversation:[State…], muted:[{kind,id,mutedUntil?}…]}`
 //!   (`byConversation` lists conversations with something unread, a card
 //!   waiting, or a mute; `kind` filters the lists, never the totals).
 //! - `POST /cli/thread/read {conversationId | addr, seq?}` and
@@ -297,6 +297,10 @@ fn handle_unread(person: &Person, f: &Fields) -> CliResponse {
         Ok(s) => s,
         Err(e) => return read_error(e),
     };
+    let badge_key = match read_state::badge_key_for(&conn, &person.key) {
+        Ok(k) => k,
+        Err(e) => return read_error(e),
+    };
     drop(conn);
     let items: Vec<&ReadItem> = summary.items.iter().filter(|i| kind.as_deref().is_none_or(|k| i.kind == k)).collect();
     let muted: Vec<serde_json::Value> = items
@@ -314,6 +318,8 @@ fn handle_unread(person: &Person, f: &Fields) -> CliResponse {
         serde_json::json!({
             "ok": true,
             "person": person.key,
+            // The key every push for this person carries (never a name).
+            "badgeKey": badge_key,
             "total": summary.totals.total,
             "waitingTotal": summary.totals.waiting_total,
             "byConversation": items.iter().map(|i| state_json(i)).collect::<Vec<_>>(),

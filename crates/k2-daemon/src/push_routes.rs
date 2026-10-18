@@ -90,6 +90,13 @@ fn device_reply(device: &push_devices::PushDevice) -> CliResponse {
     if let Some(map) = v.as_object_mut() {
         map.insert("ok".to_string(), serde_json::json!(true));
         map.insert("previewsAllowed".to_string(), serde_json::json!(previews_allowed()));
+        // 0.46.1: pushes carry `badgeKey` instead of the person's name; the
+        // phone matches it to this login (a phone may hold two accounts on
+        // one host). Stable for the person on this server.
+        map.insert(
+            "badgeKey".to_string(),
+            serde_json::json!(k2_core::read_state::badge_key_for_shared(&device.username)),
+        );
     }
     CliResponse::ok_json(v.to_string())
 }
@@ -260,7 +267,7 @@ pub fn notify_feedback_commented(feedback_id: &str, assignees: &[String]) {
 ///   was skipped, so a Connect user's own post buzzed their own phone;
 /// - never to a person who muted the chat;
 /// - only to people whose server bell is on, removed/disabled logins never;
-/// - each carries `principal` and that person's `unreadTotal` /
+/// - each carries that person's `badgeKey` (never their name) and `unreadTotal` /
 ///   `waitingTotal` (strings). Content-free: project name + group id.
 pub fn notify_project_message_created(project_name: &str, group_id: &str, author_person: Option<&str>) {
     if airgap_blocks() {
@@ -375,7 +382,7 @@ pub(crate) fn deliver_badge(event: PushEvent) {
         let logins = b.device_usernames.clone();
         std::thread::spawn(move || {
             let devices = push_devices::list_devices_for_usernames(&logins).unwrap_or_default();
-            if let Err(e) = cloud.dispatch(&event, &principal, &devices) {
+            if let Err(e) = cloud.dispatch(&event, &k2_core::read_state::badge_key_for_shared(&principal), &devices) {
                 k2_core::log_debug!("[push] badge dispatch dropped ({}): {e}", cloud.label());
             }
         });
@@ -502,7 +509,7 @@ fn dispatch_push(event: PushEvent) {
                     note_airgap_drop();
                     return;
                 }
-                if let Err(e) = cloud.dispatch(&event, &principal, &devices) {
+                if let Err(e) = cloud.dispatch(&event, &k2_core::read_state::badge_key_for_shared(&principal), &devices) {
                     k2_core::log_debug!("[push] dispatch failed ({}): {e}", cloud.label());
                 }
             }
@@ -603,7 +610,7 @@ pub(crate) fn deliver_thread(event: PushEvent) {
         let logins = t.device_usernames.clone();
         std::thread::spawn(move || {
             let devices = push_devices::list_devices_for_usernames(&logins).unwrap_or_default();
-            if let Err(e) = cloud.dispatch(&event, &principal, &devices) {
+            if let Err(e) = cloud.dispatch(&event, &k2_core::read_state::badge_key_for_shared(&principal), &devices) {
                 k2_core::log_debug!("[push] thread dispatch failed ({}): {e}", cloud.label());
             }
         });

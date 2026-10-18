@@ -216,12 +216,24 @@ impl Client {
         match conn.recv()?.body {
             Reply::Attached { start, end } => {
                 let pending = conn.take_rest();
-                conn.set_timeout(None)?;
+                clear_timeout_after_attach(&conn)?;
                 Ok(DataStream { stream: conn.stream, start, end, pending })
             }
             Reply::Error { code, detail } => Err(ConnectError::Refused { code, detail }),
             other => Err(ConnectError::Protocol(format!("expected attached, got {other:?}"))),
         }
+    }
+}
+
+/// Drop the handshake timeout once a data stream is attached. For an
+/// exited session ptyd sends the backlog and closes right away; macOS then
+/// refuses `setsockopt` on the disconnected socket with EINVAL, while the
+/// buffered bytes (and EOF) are still readable. That one case is fine.
+pub fn clear_timeout_after_attach(conn: &Conn) -> io::Result<()> {
+    match conn.set_timeout(None) {
+        Ok(()) => Ok(()),
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => Ok(()),
+        Err(e) => Err(e),
     }
 }
 

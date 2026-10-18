@@ -217,6 +217,17 @@ fn run(b: &CallBody) -> Result<J, DataError> {
             budget::spend(&key, Spend::Read)?;
             Ok(viewer())
         }
+        // Room-scope surfaces (0.46.1): one catalog row, two transports.
+        // The Garden acts as the owner (Rosson 2026-10-11): every name in
+        // room.members, any App on this computer for app.self/app.usage.
+        "room.members" | "app.self" | "app.usage" => {
+            budget::spend(&key, Spend::Read)?;
+            crate::apps::surfaces::garden_call(&b.verb, args)
+        }
+        "widget.self" => {
+            budget::spend(&key, Spend::Read)?;
+            widget_self(&w)
+        }
         v if v.starts_with("save.") => {
             let spend = if row.effect == Effect::Write { Spend::Save } else { Spend::Read };
             budget::spend(&key, spend)?;
@@ -248,6 +259,36 @@ fn run(b: &CallBody) -> Result<J, DataError> {
             })
         }
     }
+}
+
+/// The 7-day window of `widget.self`'s use counts (the change log's keep).
+pub const WIDGET_USE_WINDOW_SECS: i64 = k2_core::garden_data::CHANGE_LOG_KEEP_SECS;
+
+/// `widget.self()` (room-scope R16, G2): this placement's widget, its live
+/// hash, who made that version, and its last 7 days of saves.
+fn widget_self(w: &Placed) -> Result<J, DataError> {
+    let maker = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        authors::maker_of(&conn, &w.widget, &w.hash)?
+    };
+    let author = match &maker {
+        MadeBy::Owner => json!({ "kind": "owner", "handle": J::Null }),
+        MadeBy::K2 => json!({ "kind": "k2", "handle": J::Null }),
+        MadeBy::Unclaimed => json!({ "kind": "unclaimed", "handle": J::Null }),
+        MadeBy::Agent { project_id } => json!({ "kind": "agent", "handle": crate::compute_routes::ws_handle(project_id) }),
+    };
+    let space = data_space(&w.widget)?;
+    let since = crate::garden_data::now() - WIDGET_USE_WINDOW_SECS;
+    let (writes, changes) = store().writes_since(&space, &w.actor().stored(), since)?;
+    Ok(json!({
+        "widget": w.widget,
+        "garden": w.garden,
+        "placement": w.placement,
+        "hash": w.hash,
+        "author": author,
+        "uses7d": { "writes": writes, "changes": changes },
+    }))
 }
 
 fn author_unknown(w: &Placed) -> DataError {

@@ -6559,6 +6559,34 @@ async fn handle_one_request(
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Room-scope R9/R16 (0.46.1): `k2 app members|self|usage|room-names`.
+        // Not behind the runtime switch: room members include the box
+        // login's guests. Passport rules live in the handler.
+        p if crate::apps::surfaces::is_route(p) => {
+            if crate::apps::surfaces::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::apps::routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::apps::routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || crate::apps::surfaces::handle(&p_owned, who, &body_bytes, &params))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // App runtime stage 1 (prd-k2-app-runtime-v1 §8.5). Dark (404) until
         // K2_APPS / appsPreview is on. Passport rules live in the handler.
         p if crate::apps::routes::is_route(p) => {
@@ -8797,6 +8825,29 @@ async fn handle_one_request(
                             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
                     } else {
                         crate::guest_rooms_routes::app_pass_required()
+                    }
+                }
+                // Room-scope R9/R16 (0.46.1): room.members, app.self and
+                // app.usage for a pass (the handler checks rooms, caps and
+                // the link); anything else is `skin_token`.
+                sp if crate::apps::surfaces::PASS_ROUTES.contains(&sp) => {
+                    let _ = stream.read(&mut buf).await;
+                    let presented = super::http::extract_token(&query);
+                    if presented.is_some_and(k2_core::skin::is_skin_token) {
+                        match presented.and_then(crate::apps::gateway::resolve_pass) {
+                            Some(pass) => {
+                                let params = super::http::parse_params(&path, &query);
+                                let route = sp.to_string();
+                                // Task-local: read it here, not on the blocking worker.
+                                let link = crate::apps::gateway::current();
+                                tokio::task::spawn_blocking(move || crate::apps::surfaces::handle_pass(&route, &pass, &params, link.as_deref()))
+                                    .await
+                                    .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                            }
+                            None => crate::skin_routes::revoked_skin_response(),
+                        }
+                    } else {
+                        crate::apps::surfaces::forbidden(sp)
                     }
                 }
                 "/cli/skin/agents" => {

@@ -341,6 +341,13 @@ pub const FEATURE_APP_API: &str = "app-api-v1";
 /// (`/cli/skin/guests/rooms`), and a Garden widget does the same for any
 /// local App through `/cli/zen/call`, each write behind K2's confirm sheet.
 pub const FEATURE_GUESTS_ROOMS: &str = "guests-rooms-v1";
+/// Room-scope R9 (0.46.1): `room.members` on the App gateway
+/// (`GET /cli/skin/members`, cap `room:members`) and the Garden bridge.
+pub const FEATURE_ROOM_MEMBERS: &str = crate::apps::surfaces::FEATURE_ROOM_MEMBERS;
+
+/// Room-scope R16 (0.46.1): `app.self` / `app.usage` on the App's link and
+/// the Garden bridge, and the Garden's `widget.self`.
+pub const FEATURE_APP_SELF: &str = crate::apps::surfaces::FEATURE_APP_SELF;
 
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
@@ -376,6 +383,8 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_GROKBOTS);
     out.push(FEATURE_APP_API);
     out.push(FEATURE_GUESTS_ROOMS);
+    out.push(FEATURE_ROOM_MEMBERS);
+    out.push(FEATURE_APP_SELF);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
     }
@@ -425,6 +434,8 @@ mod tests {
                 "grokbots-v1",
                 "app-api-v1",
                 "guests-rooms-v1",
+                "room-members-v1",
+                "app-self-v1",
                 "thread-push-v1"
             ]
         );

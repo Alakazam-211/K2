@@ -102,13 +102,15 @@ fn exposure_counts_are_pinned() {
     // Runtime S23 (catalog v10): + one app row per live App-facing pair
     // (56: the 53 the hand-written table had, plus thread/latest R5,
     // skin/me R6, the link's skin/login and Sew's sew/pass) and socket (3).
+    // RS-A15 (0.46.1): + guests.rooms / guests.setRooms on both transports
+    // (app + garden-local). Room-scope 0.46.1: + room.members, app.self and
+    // app.usage on both transports and the Garden's widget.self (garden-local).
     let garden_local = c.verbs_exposed_to(Exposure::GardenLocal).len();
-    // + Sew's chat pass (S28 §9): POST /cli/sew/pass, link only.
-    assert_eq!((widget, app, garden_local), (24, 60, 15), "per-exposure verb counts (widget, app, garden-local)");
+    assert_eq!((widget, app, garden_local), (24, 65, 21), "per-exposure verb counts (widget, app, garden-local)");
     assert_eq!(
         c.verbs.len(),
-        121,
-        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows and the 59 app rows"
+        127,
+        "today's 37 bridge verbs plus the frame rows theme.changed, canvas.setHitRegions, window.startDrag, sources.*, the 15 Garden data rows, the 65 app rows (5 on both transports) and widget.self"
     );
 }
 

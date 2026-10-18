@@ -799,6 +799,12 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/app/grants",
         "/cli/app/grant/revoke",
         "/cli/app/guest/rooms",
+        // Room-scope R9/R16 (0.46.1): read who holds a grant on the agent's
+        // own room, and its own Apps' self and usage. `/cli/app/room-names`
+        // is NOT here: hiding guests' names is the owner's.
+        "/cli/app/members",
+        "/cli/app/self",
+        "/cli/app/usage",
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",

@@ -844,6 +844,34 @@ pub enum SessionEvent {
         #[serde(rename = "workspacePath")]
         workspace_path: String,
     },
+
+    /// Room-scope R9 (0.46.1): a room's access list may have changed (a
+    /// grant, role or guest change, or the owner's hide-names switch).
+    /// APP-LEVEL refetch signal for owner clients (Settings, Gardens); the
+    /// App activity socket maps it to `room_members_changed` for passes
+    /// holding `room:members` in that room.
+    ///
+    /// Wire: `{ "kind": "room_members_changed", "room": string | null }`
+    /// (`null` = any room).
+    RoomMembersChanged { room: Option<String> },
+
+    /// Room-scope R16 (0.46.1): an App's live deployment changed (a deploy,
+    /// rollback or auto-rollback went live). APP-LEVEL for owner clients;
+    /// the App activity socket sends `app_deployed` in the App's own room to
+    /// that App's passes and guests only.
+    ///
+    /// Wire: `{ "kind": "app_deployed", "appId", "serviceId", "projectId",
+    /// "seed": string | null, "deployment": string | null }`.
+    AppDeployed {
+        #[serde(rename = "appId")]
+        app_id: String,
+        #[serde(rename = "serviceId")]
+        service_id: String,
+        #[serde(rename = "projectId")]
+        project_id: String,
+        seed: Option<String>,
+        deployment: Option<String>,
+    },
 }
 
 impl SessionEvent {
@@ -905,6 +933,8 @@ impl SessionEvent {
             SessionEvent::GitChanged { .. } => "git_changed",
             SessionEvent::GitNotesChanged { .. } => "git_notes_changed",
             SessionEvent::OpenChanges { .. } => "open_changes",
+            SessionEvent::RoomMembersChanged { .. } => "room_members_changed",
+            SessionEvent::AppDeployed { .. } => "app_deployed",
         }
     }
 }

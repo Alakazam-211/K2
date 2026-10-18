@@ -548,13 +548,31 @@ fn k2_dts(c: &Catalog) -> Result<String, String> {
                 s.push_str(&format!("  {line}\n"));
             }
         }
+        if *surface == WIDGET_MEMBER {
+            // `k2.widget` is also the runtime's hello view: one member.
+            s.push_str(WIDGET_MEMBER_FIELDS);
+        }
         s.push_str("  }\n");
     }
-    s.push_str(
-        "  /** Any widget verb by name; a refused call rejects with K2Error. */\n  call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>\n  /** Subscribe by name; returns the unsubscribe. A refused subscription ends and calls `onError` (the function after `cb`) once with a K2Error; with no `onError` K2 logs it as an uncaught error. */\n  subscribe<V extends K2SubscribeVerb>(\n    verb: V,\n    ...args:\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void]\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void, (error: K2Error) => void]\n  ): () => void\n  /** Alias of `subscribe`. */\n  on: K2['subscribe']\n  /** Resolves with the hello once K2 connects the frame (on its load, after your top-level script runs); rejects with K2Error `failed` \"not connected\" after 10 s. Await it before `can`, `config`, `widget` or `motion`: until then they read as empty. Calls wait for it on their own. */\n  readonly connected: Promise<K2Hello>\n  /** Drawing advice: the verb exists, its cap was allowed and K2 here has its feature. False until `connected` resolves. K2 still checks every call. */\n  can(verb: string): boolean\n  /** Tell K2 you have drawn (call once). */\n  ready(): void\n  /** The placement's `config` table from the Garden file (empty until `connected`). */\n  readonly config: Readonly<Record<string, string | number | boolean>>\n  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n  /** A file in the widget's folder as a data: URL, or null. */\n  asset(name: string): string | null\n  readonly motion: { readonly reduced: boolean }\n}\n\ndeclare global {\n  const k2: K2\n  interface Window {\n    readonly k2: K2\n  }\n}\n",
-    );
+    let tail = K2_TAIL;
+    let tail = if surface_order.contains(&WIDGET_MEMBER) { tail.replace(WIDGET_MEMBER_LINE, "") } else { tail.to_string() };
+    s.push_str(&tail);
     Ok(s)
 }
+
+/// The runtime member a catalog surface may share (`widget.self` lives on
+/// `k2.widget`, beside the hello's id, name and garden; room-scope R16).
+pub const WIDGET_MEMBER: &str = "widget";
+
+/// `k2.widget`'s hello fields, written into the surface when it has verbs.
+const WIDGET_MEMBER_FIELDS: &str = "    /** The widget's folder name (or k2:<name>), once `connected` resolves. */\n    readonly id: string\n    readonly name: string\n    readonly garden: string\n";
+
+/// `k2.widget` when no catalog row is on the `widget` surface.
+const WIDGET_MEMBER_LINE: &str = "  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n";
+
+/// The end of `interface K2`: the runtime's own members.
+const K2_TAIL: &str =
+        "  /** Any widget verb by name; a refused call rejects with K2Error. */\n  call<V extends K2CallVerb>(verb: V, ...args: K2Verbs[V]['args']): Promise<K2Verbs[V]['value']>\n  /** Subscribe by name; returns the unsubscribe. A refused subscription ends and calls `onError` (the function after `cb`) once with a K2Error; with no `onError` K2 logs it as an uncaught error. */\n  subscribe<V extends K2SubscribeVerb>(\n    verb: V,\n    ...args:\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void]\n      | [...K2Verbs[V]['args'], (value: K2Verbs[V]['value']) => void, (error: K2Error) => void]\n  ): () => void\n  /** Alias of `subscribe`. */\n  on: K2['subscribe']\n  /** Resolves with the hello once K2 connects the frame (on its load, after your top-level script runs); rejects with K2Error `failed` \"not connected\" after 10 s. Await it before `can`, `config`, `widget` or `motion`: until then they read as empty. Calls wait for it on their own. */\n  readonly connected: Promise<K2Hello>\n  /** Drawing advice: the verb exists, its cap was allowed and K2 here has its feature. False until `connected` resolves. K2 still checks every call. */\n  can(verb: string): boolean\n  /** Tell K2 you have drawn (call once). */\n  ready(): void\n  /** The placement's `config` table from the Garden file (empty until `connected`). */\n  readonly config: Readonly<Record<string, string | number | boolean>>\n  readonly widget: { readonly id: string; readonly name: string; readonly garden: string }\n  /** A file in the widget's folder as a data: URL, or null. */\n  asset(name: string): string | null\n  readonly motion: { readonly reduced: boolean }\n}\n\ndeclare global {\n  const k2: K2\n  interface Window {\n    readonly k2: K2\n  }\n}\n";
 
 // ── k2-frame.js ──────────────────────────────────────────────────────────
 
@@ -760,8 +778,8 @@ mod tests {
         let widget: Vec<&str> = catalog().widget_callable_verbs().iter().map(|v| v.verb.as_str()).collect();
         assert_eq!(
             widget.len(),
-            41,
-            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local)"
+            45,
+            "UW16 + UWB10: 16 widget verbs, plus the whole canvas (canvas.setHitRegions, window.startDrag), plus Garden v3's six sources.* verbs, plus Garden data's 15 garden-local rows, plus RS-A15's guests.rooms / guests.setRooms (app + garden-local), plus room-scope 0.46.1's room.members, app.self, app.usage and widget.self"
         );
         assert_eq!(catalog().verbs_exposed_to(Exposure::Widget).len(), 24, "the bridge's own rows");
         for never in ["zen.exit", "controls.bind", "homes.list", "agents.local", "agents.add", "agents.home", "agents.setHome",

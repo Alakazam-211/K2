@@ -233,7 +233,7 @@ pub fn unsubscribe(app_id: &str) {
     }
 }
 
-fn live_subscriptions(app_id: &str) -> u32 {
+pub(crate) fn live_subscriptions(app_id: &str) -> u32 {
     live().lock().unwrap_or_else(|e| e.into_inner()).get(app_id).map(|l| l.subscriptions).unwrap_or(0)
 }
 

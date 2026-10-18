@@ -604,7 +604,29 @@
     return assets && typeof assets[name] === 'string' ? assets[name] : null
   }
   Object.defineProperty(k2, 'config', { enumerable: true, get: function () { return hello ? hello.config : Object.freeze({}) } })
-  Object.defineProperty(k2, 'widget', { enumerable: true, get: function () { return hello ? hello.widget : null } })
+  // `k2.widget`: the hello's id, name and garden, plus the catalog's
+  // `widget.*` helpers (`widget.self`, room-scope R16) on the same object.
+  // Before the hello it holds the helpers only (null when there are none).
+  /** @type {unknown} */
+  var widgetFor = null
+  /** @type {Record<string, unknown> | null} */
+  var widgetView = null
+  /** @type {Record<string, unknown> | null} */
+  var widgetHelpers = null
+  Object.defineProperty(k2, 'widget', {
+    enumerable: true,
+    get: function () {
+      if (!hello) {
+        if (!groups.widget) return null
+        return widgetHelpers || (widgetHelpers = Object.freeze(Object.assign({}, groups.widget)))
+      }
+      if (widgetFor !== hello) {
+        widgetFor = hello
+        widgetView = Object.freeze(Object.assign({}, groups.widget || {}, hello.widget))
+      }
+      return widgetView
+    },
+  })
   Object.defineProperty(k2, 'motion', { enumerable: true, get: function () { return hello ? hello.motion : Object.freeze({ reduced: false }) } })
 
   // Named helpers, one per row (`surface.action` → k2.surface.action).
@@ -615,7 +637,7 @@
     if (dot <= 0) return
     var surface = verb.slice(0, dot)
     var action = verb.slice(dot + 1)
-    if (surface in k2 && !(surface in groups)) return
+    if (surface in k2 && !(surface in groups) && surface !== 'widget') return
     var row = TABLE[verb]
     var group = groups[surface] || (groups[surface] = {})
     group[action] =
@@ -649,6 +671,7 @@
   }
 
   Object.keys(groups).forEach(function (surface) {
+    if (surface === 'widget') return // served by the k2.widget getter
     k2[surface] = Object.freeze(groups[surface])
   })
 

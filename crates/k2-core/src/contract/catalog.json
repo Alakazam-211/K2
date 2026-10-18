@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 11,
+  "catalogVersion": 12,
   "caps": [
     {
       "name": "agents:read",
@@ -71,6 +71,12 @@
       "name": "files:agentconfig",
       "exposure": ["app"],
       "label": "Also allow writing the agent's .k2 folder (not recommended)"
+    },
+    {
+      "name": "room:members",
+      "exposure": ["app", "garden-local"],
+      "label": "See who has access to the room",
+      "sentence": "See who has access to the agents on this computer: the App guests and agent logins with a grant on each room, and their roles."
     }
   ],
   "errors": [
@@ -10019,6 +10025,8 @@
               "heartbeat_changed",
               "ticket_changed",
               "rooms_changed",
+              "room_members_changed",
+              "app_deployed",
               "resync"
             ]
           },
@@ -10091,6 +10099,10 @@
           },
           "hasBrief": {
             "type": "boolean"
+          },
+          "app": {
+            "type": "string",
+            "description": "app_deployed: the App that went live (refetch app.self)."
           }
         },
         "required": [
@@ -10107,7 +10119,7 @@
         "usage",
         "failed"
       ],
-      "doc": "Live room events: agent working, heartbeats, tickets, rooms_changed; resync then close 4008 when behind.",
+      "doc": "Live room events: agent working, heartbeats, tickets, rooms_changed, room_members_changed, app_deployed; resync then close 4008 when behind.",
       "example": "const off = k2.activity.events({workspace}, (f) => f.kind === 'resync' ? reload() : apply(f))"
     },
     {
@@ -10428,6 +10440,537 @@
       ],
       "doc": "Change the room's agent's handle (its address).",
       "example": "await k2.agentIdentity.setHandle({workspace, handle: 'sales-desk'})"
+    },
+    {
+      "verb": "room.members",
+      "cap": "room:members",
+      "exposure": [
+        "app",
+        "garden-local"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "room-members-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/members"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The room: the agent's handle (or its project id)."
+            },
+            "app": {
+              "type": "string",
+              "description": "Only this App's grants. An App names only itself (another App answers not_found); a Garden may name any App on this computer, or leave it out for every App."
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "RoomMembers",
+        "type": "object",
+        "properties": {
+          "workspace": {
+            "type": "string",
+            "description": "The room's handle."
+          },
+          "room": {
+            "type": "string",
+            "description": "The room's project id."
+          },
+          "namesHidden": {
+            "type": "boolean",
+            "description": "The owner hides guests' names in this room: an App sees null names. A Garden (the owner) always sees them."
+          },
+          "admins": {
+            "type": "string",
+            "description": "Connect logins have no rooms: always the one line \"admins of this box\"."
+          },
+          "count": {
+            "type": "integer",
+            "description": "How many members."
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "title": "RoomMember",
+              "type": "object",
+              "properties": {
+                "username": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "null when the owner hides names in this room (App callers only)."
+                },
+                "displayName": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The full name when set, else the username; null when names are hidden."
+                },
+                "kind": {
+                  "enum": [
+                    "guest",
+                    "agent"
+                  ],
+                  "description": "agent: a login marked as an agent (k2 app user agent)."
+                },
+                "role": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The role on the grant; null = a grant with rooms only (Thread)."
+                },
+                "app": {
+                  "type": "string",
+                  "description": "host (the box login) or the App id the grant is for."
+                },
+                "caps": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "username",
+                "displayName",
+                "kind",
+                "role",
+                "app",
+                "caps"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "workspace",
+          "room",
+          "namesHidden",
+          "admins",
+          "count",
+          "members"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "skin_room",
+        "cap_not_granted",
+        "not_bound",
+        "not_found",
+        "usage",
+        "failed"
+      ],
+      "doc": "Who holds a grant on the room: guests and agent logins with their roles (from grants, not presence); admins of this box are one line.",
+      "example": "const {members} = await k2.room.members({workspace})"
+    },
+    {
+      "verb": "app.self",
+      "cap": null,
+      "exposure": [
+        "app",
+        "garden-local"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-self-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/self",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "string",
+              "description": "An App names only itself (another App answers not_found, the same as no such App). A Garden names any App on this computer."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppSelf",
+        "type": "object",
+        "properties": {
+          "app": {
+            "type": "string",
+            "description": "The App id."
+          },
+          "workspace": {
+            "type": "string",
+            "description": "The handle of the workspace that owns the App."
+          },
+          "liveSeed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The live Seed's hash; null before the first deploy."
+          },
+          "health": {
+            "enum": [
+              "running",
+              "starting",
+              "crashlooping",
+              "exited",
+              "stopped",
+              "suspended"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "description": "The App row's state (running, stopped, crashlooping, failed, installing)."
+          },
+          "deployment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The live deployment id."
+          },
+          "deployedAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "When the live deployment went live, seconds since the epoch."
+          }
+        },
+        "required": [
+          "app",
+          "workspace",
+          "liveSeed",
+          "health",
+          "state",
+          "deployment",
+          "deployedAt"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "not_exposed",
+        "not_found",
+        "usage",
+        "failed"
+      ],
+      "doc": "This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest).",
+      "example": "const me = await k2.asApp().app.self()"
+    },
+    {
+      "verb": "app.usage",
+      "cap": null,
+      "exposure": [
+        "app",
+        "garden-local"
+      ],
+      "reach": "portable",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-self-v1",
+      "bindings": {
+        "http": {
+          "method": "GET",
+          "route": "/cli/skin/usage",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "app": {
+              "type": "string",
+              "description": "An App names only itself (another App answers not_found, the same as no such App). A Garden names any App on this computer."
+            },
+            "hours": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 720,
+              "description": "The window for the counts, in hours (default 24; the audit keeps 30 days of calls)."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "AppUsage",
+        "type": "object",
+        "properties": {
+          "app": {
+            "type": "string",
+            "description": "The App id."
+          },
+          "hours": {
+            "type": "integer",
+            "description": "The window the counts cover, in hours."
+          },
+          "quotas": {
+            "title": "AppQuotas",
+            "type": "object",
+            "properties": {
+              "rps": {
+                "type": "integer",
+                "description": "Sustained calls per second."
+              },
+              "burst": {
+                "type": "integer"
+              },
+              "sockets": {
+                "type": "integer"
+              },
+              "bodyBytes": {
+                "type": "integer"
+              },
+              "uploadBytes": {
+                "type": "integer"
+              },
+              "subscriptions": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "rps",
+              "burst",
+              "sockets",
+              "bodyBytes",
+              "uploadBytes",
+              "subscriptions"
+            ],
+            "additionalProperties": false
+          },
+          "live": {
+            "title": "AppLiveUse",
+            "type": "object",
+            "properties": {
+              "connections": {
+                "type": "integer"
+              },
+              "subscriptions": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "connections",
+              "subscriptions"
+            ],
+            "additionalProperties": false
+          },
+          "totals": {
+            "title": "AppCallTotals",
+            "type": "object",
+            "properties": {
+              "calls": {
+                "type": "integer"
+              },
+              "denied": {
+                "type": "integer"
+              },
+              "bytesIn": {
+                "type": "integer"
+              },
+              "bytesOut": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "calls",
+              "denied",
+              "bytesIn",
+              "bytesOut"
+            ],
+            "additionalProperties": false
+          },
+          "verbs": {
+            "type": "array",
+            "items": {
+              "title": "AppVerbUse",
+              "type": "object",
+              "properties": {
+                "verb": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The catalog verb, or null for a call that isn't one (a refused route)."
+                },
+                "route": {
+                  "type": "string",
+                  "description": "METHOD /path, as the gateway recorded it."
+                },
+                "calls": {
+                  "type": "integer"
+                },
+                "denied": {
+                  "type": "integer",
+                  "description": "Refused calls (status 400 or more)."
+                }
+              },
+              "required": [
+                "verb",
+                "route",
+                "calls",
+                "denied"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "app",
+          "hours",
+          "quotas",
+          "live",
+          "totals",
+          "verbs"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "not_exposed",
+        "not_found",
+        "usage",
+        "failed"
+      ],
+      "doc": "This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest).",
+      "example": "const {verbs, quotas} = await k2.asApp().app.usage({hours: 24})"
+    },
+    {
+      "verb": "widget.self",
+      "cap": null,
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "app-self-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "WidgetSelf",
+        "type": "object",
+        "properties": {
+          "widget": {
+            "type": "string",
+            "description": "The widget's folder name (k2:<name> for a built-in)."
+          },
+          "garden": {
+            "type": "string",
+            "description": "The Garden it is placed on."
+          },
+          "placement": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string",
+            "description": "The live version's hash (the code this frame runs)."
+          },
+          "author": {
+            "title": "WidgetAuthor",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "owner",
+                  "agent",
+                  "k2",
+                  "unclaimed"
+                ]
+              },
+              "handle": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "agent: the agent's handle."
+              }
+            },
+            "required": [
+              "kind",
+              "handle"
+            ],
+            "additionalProperties": false
+          },
+          "uses7d": {
+            "title": "WidgetUses",
+            "type": "object",
+            "properties": {
+              "writes": {
+                "type": "integer",
+                "description": "Saves this widget made to its data in the last 7 days."
+              },
+              "changes": {
+                "type": "integer",
+                "description": "Every change to its data in the last 7 days: this widget, you and agents."
+              }
+            },
+            "required": [
+              "writes",
+              "changes"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "widget",
+          "garden",
+          "placement",
+          "hash",
+          "author",
+          "uses7d"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "This widget: its id, live hash, who made it and its last 7 days of use.",
+      "example": "const me = await k2.widget.self()"
     },
     {
       "verb": "chat.pass",

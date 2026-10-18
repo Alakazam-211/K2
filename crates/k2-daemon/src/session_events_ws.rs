@@ -457,6 +457,10 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // Changes tab v1.1 (C5): app-level too; clients filter themselves.
         SessionEvent::GitNotesChanged { .. } => None,
         SessionEvent::OpenChanges { .. } => None,
+        // Room-scope R9/R16 (0.46.1) — APP-LEVEL refetch signals for owner
+        // clients; Apps get them per room on the activity socket.
+        SessionEvent::RoomMembersChanged { .. } => None,
+        SessionEvent::AppDeployed { .. } => None,
 
         // 0.39.39 WORKSPACE-SCOPED events — each carries a project path
         // in `workspace_path`; the cwd-prefix filter routes them to the
@@ -851,6 +855,14 @@ mod tests {
             },
             SessionEvent::GitNotesChanged { workspace_path: "/x/foo".into() },
             SessionEvent::OpenChanges { workspace_path: "/x/foo".into() },
+            SessionEvent::RoomMembersChanged { room: None },
+            SessionEvent::AppDeployed {
+                app_id: "jobs".into(),
+                service_id: "svc".into(),
+                project_id: "p".into(),
+                seed: None,
+                deployment: None,
+            },
         ]
     }
 

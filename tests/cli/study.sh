@@ -54,7 +54,7 @@ trap 'rm -rf "$SANDBOX"' EXIT
 export HOME="$SANDBOX"
 unset K2_PORT K2_HOOK_TOKEN K2SO_PORT K2SO_HOOK_TOKEN K2_HOST || true
 
-TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-heartbeats app-tickets app-identity skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects hooks agent-hire garden-data design"
+TOPICS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute notifications projects hooks agent-hire garden-data design"
 
 echo "== k2 study source (no daemon) =="
 set +e
@@ -634,6 +634,21 @@ assert_contains "conflict exit" "$gd_out" "5 conflict"
 gd_json="$("$K2" study garden-data --json)"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="garden-data" and "data:<widget>" in d["body"], d["id"]' "$gd_json"
 echo "  PASS: garden-data --json id+body"
+pass=$((pass + 1))
+
+echo "== k2 study app-surfaces (room-scope R9/R16, 0.46.1) =="
+as_out="$("$K2" study app-surfaces)"
+assert_contains "title" "$as_out" "k2 study app-surfaces"
+for needle in "room.members, cap room:members" "admins of this box" "GET /cli/skin/members?workspace=" \
+    "GET /cli/skin/self" "GET /cli/skin/usage?hours=N" "k2.widget.self()" "k2 app room-names <room> hide|show" \
+    "room_members_changed" "app_deployed" "not_exposed"; do
+    assert_contains "app-surfaces: $needle" "$as_out" "$needle"
+done
+as_lines="$(printf '%s\n' "$as_out" | wc -l | tr -d ' ')"
+if [ "$as_lines" -le 80 ]; then echo "  PASS: app-surfaces is bounded ($as_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-surfaces is $as_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
+as_json="$("$K2" study app-surfaces --json)"
+python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["id"]=="app-surfaces" and "room.members" in d["body"], d["id"]' "$as_json"
+echo "  PASS: app-surfaces --json id+body"
 pass=$((pass + 1))
 
 echo "== --help exit 0; bad flag exit 2 =="

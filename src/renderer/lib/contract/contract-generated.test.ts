@@ -166,6 +166,12 @@ describe('TUWA5: the generated tables', () => {
       'sources.subscribe': { cap: 'sources:read', reach: 'portable', kind: 'subscribe' },
       'sources.refresh': { cap: 'sources:read', reach: 'portable', kind: 'call' },
       'sources.ask': { cap: 'sources:read', reach: 'local', kind: 'call' },
+      // Room-scope surfaces (0.46.1): one row, the App gateway and the
+      // Garden bridge (the daemon answers them through /cli/zen/call).
+      'app.self': { cap: null, reach: 'portable', kind: 'call' },
+      'app.usage': { cap: null, reach: 'portable', kind: 'call' },
+      'widget.self': { cap: null, reach: 'local', kind: 'call' },
+      'room.members': { cap: 'room:members', reach: 'portable', kind: 'call' },
       'store.get': { cap: 'store:read', reach: 'local', kind: 'call' },
       'store.list': { cap: 'store:read', reach: 'local', kind: 'call' },
       'store.changes': { cap: 'store:read', reach: 'local', kind: 'call' },
@@ -184,7 +190,7 @@ describe('TUWA5: the generated tables', () => {
 
   it('widget caps are bridge caps (or frame-host caps: sources:read; or Garden data: store:*), and K2’s own caps never are widget caps (UW69)', () => {
     const bridgeCaps = new Set<string>(Object.values(ZEN_VERBS).filter((c): c is NonNullable<typeof c> => c !== null))
-    const extra = ['sources:read', 'store:read', 'store:write', 'guests:rooms']
+    const extra = ['sources:read', 'store:read', 'store:write', 'guests:rooms', 'room:members']
     for (const c of USER_WIDGET_CAPS) expect(bridgeCaps.has(c) || extra.includes(c), c).toBe(true)
     expect([...USER_WIDGET_CAPS]).toEqual([
       'agents:read',
@@ -195,6 +201,7 @@ describe('TUWA5: the generated tables', () => {
       'store:read',
       'store:write',
       'guests:rooms',
+      'room:members',
     ])
     expect(bridgeCaps.has('sources:read'), 'sources.* are answered by the custom layer, never ZEN_VERBS').toBe(false)
     for (const c of ['gardens:manage', 'gardens:template', 'agents:add', 'app:navigate']) {
@@ -235,6 +242,7 @@ describe('TUWA10: one cap table', () => {
       'files:agentconfig': "Also allow writing the agent's .k2 folder (not recommended)",
       // RS-A15: an owner grant to the App itself, never a role's or a pass's cap.
       'guests:rooms': "Set its own guests' rooms (an owner grant per App, never a guest's)",
+      'room:members': 'See who has access to the room',
     })
   })
 

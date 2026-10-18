@@ -17,7 +17,7 @@
 //! test fails a hand edit).
 
 /// The catalog version this table was generated from.
-pub const CATALOG_VERSION: u32 = 11;
+pub const CATALOG_VERSION: u32 = 12;
 
 /// Every `(method, path)` the browser helper forwards with a guest's
 /// pass (rows for both doors and helper-only rows; a GET row also opens
@@ -100,6 +100,8 @@ pub const HTTP_ALLOWLIST: &[(&str, &str)] = &[
     ("HEAD", "/cli/agent/identity"),
     ("POST", "/cli/agent/identity"),
     ("POST", "/cli/agent/handle"),
+    ("GET", "/cli/skin/members"),
+    ("HEAD", "/cli/skin/members"),
 ];
 
 /// Every `(method, path)` an App's gateway link serves to its App pass
@@ -184,6 +186,12 @@ pub const LINK_HTTP: &[(&str, &str)] = &[
     ("HEAD", "/cli/agent/identity"),
     ("POST", "/cli/agent/identity"),
     ("POST", "/cli/agent/handle"),
+    ("GET", "/cli/skin/members"),
+    ("HEAD", "/cli/skin/members"),
+    ("GET", "/cli/skin/self"),
+    ("HEAD", "/cli/skin/self"),
+    ("GET", "/cli/skin/usage"),
+    ("HEAD", "/cli/skin/usage"),
     ("POST", "/cli/sew/pass"),
 ];
 
@@ -200,7 +208,7 @@ pub const WS_ALLOWLIST: &[(&str, &str)] = &[
 pub const HELPER_ONLY_HTTP: &[&str] = &["/cli/skin/password/change"];
 
 /// Routes only an App's gateway link serves: a BFF's server-side calls.
-pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/guests/rooms", "/cli/sew/pass"];
+pub const LINK_ONLY_HTTP: &[&str] = &["/cli/skin/login", "/cli/skin/guests/rooms", "/cli/skin/self", "/cli/skin/usage", "/cli/sew/pass"];
 
 /// The catalog verb behind each App-facing pair and socket
 /// (`(method, path, verb, door)`; sockets are `WS`), for refusals, the
@@ -264,6 +272,9 @@ pub const VERBS: &[(&str, &str, &str, &str)] = &[
     ("GET", "/cli/agent/identity", "agentIdentity.get", "both"),
     ("POST", "/cli/agent/identity", "agentIdentity.set", "both"),
     ("POST", "/cli/agent/handle", "agentIdentity.setHandle", "both"),
+    ("GET", "/cli/skin/members", "room.members", "both"),
+    ("GET", "/cli/skin/self", "app.self", "link"),
+    ("GET", "/cli/skin/usage", "app.usage", "link"),
     ("POST", "/cli/sew/pass", "chat.pass", "link"),
     ("WS", "/cli/overlay/events", "thread.events", "both"),
     ("WS", "/cli/fs/events", "files.events", "both"),
@@ -313,11 +324,13 @@ mod tests {
         assert!(link_allows_http("HEAD", "/cli/thread"));
         assert!(link_allows_http("POST", "/cli/thread/post"));
         assert!(!link_allows_http("GET", "/cli/thread/post"), "exact method");
+        let on_link = |p: &str| link_allows_http("GET", p) || link_allows_http("POST", p);
+        let on_helper = |p: &str| helper_allows_http("GET", p) || helper_allows_http("POST", p);
         for p in HELPER_ONLY_HTTP {
-            assert!(!link_allows_http("POST", p) && helper_allows_http("POST", p), "{p} is the helper's alone");
+            assert!(!on_link(p) && on_helper(p), "{p} is the helper's alone");
         }
         for p in LINK_ONLY_HTTP {
-            assert!(link_allows_http("POST", p) && !helper_allows_http("POST", p), "{p} is the link's alone");
+            assert!(on_link(p) && !on_helper(p), "{p} is the link's alone");
         }
         assert!(HELPER_ONLY_HTTP.contains(&"/cli/skin/password/change"));
         assert!(LINK_ONLY_HTTP.contains(&"/cli/skin/login"));

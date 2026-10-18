@@ -1468,6 +1468,8 @@ async fn async_main() {
     // watchdog every 60 s. Its own task — it must keep reporting even
     // when the tick it watches has stopped.
     let _heartbeat_wait_handle = heartbeat_wait::spawn();
+    // Room-scope R9 (0.46.1): grant/role/guest writes emit room_members_changed.
+    crate::apps::surfaces::install_listener();
 
     // Federation outbox drain (audit finding #5 — the retry loop the durable
     // outbox promised). Sweeps queued cross-server messages to reachable

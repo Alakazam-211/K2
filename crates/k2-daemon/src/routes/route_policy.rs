@@ -245,6 +245,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/link/rotate", Member),
     get("/cli/app/list", Member),
     get("/cli/app/logs", Member),
+    // Room-scope R9 (0.46.1): who holds a grant on a room (owner/admin any
+    // room; a passport its own room; a member login is refused).
+    get("/cli/app/members", Member),
     // S19: per-App quotas. Lowering applies now (manage); a raise is the
     // owner's, anyone else's is a held `quota` request (handler).
     get("/cli/app/quota", Member),
@@ -258,6 +261,10 @@ pub const ROUTES: &[Route] = &[
     // S19: only the owner resumes a suspended App.
     post("/cli/app/resume", Owner),
     post("/cli/app/rollback", Member),
+    // Room-scope R9: the owner hides guests' names in one room.
+    post("/cli/app/room-names", Owner),
+    // Room-scope R16: an App's self (id, live Seed, health, deploy time).
+    get("/cli/app/self", Member),
     // S28 `k2 app shell` (WebSocket; same rules as exec).
     get("/cli/app/shell", Member),
     post("/cli/app/start", Member),
@@ -266,6 +273,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/suspend", Member),
     // purge (deletes the App's data) is owner-only in the handler.
     post("/cli/app/uninstall", Member),
+    // Room-scope R16: an App's quotas and per-call counts from its audit.
+    get("/cli/app/usage", Member),
     post("/cli/app/validate", Member),
     // 0.46.0 grace: what breaks at the 0.46.1 cut-over, per service.
     get("/cli/app/warnings", Member),
@@ -1029,6 +1038,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/logout", Public),
     // Room-scope R6 (0.46.1): a pass reads its own view; no login uses it.
     get("/cli/skin/me", NoLogin),
+    // Room-scope R9/R16 (0.46.1): room.members, app.self, app.usage for a
+    // pass (the handler checks rooms, caps and the link).
+    get("/cli/skin/members", NoLogin),
     post("/cli/skin/password/change", Public),
     post("/cli/skin/password/forgot", Public),
     post("/cli/skin/password/reset", Public),
@@ -1038,6 +1050,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/roles/room", Owner),
     post("/cli/skin/roles/unassign", Owner),
     post("/cli/skin/roles/update", Owner),
+    get("/cli/skin/self", NoLogin),
     both("/cli/skin/templates", Owner),
     post("/cli/skin/templates/apply", Owner),
     post("/cli/skin/templates/delete", Owner),
@@ -1045,6 +1058,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/templates/lines/delete", Owner),
     post("/cli/skin/templates/lines/update", Owner),
     post("/cli/skin/templates/update", Owner),
+    get("/cli/skin/usage", NoLogin),
     both("/cli/skin/users", Owner),
     post("/cli/skin/users/agent", Owner),
     post("/cli/skin/users/email", Owner),

@@ -188,3 +188,146 @@ fn only_an_agent_with_the_switch_makes_a_garden() {
     assert_eq!(s, "200 OK", "{v}");
     assert!(has_audit("zen-garden-new", "ok target="), "{:?}", audit_events());
 }
+
+// ── the widget dev loop (0.46.1 S3) ─────────────────────────────────────
+
+const PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUg==";
+
+fn folder(id: &str, body: &str) -> J {
+    json!([
+        {"name": "manifest.json", "text": format!("{{\"schema\": 1, \"id\": \"{id}\", \"name\": \"Board\", \"caps\": [\"agents:read\"]}}")},
+        {"name": "index.html", "text": format!("<!doctype html><p>{body}</p><script src=\"app.js\"></script>")},
+        {"name": "app.js", "text": "console.log(1)\n"},
+        {"name": "logo.png", "base64": PNG_B64},
+    ])
+}
+
+fn file(f: &ZenFiles, w: &str, name: &str) -> Option<String> {
+    std::fs::read_to_string(f.widget_dir(w).join(name)).ok()
+}
+
+#[test]
+fn a_folder_put_writes_whole_with_the_switch_and_refuses_a_broken_folder() {
+    let e = env();
+    let mgr = workspace("w-fmgr", true);
+    let (s, v) = call("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "board", "files": folder("board", "v1")}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["written"], json!(["app.js", "index.html", "logo.png", "manifest.json"]), "{v}");
+    assert_eq!(v["validate"]["ok"], true, "{v}");
+    assert!(file(&e.f, "board", "index.html").is_some_and(|t| t.contains("v1")));
+    assert!(has_audit("zen-widget-folder-put", "widgets/board"), "{:?}", audit_events());
+    // Broken: refused, nothing written.
+    let mut broken = folder("board", "v2");
+    broken[0]["text"] = json!("{ not json");
+    let (s, v) = call("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "board", "files": broken}));
+    assert_eq!(s, "400 Bad Request", "{v}");
+    assert!(v["message"].as_str().is_some_and(|m| m.contains("nothing was written")), "{v}");
+    assert!(file(&e.f, "board", "index.html").is_some_and(|t| t.contains("v1")), "a bad folder never lands");
+    // Built-ins are never written.
+    let (s, v) = call("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "k2:diary", "files": folder("diary", "x")}));
+    assert_eq!(s, "400 Bad Request", "{v}");
+}
+
+#[test]
+fn without_the_switch_a_folder_put_proposes_each_changed_code_file() {
+    let e = env();
+    let plain = workspace("w-fplain", false);
+    let (s, v) = call("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": folder("board", "v1")}));
+    assert_eq!(s, "200 OK", "{v}");
+    let (s, v) = call("/cli/zen/widget/folder/put", false, &plain, json!({"widget": "board", "files": folder("board", "v2"), "note": "bigger"}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["proposed"], true, "{v}");
+    let props = v["proposals"].as_array().expect("proposals").clone();
+    assert_eq!(props.len(), 1, "only index.html changed: {v}");
+    assert_eq!(props[0]["file"], "index.html");
+    assert_eq!(props[0]["note"], "folder put 1/1: bigger");
+    assert!(file(&e.f, "board", "index.html").is_some_and(|t| t.contains("v1")), "a proposal writes nothing");
+    // Nothing changed: no proposals.
+    let (s, v) = call("/cli/zen/widget/folder/put", false, &plain, json!({"widget": "board", "files": folder("board", "v1")}));
+    assert_eq!((s.as_str(), v["proposed"].as_bool()), ("200 OK", Some(false)), "{v}");
+    // An image change needs a writer; prune is refused.
+    let mut asset = folder("board", "v1");
+    asset[3]["base64"] = json!("iVBORw0KGgoAAAANSUhEUgAA");
+    let (s, v) = call("/cli/zen/widget/folder/put", false, &plain, json!({"widget": "board", "files": asset}));
+    assert_eq!(s, "400 Bad Request", "{v}");
+    assert!(v["message"].as_str().is_some_and(|m| m.contains("image or font")), "{v}");
+    let (s, v) = call("/cli/zen/widget/folder/put", false, &plain, json!({"widget": "board", "files": folder("board", "v3"), "prune": true}));
+    assert_eq!(s, "400 Bad Request", "{v}");
+    // The person approves the proposal: it lands.
+    let id = props[0]["id"].as_str().expect("id");
+    let (s, v) = call("/cli/zen/proposals/approve", true, &Caller::Owner, json!({"id": id}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert!(file(&e.f, "board", "index.html").is_some_and(|t| t.contains("v2")));
+}
+
+#[test]
+fn a_folder_check_writes_nothing_for_any_local_agent_and_never_pends() {
+    let e = env();
+    let plain = workspace("w-fcheck", false);
+    let (s, v) = call("/cli/zen/widget/folder/check", false, &plain, json!({"files": folder("board", "v1"), "fallback": "staged-dir"}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!((v["ok"].as_bool(), v["status"].as_str(), v["widget"].as_str()), (Some(true), Some("ok"), Some("board")), "{v}");
+    assert!(!e.f.widget_dir("board").exists(), "check writes nothing");
+    let mut bad = folder("board", "v1");
+    bad[1] = json!({"name": "index.html", "text": "<p onclick=\"x()\">inline</p>"});
+    let (s, v) = call("/cli/zen/widget/folder/check", false, &plain, json!({"files": bad}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!((v["ok"].as_bool(), v["status"].as_str()), (Some(false), Some("failed")), "{v}");
+    assert!(v["errors"].as_array().is_some_and(|e| !e.is_empty()), "{v}");
+    let (s, v) = call("/cli/zen/widget/folder/check", false, &plain, json!({"files": [{"name": "../x.js", "text": ""}]}));
+    assert_eq!(s, "400 Bad Request", "{v}");
+    // A Connect login is still turned away.
+    let login = Caller::Login { username: "ada".into() };
+    let (s, v) = call("/cli/zen/widget/folder/check", false, &login, json!({"files": folder("board", "v1")}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("403 Forbidden", Some("zen_local_only")), "{v}");
+}
+
+#[test]
+fn a_garden_check_reports_errors_and_writes_nothing() {
+    let e = env();
+    let plain = workspace("w-gcheck", false);
+    let g = garden1(&e.f);
+    let before = disk(&e.f, &g);
+    let (s, v) = call("/cli/zen/garden/check", false, &plain, json!({"garden": g, "text": "schema = 1\nnot_a_key = 3\n"}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!((v["ok"].as_bool(), v["status"].as_str()), (Some(false), Some("failed")), "{v}");
+    assert!(v["errors"][0]["message"].as_str().is_some_and(|m| m.contains("not_a_key")), "{v}");
+    let (s, v) = call("/cli/zen/garden/check", false, &plain, json!({"garden": g, "text": page("#445566")}));
+    assert_eq!((s.as_str(), v["ok"].as_bool()), ("200 OK", Some(true)), "{v}");
+    assert_eq!(disk(&e.f, &g), before, "check never writes");
+}
+
+#[test]
+fn only_a_writer_previews_and_the_preview_never_touches_the_persons_gardens() {
+    let e = env();
+    let plain = workspace("w-pplain", false);
+    let mgr = workspace("w-pmgr", true);
+    let (s, v) = call("/cli/zen/widget/preview", false, &plain, json!({"files": folder("board", "v1")}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("403 Forbidden", Some("person_only")), "{v}");
+    let before: Vec<(String, Option<String>)> = e.f.gardens().into_iter().map(|g| (g.id.clone(), disk(&e.f, &g.id))).collect();
+    let (s, v) = call("/cli/zen/widget/preview", false, &mgr, json!({"files": folder("board", "v1"), "config": {"sources": "fleet"}}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["preview"], "preview-board", "{v}");
+    let gid = v["garden"]["id"].as_str().expect("garden").to_string();
+    for (id, text) in &before {
+        assert_ne!(id, &gid);
+        assert_eq!(&disk(&e.f, id), text, "{id} untouched");
+    }
+    assert!(disk(&e.f, &gid).is_some_and(|t| t.contains("widget = \"preview-board\"") && t.contains("sources = \"fleet\"")));
+    assert!(has_audit("zen-widget-preview", "preview-board"), "{:?}", audit_events());
+    let (s, v) = call("/cli/zen/widget/preview", false, &mgr, json!({"clear": true}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["removed"], json!(["preview-board"]), "{v}");
+    assert!(e.f.find_garden("Widget preview").is_none());
+}
+
+#[test]
+fn folder_routes_take_a_whole_folder_body_and_the_rest_keep_320_kb() {
+    assert_eq!(crate::zen_routes::max_body("/cli/zen/widget/folder/put"), k2_core::zen::widget_folder::MAX_FOLDER_BODY);
+    assert_eq!(crate::zen_routes::max_body("/cli/zen/widget/preview"), k2_core::zen::widget_folder::MAX_FOLDER_BODY);
+    assert_eq!(crate::zen_routes::max_body("/cli/zen/widget/put"), crate::zen_routes::MAX_BODY);
+    assert_eq!(crate::zen_routes::too_large_for("/cli/zen/widget/folder/check").status, "413 Payload Too Large");
+    for p in crate::zen_agent_routes::FOLDER_ROUTES {
+        assert!(crate::zen_routes::POST_ROUTES.contains(p), "{p} is a POST row");
+    }
+}

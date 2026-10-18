@@ -1248,6 +1248,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/zen/data/tx/begin", NoLogin),
     post("/cli/zen/data/tx/commit", NoLogin),
     get("/cli/zen/doctor", Member),
+    // A staged Garden page checked, never written (0.46.1 S3).
+    post("/cli/zen/garden/check", Member),
     post("/cli/zen/garden/delete", Member),
     // Garden Lock (prd-garden-lock-and-sync-v1 §5.2): the person only; the
     // handler refuses every passport, login and app pass (403 owner_only).
@@ -1292,8 +1294,13 @@ pub const ROUTES: &[Route] = &[
     // owner token only; sign takes it or a local agent/shell passport.
     post("/cli/zen/widget/claim", Member),
     get("/cli/zen/widget/errors", Member),
+    // The widget dev loop (0.46.1 S3): a staged folder checked, written
+    // (or proposed) whole, or previewed on K2's own preview Garden.
+    post("/cli/zen/widget/folder/check", Member),
+    post("/cli/zen/widget/folder/put", Member),
     post("/cli/zen/widget/new", Member),
     post("/cli/zen/widget/pause", Member),
+    post("/cli/zen/widget/preview", Member),
     post("/cli/zen/widget/put", Member),
     post("/cli/zen/widget/resume", Member),
     post("/cli/zen/widget/run", Member),

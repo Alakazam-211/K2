@@ -23,6 +23,10 @@ use crate::run;
 /// What running a program does to the temp root.
 type Effect = Rc<dyn Fn(&[String])>;
 
+/// A fake program that answers from its argv and the temp root (a fake
+/// `sew` that behaves like a given Sew release).
+pub(crate) type Program = Rc<dyn Fn(&[String]) -> ExecOut>;
+
 #[derive(Default)]
 struct ExecLog {
     calls: Vec<(String, Vec<String>, Option<Vec<u8>>)>,
@@ -36,6 +40,9 @@ struct ExecLog {
     rules: Vec<(String, String, ExecOut)>,
     /// prog → what running it does to the temp root (useradd, usermod, …).
     effects: Vec<(String, Effect)>,
+    /// prog → a fake program; when set, it alone answers (after the call is
+    /// logged), ahead of `rules`, `answers` and `effects`.
+    programs: HashMap<String, Program>,
 }
 
 #[derive(Clone, Default)]
@@ -68,6 +75,10 @@ impl Exec for FakeExec {
                     stderr: vec![],
                 },
             });
+        }
+        if let Some(prog_fn) = log.programs.get(prog).cloned() {
+            drop(log);
+            return Ok(prog_fn(args));
         }
         let effects: Vec<_> = log
             .effects

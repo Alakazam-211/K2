@@ -41829,7 +41829,9 @@ Server:
          install: changing it later means a fresh install (uninstall --purge,
          then enable). Default k2; standalone = Sew's own password logins.
   k2 hostchat disable | rollback | doctor | backup | backups [--json]
-  k2 hostchat upgrade [--tarball FILE] [--dry-run] [--json]
+  k2 hostchat upgrade [--tarball FILE] [--media-tarball FILE] [--dry-run] [--no-wait] [--json]
+                                            (--media-tarball: the sew-media release, needed when voice is on;
+                                             waits for the result; exit 3 unless it is done)
   k2 hostchat restore <bundle-id> --confirm [--json]
   k2 hostchat rotate-master [--json]
   k2 hostchat config --public-url https://HOST [--json]
@@ -41990,6 +41992,58 @@ sys.exit(3 if bad else 0)
     exit 3
 }
 
+# Wait until GET /cli/sew/status leaves "upgrading", then print the result
+# and its reason (upgradeProgress.lastError, else lastError). Exit 0 only on
+# result "done"; anything else (refused, aborted, rolled_back, media_failed,
+# rollback_failed) exits 3 with the reason on stderr.
+_hostchat_upgrade_wait() {
+    local as_json="${1:-0}" i=0 last=""
+    while [ "$i" -lt 900 ]; do
+        _hostchat_call GET /cli/sew/status ""
+        local now
+        now="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+p = v.get("upgradeProgress") or {}
+busy = v.get("state") == "upgrading" or (p.get("result") is None and p.get("current") is not None)
+print(("busy " if busy else "done ") + str(p.get("current") or "-"))
+')"
+        case "$now" in
+            done*)
+                if [ "$as_json" = "1" ]; then
+                    printf '%s\n' "$_CP_BODY"
+                fi
+                printf '%s' "$_CP_BODY" | K2_HC_JSON="$as_json" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+p = v.get("upgradeProgress") or {}
+res = p.get("result")
+why = p.get("lastError") or v.get("lastError")
+quiet = os.environ["K2_HC_JSON"] == "1"
+if res == "done":
+    if not quiet:
+        print("upgraded: %s -> %s" % (p.get("from"), p.get("to")))
+    sys.exit(0)
+if not why:
+    why = "the daemon recorded no reason (a K2 bug: send the k2-daemon log)"
+print(json.dumps({"error": "upgrade_" + str(res), "result": res, "from": p.get("from"), "to": p.get("to"),
+                  "hint": why}), file=sys.stderr)
+sys.exit(3)
+'
+                return $?
+                ;;
+        esac
+        if [ "$now" != "$last" ] && [ "$as_json" != "1" ]; then
+            echo "… upgrading: ${now#busy }" >&2
+            last="$now"
+        fi
+        sleep 2
+        i=$((i + 1))
+    done
+    echo '{"error":"timeout","hint":"still upgrading after 30 minutes: k2 hostchat status"}' >&2
+    exit 3
+}
+
 # One top-level string field of _CP_BODY ("" when absent).
 _hostchat_field() {
     printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin).get(sys.argv[1]); print(v if isinstance(v, str) else "")' "$1"
@@ -42080,10 +42134,11 @@ cmd_hostchat() {
             [ -n "${pos[0]:-}" ] || { echo '{"error":"usage","hint":"k2 hostchat job <id>"}' >&2; exit 2; }
             _hostchat_call GET /cli/sew/job "id=$(urlencode "${pos[0]}")"; _hostchat_print job "$as_json" ;;
         upgrade)
-            local b; b="$(_compute_json K2_CJ_tarballPath="$(abs "$tarball")" K2_CJ_dryRun_b="$dry")"
+            local b; b="$(_compute_json K2_CJ_tarballPath="$(abs "$tarball")" K2_CJ_mediaTarballPath="$(abs "$media_tarball")" K2_CJ_dryRun_b="$dry")"
             _hostchat_call POST /cli/sew/server/upgrade "$b"
             if [ "$wait" = "1" ] && [ "$(_hostchat_field state)" = "upgrading" ]; then
-                sleep 2; _hostchat_call GET /cli/sew/status ""
+                _hostchat_upgrade_wait "$as_json"
+                return $?
             fi
             _hostchat_print upgrade "$as_json" ;;
         restore)

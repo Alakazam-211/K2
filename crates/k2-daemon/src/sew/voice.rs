@@ -598,7 +598,7 @@ fn install_steps(env: &Env, req: &InstallRequest) -> R<Value> {
     }))
 }
 
-fn stage_media_bytes(env: &Env, path: Option<&std::path::Path>) -> R<()> {
+pub(crate) fn stage_media_bytes(env: &Env, path: Option<&std::path::Path>) -> R<()> {
     let (v, art) = pinned_media_artifact(&env.ops.arch()).map_err(|e| no("media_unpinned", 409, e))?;
     let staged = sup::helper_json(env, &["status"]).ok().and_then(|s| s.pointer("/staged/media").and_then(Value::as_str).map(str::to_string));
     if staged.as_deref() == Some(v) && path.is_none() {

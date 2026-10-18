@@ -510,7 +510,11 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
             need_manage(who)?;
             sup::need_released(&env)?;
             let v = json_body(body)?;
-            let req = sup::UpgradeRequest { tarball_path: abs_path(&v, "tarballPath")?, dry_run: b(&v, "dryRun") };
+            let req = sup::UpgradeRequest {
+                tarball_path: abs_path(&v, "tarballPath")?,
+                media_tarball_path: abs_path(&v, "mediaTarballPath")?,
+                dry_run: b(&v, "dryRun"),
+            };
             match sup::upgrade_begin(&env, &req)? {
                 Err(done) => Ok(done),
                 Ok((latch, from)) if background => {

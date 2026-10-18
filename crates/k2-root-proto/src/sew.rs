@@ -49,6 +49,13 @@ pub const SEW_MEDIA_SYSCTL: &str = "/etc/sysctl.d/60-sew-media.conf";
 pub const SEW_STAGE_DIR: &str = "/var/lib/k2-root-helper/sew";
 pub const SEW_STAGE_TARBALL: &str = "/var/lib/k2-root-helper/sew/sew.tar.gz";
 pub const SEW_STAGE_MEDIA_TARBALL: &str = "/var/lib/k2-root-helper/sew/sew-media.tar.gz";
+/// The pinned tarball's `sew` member (root 0700, sha256 = the pin's
+/// `binary_sha256`), extracted by `engine sew upgrade` for the INSTALLED
+/// Sew's `sew upgrade --binary <this> --sha256 <binary_sha256>`: an older
+/// Sew (0.1.x) refuses a release tarball with more than one member, and
+/// 0.2.0 on ship `LICENSE`, `NOTICE` and `THIRD_PARTY_NOTICES.md` beside
+/// `sew`. Removed after the call.
+pub const SEW_STAGE_UPGRADE_BIN: &str = "/var/lib/k2-root-helper/sew/sew.new";
 pub const SEW_STAGE_INSTALL_JSON: &str = "/var/lib/k2-root-helper/sew/install.json";
 pub const SEW_STAGE_MEDIA_JSON: &str = "/var/lib/k2-root-helper/sew/media.json";
 /// The TURN TLS chain and key the daemon hands over (K13), written 0600
@@ -265,7 +272,7 @@ pub const TEST_RELEASES: &[SewRelease] = &[
         artifacts: &[SewArtifact {
             arch: "x86_64",
             triple: "x86_64-unknown-linux-gnu",
-            tarball_sha256: "a5940321b4efb87b6a27098f47140555c10630667739f53d6e5256144f00b7cf",
+            tarball_sha256: "d73db8b4ab25f2a02ad63e5b9c6f5e1395f77586eda83794bfd6a898f6d4e1a5",
             binary_sha256: "f6a283a01c9931727e76b819b3bade043c01731523cbdf7d9febb139a7415094",
         }],
         media: Some(SewSidecar {

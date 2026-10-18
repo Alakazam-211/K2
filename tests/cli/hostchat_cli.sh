@@ -14,6 +14,9 @@
 #   5. Person-only steps refuse inside a K2 terminal before any request.
 #   6. A release without a Sew pin: enable/preflight/upgrade/media install
 #      exit 3 with sew_not_released; status says so plainly, exit 0.
+#   7. upgrade sends tarballPath + mediaTarballPath, waits on /cli/sew/status
+#      until the result, exits 0 only on "done"; a refusal exits 3 with
+#      upgradeProgress.lastError (the reason) on stderr.
 # Fake values only (example.test, made-up ids). Never touches the real ~/.k2.
 
 set -euo pipefail
@@ -109,6 +112,17 @@ class H(BaseHTTPRequestHandler):
         elif unreleased and p in ("/cli/sew/server/enable", "/cli/sew/server/upgrade", "/cli/sew/preflight",
                                   "/cli/sew/media/install", "/cli/sew/media/preflight"):
             status, out = 409, {"ok": False, "error": {"code": "sew_not_released", "hint": msg}}
+        elif p == "/cli/sew/status" and os.path.exists(os.path.join(work, "upgrade")):
+            mode = open(os.path.join(work, "upgrade")).read().strip()
+            state["upolls"] = state.get("upolls", 0) + 1
+            busy = state["upolls"] < 2
+            why = None if mode == "done" else "upgrade to 0.2.0 refused by Sew (exit 3): the tarball must hold exactly one regular file named sew"
+            out = {"ok": True, "supported": True, "state": "upgrading" if busy else "running", "lastError": why,
+                   "upgradeProgress": {"from": "0.1.2", "to": "0.2.0", "current": "upgrade" if busy else None,
+                                       "result": None if busy else mode, "lastError": None if busy else why}}
+        elif p == "/cli/sew/server/upgrade":
+            state["upolls"] = 0
+            out = {"ok": True, "state": "upgrading", "hint": "poll GET /cli/sew/status (upgradeProgress)"}
         elif p == "/cli/sew/status":
             state["polls"] += 1
             done = state["polls"] >= 2
@@ -320,6 +334,22 @@ for verb in "enable --tarball sew.tar.gz" "preflight" "upgrade --tarball sew.tar
     assert_contains "unreleased: $verb gives the message" "$err" "$NR"
 done
 rm -f "$WORK/unreleased"
+
+echo "== upgrade waits for the result and carries the reason =="
+echo refused > "$WORK/upgrade"
+run owner hostchat upgrade --tarball sew.tar.gz --media-tarball sew-media.tar.gz
+assert_eq "upgrade refused → exit 3" "$rc" "3"
+body="$(req_where /cli/sew/server/upgrade body)"
+assert_contains "upgrade: tarball absolute" "$body" "\"tarballPath\": \"$WORK/sew.tar.gz\""
+assert_contains "upgrade: media tarball absolute" "$body" "\"mediaTarballPath\": \"$WORK/sew-media.tar.gz\""
+assert_contains "upgrade refused: result on stderr" "$err" '"error": "upgrade_refused"'
+assert_contains "upgrade refused: Sew's reason on stderr" "$err" "the tarball must hold exactly one regular file named sew"
+echo done > "$WORK/upgrade"
+run owner hostchat upgrade --tarball sew.tar.gz
+assert_eq "upgrade done → exit 0" "$rc" "0"
+assert_contains "upgrade done: from → to" "$out" "upgraded: 0.1.2 -> 0.2.0"
+assert_absent "upgrade done: no media path sent" "$(req_where /cli/sew/server/upgrade body)" "mediaTarballPath"
+rm -f "$WORK/upgrade"
 
 echo
 echo "hostchat CLI: $pass passed, $fail failed"

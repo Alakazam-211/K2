@@ -833,6 +833,10 @@ pub mod fake {
                 }
                 "engine sew media turn-cert" => Self::sew_exit(0, json!({"changed": ["turn-tls/fullchain.pem"]})),
                 "engine sew media status" => Self::sew_exit(0, self.media_state.lock().unwrap().clone()),
+                "engine sew media upgrade" => {
+                    let to = pinned().media.as_ref().map(|m| m.version).unwrap_or(pin);
+                    Self::sew_exit(0, json!({"changed": ["/usr/local/lib/sew-media/sew-media"], "to": to, "mode": "now"}))
+                }
                 "engine sew media uninstall" => {
                     inactive(UNIT_MEDIA);
                     Self::sew_exit(0, json!({"removed": ["sew-media"]}))

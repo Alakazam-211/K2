@@ -145,7 +145,10 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// (`uplot@1.6.32`).
 /// v24 = the `k2:*@2` data-source cards (0.46.1): several sources per card
 /// (`config.sources`), soft crit, named lists, K2 Web's ops data.
-pub const SKILL_VERSION_ZEN: u32 = 24;
+/// v25 = Thread read state in Zen (0.46.1, thread-read-v1): the Agents
+/// widget's `unread` prop and the Conversation's `mute` prop (Garden 1 turns
+/// it on); conversations mark their Thread read while looked at.
+pub const SKILL_VERSION_ZEN: u32 = 25;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

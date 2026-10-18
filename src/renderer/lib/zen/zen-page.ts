@@ -270,7 +270,8 @@ export const BUILTIN_TEXTING_PAGE: ZenResolvedPage = Object.freeze({
       id: 'conversation',
       kind: 'conversation',
       column: 1,
-      props: { agents: 'agents', 'activity-drawer': true },
+      // 0.46.1: Garden 1's mute bell (thread-read-v1).
+      props: { agents: 'agents', 'activity-drawer': true, mute: true },
       caps: ['agents:read', 'presence:read', 'thread:read', 'thread:post'],
       source: 'builtin',
     },

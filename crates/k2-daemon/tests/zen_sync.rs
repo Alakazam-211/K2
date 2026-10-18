@@ -248,7 +248,9 @@ const FROZEN: &[(&str, &str)] = &[
     // 0.46.0 (GS45, Rosson 2026-10-16): Garden 1 takes K2 Companion's look:
     // the Glass theme (`theme`), nine pins (`pin-limit`) and Recent agents
     // first (`recent-first`; both props unset by default in widget-props).
-    ("template:k2.texting@1", "8889bebc10e1786c"),
+    // 0.46.1 (GS45, thread-read-v1 Zen defaults): Garden 1's mute bell
+    // (`mute = true`; off by default in widget-props).
+    ("template:k2.texting@1", "dcf00349d9e1314f"),
     // 0.46.0 (GS45, plan-agent-status-unify-v1, Rosson 2026-10-16): working
     // is the theme accent in basic, midnight and paper, and the bone text
     // colour in haunted (its accent sits too near the needs-you orange).
@@ -261,7 +263,8 @@ const FROZEN: &[(&str, &str)] = &[
     ("theme:haunted", "d4380bff6abfb969"),
     ("theme:midnight", "f0ecc58c374f1766"),
     ("theme:paper", "a9f7198592fa9474"),
-    ("widget-props", "16e90623b0957c98"),
+    // 0.46.1: `agents.unread` (on) and `conversation.mute` (off).
+    ("widget-props", "9003638b0181aa01"),
 ];
 
 fn frozen_hashes() -> BTreeMap<String, String> {
@@ -907,10 +910,28 @@ fn gs51_the_kanban_is_new_in_the_catalog() {
     assert!(fresh.find_garden("Kanban").is_none(), "never preinstalled");
 }
 
+/// Take 0.46.1's Thread read state out of a set (thread-read-v1 Zen
+/// defaults): the `agents.unread` and `conversation.mute` props and Garden
+/// 1's `mute = true`.
+fn strip_0461(s: &mut DefaultsSet) {
+    let t = s.templates.get_mut(zen::TEMPLATE_ID).expect("texting in the set");
+    replace_in(t, "mute = true\n", "");
+    for k in ["agents.unread", "conversation.mute"] {
+        assert!(s.widget_props.remove(k).is_some(), "this build lists the {k} prop");
+    }
+}
+
+/// K2's defaults as 0.46.0 shipped them: this build's set without 0.46.1's
+/// Thread read state.
+fn release_0460() -> Defaults {
+    fake_set(strip_0461)
+}
+
 /// Take 0.46.0's Garden 1 look out of a set (Rosson 2026-10-16): the Glass
 /// theme, Garden 1's `theme = "glass"`, `pin-limit = 9`, `recent-first =
-/// true` and those two props.
+/// true` and those two props. Also takes out everything newer (0.46.1).
 fn strip_0460(s: &mut DefaultsSet) {
+    strip_0461(s);
     let t = s.templates.get_mut(zen::TEMPLATE_ID).expect("texting in the set");
     for line in ["theme = \"glass\"\n", "pin-limit = 9\n", "recent-first = true\n"] {
         replace_in(t, line, "");
@@ -1028,6 +1049,60 @@ fn gs51_garden1_companion_port_is_news_after_0455() {
     assert_eq!(resolve_now(&f, &mine), mine_before, "an own copy doesn't move");
     assert_eq!(widget(&mine_before, "agents")["props"]["pins"], false);
     assert_eq!(widget(&resolve_now(&f, &g2), "agents")["props"]["pins"], false, "Garden 2's own Agents widget: no pins");
+}
+
+/// 0.46.1 (thread-read-v1 Zen defaults): upgrading from 0.46.0, the synced
+/// Garden 1 gets the conversation's mute bell (`mute = true`) and the
+/// Agents list's unread counts (`unread`, a new prop on by default), with
+/// one update item on the What's new card. An own copy of Garden 1 keeps
+/// 0.46.0's page: no bell.
+#[test]
+fn gs54_garden1_thread_read_is_news_after_0460() {
+    let (_t, z) = temp_dir("garden1-read");
+    let old = release_0460();
+    let old_fp = old.fingerprint().to_string();
+    let f = ZenFiles::with_defaults(&z, old);
+    legacy_setup(&f);
+    let g1 = gid(&f, 0);
+    let mine = new_garden(&f, "mine", "texting", Some(LAYOUT_ONLY));
+    f.news().expect("news on 0.46.0");
+    f.set_garden_sync(&mine, Parts::Both, false).expect("mine: own copy");
+    f.news_seen(&[], true).expect("0.46.0: everything seen");
+    let mine_before = resolve_now(&f, &mine);
+
+    // This build starts on the same folder.
+    let f = ZenFiles::with_defaults(&z, fake_set(|_| {}));
+    let news = f.news().expect("news after the upgrade");
+    assert_eq!(news["previousDefaults"], old_fp.as_str(), "0.46.0's set is the previous one: {news}");
+    let updates: Vec<&J> = news["items"].as_array().expect("items").iter().filter(|i| i["kind"] == "update").collect();
+    let g1_item = updates
+        .iter()
+        .find(|i| i["garden"] == g1.as_str())
+        .unwrap_or_else(|| panic!("no update item for Garden 1: {news}"));
+    assert_eq!(g1_item["part"], "page", "only the page moved, not the theme: {news}");
+    assert!(!updates.iter().any(|i| i["garden"] == mine.as_str()), "an own copy gets no update item: {news}");
+
+    let widget = |v: &J, kind: &str| {
+        v["page"]["widgets"]
+            .as_array()
+            .expect("widgets")
+            .iter()
+            .find(|w| w["kind"] == kind)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {kind} widget: {v}"))
+    };
+    let now = resolve_now(&f, &g1);
+    assert_eq!(widget(&now, "conversation")["props"]["mute"], true, "synced Garden 1: the bell");
+    assert_eq!(widget(&now, "agents")["props"]["unread"], true, "synced Garden 1: unread counts");
+    let then = resolve_as(&f, &g1, &view(copy_of(&old_fp), synced()));
+    assert_ne!(widget(&then, "conversation")["props"]["mute"], true, "0.46.0's Garden 1 has no bell: {then}");
+    // The own copy never moves (never revert): no bell.
+    let mine_now = resolve_now(&f, &mine);
+    assert_eq!(mine_now, mine_before, "an own copy doesn't move");
+    assert_ne!(widget(&mine_now, "conversation")["props"]["mute"], true, "own copy: no bell");
+    // Seen once.
+    f.news_seen(&[], true).expect("seen");
+    assert_eq!(f.news().expect("news")["items"], json!([]), "the card shows it once");
 }
 
 /// Rosson 2026-10-16 (0.46.0): Garden 1 takes K2 Companion's look: the

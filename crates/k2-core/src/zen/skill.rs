@@ -1006,6 +1006,17 @@ mod tests {
         }
     }
 
+    /// v25: Thread read state in Zen (0.46.1): the props are in the skill's
+    /// widget table with what they do.
+    #[test]
+    fn skill_documents_unread_and_mute_props() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 25, "the read-state props need a new skill version");
+        let s = generate_k2_zen_skill();
+        for needle in ["`unread`", "your unread count and the cards waiting on you", "`mute`", "a bell in the header to mute or unmute this agent's Thread"] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+    }
+
     /// v20: the Kanban Garden (0.45.7, Rosson 2026-10-15): where its board
     /// lives and the shape an agent writes.
     #[test]

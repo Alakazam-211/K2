@@ -70,6 +70,11 @@ load-older = true
 # 0.45.6 (Rosson 2026-10-15, from K2 Companion): the live activity
 # drawer above the message box while the agent works on your message.
 activity-drawer = true
+# 0.46.1 (thread-read-v1): the bell that mutes this agent's Thread. The
+# conversation marks the Thread read while you look at it and shows the
+# cards waiting on you either way; the Agents list shows unread counts
+# (`unread`, on by default).
+mute = true
 
 # The thin left rail (Rosson 2026-10-04): My Home (current), Agents,
 # Projects, Tickets. Drawn at the left edge of column 0, outside the Agents

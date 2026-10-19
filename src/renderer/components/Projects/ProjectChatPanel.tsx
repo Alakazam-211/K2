@@ -35,7 +35,7 @@
 //     posted as read (`useAutoMarkRead`). The header's bell mutes the
 //     chat for this person (a grey dot, out of the badge).
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { usePageViewStore } from '@/stores/page-view'
 import { useAutoMarkRead } from '@/stores/unread'
@@ -66,13 +66,15 @@ import {
 } from '@/components/common/SelectableText'
 import {
   ThreadChatBubble,
-  ThreadChatComposer,
+  ThreadChatDraftComposer,
   ThreadChatEmpty,
   ThreadChatNote,
   ThreadChatScope,
+  type ThreadChatDraftApi,
 } from '@/components/Thread/ThreadChat'
-import { THREAD_LIST_GAP, THREAD_LIST_PADDING, ThreadLoadOlder } from '@/components/Thread/ThreadZenKit'
+import { THREAD_LIST_GAP, THREAD_LIST_PADDING, ThreadLoadOlder, ThreadWindowSpacer } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
+import { useRenderWindow } from '@/components/Thread/useRenderWindow'
 import { useChatSessionTurn, type ChatSessionTarget } from '@/components/Thread/sessionTurn'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { useIsYouAuthor } from '@/components/Settings/sections/useNotifyPrefs'
@@ -88,6 +90,10 @@ import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
 // Resize-handle hit-area thickness (px), centered on the panel's left
 // border (the dashboard's DIVIDER_HIT_PX idiom).
 const RESIZE_HIT_PX = 7
+
+/** The delivered line's style: one object (the memoized bubble compares
+ *  its footer's props). */
+const DELIVERY_STYLE: React.CSSProperties = { fontStyle: 'italic' }
 
 /** The most recent post's delivery outcome, rendered under its message. */
 interface LastPost {
@@ -125,16 +131,13 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   const [loadingEarlier, setLoadingEarlier] = useState(false)
 
   // Composer drafts survive panel unmount (leave project / switch pages).
-  const [draft, setDraft] = useState(() => getProjectChatDraft(show.id))
+  // The text lives in the message box (keyed by project), so a keystroke
+  // never re-renders the stream; this reads and clears it via `draftApi`.
+  const draftApi = useRef<ThreadChatDraftApi>(null)
   const [busy, setBusy] = useState(false)
-
-  const setDraftAndPersist = (text: string): void => {
-    setDraft(text)
-    setProjectChatDraft(show.id, text)
-  }
+  const persistDraft = useCallback((text: string) => setProjectChatDraft(show.id, text), [show.id])
 
   useEffect(() => {
-    setDraft(getProjectChatDraft(show.id))
     clearStuckBodyUserSelect()
   }, [show.id])
 
@@ -204,20 +207,44 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   // Keep the newest message in view when the TAIL grows (initial load or
   // a new message) — but not when history is prepended (loadEarlier
   // preserves its own scroll anchor) and not mid text-selection.
+  // The render window (0.46.2, from K2 Companion): every loaded message
+  // stays in `messages`, only a window of rows is drawn (the newest 30 on
+  // opening, at most ~50 while reading back), spacers of the measured
+  // height standing in for the rest.
+  const keys = useMemo(() => (messages ?? []).map((m) => m.id), [messages])
+  const followingRef = useRef(true)
+  const win = useRenderWindow({
+    room: show.id,
+    keys,
+    scroller: () => scrollRef.current,
+    list: () => scrollRef.current?.querySelector<HTMLElement>('[data-thread-column]') ?? null,
+    following: () => followingRef.current,
+    stick: (el) => {
+      el.scrollTop = el.scrollHeight
+    },
+  })
+  const toNewest = win.toNewest
+
   const lastId = messages && messages.length > 0 ? messages[messages.length - 1].id : null
   const prevLastId = useRef<string | null>(null)
   useEffect(() => {
     if (lastId === null || lastId === prevLastId.current) return
     prevLastId.current = lastId
     if (hasSelectionWithin(scrollRef.current)) return
+    followingRef.current = true
+    // Rows below the window come back first (the newest is drawn).
+    toNewest(false)
     requestAnimationFrame(() => {
       if (hasSelectionWithin(scrollRef.current)) return
       const el = scrollRef.current
       if (el) el.scrollTop = el.scrollHeight
     })
-  }, [lastId])
+  }, [lastId, toNewest])
 
+  const growTop = win.growTop
   const loadEarlier = useCallback(async (): Promise<void> => {
+    // Memory first: rows above the window come back before a fetch.
+    if (growTop()) return
     if (loadingEarlier) return
     const next = nextEarlierLimit(limitRef.current)
     setLimit(next)
@@ -235,16 +262,16 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     } finally {
       setLoadingEarlier(false)
     }
-  }, [loadingEarlier, load])
+  }, [loadingEarlier, load, growTop])
 
-  const send = useCallback((): void => {
+  const send = useCallback((draft: string): void => {
     const text = draft.trim()
     if (!text || busy) return
     setBusy(true)
     setSendError(null)
     postProjectGroupMessage(primaryScope(), show.id, text)
       .then((posted) => {
-        setDraftAndPersist('')
+        draftApi.current?.set('')
         clearProjectChatDraft(show.id)
         setLastPost({
           messageId: posted.id,
@@ -270,7 +297,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
       })
       .catch((e) => setSendError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
-  }, [draft, busy, show.id])
+  }, [busy, show.id])
 
   // §6.7.3 polish — resizable width: the persisted store value, with a
   // panel-local live value while a drag is in flight (drag live,
@@ -364,7 +391,13 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
           className="flex-1 overflow-y-auto overflow-x-hidden min-h-0"
           data-project-chat={show.id}
           data-zen-conversation-body=""
-          style={{ padding: THREAD_LIST_PADDING }}
+          // The render window holds the row on screen itself.
+          style={{ padding: THREAD_LIST_PADDING, overflowAnchor: 'none' }}
+          onScroll={(e) => {
+            const el = e.currentTarget
+            if (el.clientHeight > 0) followingRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 32
+            win.onScroll()
+          }}
         >
           {loadError ? (
             <ThreadChatNote error>Failed to load chat: {loadError}</ThreadChatNote>
@@ -376,14 +409,16 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
             </ThreadChatEmpty>
           ) : (
             <ThreadMessageColumn gap={THREAD_LIST_GAP} testId="project-chat-column">
-              {showEarlier && (
+              {/* Shown once the window reaches the first loaded message
+                  (memory first). */}
+              {showEarlier && win.drawsOldest && (
                 <ThreadLoadOlder
                   loading={loadingEarlier}
                   onClick={() => void loadEarlier()}
                   testId="project-chat-load-earlier"
                 />
               )}
-              {atCeiling && (
+              {atCeiling && win.drawsOldest && (
                 <div
                   className="text-center"
                   style={{ fontSize: '0.75em', color: 'var(--zen-text-muted)' }}
@@ -391,7 +426,8 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                   Showing the latest 500 messages — earlier history isn&rsquo;t shown.
                 </div>
               )}
-              {messages.map((m) => {
+              <ThreadWindowSpacer px={win.above} gap={THREAD_LIST_GAP} edge="top" />
+              {messages.slice(win.lo, win.hi).map((m) => {
                 const delivery =
                   lastPost?.messageId === m.id
                     ? deliveredLine(lastPost.delivered, lastPost.deliveryReason, poc)
@@ -406,10 +442,12 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                     body={m.body}
                     createdAt={m.createdAt}
                     timeLabel={formatRelativeTime(m.createdAt, nowSec)}
-                    footer={delivery ? <span data-project-chat-delivery="" style={{ fontStyle: 'italic' }}>{delivery}</span> : undefined}
+                    footer={delivery ? <span data-project-chat-delivery="" style={DELIVERY_STYLE}>{delivery}</span> : undefined}
+                    still={win.wasDrawn(m.id)}
                   />
                 )
               })}
+              <ThreadWindowSpacer px={win.below} gap={THREAD_LIST_GAP} edge="bottom" />
             </ThreadMessageColumn>
           )}
         </div>
@@ -429,12 +467,14 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
             </div>
           </div>
         ) : (
-          <ThreadChatComposer
+          <ThreadChatDraftComposer
+            key={show.id}
+            apiRef={draftApi}
+            initialValue={getProjectChatDraft(show.id)}
+            onDraftChange={persistDraft}
             testId="project-chat-compose"
             inputTestId="project-chat-input"
             sendTestId="project-chat-send"
-            value={draft}
-            onChange={setDraftAndPersist}
             onSend={send}
             busy={busy}
             drawer={<ZenActivityDrawer turn={pocTurn} />}

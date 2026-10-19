@@ -484,6 +484,14 @@ function sameItem(a: OverlayThreadItem, b: OverlayThreadItem): boolean {
   )
 }
 
+/** The same message drawn the same: one object, or equal by content (a
+ *  re-read or a cache swap hands over new, equal objects). What the
+ *  memoized Thread rows compare by. */
+export function sameThreadItem(a: OverlayThreadItem, b: OverlayThreadItem): boolean {
+  if (a === b) return true
+  return a.id === b.id && a.collection === b.collection && (a.doc === b.doc ? a.seq === b.seq && a.localTime === b.localTime : sameItem(a, b))
+}
+
 /**
  * Thread sync: merge rows from any source (a socket frame, a catch-up
  * `GET thread?since_seq=`, this window's own send) into a list BY ID.

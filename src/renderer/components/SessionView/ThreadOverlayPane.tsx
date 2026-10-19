@@ -11,6 +11,7 @@ import { useRoom } from '@/components/Room/RoomContext'
 import { displayThreadAddress } from '@/lib/thread-address-bus'
 import {
   isVoidedHitl,
+  sameThreadItem,
   type OverlayDoc,
   type OverlayThreadItem,
   type ThreadAnswerPayload,
@@ -30,10 +31,12 @@ import {
   THREAD_ZEN_SCOPE_ATTR,
   ThreadBubble,
   ThreadLoadOlder,
+  ThreadWindowSpacer,
   ThreadZenStyles,
   zenEmptyThreadText,
 } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
+import { useRenderWindow } from '@/components/Thread/useRenderWindow'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { handoffApi, type HandoffDecideBody, type HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
 
@@ -118,7 +121,12 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     [room, fileLinkTransport, addr],
   )
   // A Thread is shared: "You" only on this viewer's own posts.
-  const viewer = useThreadViewer(roomScope)
+  // One object per viewer (the guess before the server answers is a new
+  // object each read; the memoized rows compare it by identity).
+  const viewerNow = useThreadViewer(roomScope)
+  const viewerKey = JSON.stringify(viewerNow)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const viewer = useMemo(() => viewerNow, [viewerKey])
   const isTabVisible = useIsTabVisible()
   const { items, error, answer, voidCard, hasMore, loadOlder, loadingOlder, loaded, turn, currentAddr, pastAddresses } = useOverlayThread({
     // Home M4: the room's server (B's thread in B's room).
@@ -130,7 +138,22 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     viewing: active && isTabVisible,
   })
 
-  const visible = items.filter((it) => !isVoidedHitl(it.doc))
+  const visible = useMemo(() => items.filter((it) => !isVoidedHitl(it.doc)), [items])
+  const keys = useMemo(() => visible.map((it) => it.id), [visible])
+  // Rows get stable callbacks (the memoized rows compare them by identity):
+  // the latest hook functions through refs.
+  const answerRef = useRef(answer)
+  answerRef.current = answer
+  const voidRef = useRef(voidCard)
+  voidRef.current = voidCard
+  const answerById = useCallback((id: string, payload: ThreadAnswerPayload) => answerRef.current(id, payload), [])
+  const voidById = useCallback((id: string) => void voidRef.current(id), [])
+  const workspaceName = addr.split('/')[0]
+  const cardContext = useMemo<SecretCardContext>(
+    () => ({ workspace: workspaceName, server: roomScope.label }),
+    [workspaceName, roomScope.label],
+  )
+  const handoffDecide = useCallback((body: HandoffDecideBody) => handoffApi.decide(body, roomScope), [roomScope])
   // The column's message box draws the drawer: hand it the live turn.
   const liveTurn = turn ?? null
   useEffect(() => {
@@ -240,10 +263,30 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     return true
   }
 
+  // The render window (0.46.2, from K2 Companion): every message stays in
+  // the hook's memory, only a window of rows is in the DOM (the newest 30
+  // on opening, at most ~50 while reading back), spacers of the measured
+  // height standing in for the rest.
+  const win = useRenderWindow({
+    room: addr,
+    keys,
+    scroller: () => listRef.current,
+    list: () => contentRef.current,
+    following: () => pinBottomRef.current,
+    stick: (el) => {
+      el.scrollTop = el.scrollHeight
+    },
+    onScrollWrite: (top) => {
+      savedScrollTopRef.current = top
+    },
+  })
+
   function requestOlder(): void {
-    if (!hasMore || loadingOlder) return
     const el = listRef.current
     if (!el || !listScrollLive(el)) return
+    // Memory first: rows above the window come back before a fetch.
+    if (win.growTop()) return
+    if (!hasMore || loadingOlder) return
     prevHeightRef.current = el.scrollHeight
     void loadOlder()
   }
@@ -283,6 +326,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
           pinBottomRef.current =
             el.scrollHeight - el.scrollTop - el.clientHeight <= 32
           savedScrollTopRef.current = el.scrollTop
+          win.onScroll()
         }}
       >
         {loaded && !error && visible.length === 0 && (
@@ -301,26 +345,31 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         <FileLinkProvider workspace={addr} transport={fileLinkTransport} open={openFileLink}>
           {/* Narrow (< 480px): bubbles use the column (ThreadColumn). */}
           <ThreadMessageColumn ref={contentRef} gap={THREAD_LIST_GAP} testId="thread-overlay-column">
-            {hasMore && (
+            {/* "Earlier messages" fetches; it shows once the window reaches
+                the first message in memory (memory first). */}
+            {hasMore && win.drawsOldest && (
               <ThreadLoadOlder loading={loadingOlder} onClick={() => requestOlder()} testId="overlay-load-older" />
             )}
             {error && (
               <div style={{ color: 'var(--zen-text-muted)', fontSize: '0.85em', textAlign: 'center' }}>{error}</div>
             )}
-            {visible.map((it) => (
-              <ThreadItemRow
+            <ThreadWindowSpacer px={win.above} gap={THREAD_LIST_GAP} edge="top" />
+            {visible.slice(win.lo, win.hi).map((it) => (
+              <OverlayRow
                 key={it.id}
                 item={it}
                 viewer={viewer}
                 nowSec={nowSec}
                 currentAddr={currentAddr}
                 pastAddresses={pastAddresses}
-                onAnswer={(payload) => answer(it.id, payload)}
-                onVoid={() => void voidCard(it.id)}
-                cardContext={{ workspace: addr.split('/')[0], server: roomScope.label }}
-                onHandoffDecide={(body) => handoffApi.decide(body, roomScope)}
+                answerById={answerById}
+                voidById={voidById}
+                cardContext={cardContext}
+                onHandoffDecide={handoffDecide}
+                still={win.wasDrawn(it.id)}
               />
             ))}
+            <ThreadWindowSpacer px={win.below} gap={THREAD_LIST_GAP} edge="bottom" />
           </ThreadMessageColumn>
         </FileLinkProvider>
         </ThreadFileActionsProvider>
@@ -359,6 +408,43 @@ export function threadAuthorLabel(
   return { label: viaWidget ? `${name} · via ${viaWidget}` : name, mine }
 }
 
+interface OverlayRowProps {
+  item: OverlayThreadItem
+  viewer: ThreadViewer | null
+  nowSec: number
+  currentAddr?: string
+  pastAddresses?: readonly string[]
+  answerById: (id: string, payload: ThreadAnswerPayload) => unknown
+  voidById: (id: string) => void
+  cardContext: SecretCardContext
+  onHandoffDecide: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>
+  still: boolean
+}
+
+/** One Thread row, memoized (0.46.2): a keystroke, an activity frame, a
+ *  parent re-render or a re-read that hands back equal messages does not
+ *  re-render it (nor parse its Markdown again). The message is compared by
+ *  content, everything else by identity (the pane keeps them stable). */
+const OverlayRow = memo(
+  function OverlayRow({ item, answerById, voidById, ...rest }: OverlayRowProps): JSX.Element {
+    const id = item.id
+    const onAnswer = useCallback((payload: ThreadAnswerPayload) => answerById(id, payload), [answerById, id])
+    const onVoid = useCallback(() => voidById(id), [voidById, id])
+    return <ThreadItemRow item={item} onAnswer={onAnswer} onVoid={onVoid} {...rest} />
+  },
+  (a, b) =>
+    sameThreadItem(a.item, b.item) &&
+    a.viewer === b.viewer &&
+    a.nowSec === b.nowSec &&
+    a.currentAddr === b.currentAddr &&
+    a.pastAddresses === b.pastAddresses &&
+    a.answerById === b.answerById &&
+    a.voidById === b.voidById &&
+    a.cardContext === b.cardContext &&
+    a.onHandoffDecide === b.onHandoffDecide &&
+    a.still === b.still,
+)
+
 export function ThreadItemRow({
   item,
   viewer = OWNER_VIEWER,
@@ -369,6 +455,7 @@ export function ThreadItemRow({
   onVoid,
   cardContext,
   onHandoffDecide,
+  still,
 }: {
   item: OverlayThreadItem
   /** Who is looking (`useThreadViewer` on the room's server). Defaults to
@@ -385,9 +472,14 @@ export function ThreadItemRow({
   cardContext?: SecretCardContext
   /** A handoff card's decision on the room's server. */
   onHandoffDecide?: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>
+  /** Drawn again by the render window: no message-in animation. */
+  still?: boolean
 }): JSX.Element {
   const { label: author, mine } = threadAuthorLabel(item.doc, viewer, currentAddr, pastAddresses)
   const now = nowSec ?? Math.floor(Date.now() / 1000)
+  const workspace = cardContext?.workspace
+  const server = cardContext?.server
+  const secret = useMemo(() => ({ workspace, server }), [workspace, server])
   return (
     <ThreadBubble
       item={item}
@@ -399,8 +491,9 @@ export function ThreadItemRow({
       onAnswer={onAnswer}
       onVoid={onVoid}
       // The desktop Thread is where Zen's "More options" leads: the full card.
-      secret={{ workspace: cardContext?.workspace, server: cardContext?.server }}
+      secret={secret}
       onHandoffDecide={onHandoffDecide}
+      still={still}
     />
   )
 }

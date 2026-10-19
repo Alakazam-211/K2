@@ -26,7 +26,7 @@
 // `TicketRailTerminalContext` = false, so the rail draws no tabs and no
 // Agent terminal, just the Thread.
 
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { TerminalPane } from '@/kessel-term/TerminalPane'
@@ -42,12 +42,14 @@ import {
   ThreadChatBubble,
   ThreadChatChip,
   ThreadChatChips,
-  ThreadChatComposer,
+  ThreadChatDraftComposer,
   ThreadChatNote,
   ThreadChatScope,
+  type ThreadChatDraftApi,
 } from '@/components/Thread/ThreadChat'
-import { THREAD_LIST_GAP, THREAD_LIST_PADDING } from '@/components/Thread/ThreadZenKit'
+import { THREAD_LIST_GAP, THREAD_LIST_PADDING, ThreadWindowSpacer } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
+import { useRenderWindow } from '@/components/Thread/useRenderWindow'
 import { useChatSessionTurn, type ChatSessionTarget } from '@/components/Thread/sessionTurn'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { useIsYouAuthor } from '@/components/Settings/sections/useNotifyPrefs'
@@ -328,8 +330,10 @@ export function ThreadTab({
   const turn = useChatSessionTurn(primaryScope(), sessionTarget)
   // "You": `owner`, plus the owner-linked logins when this viewer is the owner.
   const isYou = useIsYouAuthor()
-  // Drafts survive unmount (leave ticket / switch tabs or pages).
-  const [reply, setReply] = useState(() => getTicketDraft(ticketId))
+  // Drafts survive unmount (leave ticket / switch tabs or pages). The text
+  // lives in the message box (a keystroke never re-renders the comments);
+  // this reads and clears it through `draftApi`.
+  const draftApi = useRef<ThreadChatDraftApi>(null)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [deliveryMiss, setDeliveryMiss] = useState<string | null>(null)
@@ -366,27 +370,60 @@ export function ThreadTab({
     }
   }, [ticketId, item, error])
 
-  const setReplyAndDraft = (text: string): void => {
-    setReply(text)
-    setTicketDraft(ticketId, text)
-  }
+  const persistDraft = useCallback((text: string) => setTicketDraft(ticketId, text), [ticketId])
+
+  // The render window (0.46.2, from K2 Companion): every comment stays in
+  // `item`, only a window of rows is drawn (the newest 30 on opening, at
+  // most ~50 while reading back), spacers of the measured height standing
+  // in for the rest.
+  const comments = item?.comments
+  const keys = useMemo(() => (comments ?? []).map((_, i) => `${ticketId}:${i}`), [comments, ticketId])
+  const followingRef = useRef(true)
+  const scroller = (): HTMLElement | null => scrollRef.current?.parentElement ?? null
+  const win = useRenderWindow({
+    room: ticketId,
+    keys,
+    scroller,
+    list: () => scrollRef.current?.querySelector<HTMLElement>('[data-thread-column]') ?? null,
+    following: () => followingRef.current,
+    stick: (el) => {
+      el.scrollTop = el.scrollHeight
+    },
+  })
+  const onWindowScroll = win.onScroll
+  // The list (and its scroller) mounts once the ticket loads.
+  const listShown = item !== null && !error
+  useEffect(() => {
+    const el = scrollRef.current?.parentElement
+    if (!el) return
+    const onScroll = (): void => {
+      if (el.clientHeight > 0) followingRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= 32
+      onWindowScroll()
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [onWindowScroll, listShown])
 
   // Keep the newest message in view when the thread grows (and on first
   // load) — but not while the user is drag-selecting.
   const commentCount = item?.comments.length ?? 0
   const prevCommentCountRef = useRef(-1)
+  const toNewest = win.toNewest
   useEffect(() => {
     if (!item) return
     const grew = commentCount > prevCommentCountRef.current
     prevCommentCountRef.current = commentCount
     if (!grew) return
     if (hasSelectionWithin(scrollRef.current)) return
+    followingRef.current = true
+    // Rows below the window come back first (the newest is drawn).
+    toNewest(false)
     requestAnimationFrame(() => {
       if (hasSelectionWithin(scrollRef.current)) return
       const el = scrollRef.current?.parentElement
       if (el) el.scrollTop = el.scrollHeight
     })
-  }, [item, commentCount])
+  }, [item, commentCount, toNewest])
 
   const submit = useCallback(
     async (op: () => Promise<void>): Promise<void> => {
@@ -428,19 +465,20 @@ export function ThreadTab({
     setDeliveryMiss(res.delivered === false ? res.deliveryReason ?? 'not delivered' : null)
   }
 
-  const sendReply = (): void => {
-    const text = reply.trim()
+  const sendReply = (draft: string): void => {
+    const text = draft.trim()
     if (!text) return
     void submit(async () => {
       await send(text, false)
-      setReplyAndDraft('')
+      draftApi.current?.set('')
       clearTicketDraft(ticketId)
     })
   }
 
   return (
     <ThreadChatScope className="flex-1 flex flex-col min-h-0" testId="ticket-rail-thread">
-      <SelectableRegion className="flex-1 overflow-y-auto overflow-x-hidden min-h-0">
+      {/* overflow-anchor: the render window holds the row on screen itself. */}
+      <SelectableRegion className="flex-1 overflow-y-auto overflow-x-hidden min-h-0 [overflow-anchor:none]">
         <div
           ref={scrollRef}
           className="min-h-full"
@@ -449,28 +487,36 @@ export function ThreadTab({
           style={{ padding: THREAD_LIST_PADDING }}
         >
           <ThreadMessageColumn gap={THREAD_LIST_GAP} testId="ticket-rail-column">
-            {item.comments.map((c, i) => (
-              <ThreadChatBubble
-                key={`${c.at}-${i}`}
-                id={`${ticketId}:${i}`}
-                author={c.author}
-                mine={isYou(c.author)}
-                body={c.body}
-                createdAt={c.at}
-                timeLabel={formatRelativeTime(c.at, nowSec)}
-              />
-            ))}
+            <ThreadWindowSpacer px={win.above} gap={THREAD_LIST_GAP} edge="top" />
+            {item.comments.slice(win.lo, win.hi).map((c, j) => {
+              const i = win.lo + j
+              return (
+                <ThreadChatBubble
+                  key={`${c.at}-${i}`}
+                  id={keys[i]}
+                  author={c.author}
+                  mine={isYou(c.author)}
+                  body={c.body}
+                  createdAt={c.at}
+                  timeLabel={formatRelativeTime(c.at, nowSec)}
+                  still={win.wasDrawn(keys[i])}
+                />
+              )
+            })}
+            <ThreadWindowSpacer px={win.below} gap={THREAD_LIST_GAP} edge="bottom" />
           </ThreadMessageColumn>
         </div>
       </SelectableRegion>
 
-      <ThreadChatComposer
+      <ThreadChatDraftComposer
+        key={ticketId}
+        apiRef={draftApi}
+        initialValue={getTicketDraft(ticketId)}
+        onDraftChange={persistDraft}
         testId="ticket-compose"
         inputTestId="ticket-compose-input"
         sendTestId="ticket-compose-send"
         inputRef={textareaRef}
-        value={reply}
-        onChange={setReplyAndDraft}
         onSend={sendReply}
         busy={busy}
         drawer={<ZenActivityDrawer turn={turn} />}

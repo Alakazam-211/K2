@@ -23,6 +23,8 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useImperativeHandle,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -122,6 +124,7 @@ export function ThreadChatBubble({
   mine,
   timeLabel,
   footer,
+  still,
 }: {
   id: string
   seq?: number
@@ -132,15 +135,20 @@ export function ThreadChatBubble({
   mine: boolean
   timeLabel: string
   footer?: ReactNode
+  /** Drawn again by the render window: no message-in animation. */
+  still?: boolean
 }): JSX.Element {
+  // One item per message (not per render), so the memoized bubble skips.
+  const item = useMemo(() => threadChatItem({ id, seq, author, body, createdAt }), [id, seq, author, body, createdAt])
   return (
     <ThreadBubble
-      item={threadChatItem({ id, seq, author, body, createdAt })}
+      item={item}
       mine={mine}
       author={mine ? 'You' : author}
       timeLabel={timeLabel}
       viewer={null}
       footer={footer}
+      still={still}
     />
   )
 }
@@ -153,22 +161,46 @@ export function threadChatSendKey(e: Pick<KeyboardEvent, 'key' | 'shiftKey' | 'a
   return !e.shiftKey && !e.altKey
 }
 
-export function ThreadChatComposer({
-  value,
-  onChange,
+/** What a chat's code reads and writes of a `ThreadChatDraftComposer`'s
+ *  text (on Send, after a send went through). */
+export interface ThreadChatDraftApi {
+  get: () => string
+  set: (text: string) => void
+}
+
+/** The Thread's message box owning its draft (K2 Companion's
+ *  `ThreadDraftComposer`, 0.46.2): a keystroke re-renders the box only,
+ *  never the chat around it and its messages. The chat hears about the
+ *  text on Send (`onSend(text)`), sets it through `apiRef` (clear after a
+ *  send), and `onDraftChange` persists it. Key it by the chat (a ticket, a
+ *  project) so another chat starts from its own `initialValue`. */
+export function ThreadChatDraftComposer({
+  initialValue,
+  onDraftChange,
   onSend,
-  busy = false,
-  placeholder,
-  inputTestId,
-  sendTestId,
-  sendLabel = 'Send message',
-  inputRef,
-  above,
-  leading,
-  drawer,
-  onKeyDown,
-  testId,
-}: {
+  apiRef,
+  ...box
+}: Omit<ThreadChatComposerProps, 'value' | 'onChange' | 'onSend'> & {
+  initialValue: string
+  onDraftChange?: (text: string) => void
+  onSend: (text: string) => void
+  apiRef?: Ref<ThreadChatDraftApi>
+}): JSX.Element {
+  const [value, setValue] = useState(initialValue)
+  const valueRef = useRef(value)
+  valueRef.current = value
+  const persist = useRef(onDraftChange)
+  persist.current = onDraftChange
+  const change = useCallback((text: string) => {
+    valueRef.current = text
+    setValue(text)
+    persist.current?.(text)
+  }, [])
+  useImperativeHandle(apiRef, () => ({ get: () => valueRef.current, set: change }), [change])
+  return <ThreadChatComposer {...box} value={value} onChange={change} onSend={() => onSend(valueRef.current)} />
+}
+
+export interface ThreadChatComposerProps {
   value: string
   onChange: (text: string) => void
   onSend: () => void
@@ -189,7 +221,24 @@ export function ThreadChatComposer({
   /** Runs first; `preventDefault` there skips the send keys. */
   onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void
   testId?: string
-}): JSX.Element {
+}
+
+export function ThreadChatComposer({
+  value,
+  onChange,
+  onSend,
+  busy = false,
+  placeholder,
+  inputTestId,
+  sendTestId,
+  sendLabel = 'Send message',
+  inputRef,
+  above,
+  leading,
+  drawer,
+  onKeyDown,
+  testId,
+}: ThreadChatComposerProps): JSX.Element {
   const fontSize = useSettingsStore((s) => s.editor.fontSize) || 13
   const ownRef = useRef<HTMLTextAreaElement | null>(null)
   const setRef = useCallback(

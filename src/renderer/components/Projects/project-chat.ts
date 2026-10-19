@@ -46,7 +46,30 @@ export function mergeMessages(
   const ids = new Set(incoming.map((m) => m.id))
   const head = incoming[0]
   const prefix = existing.filter((m) => !ids.has(m.id) && m.createdAt <= head.createdAt)
-  return [...prefix, ...incoming]
+  // 0.46.2: a row that did not change keeps its object, and a refetch that
+  // changed nothing returns `existing` itself, so the stream (and anything
+  // keyed on the array) does not re-render for an event elsewhere.
+  const known = new Map(existing.map((m) => [m.id, m]))
+  const tail = incoming.map((m) => {
+    const old = known.get(m.id)
+    return old && sameMessage(old, m) ? old : m
+  })
+  const next = [...prefix, ...tail]
+  return next.length === existing.length && next.every((m, i) => m === existing[i]) ? existing : next
+}
+
+/** Two copies of one stored message say the same thing. */
+export function sameMessage(a: ProjectGroupMessage, b: ProjectGroupMessage): boolean {
+  return (
+    a === b ||
+    (a.id === b.id &&
+      a.groupId === b.groupId &&
+      a.author === b.author &&
+      a.body === b.body &&
+      a.createdAt === b.createdAt &&
+      a.seq === b.seq &&
+      a.authorKind === b.authorKind)
+  )
 }
 
 // ── Chat panel width (§6.7.3 polish — resizable side panel) ──────────────

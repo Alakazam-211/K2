@@ -15,8 +15,7 @@
 // (`THREAD_ZEN_DESKTOP_TOKENS` on a `[data-k2-thread-zen]` box), so the
 // shapes are Zen's and the colours are the window's.
 
-import { useCallback, useState } from 'react'
-import type { CSSProperties, JSX, ReactNode, Ref } from 'react'
+import { isValidElement, memo, useCallback, useState, type CSSProperties, type JSX, type ReactNode, type Ref } from 'react'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { ChoiceCard } from '@/components/SessionView/ChoiceCard'
 import { SecretCard } from '@/components/SessionView/SecretCard'
@@ -26,7 +25,7 @@ import {
   type HandoffDecideBody,
   type HandoffDecideResult,
 } from '@/components/Settings/sections/handoff-api'
-import type { OverlayThreadItem, ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
+import { sameThreadItem, type OverlayThreadItem, type ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import { ZEN_SOLID_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
@@ -98,6 +97,7 @@ const anim = (name: string, ms: number, ease = 'cubic-bezier(0.22, 1, 0.36, 1)')
 /** Motion and hover rules for the shared pieces (Zen and the desktop Thread). */
 export const THREAD_ZEN_CSS = `
 ${SCOPE} [data-zen-message] { animation: zen-message-in ${anim('messageIn', 220)} both; }
+${SCOPE} [data-zen-message][data-zen-message-still] { animation: none; }
 ${SCOPE} [data-zen-pulse] { animation: zen-pulse var(--zen-anim-workingPulse-duration, 1400ms) var(--zen-anim-workingPulse-ease, ease-in-out) infinite; }
 ${SCOPE} [data-zen-typing] span { animation: zen-typing var(--zen-anim-workingPulse-duration, 1400ms) var(--zen-anim-workingPulse-ease, ease-in-out) infinite; }
 ${SCOPE} [data-zen-typing] span:nth-child(2) { animation-delay: 160ms; }
@@ -307,19 +307,11 @@ export interface ThreadBubbleSecret {
   server?: string
 }
 
-export function ThreadBubble({
-  item,
-  mine,
-  author,
-  timeLabel,
-  viewer,
-  onAnswer,
-  onVoid,
-  secret,
-  nowSec,
-  onHandoffDecide,
-  footer,
-}: {
+/** The bubble's body text style: the bubble's own colour and size. One
+ *  object, so the memoized body (and its Markdown parse) skips re-renders. */
+const BUBBLE_BODY_STYLE: CSSProperties = { color: 'inherit', fontSize: 'inherit' }
+
+export interface ThreadBubbleProps {
   item: OverlayThreadItem
   /** The viewer's own post: right side, accent bubble. */
   mine: boolean
@@ -339,7 +331,62 @@ export function ThreadBubble({
   /** A line under "author · time", on the same side (the project chat's
    *  "delivered to …"). Absent (the Thread): nothing is drawn. */
   footer?: ReactNode
-}): JSX.Element {
+  /** Drawn again by the render window (useRenderWindow): no message-in
+   *  animation, it was on screen before. */
+  still?: boolean
+}
+
+function shallowSame(a: object | null | undefined, b: object | null | undefined): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  const ka = Object.keys(a)
+  if (ka.length !== Object.keys(b).length) return false
+  return ka.every((k) => Object.is((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
+}
+
+/** Two footers draw the same: one node, or two elements of one type with
+ *  the same props (a parent re-render makes a new, equal element). */
+export function sameChatNode(a: ReactNode, b: ReactNode): boolean {
+  if (Object.is(a, b)) return true
+  if (!isValidElement(a) || !isValidElement(b)) return false
+  return a.type === b.type && a.key === b.key && shallowSame(a.props as object, b.props as object)
+}
+
+/** A bubble re-renders only when what it draws changed: the message by
+ *  content (a re-read hands over new, equal objects), the rest by value;
+ *  callbacks by identity (callers keep them stable). */
+export function sameBubbleProps(a: ThreadBubbleProps, b: ThreadBubbleProps): boolean {
+  return (
+    sameThreadItem(a.item, b.item) &&
+    a.mine === b.mine &&
+    a.author === b.author &&
+    a.timeLabel === b.timeLabel &&
+    a.viewer === b.viewer &&
+    a.nowSec === b.nowSec &&
+    a.onAnswer === b.onAnswer &&
+    a.onVoid === b.onVoid &&
+    a.onHandoffDecide === b.onHandoffDecide &&
+    a.still === b.still &&
+    shallowSame(a.secret, b.secret) &&
+    sameChatNode(a.footer, b.footer)
+  )
+}
+
+/** One message (memoized: `sameBubbleProps`). */
+export const ThreadBubble = memo(function ThreadBubble({
+  item,
+  mine,
+  author,
+  timeLabel,
+  viewer,
+  onAnswer,
+  onVoid,
+  secret,
+  nowSec,
+  onHandoffDecide,
+  footer,
+  still = false,
+}: ThreadBubbleProps): JSX.Element {
   const kind = item.doc.kind
   const text = threadBubbleText(item)
   const files = item.doc.attachments ?? []
@@ -355,6 +402,7 @@ export function ThreadBubble({
       data-seq={item.seq}
       data-status={item.doc.choice?.status || item.doc.secret?.status || item.doc.handoff?.status || ''}
       data-mine={mine ? '' : undefined}
+      data-zen-message-still={still ? '' : undefined}
       className="flex flex-col"
       style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: threadBubbleMaxWidth(narrow), minWidth: 0, gap: 3 }}
     >
@@ -381,7 +429,7 @@ export function ThreadBubble({
           }),
         }}
       >
-        {text && <ChatMessageBody text={text} style={{ color: 'inherit', fontSize: 'inherit' }} />}
+        {text && <ChatMessageBody text={text} style={BUBBLE_BODY_STYLE} />}
         {kind === 'choice' && item.doc.choice && (
           <ChoiceCard
             options={item.doc.choice.options}
@@ -456,6 +504,20 @@ export function ThreadBubble({
         </span>
       )}
     </div>
+  )
+}, sameBubbleProps)
+
+/** Stands in for the rows the render window does not draw (useRenderWindow):
+ *  their measured height. It takes back the list's `gap` with a negative
+ *  margin, so the list is as tall as it was with the rows in it. */
+export function ThreadWindowSpacer({ px, gap, edge }: { px: number; gap: number; edge: 'top' | 'bottom' }): JSX.Element | null {
+  if (!(px > 0)) return null
+  return (
+    <div
+      aria-hidden="true"
+      data-win-spacer={edge}
+      style={{ flex: 'none', height: px, ...(edge === 'top' ? { marginBottom: -gap } : { marginTop: -gap }) }}
+    />
   )
 }
 

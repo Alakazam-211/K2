@@ -54,6 +54,21 @@ describe('mergeMessages (authoritative-tail merge)', () => {
     expect(mergeMessages(page, page)).toEqual(page)
   })
 
+  it('a refetch of equal, new objects returns the loaded array itself (0.46.2: nothing re-renders)', () => {
+    const loaded = [msg('a', 100), msg('b', 200), msg('c', 300)]
+    const refetch = [msg('b', 200), msg('c', 300)]
+    expect(mergeMessages(loaded, refetch)).toBe(loaded)
+  })
+
+  it('a changed or new row is new; unchanged rows keep their objects', () => {
+    const loaded = [msg('a', 100), msg('b', 200)]
+    const merged = mergeMessages(loaded, [msg('a', 100), msg('b', 200, 'edited'), msg('c', 300)])
+    expect(merged).not.toBe(loaded)
+    expect(merged[0]).toBe(loaded[0])
+    expect(merged[1]).not.toBe(loaded[1])
+    expect(merged.map((m) => m.body)).toEqual(['a', 'edited', 'c'])
+  })
+
   it('keeps earlier-loaded history as a prefix when a live refetch uses a smaller window', () => {
     // The user "loaded earlier" down to a..d; the live refetch window
     // only covers c..e (a new message arrived). a and b must survive.

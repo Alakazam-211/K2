@@ -455,7 +455,8 @@ async fn project_messages_before_seq_pages_back_with_the_plain_reads_view() {
             assert_eq!(plain.json()["messages"], paged.json()["messages"], "{who}: the page is the plain read's view");
             assert_eq!(paged.json()["messages"].as_array().expect("messages").as_slice(), reference.as_slice(), "{who}: the same rows as the owner's");
         } else {
-            assert!(paged.status == 401 || paged.status == 403, "{who} is refused: {} {}", paged.status, paged.body);
+            assert_eq!(paged.status, 403, "{who} is refused: {}", paged.body);
+            assert_eq!(paged.body, plain.body, "{who}: the same refusal as the plain read");
             assert!(!paged.body.contains("pc1"), "{who}: a refusal carries no message text: {}", paged.body);
         }
     }

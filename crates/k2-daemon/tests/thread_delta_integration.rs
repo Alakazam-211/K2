@@ -461,3 +461,118 @@ async fn project_messages_before_seq_pages_back_with_the_plain_reads_view() {
         }
     }
 }
+
+// ── project chat for member agents only (0.46.2, Rosson 2026-10-18) ──
+
+/// 6. Through the real dispatcher: an agent passport reads (plain,
+///    `after_seq`, `before_seq`) and posts only in the chat of a project
+///    its workspace is a member of, the point of contact included, and
+///    posts as its own workspace. Another workspace's agent gets one 403
+///    `not_a_member` with no message text and no member names; an unknown
+///    project is the same 404 for everyone. The owner and a Connect login
+///    are unchanged; an App guest and no token stay refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_chat_reads_and_posts_are_for_member_agents_only() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let _shim = k2_core::test_env::AgentShim::install();
+    let tag = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    // Plain registered workspaces (no agent to wake): injection reports
+    // `no_agent_mode` at once.
+    let poc = seed_ws(&env, &format!("mcpoc{tag}"));
+    let member = seed_ws(&env, &format!("mcmember{tag}"));
+    let outsider = seed_ws(&env, &format!("mcout{tag}"));
+    let g = ok_post(port, "/cli/project-group/create", OWNER, json!({ "name": format!("Members {tag}") })).await;
+    let gid = g["id"].as_str().unwrap_or_else(|| panic!("group id: {g}")).to_string();
+    for ws in [&poc, &member] {
+        ok_post(port, "/cli/project-group/add-member", OWNER, json!({ "group": gid, "workspace": ws.id })).await;
+    }
+    let shown = ok_get(port, "/cli/project-group/show", OWNER, &format!("group={gid}")).await;
+    assert_eq!(shown["pocWorkspaceId"].as_str(), Some(poc.id.as_str()), "the first member is the PoC: {shown}");
+    for i in 1..=3 {
+        k2_core::project_groups::post_message(&gid, "owner", &format!("mc-secret-{i}")).expect("seed");
+    }
+
+    let gina = member_login(port, &format!("mcgina{tag}")).await;
+    let poc_pass = passport(&poc);
+    let member_pass = passport(&member);
+    let outsider_pass = passport(&outsider);
+    let guest_pass = guest(port, &format!("mcg{tag}"), &[(&member, &["thread:read", "files:read"])]).await;
+    let reads = ["", "&after_seq=0", "&before_seq=100"];
+
+    // Readers let in: the same three rows on every read form.
+    for (who, tok) in [("owner", OWNER), ("connect login", gina.as_str()), ("poc agent", poc_pass.as_str()), ("member agent", member_pass.as_str())] {
+        for q in reads {
+            let v = ok_get(port, "/cli/project-group/messages", tok, &format!("group={gid}{q}")).await;
+            assert_eq!(seqs(&v["messages"]), vec![1, 2, 3], "{who} {q:?}: {v}");
+        }
+    }
+
+    // Refused readers: one refusal per caller across the read forms, no text.
+    let mut outsider_refusal = String::new();
+    for (who, tok, code) in [
+        ("outsider agent", outsider_pass.as_str(), "not_a_member"),
+        ("app guest", guest_pass.as_str(), ""),
+        ("no token", "", ""),
+    ] {
+        let mut bodies = Vec::new();
+        for q in reads {
+            let r = get(port, "/cli/project-group/messages", tok, &format!("group={gid}{q}")).await;
+            assert_eq!(r.status, 403, "{who} {q:?}: {}", r.body);
+            assert!(!r.body.contains("mc-secret"), "{who}: a refusal carries no message text: {}", r.body);
+            if !code.is_empty() {
+                assert_eq!(r.code(), code, "{who}: {}", r.body);
+                assert_eq!(r.json()["ok"], false, "{}", r.body);
+            }
+            bodies.push(r.body);
+        }
+        assert!(bodies.windows(2).all(|w| w[0] == w[1]), "{who}: the same refusal on every read form: {bodies:?}");
+        if who == "outsider agent" {
+            for leak in [poc.handle.as_str(), member.handle.as_str()] {
+                assert!(!bodies[0].contains(leak), "the refusal names no member ({leak}): {}", bodies[0]);
+            }
+            outsider_refusal = bodies[0].clone();
+        }
+    }
+    // An unknown project: the same 404 for the outsider as for the owner.
+    let mine = get(port, "/cli/project-group/messages", OWNER, "group=no-such-project-mc").await;
+    let theirs = get(port, "/cli/project-group/messages", outsider_pass.as_str(), "group=no-such-project-mc").await;
+    assert_eq!((mine.status, theirs.status), (404, 404), "{} | {}", mine.body, theirs.body);
+    assert_eq!(mine.body, theirs.body);
+
+    // Posting. Member agents post as their own workspace whatever author
+    // the body names; the PoC never self-injects.
+    let m = ok_post(port, "/cli/project-group/msg", member_pass.as_str(), json!({ "group": gid, "body": "member line", "author": member.handle })).await;
+    assert_eq!((m["author"].as_str(), m["authorKind"].as_str(), m["seq"].as_i64()), (Some(member.handle.as_str()), Some("agent"), Some(4)), "{m}");
+    let m = ok_post(port, "/cli/project-group/msg", member_pass.as_str(), json!({ "group": gid, "body": "as owner?", "author": "owner" })).await;
+    assert_eq!((m["author"].as_str(), m["authorKind"].as_str()), (Some(member.handle.as_str()), Some("agent")), "an agent never posts as the owner: {m}");
+    let m = ok_post(port, "/cli/project-group/msg", poc_pass.as_str(), json!({ "group": gid, "body": "poc line", "author": poc.handle })).await;
+    assert_eq!((m["author"].as_str(), m["deliveryReason"].as_str()), (Some(poc.handle.as_str()), Some("author-is-poc")), "{m}");
+
+    // The outsider is refused whatever author it names; nothing is stored.
+    for author in [json!(outsider.handle), json!(member.handle), json!("owner"), Value::Null] {
+        let mut body = json!({ "group": gid, "body": "mc-let-me-in" });
+        if !author.is_null() {
+            body["author"] = author.clone();
+        }
+        let r = post(port, "/cli/project-group/msg", outsider_pass.as_str(), body).await;
+        assert_eq!((r.status, r.code()), (403, "not_a_member".to_string()), "author {author}: {}", r.body);
+        assert_eq!(r.body, outsider_refusal, "the same refusal as the read");
+    }
+    // App guest and no token stay refused on the post.
+    for (who, tok) in [("app guest", guest_pass.as_str()), ("no token", "")] {
+        let r = post(port, "/cli/project-group/msg", tok, json!({ "group": gid, "body": "mc-let-me-in" })).await;
+        assert_eq!(r.status, 403, "{who}: {}", r.body);
+    }
+
+    // People post as before.
+    let m = ok_post(port, "/cli/project-group/msg", OWNER, json!({ "group": gid, "body": "owner line" })).await;
+    assert_eq!(m["authorKind"], "person", "{m}");
+    let m = ok_post(port, "/cli/project-group/msg", gina.as_str(), json!({ "group": gid, "body": "gina line" })).await;
+    assert_eq!(m["author"].as_str(), Some(format!("mcgina{tag}").as_str()), "{m}");
+
+    let all = ok_get(port, "/cli/project-group/messages", OWNER, &format!("group={gid}&after_seq=0")).await;
+    assert_eq!(seqs(&all["messages"]), (1..=8).collect::<Vec<_>>(), "refused posts never store: {all}");
+    assert!(!all.to_string().contains("mc-let-me-in"), "{all}");
+}

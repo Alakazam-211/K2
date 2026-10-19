@@ -904,3 +904,53 @@ fn urlencode(s: &str) -> String {
     }
     out
 }
+
+/// 0.46.2 (Rosson 2026-10-18): over the cell socket too, an agent reads
+/// (plain, `after_seq`, `before_seq`) and posts only in the chat of a
+/// project its workspace is a member of, and posts as its own workspace.
+/// Another workspace's agent gets 403 `not_a_member` with no message text.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn project_chat_over_the_cell_socket_is_for_member_agents_only() {
+    let _g = lock();
+    let home = set_short_home();
+    let (member_id, _) = mk_workspace(&home, "pcmember");
+    let (outsider_id, _) = mk_workspace(&home, "pcoutsider");
+    let gid = k2_core::project_groups::create_group(&format!("cellchat-{}", std::process::id()))
+        .expect("group")
+        .id;
+    k2_core::project_groups::add_member(&gid, &member_id).expect("member");
+    k2_core::project_groups::post_message(&gid, "owner", "cell-secret-1").expect("seed");
+    let (_s1, member_tok, member_sock) = mint_bind_serve_in_ws("pane-m", &member_id);
+    let (_s2, out_tok, out_sock) = mint_bind_serve_in_ws("pane-o", &outsider_id);
+    settle().await;
+
+    for q in ["", "&after_seq=0", "&before_seq=100"] {
+        let pq = format!("/cli/project-group/messages?group={gid}{q}");
+        let (status, body) = uds(&member_sock, &get(&pq, Some(&member_tok))).await;
+        assert_eq!(status, 200, "member {q:?}: {body}");
+        assert!(body.contains("cell-secret-1"), "member {q:?} reads the chat: {body}");
+        let (status, body) = uds(&out_sock, &get(&pq, Some(&out_tok))).await;
+        assert_eq!(status, 403, "outsider {q:?}: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|e| panic!("JSON: {e}; {body}"));
+        assert_eq!(v["error"]["code"], "not_a_member", "outsider {q:?}: {body}");
+        assert!(!body.contains("cell-secret"), "a refusal carries no message text: {body}");
+    }
+    // Other project reads are unchanged for the outsider.
+    let (status, body) = uds(&out_sock, &get(&format!("/cli/project-group/show?group={gid}"), Some(&out_tok))).await;
+    assert_eq!(status, 200, "show is unchanged: {body}");
+
+    // The member (the PoC) posts as itself even when the body says owner.
+    let msg = format!(r#"{{"group":"{gid}","body":"cell member line","author":"owner"}}"#);
+    let (status, body) = uds(&member_sock, &post_json("/cli/project-group/msg", &member_tok, &msg)).await;
+    assert_eq!(status, 200, "member post: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|e| panic!("JSON: {e}; {body}"));
+    assert_eq!((v["author"].as_str(), v["authorKind"].as_str()), (Some("pcmember"), Some("agent")), "{v}");
+    // The outsider is refused and nothing is stored.
+    let msg = format!(r#"{{"group":"{gid}","body":"cell let me in","author":"pcmember"}}"#);
+    let (status, body) = uds(&out_sock, &post_json("/cli/project-group/msg", &out_tok, &msg)).await;
+    assert_eq!(status, 403, "outsider post: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|e| panic!("JSON: {e}; {body}"));
+    assert_eq!(v["error"]["code"], "not_a_member", "{v}");
+    let stored = k2_core::project_groups::list_messages(&gid, None, Some(500)).expect("list").messages;
+    assert_eq!(stored.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(), vec!["cell-secret-1", "cell member line"]);
+}

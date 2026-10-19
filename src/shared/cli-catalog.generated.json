@@ -625,7 +625,7 @@
    },
    {
     "name": "mail send",
-    "usage": "k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--to <addr>] [--cc <addr>] [--from <owned-addr>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
+    "usage": "k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--to <addr>] [--cc <addr>] [--from <owned-addr>] [--from-name <name>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
     "description": "Send email from an address you can send FROM (sender verified server-side). Works on HOSTED addresses (governed: off (default) = exit 3 with guidance; approval = queued for your human, exit 0 — track with 'k2 mail outbox <id>'; on = submitted immediately) AND on LINKED external inboxes where your workspace holds the 'send' level AND Sending=on. Linked send needs an explicit --from <linked-address>. Attachments (--attach) are supported on LINKED sends only (not hosted yet). Statuses: pending_approval, approved, rejected (note in outbox), submitted (= accepted-for-delivery; never claims delivered), failed. Positional <to> and --to both work; max 10 recipients."
    },
    {

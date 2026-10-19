@@ -54,6 +54,9 @@ pub const RATE_LIMIT_HOURLY: u32 = 20;
 pub const RATE_LIMIT_DAILY: u32 = 100;
 pub const MAX_RECIPIENTS: usize = 10;
 pub const MAX_MESSAGE_BYTES: usize = 10 * 1024 * 1024;
+/// Longest agent-chosen From display name (`k2 mail send --from-name`),
+/// in characters (Unicode scalar values, after trimming).
+pub const MAX_FROM_NAME_CHARS: usize = 128;
 /// §8.4 loop caps.
 pub const MAX_REPLY_REFERENCES: usize = 100;
 pub const MAX_THREAD_REPLIES_PER_HOUR: usize = 4;
@@ -336,6 +339,19 @@ pub fn check_recipient_limit(msg: &OutboundMessage) -> Result<(), SendError> {
     )))
 }
 
+/// A fresh Message-ID for a message sent FROM `from_address`, without
+/// the angle brackets (the JMAP `messageId` form): `<uuid>@<sender
+/// domain>`. Without it Stalwart's composer stamps `@<machine
+/// hostname>`, which leaks the box name and doesn't match the sender.
+pub fn new_message_id_for(from_address: &str) -> String {
+    let domain = from_address
+        .rsplit_once('@')
+        .map(|(_, d)| d)
+        .filter(|d| !d.is_empty())
+        .unwrap_or("localhost");
+    format!("{}@{}", uuid::Uuid::new_v4().simple(), domain)
+}
+
 /// Pure builder: the RFC 8621 Email object for `Email/set create`
 /// (bodyValues text part; threading headers only when set). The JMAP
 /// layer adds `mailboxIds` — everything content-shaped lives here so
@@ -347,6 +363,7 @@ pub fn submission_email_json(msg: &OutboundMessage) -> serde_json::Value {
     };
     let mut v = serde_json::json!({
         "from": [{ "name": msg.from_name, "email": msg.from }],
+        "messageId": [new_message_id_for(&msg.from)],
         "to": addr_list(&msg.to),
         "subject": msg.subject,
         "keywords": { "$seen": true },
@@ -363,6 +380,75 @@ pub fn submission_email_json(msg: &OutboundMessage) -> serde_json::Value {
         v["header:References:asText"] = serde_json::json!(refs);
     }
     v
+}
+
+/// Invisible formatting characters refused in a From display name: they
+/// can reorder or hide what a mail client shows (bidi overrides, zero-
+/// width space, BOM, line/paragraph separators). ZWJ/ZWNJ (U+200C/D) stay
+/// allowed — emoji sequences and several scripts need them.
+fn is_spoofy_format_char(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200B}'
+            | '\u{200E}'
+            | '\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
+}
+
+/// Validate an agent-chosen From display name (`fromName`, `k2 mail send
+/// --from-name`). COSMETIC ONLY: the From ADDRESS stays the server-stamped
+/// one the workspace may send from — this never changes who the mail is
+/// from. Returns the trimmed name. Refuses (usage, nothing sent):
+/// - empty / whitespace only;
+/// - over [`MAX_FROM_NAME_CHARS`] characters;
+/// - CR, LF, TAB or any other control character (no header injection), and
+///   invisible bidi/zero-width formatting characters (no display spoofing);
+/// - `@` (and its fullwidth/small forms): a name that looks like an
+///   address ("ceo@bank.com" <bot@acme.dev>) would hide the real sender in
+///   clients that show only the name.
+///
+/// Quoting is NOT done here — the name rides the JMAP `from[].name` field
+/// as a structured value and the mail server's composer quotes it
+/// (`"…"` with `\"`/`\\` escapes) or RFC 2047-encodes it (non-ASCII), so
+/// `<`, `>`, `"` and `,` stay inside the display name.
+pub fn validate_from_name(raw: &str) -> Result<String, SendError> {
+    // Checked on the RAW value: a trailing CR/LF is refused, not trimmed.
+    if let Some(c) = raw.chars().find(|c| c.is_control() || is_spoofy_format_char(*c)) {
+        return Err(SendError::Usage(format!(
+            "fromName holds a control or invisible formatting character (U+{:04X}) — line \
+             breaks, tabs and other control characters can't go in a display name",
+            c as u32
+        )));
+    }
+    let name = raw.trim();
+    if name.is_empty() {
+        return Err(SendError::Usage(
+            "fromName is empty — pass a display name, or omit --from-name to use the \
+             workspace's agent name"
+                .to_string(),
+        ));
+    }
+    let n = name.chars().count();
+    if n > MAX_FROM_NAME_CHARS {
+        return Err(SendError::Usage(format!(
+            "fromName is too long ({n} characters) — max {MAX_FROM_NAME_CHARS}"
+        )));
+    }
+    if name.chars().any(|c| matches!(c, '@' | '\u{FF20}' | '\u{FE6B}')) {
+        return Err(SendError::Usage(
+            "fromName can't contain '@' — a display name that looks like an email address \
+             would hide the real sender. The name is cosmetic only; pick the sending address \
+             with --from"
+                .to_string(),
+        ));
+    }
+    Ok(name.to_string())
 }
 
 /// Validate + normalize a recipient list: every entry must be a full
@@ -2050,6 +2136,183 @@ mod tests {
         assert_eq!(v["header:In-Reply-To:asText"], "<orig@github.com>");
         assert_eq!(v["header:References:asText"], "<r1@x> <orig@github.com>");
         assert_eq!(m.all_recipients().len(), 2);
+    }
+
+    // ── From display name (`k2 mail send --from-name`) + Message-ID ──
+
+    /// Names an agent may pick: kept verbatim (trimmed). Specials that
+    /// matter in an address header (`"`, `,`, `<`, `>`, `\`, `;`, `:`)
+    /// are allowed — the mail server's composer quotes them (see the
+    /// Stalwart contract test below).
+    #[test]
+    fn from_name_accepts_real_names_verbatim() {
+        for (raw, want) in [
+            ("Laura", "Laura"),
+            ("  Laura  ", "Laura"),
+            ("Smith, John", "Smith, John"),
+            (r#"Laura "LJ" Jones"#, r#"Laura "LJ" Jones"#),
+            ("Laura <Sales>", "Laura <Sales>"),
+            (r"Back\slash; colon:", r"Back\slash; colon:"),
+            ("Zoë Ünal", "Zoë Ünal"),
+            ("李雷", "李雷"),
+            // ZWJ emoji sequence (woman technologist) — ZWJ stays allowed.
+            ("Cassi \u{1F469}\u{200D}\u{1F4BB}", "Cassi \u{1F469}\u{200D}\u{1F4BB}"),
+        ] {
+            assert_eq!(validate_from_name(raw).expect(raw), want, "{raw:?}");
+        }
+    }
+
+    fn usage_hint(r: Result<String, SendError>) -> String {
+        match r {
+            Err(SendError::Usage(h)) => h,
+            other => panic!("expected a usage refusal, got {other:?}"),
+        }
+    }
+
+    /// CR/LF (header injection) and every other control or invisible
+    /// formatting character are refused — on the RAW value, so a trailing
+    /// newline is refused, not trimmed away.
+    #[test]
+    fn from_name_refuses_cr_lf_and_control_characters() {
+        for bad in [
+            "Laura\r\nBcc: evil@example.com",
+            "Laura\nX-Injected: 1",
+            "Laura\r",
+            "Laura\n",
+            "\r\nLaura",
+            "La\tura",
+            "La\u{0}ura",
+            "La\u{7F}ura",
+            "La\u{85}ura",
+            "La\u{2028}ura",
+            "\u{202E}arual",
+            "La\u{200B}ura",
+            "\u{FEFF}Laura",
+        ] {
+            let hint = usage_hint(validate_from_name(bad));
+            assert!(hint.contains("control or invisible"), "{bad:?} → {hint}");
+        }
+    }
+
+    #[test]
+    fn from_name_refuses_over_long_names_at_the_character_cap() {
+        let at_cap = "a".repeat(MAX_FROM_NAME_CHARS);
+        assert_eq!(validate_from_name(&at_cap).expect("128 chars is allowed"), at_cap);
+        // The cap counts characters, not bytes: 128 multi-byte chars pass.
+        let wide = "é".repeat(MAX_FROM_NAME_CHARS);
+        assert_eq!(validate_from_name(&wide).expect("128 wide chars"), wide);
+
+        let over = "a".repeat(MAX_FROM_NAME_CHARS + 1);
+        let hint = usage_hint(validate_from_name(&over));
+        assert!(hint.contains("too long (129 characters)"), "{hint}");
+        assert!(hint.contains("max 128"), "{hint}");
+    }
+
+    /// Decision: a display name that looks like an address is refused —
+    /// `"ceo@bank.com" <bot@acme.dev>` shows as ceo@bank.com in clients
+    /// that hide the address. Fullwidth/small `@` lookalikes too.
+    #[test]
+    fn from_name_refuses_at_signs_and_empty_names() {
+        for bad in ["ceo@bank.com", "Laura @ Acme", "ceo\u{FF20}bank.com", "ceo\u{FE6B}bank.com"] {
+            let hint = usage_hint(validate_from_name(bad));
+            assert!(hint.contains("can't contain '@'"), "{bad:?} → {hint}");
+        }
+        for empty in ["", "   "] {
+            let hint = usage_hint(validate_from_name(empty));
+            assert!(hint.contains("fromName is empty"), "{empty:?} → {hint}");
+        }
+    }
+
+    /// The name reaches the JMAP Email object as a STRUCTURED value (never
+    /// pre-quoted or pre-encoded by us), next to the unchanged address.
+    #[test]
+    fn submission_email_json_carries_the_chosen_from_name_unquoted() {
+        let mut m = msg();
+        m.from_name = Some(r#"Smith, "LJ" <Laura>"#.to_string());
+        let v = submission_email_json(&m);
+        let from = v["from"].as_array().expect("from is an array");
+        assert_eq!(from.len(), 1, "exactly one From mailbox: {v}");
+        assert_eq!(from[0]["name"], r#"Smith, "LJ" <Laura>"#);
+        assert_eq!(from[0]["email"], "bot@acme.dev");
+    }
+
+    /// Message-ID uses the SENDING address's domain (not the box's
+    /// hostname, which Stalwart's composer would otherwise stamp), in the
+    /// JMAP bracket-less form, fresh per message.
+    #[test]
+    fn submission_email_json_stamps_a_message_id_on_the_sender_domain() {
+        let m = msg();
+        let a = submission_email_json(&m);
+        let b = submission_email_json(&m);
+        let ids = a["messageId"].as_array().expect("messageId is an array");
+        assert_eq!(ids.len(), 1, "{a}");
+        let id = ids[0].as_str().expect("string id");
+        let (local, domain) = id.split_once('@').expect("id has an @");
+        assert_eq!(domain, "acme.dev", "{id}");
+        assert_eq!(local.len(), 32, "uuid simple form: {id}");
+        assert!(local.chars().all(|c| c.is_ascii_hexdigit()), "{id}");
+        assert!(!id.contains('<') && !id.contains('>'), "JMAP form has no brackets: {id}");
+        assert_ne!(a["messageId"], b["messageId"], "fresh per message");
+        let other = new_message_id_for("x@Sub.Example.org");
+        assert_eq!(other.split_once('@').expect("@").1, "Sub.Example.org");
+    }
+
+    /// CONTRACT with the hosted path: Stalwart composes the From header
+    /// from our JMAP `from[0]` with its own builder (mail-builder 1.0, the
+    /// version Stalwart 0.16 pins). Render every allowed kind of name the
+    /// same way and parse it back: exactly ONE mailbox, the exact name, the
+    /// unchanged address — a `,`, `"` or `<…>` in the name never creates a
+    /// second address, and non-ASCII is RFC 2047-encoded on the wire.
+    #[test]
+    fn hosted_from_header_contract_one_mailbox_exact_name() {
+        let from_addr = "laura@alakazam-labs.com";
+        for raw in [
+            "Laura",
+            "Smith, John",
+            r#"Laura "LJ" Jones"#,
+            "Laura <ceo-office>, Sales",
+            r"Back\slash",
+            "Zoë Ünal",
+            "李雷",
+        ] {
+            let name = validate_from_name(raw).expect(raw);
+            let mut m = msg();
+            m.from = from_addr.to_string();
+            m.from_name = Some(name.clone());
+            let v = submission_email_json(&m);
+            let jname = v["from"][0]["name"].as_str().expect("name").to_string();
+            let jemail = v["from"][0]["email"].as_str().expect("email").to_string();
+            let wire = mail_builder::MessageBuilder::new()
+                .from((jname, jemail))
+                .to("human@example.com")
+                .subject("Digest")
+                .text_body("All green.")
+                .write_to_string()
+                .expect("compose");
+            let header_block = wire.split("\r\n\r\n").next().expect("headers").to_string();
+            let from_headers = header_block
+                .split("\r\n")
+                .filter(|l| l.to_ascii_lowercase().starts_with("from:"))
+                .count();
+            assert_eq!(from_headers, 1, "exactly one From header for {raw:?}:\n{header_block}");
+            if !raw.is_ascii() {
+                assert!(
+                    header_block.to_ascii_lowercase().contains("=?utf-8?"),
+                    "non-ASCII name is RFC 2047-encoded for {raw:?}:\n{header_block}"
+                );
+                assert!(header_block.is_ascii(), "wire headers stay ASCII:\n{header_block}");
+            }
+            let parsed = mail_parser::MessageParser::default()
+                .parse(wire.as_bytes())
+                .expect("parses");
+            let list = parsed
+                .from()
+                .and_then(|a| a.as_list())
+                .expect("From is a mailbox list");
+            assert_eq!(list.len(), 1, "one mailbox for {raw:?}: {list:?}\n{header_block}");
+            assert_eq!(list[0].name(), Some(name.as_str()), "{header_block}");
+            assert_eq!(list[0].address(), Some(from_addr), "{header_block}");
+        }
     }
 
     // ── BCC (agent --bcc + owner always-BCC policy) ──

@@ -26933,7 +26933,7 @@ cmd_schema() {
     },
     {
       "name": "mail send",
-      "usage": "k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--to <addr>] [--cc <addr>] [--from <owned-addr>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
+      "usage": "k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--to <addr>] [--cc <addr>] [--from <owned-addr>] [--from-name <name>] [--attach <path>] [--wait [--timeout <secs>]] [--json]",
       "description": "Send email from an address you can send FROM (sender verified server-side). Works on HOSTED addresses (governed: off (default) = exit 3 with guidance; approval = queued for your human, exit 0 — track with 'k2 mail outbox <id>'; on = submitted immediately) AND on LINKED external inboxes where your workspace holds the 'send' level AND Sending=on. Linked send needs an explicit --from <linked-address>. Attachments (--attach) are supported on LINKED sends only (not hosted yet). Statuses: pending_approval, approved, rejected (note in outbox), submitted (= accepted-for-delivery; never claims delivered), failed. Positional <to> and --to both work; max 10 recipients.",
       "args": [{"name": "to", "required": false}],
       "flags": [
@@ -26943,6 +26943,7 @@ cmd_schema() {
         {"name": "--body-file", "arg": "f", "description": "Read the body from a file."},
         {"name": "--cc", "arg": "addr", "description": "Cc (repeatable / comma-separated)."},
         {"name": "--from", "arg": "owned-addr", "description": "Which of your addresses sends (needed with several)."},
+        {"name": "--from-name", "arg": "name", "description": "From display name (default: the workspace's agent name). Cosmetic only; the address is unchanged. HOSTED mailboxes only. Max 128 chars; no '@', line breaks or control characters."},
         {"name": "--attach", "arg": "path", "description": "Workspace-relative path to a file to attach (repeatable; the daemon reads it). LINKED inboxes only. Max 10 files, 25MB each / 25MB total."},
         {"name": "--at", "arg": "when", "description": "Schedule leave time (HOSTED): RFC3339 with offset. Past times hard-reject exit 2. Max 30d. Mutex with --in."},
         {"name": "--in", "arg": "duration", "description": "Schedule relative (HOSTED): 30m, 2h, 1d. Max 30d. Mutex with --at."},
@@ -40853,7 +40854,8 @@ _mail_py() {
     M_UNREAD="${M_UNREAD:-false}" M_LIMIT="${M_LIMIT:-}" M_QUERY="${M_QUERY:-}" \
     M_OFFSET="${M_OFFSET:-}" M_SINCE="${M_SINCE:-}" M_BEFORE="${M_BEFORE:-}" \
     M_FOLDER="${M_FOLDER:-}" M_JUNK="${M_JUNK:-false}" \
-    M_FROM="${M_FROM:-}" M_HTML="${M_HTML:-false}" M_RAW="${M_RAW:-false}" \
+    M_FROM="${M_FROM:-}" M_FROM_NAME="${M_FROM_NAME:-}" \
+    M_HTML="${M_HTML:-false}" M_RAW="${M_RAW:-false}" \
     M_GET="${M_GET:-}" M_OUT="${M_OUT:-}" \
     M_TO="${M_TO:-}" M_SUBJECT="${M_SUBJECT:-}" M_TIMEOUT="${M_TIMEOUT:-}" \
     M_SEND_AT="${M_SEND_AT:-}" M_SEND_IN="${M_SEND_IN:-}" \
@@ -41511,6 +41513,10 @@ elif verb == "send":
         body["bcc"] = bcc
     if env("M_FROM"):
         body["from"] = env("M_FROM")
+    if env("M_FROM_NAME"):
+        # From DISPLAY NAME only — cosmetic; the daemon validates it and
+        # still stamps the address (hosted mailboxes only).
+        body["fromName"] = env("M_FROM_NAME")
     attach = env_lines("M_ATTACH")
     if attach:
         # Workspace-relative file PATHS — the daemon reads the bytes
@@ -43884,6 +43890,7 @@ cmd_mail_wait() {
 cmd_mail_send() {
     if _wants_help "$@"; then cmd_help_mail_send; exit 0; fi
     local to="" subject="" body="" body_file="" cc="" bcc="" from="" attach=""
+    local from_name="" from_name_set=false
     local wait=false timeout="" as_json=false send_at="" send_in=""
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -43909,6 +43916,9 @@ cmd_mail_send() {
             --from)
                 [ $# -ge 2 ] || { _mail_err "usage" "--from requires one of your addresses (see 'k2 mail addresses')"; exit 2; }
                 from="$2"; shift 2 ;;
+            --from-name)
+                [ $# -ge 2 ] || { _mail_err "usage" "--from-name requires a display name (e.g. --from-name \"Laura\")"; exit 2; }
+                from_name="$2"; from_name_set=true; shift 2 ;;
             --attach)
                 [ $# -ge 2 ] || { _mail_err "usage" "--attach requires a file path"; exit 2; }
                 attach="${attach}${attach:+$'\n'}$2"; shift 2 ;;
@@ -43924,7 +43934,7 @@ cmd_mail_send() {
                 timeout="$2"; shift 2 ;;
             --json) as_json=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--from <owned-addr>] [--attach <path>] [--wait [--timeout <s>]] [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: k2 mail send <to> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--from <owned-addr>] [--from-name <name>] [--attach <path>] [--wait [--timeout <s>]] [--json]"
                 exit 2 ;;
             *)
                 to="${to}${to:+$'\n'}$1"; shift ;;
@@ -43956,6 +43966,10 @@ cmd_mail_send() {
         _mail_err "usage" "send requires --body <text> or --body-file <f>"
         exit 2
     fi
+    if $from_name_set && [ -z "${from_name//[[:space:]]/}" ]; then
+        _mail_err "usage" "--from-name needs a non-empty display name (omit it to use your workspace's agent name)"
+        exit 2
+    fi
     if [ -n "$timeout" ]; then
         if ! $wait; then
             _mail_err "usage" "--timeout only makes sense with --wait"
@@ -43973,6 +43987,7 @@ cmd_mail_send() {
     fi
     local M_VERB="send" M_JSON="$as_json" M_TO="$to" M_SUBJECT="$subject" \
           M_BODY="$body" M_CC="$cc" M_BCC="$bcc" M_FROM="$from" M_ATTACH="$attach" \
+          M_FROM_NAME="$from_name" \
           M_WAIT="$wait" M_TIMEOUT="$timeout" M_SEND_AT="$send_at" M_SEND_IN="$send_in"
     _mail_py
 }
@@ -48796,6 +48811,13 @@ ARGUMENTS / FLAGS
   --from <owned-addr>    Which of YOUR addresses sends (needed when you own
                          several). The sender is verified server-side — you
                          can only ever send as an address you own.
+  --from-name <name>     The display name on the From line, e.g.
+                         --from-name "Laura" → Laura <laura@acme.com>.
+                         Default: your workspace's agent name. Cosmetic
+                         only — the address is still the one above. HOSTED
+                         K2 mailboxes only (a linked inbox keeps its own
+                         name). Max 128 characters; no '@', line breaks or
+                         control characters.
   --attach <path>        Workspace-relative path to a file to attach
                          (repeatable). The DAEMON reads the file — you pass a
                          path, not bytes. LINKED inboxes only (not hosted K2
@@ -48822,6 +48844,7 @@ QUEUED IS SUCCESS
 EXAMPLES
   k2 mail send hello@example.com --subject "hi" --body "hello from the bot"
   k2 mail send --to a@x.com --to b@y.com --subject "digest" --body-file ./digest.md --wait
+  k2 mail send cust@x.com --from laura@acme.com --from-name "Laura" --subject "hi" --body "hello"
 EOF
 }
 

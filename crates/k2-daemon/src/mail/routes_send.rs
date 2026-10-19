@@ -742,8 +742,11 @@ fn hosted_attachments_unsupported() -> CliResponse {
 // ── POST /cli/mail/send ─────────────────────────────────────────────────
 
 /// S5: gated outbound. Body: `{project, to (string|[string]), subject,|[string]), subject,
-/// body, cc?, from?, wait?, timeout?}`. From is SERVER-STAMPED (owned
-/// address; the workspace's single one when `from` is omitted).
+/// body, cc?, from?, fromName?, wait?, timeout?}`. From is SERVER-STAMPED
+/// (owned address; the workspace's single one when `from` is omitted).
+/// `fromName` is an optional display name — cosmetic only, validated by
+/// [`send::validate_from_name`], HOSTED senders only; without it the
+/// workspace's agent name is used.
 /// off → 403 `gated` (CLI exit 3); approval → pending row + owner
 /// notification (`--wait` blocks until decided); on → audit row +
 /// submit ("accepted-for-delivery").
@@ -799,6 +802,12 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         Ok(s) => s,
         Err(resp) => return resp,
     };
+    // Optional From DISPLAY NAME — cosmetic only (the address is still
+    // server-stamped below). Validated before any identity work.
+    let from_name_explicit = match from_name_param(&v) {
+        Ok(n) => n,
+        Err(resp) => return resp,
+    };
     let (path, project_id) = match resolve_caller(project) {
         Ok(p) => p,
         Err(resp) => return resp,
@@ -848,7 +857,7 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
     };
     let agent_name = k2_core::workspace::display::agent_display_name(&path);
     let mut msg = OutboundMessage {
-        from_name: Some(agent_name.clone()),
+        from_name: Some(from_name_explicit.clone().unwrap_or_else(|| agent_name.clone())),
         from: from_inbox.address.clone(),
         to,
         cc,
@@ -886,6 +895,15 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         // ── LINKED: mail_agent_send gate, then the governed pipeline over
         // SMTP or Microsoft Graph (§17.5 / E4; MCS2 approval hand-off) ──
         Source::Linked => {
+            if from_name_explicit.is_some() {
+                return error_response(
+                    "400 Bad Request",
+                    "usage",
+                    "--from-name works on hosted K2 mailboxes only — a linked inbox is your \
+                     human's own account and sends under the display name set on that \
+                     account",
+                );
+            }
             if schedule_requested {
                 return error_response(
                     "400 Bad Request",
@@ -986,6 +1004,22 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
                 send_after,
             )
         }
+    }
+}
+
+/// The optional `fromName` body field: absent/null → `None`; a string →
+/// validated ([`send::validate_from_name`]); anything else → usage.
+fn from_name_param(v: &serde_json::Value) -> Result<Option<String>, CliResponse> {
+    match &v["fromName"] {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(raw) => {
+            send::validate_from_name(raw).map(Some).map_err(send_error_response)
+        }
+        _ => Err(error_response(
+            "400 Bad Request",
+            "usage",
+            "'fromName' must be a string (the From display name)",
+        )),
     }
 }
 
@@ -1391,11 +1425,13 @@ pub fn handle_approvals_list(_params: &HashMap<String, String>) -> CliResponse {
             // missing/corrupt body file lists WITHOUT a preview (the
             // decision buttons still work — approve would then fail
             // loudly on the unreadable body).
-            let preview: Option<String> = store
-                .load_message(&row.id)
-                .ok()
-                .map(|m| m.text_body.chars().take(280).collect());
+            let stored = store.load_message(&row.id).ok();
+            let preview: Option<String> =
+                stored.as_ref().map(|m| m.text_body.chars().take(280).collect());
             v["bodyPreview"] = serde_json::json!(preview);
+            // The From display name the recipient will see (agent name
+            // or the agent's --from-name) — the approver sees it first.
+            v["fromName"] = serde_json::json!(stored.as_ref().and_then(|m| m.from_name.clone()));
             v["workspace"] = serde_json::json!(project_name(&row.owner_project_id));
             v["expiresAt"] = serde_json::json!(row.created_at + send::APPROVAL_EXPIRE_SECS);
             v
@@ -2301,6 +2337,133 @@ mod tests {
         cleanup(&project2, None);
     }
 
+    // ── fromName (`k2 mail send --from-name`) ──
+
+    /// A bad `fromName` is a usage refusal BEFORE any identity work (the
+    /// project here doesn't exist) — nothing is resolved, queued or sent.
+    #[test]
+    fn send_from_name_refusals_come_before_identity_work() {
+        let long = "a".repeat(send::MAX_FROM_NAME_CHARS + 1);
+        for (from_name, needle) in [
+            (serde_json::json!("Laura\r\nBcc: evil@example.com"), "control or invisible"),
+            (serde_json::json!("Laura\n"), "control or invisible"),
+            (serde_json::json!(long), "too long"),
+            (serde_json::json!("ceo@bank.com"), "can't contain '@'"),
+            (serde_json::json!("   "), "fromName is empty"),
+            (serde_json::json!(42), "must be a string"),
+            (serde_json::json!(["Laura"]), "must be a string"),
+        ] {
+            let body = send_body(
+                "/tmp/no-such-workspace-for-from-name",
+                serde_json::json!({ "fromName": from_name.clone() }),
+            );
+            let resp = handle_send(&body);
+            assert_eq!(resp.status, "400 Bad Request", "{from_name} → {}", resp.body);
+            let v = body_json(&resp);
+            assert_eq!(v["error"]["code"], "usage", "{from_name} → {v}");
+            let hint = v["error"]["hint"].as_str().expect("hint");
+            assert!(hint.contains(needle), "{from_name} → {hint}");
+        }
+    }
+
+    /// `fromName` reaches the stored (= sent) message and the approver's
+    /// queue; the From ADDRESS stays the server-stamped one. Without it the
+    /// workspace's agent name is used, as before.
+    #[test]
+    fn send_from_name_reaches_the_message_and_the_approvals_queue() {
+        let _mail = crate::mail::mail_server_test_lock();
+        let (name, path) = unique("fname");
+        let project_id = insert_project(&name, &path);
+        let domain = format!("{name}.example");
+        let from = format!("laura@{domain}");
+        seed_domain(&domain, "direct");
+        seed_address(&project_id, &from, Some("acc-1"));
+        set_gating(&path, "approval");
+        let store = DbOutboundStore::default();
+
+        let resp = handle_send(&send_body(
+            &path,
+            serde_json::json!({ "fromName": "  Smith, \"LJ\" Laura  " }),
+        ));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let stored = store.load_message(&id).expect("stored message");
+        assert_eq!(stored.from_name.as_deref(), Some("Smith, \"LJ\" Laura"));
+        assert_eq!(stored.from, from, "the address is unchanged by a display name");
+
+        let resp = handle_approvals_list(&params(&[]));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let v = body_json(&resp);
+        let row = v["pending"]
+            .as_array()
+            .expect("pending list")
+            .iter()
+            .find(|r| r["id"] == id.as_str())
+            .unwrap_or_else(|| panic!("queued row {id} missing from approvals: {v}"))
+            .clone();
+        assert_eq!(row["fromName"], "Smith, \"LJ\" Laura", "{row}");
+        assert_eq!(row["from"], from.as_str(), "{row}");
+
+        // No fromName → the workspace's agent name (unchanged default).
+        let resp = handle_send(&send_body(&path, serde_json::json!({})));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        let id2 = body_json(&resp)["id"].as_str().expect("id").to_string();
+        let stored2 = store.load_message(&id2).expect("stored message");
+        assert_eq!(
+            stored2.from_name,
+            Some(k2_core::workspace::display::agent_display_name(&path))
+        );
+        // An explicit null is the same as absent.
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "fromName": null })));
+        assert_eq!(resp.status, "200 OK", "{}", resp.body);
+        cleanup(&project_id, Some(&domain));
+    }
+
+    /// Governance unchanged: a display name never widens WHO may send.
+    /// A foreign `from` is still masked (and nothing is audited), an
+    /// ambiguous sender still needs `from`, and send=off still refuses.
+    #[test]
+    fn send_from_name_does_not_change_the_sender_rules() {
+        let (name, path) = unique("fname-gov");
+        let project_id = insert_project(&name, &path);
+        let domain = format!("{name}.example");
+        seed_domain(&domain, "direct");
+        set_gating(&path, "approval");
+        let (name2, path2) = unique("fname-f");
+        let project2 = insert_project(&name2, &path2);
+        let foreign = format!("theirs@{name2}.example");
+        seed_address(&project2, &foreign, Some("acc-f"));
+
+        // Foreign from + a name that matches the foreign mailbox → masked.
+        let resp = handle_send(&send_body(
+            &path,
+            serde_json::json!({ "from": foreign, "fromName": "Theirs" }),
+        ));
+        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
+        assert_eq!(outbound_count(&project_id), 0);
+        assert_eq!(outbound_count(&project2), 0);
+
+        // Two own addresses, no from → still the usage refusal.
+        seed_address(&project_id, &format!("a@{domain}"), Some("acc-1"));
+        seed_address(&project_id, &format!("b@{domain}"), Some("acc-2"));
+        let resp = handle_send(&send_body(&path, serde_json::json!({ "fromName": "Laura" })));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        assert!(body_json(&resp)["error"]["hint"].as_str().unwrap().contains("pass 'from'"));
+
+        // send=off still refuses with the teaching 403.
+        set_gating(&path, "off");
+        let resp = handle_send(&send_body(
+            &path,
+            serde_json::json!({ "from": format!("a@{domain}"), "fromName": "Laura" }),
+        ));
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        assert_eq!(body_json(&resp)["error"]["code"], "gated");
+        assert_eq!(outbound_count(&project_id), 0);
+
+        cleanup(&project_id, Some(&domain));
+        cleanup(&project2, None);
+    }
+
     /// The always-on hourly cap through the real store: the 21st send
     /// inside an hour answers 429 with the distinct window marker.
     #[test]
@@ -2557,6 +2720,31 @@ mod tests {
         assert!(hint.contains("`k2 mail sending <workspace> on`"), "{hint}");
         assert!(hint.contains("Workspaces / Agents → <workspace> → Email sending"), "{hint}");
         assert_eq!(outbound_count(&project_id), 0, "off mode never audits linked");
+        cleanup_linked(&project_id);
+    }
+
+    /// `--from-name` is HOSTED only: a linked inbox is the human's own
+    /// account and keeps the display name set on it. Refused (usage) even
+    /// in on mode, before any credential/SMTP work; nothing is audited.
+    #[test]
+    fn linked_send_refuses_from_name() {
+        let (name, path) = unique("lfname");
+        let project_id = insert_project(&name, &path);
+        let linked = format!("me-{}@linked.example", &project_id[..8]);
+        seed_linked(&project_id, &linked, "send");
+        set_gating(&path, "on");
+        let resp = handle_send(&send_body(
+            &path,
+            serde_json::json!({ "from": linked, "fromName": "Laura" }),
+        ));
+        assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
+        let v = body_json(&resp);
+        assert_eq!(v["error"]["code"], "usage");
+        assert!(
+            v["error"]["hint"].as_str().unwrap().contains("hosted K2 mailboxes only"),
+            "{v}"
+        );
+        assert_eq!(outbound_count(&project_id), 0, "a refused linked send never audits");
         cleanup_linked(&project_id);
     }
 

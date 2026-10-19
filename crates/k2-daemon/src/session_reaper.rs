@@ -56,6 +56,20 @@ async fn run() {
         if reaped > 0 {
             log_debug!("[session-reaper] evicted {reaped} expired connect session(s)");
         }
+        // 0.46.3: a phone push registration ends with its login. Ending a
+        // session already drops its rows; this sweep is the backstop for
+        // logins that ended without an end event (a reset session file, an
+        // epoch bump never presented again) and for pre-0.46.3 rows.
+        match tokio::task::spawn_blocking(
+            k2_core::connect_users::prune_push_devices_without_live_session,
+        )
+        .await
+        {
+            Ok(Ok(0)) => {}
+            Ok(Ok(n)) => log_debug!("[session-reaper] dropped {n} push device(s) with no live login"),
+            Ok(Err(e)) => log_debug!("[session-reaper] WARN push device sweep skipped: {e}"),
+            Err(e) => log_debug!("[session-reaper] WARN push device sweep join: {e}"),
+        }
         tokio::time::sleep(tick).await;
     }
 }

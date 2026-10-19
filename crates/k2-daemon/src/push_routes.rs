@@ -67,8 +67,22 @@ pub fn dispatch(path: &str, _params: &HashMap<String, String>) -> Option<CliResp
 /// from the body. Unknown paths 404 (mirrors `dispatch_unit6_post`);
 /// the GET-only [`DEVICE_PATH`] answers 405.
 pub fn dispatch_post(path: &str, body: &[u8], username: &str) -> CliResponse {
+    dispatch_post_for_session(path, body, username, None)
+}
+
+/// [`dispatch_post`] with the caller's Connect login session (0.46.3):
+/// `session_sid` is `connect_users::session_sid(<caller token>)` for a
+/// Connect session, `None` for the owner token. register-device links the
+/// device to it, so the registration ends when that login ends (logout,
+/// revoke, expiry). Resolved by the dispatcher, never from the body.
+pub fn dispatch_post_for_session(
+    path: &str,
+    body: &[u8],
+    username: &str,
+    session_sid: Option<&str>,
+) -> CliResponse {
     match path {
-        "/cli/push/register-device" => handle_register(body, username),
+        "/cli/push/register-device" => handle_register(body, username, session_sid),
         "/cli/push/unregister-device" => handle_unregister(body, username),
         DEVICE_PATH => CliResponse::method_not_allowed(),
         _ => CliResponse::not_found(),
@@ -97,6 +111,13 @@ fn device_reply(device: &push_devices::PushDevice) -> CliResponse {
             "badgeKey".to_string(),
             serde_json::json!(k2_core::read_state::badge_key_for_shared(&device.username)),
         );
+        // 0.46.3: true when the registration is tied to a Connect login
+        // (it ends when that login signs out, is revoked or expires);
+        // false for the owner token or a row from before 0.46.3.
+        let linked = push_devices::device_session_sid(&device.device_id)
+            .map(|s| s.is_some())
+            .unwrap_or(false);
+        map.insert("sessionLinked".to_string(), serde_json::json!(linked));
     }
     CliResponse::ok_json(v.to_string())
 }
@@ -131,12 +152,23 @@ struct RegisterBody {
 /// Handler for `POST /cli/push/register-device` — upsert keyed by
 /// deviceId (re-sent every app launch; rotation lands for free). The
 /// reply is the stored row plus `previewsAllowed` ([`device_reply`]).
-fn handle_register(body: &[u8], username: &str) -> CliResponse {
+///
+/// 0.46.3: the row is linked to the caller's login session
+/// (`session_sid`); when that login ends the row goes. Every register
+/// re-links, so the phone's per-launch register follows a new login.
+fn handle_register(body: &[u8], username: &str, session_sid: Option<&str>) -> CliResponse {
     let b: RegisterBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
     };
-    match push_devices::upsert_device_with(&b.device_id, &b.platform, &b.token, username, b.previews) {
+    match push_devices::upsert_device_for_session(
+        &b.device_id,
+        &b.platform,
+        &b.token,
+        username,
+        b.previews,
+        session_sid,
+    ) {
         Ok(device) => device_reply(&device),
         Err(e) => usage_error(e),
     }
@@ -1075,6 +1107,47 @@ mod tests {
             !push_devices::list_devices().expect("list").iter().any(|d| d.device_id == id),
             "a removed login's phone must not keep getting pushes"
         );
+    }
+
+    /// 0.46.3: register-device from a Connect login links the phone to
+    /// that login (`sessionLinked: true`); `POST /cli/auth/logout` of that
+    /// login drops it, while the same person's other login keeps its phone
+    /// and the owner's phone (`sessionLinked: false`) is untouched.
+    #[test]
+    fn push_logout_ends_only_that_logins_registration() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::connect_users::add_user("pushlogout", "password123").expect("add");
+        let a = k2_core::connect_users::create_session("pushlogout");
+        let b = k2_core::connect_users::create_session("pushlogout");
+        let (ida, idb, ido) = (did("lo-a"), did("lo-b"), did("lo-owner"));
+        let reg = |id: &str, user: &str, sid: Option<String>| {
+            ok_json(dispatch_post_for_session(
+                "/cli/push/register-device",
+                serde_json::json!({ "deviceId": id, "platform": "apns", "token": tok(id) }).to_string().as_bytes(),
+                user,
+                sid.as_deref(),
+            ))
+        };
+        let v = reg(&ida, "pushlogout", Some(k2_core::connect_users::session_sid(&a)));
+        assert_eq!(v["sessionLinked"], true, "a login's registration is linked: {v}");
+        assert!(v.get("sessionSid").is_none() && !v.to_string().contains(&a), "never echoes the token or sid: {v}");
+        reg(&idb, "pushlogout", Some(k2_core::connect_users::session_sid(&b)));
+        let v = reg(&ido, "owner", None);
+        assert_eq!(v["sessionLinked"], false, "the owner token has no login: {v}");
+
+        let (resp, user) = crate::connect_users_routes::handle_logout_with_user(&a);
+        assert_eq!(resp.status, "200 OK");
+        assert_eq!(user.as_deref(), Some("pushlogout"));
+        let ids: Vec<String> = push_devices::list_devices().expect("list").into_iter().map(|d| d.device_id).collect();
+        assert!(!ids.contains(&ida), "the logged-out phone stops getting pushes");
+        assert!(ids.contains(&idb), "the same person's other login keeps its phone");
+        assert!(ids.contains(&ido), "the owner's phone is untouched");
+        remove_device(&idb);
+        remove_device(&ido);
+    }
+
+    fn remove_device(id: &str) {
+        push_devices::remove_device(id).expect("cleanup");
     }
 
     /// TP5: air-gap is checked on EVERY send, for every kind — flipped

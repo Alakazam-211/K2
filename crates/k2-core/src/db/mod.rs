@@ -1446,6 +1446,11 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // 0182–0193 are held by other 0.46.1 lanes; renumber freely on a
         // slip (and edit the migration-order tests below).
         ("0194_compute_manage", include_str!("../../drizzle_sql/0194_compute_manage.sql")),
+        // 0195 — a phone's push registration ends with the login session
+        // that made it (0.46.3): nullable `push_devices.session_sid` (the
+        // `cu_…` session id, never the token) + its index. Additive only;
+        // renumber freely on a slip (and edit the migration-order tests).
+        ("0195_push_device_session", include_str!("../../drizzle_sql/0195_push_device_session.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2109,7 +2114,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0194_compute_manage",
+            last_name, "0195_push_device_session",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2159,6 +2164,7 @@ mod tests {
                 "0190_thread_read",
                 "0193_homes_sync",
                 "0194_compute_manage",
+                "0195_push_device_session",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2212,6 +2218,7 @@ mod tests {
                 "0190_thread_read",
                 "0193_homes_sync",
                 "0194_compute_manage",
+                "0195_push_device_session",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2270,6 +2277,53 @@ mod tests {
         run_migrations(&conn).unwrap();
         let n: i64 = conn
             .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0189_push_device_previews'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "recorded once");
+    }
+
+    /// A 0.46.2 database (last migration 0194) with a registered phone
+    /// upgrades through 0195: the row keeps its data (previews included),
+    /// its new `session_sid` is NULL (a legacy, unlinked row), the session
+    /// index exists, and a second run is a no-op.
+    #[test]
+    fn a_046_2_database_upgrades_through_0195_push_device_session() {
+        let conn = fresh_memory();
+        run_migrations_through(&conn, Some("0194_compute_manage")).unwrap();
+        let cols = |conn: &Connection| -> Vec<String> {
+            let mut stmt = conn.prepare("PRAGMA table_info(push_devices)").unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(1)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        assert!(!cols(&conn).iter().any(|c| c == "session_sid"), "0.46.2 has no session_sid column");
+        conn.execute(
+            "INSERT INTO push_devices (device_id, platform, token, username, created_at, updated_at, last_seen_at, previews) \
+             VALUES ('d-0462', 'fcm', 'tok-0462', 'gina', 1, 2, 3, 0)",
+            [],
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        assert!(cols(&conn).iter().any(|c| c == "session_sid"), "0195 adds push_devices.session_sid");
+        let (token, user, previews, seen, sid): (String, String, Option<i64>, i64, Option<String>) = conn
+            .query_row(
+                "SELECT token, username, previews, last_seen_at, session_sid FROM push_devices WHERE device_id = 'd-0462'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!((token.as_str(), user.as_str(), previews, seen), ("tok-0462", "gina", Some(0), 3));
+        assert_eq!(sid, None, "a pre-0195 row is unlinked until its next register");
+        let idx: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_push_devices_session'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx, 1, "0195 adds the session index");
+
+        run_migrations(&conn).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _migrations WHERE name = '0195_push_device_session'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "recorded once");
     }
@@ -2701,7 +2755,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0194 (compute manage, 0.46.1) is the newest: its record goes
+            // 0195 (push device session, 0.46.3) is the newest: its record
+            // goes (its column and index stay; re-adding the column is
+            // skipped as a duplicate column, the index is IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0195_push_device_session'", []).unwrap();
+            // 0194 (compute manage, 0.46.1) came before it: its record goes
             // (its projects column stays; re-adding it is skipped as a
             // duplicate column).
             conn.execute("DELETE FROM _migrations WHERE name = '0194_compute_manage'", []).unwrap();

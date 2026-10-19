@@ -21,7 +21,8 @@ const VIEW = 500
 
 // ── Fake layout ────────────────────────────────────────────────────────────
 
-const box = { scrollTop: 0 }
+/** The scroller's state; `view` 0 = hidden (a background tab). */
+const box = { scrollTop: 0, view: VIEW }
 
 function isList(el: Element | null): el is HTMLElement {
   return !!el && (el as HTMLElement).hasAttribute?.('data-list')
@@ -80,7 +81,7 @@ beforeAll(() => {
   Object.defineProperty(proto, 'clientHeight', {
     configurable: true,
     get(this: HTMLElement) {
-      return this.hasAttribute('data-scroller') ? VIEW : 0
+      return this.hasAttribute('data-scroller') ? box.view : 0
     },
   })
   Object.defineProperty(proto, 'scrollHeight', {
@@ -197,6 +198,7 @@ async function idle(): Promise<void> {
 beforeEach(() => {
   vi.useFakeTimers()
   box.scrollTop = 0
+  box.view = VIEW
   followingNow = true
 })
 afterEach(() => {
@@ -294,6 +296,21 @@ describe('the render window', () => {
     expect(win.above).toBe(25 * (ROW + GAP))
     expect(el.scrollHeight).toBe(heightBefore + 25 * (ROW + GAP))
     expect(el.scrollTop).toBe(el.scrollHeight - VIEW)
+  })
+
+  it('hidden: no trim (no 0px spacers); shown again, the trim measures real heights', async () => {
+    const view = render(<Chat n={500} />)
+    box.view = 0
+    view.rerender(<Chat n={500} extra={25} />)
+    await idle()
+    expect(drawnKeys(view.container)).toHaveLength(WINDOW_ROWS + 25)
+    box.view = VIEW
+    const el = scroller(view.container)
+    el.scrollTop = el.scrollHeight
+    fireEvent.scroll(el)
+    await idle()
+    expect(drawnKeys(view.container)).toHaveLength(WINDOW_ROWS)
+    expect(win.above).toBe(25 * (ROW + GAP))
   })
 
   it('memory first: growTop draws rows above the window, and says false at the first row in memory', async () => {

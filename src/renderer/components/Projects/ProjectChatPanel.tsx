@@ -232,8 +232,9 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     prevLastId.current = lastId
     if (hasSelectionWithin(scrollRef.current)) return
     followingRef.current = true
-    // Rows below the window come back first (the newest is drawn).
-    toNewest(false)
+    // Rows below the window come back first (the newest is drawn, and the
+    // view lands there after that commit).
+    toNewest(true)
     requestAnimationFrame(() => {
       if (hasSelectionWithin(scrollRef.current)) return
       const el = scrollRef.current

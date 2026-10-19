@@ -127,7 +127,8 @@ export function useRenderWindow(o: RenderWindowOptions): RenderWindow {
     const px = measureRows(leaving)
     leaving.forEach((r, i) => {
       const key = r.getAttribute(ROW_KEY_ATTR)
-      if (key) heights.current.px.set(key, px[i])
+      // 0: not laid out (hidden); it counts as never measured.
+      if (key && px[i] > 0) heights.current.px.set(key, px[i])
     })
   }
 
@@ -183,6 +184,10 @@ export function useRenderWindow(o: RenderWindowOptions): RenderWindow {
     const el = scroller()
     const view = drawn.current
     if (!el || !view || !view.keys.length) return 'done'
+    // Hidden (a background tab, a 0-height retainer): nothing to measure,
+    // and a row measured now would leave a 0px spacer. The next commit or
+    // scroll once shown checks again.
+    if (!(el.clientHeight > 0)) return 'done'
     if (busy?.()) return 'busy'
     const { keys: k, lo, hi } = view
     const len = k.length
@@ -208,7 +213,6 @@ export function useRenderWindow(o: RenderWindowOptions): RenderWindow {
       return 'done'
     }
     const ch = el.clientHeight
-    if (!(ch > 0)) return 'done'
     const st = el.scrollTop
     const scTop = el.getBoundingClientRect().top
     const y = (r: HTMLElement): number => r.getBoundingClientRect().top - scTop + st

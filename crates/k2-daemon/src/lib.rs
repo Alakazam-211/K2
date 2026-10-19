@@ -262,6 +262,8 @@ pub mod handoff;
 pub mod handoff_setup;
 pub mod tunnel_identity_routes;
 pub mod upstream_dial;
+// 0.46.3: tunnel splice provenance + proxy-target policy.
+pub mod splice_guard;
 pub mod update_routes;
 pub mod v2_session_map;
 pub mod v2_spawn;
@@ -362,6 +364,9 @@ pub mod test_harness {
         pub tunnel_port: u16,
         /// This daemon's own login limiter (both listeners share it).
         pub login_limiter: Arc<crate::login_throttle::LoginLimiter>,
+        /// This daemon's main port in the splice guard's registry (0.46.3);
+        /// unregistered when the harness is dropped.
+        _daemon_port_reg: crate::splice_guard::DaemonPortReg,
     }
 
     /// Bind an ephemeral `127.0.0.1:0` listener, mark boot-status
@@ -390,6 +395,7 @@ pub mod test_harness {
         let local_addr = std_listener.local_addr().expect("local_addr");
         let port = local_addr.port();
         crate::publish_runtime::set_loopback_port(port);
+        let daemon_port_reg = crate::splice_guard::register_daemon_port(port);
         k2_core::listen::set_lan_bound(local_addr.ip().is_unspecified());
         std_listener
             .set_nonblocking(true)
@@ -459,6 +465,7 @@ pub mod test_harness {
             local_addr,
             tunnel_port,
             login_limiter,
+            _daemon_port_reg: daemon_port_reg,
         }
     }
 }

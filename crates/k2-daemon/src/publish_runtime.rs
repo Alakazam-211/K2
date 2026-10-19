@@ -70,6 +70,13 @@ impl PublishError {
             body: None,
         }
     }
+    fn target(r: crate::splice_guard::TargetRefusal) -> Self {
+        Self {
+            status: "400 Bad Request",
+            message: r.to_string(),
+            body: Some(serde_json::json!({ "error": r.to_string(), "code": r.code })),
+        }
+    }
     fn fail(msg: impl Into<String>) -> Self {
         Self {
             status: "400 Bad Request",
@@ -793,6 +800,9 @@ pub(crate) fn attach_hostname(
     transfer: bool,
 ) -> Result<(), String> {
     let target = format!("127.0.0.1:{port}");
+    // 0.46.3: belt for every caller (publish run, App open/deploy).
+    let target_caller = crate::splice_guard::TargetCaller::from_label_caller(&crate::label_owner::current());
+    crate::splice_guard::check_target(&target, target_caller).map_err(|r| r.to_string())?;
     // One owner per label: decide BEFORE any control-plane write, so a
     // label another workspace on this server holds is never repointed.
     let caller = crate::label_owner::current();
@@ -1052,6 +1062,11 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
     if spec.port == 0 {
         return Err(PublishError::bad("Missing port"));
     }
+    // 0.46.3: never this daemon's own port (the published address would
+    // route public traffic into the daemon as if it were local).
+    let caller = crate::splice_guard::TargetCaller::from_label_caller(&crate::label_owner::current());
+    crate::splice_guard::check_target(&format!("127.0.0.1:{}", spec.port), caller)
+        .map_err(PublishError::target)?;
     if let ProbeTimeout::Ms(ms) = spec.probe_timeout {
         if ms == 0 || ms > ps::PROBE_TIMEOUT_MAX_MS {
             return Err(PublishError::bad(
@@ -2604,6 +2619,65 @@ mod tests {
             );
             let _ = SubdomainWorkspace::unclaim(&conn, &name);
         }
+    }
+
+    /// 0.46.3: `publish run --port <the daemon's own port>` is refused for
+    /// an agent and for the owner, tunnel or not, before any row, process
+    /// or control-plane call; hostname attach refuses it too.
+    #[test]
+    fn run_refuses_the_daemon_port_for_everyone() {
+        let _home = crate::test_support::TempHome::new();
+        let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true });
+        fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+        let mock = start_mock_cp(
+            200,
+            r#"{"subdomains":[{"label":"rosson","primary":true,"connected":true,"tier":"pro"}]}"#,
+            "*",
+        );
+        let hold = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let daemon_port = hold.local_addr().unwrap().port();
+        let _reg = crate::splice_guard::register_daemon_port(daemon_port);
+        let dir = _home.path().join("ws-self");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let name = unique("selfie");
+        let marker = dir.join("spawned");
+        let callers = [
+            crate::label_owner::Caller::Agent,
+            crate::label_owner::Caller::Manager { actor: "owner".into() },
+        ];
+        for caller in callers {
+            for no_tunnel in [false, true] {
+                let err = crate::label_owner::with_caller(caller.clone(), || {
+                    run(RunSpec {
+                        project_id: project_id.clone(),
+                        name: name.clone(),
+                        cmd: format!("echo hi > {}", marker.display()),
+                        cwd: dir.clone(),
+                        port: daemon_port,
+                        no_tunnel,
+                        replace_spec: false,
+                        skin: false,
+                        skin_root: String::new(),
+                        cwd_explicit: false,
+                        transfer: false,
+                        probe_timeout: ProbeTimeout::Keep,
+                    })
+                })
+                .expect_err("the daemon's own port must be refused");
+                assert_eq!(err.status, "400 Bad Request", "{caller:?} no_tunnel={no_tunnel}: {}", err.message);
+                let body = err.body.as_ref().expect("structured body");
+                assert_eq!(body["code"], "target_is_daemon", "{caller:?}: {body}");
+                assert!(!marker.exists(), "must not spawn ({caller:?})");
+                assert!(load_row(&project_id, &name).is_none(), "no row ({caller:?})");
+            }
+            let err = crate::label_owner::with_caller(caller.clone(), || {
+                attach_hostname(&project_id, &name, daemon_port, "tok_test", "rosson", false)
+            })
+            .expect_err("attach refuses the daemon port");
+            assert!(err.contains("target_is_daemon"), "{caller:?}: {err}");
+        }
+        assert_eq!(mock.hits.load(AtomOrd::SeqCst), 0, "no control-plane call on refusal");
     }
 
     /// AR6: `rm` of a same-named service never drops another workspace's

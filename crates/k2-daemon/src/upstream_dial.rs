@@ -144,6 +144,11 @@ pub async fn dial_addrs(
     let deadline = Instant::now() + budget;
     let mut tried = Vec::with_capacity(addrs.len());
     for addr in addrs {
+        // 0.46.3: a name that resolves to cloud metadata is never dialed.
+        if crate::splice_guard::is_metadata_ip(addr.ip()) {
+            tried.push((*addr, "refused: cloud metadata address".to_string()));
+            continue;
+        }
         let left = deadline.saturating_duration_since(Instant::now());
         let wait = share.max(Duration::from_millis(1)).min(left.max(Duration::from_millis(1)));
         match tokio::time::timeout(wait, TcpStream::connect(addr)).await {
@@ -285,6 +290,19 @@ mod tests {
         assert_eq!(tried, localhost_candidates(port), "both loopbacks, v4 first: {err}");
         let msg = err.to_string();
         assert!(msg.contains("127.0.0.1") && msg.contains("::1"), "{msg}");
+    }
+
+    /// 0.46.3: the cloud metadata address is never dialed, whatever name
+    /// resolved to it.
+    #[tokio::test]
+    async fn metadata_address_is_never_dialed() {
+        let meta: SocketAddr = "169.254.169.254:80".parse().unwrap();
+        let mapped: SocketAddr = "[::ffff:169.254.169.254]:80".parse().unwrap();
+        let err = dial_addrs("meta.example:80", &[meta, mapped], Duration::from_secs(5))
+            .await
+            .expect_err("metadata must not be dialed");
+        assert_eq!(err.tried.len(), 2, "{err}");
+        assert!(err.tried.iter().all(|(_, e)| e.contains("cloud metadata")), "{err}");
     }
 
     #[tokio::test]

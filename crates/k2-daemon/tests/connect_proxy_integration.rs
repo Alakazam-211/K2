@@ -716,3 +716,74 @@ async fn agent_limits_own_labels_no_primary_no_reserved_rate_limited() {
 
     assert_token_nowhere_under(home.path());
 }
+
+/// 0.46.3: a proxy target is never this daemon's own port (any alias), for
+/// anyone; never the cloud metadata address, for anyone; and an agent's
+/// target must be loopback. The owner keeps LAN targets. Refused calls
+/// send nothing to the control plane.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn proxy_targets_never_the_daemon_and_agents_loopback_only() {
+    let (_g, home) = setup();
+    let _ag = EnvVar::remove("K2_AIRGAP");
+    seed_vaulted_tunnel();
+    let d = futures_block(test_harness::start(OWNER_TOKEN));
+    let cp = smart_cp();
+    let _cp = EnvVar::set("K2_CONNECT_BASE", &cp.base);
+    let (mine, _) = register_workspace(home.path(), "mine");
+    let agent = passport_for(&mine);
+    let p = d.port;
+
+    let refused = |token: &str, body: &str, code: &str| {
+        let r = proxy(p, token, body);
+        assert_eq!(r.status, 400, "{body}: {}", r.body);
+        assert_eq!(json_of(&r.body)["code"], json!(code), "{body}: {}", r.body);
+    };
+    let create = |label: &str, target: &str| {
+        format!(r#"{{"method":"POST","endpoint":"/subdomains","body":{{"label":"{label}","target":"{target}"}}}}"#)
+    };
+    let daemon_aliases = [
+        format!("127.0.0.1:{p}"),
+        format!("localhost:{p}"),
+        format!("[::1]:{p}"),
+        format!("0.0.0.0:{p}"),
+        format!("127.0.0.2:{p}"),
+        format!("[::ffff:127.0.0.1]:{p}"),
+    ];
+    for t in &daemon_aliases {
+        refused(&agent, &create("selfie", t), "target_is_daemon");
+        refused(OWNER_TOKEN, &create("selfie", t), "target_is_daemon");
+    }
+    for t in ["192.168.255.77:8080", "169.254.10.20:80", "app.example.com:3000"] {
+        refused(&agent, &create("lan", t), "target_not_loopback");
+    }
+    for t in ["169.254.169.254:80", "[::ffff:169.254.169.254]:80"] {
+        refused(&agent, &create("meta", t), "target_metadata");
+        refused(OWNER_TOKEN, &create("meta", t), "target_metadata");
+    }
+    assert!(writes(&cp).is_empty(), "no refused call reached the control plane: {:?}", writes(&cp));
+    assert_eq!(owner_of("selfie"), None, "nothing claimed");
+
+    // A normal agent target works; retargeting it at the daemon does not.
+    let r = proxy(p, &agent, &create("guarded", "localhost:3999"));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(owner_of("guarded").as_deref(), Some(mine.as_str()));
+    refused(
+        &agent,
+        &format!(r#"{{"method":"PUT","endpoint":"/subdomains/guarded","body":{{"target":"localhost:{p}"}}}}"#),
+        "target_is_daemon",
+    );
+    refused(
+        &agent,
+        r#"{"method":"PUT","endpoint":"/subdomains/guarded","body":{"target":"10.0.0.5:3000"}}"#,
+        "target_not_loopback",
+    );
+    assert_eq!(writes(&cp).len(), 1, "only the good create was sent");
+
+    // The owner keeps LAN targets.
+    let r = proxy(p, OWNER_TOKEN, &create("nas", "192.168.255.77:8080"));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(writes(&cp).len(), 2, "the owner's LAN create was sent");
+    assert!(writes(&cp)[1].contains("192.168.255.77:8080"), "{:?}", writes(&cp));
+
+    assert_token_nowhere_under(home.path());
+}

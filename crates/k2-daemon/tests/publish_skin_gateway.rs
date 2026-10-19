@@ -4177,6 +4177,7 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
         // this room has no agent working).
         let turn = uuid::Uuid::new_v4().to_string();
         k2_daemon::overlay_ws::publish_activity(k2_daemon::overlay_ws::OverlayFrame {
+            rev: 0,
             collection: "activity".into(),
             seq: 0,
             id: turn.clone(),

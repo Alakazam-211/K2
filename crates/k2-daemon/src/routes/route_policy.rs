@@ -1183,6 +1183,9 @@ pub const ROUTES: &[Route] = &[
     // thread-attachments-v1: previews and ranged downloads of a Thread
     // message's file objects (Thread rights + the caller's file rights).
     get("/cli/thread/attachment", Member),
+    // inbox-catchup-v1 (0.46.3): a read with a JSON body (200 cursors
+    // don't fit in a URL), so POST only; a GET is 405 before auth.
+    post("/cli/thread/catchup", Member),
     // Thread export / import outside a clone (prd-clone-carries-threads-
     // and-vault-v1 T4): Owner/Admin people + the clone gate; the list of a
     // workspace's imported Threads is a read for any login.

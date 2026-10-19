@@ -1218,6 +1218,7 @@ async fn overlay_ws_accepts_skin_read_and_filters_chatterlog() {
             tokio::time::sleep(Duration::from_millis(50)).await;
 
             overlay_ws::publish(OverlayFrame {
+                rev: 0,
                 collection: "chatterlog".into(),
                 seq: 1,
                 id: "clog".into(),
@@ -1226,6 +1227,7 @@ async fn overlay_ws_accepts_skin_read_and_filters_chatterlog() {
                 conversation_id: None,
             });
             overlay_ws::publish(OverlayFrame {
+                rev: 0,
                 collection: "thread".into(),
                 seq: 2,
                 id: "tid".into(),

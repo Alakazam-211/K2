@@ -447,6 +447,14 @@ fn homes_sync_ready() -> bool {
         .unwrap_or(false)
 }
 
+/// Phone inbox catch-up (inbox-catchup-v1, 0.46.3): `POST
+/// /cli/thread/catchup` (Thread deltas or newest pages for up to 200
+/// chats plus up to 50 project chats in one call, each entry exactly the
+/// plain read's body for the same caller), and top-level `rev` +
+/// `instanceId` on every `GET /cli/thread` answer (and `rev` on overlay
+/// WS frames). No SQL migration.
+pub const FEATURE_INBOX_CATCHUP: &str = "inbox-catchup-v1";
+
 /// True when the notify prefs tables exist in the daemon DB.
 fn thread_push_ready() -> bool {
     k2_core::db::try_shared()
@@ -497,6 +505,9 @@ pub fn features() -> Vec<&'static str> {
     }
     if homes_sync_ready() {
         out.push(FEATURE_HOMES_SYNC);
+    }
+    if k2_core::db::try_shared().is_some() {
+        out.push(FEATURE_INBOX_CATCHUP);
     }
     out
 }
@@ -553,7 +564,8 @@ mod tests {
                 "thread-push-v1",
                 "push-previews-v1",
                 "thread-read-v1",
-                "homes-sync-v1"
+                "homes-sync-v1",
+                "inbox-catchup-v1"
             ]
         );
     }

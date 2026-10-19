@@ -156,7 +156,12 @@ async fn thread_after_seq_pages_forward_and_carries_card_changes() {
     assert_eq!((seqs(&v["items"]), v["has_more"].as_bool()), (vec![4, 5], Some(true)), "newest-N, has_more = older remain: {v}");
     let mut keys: Vec<&str> = v.as_object().expect("object").keys().map(String::as_str).collect();
     keys.sort();
-    assert_eq!(keys, ["addr", "collection", "conversation_id", "has_more", "items", "ok", "pastAddresses"], "old shape: {v}");
+    // inbox-catchup-v1 (0.46.3) adds `rev` + `instanceId` (§3.1); nothing else.
+    assert_eq!(
+        keys,
+        ["addr", "collection", "conversation_id", "has_more", "instanceId", "items", "ok", "pastAddresses", "rev"],
+        "old shape plus rev/instanceId: {v}"
+    );
     let v = ok_get(port, "/cli/thread", OWNER, &format!("addr={h}&since_seq=3")).await;
     assert_eq!(seqs(&v["items"]), vec![4, 5], "{v}");
     let v = ok_get(port, "/cli/thread", OWNER, &format!("addr={h}&since_seq=0&limit=2")).await;

@@ -133,12 +133,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // through [`messages_view`], so the three can't drift apart.
         "/cli/project-group/messages" => {
             let selector = str_param(params, "group");
-            if selector.is_empty() {
-                return Some(usage_error("missing group (a project name, id, or unique prefix)"));
-            }
-            let group_id = match project_groups::resolve_group(&selector) {
+            let group_id = match resolve_group_selector(&selector) {
                 Ok(id) => id,
-                Err(e) => return Some(resolve_error_response(&selector, e)),
+                Err(e) => return Some(e),
             };
             let after = match opt_param(params, "after") {
                 Some(raw) => match raw.parse::<i64>() {
@@ -180,21 +177,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 if params.contains_key("before_seq") {
                     return Some(usage_error("after_seq cannot be combined with before_seq"));
                 }
-                return Some(match project_groups::list_messages_after_seq(&group_id, after_seq, limit) {
-                    Ok(page) => CliResponse::ok_json(
-                        serde_json::json!({
-                            "ok": true,
-                            "groupId": group_id,
-                            "after_seq": after_seq,
-                            "messages": messages_view(&page.messages),
-                            "has_more": page.truncated,
-                            "truncated": page.truncated,
-                            "changed": [],
-                            "removed": [],
-                        })
-                        .to_string(),
-                    ),
-                    Err(e) => core_error(e),
+                return Some(match messages_after_seq_body(&group_id, after_seq, limit) {
+                    Ok(body) => CliResponse::ok_json(body.to_string()),
+                    Err(e) => e,
                 });
             }
             // project-chat-paging-v1: `before_seq=N` → the newest `limit`
@@ -394,6 +379,39 @@ fn messages_view(messages: &[project_groups::ProjectGroupMessage]) -> serde_json
 /// thread-read-v1: for a person (the dispatcher bound their login), each
 /// group row gains their own `unread`, `waiting` (always 0), `muted`,
 /// `lastReadSeq` and `lastSeq`. An agent's list is unchanged.
+/// Resolve a project selector (name, id or unique prefix) to its group id,
+/// with the same 400/404/409 bodies as `GET /cli/project-group/*`.
+pub(crate) fn resolve_group_selector(selector: &str) -> Result<String, CliResponse> {
+    if selector.is_empty() {
+        return Err(usage_error("missing group (a project name, id, or unique prefix)"));
+    }
+    project_groups::resolve_group(selector).map_err(|e| resolve_error_response(selector, e))
+}
+
+/// The thread-delta-v1 project chat body (`ok:true`): messages with
+/// `seq > after_seq`, oldest first, `has_more` when newer ones remain.
+/// The ONE builder behind `GET /cli/project-group/messages?after_seq=` and
+/// each `groups[]` entry of `POST /cli/thread/catchup` (inbox-catchup-v1).
+pub(crate) fn messages_after_seq_body(
+    group_id: &str,
+    after_seq: i64,
+    limit: Option<i64>,
+) -> Result<serde_json::Value, CliResponse> {
+    match project_groups::list_messages_after_seq(group_id, after_seq, limit) {
+        Ok(page) => Ok(serde_json::json!({
+            "ok": true,
+            "groupId": group_id,
+            "after_seq": after_seq,
+            "messages": messages_view(&page.messages),
+            "has_more": page.truncated,
+            "truncated": page.truncated,
+            "changed": [],
+            "removed": [],
+        })),
+        Err(e) => Err(core_error(e)),
+    }
+}
+
 fn with_read_state(groups: Vec<project_groups::ProjectGroup>) -> Vec<serde_json::Value> {
     let rows: Vec<serde_json::Value> = groups
         .iter()

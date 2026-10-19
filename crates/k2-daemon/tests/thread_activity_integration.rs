@@ -832,6 +832,7 @@ async fn a_flood_of_activity_frames_closes_no_thread_socket() {
             tokio::time::sleep(Duration::from_millis(50)).await;
             for i in 0..1_500 {
                 overlay_ws::publish_activity(overlay_ws::OverlayFrame {
+                    rev: 0,
                     collection: "activity".into(),
                     seq: 0,
                     id: "flood-turn".into(),

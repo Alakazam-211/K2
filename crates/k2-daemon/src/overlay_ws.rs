@@ -23,6 +23,7 @@
 //! them ([`skin_may_see_frame`] passes only `thread`).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 use futures_util::{SinkExt, StreamExt};
@@ -69,6 +70,27 @@ pub struct OverlayFrame {
     /// Internal filter key; omitted from the wire shape in [`wire_json`].
     #[serde(skip)]
     pub conversation_id: Option<String>,
+    /// inbox-catchup-v1 (§3.1): the per-process write counter, stamped by
+    /// [`publish`] (whatever the caller set is overwritten). `0` = not
+    /// published on the Thread bus (activity frames). It goes on the wire
+    /// as an extra `rev` key; never a cursor, never persisted, restarts
+    /// with the daemon (pair it with `boot_status::instance_id()`).
+    #[serde(skip)]
+    pub rev: u64,
+}
+
+/// The last `rev` stamped by [`publish`] (0 before the first frame).
+static REV: AtomicU64 = AtomicU64::new(0);
+
+/// Stamp + send happen under this lock, so bus order is `rev` order.
+static PUBLISH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// inbox-catchup-v1: the overlay bus high-water mark. A Thread read takes
+/// it BEFORE its store read. Frames are published only after their write
+/// commits, so any frame with `rev <=` this value is already in the read,
+/// and every later frame has a higher `rev`.
+pub fn current_rev() -> u64 {
+    REV.load(Ordering::SeqCst)
 }
 
 fn bus() -> &'static broadcast::Sender<OverlayFrame> {
@@ -79,7 +101,7 @@ fn bus() -> &'static broadcast::Sender<OverlayFrame> {
     })
 }
 
-pub fn publish(frame: OverlayFrame) {
+pub fn publish(mut frame: OverlayFrame) {
     // thread-read-v1: a Thread write (a post, a card's new status) may
     // change every connected person's counts for that conversation.
     if frame.collection == "thread" {
@@ -87,6 +109,8 @@ pub fn publish(frame: OverlayFrame) {
             crate::read_live::conversation_changed(k2_core::read_state::KIND_THREAD, conv);
         }
     }
+    let _guard = PUBLISH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    frame.rev = REV.fetch_add(1, Ordering::SeqCst) + 1;
     let _ = bus().send(frame);
 }
 
@@ -121,6 +145,7 @@ pub const MOVED_COLLECTION: &str = "moved";
 pub fn publish_moved(mv: &k2_core::overlay::ConversationMove) {
     for conv in [&mv.from, &mv.to] {
         publish(OverlayFrame {
+            rev: 0,
             collection: MOVED_COLLECTION.to_string(),
             seq: mv.thread_total as i64,
             id: mv.to.clone(),
@@ -141,6 +166,7 @@ pub const ADDRESS_COLLECTION: &str = "address";
 /// Not stored; app guests never see it (thread frames only).
 pub fn publish_address(conversation_id: &str, address: &str, previous: &str) {
     publish(OverlayFrame {
+        rev: 0,
         collection: ADDRESS_COLLECTION.to_string(),
         seq: 0,
         id: conversation_id.to_string(),
@@ -193,6 +219,12 @@ pub(crate) struct GuestWire {
 /// state on the next GET), and a guest sees only the files its own file
 /// rights cover (the rest are `{kind, state:"hidden"}`).
 pub(crate) fn wire_json_for(frame: &OverlayFrame, guest: Option<&GuestWire>) -> String {
+    // inbox-catchup-v1 C4 (0.46.3): a guest's frames never carry `rev` (a
+    // server-wide write counter would show how busy other rooms are).
+    if guest.is_some() && frame.rev > 0 {
+        let unstamped = OverlayFrame { rev: 0, ..frame.clone() };
+        return wire_json_for(&unstamped, guest);
+    }
     let has_files = frame.doc.as_ref().is_some_and(|d| !d.attachments.is_empty());
     if !has_files || frame.activity.is_some() {
         return wire_json(frame);
@@ -207,54 +239,62 @@ pub(crate) fn wire_json_for(frame: &OverlayFrame, guest: Option<&GuestWire>) -> 
         ),
         None => crate::thread_attachments::rewrite_doc(&mut doc, None, &crate::thread_attachments::Viewer::Full, false),
     }
-    serde_json::json!({
-        "collection": frame.collection,
-        "seq": frame.seq,
-        "id": frame.id,
-        "doc": doc,
-    })
-    .to_string()
+    with_rev(
+        serde_json::json!({
+            "collection": frame.collection,
+            "seq": frame.seq,
+            "id": frame.id,
+            "doc": doc,
+        }),
+        frame,
+    )
+}
+
+/// inbox-catchup-v1: a published frame carries its `rev` as an extra key
+/// (current clients ignore it). Activity frames (`rev` 0) don't.
+fn with_rev(mut v: serde_json::Value, frame: &OverlayFrame) -> String {
+    if frame.rev > 0 {
+        v["rev"] = serde_json::json!(frame.rev);
+    }
+    v.to_string()
 }
 
 fn wire_json(frame: &OverlayFrame) -> String {
-    if frame.collection == ADDRESS_COLLECTION {
-        let payload = frame.activity.as_ref();
-        return serde_json::json!({
+    let payload = frame.activity.as_ref();
+    let v = if frame.collection == ADDRESS_COLLECTION {
+        serde_json::json!({
             "collection": frame.collection,
             "seq": frame.seq,
             "id": frame.id,
             "address": payload.and_then(|p| p.get("address")).cloned().unwrap_or(serde_json::Value::Null),
             "previous": payload.and_then(|p| p.get("previous")).cloned().unwrap_or(serde_json::Value::Null),
         })
-        .to_string();
-    }
-    if frame.collection == MOVED_COLLECTION {
-        let payload = frame.activity.as_ref();
-        return serde_json::json!({
+    } else if frame.collection == MOVED_COLLECTION {
+        serde_json::json!({
             "collection": frame.collection,
             "seq": frame.seq,
             "id": frame.id,
             "from": payload.and_then(|p| p.get("from")).cloned().unwrap_or(serde_json::Value::Null),
             "to": frame.id,
         })
-        .to_string();
-    }
-    match &frame.activity {
-        // §7.6: an activity frame has no `doc`.
-        Some(activity) => serde_json::json!({
-            "collection": frame.collection,
-            "seq": frame.seq,
-            "id": frame.id,
-            "activity": activity,
-        }),
-        None => serde_json::json!({
-            "collection": frame.collection,
-            "seq": frame.seq,
-            "id": frame.id,
-            "doc": frame.doc,
-        }),
-    }
-    .to_string()
+    } else {
+        match &frame.activity {
+            // §7.6: an activity frame has no `doc`.
+            Some(activity) => serde_json::json!({
+                "collection": frame.collection,
+                "seq": frame.seq,
+                "id": frame.id,
+                "activity": activity,
+            }),
+            None => serde_json::json!({
+                "collection": frame.collection,
+                "seq": frame.seq,
+                "id": frame.id,
+                "doc": frame.doc,
+            }),
+        }
+    };
+    with_rev(v, frame)
 }
 
 /// Whether this overlay subscriber may see `frame`.
@@ -467,6 +507,7 @@ pub async fn serve_overlay_events_connection(
 pub fn emit_links(links: &[k2_core::overlay::OverlayLink], doc: &OverlayDoc) {
     for link in links {
         publish(OverlayFrame {
+            rev: 0,
             collection: link.collection.to_string(),
             seq: link.seq,
             id: link.id.clone(),
@@ -512,6 +553,7 @@ mod tests {
             "thread",
         );
         publish(OverlayFrame {
+            rev: 0,
             collection: "thread".to_string(),
             seq: 1,
             id: id.clone(),
@@ -557,6 +599,7 @@ mod tests {
     fn skin_ws_drops_chatterlog_keeps_thread() {
         let conv = "conv-skin-filter";
         let thread = OverlayFrame {
+            rev: 0,
             collection: "thread".into(),
             seq: 1,
             id: "t1".into(),
@@ -565,6 +608,7 @@ mod tests {
             conversation_id: Some(conv.into()),
         };
         let chatterlog = OverlayFrame {
+            rev: 0,
             collection: "chatterlog".into(),
             seq: 2,
             id: "c1".into(),
@@ -573,6 +617,7 @@ mod tests {
             conversation_id: None,
         };
         let other = OverlayFrame {
+            rev: 0,
             collection: "thread".into(),
             seq: 3,
             id: "t2".into(),
@@ -581,6 +626,7 @@ mod tests {
             conversation_id: Some("other".into()),
         };
         let chatter_same = OverlayFrame {
+            rev: 0,
             collection: "chatter".into(),
             seq: 4,
             id: "ch1".into(),
@@ -615,6 +661,7 @@ mod tests {
     fn skin_ws_drops_activity_frames() {
         let conv = "conv-activity-filter";
         let activity = OverlayFrame {
+            rev: 0,
             collection: "activity".into(),
             seq: 0,
             id: "turn-1".into(),
@@ -631,6 +678,7 @@ mod tests {
     #[test]
     fn activity_wire_shape_has_no_doc() {
         let frame = OverlayFrame {
+            rev: 0,
             collection: "activity".into(),
             seq: 0,
             id: "turn-2".into(),
@@ -649,5 +697,54 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&wire_json(&thread)).expect("json");
         assert!(v.get("activity").is_none(), "{v}");
         assert!(v.get("doc").is_some(), "thread frames keep `doc` (null): {v}");
+        assert!(v.get("rev").is_none(), "an unpublished frame has no rev: {v}");
+    }
+
+    /// inbox-catchup-v1 (0.46.3): `publish` stamps a strictly rising `rev`
+    /// (overwriting the caller's), `current_rev` is the high-water mark, the
+    /// wire carries it for people, and a guest's frame never does (C4).
+    #[test]
+    fn publish_stamps_a_rising_rev_people_see_and_guests_do_not() {
+        let conv = format!("rev-{}", uuid::Uuid::new_v4());
+        let mut rx = subscribe();
+        let before = current_rev();
+        for i in 0..3 {
+            publish(OverlayFrame {
+                rev: 999_999,
+                collection: "thread".into(),
+                seq: i + 1,
+                id: format!("d{i}"),
+                doc: Some(OverlayDoc::text(format!("d{i}"), "k2".into(), "k2".into(), "hi".into(), "thread")),
+                activity: None,
+                conversation_id: Some(conv.clone()),
+            });
+        }
+        let mut revs = Vec::new();
+        while revs.len() < 3 {
+            let f = rx.try_recv().expect("published frame");
+            if f.conversation_id.as_deref() == Some(conv.as_str()) {
+                revs.push(f.clone());
+            }
+        }
+        let nums: Vec<u64> = revs.iter().map(|f| f.rev).collect();
+        assert!(nums[0] > before && nums[0] < nums[1] && nums[1] < nums[2], "rising revs after {before}: {nums:?}");
+        assert!(current_rev() >= nums[2]);
+        let person: serde_json::Value = serde_json::from_str(&wire_json_for(&revs[2], None)).expect("json");
+        assert_eq!(person["rev"], nums[2], "{person}");
+        let pass = k2_core::skin::SkinPass {
+            id: "skin-pass".into(),
+            principal_id: Some("prin".into()),
+            username: "guest".into(),
+            caps: vec!["thread:read".into()],
+            rooms: vec!["p".into()],
+            session: false,
+            room_policy: k2_core::skin::RoomPolicy::new(),
+            app: String::new(),
+            room_paths: Default::default(),
+        };
+        let guest = GuestWire { pass, project_id: "p".into(), root: None };
+        let g: serde_json::Value = serde_json::from_str(&wire_json_for(&revs[2], Some(&guest))).expect("json");
+        assert!(g.get("rev").is_none(), "a guest frame carries no rev: {g}");
+        assert_eq!(g["id"], "d2", "{g}");
     }
 }

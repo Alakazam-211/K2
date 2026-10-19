@@ -18,6 +18,9 @@ use crate::overlay_ws::OverlayFrame;
 use crate::session_token::HookPrincipal;
 use crate::workspace_msg::{self, MsgTarget};
 
+/// `POST /cli/thread/catchup` (inbox-catchup-v1, 0.46.3).
+pub(crate) mod catchup;
+
 thread_local! {
     static REQUEST_SKIN: RefCell<Option<SkinPass>> = const { RefCell::new(None) };
 }
@@ -77,11 +80,33 @@ impl ResolvedOverlay {
 
 /// Add `movedFrom` to a Thread route's JSON body when the caller used an
 /// older address (the CLI prints `note: <old> is now <new>`).
-fn with_moved_from(mut body: serde_json::Value, resolved: &ResolvedOverlay) -> String {
+fn with_moved_from(body: serde_json::Value, resolved: &ResolvedOverlay) -> String {
+    moved_from_value(body, resolved).to_string()
+}
+
+/// [`with_moved_from`] as a value (the shared Thread reader builds bodies
+/// the catch-up measures and embeds).
+fn moved_from_value(mut body: serde_json::Value, resolved: &ResolvedOverlay) -> serde_json::Value {
     if let Some(old) = resolved.moved_from() {
         body["movedFrom"] = serde_json::json!(old);
     }
-    body.to_string()
+    body
+}
+
+/// inbox-catchup-v1 (0.46.3, §3.1): a Thread read answer carries the
+/// overlay bus `rev` taken BEFORE its store read, and this daemon run's
+/// `instanceId` (the same value as the session hello and the push stamp).
+///
+/// Never for an App guest or App pass (C4): `rev` is a server-wide write
+/// counter, so it would tell a guest how busy rooms it can't see are, and
+/// guests never use the inbox stream it pairs with.
+fn with_rev_and_instance(mut body: serde_json::Value, rev: u64) -> serde_json::Value {
+    if request_skin().is_some() {
+        return body;
+    }
+    body["rev"] = serde_json::json!(rev);
+    body["instanceId"] = serde_json::json!(crate::boot_status::instance_id());
+    body
 }
 
 /// The conversation an address reaches now, for the activity tracker's
@@ -453,7 +478,9 @@ fn thread_items_view(items: &[overlay::OverlayItem], resolved: &ResolvedOverlay,
     v
 }
 
-fn snapshot_json(collection: &str, resolved: &ResolvedOverlay, page: OverlayPage) -> String {
+/// The page body (`ok:true`, newest page / `since_seq` / `before_seq`).
+/// `rev` must be read before the store read that produced `page`.
+fn snapshot_json(collection: &str, resolved: &ResolvedOverlay, page: OverlayPage, rev: u64) -> serde_json::Value {
     let items = if collection == "thread" {
         thread_items_view(&page.items, resolved, request_skin().as_ref())
     } else {
@@ -470,7 +497,7 @@ fn snapshot_json(collection: &str, resolved: &ResolvedOverlay, page: OverlayPage
         // renders old rows' `from`/`to` under the current name.
         "pastAddresses": past_addresses(resolved),
     });
-    with_moved_from(body, resolved)
+    with_rev_and_instance(moved_from_value(body, resolved), rev)
 }
 
 /// `ws/<n>` and each retired `ws/<name>` of a sidecar conversation.
@@ -520,7 +547,7 @@ pub(crate) fn parse_after_seq(params: &HashMap<String, String>) -> Result<Option
 /// `items` and `changed` carry the same per-caller attachment view as the
 /// page ([`thread_items_view`]: live `state`, the App guest strip);
 /// `removed` is `{id, seq}` only.
-fn thread_delta_json(resolved: &ResolvedOverlay, after_seq: i64, delta: overlay::ThreadDelta) -> String {
+fn thread_delta_json(resolved: &ResolvedOverlay, after_seq: i64, delta: overlay::ThreadDelta, rev: u64) -> serde_json::Value {
     let pass = request_skin();
     let body = serde_json::json!({
         "ok": true,
@@ -534,7 +561,7 @@ fn thread_delta_json(resolved: &ResolvedOverlay, after_seq: i64, delta: overlay:
         "removed": removed_json(&delta.removed),
         "pastAddresses": past_addresses(resolved),
     });
-    with_moved_from(body, resolved)
+    with_rev_and_instance(moved_from_value(body, resolved), rev)
 }
 
 /// `removed` rows of a delta as `[{id, seq}]`.
@@ -561,41 +588,87 @@ fn parse_overlay_limit(params: &HashMap<String, String>) -> usize {
     }
 }
 
+/// How one Thread read pages (inbox-catchup-v1 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThreadReadMode {
+    /// The plain page: `since_seq` / `before_seq` (both `None` = newest).
+    Page { since: Option<i64>, before: Option<i64> },
+    /// thread-delta-v1 `after_seq=N`.
+    After(i64),
+    /// The newest `limit` items (a catch-up `newest:true` entry). The same
+    /// read as `Page { since: None, before: None }`.
+    Newest,
+}
+
+/// Steps 1–3 of every Thread read: resolve `addr` the way THIS caller may
+/// (an App guest: its rooms' pinned Chats only), `thread:read` in that
+/// room for a guest, and the agent passport's own-workspace rule.
+fn thread_read_target(addr: &str, principal: Option<&HookPrincipal>) -> Result<ResolvedOverlay, CliResponse> {
+    if addr.trim().is_empty() {
+        return Err(usage("missing addr"));
+    }
+    let resolved = resolve_thread_addr(addr)?;
+    require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_READ)?;
+    authorize_read(principal, &resolved)?;
+    Ok(resolved)
+}
+
+/// Step 4: the store read and the body (`ok:true`, items through
+/// [`thread_items_view`], `rev` read BEFORE the store read, `instanceId`).
+fn thread_read_body(resolved: &ResolvedOverlay, mode: ThreadReadMode, limit: usize) -> Result<serde_json::Value, CliResponse> {
+    let rev = crate::overlay_ws::current_rev();
+    let (since, before) = match mode {
+        ThreadReadMode::After(after) => {
+            return overlay::read_thread_delta(&resolved.conversation_id, after, limit)
+                .map(|delta| thread_delta_json(resolved, after, delta, rev))
+                .map_err(|e| error_json("500 Internal Server Error", "store", e));
+        }
+        ThreadReadMode::Page { since, before } => (since, before),
+        ThreadReadMode::Newest => (None, None),
+    };
+    overlay::read_thread_page(&resolved.conversation_id, since, before, limit)
+        .map(|page| snapshot_json("thread", resolved, page, rev))
+        .map_err(|e| error_json("500 Internal Server Error", "store", e))
+}
+
+/// One Thread read for the caller bound on this thread (the App guest's
+/// pass via [`with_request_skin`]) and `principal` (an agent passport).
+/// The ONE reader behind `GET /cli/thread` and every `POST
+/// /cli/thread/catchup` entry, so a catch-up entry can never drift from
+/// the plain read for any caller (the 0.46.1 delta leak, `c650ea6bb`, was
+/// exactly such a drift). Ok = the body with `ok:true`; Err = the plain
+/// read's error response (400 / 403 / 404 / 500).
+pub(crate) fn thread_read_for(
+    addr: &str,
+    mode: ThreadReadMode,
+    limit: usize,
+    principal: Option<&HookPrincipal>,
+) -> Result<serde_json::Value, CliResponse> {
+    let resolved = thread_read_target(addr, principal)?;
+    thread_read_body(&resolved, mode, limit)
+}
+
 fn handle_get_thread(params: &HashMap<String, String>) -> CliResponse {
     let addr = str_param(params, "addr");
-    if addr.is_empty() {
-        return usage("missing addr");
-    }
-    let resolved = match resolve_thread_addr(&addr) {
+    let principal = crate::caller_workspace::principal_from_params(params);
+    let resolved = match thread_read_target(&addr, principal.as_ref()) {
         Ok(r) => r,
         Err(e) => return e,
     };
-    if let Err(e) = require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_READ) {
-        return e;
-    }
-    let principal = crate::caller_workspace::principal_from_params(params);
-    if let Err(e) = authorize_read(principal.as_ref(), &resolved) {
-        return e;
-    }
-    let since = parse_since_opt(params);
-    let before = parse_before_seq(params);
     let limit = parse_overlay_limit(params);
-    match parse_after_seq(params) {
+    let mode = match parse_after_seq(params) {
         Err(e) => return e,
         Ok(Some(after)) => {
             if opt_param(params, "since_seq").is_some() || opt_param(params, "before_seq").is_some() {
                 return usage("after_seq cannot be combined with since_seq or before_seq");
             }
-            return match overlay::read_thread_delta(&resolved.conversation_id, after, limit) {
-                Ok(delta) => CliResponse::ok_json(thread_delta_json(&resolved, after, delta)),
-                Err(e) => error_json("500 Internal Server Error", "store", e),
-            };
+            ThreadReadMode::After(after)
         }
-        Ok(None) => {}
-    }
-    match overlay::read_thread_page(&resolved.conversation_id, since, before, limit) {
-        Ok(page) => CliResponse::ok_json(snapshot_json("thread", &resolved, page)),
-        Err(e) => error_json("500 Internal Server Error", "store", e),
+        Ok(None) => ThreadReadMode::Page { since: parse_since_opt(params), before: parse_before_seq(params) },
+    };
+    match thread_read_body(&resolved, mode, limit) {
+        Ok(body) => CliResponse::ok_json(body.to_string()),
+        Err(e) => e,
     }
 }
 
@@ -781,8 +854,9 @@ fn handle_get_chatter(params: &HashMap<String, String>) -> CliResponse {
     let since = parse_since_opt(params);
     let before = parse_before_seq(params);
     let limit = parse_overlay_limit(params);
+    let rev = crate::overlay_ws::current_rev();
     match overlay::read_chatter_page(&resolved.conversation_id, since, before, limit) {
-        Ok(page) => CliResponse::ok_json(snapshot_json("chatter", &resolved, page)),
+        Ok(page) => CliResponse::ok_json(snapshot_json("chatter", &resolved, page, rev).to_string()),
         Err(e) => error_json("500 Internal Server Error", "store", e),
     }
 }
@@ -1064,8 +1138,10 @@ pub(crate) fn post_workspace_notice(addr: &str, from: &str, text: &str) -> Resul
         text,
         "thread",
     )?;
-    drop(conn);
+    // inbox-catchup-v1 (0.46.3): publish while the write's lock is held,
+    // so bus (and `rev`) order is commit order.
     crate::overlay_ws::emit_links(&links, &item.doc);
+    drop(conn);
     Ok(item.id)
 }
 
@@ -1618,8 +1694,9 @@ pub(crate) fn post_handoff_card(
     let conn = db.lock();
     let (item, links) =
         overlay::post_handoff(&conn, &resolved.conversation_id, &resolved.project_id, from, &resolved.addr, body, card)?;
-    drop(conn);
+    // Publish under the write's lock (bus order = commit order, 0.46.3).
     crate::overlay_ws::emit_links(&links, &item.doc);
+    drop(conn);
     // Name-only push, like a secret card (§7): never a preview.
     push_agent_post(&resolved, &item.doc.from, item.seq, k2_core::push::ThreadMsgKind::Secret, "", 0);
     Ok(format!("{}/{}", resolved.conversation_id, item.id))
@@ -1676,8 +1753,9 @@ pub(crate) fn post_clone_text_line(conversation_id: &str, project_id: &str, addr
     let conn = db.lock();
     match overlay::post_thread(&conn, conversation_id, project_id, addr, addr, body, "import") {
         Ok((item, links)) => {
-            drop(conn);
+            // Publish under the write's lock (bus order = commit order, 0.46.3).
             crate::overlay_ws::emit_links(&links, &item.doc);
+            drop(conn);
         }
         Err(e) => k2_core::log_debug!("[clone-vault] overflow line not posted: {e}"),
     }
@@ -2133,6 +2211,7 @@ fn inject_skin_thread(resolved: &ResolvedOverlay, from: &str, text: &str, turn: 
 /// the read frames, and every person's phone may get a corrected badge.
 fn publish_card_frame(cb: &CardCallback) {
     crate::overlay_ws::publish(OverlayFrame {
+        rev: 0,
         collection: "thread".to_string(),
         seq: cb.seq,
         id: cb.doc_id.clone(),
@@ -2651,7 +2730,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/chatter" => handle_get_chatter(params),
         "/cli/chatterlog" => handle_get_chatterlog(params),
         "/cli/thread/post" | "/cli/thread/ask" | "/cli/thread/secret" | "/cli/thread/answer"
-        | "/cli/thread/void" => CliResponse::method_not_allowed(),
+        | "/cli/thread/void" | catchup::ROUTE => CliResponse::method_not_allowed(),
         _ => return None,
     };
     Some(resp)
@@ -2674,6 +2753,21 @@ pub fn dispatch_post_as(
     // the only door); an agent's cell POST is refused.
     if crate::read_routes::is_read_route(path) {
         return crate::read_routes::not_a_person();
+    }
+    // inbox-catchup-v1: a read with a JSON body (never merged into params;
+    // the stamped principal on `params` is the caller). TCP and the cell
+    // socket call `catchup::handle` themselves with the classified caller;
+    // this in-process door has none, so a stamped passport's project chat
+    // entries are refused (fail closed).
+    if path == catchup::ROUTE {
+        let flight_key = params
+            .get("cell_session_id")
+            .map(|s| format!("cell:{s}"))
+            .or_else(|| {
+                crate::caller_workspace::principal_from_params(params)
+                    .map(|p| format!("passport:{}:{}", p.workspace_uuid, p.agent_address))
+            });
+        return catchup::handle(params, body, None, flight_key.as_deref(), None);
     }
     let mut params = params.clone();
     // Stamp is already on this map (cell and HTTP stamp, then enter here).

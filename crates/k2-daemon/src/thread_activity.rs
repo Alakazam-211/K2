@@ -1127,6 +1127,7 @@ fn run(f: impl FnOnce(&mut Tracker, i64) -> Vec<Out>) {
         let mut t = tracker().lock();
         for o in f(&mut t, now) {
             overlay_ws::publish_activity(OverlayFrame {
+                rev: 0,
                 collection: "activity".to_string(),
                 seq: 0,
                 id: o.turn_id,

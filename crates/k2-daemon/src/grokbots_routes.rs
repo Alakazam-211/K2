@@ -505,6 +505,10 @@ pub fn thread_by_addr(who: Who, params: &HashMap<String, String>) -> CliResponse
         Ok(r) => r,
         Err(r) => return r,
     };
+    // inbox-catchup-v1 (§3.1): every `GET /cli/thread` answer carries the
+    // overlay `rev` (read before the store read) and `instanceId`.
+    let rev = crate::overlay_ws::current_rev();
+    let instance_id = crate::boot_status::instance_id();
     let bot = match collect_now(&p, &id) {
         Ok(b) => b,
         Err(r) => return r,
@@ -537,6 +541,8 @@ pub fn thread_by_addr(who: Who, params: &HashMap<String, String>) -> CliResponse
                         "changed": d.changed,
                         "removed": crate::overlay_routes::removed_json(&d.removed),
                         "pastAddresses": [],
+                        "rev": rev,
+                        "instanceId": instance_id,
                     }),
                 ),
                 Err(e) => CliResponse::internal_error(format!("read Thread: {e}")),
@@ -555,6 +561,8 @@ pub fn thread_by_addr(who: Who, params: &HashMap<String, String>) -> CliResponse
                 "items": page.items,
                 "has_more": page.has_more,
                 "pastAddresses": [],
+                "rev": rev,
+                "instanceId": instance_id,
             }),
         ),
         Err(e) => CliResponse::internal_error(format!("read Thread: {e}")),

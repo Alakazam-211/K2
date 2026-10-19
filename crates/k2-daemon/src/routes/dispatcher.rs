@@ -7352,6 +7352,30 @@ async fn handle_one_request(
                         bound_skin = Some(pass);
                         (true, None, Some(name))
                     }
+                    // inbox-catchup-v1 (0.46.3): a guest catches up on its
+                    // own rooms with its Thread read rights (the handler
+                    // resolves and checks each entry like `GET /cli/thread`).
+                    Some(pass)
+                        if p == crate::overlay_routes::catchup::ROUTE
+                            && pass.dispatcher_admits_cap(crate::skin_routes::THREAD_READ) =>
+                    {
+                        bound_skin = Some(pass);
+                        (true, None, None)
+                    }
+                    Some(_) if p == crate::overlay_routes::catchup::ROUTE => {
+                        let _ = stream.read(&mut buf).await;
+                        let r = crate::skin_routes::missing_cap_response(
+                            crate::skin_routes::THREAD_READ,
+                        );
+                        super::http::send_response(
+                            &mut *stream,
+                            r.status,
+                            r.content_type,
+                            &r.body,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
                     Some(_) if skin_thread_write => {
                         let _ = stream.read(&mut buf).await;
                         let r = crate::skin_routes::missing_cap_response(
@@ -7422,15 +7446,43 @@ async fn handle_one_request(
                     .and_then(k2_core::connect_users::validate_session)
                     .unwrap_or_else(|| "owner".to_string())
             };
+            // inbox-catchup-v1: `gb:` entries go through the Grok Bots
+            // gate as the TCP caller (never for an App guest), project chat
+            // entries through the project chat read's member rules, and one
+            // catch-up runs per presented token at a time (C2).
+            let catchup_ctx = (p == crate::overlay_routes::catchup::ROUTE).then(|| {
+                let who = bound_skin.is_none().then(|| {
+                    crate::grokbots_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str())
+                });
+                let caller = crate::sidecar_routes::caller_from_tcp(
+                    crate::project_group_routes::MESSAGES_PATH,
+                    &query,
+                    bearer_token.as_deref(),
+                    state.token.as_str(),
+                );
+                let key = bearer_token
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| super::http::extract_token(&query))
+                    .map(|t| format!("tok:{t}"));
+                (who, key, caller)
+            });
             let resp = tokio::task::spawn_blocking(move || {
                 crate::overlay_routes::with_request_skin(bound_skin, || {
-                    crate::caller_workspace::with_request_principal(scoped_principal, || {
-                        crate::overlay_routes::dispatch_post_as(
+                    crate::caller_workspace::with_request_principal(scoped_principal, || match catchup_ctx {
+                        Some((who, key, caller)) => crate::overlay_routes::catchup::handle(
+                            &params,
+                            &body_bytes,
+                            who.as_ref(),
+                            key.as_deref(),
+                            Some(&caller),
+                        ),
+                        None => crate::overlay_routes::dispatch_post_as(
                             &p_owned,
                             &params,
                             &body_bytes,
                             &session_author,
-                        )
+                        ),
                     })
                 })
             })

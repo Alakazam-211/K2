@@ -911,6 +911,14 @@ mod unix_impl {
                 from_cli(crate::cli_response::CliResponse::method_not_allowed())
             }
             "/cli/thread" => from_cli(crate::cli::dispatch(path, params)),
+            // inbox-catchup-v1 (0.46.3): Thread entries read as this cell's
+            // passport; project chat entries ask the same member check as
+            // the project chat read; one catch-up per session at a time.
+            path if is_post && path == crate::overlay_routes::catchup::ROUTE => {
+                let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
+                let key = format!("cell:{this_session_id}");
+                from_cli(crate::overlay_routes::catchup::handle(params, body, None, Some(&key), Some(&caller)))
+            }
             path if is_post && path.starts_with("/cli/thread/") => {
                 from_cli(crate::overlay_routes::dispatch_post(path, params, body))
             }

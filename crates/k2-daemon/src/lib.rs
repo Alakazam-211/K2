@@ -254,6 +254,7 @@ pub mod terminal_routes;
 pub mod themes_routes;
 pub mod triage;
 pub mod tunnel_tls_listener;
+pub mod tunnel_autostart;
 pub mod tunnel_ingress_listener;
 // Runtime stage H: front-door hand-off (no-downtime upgrades).
 pub mod front443;

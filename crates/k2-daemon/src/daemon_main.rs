@@ -1639,14 +1639,27 @@ async fn bring_up_tunnel_listeners(state: &DaemonState, port: u16) {
             "[daemon/e2e] air-gap is on (K2_AIRGAP=1) — skipping E2E TLS listener (no cert.k2.dev)"
         );
     } else {
-        match tunnel_tls_listener::maybe_spawn(port).await {
-            Ok(Some(https_port)) => {
-                log_debug!("[daemon/e2e] E2E HTTPS listener active on port {https_port}")
+        let bring_up = async move {
+            match tunnel_tls_listener::maybe_spawn(port).await {
+                Ok(Some(https_port)) => {
+                    log_debug!("[daemon/e2e] E2E HTTPS listener active on port {https_port}")
+                }
+                Ok(None) => { /* E2E off or no subdomain — the common case, no log noise */ }
+                Err(e) => log_debug!(
+                    "[daemon/e2e] E2E listener did not start (the tunnel start \
+                     brings it up on demand and the auto-start retries; daemon unaffected): {e}"
+                ),
             }
-            Ok(None) => { /* E2E off or no subdomain — the common case, no log noise */ }
-            Err(e) => log_debug!(
-                "[daemon/e2e] E2E listener did not start (tunnel falls back to HTTP path; daemon unaffected): {e}"
-            ),
+        };
+        if crate::handoff::booted_from_handoff() {
+            // The handed-over TLS socket must be taken before
+            // `drop_untaken` closes it: wait (a valid cert starts at once).
+            bring_up.await;
+        } else {
+            // 0.46.2: with no usable cert the broker call can take minutes
+            // (`CERT_ISSUE_TIMEOUT`); boot does not wait for it. A tunnel
+            // start meanwhile waits on the same serialized ensure.
+            tokio::spawn(bring_up);
         }
     }
 }
@@ -1665,6 +1678,8 @@ async fn bring_up_tunnel_listeners(state: &DaemonState, port: u16) {
 ///     stalls a runtime worker.
 ///   * Every failure mode (load error, frpc-not-installed, spawn error,
 ///     join error) is logged at info/warn and swallowed — never panics.
+///     A failed start is retried on a capped backoff (15 s … 5 m) until the
+///     tunnel runs or the owner disables it ([`crate::tunnel_autostart`]).
 ///   * A missing / non-`auto_start` / non-connectable config is a silent
 ///     no-op (the common case).
 fn maybe_autostart_tunnel(daemon_port: u16) {
@@ -1765,27 +1780,13 @@ fn maybe_autostart_tunnel(daemon_port: u16) {
         }
 
         log_debug!("[daemon/tunnel] auto-start: launching frpc tunnel on daemon port {daemon_port}");
-        // frpc spawn blocks; isolate it on the blocking pool so it can't
-        // stall a runtime worker. `start_tunnel(None, …)` uses the saved
-        // subdomain from tunnel.json.
-        let join = tokio::task::spawn_blocking(move || {
-            k2_core::tunnel::start_tunnel(None, daemon_port)
-        })
-        .await;
-
-        match join {
-            Ok(Ok(st)) => log_debug!(
-                "[daemon/tunnel] auto-started: running={} url={:?}",
-                st.running,
-                st.public_url
-            ),
-            Ok(Err(e)) => log_debug!(
-                "[daemon/tunnel] auto-start failed (tunnel not running; daemon unaffected): {e}"
-            ),
-            Err(e) => log_debug!(
-                "[daemon/tunnel] auto-start task panicked/cancelled (daemon unaffected): {e}"
-            ),
-        }
+        // frpc spawn blocks; `start_with_retry` isolates it on the blocking
+        // pool so it can't stall a runtime worker. `start_tunnel(None, …)`
+        // uses the saved subdomain from tunnel.json. 0.46.2: a failed start
+        // (cert broker, network, frps) is retried on a capped backoff until
+        // the tunnel runs or the owner disables it — before, "will retry"
+        // was logged and nothing retried (rosson.k2.dev, 2026-10-19).
+        crate::tunnel_autostart::start_with_retry(daemon_port).await;
     });
 }
 

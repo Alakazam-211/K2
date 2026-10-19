@@ -368,8 +368,10 @@ pub fn self_sign(subdomain: &str, key_pair: &KeyPair) -> Result<String, String> 
 /// ## The real path (default): broker-issued
 ///
 /// 1. load the persisted key (or generate it);
-/// 2. if `~/.k2/tunnel-cert.pem` already holds a broker-issued chain that's
-///    NOT within the renewal window, reuse it;
+/// 2. if `~/.k2/tunnel-cert.pem` already holds a chain for this subdomain
+///    that has NOT expired, reuse it — also inside the renewal window (the
+///    daemon's renewer renews it in the background; a failed renewal must
+///    never take a still-valid cert out of service, 0.46.2);
 /// 3. otherwise POST the CSR ([`build_csr_pem`]) to the control-plane
 ///    `/cert` broker ([`super::cert_broker::provision_via_broker`]) and
 ///    install the returned publicly-trusted chain.
@@ -428,10 +430,26 @@ fn load_or_provision_broker(subdomain: &str) -> Result<(String, String), String>
             super::cert_broker::now_unix(),
         ) {
             return Ok((cert_pem, key_pem));
+        } else if !super::cert_broker::cert_expired(&cert_pem, super::cert_broker::now_unix()) {
+            // Inside the renewal window but still valid: SERVE IT. Renewal
+            // is the daemon renewer's job (it checks at once, then retries
+            // with backoff). Before 0.46.2 this path called the broker
+            // inline and a failed ACME order kept the tunnel and the E2E
+            // listener down for a cert with weeks left (rosson.k2.dev,
+            // 2026-10-19: 14 minutes dark).
+            let left_days = super::cert_broker::cert_not_after(&cert_pem)
+                .map(|na| (na - super::cert_broker::now_unix()) / 86_400)
+                .unwrap_or(0);
+            crate::log_debug!(
+                "[tunnel/tls] WARN: installed cert for {subdomain} is within the renewal \
+                 window ({left_days}d left) — serving it now; the renewer requests a \
+                 fresh broker-issued chain in the background"
+            );
+            return Ok((cert_pem, key_pem));
         } else {
             crate::log_debug!(
-                "[tunnel/tls] installed cert is within the renewal window — \
-                 requesting a fresh broker-issued chain"
+                "[tunnel/tls] installed cert for {subdomain} has expired — requesting a \
+                 fresh broker-issued chain (no usable cert until it is issued)"
             );
         }
     }
@@ -790,6 +808,62 @@ mod tests {
                 !cert_path().exists(),
                 "a failed broker call must not leave a (self-signed) cert behind"
             );
+        });
+    }
+
+    /// Install a cert for `sub` signed by the persisted key, valid until
+    /// `now + days` (negative = already expired).
+    fn install_cert_valid_for(sub: &str, days: i64) -> String {
+        let kp = load_or_generate_keypair().expect("keypair");
+        let mut params = CertificateParams::new(sans_for(sub)).expect("params");
+        let now = time::OffsetDateTime::now_utc();
+        params.not_before = now - time::Duration::days(60);
+        params.not_after = now + time::Duration::days(days);
+        let pem = params.self_signed(&kp).expect("sign").pem();
+        crate::tunnel::cert_broker::install_cert(&pem).expect("install");
+        pem
+    }
+
+    /// Point the broker at a closed port and seed a connectable config.
+    fn dead_broker() -> (crate::test_env::ClosedPort, crate::test_env::EnvVar, crate::test_env::EnvVar) {
+        let off = crate::test_env::EnvVar::remove("K2_E2E_SELF_SIGNED");
+        let closed = crate::test_env::ClosedPort::new();
+        let dead = format!("http://127.0.0.1:{}/cert", closed.port());
+        let url = crate::test_env::EnvVar::set(super::super::cert_broker::BROKER_URL_ENV, &dead);
+        super::super::config::save(&super::super::config::TunnelConfig {
+            token: "tok".to_string(),
+            subdomain: "rosson".to_string(),
+            ..Default::default()
+        })
+        .expect("seed config");
+        (closed, off, url)
+    }
+
+    /// The 2026-10-19 outage: a still-valid cert inside the renewal window
+    /// is served as-is, without waiting on (or failing with) the broker.
+    #[test]
+    fn valid_cert_in_renewal_window_is_served_when_broker_is_down() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        with_temp_home(|| {
+            let _broker = dead_broker();
+            let installed = install_cert_valid_for("rosson", 10);
+            let (cert, key) = load_or_provision_cert("rosson")
+                .expect("a valid cert inside the renewal window must be served");
+            assert_eq!(cert, installed, "the installed cert must be served unchanged");
+            server_config(&cert, &key).expect("installed cert + persisted key must build");
+        });
+    }
+
+    /// An expired cert is not usable: the broker must issue a new one, and
+    /// a broker failure is an error (nothing to serve).
+    #[test]
+    fn expired_cert_is_not_served_when_broker_is_down() {
+        with_temp_home(|| {
+            let _broker = dead_broker();
+            install_cert_valid_for("rosson", -1);
+            let err = load_or_provision_cert("rosson")
+                .expect_err("an expired cert must not be served");
+            assert!(err.contains("cert broker"), "expected a broker error, got: {err}");
         });
     }
 

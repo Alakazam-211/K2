@@ -51,11 +51,20 @@ pub const BROKER_URL_ENV: &str = "K2_CERT_BROKER_URL";
 /// renewal window + retries").
 pub const RENEWAL_WINDOW: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
-/// HTTP timeout for a single broker call. ACME issuance on the control plane
-/// can take a few seconds (DNS-01 propagation), so this is more generous
-/// than the lease loop's, but still bounded so a hung network never wedges
-/// the renewal loop.
-const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
+/// HTTP timeout for the `/cert` issue call ([`request_cert`], the only
+/// broker call). ACME issuance runs inside the request: DNS-01 propagation,
+/// and since 0.46.2 the broker's all-NS DNS gate, a 10 s settle delay and
+/// one retry (k2-connect #20), so a retried issue can take minutes. 240 s
+/// covers that and is still bounded so a hung network never wedges the
+/// renewal loop. Never on the tunnel-start path while a valid cert is
+/// installed: that cert serves and the daemon renewer makes this call in
+/// the background. Also sent to the broker as [`CERT_CLIENT_TIMEOUT_HEADER`]
+/// (its per-request budget is that value − 5 s; 55 s without the header).
+pub const CERT_ISSUE_TIMEOUT: Duration = Duration::from_secs(240);
+
+/// Request header telling the broker how long this client waits on `/cert`
+/// (whole seconds, from [`CERT_ISSUE_TIMEOUT`]).
+pub const CERT_CLIENT_TIMEOUT_HEADER: &str = "X-K2-Cert-Client-Timeout";
 
 /// Resolve the broker base URL: `K2_CERT_BROKER_URL` if set (non-blank),
 /// else [`DEFAULT_BROKER_URL`].
@@ -212,7 +221,7 @@ pub fn request_cert(
 ) -> Result<String, BrokerError> {
     let url = broker_url();
     let client = reqwest::blocking::Client::builder()
-        .timeout(HTTP_TIMEOUT)
+        .timeout(CERT_ISSUE_TIMEOUT)
         .build()
         .map_err(|e| BrokerError::Unreachable(format!("http client build failed: {e}")))?;
 
@@ -226,6 +235,10 @@ pub fn request_cert(
     let resp = client
         .post(&url)
         .header("Content-Type", "application/json")
+        .header(
+            CERT_CLIENT_TIMEOUT_HEADER,
+            CERT_ISSUE_TIMEOUT.as_secs().to_string(),
+        )
         .body(body)
         .send()
         .map_err(|e| BrokerError::Unreachable(format!("POST {url}: {e}")))?;
@@ -463,6 +476,18 @@ pub fn cert_needs_renewal(cert_pem: &str, window: Duration, now_unix: i64) -> bo
     }
 }
 
+/// True when the leaf cert is past its `notAfter` (or has no parseable
+/// leaf), i.e. it can no longer be served. A cert inside the renewal window
+/// but before `notAfter` is NOT expired: it still serves while a renewal is
+/// retried (0.46.2: a failed renewal at boot kept the tunnel down although
+/// the installed cert had weeks left).
+pub fn cert_expired(cert_pem: &str, now_unix: i64) -> bool {
+    match cert_not_after(cert_pem) {
+        Some(not_after) => now_unix >= not_after,
+        None => true,
+    }
+}
+
 /// Current wall-clock time as a Unix timestamp (seconds). Thin wrapper so
 /// production callers don't repeat the `SystemTime` boilerplate; tests pass
 /// an explicit `now` to [`cert_needs_renewal`] instead.
@@ -622,6 +647,12 @@ mod tests {
             assert!(req.contains("BEGIN CERTIFICATE REQUEST"), "CSR must be POSTed\n{req}");
             assert!(req.contains("\"subdomain\":\"rosson\""), "subdomain must be sent\n{req}");
             assert!(req.contains("\"token\":\"tok_live\""), "bearer token must be sent\n{req}");
+            // The broker sizes its per-request budget from this header.
+            assert!(
+                req.to_ascii_lowercase()
+                    .contains("\r\nx-k2-cert-client-timeout: 240\r\n"),
+                "the /cert POST must carry X-K2-Cert-Client-Timeout: 240\n{req}"
+            );
 
             // The chain is installed on disk (0644) ...
             assert!(super::super::tls::cert_path().exists(), "cert installed");
@@ -677,6 +708,26 @@ mod tests {
         // Garbage / empty → always needs (re)provisioning.
         assert!(cert_needs_renewal("not a cert", RENEWAL_WINDOW, now_unix()));
         assert!(cert_needs_renewal("", RENEWAL_WINDOW, now_unix()));
+    }
+
+    /// The `/cert` issue call waits 240 s (broker DNS gate + settle + one
+    /// retry, k2-connect #20) and tells the broker so via the header.
+    #[test]
+    fn cert_issue_timeout_is_240s() {
+        assert_eq!(CERT_ISSUE_TIMEOUT, Duration::from_secs(240));
+        assert_eq!(CERT_CLIENT_TIMEOUT_HEADER, "X-K2-Cert-Client-Timeout");
+    }
+
+    /// Inside the renewal window is still servable; past `notAfter` (or
+    /// garbage) is not.
+    #[test]
+    fn cert_expired_only_past_not_after() {
+        let soon = fake_broker_chain("rosson", 10);
+        assert!(!cert_expired(&soon, now_unix()), "10d left is not expired");
+        let past = fake_broker_chain("rosson", -1);
+        assert!(cert_expired(&past, now_unix()), "notAfter yesterday is expired");
+        assert!(cert_expired("not a cert", now_unix()));
+        assert!(cert_expired("", now_unix()));
     }
 
     /// (c) Broker-unreachable on the real path is a HARD error — never a

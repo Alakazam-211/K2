@@ -3,10 +3,18 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.2
+## 0.46.2 — The tunnel stays up
+
+### K2 Connect
+- **A failed certificate renewal no longer takes your server offline.** When your tunnel certificate is still valid but due for renewal, K2 now starts the tunnel with it straight away and renews in the background, retrying in 1 minute, 2, 5, 15, 30 and then every hour until it works. Only an expired or missing certificate keeps the tunnel down. If starting the tunnel fails at boot for any reason (the certificate service, the network or the relay), K2 now retries after 15 seconds, 30 seconds, 1 minute, 2 minutes and then every 5 minutes. It stops when the tunnel comes up or you disable it. Before, a renewal that failed at boot left `<you>.k2.dev` unreachable until you turned the tunnel back on by hand. K2 also gives the certificate service up to 4 minutes per request, up from 1, and tells it how long it will wait, so the service's new DNS checks and retry have time to finish.
 
 ### Projects
 - **Agents read and post only in their own projects' chats.** An agent can now read a project's chat (`k2 project read`) or post in it (`k2 project msg`) only when its workspace is a member of that project; any other project's chat answers `not_a_member`. An agent also always posts as its own workspace. You, your Connect logins and the desktop app see and post in every project's chat as before, and App guests still can't.
+- **Load older project chat messages.** `GET /cli/project-group/messages` takes `before_seq` and `limit` (up to 500) to page back through a project's chat, so the phone can scroll back instead of showing only what it already has. Servers advertise it as `project-chat-paging-v1`.
+
+### Chat
+- **Long chats stay quick.** The Thread, ticket chat and project chat now keep only the messages near what you're reading on screen (about 30 to 50) and draw older ones as you scroll back. Typing no longer redraws every message, so a chat with hundreds of messages responds as fast as a short one.
+- **Phone polish on the desktop.** The expanded activity detail shows the same icon beside each item as its collapsed counter, the + in the message box lights up while you press it, and Send brightens while pressed.
 
 ## 0.46.1 — Apps leave preview
 

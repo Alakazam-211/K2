@@ -272,20 +272,42 @@ pub async fn maybe_spawn(http_port: u16) -> Result<Option<u16>, String> {
         return Ok(None);
     }
 
-    spawn_listener(http_port, subdomain).await.map(Some)
+    // Through the same serialized, liveness-aware ensure the tunnel start
+    // uses (0.46.2), on the blocking pool: with no usable cert the broker
+    // call can take minutes (`CERT_ISSUE_TIMEOUT`), which must neither pin
+    // a runtime worker nor race a concurrent tunnel start into a second
+    // listener.
+    let handle = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || ensure_spawned_blocking(handle, http_port))
+        .await
+        .map_err(|e| format!("E2E listener bring-up task failed: {e}"))?
+        .map(Some)
 }
 
 /// Bind + spawn the E2E HTTPS listener for `subdomain`, provisioning its cert
 /// via the broker seam first, and record it in [`LIVE`] (port, name, tasks).
 /// Idempotent guard lives in the callers; this is the actual bring-up.
 async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String> {
+    spawn_listener_with(http_port, subdomain, RenewSchedule::production()).await
+}
+
+/// [`spawn_listener`] with an explicit renewer schedule (tests).
+async fn spawn_listener_with(
+    http_port: u16,
+    subdomain: String,
+    schedule: RenewSchedule,
+) -> Result<u16, String> {
     let subdomain = subdomain.trim().to_string();
     // Cert + key via the broker seam (broker-issued on the real path;
     // self-signed only under the explicit `K2_E2E_SELF_SIGNED` spike hatch).
-    // On the real path a broker-unreachable failure surfaces HERE and is
-    // returned — the caller logs it and the tunnel does NOT come up against
-    // an untrusted/missing cert (no silent cleartext fallback). A cert on
-    // disk for ANOTHER name is never reused (`cert_covers`).
+    // An installed cert for this name that has NOT expired is served as-is,
+    // also inside the renewal window (0.46.2): the renewer spawned below
+    // renews it in the background. Only when there is no usable cert
+    // (missing, expired, another name) does the broker have to answer
+    // here; a failure is then returned — the caller logs it and the tunnel
+    // does NOT come up against an untrusted/missing cert (no silent
+    // cleartext fallback). A cert on disk for ANOTHER name is never reused
+    // (`cert_covers`).
     let (cert_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert(&subdomain)
         .map_err(|e| format!("provision tunnel cert: {e}"))?;
     let server_config = k2_core::tunnel::tls::server_config(&cert_pem, &key_pem)
@@ -356,7 +378,7 @@ async fn spawn_listener(http_port: u16, subdomain: String) -> Result<u16, String
         let cfg = shared_config.clone();
         let sub = subdomain.clone();
         Some(tokio::spawn(async move {
-            cert_renewal_loop(sub, cfg).await;
+            cert_renewal_loop(sub, cfg, schedule).await;
         }))
     } else {
         None
@@ -616,30 +638,65 @@ async fn accept_loop(
     }
 }
 
+/// When the cert renewer runs: how often it checks a fresh cert, and how
+/// long it waits after a failed renewal (index = failures so far − 1; the
+/// last entry repeats). Injected so tests run the real loop in milliseconds.
+#[derive(Debug, Clone)]
+pub(crate) struct RenewSchedule {
+    pub check_every: Duration,
+    pub retry_after_failure: Vec<Duration>,
+}
+
+impl RenewSchedule {
+    /// Production: check every 12 h; after a failed renewal retry in 1 m,
+    /// 2 m, 5 m, 15 m, 30 m, then hourly. A cert inside the 30-day window
+    /// still serves meanwhile, so hourly retries leave hundreds of tries.
+    pub(crate) fn production() -> Self {
+        Self {
+            check_every: CERT_CHECK_INTERVAL,
+            retry_after_failure: [60, 120, 300, 900, 1800, 3600]
+                .into_iter()
+                .map(Duration::from_secs)
+                .collect(),
+        }
+    }
+
+    /// The wait after `failures` consecutive failed renewals (≥ 1).
+    pub(crate) fn retry_delay(&self, failures: u32) -> Duration {
+        crate::tunnel_autostart::backoff_step(&self.retry_after_failure, failures)
+    }
+}
+
 /// Daemon-owned cert-renewal loop (mirrors `tunnel::lease`'s daemon-side
-/// scheduling). Periodically checks the installed leaf's `notAfter`; when
-/// it's within [`k2_core::tunnel::cert_broker::RENEWAL_WINDOW`] of expiry,
-/// re-runs the broker client and hot-swaps the rustls config in place.
+/// scheduling). Checks the installed leaf's `notAfter` AT ONCE and then
+/// every `schedule.check_every`; when it's within
+/// [`k2_core::tunnel::cert_broker::RENEWAL_WINDOW`] of expiry, re-runs the
+/// broker client and hot-swaps the rustls config in place.
 ///
-/// Fully fault-isolated: a transient broker failure is logged and retried on
-/// the next tick (the OLD cert keeps serving until the new one lands), so a
-/// hiccup never drops the listener. Runs for the life of the daemon (the
-/// E2E listener has no separate stop signal — it lives as long as the
-/// process, like the cleartext listener).
-async fn cert_renewal_loop(subdomain: String, shared_config: Arc<ArcSwap<ServerConfig>>) {
+/// Fully fault-isolated: a failed renewal is logged and retried on the
+/// backoff in `schedule.retry_after_failure` (the OLD cert keeps serving
+/// until the new one lands), so a hiccup never drops the listener. The
+/// first check runs immediately (0.46.2): the listener now starts on a
+/// still-valid cert inside the window instead of renewing inline, and this
+/// loop is what renews it. Runs until the listener is retired (its task is
+/// aborted) or the tunnel serves another name.
+async fn cert_renewal_loop(
+    subdomain: String,
+    shared_config: Arc<ArcSwap<ServerConfig>>,
+    schedule: RenewSchedule,
+) {
     use k2_core::tunnel::cert_broker;
 
     log_debug!(
-        "[daemon/e2e] cert auto-renewal started for {}.k2.dev (check every {:?}, \
+        "[daemon/e2e] cert auto-renewal started for {}.k2.dev (check now, then every {:?}; \
          renew within {:?} of expiry)",
         subdomain,
-        CERT_CHECK_INTERVAL,
+        schedule.check_every,
         cert_broker::RENEWAL_WINDOW
     );
 
+    let mut failures: u32 = 0;
     loop {
-        tokio::time::sleep(CERT_CHECK_INTERVAL).await;
-
         // Belt to the identity-changed abort (0.45.2): a renewer for a name
         // the tunnel no longer serves must never request that name's cert
         // (with the NEW bearer) and overwrite `tunnel-cert.pem`.
@@ -655,12 +712,13 @@ async fn cert_renewal_loop(subdomain: String, shared_config: Arc<ArcSwap<ServerC
         }
 
         // Read the installed cert to decide whether we're inside the window.
+        // Unreadable counts as "needs renewal" (the broker reinstalls it).
         let cert_path = k2_core::tunnel::tls::cert_path();
         let installed = match std::fs::read_to_string(&cert_path) {
             Ok(s) => s,
             Err(e) => {
                 log_debug!("[daemon/e2e] renewal: cannot read {}: {e}", cert_path.display());
-                continue;
+                String::new()
             }
         };
         if !cert_broker::cert_needs_renewal(
@@ -668,6 +726,8 @@ async fn cert_renewal_loop(subdomain: String, shared_config: Arc<ArcSwap<ServerC
             cert_broker::RENEWAL_WINDOW,
             cert_broker::now_unix(),
         ) {
+            failures = 0;
+            tokio::time::sleep(schedule.check_every).await;
             continue; // still fresh — quiet on the happy path.
         }
 
@@ -678,37 +738,42 @@ async fn cert_renewal_loop(subdomain: String, shared_config: Arc<ArcSwap<ServerC
         );
 
         // Re-provision via the broker. Blocking reqwest under the hood, so
-        // run it off the async runtime. A failure is transient: log + retry.
+        // run it off the async runtime.
         let sub = subdomain.clone();
         let provisioned =
-            tokio::task::spawn_blocking(move || cert_broker::provision_via_broker(&sub))
-                .await;
-        let (cert_pem, key_pem) = match provisioned {
-            Ok(Ok(pair)) => pair,
-            Ok(Err(e)) => {
-                log_debug!(
-                    "[daemon/e2e] renewal: broker request failed (will retry next tick): {e}"
-                );
-                continue;
-            }
-            Err(e) => {
-                log_debug!("[daemon/e2e] renewal: provision task panicked: {e}");
-                continue;
-            }
+            tokio::task::spawn_blocking(move || cert_broker::provision_via_broker(&sub)).await;
+        let outcome = match provisioned {
+            Ok(Ok((cert_pem, key_pem))) => k2_core::tunnel::tls::server_config(&cert_pem, &key_pem)
+                .map_err(|e| format!("fresh cert didn't build a ServerConfig: {e}")),
+            Ok(Err(e)) => Err(format!("broker request failed: {e}")),
+            Err(e) => Err(format!("provision task panicked: {e}")),
         };
-
-        match k2_core::tunnel::tls::server_config(&cert_pem, &key_pem) {
+        match outcome {
             Ok(new_cfg) => {
                 shared_config.store(Arc::new(new_cfg));
+                failures = 0;
                 log_debug!(
                     "[daemon/e2e] cert for {}.k2.dev renewed + hot-swapped (no listener restart)",
                     subdomain
                 );
+                tokio::time::sleep(schedule.check_every).await;
             }
-            Err(e) => log_debug!(
-                "[daemon/e2e] renewal: fresh cert didn't build a ServerConfig \
-                 (keeping the old one): {e}"
-            ),
+            Err(e) => {
+                failures = failures.saturating_add(1);
+                let wait = schedule.retry_delay(failures);
+                let state = if cert_broker::cert_expired(&installed, cert_broker::now_unix()) {
+                    "the EXPIRED cert"
+                } else {
+                    "the installed cert, still valid"
+                };
+                log_debug!(
+                    "[daemon/e2e] WARN: cert renewal for {}.k2.dev failed (attempt {failures}; \
+                     serving {state}; retrying in {:?}): {e}",
+                    subdomain,
+                    wait
+                );
+                tokio::time::sleep(wait).await;
+            }
         }
     }
 }
@@ -1595,5 +1660,342 @@ mod tests {
 
         subdomains::store(SubdomainMap::default());
         // `_home` (TempHome) restores $HOME and removes the tempdir on drop.
+    }
+
+    // ── 0.46.2: a failed renewal never takes a valid cert out of service ──
+
+    /// A loopback cert broker that answers each request with the next
+    /// scripted `(status line, body)` (the last one repeats) and counts the
+    /// requests it served.
+    struct FakeBroker {
+        url: String,
+        hits: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl FakeBroker {
+        fn start(script: Vec<(&'static str, String)>) -> Self {
+            use std::io::{Read, Write};
+            let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind fake broker");
+            let port = l.local_addr().expect("addr").port();
+            let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let h = hits.clone();
+            std::thread::spawn(move || {
+                for sock in l.incoming() {
+                    let Ok(mut sock) = sock else { return };
+                    // Read the whole request (headers + Content-Length body).
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 4096];
+                    loop {
+                        let n = sock.read(&mut chunk).unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        buf.extend_from_slice(&chunk[..n]);
+                        let text = String::from_utf8_lossy(&buf).to_string();
+                        if let Some(end) = text.find("\r\n\r\n") {
+                            let len = text[..end]
+                                .lines()
+                                .find_map(|l| {
+                                    let (k, v) = l.split_once(':')?;
+                                    k.eq_ignore_ascii_case("content-length")
+                                        .then(|| v.trim().parse::<usize>().ok())
+                                        .flatten()
+                                })
+                                .unwrap_or(0);
+                            if buf.len() >= end + 4 + len {
+                                break;
+                            }
+                        }
+                    }
+                    let i = h.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let (status, body) = script
+                        .get(i)
+                        .or_else(|| script.last())
+                        .cloned()
+                        .expect("non-empty script");
+                    let resp = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = sock.write_all(resp.as_bytes());
+                    let _ = sock.flush();
+                }
+            });
+            Self { url: format!("http://127.0.0.1:{port}/cert"), hits }
+        }
+
+        fn hits(&self) -> usize {
+            self.hits.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    fn broker_issuance_failed() -> (&'static str, String) {
+        (
+            "502 Bad Gateway",
+            serde_json::json!({
+                "error": "issuance_failed",
+                "detail": "order did not become ready (status: Invalid)"
+            })
+            .to_string(),
+        )
+    }
+
+    fn broker_ok(cert_pem: &str) -> (&'static str, String) {
+        ("200 OK", serde_json::json!({ "cert": cert_pem }).to_string())
+    }
+
+    /// A cert for `sub` signed by the daemon's persisted tunnel key, valid
+    /// until `days` from today (negative = already expired).
+    fn cert_signed_by_tunnel_key(sub: &str, days: i64) -> String {
+        use chrono::Datelike;
+        let kp = k2_core::tunnel::tls::load_or_generate_keypair().expect("tunnel keypair");
+        let mut params =
+            rcgen::CertificateParams::new(k2_core::tunnel::tls::sans_for(sub)).expect("params");
+        let ymd = |d: chrono::DateTime<chrono::Utc>| {
+            rcgen::date_time_ymd(d.year(), d.month() as u8, d.day() as u8)
+        };
+        let now = chrono::Utc::now();
+        params.not_before = ymd(now - chrono::Duration::days(80));
+        params.not_after = ymd(now + chrono::Duration::days(days));
+        params.self_signed(&kp).expect("sign").pem()
+    }
+
+    /// TLS-handshake 127.0.0.1:`port` for `sni`, trusting only `trust_pem`,
+    /// and return the leaf the server presented (DER). Fails loudly when
+    /// the handshake fails (the served cert is not `trust_pem`).
+    async fn served_leaf(trust_pem: &str, port: u16, sni: &str) -> Vec<u8> {
+        use tokio_rustls::TlsConnector;
+        let mut roots = rustls::RootCertStore::empty();
+        for item in rustls_pemfile::certs(&mut trust_pem.as_bytes()) {
+            roots.add(item.expect("trust pem")).expect("add root");
+        }
+        let cfg = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let tcp = TcpStream::connect(("127.0.0.1", port)).await.expect("connect");
+        let name = rustls::pki_types::ServerName::try_from(sni.to_string()).expect("sni");
+        let tls = TlsConnector::from(Arc::new(cfg))
+            .connect(name, tcp)
+            .await
+            .expect("TLS handshake against the expected cert");
+        let (_, conn) = tls.get_ref();
+        conn.peer_certificates().expect("peer certs")[0].as_ref().to_vec()
+    }
+
+    fn leaf_der(pem: &str) -> Vec<u8> {
+        rustls_pemfile::certs(&mut pem.as_bytes())
+            .next()
+            .expect("a cert")
+            .expect("parse cert")
+            .as_ref()
+            .to_vec()
+    }
+
+    /// Seed a connectable E2E config for `rosson` and point the broker at
+    /// `url` (spike hatch off, E2E default on, air-gap off).
+    fn seed_e2e_config(url: &str) -> Vec<k2_core::test_env::EnvVar> {
+        let guards = vec![
+            k2_core::test_env::EnvVar::remove("K2_E2E_SELF_SIGNED"),
+            k2_core::test_env::EnvVar::remove("K2_E2E"),
+            k2_core::test_env::EnvVar::remove("K2_AIRGAP"),
+            k2_core::test_env::EnvVar::set(k2_core::tunnel::cert_broker::BROKER_URL_ENV, url),
+        ];
+        k2_core::tunnel::config::save(&k2_core::tunnel::config::TunnelConfig {
+            token: "tok".to_string(),
+            subdomain: "rosson".to_string(),
+            ..Default::default()
+        })
+        .expect("seed tunnel.json");
+        guards
+    }
+
+    async fn wait_for(what: &str, mut cond: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !cond() {
+            assert!(std::time::Instant::now() < deadline, "timed out waiting for {what}");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    fn fast_schedule() -> RenewSchedule {
+        RenewSchedule {
+            check_every: Duration::from_secs(3600),
+            retry_after_failure: vec![Duration::from_millis(50)],
+        }
+    }
+
+    #[test]
+    fn renew_schedule_production_backs_off_to_hourly() {
+        let s = RenewSchedule::production();
+        assert_eq!(s.check_every, Duration::from_secs(12 * 60 * 60));
+        let got: Vec<u64> = (1..=8).map(|n| s.retry_delay(n).as_secs()).collect();
+        assert_eq!(got, vec![60, 120, 300, 900, 1800, 3600, 3600, 3600]);
+    }
+
+    /// (a) The 2026-10-19 outage: the installed cert is valid but inside
+    /// the renewal window and the broker fails. The listener must start on
+    /// the OLD cert, the renewer must retry on its backoff, and once the
+    /// broker issues, the new cert is hot-swapped in.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn valid_cert_in_window_starts_listener_and_renewal_retries() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _home = crate::test_support::TempHome::new();
+        let old = cert_signed_by_tunnel_key("rosson", 10);
+        let fresh = cert_signed_by_tunnel_key("rosson", 90);
+        k2_core::tunnel::cert_broker::install_cert(&old).expect("install old cert");
+        let broker = FakeBroker::start(vec![
+            broker_issuance_failed(),
+            broker_issuance_failed(),
+            broker_ok(&fresh),
+        ]);
+        let _env = seed_e2e_config(&broker.url);
+        retire_any();
+
+        let port = spawn_listener_with(1, "rosson".to_string(), fast_schedule())
+            .await
+            .expect("a valid cert in the renewal window must start the listener");
+        assert_eq!(
+            live_renewer_subdomain().as_deref(),
+            Some("rosson"),
+            "the renewer must run even though the broker is failing"
+        );
+        // The renewer tries at once, fails twice, then the broker issues.
+        wait_for("three broker requests (2 failures, then success)", || broker.hits() >= 3).await;
+        wait_for("the renewed cert on disk", || {
+            std::fs::read_to_string(k2_core::tunnel::tls::cert_path()).ok().as_deref()
+                == Some(fresh.as_str())
+        })
+        .await;
+        // The hot-swap lands right after the install.
+        let mut swapped = false;
+        for _ in 0..100 {
+            let tcp_ok = std::net::TcpStream::connect(("127.0.0.1", port)).is_ok();
+            assert!(tcp_ok, "the listener must stay up through the renewal");
+            if tokio::time::timeout(
+                Duration::from_secs(5),
+                served_leaf_or_none(&fresh, port, "rosson.k2.dev"),
+            )
+            .await
+            .expect("handshake timeout")
+                == Some(leaf_der(&fresh))
+            {
+                swapped = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(swapped, "the renewed cert must be hot-swapped into the live listener");
+        assert_eq!(broker.hits(), 3, "a fresh cert must not be re-requested");
+        retire_any();
+    }
+
+    /// Before the broker recovers, the listener serves the OLD cert.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn old_cert_is_served_while_renewal_fails() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _home = crate::test_support::TempHome::new();
+        let old = cert_signed_by_tunnel_key("rosson", 10);
+        k2_core::tunnel::cert_broker::install_cert(&old).expect("install old cert");
+        let broker = FakeBroker::start(vec![broker_issuance_failed()]);
+        let _env = seed_e2e_config(&broker.url);
+        retire_any();
+
+        let port = spawn_listener_with(1, "rosson".to_string(), fast_schedule())
+            .await
+            .expect("listener starts on the old cert");
+        wait_for("at least two renewal attempts (retry scheduled)", || broker.hits() >= 2).await;
+        assert_eq!(
+            served_leaf(&old, port, "rosson.k2.dev").await,
+            leaf_der(&old),
+            "the still-valid old cert must keep serving while renewal fails"
+        );
+        assert_eq!(live_renewer_subdomain().as_deref(), Some("rosson"));
+        retire_any();
+    }
+
+    /// (b) Expired cert + broker failure: nothing to serve, so no start;
+    /// the auto-start retry driver (the production one, with short waits)
+    /// keeps trying through the real ensure path until the broker issues,
+    /// then the listener starts on the new cert.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn expired_cert_no_start_then_retry_starts_when_broker_recovers() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _home = crate::test_support::TempHome::new();
+        let expired = cert_signed_by_tunnel_key("rosson", -2);
+        let fresh = cert_signed_by_tunnel_key("rosson", 90);
+        k2_core::tunnel::cert_broker::install_cert(&expired).expect("install expired cert");
+        let broker = FakeBroker::start(vec![
+            broker_issuance_failed(),
+            broker_issuance_failed(),
+            broker_ok(&fresh),
+        ]);
+        let _env = seed_e2e_config(&broker.url);
+        retire_any();
+
+        let handle = tokio::runtime::Handle::current();
+        let attempt = || {
+            let handle = handle.clone();
+            async move {
+                tokio::task::spawn_blocking(move || ensure_spawned_blocking(handle, 1))
+                    .await
+                    .expect("ensure task")
+                    .map(|p| format!("listener on {p}"))
+            }
+        };
+        let steps = [Duration::from_millis(20)];
+        let outcome = crate::tunnel_autostart::retry_until_started(&steps, attempt, || {
+            crate::tunnel_autostart::Gate::Go
+        })
+        .await;
+        let crate::tunnel_autostart::RetryOutcome::Started { attempts, .. } = outcome else {
+            panic!("expected the retry to start the listener, got {outcome:?}");
+        };
+        assert_eq!(attempts, 3, "two failed starts (no usable cert), then success");
+        assert_eq!(broker.hits(), 3);
+        let (port, sub) = live_listener().expect("listener recorded");
+        assert_eq!(sub, "rosson");
+        assert_eq!(
+            served_leaf(&fresh, port, "rosson.k2.dev").await,
+            leaf_der(&fresh),
+            "the listener must serve the newly issued cert"
+        );
+        retire_any();
+    }
+
+    /// The first failed attempt in (b) really is "no start": an expired
+    /// cert with a failing broker returns an error and records nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn expired_cert_and_broker_failure_does_not_start() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _home = crate::test_support::TempHome::new();
+        let expired = cert_signed_by_tunnel_key("rosson", -2);
+        k2_core::tunnel::cert_broker::install_cert(&expired).expect("install expired cert");
+        let broker = FakeBroker::start(vec![broker_issuance_failed()]);
+        let _env = seed_e2e_config(&broker.url);
+        retire_any();
+
+        let err = spawn_listener_with(1, "rosson".to_string(), fast_schedule())
+            .await
+            .expect_err("an expired cert must not be served");
+        assert!(err.contains("issuance_failed"), "expected the broker error, got: {err}");
+        assert!(live_listener().is_none(), "no listener may be recorded");
+        assert_eq!(broker.hits(), 1);
+    }
+
+    async fn served_leaf_or_none(trust_pem: &str, port: u16, sni: &str) -> Option<Vec<u8>> {
+        use tokio_rustls::TlsConnector;
+        let mut roots = rustls::RootCertStore::empty();
+        for item in rustls_pemfile::certs(&mut trust_pem.as_bytes()) {
+            roots.add(item.expect("trust pem")).expect("add root");
+        }
+        let cfg = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let tcp = TcpStream::connect(("127.0.0.1", port)).await.expect("connect");
+        let name = rustls::pki_types::ServerName::try_from(sni.to_string()).expect("sni");
+        let tls = TlsConnector::from(Arc::new(cfg)).connect(name, tcp).await.ok()?;
+        let (_, conn) = tls.get_ref();
+        Some(conn.peer_certificates()?[0].as_ref().to_vec())
     }
 }

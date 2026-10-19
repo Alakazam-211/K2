@@ -22,6 +22,9 @@
 //! admin only, and never an agent; `dashboard/add-pane` /
 //! `dashboard/remove-pane` change one pane server-side so two clients
 //! can't overwrite each other (see [`handle_dashboard_pane`]).
+//! 0.46.2 (project-chat-paging-v1): `messages?before_seq=N` pages a chat
+//! back by seq for K2 Companion, through the same dispatcher auth arm and
+//! the same [`messages_view`] as the plain read.
 //! Project chat post (`msg`) is open to every login. The
 //! `dashboard/*` mutations — and the §6.7.7 `set-icon` / `set-color`
 //! appearance mutations — additionally require the owner-or-admin bit
@@ -119,6 +122,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // The single chat stream, oldest-first. No `after` → the
         // latest N (default 20); `after` is strictly-greater (powers
         // CLI `read --after` + the drawer's incremental fetch).
+        // Two seq cursors, at most one per request (400 `usage` for a mix):
+        // `after_seq=N` (thread-delta-v1, newer) and `before_seq=N`
+        // (project-chat-paging-v1, older). Every read returns its messages
+        // through [`messages_view`], so the three can't drift apart.
         "/cli/project-group/messages" => {
             let selector = str_param(params, "group");
             if selector.is_empty() {
@@ -165,17 +172,51 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 if after.is_some() {
                     return Some(usage_error("after_seq cannot be combined with after"));
                 }
+                if params.contains_key("before_seq") {
+                    return Some(usage_error("after_seq cannot be combined with before_seq"));
+                }
                 return Some(match project_groups::list_messages_after_seq(&group_id, after_seq, limit) {
                     Ok(page) => CliResponse::ok_json(
                         serde_json::json!({
                             "ok": true,
                             "groupId": group_id,
                             "after_seq": after_seq,
-                            "messages": page.messages,
+                            "messages": messages_view(&page.messages),
                             "has_more": page.truncated,
                             "truncated": page.truncated,
                             "changed": [],
                             "removed": [],
+                        })
+                        .to_string(),
+                    ),
+                    Err(e) => core_error(e),
+                });
+            }
+            // project-chat-paging-v1: `before_seq=N` → the newest `limit`
+            // messages with seq < N, oldest first; `has_more` when OLDER
+            // messages remain. The phone pages back from its oldest cached
+            // seq until `has_more` is false.
+            if let Some(raw) = params.get("before_seq") {
+                let before_seq = match raw.trim().parse::<i64>() {
+                    Ok(n) if n >= 1 => n,
+                    _ => {
+                        return Some(usage_error(format!(
+                            "invalid before_seq '{raw}' — expected a whole number >= 1"
+                        )))
+                    }
+                };
+                if after.is_some() {
+                    return Some(usage_error("before_seq cannot be combined with after"));
+                }
+                return Some(match project_groups::list_messages_before_seq(&group_id, before_seq, limit) {
+                    Ok(page) => CliResponse::ok_json(
+                        serde_json::json!({
+                            "ok": true,
+                            "groupId": group_id,
+                            "before_seq": before_seq,
+                            "messages": messages_view(&page.messages),
+                            "has_more": page.truncated,
+                            "truncated": page.truncated,
                         })
                         .to_string(),
                     ),
@@ -187,7 +228,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     serde_json::json!({
                         "ok": true,
                         "groupId": group_id,
-                        "messages": page.messages,
+                        "messages": messages_view(&page.messages),
                         "truncated": page.truncated,
                     })
                     .to_string(),
@@ -273,6 +314,16 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         _ => return None,
     };
     Some(resp)
+}
+
+/// Project chat messages as a reader sees them. Every
+/// `/cli/project-group/messages` read (the plain page, `after_seq`,
+/// `before_seq`) returns its rows through here, so a per-viewer rewrite
+/// added later (attachments, redaction) lands on all three at once.
+/// Today the view is the stored row for every caller the dispatcher lets
+/// in: a project message has no attachments, cards or redactions.
+fn messages_view(messages: &[project_groups::ProjectGroupMessage]) -> serde_json::Value {
+    serde_json::to_value(messages).unwrap_or_else(|_| serde_json::json!([]))
 }
 
 /// thread-read-v1: for a person (the dispatcher bound their login), each

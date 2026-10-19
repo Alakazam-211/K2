@@ -395,6 +395,13 @@ pub const FEATURE_FILES_PATH_SCOPE: &str = "files-path-scope-v1";
 /// (items at or below N rewritten in place since: card answers, voids,
 /// expiries, handoffs) and `removed` (items that left the Thread).
 pub const FEATURE_THREAD_DELTA: &str = "thread-delta-v1";
+/// Older pages of a project chat (project-chat-paging-v1, 0.46.2):
+/// `GET /cli/project-group/messages?before_seq=N&limit=L` returns the newest
+/// `L` messages with `seq < N` OLDEST first, `has_more` when older ones
+/// remain (the `/cli/thread` `before_seq` page). A bad `before_seq` or
+/// `limit`, or `before_seq` with `after_seq` / `after`, is 400 `usage`.
+/// K2 Companion pages a project chat back only on a server with this key.
+pub const FEATURE_PROJECT_CHAT_PAGING: &str = "project-chat-paging-v1";
 /// Thread push message previews (0.46.1): `POST /cli/push/register-device`
 /// takes `previews` (absent = keep the stored value), its reply and
 /// `GET /cli/push/device` carry `previews` + `previewsAllowed`, and a
@@ -479,6 +486,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_FILES_PATH_SCOPE);
     out.push(FEATURE_THREAD_ATTACHMENTS);
     out.push(FEATURE_THREAD_DELTA);
+    out.push(FEATURE_PROJECT_CHAT_PAGING);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
         // Same DB as 0157: migration 0189 (push_devices.previews) ran with it.
@@ -541,6 +549,7 @@ mod tests {
                 "files-path-scope-v1",
                 "thread-attachments-v1",
                 "thread-delta-v1",
+                "project-chat-paging-v1",
                 "thread-push-v1",
                 "push-previews-v1",
                 "thread-read-v1",

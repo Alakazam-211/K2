@@ -13,6 +13,9 @@
 //!    room it doesn't hold) get the same status and error code with and
 //!    without `after_seq`.
 //! 4. `/boot-status` lists `thread-delta-v1`.
+//! 5. project-chat-paging-v1 (0.46.2): `GET /cli/project-group/messages?
+//!    before_seq=N` pages a project chat back, same auth and view as the
+//!    plain read.
 
 #![cfg(unix)]
 
@@ -317,6 +320,143 @@ async fn thread_after_seq_keeps_every_callers_read_rules() {
             assert_eq!(v["after_seq"], 0);
         } else {
             assert!(!new.body.contains("hello"), "{who}: a refusal carries no Thread text: {}", new.body);
+        }
+    }
+}
+
+// ── project-chat-paging-v1 (0.46.2) ──────────────────────────────────
+
+/// A Connect login (a server member) made through the real routes.
+async fn member_login(port: u16, username: &str) -> String {
+    ok_post(port, "/cli/users/add", OWNER, json!({ "username": username, "password": "password123" })).await;
+    let body = json!({ "username": username, "password": "password123" }).to_string();
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/auth/login", Some(body))).await.unwrap();
+    assert_eq!(r.status, 200, "login {username}: {}", r.body);
+    r.json()["token"].as_str().expect("token").to_string()
+}
+
+/// 5. `GET /cli/project-group/messages?before_seq=N&limit=L`: the newest L
+///    messages with `seq < N`, oldest first, `has_more` while older ones
+///    remain; 120 messages page back in 50s with exact seqs; the start is
+///    an empty page; bad params are 400 `usage`; callers the plain read
+///    refuses are refused the same way, and every caller it admits sees
+///    the same messages for the same seqs; `/boot-status` lists
+///    `project-chat-paging-v1`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn project_messages_before_seq_pages_back_with_the_plain_reads_view() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    let (member, _) = pinned_ws(&env, &format!("pcmember{tag}"));
+    let g = ok_post(port, "/cli/project-group/create", OWNER, json!({ "name": format!("Paging {tag}") })).await;
+    let gid = g["group"]["id"].as_str().or_else(|| g["id"].as_str()).unwrap_or_else(|| panic!("group id: {g}")).to_string();
+    ok_post(port, "/cli/project-group/add-member", OWNER, json!({ "group": gid, "workspace": member.id })).await;
+
+    let boot = ok_get(port, "/boot-status", OWNER, "").await;
+    let features = boot["features"].as_array().expect("features");
+    assert!(features.iter().any(|f| f == "project-chat-paging-v1"), "feature key: {boot}");
+    assert!(features.iter().any(|f| f == "thread-delta-v1"), "delta key kept: {boot}");
+
+    // The start of an empty chat: an empty page.
+    let v = ok_get(port, "/cli/project-group/messages", OWNER, &format!("group={gid}&before_seq=1&limit=50")).await;
+    assert_eq!((seqs(&v["messages"]), v["has_more"].as_bool()), (vec![], Some(false)), "{v}");
+    let v = ok_get(port, "/cli/project-group/messages", OWNER, &format!("group={gid}&before_seq=500")).await;
+    assert_eq!((seqs(&v["messages"]), v["has_more"].as_bool()), (vec![], Some(false)), "empty chat: {v}");
+
+    // 120 messages, a person and the member agent taking turns (stored
+    // through core: the HTTP post would wake the PoC 120 times).
+    for i in 1..=120i64 {
+        let author = if i % 3 == 0 { member.handle.as_str() } else { "owner" };
+        let m = k2_core::project_groups::post_message(&gid, author, &format!("pc{i}")).expect("post");
+        assert_eq!(m.seq, i);
+    }
+    let msgs = |v: &Value| seqs(&v["messages"]);
+
+    // Page back in 50s from past the newest seq.
+    let v = ok_get(port, "/cli/project-group/messages", OWNER, &format!("group={gid}&before_seq=121&limit=50")).await;
+    assert_eq!((msgs(&v), v["has_more"].as_bool(), v["truncated"].as_bool()), ((71..=120).collect::<Vec<_>>(), Some(true), Some(true)), "{v}");
+    assert_eq!((v["groupId"].as_str(), v["before_seq"].as_i64()), (Some(gid.as_str()), Some(121)), "{v}");
+    assert_eq!((v["messages"][0]["body"].as_str(), v["messages"][49]["body"].as_str()), (Some("pc71"), Some("pc120")), "{v}");
+    let mut keys: Vec<&str> = v.as_object().expect("object").keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(keys, ["before_seq", "groupId", "has_more", "messages", "ok", "truncated"], "page shape: {v}");
+    let v = ok_get(port, "/cli/project-group/messages", OWNER, &format!("group={gid}&before_seq=71&limit=50")).await;
+    assert_eq!((msgs(&v), v["has_more"].as_bool()), ((21..=70).collect::<Vec<_>>(), Some(true)), "{v}");
+    let v = ok_get(port, "/cli/project-group/messages", OWNER, &format!("group={gid}&before_seq=21&limit=50")).await;
+    assert_eq!((msgs(&v), v["has_more"].as_bool()), ((1..=20).collect::<Vec<_>>(), Some(false)), "{v}");
+    let v = ok_get(port, "/cli/project-group/messages", OWNER, &format!("group={gid}&before_seq=1&limit=50")).await;
+    assert_eq!((msgs(&v), v["has_more"].as_bool()), (vec![], Some(false)), "the start: {v}");
+
+    // The phone's walk: the plain latest page, then back from its oldest seq.
+    let tail = ok_get(port, "/cli/project-group/messages", OWNER, &format!("group={gid}&limit=50")).await;
+    assert_eq!((msgs(&tail), tail["truncated"].as_bool()), ((71..=120).collect::<Vec<_>>(), Some(true)), "{tail}");
+    let mut walked = msgs(&tail);
+    let mut cursor = walked[0];
+    loop {
+        let v = ok_get(port, "/cli/project-group/messages", OWNER, &format!("group={gid}&before_seq={cursor}&limit=50")).await;
+        let page = msgs(&v);
+        walked.splice(0..0, page.iter().copied());
+        if !v["has_more"].as_bool().expect("has_more") {
+            break;
+        }
+        cursor = page[0];
+    }
+    assert_eq!(walked, (1..=120).collect::<Vec<_>>(), "every message once, in order");
+
+    // Default limit (20, the plain read's) and the 500 cap.
+    let v = ok_get(port, "/cli/project-group/messages", OWNER, &format!("group={gid}&before_seq=101")).await;
+    assert_eq!((msgs(&v), v["has_more"].as_bool()), ((81..=100).collect::<Vec<_>>(), Some(true)), "default 20: {v}");
+    let v = ok_get(port, "/cli/project-group/messages", OWNER, &format!("group={gid}&before_seq=121&limit=100000")).await;
+    assert_eq!((msgs(&v), v["has_more"].as_bool()), ((1..=120).collect::<Vec<_>>(), Some(false)), "over-cap limit clamps: {v}");
+
+    // Bad params are 400 `usage`, never a silent newest-N page.
+    for q in [
+        "before_seq=0",
+        "before_seq=-1",
+        "before_seq=abc",
+        "before_seq=",
+        "before_seq=1.5",
+        "before_seq=50&limit=0",
+        "before_seq=50&limit=-2",
+        "before_seq=50&limit=x",
+        "before_seq=50&after_seq=1",
+        "after_seq=1&before_seq=50",
+        "before_seq=50&after=0",
+    ] {
+        let r = get(port, "/cli/project-group/messages", OWNER, &format!("group={gid}&{q}")).await;
+        assert_eq!((r.status, r.code()), (400, "usage".to_string()), "{q}: {}", r.body);
+    }
+    let r = get(port, "/cli/project-group/messages", OWNER, "group=no-such-project-at-all&before_seq=5").await;
+    assert_eq!(r.status, 404, "{}", r.body);
+
+    // Same auth and the same view as the plain read. The owner's plain
+    // `after=0` read is the reference for seqs 71..=120.
+    let reference = ok_get(port, "/cli/project-group/messages", OWNER, &format!("group={gid}&after=0")).await;
+    let reference: Vec<Value> = reference["messages"].as_array().expect("messages")[70..].to_vec();
+    assert_eq!(reference.len(), 50);
+    let gina = member_login(port, &format!("pcgina{tag}")).await;
+    let agent = passport(&member);
+    let guest_pass = guest(port, &format!("pcg{tag}"), &[(&member, &["thread:read", "files:read"])]).await;
+    let callers = [
+        ("owner", OWNER),
+        ("connect login", gina.as_str()),
+        ("member agent", agent.as_str()),
+        ("no token", ""),
+        ("bad token", "not-a-real-token"),
+        ("app guest", guest_pass.as_str()),
+    ];
+    for (who, tok) in callers {
+        let plain = get(port, "/cli/project-group/messages", tok, &format!("group={gid}&limit=50")).await;
+        let paged = get(port, "/cli/project-group/messages", tok, &format!("group={gid}&before_seq=121&limit=50")).await;
+        assert_eq!(outcome(&plain), outcome(&paged), "{who}: {} | {}", plain.body, paged.body);
+        if matches!(who, "owner" | "connect login" | "member agent") {
+            assert_eq!(paged.status, 200, "{who}: {}", paged.body);
+            assert_eq!(plain.json()["messages"], paged.json()["messages"], "{who}: the page is the plain read's view");
+            assert_eq!(paged.json()["messages"].as_array().expect("messages").as_slice(), reference.as_slice(), "{who}: the same rows as the owner's");
+        } else {
+            assert!(paged.status == 401 || paged.status == 403, "{who} is refused: {} {}", paged.status, paged.body);
+            assert!(!paged.body.contains("pc1"), "{who}: a refusal carries no message text: {}", paged.body);
         }
     }
 }

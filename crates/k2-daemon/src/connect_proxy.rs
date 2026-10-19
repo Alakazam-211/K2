@@ -16,7 +16,9 @@
 //! from it is still a 200 here; the CLI renders it as before). Anything
 //! else means nothing reached the control plane, or it could not be
 //! reached: 400 `not_allowed` / `no_token` / `bad_request` / `bad_label` /
-//! `reserved_label`, 403 `airgap` / `primary_label` / `label_not_claimed`,
+//! `reserved_label` / `bad_target` / `target_is_daemon` /
+//! `target_metadata` / `target_not_loopback` (0.46.3, see
+//! [`crate::splice_guard::check_target`]), 403 `airgap` / `primary_label` / `label_not_claimed`,
 //! 409 `label_owned_by_other_workspace`, 429 `rate_limited`, 503
 //! `token_unreadable` (the vault could not be read; soft, retry), 502
 //! `unreachable`, 500 `config`.
@@ -49,6 +51,7 @@ use k2_core::tunnel::cp_proxy::{self, ProxyError};
 use crate::cli_response::CliResponse;
 use crate::label_owner;
 use crate::session_token::HookPrincipal;
+use crate::splice_guard;
 
 /// Agent creates + deletes allowed per workspace per rolling hour.
 pub const AGENT_WRITES_PER_HOUR: usize = 20;
@@ -248,6 +251,22 @@ fn agent_gate(
     Ok((fwd, Some(after)))
 }
 
+/// The proxy target a create (`POST /subdomains`) or retarget
+/// (`PUT /subdomains/<label>`) sets, if any.
+fn target_of(method: &str, endpoint: &str, body: Option<&str>) -> Option<String> {
+    let sets_target = match method {
+        "POST" => endpoint == "/subdomains",
+        "PUT" => endpoint.starts_with("/subdomains/"),
+        _ => false,
+    };
+    if !sets_target {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(body?).ok()?;
+    let t = v.get("target")?.as_str()?.trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
 /// Record an accepted agent write locally (0074 claim / target / unclaim),
 /// then tell the UIs and re-pull the routing map so the URL works now.
 fn record_after(principal: &HookPrincipal, after: AfterWrite) {
@@ -309,6 +328,19 @@ pub fn handle(body: &[u8], principal: Option<&HookPrincipal>) -> CliResponse {
         Some(serde_json::Value::String(s)) => Some(s.clone()),
         Some(other) => Some(other.to_string()),
     };
+
+    // 0.46.3: one target rule for every caller (`splice_guard`): never
+    // this daemon's own port or a metadata address; agents loopback only.
+    if let Some(target) = target_of(method, endpoint, cp_body.as_deref()) {
+        let caller = if principal.is_some() {
+            splice_guard::TargetCaller::Agent
+        } else {
+            splice_guard::TargetCaller::Operator
+        };
+        if let Err(r) = splice_guard::check_target(&target, caller) {
+            return err("400 Bad Request", r.code, r.message);
+        }
+    }
 
     let mut after = None;
     if let Some(p) = principal {

@@ -702,6 +702,9 @@ async fn async_main() {
     };
     let port = claimed.port;
     publish_runtime::set_loopback_port(port);
+    // 0.46.3: the splice guard refuses proxy targets and splices that
+    // would land on this listener. Registered for the process life.
+    std::mem::forget(crate::splice_guard::register_daemon_port(port));
     k2_core::listen::set_lan_bound(lan);
     if claimed.reused {
         log_debug!(

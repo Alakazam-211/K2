@@ -148,6 +148,11 @@ where
         .await
         .map_err(|_| format!("App {} backend :{} did not accept within 5s", be.app_id, be.port))?
         .map_err(|e| format!("App {} backend :{}: {e}", be.app_id, be.port))?;
+    // 0.46.3: never splice visitors into the daemon's own main listener;
+    // any other splice is marked so it can never pass as local.
+    crate::splice_guard::refuse_self_dial(&upstream)
+        .map_err(|why| format!("App {} backend :{}: {why}", be.app_id, be.port))?;
+    let _splice_mark = crate::splice_guard::mark(&upstream);
     be.active.fetch_add(1, Ordering::SeqCst);
     be.total.fetch_add(1, Ordering::SeqCst);
     let _guard = Guard(be.clone());

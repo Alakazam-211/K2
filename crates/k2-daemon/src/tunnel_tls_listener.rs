@@ -963,6 +963,17 @@ async fn serve_one(
                         return Ok(());
                     }
                 };
+            // 0.46.3: a target on this daemon's own main port (any alias)
+            // would make internet traffic look local. Refuse it before a
+            // byte is forwarded, and mark every other splice so the main
+            // listener still serves it as tunnel ingress if it lands there.
+            if let Err(why) = crate::splice_guard::refuse_self_dial(&upstream) {
+                log_debug!("[daemon/e2e] {sni}: refusing target {target}: {why} — answering 502");
+                drop(upstream);
+                write_unreachable_502(&mut tls).await;
+                return Ok(());
+            }
+            let _splice_mark = crate::splice_guard::mark(&upstream);
             log_debug!("[daemon/e2e] routing {sni} → internal endpoint {target}");
             let res = tokio::io::copy_bidirectional(&mut tls, &mut upstream)
                 .await
@@ -1368,6 +1379,101 @@ mod tests {
         assert!(
             !down.contains(&dead_port.to_string()),
             "the 502 body must not leak the internal target, got:\n{down}"
+        );
+
+        subdomains::store(SubdomainMap::default());
+    }
+
+    /// 0.46.3: a nested label whose target is the daemon's own main port
+    /// is answered 502 under every loopback alias, and not one request byte
+    /// reaches that port. A normal app target on the same box still works.
+    #[tokio::test]
+    async fn nested_target_on_daemon_port_is_502_under_every_alias() {
+        use k2_core::tunnel::subdomains::{self, SubdomainMap};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _home = crate::test_support::TempHome::new();
+        let daemon_port = install_test_ingress_state();
+
+        // Stand-in for the daemon's main listener: dual-stack, so the v4
+        // aliases arrive as `::ffff:127.0.0.1`. Counts accepted sockets and
+        // sockets that delivered any byte.
+        let main = TcpListener::bind("[::]:0")
+            .await
+            .expect("bind [::]:0 (this test needs dual-stack loopback)");
+        let main_port = main.local_addr().unwrap().port();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let got_bytes = Arc::new(AtomicUsize::new(0));
+        {
+            let (accepted, got_bytes) = (accepted.clone(), got_bytes.clone());
+            tokio::spawn(async move {
+                while let Ok((mut s, _)) = main.accept().await {
+                    accepted.fetch_add(1, Ordering::SeqCst);
+                    let got_bytes = got_bytes.clone();
+                    tokio::spawn(async move {
+                        let mut b = [0u8; 256];
+                        if matches!(s.read(&mut b).await, Ok(n) if n > 0) {
+                            got_bytes.fetch_add(1, Ordering::SeqCst);
+                            let _ = s
+                                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nMAIN")
+                                .await;
+                        }
+                    });
+                }
+            });
+        }
+        let _reg = crate::splice_guard::register_daemon_port(main_port);
+        let app_port = spawn_tagged_stub("APP").await;
+
+        let aliases = [
+            ("v4", format!("127.0.0.1:{main_port}"), true),
+            ("lh", format!("localhost:{main_port}"), true),
+            ("v6", format!("[::1]:{main_port}"), true),
+            ("any", format!("0.0.0.0:{main_port}"), false),
+        ];
+        let mut targets = std::collections::HashMap::new();
+        for (label, t, _) in &aliases {
+            targets.insert(label.to_string(), t.clone());
+        }
+        targets.insert("app".to_string(), format!("localhost:{app_port}"));
+        subdomains::store(SubdomainMap { primary: "example".to_string(), targets });
+
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        let (cert_pem, key_pem) =
+            k2_core::tunnel::tls::load_or_provision_cert("example").expect("cert");
+        let server_config =
+            k2_core::tunnel::tls::server_config(&cert_pem, &key_pem).expect("server config");
+        let shared = Arc::new(ArcSwap::from_pointee(server_config));
+        let tls_listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind tls");
+        let https_port = tls_listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            accept_loop(Arc::new(tls_listener), shared, daemon_port).await;
+        });
+
+        for (label, target, must_connect) in &aliases {
+            let before = accepted.load(Ordering::SeqCst);
+            let sni = format!("{label}.example.k2.dev");
+            let resp = tls_client_get(&cert_pem, https_port, &sni, "/cli/auth/login").await;
+            assert!(
+                resp.starts_with("HTTP/1.1 502 Bad Gateway\r\n") && !resp.contains("MAIN"),
+                "{target}: a target on the daemon port must be 502, got:\n{resp}"
+            );
+            if *must_connect {
+                assert!(
+                    accepted.load(Ordering::SeqCst) > before,
+                    "{target}: the dial reached the daemon port (the belt, not a refused dial, answered)"
+                );
+            }
+        }
+        // Give any (wrongly) forwarded bytes time to land.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(got_bytes.load(Ordering::SeqCst), 0, "no request byte reached the daemon port");
+
+        let ok = tls_client_get(&cert_pem, https_port, "app.example.k2.dev", "/").await;
+        assert!(
+            ok.starts_with("HTTP/1.1 200 OK\r\n") && ok.contains("APP"),
+            "a normal published app is unaffected, got:\n{ok}"
         );
 
         subdomains::store(SubdomainMap::default());

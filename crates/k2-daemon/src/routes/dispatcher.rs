@@ -800,6 +800,22 @@ mod app_web_root_location_tests {
 /// connection. The mid-keep-alive WS upgrade case is forbidden by
 /// HTTP/1.1 anyway.
 pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress: Ingress) {
+    // 0.46.3: a main-listener connection may be the daemon's own tunnel
+    // splice (a nested label whose target is this port). Wait for the
+    // first request bytes — the splicer records the socket before it
+    // forwards any — then look the peer up; a splice is `Tunnel` for the
+    // whole connection, whatever loopback alias it dialed.
+    let ingress = match ingress {
+        Ingress::Loopback | Ingress::Lan => {
+            let mut first = [0u8; 1];
+            match tokio::time::timeout(KEEP_ALIVE_IDLE_TIMEOUT, stream.peek(&mut first)).await {
+                Ok(Ok(n)) if n > 0 => {}
+                _ => return,
+            }
+            crate::splice_guard::settle_ingress(ingress, stream.peer_addr().ok())
+        }
+        other => other,
+    };
     let mut requests_served: u32 = 0;
     loop {
         let outcome = handle_one_request(&mut stream, &state, ingress).await;

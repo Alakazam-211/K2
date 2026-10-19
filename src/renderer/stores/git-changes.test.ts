@@ -35,13 +35,29 @@ vi.mock('@/stores/session-events', async () => {
   }
 })
 
+// `cli.get` / `cli.post` see only the git routes under test. Other stores in
+// this module graph read the daemon on their own clock: settings.ts
+// dynamic-imports custom-themes on load, which then GETs `themes/list`.
+// When that lands mid-test (a slow, loaded machine), a shared mock would hand
+// it the next `mockResolvedValueOnce` meant for git/snapshot, and the store
+// would get the wrong answer. Those reads go to `cli.foreign`, which refuses.
 const cli = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
+  foreign: vi.fn(async (method: string, route: string) => {
+    throw new Error(`git-changes.test: ${method} ${route} is not a git route`)
+  }),
 }))
 vi.mock('@/lib/daemon-cli', async () => {
   const actual = await vi.importActual<typeof import('@/lib/daemon-cli')>('@/lib/daemon-cli')
-  return { ...actual, daemonCliGet: cli.get, daemonCliPost: cli.post }
+  const isGit = (route: unknown): boolean => typeof route === 'string' && route.startsWith('git/')
+  return {
+    ...actual,
+    daemonCliGet: (scope: unknown, route: string, ...rest: unknown[]) =>
+      isGit(route) ? cli.get(scope, route, ...rest) : cli.foreign('GET', route),
+    daemonCliPost: (scope: unknown, route: string, ...rest: unknown[]) =>
+      isGit(route) ? cli.post(scope, route, ...rest) : cli.foreign('POST', route),
+  }
 })
 
 import { fakeScope } from '@/test-utils/fake-scope'

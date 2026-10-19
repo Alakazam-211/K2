@@ -16,15 +16,30 @@ const cli = vi.hoisted(() => ({
   prefs: {} as Json,
   admin: {} as Json,
   gets: [] as string[],
+  /** Boot reads by other stores, kept out of `gets` (see BACKGROUND_GETS). */
+  backgroundGets: [] as string[],
   posts: [] as Array<{ route: string; body: Json }>,
   adminError: null as Error | null,
   postError: null as Error | null,
 }))
 
+// Stores this page's imports pull in read the daemon once on load (projects,
+// focus groups, layouts, and settings.ts's dynamic import of custom-themes).
+// They are not the Notifications page, and on a slow, loaded machine they
+// land inside whichever test is running, so they go to `backgroundGets`
+// instead of `gets` and are refused. Any other route is still recorded and
+// still fails as an unexpected GET.
+const BACKGROUND_GETS = vi.hoisted(
+  () => new Set(['projects/list', 'focus-groups/list', 'workspace-layouts/load-all', 'themes/list']),
+)
+
 const events = vi.hoisted(() => ({ handlers: new Set<() => void>() }))
 
 // `/cli/settings` for the Message previews row. `settings` is what the
-// focused server's GET returns; `updates` records each write.
+// focused server's GET returns; `updates` records each write. Not only the
+// row writes here: the panels store, imported along the way, persists its
+// tab layout through `settingsUpdate` 2 s after it loads, which on a slow,
+// loaded machine falls inside a test. Assert on `previewWrites()`.
 const appSettings = vi.hoisted(() => ({
   settings: {} as Json,
   updates: [] as Json[],
@@ -51,6 +66,10 @@ vi.mock('@tauri-apps/api/window', () => ({
 
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async (_scope: unknown, route: string) => {
+    if (BACKGROUND_GETS.has(route)) {
+      cli.backgroundGets.push(route)
+      throw new Error(`background GET ${route} is not mocked here`)
+    }
     cli.gets.push(route)
     if (route === 'auth/whoami') return cli.whoami
     if (route === 'notify/prefs') return cli.prefs
@@ -163,6 +182,7 @@ beforeEach(() => {
   cli.prefs = prefs()
   cli.admin = admin()
   cli.gets = []
+  cli.backgroundGets = []
   cli.posts = []
   cli.adminError = null
   cli.postError = null
@@ -176,6 +196,11 @@ afterEach(() => {
   cleanup()
   __resetServerScopesForTests()
 })
+
+/** The writes that touch the Message previews key (the row's own writes). */
+function previewWrites(): Json[] {
+  return appSettings.updates.filter((u) => Object.prototype.hasOwnProperty.call(u, 'pushMessagePreviews'))
+}
 
 async function loaded(): Promise<void> {
   await waitFor(() => expect(screen.getByTestId('notifications-server-bell')).toBeTruthy())
@@ -718,7 +743,7 @@ describe('Settings → Notifications: message previews (pushMessagePreviews)', (
     render(<NotificationsSection />)
     const sw = await screen.findByRole('switch', { name: PUSH_PREVIEWS_LABEL })
     fireEvent.click(sw)
-    await waitFor(() => expect(appSettings.updates).toEqual([{ pushMessagePreviews: false }]))
+    await waitFor(() => expect(previewWrites()).toEqual([{ pushMessagePreviews: false }]))
     await waitFor(() => expect(sw.getAttribute('aria-checked')).toBe('false'))
   })
 

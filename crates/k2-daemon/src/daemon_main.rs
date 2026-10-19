@@ -357,6 +357,11 @@ async fn async_main() {
         );
         std::process::exit(0);
     }
+    // 0.46.3 — an update job that crossed this restart: settle it (done or
+    // failed, from the version actually running) and serve it again on its
+    // job id, so a remote client's `update/status` poll gets the verdict
+    // instead of a 404. Every OS (bundled-app, macOS helper, Linux swap).
+    crate::update_routes::reconcile_persisted_job(env!("CARGO_PKG_VERSION"));
     // Sync the persisted federation master switch into the process so a daemon
     // that boots with it already ON has the /cli/federation/* surface live
     // immediately (the K2 Connect toggle persists it; env-var force-on still

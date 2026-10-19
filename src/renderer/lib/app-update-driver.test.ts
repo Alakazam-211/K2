@@ -65,3 +65,51 @@ describe('runTriggeredAppUpdate Arch offer', () => {
     expect(bodies.some((body) => body.includes('"failed"'))).toBe(true)
   })
 })
+
+describe('runTriggeredAppUpdate target version relay (0.46.3)', () => {
+  beforeEach(() => {
+    setConnectedAirgap(false)
+    useUpdateStore.setState({
+      status: 'idle',
+      version: null,
+      notes: null,
+      progress: 0,
+      error: null,
+      archDownloadUrl: null,
+    })
+    vi.mocked(invoke).mockReset()
+    vi.mocked(check).mockReset()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true })),
+    )
+  })
+
+  it('names the version it installs on applying and restarting, so the daemon can settle the job after the restart', async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+      if (cmd === 'daemon_ws_url') return { state: 'available', port: 9, token: 't' }
+      if (cmd === 'probe_install_update') {
+        return { kind: 'macos', version: null, has_update: false, download_url: null }
+      }
+      if (cmd === 'stop_bundled_daemon_for_update' || cmd === 'relaunch_via_open') return undefined
+      throw new Error(`unexpected invoke ${cmd}`)
+    })
+    vi.mocked(check).mockResolvedValue({
+      version: '0.46.3',
+      body: null,
+      download: vi.fn(async () => {}),
+      install: vi.fn(async () => {}),
+    } as unknown as Awaited<ReturnType<typeof check>>)
+
+    await runTriggeredAppUpdate('job-7')
+
+    const bodies = vi.mocked(fetch).mock.calls.map((call) => {
+      const init = call[1] as { body?: string } | undefined
+      return JSON.parse(init?.body ?? '{}') as Record<string, unknown>
+    })
+    expect(bodies.map((b) => b.phase)).toEqual(['downloading', 'applying', 'restarting'])
+    expect(bodies[0]).toEqual({ job_id: 'job-7', phase: 'downloading' })
+    expect(bodies[1]).toEqual({ job_id: 'job-7', phase: 'applying', target_version: '0.46.3' })
+    expect(bodies[2]).toEqual({ job_id: 'job-7', phase: 'restarting', target_version: '0.46.3' })
+  })
+})

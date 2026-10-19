@@ -12208,7 +12208,8 @@ async fn handle_one_request(
         // owner / Connect login (token_ok) OR an agent passport (0.45.6:
         // `k2 project` sends the session passport inside a K2 terminal,
         // so the "Manage K2 projects" switch applies to its mutations;
-        // reads stay open to agents whatever the switch says).
+        // reads stay open to agents whatever the switch says, except the
+        // chat itself: member projects only, 0.46.2).
         p if !is_post && p.starts_with("/cli/project-group/") => {
             let params =
                 super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query)
@@ -12217,6 +12218,18 @@ async fn handle_one_request(
                 token_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str());
             if !auth_ok {
                 let r = crate::cli::CliResponse::forbidden();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            // 0.46.2 (Rosson 2026-10-18): an agent passport reads only the
+            // chats of projects its workspace is a member of.
+            let caller = crate::sidecar_routes::caller_from_tcp(
+                p,
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+            );
+            if let Some(r) = crate::project_group_routes::chat_read_refusal(p, &params, &caller) {
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }

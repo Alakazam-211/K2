@@ -704,6 +704,16 @@ mod unix_impl {
                 let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
                 from_cli(crate::project_group_routes::dispatch_post_as(p, body, &caller, "cell"))
             }
+            // K2 projects reads over the cell socket: the chat itself is for
+            // member projects only (0.46.2, the same check as the TCP arm);
+            // everything else is the plain read chain.
+            p if !is_post && p.starts_with("/cli/project-group/") => {
+                let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
+                match crate::project_group_routes::chat_read_refusal(p, params, &caller) {
+                    Some(r) => from_cli(r),
+                    None => from_cli(crate::cli::dispatch(p, params)),
+                }
+            }
             // k2 sidecar v1: new / list / stop for THIS cell's session
             // (SC36). The handler applies the agent gate from the bound
             // session. Same body caps as TCP (413).

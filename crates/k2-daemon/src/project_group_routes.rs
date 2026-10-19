@@ -25,6 +25,11 @@
 //! 0.46.2 (project-chat-paging-v1): `messages?before_seq=N` pages a chat
 //! back by seq for K2 Companion, through the same dispatcher auth arm and
 //! the same [`messages_view`] as the plain read.
+//! 0.46.2 (Rosson 2026-10-18): an agent passport reads and posts only in
+//! the chats of projects its workspace is a member of, and posts as its
+//! own workspace ([`chat_read_refusal`], [`handle_msg_as`], one check in
+//! [`agent_chat_refusal`]). Owner, Connect logins and shell tabs are
+//! unchanged; app passes and API sessions stay refused.
 //! Project chat post (`msg`) is open to every login. The
 //! `dashboard/*` mutations — and the §6.7.7 `set-icon` / `set-color`
 //! appearance mutations — additionally require the owner-or-admin bit
@@ -316,6 +321,66 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
     Some(resp)
 }
 
+/// The project chat read path (`k2 project read`, the drawer, K2 Companion).
+pub const MESSAGES_PATH: &str = "/cli/project-group/messages";
+
+// ── Who may read and post in a project chat (Rosson 2026-10-18) ───────
+//
+// An agent passport reads and posts only in the chats of projects its
+// workspace is a member of (the point of contact is always a member).
+// The owner token, Connect logins and a person in a K2 shell tab are
+// unchanged; app passes and API sessions stay refused. Every chat read
+// (plain, `after_seq`, `before_seq`) goes through [`chat_read_refusal`]
+// and the chat post through [`handle_msg_as`]; both ask
+// [`agent_chat_refusal`], the one membership check.
+
+/// `Some(403)` when the agent whose workspace is `workspace_id` may not
+/// use the chat of project `group_id`. A membership read that fails
+/// refuses too (fail closed). The refusal names neither the project's
+/// members nor any message.
+pub fn agent_chat_refusal(workspace_id: &str, group_id: &str) -> Option<CliResponse> {
+    match project_groups::list_members(group_id) {
+        Ok(members) if members.iter().any(|m| m.workspace_id == workspace_id) => None,
+        Ok(_) => Some(error_response(
+            "403 Forbidden",
+            "not_a_member",
+            "this agent's workspace is not a member of this project, so it can't read or post in \
+             the project's chat. Ask your human to add this workspace to the project.",
+        )),
+        Err(e) => Some(core_error(e)),
+    }
+}
+
+/// The refusal (if any) for one `/cli/project-group/*` GET, given the
+/// classified caller (`sidecar_routes::caller_from_tcp` /
+/// `caller_from_session`). Only [`MESSAGES_PATH`] is gated: the other
+/// reads (list, show, resources, icon) are unchanged. A missing or
+/// unknown project is left to the read, which answers every caller the
+/// same `usage` / `not_found` (agents can list every project's name).
+pub fn chat_read_refusal(
+    path: &str,
+    params: &HashMap<String, String>,
+    caller: &crate::sidecar_routes::Caller,
+) -> Option<CliResponse> {
+    use crate::sidecar_routes::Caller;
+    if path != MESSAGES_PATH {
+        return None;
+    }
+    match caller {
+        Caller::Owner | Caller::Login { .. } | Caller::Shell { .. } => None,
+        // An API session's passport: the read arm's plain refusal.
+        Caller::WrongCredential | Caller::Invalid => Some(CliResponse::forbidden()),
+        Caller::Agent(a) => {
+            let selector = str_param(params, "group");
+            if selector.is_empty() {
+                return None;
+            }
+            let group_id = project_groups::resolve_group(&selector).ok()?;
+            agent_chat_refusal(&a.project_id, &group_id)
+        }
+    }
+}
+
 /// Project chat messages as a reader sees them. Every
 /// `/cli/project-group/messages` read (the plain page, `after_seq`,
 /// `before_seq`) returns its rows through here, so a per-viewer rewrite
@@ -550,7 +615,9 @@ fn outcome_of(resp: &CliResponse) -> String {
 /// - An agent passport: every mutation except `msg` needs its
 ///   workspace's "Manage K2 projects" switch (0162, DEFAULT ON) → else
 ///   403 `agent_permission_off`. With the switch on it may do what the
-///   owner token let it do before (today's behaviour).
+///   owner token let it do before (today's behaviour). `msg` needs its
+///   workspace to be a member of the project (403 `not_a_member`) and is
+///   authored as that workspace ([`handle_msg_as`]).
 /// - App passes, API keys/cells, bad tokens: 403.
 ///
 /// Project create/delete and member add/remove write an audit line
@@ -628,7 +695,14 @@ pub fn dispatch_post_as(
                 .map(|g| g.name)
         })
         .flatten();
-    let resp = dispatch_post(path, body, &session_author);
+    // Project chat post: an agent posts as its own workspace, and only in
+    // a project that workspace is a member of (Rosson 2026-10-18).
+    let resp = match caller {
+        Caller::Agent(a) if path == "/cli/project-group/msg" => {
+            handle_msg_as(body, &session_author, Some(&a.project_id))
+        }
+        _ => dispatch_post(path, body, &session_author),
+    };
     if let Some(event) = audit_event(path) {
         let outcome = format!(
             "{} {}",
@@ -1343,6 +1417,17 @@ fn project_payload(group_name: &str, body: &str) -> String {
 /// Every login may post (the Viewer role it once refused was removed);
 /// the dispatcher's `token_ok` gate runs before this handler.
 pub fn handle_msg(body: &[u8], session_author: &str) -> CliResponse {
+    handle_msg_as(body, session_author, None)
+}
+
+/// [`handle_msg`] for a classified caller. `agent_workspace` is the
+/// workspace of an agent passport (`None` for the owner token, a Connect
+/// login, a shell tab, and the trusted in-process callers). For an agent
+/// the project must have its workspace as a member
+/// ([`agent_chat_refusal`]), and the line is authored as that workspace
+/// whatever `author` the body names: an agent never posts as the owner,
+/// a person, or another agent.
+pub fn handle_msg_as(body: &[u8], session_author: &str, agent_workspace: Option<&str>) -> CliResponse {
     let b: MsgBody = match serde_json::from_slice(body) {
         Ok(b) => b,
         Err(e) => return usage_error(format!("invalid JSON body: {e}")),
@@ -1365,55 +1450,70 @@ pub fn handle_msg(body: &[u8], session_author: &str) -> CliResponse {
     // Core's post_message stores what it is told — the gate lives HERE
     // for agent authors; human authors come from the session token.
     let author_given = b.author.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let (author_owned, author_workspace_id): (String, Option<String>) = match author_given {
-        // UI human post — session-resolved author; no workspace membership.
-        None => {
-            let a = session_author.trim();
-            let a = if a.is_empty() { "owner" } else { a };
-            (a.to_string(), None)
-        }
-        // Explicit human/legacy "owner" author — always allowed.
-        Some("owner") => ("owner".to_string(), None),
-        // Agent CLI — must resolve to a MEMBER workspace.
-        Some(author) => {
-            let Some(path) = crate::workspace_msg::resolve_workspace(author) else {
-                return error_response(
-                    "403 Forbidden",
-                    "not_a_member",
-                    format!(
-                        "author '{author}' is not a registered workspace — only 'owner' or a \
-                         member workspace's agent can post to '{}'",
-                        group.name
-                    ),
-                );
-            };
-            let workspace_id = {
-                let db = k2_core::db::shared();
-                let conn = db.lock();
-                k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
-            };
-            let Some(workspace_id) = workspace_id else {
-                return error_response(
-                    "403 Forbidden",
-                    "not_a_member",
-                    format!("author workspace not registered: {path}"),
-                );
-            };
-            let members = match project_groups::list_members(&group_id) {
-                Ok(m) => m,
-                Err(e) => return core_error(e),
-            };
-            if !members.iter().any(|m| m.workspace_id == workspace_id) {
-                return error_response(
-                    "403 Forbidden",
-                    "not_a_member",
-                    format!(
-                        "author '{author}' is not a member of project '{}' — add it first",
-                        group.name
-                    ),
-                );
+    let pinned_agent = match agent_workspace {
+        Some(ws) => {
+            if let Some(refusal) = agent_chat_refusal(ws, &group_id) {
+                return refusal;
             }
-            (author.to_string(), Some(workspace_id))
+            // The workspace's registry name: what `k2 project msg` sends.
+            let name = workspace_name_path(ws).0.filter(|n| !n.trim().is_empty());
+            Some((name.unwrap_or_else(|| ws.to_string()), Some(ws.to_string())))
+        }
+        None => None,
+    };
+    let (author_owned, author_workspace_id): (String, Option<String>) = if let Some(pinned) = pinned_agent {
+        pinned
+    } else {
+        match author_given {
+            // UI human post — session-resolved author; no workspace membership.
+            None => {
+                let a = session_author.trim();
+                let a = if a.is_empty() { "owner" } else { a };
+                (a.to_string(), None)
+            }
+            // Explicit human/legacy "owner" author — always allowed.
+            Some("owner") => ("owner".to_string(), None),
+            // Agent CLI — must resolve to a MEMBER workspace.
+            Some(author) => {
+                let Some(path) = crate::workspace_msg::resolve_workspace(author) else {
+                    return error_response(
+                        "403 Forbidden",
+                        "not_a_member",
+                        format!(
+                            "author '{author}' is not a registered workspace — only 'owner' or a \
+                             member workspace's agent can post to '{}'",
+                            group.name
+                        ),
+                    );
+                };
+                let workspace_id = {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    k2_core::workspace::agent_identity::resolve_project_id(&conn, &path)
+                };
+                let Some(workspace_id) = workspace_id else {
+                    return error_response(
+                        "403 Forbidden",
+                        "not_a_member",
+                        format!("author workspace not registered: {path}"),
+                    );
+                };
+                let members = match project_groups::list_members(&group_id) {
+                    Ok(m) => m,
+                    Err(e) => return core_error(e),
+                };
+                if !members.iter().any(|m| m.workspace_id == workspace_id) {
+                    return error_response(
+                        "403 Forbidden",
+                        "not_a_member",
+                        format!(
+                            "author '{author}' is not a member of project '{}' — add it first",
+                            group.name
+                        ),
+                    );
+                }
+                (author.to_string(), Some(workspace_id))
+            }
         }
     };
     let author = author_owned.as_str();
@@ -3819,6 +3919,127 @@ mod agent_switch_tests {
             serde_json::json!({ "group": gid, "workspace": b_name }),
             &me,
         ));
+    }
+
+    /// 0.46.2 (Rosson 2026-10-18): an agent reads and posts only in the
+    /// chats of projects its workspace is a member of, and posts as its own
+    /// workspace. The PoC is a member like any other. Owner, Connect login
+    /// and shell tab are unchanged; API sessions are refused.
+    #[test]
+    fn project_chat_is_for_member_agents_only() {
+        // Create/add/remove/delete write audit lines under $HOME: a home of our own.
+        let _home = crate::test_support::TempHome::new();
+        let (poc_id, poc_name, _) = insert_workspace("chat-poc");
+        let (mem_id, mem_name, _) = insert_workspace("chat-member");
+        let (out_id, out_name, _) = insert_workspace("chat-outsider");
+        let name = format!("pgs-chat-{}", uuid::Uuid::new_v4());
+        let owner = Caller::Owner;
+        let gid = ok(post("/cli/project-group/create", serde_json::json!({ "name": name }), &owner))["id"]
+            .as_str()
+            .expect("id")
+            .to_string();
+        for ws in [&poc_name, &mem_name] {
+            ok(post("/cli/project-group/add-member", serde_json::json!({ "group": gid, "workspace": ws }), &owner));
+        }
+        assert_eq!(project_groups::get_poc(&gid).expect("poc").as_deref(), Some(poc_id.as_str()), "first member is the PoC");
+        project_groups::post_message(&gid, "owner", "secret-line-1").expect("seed");
+
+        let read_params = |extra: &[(&str, &str)]| -> HashMap<String, String> {
+            let mut p: HashMap<String, String> = [("group".to_string(), gid.clone())].into_iter().collect();
+            for (k, v) in extra {
+                p.insert(k.to_string(), v.to_string());
+            }
+            p
+        };
+        let reads: [&[(&str, &str)]; 3] = [&[], &[("after_seq", "0")], &[("before_seq", "100")]];
+
+        // Readers the gate lets through, on every read form.
+        let login = Caller::Login { username: "gina".to_string() };
+        let shell = Caller::Shell { project_id: out_id.clone() };
+        for (who, c) in [("owner", &owner), ("login", &login), ("shell", &shell), ("poc agent", &agent(&poc_id)), ("member agent", &agent(&mem_id))] {
+            for extra in reads {
+                assert!(chat_read_refusal(MESSAGES_PATH, &read_params(extra), c).is_none(), "{who} {extra:?} reads");
+            }
+        }
+
+        // The outsider agent: the same 403 `not_a_member` on every read
+        // form, with no message text and no member names.
+        let outsider = agent(&out_id);
+        let mut bodies = Vec::new();
+        for extra in reads {
+            let r = chat_read_refusal(MESSAGES_PATH, &read_params(extra), &outsider)
+                .unwrap_or_else(|| panic!("outsider {extra:?} must be refused"));
+            assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("JSON");
+            assert_eq!((v["ok"].as_bool(), v["error"]["code"].as_str()), (Some(false), Some("not_a_member")), "{v}");
+            for leak in ["secret-line", poc_name.as_str(), mem_name.as_str()] {
+                assert!(!r.body.contains(leak), "refusal leaks {leak}: {}", r.body);
+            }
+            bodies.push(r.body);
+        }
+        assert!(bodies.windows(2).all(|w| w[0] == w[1]), "one refusal for every read form: {bodies:?}");
+        // Only the chat read is gated; an unknown project is the read's own 404.
+        assert!(chat_read_refusal("/cli/project-group/show", &read_params(&[]), &outsider).is_none());
+        let mut unknown = read_params(&[]);
+        unknown.insert("group".to_string(), "no-such-project-zz".to_string());
+        assert!(chat_read_refusal(MESSAGES_PATH, &unknown, &outsider).is_none());
+        // An API session's passport is refused with the read arm's 403.
+        let r = chat_read_refusal(MESSAGES_PATH, &read_params(&[]), &Caller::WrongCredential).expect("api refused");
+        assert_eq!((r.status, r.body.as_str()), ("403 Forbidden", CliResponse::forbidden().body.as_str()));
+
+        // Posting. A member agent posts as itself even when the body names
+        // the owner or another member.
+        let posted = ok(post(
+            "/cli/project-group/msg",
+            serde_json::json!({ "group": gid, "body": "member line", "author": "owner" }),
+            &agent(&mem_id),
+        ));
+        assert_eq!((posted["author"].as_str(), posted["authorKind"].as_str()), (Some(mem_name.as_str()), Some("agent")), "{posted}");
+        let posted = ok(post(
+            "/cli/project-group/msg",
+            serde_json::json!({ "group": gid, "body": "as the poc?", "author": poc_name }),
+            &agent(&mem_id),
+        ));
+        assert_eq!(posted["author"], mem_name.as_str(), "no posting as another member: {posted}");
+        let posted = ok(post("/cli/project-group/msg", serde_json::json!({ "group": gid, "body": "no author" }), &agent(&mem_id)));
+        assert_eq!(posted["author"], mem_name.as_str(), "{posted}");
+        // The PoC posts too (and never self-injects).
+        let posted = ok(post(
+            "/cli/project-group/msg",
+            serde_json::json!({ "group": gid, "body": "poc line", "author": poc_name }),
+            &agent(&poc_id),
+        ));
+        assert_eq!((posted["author"].as_str(), posted["deliveryReason"].as_str()), (Some(poc_name.as_str()), Some("author-is-poc")), "{posted}");
+
+        // The outsider is refused whatever author it names, and nothing is stored.
+        let before = project_groups::list_messages(&gid, None, Some(500)).expect("list").messages.len();
+        for author in [None, Some("owner"), Some(poc_name.as_str()), Some(out_name.as_str())] {
+            let mut body = serde_json::json!({ "group": gid, "body": "let me in" });
+            if let Some(a) = author {
+                body["author"] = serde_json::json!(a);
+            }
+            let r = post("/cli/project-group/msg", body, &outsider);
+            assert_eq!(r.status, "403 Forbidden", "author {author:?}: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("JSON");
+            assert_eq!(v["error"]["code"], "not_a_member", "{v}");
+            assert_eq!(r.body, bodies[0], "the read's refusal");
+        }
+        assert_eq!(project_groups::list_messages(&gid, None, Some(500)).expect("list").messages.len(), before, "refused posts never store");
+
+        // People are unchanged: the owner, a login and a shell tab post as before.
+        assert_eq!(ok(post("/cli/project-group/msg", serde_json::json!({ "group": gid, "body": "o" }), &owner))["author"], "owner");
+        assert_eq!(ok(post("/cli/project-group/msg", serde_json::json!({ "group": gid, "body": "g" }), &login))["author"], "gina");
+        ok(post("/cli/project-group/msg", serde_json::json!({ "group": gid, "body": "s" }), &shell));
+        // App passes / API sessions stay refused.
+        let r = post("/cli/project-group/msg", serde_json::json!({ "group": gid, "body": "x" }), &Caller::WrongCredential);
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+
+        // Removed from the project → refused from then on.
+        ok(post("/cli/project-group/remove-member", serde_json::json!({ "group": gid, "workspace": mem_name }), &owner));
+        assert!(chat_read_refusal(MESSAGES_PATH, &read_params(&[]), &agent(&mem_id)).is_some(), "an ex-member is refused");
+        let r = post("/cli/project-group/msg", serde_json::json!({ "group": gid, "body": "still?" }), &agent(&mem_id));
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        ok(post("/cli/project-group/delete", serde_json::json!({ "group": gid }), &owner));
     }
 
     #[test]

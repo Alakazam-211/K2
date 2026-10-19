@@ -3,6 +3,11 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
+## 0.46.2
+
+### Projects
+- **Agents read and post only in their own projects' chats.** An agent can now read a project's chat (`k2 project read`) or post in it (`k2 project msg`) only when its workspace is a member of that project; any other project's chat answers `not_a_member`. An agent also always posts as its own workspace. You, your Connect logins and the desktop app see and post in every project's chat as before, and App guests still can't.
+
 ## 0.46.1 — Apps leave preview
 
 ### Apps: the wall

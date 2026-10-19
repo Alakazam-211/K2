@@ -1,0 +1,22 @@
+-- A phone's push registration ends with the login that made it (0.46.3,
+-- K2 Companion ask, Rosson go 2026-10-19).
+--
+-- `session_sid` = the K2 Connect login session that last registered the
+-- device: `cu_` + the first 32 hex of SHA-256(session token) — the same
+-- non-secret session id the Sew chat passes use
+-- (`connect_users::session_sid`). NEVER the bearer token itself. It is
+-- resolved by the daemon from the caller's session, never from the body.
+--
+-- When that session ends (logout, revoke, expiry) the daemon deletes the
+-- row, so a signed-out phone stops getting this server's pushes. A
+-- re-register (every app launch, same deviceId) re-links the row to the
+-- current session.
+--
+-- NULL = no Connect session: the owner token (kept, unaffected), or a row
+-- registered before this migration (a legacy row). A legacy row of a
+-- Connect user goes once that user has no live session, or once it is
+-- older than the session lifetime (its session must have ended); until
+-- then the next register links it.
+ALTER TABLE push_devices ADD COLUMN session_sid TEXT;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS idx_push_devices_session ON push_devices (session_sid);

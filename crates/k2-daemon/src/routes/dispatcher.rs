@@ -8143,11 +8143,20 @@ async fn handle_one_request(
                 .await;
                 return DispatchOutcome::Done;
             }
-            let username = if super::http::token_is_owner(&query, state.token.as_str()) {
+            let owner = super::http::token_is_owner(&query, state.token.as_str());
+            let username = if owner {
                 Some("owner".to_string())
             } else {
                 super::http::extract_token(&query)
                     .and_then(k2_core::connect_users::validate_session)
+            };
+            // 0.46.3: the caller's login session (`cu_…`, never the token)
+            // so a registration ends with the login that made it. None for
+            // the owner token.
+            let session_sid = if owner {
+                None
+            } else {
+                super::http::extract_token(&query).map(k2_core::connect_users::session_sid)
             };
             // token_ok passed but the session vanished in between
             // (revocation race) — fail closed like the gate above.
@@ -8165,7 +8174,12 @@ async fn handle_one_request(
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let p_owned = p.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                crate::push_routes::dispatch_post(&p_owned, &body_bytes, &username)
+                crate::push_routes::dispatch_post_for_session(
+                    &p_owned,
+                    &body_bytes,
+                    &username,
+                    session_sid.as_deref(),
+                )
             })
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse {

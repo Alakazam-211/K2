@@ -96,6 +96,26 @@ pub fn upsert_device_with(
     username: &str,
     previews: Option<bool>,
 ) -> Result<PushDevice, String> {
+    upsert_device_for_session(device_id, platform, token, username, previews, None)
+}
+
+/// [`upsert_device_with`] plus the login session that registered the
+/// device (0.46.3, migration 0195). `session_sid` is the caller's Connect
+/// session id (`connect_users::session_sid`, `cu_…`) resolved by the
+/// daemon — never a token, never the request body; `None` for the owner
+/// token (no session). Every register REPLACES the link: a phone that
+/// signed in again re-links to its new session, and a device that moves
+/// to the owner token is no longer tied to any login. When the linked
+/// session ends, [`remove_devices_for_sessions`] drops the row.
+pub fn upsert_device_for_session(
+    device_id: &str,
+    platform: &str,
+    token: &str,
+    username: &str,
+    previews: Option<bool>,
+    session_sid: Option<&str>,
+) -> Result<PushDevice, String> {
+    let session_sid = session_sid.map(str::trim).filter(|s| !s.is_empty());
     let device_id = device_id.trim();
     let token = token.trim();
     let username = username.trim();
@@ -119,14 +139,15 @@ pub fn upsert_device_with(
     let conn = db.lock();
     conn.execute(
         "INSERT INTO push_devices (device_id, platform, token, username, \
-         created_at, updated_at, last_seen_at, previews) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?5, ?6) \
+         created_at, updated_at, last_seen_at, previews, session_sid) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?5, ?6, ?7) \
          ON CONFLICT(device_id) DO UPDATE SET \
          platform = excluded.platform, token = excluded.token, \
          username = excluded.username, updated_at = excluded.updated_at, \
          last_seen_at = excluded.last_seen_at, \
-         previews = COALESCE(excluded.previews, push_devices.previews)",
-        params![device_id, platform, token, username, now, previews.map(i64::from)],
+         previews = COALESCE(excluded.previews, push_devices.previews), \
+         session_sid = excluded.session_sid",
+        params![device_id, platform, token, username, now, previews.map(i64::from), session_sid],
     )
     .map_err(|e| format!("push device upsert failed: {e}"))?;
     conn.query_row(
@@ -195,6 +216,92 @@ pub fn list_devices_for_usernames(usernames: &[String]) -> Result<Vec<PushDevice
         .into_iter()
         .filter(|d| set.contains(d.username.as_str()))
         .collect())
+}
+
+/// The login session a device is linked to (migration 0195): `Some(sid)`
+/// for a Connect session, `None` for an owner-token or legacy row.
+/// `Err` when the device does not exist.
+pub fn device_session_sid(device_id: &str) -> Result<Option<String>, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT session_sid FROM push_devices WHERE device_id = ?1",
+        params![device_id.trim()],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .map_err(|e| format!("push device session read failed: {e}"))
+}
+
+/// Drop every device registered by one of these login sessions (`cu_…`
+/// ids): the session was logged out, revoked or expired. Returns the
+/// number of rows removed. Owner-token and legacy rows (NULL) never match.
+pub fn remove_devices_for_sessions(
+    conn: &rusqlite::Connection,
+    session_sids: &[String],
+) -> Result<usize, String> {
+    let mut n = 0;
+    for sid in session_sids {
+        n += conn
+            .execute("DELETE FROM push_devices WHERE session_sid = ?1", params![sid])
+            .map_err(|e| format!("push device session cleanup failed: {e}"))?;
+    }
+    Ok(n)
+}
+
+/// The sweep backstop (boot + the session reaper's tick): drop rows whose
+/// login is gone even though no end event reached us (a session file reset
+/// or deleted, an epoch bump never presented again).
+///
+/// - A row linked to a session (`session_sid` set) goes when that id is
+///   not in `live_sids`.
+/// - A legacy row (NULL `session_sid`, registered before 0195) of a
+///   Connect user (any `username` but `owner`) goes when that user has
+///   no live session (`users_with_live_sessions`), or when it was last
+///   registered at or before `legacy_cutoff` (unix seconds: now minus the
+///   session lifetime, so the session it was registered with has ended;
+///   sessions never refresh).
+/// - Owner-token rows (`owner`, NULL) are never touched.
+/// - A row registered at or after `taken_at` (unix seconds, when the
+///   caller read the live session set) is skipped: its session may be
+///   newer than the snapshot (a login + register racing the sweep).
+///
+/// Returns the number of rows removed.
+pub fn prune_devices_without_live_session(
+    conn: &rusqlite::Connection,
+    live_sids: &std::collections::HashSet<String>,
+    users_with_live_sessions: &std::collections::HashSet<String>,
+    legacy_cutoff: i64,
+    taken_at: i64,
+) -> Result<usize, String> {
+    let rows: Vec<(String, String, Option<String>, i64)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT device_id, username, session_sid, last_seen_at FROM push_devices \
+                 WHERE updated_at < ?1",
+            )
+            .map_err(|e| format!("push device sweep failed: {e}"))?;
+        let it = stmt
+            .query_map(params![taken_at], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .map_err(|e| format!("push device sweep failed: {e}"))?;
+        it.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("push device sweep failed: {e}"))?
+    };
+    let mut n = 0;
+    for (device_id, username, sid, last_seen) in rows {
+        let dead = match sid {
+            Some(sid) => !live_sids.contains(&sid),
+            None => {
+                username != crate::notify_prefs::OWNER
+                    && (!users_with_live_sessions.contains(&username) || last_seen <= legacy_cutoff)
+            }
+        };
+        if dead {
+            n += conn
+                .execute("DELETE FROM push_devices WHERE device_id = ?1", params![device_id])
+                .map_err(|e| format!("push device sweep failed: {e}"))?;
+        }
+    }
+    Ok(n)
 }
 
 /// Drop every device holding a vendor token the gateway reported dead
@@ -311,6 +418,92 @@ mod tests {
             !list_devices().expect("list").iter().any(|d| d.device_id == id),
             "removed device must not be listed"
         );
+    }
+
+    /// 0195: a register links the row to the caller's session; a later
+    /// register re-links it (a new login on the same phone); an owner
+    /// register (no session) clears the link; ending a session drops only
+    /// the rows linked to it.
+    #[test]
+    fn session_link_follows_the_latest_register_and_ending_a_session_drops_its_rows() {
+        let a = did("sess-a");
+        let b = did("sess-b");
+        let own = did("sess-owner");
+        let sid_a = format!("cu_a{}", uuid::Uuid::new_v4().simple());
+        let sid_b = format!("cu_b{}", uuid::Uuid::new_v4().simple());
+        let sid_new = format!("cu_n{}", uuid::Uuid::new_v4().simple());
+        upsert_device_for_session(&a, "apns", &tok("sa"), "gina", None, Some(&sid_a)).expect("a");
+        upsert_device_for_session(&b, "fcm", &tok("sb"), "gina", None, Some(&sid_b)).expect("b");
+        upsert_device(&own, "apns", &tok("so"), "owner").expect("owner");
+        assert_eq!(device_session_sid(&a).expect("a sid"), Some(sid_a.clone()));
+        assert_eq!(device_session_sid(&own).expect("owner sid"), None, "owner token: no session");
+
+        // Same phone, new login: the next register re-links.
+        upsert_device_for_session(&a, "apns", &tok("sa2"), "gina", None, Some(&sid_new)).expect("relink");
+        assert_eq!(device_session_sid(&a).expect("a sid"), Some(sid_new.clone()));
+
+        let db = crate::db::shared();
+        let conn = db.lock();
+        assert_eq!(
+            remove_devices_for_sessions(&conn, std::slice::from_ref(&sid_a)).expect("old session"),
+            0,
+            "the old login no longer owns the re-linked phone"
+        );
+        assert_eq!(remove_devices_for_sessions(&conn, std::slice::from_ref(&sid_new)).expect("end"), 1);
+        drop(conn);
+        assert!(get_device(&a).expect("get a").is_none(), "its session ended: row gone");
+        assert!(get_device(&b).expect("get b").is_some(), "another session of the same user keeps its row");
+        assert!(get_device(&own).expect("get owner").is_some(), "owner row untouched");
+
+        // A device that moves to the owner token is no longer tied to a login.
+        upsert_device(&b, "fcm", &tok("sb2"), "owner").expect("to owner");
+        assert_eq!(device_session_sid(&b).expect("b sid"), None);
+        let db = crate::db::shared();
+        let conn = db.lock();
+        assert_eq!(remove_devices_for_sessions(&conn, std::slice::from_ref(&sid_b)).expect("end b"), 0);
+        drop(conn);
+        remove_device(&b).expect("cleanup");
+        remove_device(&own).expect("cleanup");
+    }
+
+    /// The sweep backstop on its own DB (a whole-table sweep): linked rows
+    /// go when their session is not live; legacy NULL rows of a Connect
+    /// user go when the user has no live session or the row is older than
+    /// the session lifetime; owner rows and rows registered at/after the
+    /// snapshot stay.
+    #[test]
+    fn sweep_drops_rows_without_a_live_session_and_keeps_owner_and_fresh_rows() {
+        let _db = crate::db::scoped_for_test();
+        let ins = |id: &str, user: &str, sid: Option<&str>, seen: i64| {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO push_devices (device_id, platform, token, username, created_at, \
+                 updated_at, last_seen_at, session_sid) VALUES (?1, 'apns', ?1, ?2, ?3, ?3, ?3, ?4)",
+                params![id, user, seen, sid],
+            )
+            .expect("insert");
+        };
+        let now = 10_000;
+        let cutoff = now - 7 * 86_400;
+        ins("live", "gina", Some("cu_live"), now - 10);
+        ins("dead", "gina", Some("cu_dead"), now - 10);
+        ins("legacy-recent", "gina", None, now - 10);
+        ins("legacy-old", "gina", None, cutoff);
+        ins("legacy-nologin", "mo", None, now - 10);
+        ins("owner-old", "owner", None, cutoff - 100);
+        ins("fresh", "mo", Some("cu_newer_than_snapshot"), now);
+
+        let live: std::collections::HashSet<String> = ["cu_live".to_string()].into();
+        let users: std::collections::HashSet<String> = ["gina".to_string()].into();
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let n = prune_devices_without_live_session(&conn, &live, &users, cutoff, now).expect("sweep");
+        drop(conn);
+        assert_eq!(n, 3, "dead, legacy-old, legacy-nologin");
+        let mut left: Vec<String> = list_devices().expect("list").into_iter().map(|d| d.device_id).collect();
+        left.sort();
+        assert_eq!(left, vec!["fresh", "legacy-recent", "live", "owner-old"]);
     }
 
     #[test]

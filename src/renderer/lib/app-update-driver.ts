@@ -58,7 +58,7 @@ export async function postPhase(
   creds: LocalDaemonCreds,
   jobId: string,
   phase: UpdatePhase,
-  extra?: { progress?: number; error?: string },
+  extra?: { progress?: number; error?: string; targetVersion?: string },
 ): Promise<void> {
   const url = `http://127.0.0.1:${creds.port}/cli/daemon/app-update/progress?token=${creds.token}`
   await fetch(url, {
@@ -69,6 +69,10 @@ export async function postPhase(
       phase,
       ...(typeof extra?.progress === 'number' ? { progress: extra.progress } : {}),
       ...(extra?.error ? { error: extra.error } : {}),
+      // 0.46.3: the version this updater installs. The daemon keeps the job
+      // across the restart and settles it against this (older daemons
+      // ignore the field).
+      ...(extra?.targetVersion ? { target_version: extra.targetVersion } : {}),
     }),
   })
 }
@@ -123,8 +127,9 @@ export async function runTriggeredAppUpdate(jobId: string): Promise<void> {
     // 2. Download finished + staged → about to install + relaunch. There's
     //    no separate manual "apply" for Shape A: the app auto-installs +
     //    relaunches, so we drive straight through applying → restarting.
-    await postPhase(creds, jobId, 'applying').catch(() => {})
-    await postPhase(creds, jobId, 'restarting').catch(() => {})
+    const targetVersion = useUpdateStore.getState().version ?? undefined
+    await postPhase(creds, jobId, 'applying', { targetVersion }).catch(() => {})
+    await postPhase(creds, jobId, 'restarting', { targetVersion }).catch(() => {})
 
     // 3. Install + relaunch. This terminates the app, so any code after
     //    installAndRelaunch only runs if relaunch FAILED.

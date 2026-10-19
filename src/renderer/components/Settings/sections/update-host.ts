@@ -57,7 +57,12 @@ export interface UpdateStatusResult {
   phase: UpdatePhase
   progress?: number
   bytes?: number
-  error?: string
+  error?: string | null
+  target_version?: string
+  /** 0.46.3: the version the job started from (absent on older hosts). */
+  from_version?: string
+  /** 0.46.3: the version the answering daemon runs (absent on older hosts). */
+  running_version?: string
 }
 
 /**
@@ -231,6 +236,276 @@ export function shouldResolveComeback(args: {
   // sawDown + ready with no comparable version pair (older daemon omits
   // version, or expected was lost) — honest post-restart truth, numberless.
   return 'success'
+}
+
+// ── Remote update across the restart (0.46.3) ─────────────────────────
+//
+// Rosson 2026-10-19: updating a remote server from Settings → General always
+// said it failed, yet the server updated. On a Linux host without hand-off
+// the daemon stopped its K2 Connect tunnel BEFORE answering `apply`, so the
+// ack never arrived; the client saw "Load failed", retried `apply` once into
+// the dead tunnel, and toasted "Couldn't update <host>: Load failed". A
+// restarting daemon cutting the connection is the update WORKING, not
+// failing. The rules below decide from what the host reports once it is
+// back: its `/boot-status` version + instanceId, and (0.46.3 daemons) the
+// update job, which now survives the restart with the real verdict.
+
+/** HTTP status on a daemon/host-op error, when it carries one. */
+function errorStatus(err: unknown): number | undefined {
+  const s = (err as { status?: unknown } | null)?.status
+  return typeof s === 'number' ? s : undefined
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+/** Connection-level failure (dead socket, refused, CORS-masked edge 404) —
+ *  same matcher as lib/remote-retry's `isConnectionLevelError`, kept local
+ *  so this module stays dependency-free for the node test env. */
+function looksLikeConnectionDrop(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const m = err.message.toLowerCase()
+  return (
+    m.includes('failed to fetch') ||
+    m.includes('load failed') ||
+    m.includes('networkerror') ||
+    m.includes('access-control-allow-origin') ||
+    m.includes('not allowed by access-control') ||
+    m.includes('connection refused') ||
+    m.includes('econnrefused') ||
+    m.includes('daemon not reachable') ||
+    m.includes('daemon_ws_url invoke failed') ||
+    m.includes('timed out') ||
+    m.includes('timeout') ||
+    err.name === 'TimeoutError' ||
+    err.name === 'AbortError'
+  )
+}
+
+/** Relay/edge answers while the host's tunnel or daemon is down (502/503/504),
+ *  and the daemon's own 503 while it boots. */
+function isGatewayStatus(status: number | undefined): boolean {
+  return status === 502 || status === 503 || status === 504
+}
+
+/**
+ * After `apply` was SENT, does this error leave the outcome open (the host may
+ * well be restarting onto the new version) rather than prove `apply` was
+ * refused? True for:
+ *   - a dropped connection / timeout (the daemon or its tunnel went away
+ *     mid-answer),
+ *   - a gateway 502/503/504 (the relay has no tunnel to the host right now),
+ *   - a 400 saying the job is no longer `staged` or is unknown: a retried
+ *     `apply` that reached the NEW daemon (the first one went through).
+ * A 403, a 500 "swap binary: …" / "back up running binary: …" etc. are real
+ * refusals from a daemon that is still up on the old version → false.
+ */
+export function isAmbiguousApplyError(err: unknown): boolean {
+  if (isForbiddenError(errorText(err))) return false
+  if (looksLikeConnectionDrop(err)) return true
+  const status = errorStatus(err)
+  if (isGatewayStatus(status)) return true
+  if (status === 400 || status === undefined) {
+    return /not 'staged'|unknown job_id/i.test(errorText(err))
+  }
+  return false
+}
+
+/**
+ * While polling `status?job_id=` after `start`, does this error mean the host
+ * is going away to install (watch for its comeback) rather than a blip to
+ * ignore? Only once the host may legitimately restart:
+ *   - standalone (Shape B): after `apply` was sent;
+ *   - bundled-app (Shape A): any time after `start` — the co-located app
+ *     posts `applying`/`restarting` and stops the daemon within milliseconds,
+ *     so a 1.5–2 s poll usually never sees those phases.
+ * The error must be a connection drop, a gateway status, or a 404 for the
+ * job (a pre-0.46.3 daemon that restarted and forgot it). A 403 never is.
+ */
+export function pollErrorMeansRestart(args: {
+  err: unknown
+  installKind: string | undefined
+  applySent: boolean
+}): boolean {
+  const { err, installKind, applySent } = args
+  if (!applySent && installKind !== 'bundled-app') return false
+  if (isForbiddenError(errorText(err))) return false
+  if (looksLikeConnectionDrop(err)) return true
+  const status = errorStatus(err)
+  return isGatewayStatus(status) || status === 404
+}
+
+/** The comeback watcher's outcome. `unconfirmed` is NOT a failure: the host
+ *  never showed us a verdict within the window (still installing, or its
+ *  version can't be compared). */
+export type UpdateComebackOutcome =
+  | { kind: 'success'; version?: string }
+  | { kind: 'failed'; reason: string; version?: string }
+  | { kind: 'unconfirmed'; reason: string; version?: string }
+
+/** What the watcher reads from the host each tick. Both return `null` when
+ *  the host is unreachable / the job is unknown — never throw. */
+export interface UpdateComebackDeps {
+  /** The host's public `/boot-status` (no token). */
+  bootStatus: () => Promise<{
+    phase?: string
+    ready?: boolean
+    version?: string
+    instanceId?: string
+  } | null>
+  /** `GET daemon/update/status?job_id=` — the persisted verdict on 0.46.3+. */
+  jobStatus: () => Promise<UpdateStatusResult | null>
+  sleep: (ms: number) => Promise<void>
+  now: () => number
+  /** False once the row unmounts / the host switches: stop quietly. */
+  alive: () => boolean
+  /** Called once when the soft deadline passes (copy turns "taking longer"). */
+  onSlow?: () => void
+}
+
+export interface UpdateComebackOptions {
+  /** The version the update should land on (`check.latest`). */
+  expected?: string
+  /** The version the host was on before (`check.current`). */
+  from?: string
+  /** `/boot-status` instanceId read before the restart was triggered. A
+   *  different id afterwards proves the daemon restarted. */
+  startInstanceId?: string
+  intervalMs?: number
+  slowAfterMs?: number
+  giveUpAfterMs?: number
+}
+
+/** Pre-restart phases: a job still in one of these was never restarted. */
+const PRE_RESTART_PHASES: ReadonlySet<string> = new Set([
+  'downloading',
+  'verifying',
+  'staged',
+  'applying',
+])
+
+/**
+ * Watch a remote host come back from an update and decide the outcome
+ * (0.46.3). Polls until one of:
+ *   - success: the host is `ready` on the expected version (or, with no
+ *     comparable version, it restarted and its job says `done`);
+ *   - failed: the job reports `failed`/`rolled-back` (its real reason), or the
+ *     host restarted and came back on a different version;
+ *   - unconfirmed: the give-up deadline passed without either.
+ * Returns `null` if `alive()` turned false (unmounted / host switched).
+ *
+ * "Restarted" = the instanceId changed when both ids are known (a network
+ * blip that never restarted the daemon does not count), else the host was
+ * seen down at least once (the pre-instanceId rule, `shouldResolveComeback`).
+ */
+export async function watchUpdateComeback(
+  deps: UpdateComebackDeps,
+  opts: UpdateComebackOptions,
+): Promise<UpdateComebackOutcome | null> {
+  const interval = opts.intervalMs ?? 2500
+  const start = deps.now()
+  const slowAt = start + (opts.slowAfterMs ?? 4 * 60_000)
+  const giveUpAt = start + (opts.giveUpAfterMs ?? 10 * 60_000)
+  const { expected, from, startInstanceId } = opts
+  let sawDown = false
+  let slowFired = false
+  let lastReady: { version?: string; restarted: boolean } | null = null
+
+  while (deps.alive() && deps.now() < giveUpAt) {
+    await deps.sleep(interval)
+    if (!deps.alive()) return null
+    const boot = await deps.bootStatus()
+    if (!deps.alive()) return null
+    if (boot === null) {
+      sawDown = true
+    } else if (boot.phase === 'ready' || boot.ready === true) {
+      const idsComparable = !!startInstanceId && !!boot.instanceId
+      const restarted = idsComparable ? boot.instanceId !== startInstanceId : sawDown
+      const version = boot.version
+      lastReady = { version, restarted }
+
+      // The daemon's own verdict wins when it has one (0.46.3+ persists the
+      // job across the restart; older daemons 404 → null).
+      const job = await deps.jobStatus()
+      if (!deps.alive()) return null
+      if (job && isFailurePhase(job.phase)) {
+        return {
+          kind: 'failed',
+          reason: job.error || `the update ${job.phase === 'rolled-back' ? 'was rolled back' : 'failed'}`,
+          version,
+        }
+      }
+      if (job && job.phase === 'done' && restarted) {
+        return { kind: 'success', version: version ?? job.running_version }
+      }
+
+      const verdict = shouldResolveComeback({
+        phase: 'ready',
+        version,
+        expected,
+        sawDown: restarted,
+      })
+      if (verdict === 'success') return { kind: 'success', version }
+      if (verdict === 'wrong-version') {
+        // The daemon is still settling (Linux boot verifier counting) or the
+        // "down" was a blip and the job never restarted: keep watching.
+        if (job && (job.phase === 'restarting' || PRE_RESTART_PHASES.has(job.phase))) {
+          if (!idsComparable && PRE_RESTART_PHASES.has(job.phase)) sawDown = false
+        } else {
+          return {
+            kind: 'failed',
+            reason:
+              version && version === from
+                ? `it came back on v${version}; the update to v${expected} did not install`
+                : `it came back on v${version ?? 'an unknown version'}, not v${expected}`,
+            version,
+          }
+        }
+      }
+    }
+    if (!slowFired && deps.now() >= slowAt) {
+      slowFired = true
+      deps.onSlow?.()
+    }
+  }
+  if (!deps.alive()) return null
+  const mins = Math.round(((opts.giveUpAfterMs ?? 10 * 60_000) / 60_000) * 10) / 10
+  if (lastReady && !lastReady.restarted) {
+    return {
+      kind: 'unconfirmed',
+      reason: `it is still answering on v${lastReady.version ?? 'its old version'} and has not restarted yet`,
+      version: lastReady.version,
+    }
+  }
+  if (lastReady) {
+    return {
+      kind: 'unconfirmed',
+      reason: `it restarted but has not confirmed v${expected ?? 'the new version'} yet (it reports v${lastReady.version ?? '?'})`,
+      version: lastReady.version,
+    }
+  }
+  return { kind: 'unconfirmed', reason: `it did not come back within ${mins} minutes` }
+}
+
+/** In-flight line while the host restarts onto the update. */
+export function updateReconnectingCopy(hostLabel: string): string {
+  return `Updating ${hostLabel}… reconnecting…`
+}
+
+/** Verified success line. */
+export function updateSucceededCopy(hostLabel: string, version: string | undefined): string {
+  return version ? `Updated ${hostLabel} to v${version}.` : `${hostLabel} updated and is back.`
+}
+
+/** A real failure, with the host's own reason. */
+export function updateFailedCopy(hostLabel: string, reason: string): string {
+  return `Update failed on ${hostLabel}: ${reason}.`.replace(/\.\.$/, '.')
+}
+
+/** The watcher gave up without a verdict — NOT a failure. */
+export function updateUnconfirmedCopy(hostLabel: string, reason: string): string {
+  return `Couldn't confirm the update on ${hostLabel}: ${reason}. Check for updates to see its version.`
 }
 
 /** Copy for the "Update available — <current> → <latest>" banner once a

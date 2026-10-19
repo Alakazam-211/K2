@@ -1,5 +1,5 @@
 import React from 'react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -15,9 +15,14 @@ import {
   hostVersionCopy,
   newerNoArtifactCopy,
   updatePhaseCopy,
-  updateCompleteCopy,
   updateSlowComebackCopy,
-  shouldResolveComeback,
+  updateReconnectingCopy,
+  updateSucceededCopy,
+  updateFailedCopy,
+  updateUnconfirmedCopy,
+  isAmbiguousApplyError,
+  pollErrorMeansRestart,
+  watchUpdateComeback,
   updateForbiddenCopy,
   isForbiddenError,
   isStaged,
@@ -1443,8 +1448,13 @@ function RestartHostRow(): React.JSX.Element | null {
 //      download progress.
 //   3. phase==staged → "Install & restart <host>" → confirm (NAMES host) →
 //      POST daemon/update/apply {job_id}. The host then restarts on the new
-//      version; the ConnectionGate's soft-reconnect returns us when it's
-//      back. We do NOT manage reconnect.
+//      version.
+//   4. Comeback (0.46.3): "Updating <host>… reconnecting…" while it is
+//      away, then a verdict from what the host reports once back — its
+//      /boot-status version + instanceId and the job (kept across the
+//      restart by 0.46.3 daemons): "Updated <host> to vX", "Update failed
+//      on <host>: <reason>", or "Couldn't confirm…" on timeout. A dropped
+//      connection during apply/restart is never a failure by itself.
 //   * failed / rolled-back are surfaced as a host-named message
 //     ("Update rolled back — <host> is still on <current>").
 //
@@ -1465,18 +1475,26 @@ function UpdateHostRow(): React.JSX.Element | null {
   const [jobId, setJobId] = useState<string | null>(null)
   const [status, setStatus] = useState<UpdateStatusResult | null>(null)
   const [applying, setApplying] = useState(false)
-  // Comeback watcher (0.40.48): tracks the host's return AFTER the job hits
-  // `restarting`/`done` (both mean "the host is going away now") so the row
-  // resolves to a verified success line instead of saying "Installing &
-  // restarting…" forever. `expected` is check.latest captured at watch
-  // start — comparing it against the returned /boot-status version is how
-  // we verify the update actually took (vs. rolled back).
+  // Comeback watcher (0.40.48; verdicts 0.46.3): once the host goes away to
+  // install, watch it come back and decide from what it REPORTS — its
+  // /boot-status version + instanceId and the update job (which a 0.46.3
+  // daemon keeps across the restart). A dropped connection on the way is
+  // the update working, never a failure by itself (Rosson 2026-10-19).
+  const [watching, setWatching] = useState(false)
   const [comeback, setComeback] = useState<
     | null
     | { kind: 'watching' }
     | { kind: 'slow' }
-    | { kind: 'back'; version?: string; expected?: string }
+    | { kind: 'success'; version?: string }
+    | { kind: 'failed'; reason: string; version?: string }
+    | { kind: 'unconfirmed'; reason: string; version?: string }
   >(null)
+  // Standalone hosts may only go away after `apply` was sent; bundled-app
+  // hosts any time after `start` (see pollErrorMeansRestart).
+  const applySentRef = useRef(false)
+  // /boot-status instanceId read just before the restart was triggered —
+  // a different id afterwards proves the daemon restarted.
+  const startInstanceRef = useRef<string | undefined>(undefined)
 
   const isRemote = activeHost !== 'local'
   const hostLabel = isRemote ? (activeHost.label?.trim() || activeHost.hostname) : ''
@@ -1492,7 +1510,10 @@ function UpdateHostRow(): React.JSX.Element | null {
     setJobId(null)
     setStatus(null)
     setApplying(false)
+    setWatching(false)
     setComeback(null)
+    applySentRef.current = false
+    startInstanceRef.current = undefined
     if (!isRemote) {
       setRole(null)
       return
@@ -1518,13 +1539,18 @@ function UpdateHostRow(): React.JSX.Element | null {
     }
   }, [isRemote, hostId])
 
-  // Poll the update job status every ~1.5s while a job is running and not
-  // yet terminal. The ConnectionGate's soft-reconnect handles the host
-  // going away on restart, so we stop polling at any terminal phase.
   const phase: UpdatePhase | null = status?.phase ?? null
+  // The host is going away to install: the job said so, or a dropped
+  // connection after the point where that is expected.
+  const hostGoneInstalling = watching || phase === 'restarting' || phase === 'done'
+  const installKind = check?.installKind
+
+  // Poll the update job status every ~1.5s while a job is running and not
+  // yet terminal. Once the host is going away the comeback watcher takes
+  // over (it reads the job too, after the restart).
   useEffect(() => {
     if (!jobId) return
-    if (isTerminalPhase(phase)) return
+    if (isTerminalPhase(phase) || hostGoneInstalling) return
     let cancelled = false
     const tick = async (): Promise<void> => {
       try {
@@ -1533,12 +1559,16 @@ function UpdateHostRow(): React.JSX.Element | null {
       } catch (e) {
         if (cancelled) return
         const msg = e instanceof Error ? e.message : String(e)
-        // A connection-level error here is expected once the host starts
-        // restarting — let the ConnectionGate handle it; don't spam toasts.
-        // Any other error we surface once, then stop polling.
         if (isForbiddenError(msg)) {
           addToast(updateForbiddenCopy(hostLabel), 'error', 8000)
           setJobId(null)
+          return
+        }
+        // The host dropped (or forgot the job across a restart) at a point
+        // where that means it is installing: watch it come back. Earlier
+        // blips are ignored and the poll carries on.
+        if (pollErrorMeansRestart({ err: e, installKind, applySent: applySentRef.current })) {
+          setWatching(true)
         }
       }
     }
@@ -1549,91 +1579,81 @@ function UpdateHostRow(): React.JSX.Element | null {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [jobId, phase, hostLabel, addToast])
+  }, [jobId, phase, hostGoneInstalling, installKind, hostLabel, addToast])
 
-  // Surface a failure phase once, as a host-named toast.
+  // Surface a failure phase once, as a host-named toast with the reason.
   useEffect(() => {
     if (isFailurePhase(phase) && phase) {
-      addToast(updatePhaseCopy(phase, hostLabel, { current: check?.current }), 'error', 10000)
+      const base = updatePhaseCopy(phase, hostLabel, { current: check?.current })
+      addToast(status?.error ? `${base} ${status.error}` : base, 'error', 10000)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per failure phase
   }, [phase, hostLabel, check?.current, addToast])
 
-  // Comeback watcher (0.40.48): once the job reaches `restarting`/`done`
-  // the host drops off — the status route is gone with it, so the old row
-  // froze on "Installing & restarting…" forever. Poll the host's PUBLIC
-  // /boot-status (no token needed; hostBootStatus's retry loop evicts dead
-  // pooled sockets) until `phase === 'ready'`, then resolve the row:
-  // verified success line + refreshed version line + back to idle. Soft
-  // deadline (~4 min, matching the Connections tile's waitForHostReady)
-  // flips the copy to an honest "taking longer than expected" while the
-  // watch continues; hard stop at ~10 min leaves that copy up.
-  const hostGoneInstalling = phase === 'restarting' || phase === 'done'
+  // Comeback watcher: poll the host's PUBLIC /boot-status (no token needed;
+  // hostBootStatus's retry loop evicts dead pooled sockets) plus the job
+  // until there is a verdict — success (back on the expected version, or the
+  // job says done), failed (the job's real reason, or back on another
+  // version), or unconfirmed after ~10 min (never reported as a failure).
+  // The copy turns "taking longer than expected" at ~4 min.
   useEffect(() => {
     // `!isRemote` already narrows activeHost to a ConnectHost below.
     if (!hostGoneInstalling || !isRemote) return
     let alive = true
     const expected = check?.latest
+    const from = check?.current
+    const job = jobId
     const creds = remoteCreds(activeHost)
-    // Baden false-rollback fix: the OLD daemon answers `ready` until the
-    // moment it's actually replaced, so a `ready` probe alone proves
-    // nothing. Track whether we've seen the host DOWN; resolution requires
-    // version===expected OR sawDown (shouldResolveComeback).
-    let sawDown = false
     setComeback({ kind: 'watching' })
     void (async () => {
-      const slowAt = Date.now() + 4 * 60_000
-      const giveUpAt = Date.now() + 10 * 60_000
-      let lastReady: { version?: string } | null = null
-      while (alive && Date.now() < giveUpAt) {
-        // Jittered so many clients watching the same rebooting host don't
-        // poll in lockstep (same rationale as the recovery poll).
-        await new Promise((r) => setTimeout(r, jittered(2500)))
-        if (!alive) return
-        const s = await hostBootStatus(creds)
-        if (!alive) return
-        if (s === null) sawDown = true
-        if (s?.phase === 'ready') lastReady = { version: s.version }
-        if (
-          shouldResolveComeback({
-            phase: s?.phase,
-            version: s?.version,
-            expected,
-            sawDown,
-          }) !== 'keep-watching'
-        ) {
-          setComeback({ kind: 'back', version: s?.version, expected })
-          // Resolve the job UI back to idle: the phase line goes away, the
-          // success line below takes over, and the persistent version line
-          // reflects what the host ACTUALLY reports (never assume latest).
-          setJobId(null)
-          setStatus(null)
-          setApplying(false)
-          setCheck((c) =>
-            c ? { ...c, current: s?.version ?? c.current, available: false } : c,
-          )
-          return
-        }
-        if (Date.now() >= slowAt) {
-          setComeback((k) => (k?.kind === 'watching' ? { kind: 'slow' } : k))
-        }
-      }
-      // Hard stop with the host answering `ready` but never seen down and
-      // never on the expected version (e.g. sub-poll-interval restart on a
-      // daemon too old to report a version): resolve honestly with what it
-      // reports rather than abandoning the row on "still watching…".
-      if (alive && lastReady) {
-        setComeback({ kind: 'back', version: lastReady.version, expected })
-        setJobId(null)
-        setStatus(null)
-        setApplying(false)
+      const outcome = await watchUpdateComeback(
+        {
+          bootStatus: () => hostBootStatus(creds),
+          jobStatus: async () => {
+            if (!job) return null
+            try {
+              return await daemonCliGet<UpdateStatusResult>(primaryScope(), 'daemon/update/status', { job_id: job })
+            } catch {
+              return null // older daemon (404 after restart) / still settling
+            }
+          },
+          // Jittered so many clients watching the same rebooting host don't
+          // poll in lockstep (same rationale as the recovery poll).
+          sleep: (ms) => new Promise((r) => setTimeout(r, jittered(ms))),
+          now: () => Date.now(),
+          alive: () => alive,
+          onSlow: () => setComeback((k) => (k?.kind === 'watching' ? { kind: 'slow' } : k)),
+        },
+        { expected, from, startInstanceId: startInstanceRef.current },
+      )
+      if (!alive || !outcome) return
+      // Resolve the job UI back to idle: the outcome line takes over, and the
+      // version line shows what the host ACTUALLY reports (never assumed).
+      setComeback(outcome)
+      setJobId(null)
+      setStatus(null)
+      setApplying(false)
+      setWatching(false)
+      applySentRef.current = false
+      setCheck((c) =>
+        c
+          ? {
+              ...c,
+              current: outcome.version ?? c.current,
+              available: outcome.kind === 'success' ? false : c.available,
+            }
+          : c,
+      )
+      if (outcome.kind === 'failed') {
+        addToast(updateFailedCopy(hostLabel, outcome.reason), 'error', 10000)
       }
     })()
     return () => {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the
-    // watch trigger + host identity; check.latest is captured at start by
-    // design (the expected version must not drift mid-watch).
+    // watch trigger + host identity; check.latest/current and the job id are
+    // captured at start by design (they must not drift mid-watch).
   }, [hostGoneInstalling, isRemote, hostId])
 
   const { show, canUpdate } = updateHostVisibility({ isRemote, supportsUpdate, role })
@@ -1648,10 +1668,19 @@ function UpdateHostRow(): React.JSX.Element | null {
     }
   }
 
+  // Read the host's instanceId right before triggering a restart, so the
+  // watcher can tell a real restart from a network blip.
+  const captureInstanceId = async (): Promise<void> => {
+    if (!isRemote) return
+    const s = await hostBootStatus(remoteCreds(activeHost))
+    startInstanceRef.current = s?.instanceId
+  }
+
   const handleCheck = async (): Promise<void> => {
     setChecking(true)
     setStatus(null)
     setJobId(null)
+    setWatching(false)
     // A fresh check supersedes any resolved comeback verdict — its result
     // is newer truth than a line computed during the restart window (the
     // Baden screenshot: a stale "rolled back to v0.40.44" line sitting
@@ -1681,6 +1710,11 @@ function UpdateHostRow(): React.JSX.Element | null {
   }
 
   const handleDownload = async (): Promise<void> => {
+    setComeback(null)
+    setWatching(false)
+    applySentRef.current = false
+    // Bundled-app hosts restart on their own once the app has the update.
+    if (check?.installKind === 'bundled-app') await captureInstanceId()
     try {
       const { job_id } = await daemonCliPost<{ job_id: string }>(primaryScope(), 'daemon/update/start', {})
       setStatus({ phase: 'downloading' })
@@ -1701,20 +1735,33 @@ function UpdateHostRow(): React.JSX.Element | null {
     })
     if (!ok) return
     setApplying(true)
+    await captureInstanceId()
+    applySentRef.current = true
     try {
       await daemonCliPost(primaryScope(), 'daemon/update/apply', { job_id: jobId })
-      // The host now installs + restarts; show the restarting line and let
-      // the ConnectionGate's soft-reconnect bring us back on the new version.
+      // The host now installs + restarts; the watcher confirms the version.
       setStatus({ phase: 'restarting' })
     } catch (e) {
+      // The daemon restarting (or its tunnel going) mid-answer, or a retry
+      // that reached the NEW daemon, is the update going ahead — not a
+      // failure. Watch the host come back and decide from its version.
+      if (isAmbiguousApplyError(e)) {
+        setStatus({ phase: 'restarting' })
+        return
+      }
+      applySentRef.current = false
       reportError(e)
       setApplying(false)
     }
   }
 
   // Decide the action-area content from the current state.
-  const inProgress = jobId !== null && phase !== null && !isStaged(phase) && !isFailurePhase(phase)
-  const staged = isStaged(phase)
+  const inProgress =
+    hostGoneInstalling ||
+    (jobId !== null && phase !== null && !isStaged(phase) && !isFailurePhase(phase))
+  const staged = !hostGoneInstalling && isStaged(phase)
+  const watchLine =
+    comeback?.kind === 'slow' ? updateSlowComebackCopy(hostLabel) : updateReconnectingCopy(hostLabel)
 
   return (
     <div
@@ -1811,36 +1858,45 @@ function UpdateHostRow(): React.JSX.Element | null {
         </div>
       )}
 
-      {/* Verified comeback line (0.40.48): the watcher saw the host's
-          /boot-status go 'ready' after the install-restart — the row's
-          job state is already resolved back to idle by then, so this
-          renders alongside the refreshed version line. Green = confirmed
-          on the wire, not assumed. */}
-      {comeback?.kind === 'back' && !inProgress && !staged && (
+      {/* Comeback verdict (0.46.3): green only when the host reported the
+          new version (or its job said done); red with the host's reason on
+          a real failure; amber "couldn't confirm" when there was no verdict
+          in time — never a false failure. */}
+      {comeback?.kind === 'success' && !inProgress && !staged && (
         <div className="mt-2 text-[11px] text-[var(--color-status-ok-soft)]">
-          {updateCompleteCopy(hostLabel, comeback.expected, comeback.version)}
+          {updateSucceededCopy(hostLabel, comeback.version)}
+        </div>
+      )}
+      {comeback?.kind === 'unconfirmed' && !inProgress && !staged && (
+        <div className="mt-2 text-[11px] text-[var(--color-status-warn-amber-bright)]">
+          {updateUnconfirmedCopy(hostLabel, comeback.reason)}
+        </div>
+      )}
+      {comeback?.kind === 'failed' && !inProgress && !staged && (
+        <div className="mt-2 p-2 bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)]">
+          <p className="text-[11px] text-[var(--color-status-error-soft)]">
+            {updateFailedCopy(hostLabel, comeback.reason)}
+          </p>
         </div>
       )}
 
       {/* In-flight phase + download progress line */}
-      {(inProgress || staged) && phase && (
+      {(inProgress || staged) && (phase || hostGoneInstalling) && (
         <div className="mt-2">
           <div className="text-[11px] text-[var(--color-status-warn-amber-bright)]">
-            {/* Past the watcher's soft deadline the restarting copy would be
-                a lie ("it'll reconnect automatically" — it hasn't yet); be
-                honest that it's slow while the watch continues. */}
-            {comeback?.kind === 'slow'
-              ? updateSlowComebackCopy(hostLabel)
+            {hostGoneInstalling || !phase
+              ? watchLine
               : updatePhaseCopy(phase, hostLabel, {
-                  progress: status?.progress,
+                  // The daemon reports 0.0–1.0; the copy wants a percent.
+                  progress: typeof status?.progress === 'number' ? status.progress * 100 : undefined,
                   current: check?.current,
                 })}
           </div>
-          {phase === 'downloading' && typeof status?.progress === 'number' && (
+          {!hostGoneInstalling && phase === 'downloading' && typeof status?.progress === 'number' && (
             <div className="h-1.5 mt-1.5 bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)] overflow-hidden">
               <div
                 className="h-full bg-[var(--color-status-warn-amber)] transition-all duration-300"
-                style={{ width: `${Math.max(0, Math.min(100, status.progress))}%` }}
+                style={{ width: `${Math.max(0, Math.min(100, status.progress * 100))}%` }}
               />
             </div>
           )}
@@ -1848,7 +1904,7 @@ function UpdateHostRow(): React.JSX.Element | null {
       )}
 
       {/* Failure surface — host-named, host stays on its current version */}
-      {isFailurePhase(phase) && phase && (
+      {!hostGoneInstalling && isFailurePhase(phase) && phase && (
         <div className="mt-2 p-2 bg-[color-mix(in_srgb,var(--color-status-error)_5%,transparent)] border border-[color-mix(in_srgb,var(--color-status-error)_30%,transparent)]">
           <p className="text-[11px] text-[var(--color-status-error-soft)]">
             {updatePhaseCopy(phase, hostLabel, { current: check?.current })}

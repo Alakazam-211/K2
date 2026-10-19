@@ -371,13 +371,11 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// `failed` (with `error`) and `rolled-back` are terminal off-ramps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-// `Done` and `RolledBack` are TERMINAL phases the detached shell swap
-// helper conceptually transitions a job to AFTER the daemon has exited —
-// at which point the in-process job map no longer exists, so no Rust code
-// writes them today. They remain part of the wire contract (asserted in
-// `phase_wire_strings_match_contract`) and will be set once the helper
-// reports back through a persisted job file (e2e-smoke-test-pending). Allow
-// the dead-code warning rather than drop contract phases.
+// `Done` is set after the restart by `reconcile_persisted_job` (0.46.3: the
+// job survives the restart in `~/.k2/update/last-job.json`). `RolledBack`
+// stays part of the wire contract (asserted in
+// `phase_wire_strings_match_contract`) though no Rust code writes it today.
+// Allow the dead-code warning rather than drop contract phases.
 #[allow(dead_code)]
 pub enum Phase {
     Downloading,
@@ -427,6 +425,12 @@ pub struct Job {
     /// Absolute path the verified binary is staged at (set on `staged`).
     #[serde(skip)]
     pub staged_path: Option<PathBuf>,
+    /// The version this daemon was running when the job started. After a
+    /// restart, coming back on THIS version means the update did not take.
+    pub from_version: String,
+    /// False while `target_version` is only a placeholder: a Shape A
+    /// (bundled-app) job learns its real target from the app's updater.
+    pub target_known: bool,
 }
 
 impl Job {
@@ -439,6 +443,8 @@ impl Job {
             bytes: None,
             error: None,
             staged_path: None,
+            from_version: current_version().to_string(),
+            target_known: true,
         }
     }
 }
@@ -514,6 +520,203 @@ fn new_job_id() -> String {
         return format!("job-{nanos:x}");
     }
     hex_encode(&bytes)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Job state that survives the restart (0.46.3)
+// ─────────────────────────────────────────────────────────────────────
+//
+// The job map above lives in memory, and the update restarts the daemon. A
+// client that polled `status?job_id=` after the restart used to get 404 for
+// a job the new daemon had never heard of, so it could not tell "updated"
+// from "failed". The job that crosses the restart (apply, or a bundled-app
+// job at `applying`/`restarting`) is written to `~/.k2/update/last-job.json`;
+// the next daemon reads it at boot ([`reconcile_persisted_job`]), decides
+// done or failed from the version it is actually running, and serves the
+// verdict on the same job id.
+
+/// `~/.k2/update/last-job.json` — the one update job in flight across a
+/// restart. One file: a newer job replaces it.
+fn last_job_path() -> PathBuf {
+    k2_core::paths::k2_home().join("update").join("last-job.json")
+}
+
+/// The on-disk form of a job that crosses a restart.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+struct PersistedJob {
+    job_id: String,
+    /// Wire phase string (`restarting`, `done`, `failed`, …).
+    phase: String,
+    target_version: String,
+    #[serde(default)]
+    target_known: bool,
+    from_version: String,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+impl PersistedJob {
+    fn from_job(job: &Job) -> Self {
+        PersistedJob {
+            job_id: job.job_id.clone(),
+            phase: job.phase.as_str().to_string(),
+            target_version: job.target_version.clone(),
+            target_known: job.target_known,
+            from_version: job.from_version.clone(),
+            error: job.error.clone(),
+        }
+    }
+}
+
+fn read_persisted_job() -> Option<PersistedJob> {
+    let raw = std::fs::read(last_job_path()).ok()?;
+    serde_json::from_slice(&raw).ok()
+}
+
+fn write_persisted_job(rec: &PersistedJob) -> std::io::Result<()> {
+    let path = last_job_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let json = serde_json::to_vec_pretty(rec).map_err(std::io::Error::other)?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(tmp, path)
+}
+
+/// Write the in-memory job `job_id` to `last-job.json`. Best effort: a
+/// failed write is logged and the update still runs (the client then falls
+/// back to comparing `/boot-status` versions).
+fn persist_job(job_id: &str) {
+    let Some(job) = get_job(job_id) else { return };
+    if let Err(e) = write_persisted_job(&PersistedJob::from_job(&job)) {
+        k2_core::log_debug!(
+            "[daemon] P3 update — job {job_id}: could not persist across restart: {e}"
+        );
+    }
+}
+
+/// True when `last-job.json` holds `job_id` (so its later phases keep the
+/// record current).
+fn persisted_job_is(job_id: &str) -> bool {
+    read_persisted_job().is_some_and(|r| r.job_id == job_id)
+}
+
+/// Set the persisted record's phase + error when it is `job_id`. Used by the
+/// Linux boot verifier, which runs before the job is back in memory.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn mark_persisted_job(job_id: &str, phase: Phase, error: Option<String>) {
+    let Some(mut rec) = read_persisted_job().filter(|r| r.job_id == job_id) else {
+        return;
+    };
+    rec.phase = phase.as_str().to_string();
+    rec.error = error;
+    if let Err(e) = write_persisted_job(&rec) {
+        k2_core::log_debug!(
+            "[daemon] P3 update — job {job_id}: could not record {}: {e}",
+            phase.as_str()
+        );
+    }
+}
+
+/// The verdict for a job that was `applying`/`restarting` when the daemon
+/// went down, from the version the NEW daemon is running. Pure.
+///
+/// * running == target (or, target unknown, running != from) → `done`.
+/// * running == from while the Linux boot verifier is still counting boots
+///   → still `restarting` (it confirms or rolls back on a later boot).
+/// * running == from → `failed`: the update did not install.
+/// * any other version → `failed`, naming both versions.
+///
+/// Returns `(phase, error, target_version)`.
+fn decide_after_restart(
+    rec: &PersistedJob,
+    running: &str,
+    verifier_pending: bool,
+) -> (Phase, Option<String>, String) {
+    let target = rec.target_version.clone();
+    if rec.target_known && running == target {
+        return (Phase::Done, None, target);
+    }
+    if !rec.target_known && running != rec.from_version {
+        // A bundled-app job whose app never named its target: any new
+        // version is the update landing.
+        return (Phase::Done, None, running.to_string());
+    }
+    if running == rec.from_version {
+        if verifier_pending {
+            return (Phase::Restarting, None, target);
+        }
+        let msg = if rec.target_known {
+            format!("K2 came back on v{running}; the update to v{target} did not install")
+        } else {
+            format!("K2 came back on v{running}; the update did not install")
+        };
+        return (Phase::Failed, Some(msg), target);
+    }
+    (
+        Phase::Failed,
+        Some(format!("K2 came back on v{running}, not v{target}")),
+        target,
+    )
+}
+
+/// Boot half of the persisted job: read `last-job.json`, settle a job that
+/// was mid-restart against `running_version`, and put it back in the job map
+/// so `status?job_id=` answers for it after the restart. Call once at boot,
+/// after the Linux boot verifier.
+pub fn reconcile_persisted_job(running_version: &str) {
+    let path = last_job_path();
+    let Ok(raw) = std::fs::read(&path) else {
+        return; // no update crossed this restart — the common case
+    };
+    let Ok(mut rec) = serde_json::from_slice::<PersistedJob>(&raw) else {
+        let _ = std::fs::remove_file(&path);
+        return;
+    };
+    let Some(mut phase) = phase_from_str(&rec.phase) else {
+        let _ = std::fs::remove_file(&path);
+        return;
+    };
+    if matches!(phase, Phase::Applying | Phase::Restarting) {
+        #[cfg(target_os = "linux")]
+        let verifier_pending = pending_update_path().exists();
+        #[cfg(not(target_os = "linux"))]
+        let verifier_pending = false;
+        let (p, error, target) = decide_after_restart(&rec, running_version, verifier_pending);
+        phase = p;
+        if phase == Phase::Done {
+            rec.target_known = true;
+        }
+        rec.phase = phase.as_str().to_string();
+        rec.error = error;
+        rec.target_version = target;
+        k2_core::log_debug!(
+            "[daemon] P3 update — job {} after restart: {} (running v{running_version}, target v{}){}",
+            rec.job_id,
+            rec.phase,
+            rec.target_version,
+            rec.error.as_deref().map(|e| format!(": {e}")).unwrap_or_default()
+        );
+        if let Err(e) = write_persisted_job(&rec) {
+            k2_core::log_debug!("[daemon] P3 update — could not record the verdict: {e}");
+        }
+    }
+    let job = Job {
+        job_id: rec.job_id.clone(),
+        phase,
+        target_version: rec.target_version.clone(),
+        progress: None,
+        bytes: None,
+        error: rec.error.clone(),
+        staged_path: None,
+        from_version: rec.from_version.clone(),
+        target_known: rec.target_known,
+    };
+    jobs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(rec.job_id, job);
 }
 
 /// Reset the process-global job map and serialize the calling test against
@@ -716,8 +919,12 @@ fn start_bundled_app_update(
     // We don't know the published app version here (the app owns its feed),
     // so record the caller's request or the current version as a placeholder
     // the status route can echo until the app reports its target.
+    let target_known = requested_version.is_some();
     let target = requested_version.unwrap_or_else(|| current_version().to_string());
     let job_id = create_job(&target);
+    // The placeholder must not count as the target after the restart: the
+    // app names the real one in `app-update/progress` (`target_version`).
+    update_job(&job_id, |j| j.target_known = target_known);
 
     let Some(tx) = event_tx else {
         // No broadcast sender (test harness / no app wiring) ⇒ the co-located
@@ -791,6 +998,11 @@ pub fn phase_from_str(s: &str) -> Option<Phase> {
 ///
 /// Validates the phase string (bad ⇒ 400) and the job_id (unknown ⇒ 400),
 /// then maps phase→[`Phase`] and writes phase/progress/error onto the job.
+///
+/// 0.46.3: an optional `target_version` names the version the app's updater
+/// is installing (the job only had a placeholder). From `applying` on, the
+/// app is about to stop this daemon, so the job is persisted
+/// ([`persist_job`]) and the next daemon settles it at boot.
 pub fn handle_app_update_progress(body: &[u8]) -> CliResponse {
     #[derive(Deserialize)]
     struct Req {
@@ -800,6 +1012,8 @@ pub fn handle_app_update_progress(body: &[u8]) -> CliResponse {
         progress: Option<f64>,
         #[serde(default)]
         error: Option<String>,
+        #[serde(default)]
+        target_version: Option<String>,
     }
     let req: Req = match serde_json::from_slice(body) {
         Ok(r) => r,
@@ -825,7 +1039,14 @@ pub fn handle_app_update_progress(body: &[u8]) -> CliResponse {
         if req.error.is_some() {
             j.error = req.error.clone();
         }
+        if let Some(v) = req.target_version.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+            j.target_version = v.to_string();
+            j.target_known = true;
+        }
     });
+    if matches!(phase, Phase::Applying | Phase::Restarting) || persisted_job_is(&req.job_id) {
+        persist_job(&req.job_id);
+    }
     CliResponse::ok_json(serde_json::json!({ "ok": true }).to_string())
 }
 
@@ -916,6 +1137,11 @@ pub fn handle_status(job_id: &str) -> CliResponse {
                 "bytes": job.bytes,
                 "error": job.error,
                 "target_version": job.target_version,
+                // 0.46.3: what the job started from and what is running
+                // now, so a client reading the job after the restart can
+                // say "updated to X" or name the version it came back on.
+                "from_version": job.from_version,
+                "running_version": current_version(),
             });
             CliResponse::ok_json(body.to_string())
         }
@@ -971,6 +1197,11 @@ pub fn prepare_apply(job_id: &str) -> Result<ApplyPlan, CliResponse> {
         backup_path: backup_path(&job.target_version),
     })
 }
+
+/// How long `apply` waits after its ack before it stops the tunnel (Linux)
+/// and shuts down. A remote client's ack travels back through the K2
+/// Connect tunnel, so give it time to drain before either goes away.
+const APPLY_ACK_DRAIN_MS: u64 = 750;
 
 /// `POST /cli/daemon/update/apply` — body `{job_id}`. Only valid when the
 /// job is `staged`. Backs up the running binary, spawns a DETACHED swap/
@@ -1061,6 +1292,11 @@ pub fn handle_apply(
             "[daemon] P3 update/apply — swapped {} in place (linux, pre-exit)",
             plan.running_path.display()
         );
+        // The swap is committed: from here this daemon is replaced. Persist
+        // the job BEFORE a successor can boot (hand-off starts it right
+        // below), so the new daemon serves the verdict on this job id.
+        set_phase(&plan.job_id, Phase::Restarting);
+        persist_job(&plan.job_id);
         // Runtime stage H: when this daemon can hand off (systemd unit with
         // the drop-in, or no supervisor), the NEW binary takes the listening
         // sockets over and adopts frpc; this one drains its live App splices
@@ -1088,18 +1324,12 @@ pub fn handle_apply(
                 ),
             }
         }
-        // Best-effort frpc reap before shutdown_tx (Bug B defense-in-depth).
-        // stop_tunnel is idempotent and already used from HTTP tunnel routes;
-        // if the tunnel was never up this is a no-op. Main shutdown also
-        // calls stop_tunnel — double-call is safe.
-        match k2_core::tunnel::stop_tunnel("update apply: binary swapped, pre-shutdown reap") {
-            Ok(()) => k2_core::log_debug!(
-                "[daemon] P3 update/apply — stop_tunnel after swap (pre-shutdown reap)"
-            ),
-            Err(e) => k2_core::log_debug!(
-                "[daemon] P3 update/apply — stop_tunnel after swap (best-effort): {e}"
-            ),
-        }
+        // The frpc reap before shutdown_tx (Bug B defense-in-depth) runs in
+        // the delayed shutdown task below, NOT here. Here it ran before this
+        // handler returned, so it cut the tunnel carrying THIS request: a
+        // remote client never got the apply ack, saw a dropped connection,
+        // and reported "failed" for an update that went on to succeed
+        // (Rosson 2026-10-19).
     }
     #[cfg(not(target_os = "linux"))]
     if let Err(e) = spawn_swap_helper(&plan) {
@@ -1111,8 +1341,31 @@ pub fn handle_apply(
     // 3. Trigger the P0 graceful shutdown (detached, after the ack drains)
     //    so the supervisor respawns. The helper is already waiting.
     set_phase(&plan.job_id, Phase::Restarting);
+    #[cfg(not(target_os = "linux"))]
+    persist_job(&plan.job_id);
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        tokio::time::sleep(Duration::from_millis(APPLY_ACK_DRAIN_MS)).await;
+        // Linux: best-effort frpc reap before shutdown_tx (Bug B
+        // defense-in-depth), AFTER the ack has drained through the tunnel.
+        // stop_tunnel is idempotent; main shutdown calls it again — safe.
+        #[cfg(target_os = "linux")]
+        {
+            let reap = tokio::task::spawn_blocking(|| {
+                k2_core::tunnel::stop_tunnel("update apply: binary swapped, pre-shutdown reap")
+            })
+            .await;
+            match reap {
+                Ok(Ok(())) => k2_core::log_debug!(
+                    "[daemon] P3 update/apply — stop_tunnel after swap (pre-shutdown reap)"
+                ),
+                Ok(Err(e)) => k2_core::log_debug!(
+                    "[daemon] P3 update/apply — stop_tunnel after swap (best-effort): {e}"
+                ),
+                Err(e) => k2_core::log_debug!(
+                    "[daemon] P3 update/apply — stop_tunnel join failed (best-effort): {e}"
+                ),
+            }
+        }
         k2_core::log_debug!("[daemon] P3 update/apply — triggering graceful shutdown for swap");
         let _ = tx.send(());
     });
@@ -1272,6 +1525,22 @@ pub fn verify_pending_update(running_version: &str) -> bool {
         && std::fs::copy(&pending.backup_path, &pending.running_path).is_ok();
     let _ = clear_pending_update();
     set_phase(&pending.job_id, Phase::Failed);
+    // The job is not in memory yet at this point of boot: record the real
+    // reason on the persisted job so the client reads it after the restart.
+    mark_persisted_job(
+        &pending.job_id,
+        Phase::Failed,
+        Some(format!(
+            "v{} did not start after {} tries; {}",
+            pending.target_version,
+            pending.boots,
+            if restored {
+                "the previous version was put back"
+            } else {
+                "the previous version could not be put back"
+            }
+        )),
+    );
     restored
 }
 
@@ -2434,5 +2703,177 @@ mod tests {
         assert!(s.contains("\\\"phase\\\":\\\"ready\\\""), "waits for ready");
         assert!(s.contains("cp -f \"$BACKUP\""), "rollback restores backup");
         assert!(s.contains("/usr/local/bin/k2-daemon"), "running path");
+    }
+
+    // ── 0.46.3: the job survives the restart ────────────────────────
+
+    fn rec(phase: &str, target: &str, known: bool, from: &str) -> PersistedJob {
+        PersistedJob {
+            job_id: "jr".into(),
+            phase: phase.into(),
+            target_version: target.into(),
+            target_known: known,
+            from_version: from.into(),
+            error: None,
+        }
+    }
+
+    fn status_json(job_id: &str) -> serde_json::Value {
+        let resp = handle_status(job_id);
+        assert!(resp.status.starts_with("200"), "status={} body={}", resp.status, resp.body);
+        serde_json::from_str(&resp.body).expect("status body is JSON")
+    }
+
+    #[test]
+    fn after_restart_on_the_target_version_is_done() {
+        let (p, err, target) = decide_after_restart(&rec("restarting", "0.46.3", true, "0.46.2"), "0.46.3", false);
+        assert_eq!(p, Phase::Done);
+        assert_eq!(err, None);
+        assert_eq!(target, "0.46.3");
+    }
+
+    #[test]
+    fn after_restart_on_the_old_version_is_failed_with_the_reason() {
+        let (p, err, _) = decide_after_restart(&rec("restarting", "0.46.3", true, "0.46.2"), "0.46.2", false);
+        assert_eq!(p, Phase::Failed);
+        assert_eq!(
+            err.as_deref(),
+            Some("K2 came back on v0.46.2; the update to v0.46.3 did not install")
+        );
+    }
+
+    #[test]
+    fn after_restart_on_the_old_version_waits_while_the_linux_verifier_counts() {
+        let (p, err, _) = decide_after_restart(&rec("restarting", "0.46.3", true, "0.46.2"), "0.46.2", true);
+        assert_eq!(p, Phase::Restarting);
+        assert_eq!(err, None);
+    }
+
+    #[test]
+    fn after_restart_on_another_version_is_failed_naming_both() {
+        let (p, err, _) = decide_after_restart(&rec("restarting", "0.46.3", true, "0.46.2"), "0.46.4", false);
+        assert_eq!(p, Phase::Failed);
+        assert_eq!(err.as_deref(), Some("K2 came back on v0.46.4, not v0.46.3"));
+    }
+
+    #[test]
+    fn after_restart_with_an_unknown_target_any_new_version_is_done() {
+        // Bundled-app job whose app never named its target (placeholder =
+        // the version it started on).
+        let (p, err, target) = decide_after_restart(&rec("applying", "0.46.2", false, "0.46.2"), "0.46.3", false);
+        assert_eq!(p, Phase::Done);
+        assert_eq!(err, None);
+        assert_eq!(target, "0.46.3", "the version that landed becomes the target");
+        let (p, err, _) = decide_after_restart(&rec("applying", "0.46.2", false, "0.46.2"), "0.46.2", false);
+        assert_eq!(p, Phase::Failed);
+        assert_eq!(err.as_deref(), Some("K2 came back on v0.46.2; the update did not install"));
+    }
+
+    #[test]
+    fn restarted_daemon_serves_the_persisted_job_as_done() {
+        let _home = crate::test_support::TempHome::new();
+        let _g = clear_jobs_for_test();
+        write_persisted_job(&rec("restarting", current_version(), true, "0.0.1")).expect("persist");
+
+        // A NEW daemon (empty job map) boots on the target version.
+        reconcile_persisted_job(current_version());
+
+        let body = status_json("jr");
+        assert_eq!(body["phase"], "done");
+        assert_eq!(body["target_version"], current_version());
+        assert_eq!(body["from_version"], "0.0.1");
+        assert_eq!(body["running_version"], current_version());
+        assert!(body["error"].is_null(), "no error on success: {body}");
+        // The verdict is written back, so a second boot does not re-decide.
+        assert_eq!(read_persisted_job().expect("record kept").phase, "done");
+    }
+
+    #[test]
+    fn restarted_daemon_serves_the_persisted_job_as_failed_when_still_old() {
+        let _home = crate::test_support::TempHome::new();
+        let _g = clear_jobs_for_test();
+        write_persisted_job(&rec("restarting", "99.0.0", true, current_version())).expect("persist");
+
+        reconcile_persisted_job(current_version());
+
+        let body = status_json("jr");
+        assert_eq!(body["phase"], "failed");
+        assert_eq!(
+            body["error"],
+            format!(
+                "K2 came back on v{}; the update to v99.0.0 did not install",
+                current_version()
+            )
+        );
+    }
+
+    #[test]
+    fn no_persisted_job_means_status_still_404s() {
+        let _home = crate::test_support::TempHome::new();
+        let _g = clear_jobs_for_test();
+        reconcile_persisted_job(current_version());
+        assert!(handle_status("jr").status.starts_with("404"));
+    }
+
+    #[test]
+    fn app_progress_persists_from_applying_with_the_target_the_app_names() {
+        let _home = crate::test_support::TempHome::new();
+        let _g = clear_jobs_for_test();
+        let id = create_job(current_version());
+        update_job(&id, |j| j.target_known = false); // bundled-app placeholder
+
+        // `downloading` is not persisted: the daemon is not going away yet.
+        let body = serde_json::json!({ "job_id": id, "phase": "downloading" }).to_string();
+        assert!(handle_app_update_progress(body.as_bytes()).status.starts_with("200"));
+        assert!(read_persisted_job().is_none(), "nothing persisted before applying");
+
+        let body = serde_json::json!({
+            "job_id": id,
+            "phase": "applying",
+            "target_version": "99.0.0",
+        })
+        .to_string();
+        assert!(handle_app_update_progress(body.as_bytes()).status.starts_with("200"));
+        let saved = read_persisted_job().expect("persisted at applying");
+        assert_eq!(saved.job_id, id);
+        assert_eq!(saved.phase, "applying");
+        assert_eq!(saved.target_version, "99.0.0");
+        assert!(saved.target_known, "the app named the target");
+
+        let body = serde_json::json!({ "job_id": id, "phase": "restarting" }).to_string();
+        assert!(handle_app_update_progress(body.as_bytes()).status.starts_with("200"));
+        assert_eq!(read_persisted_job().expect("kept current").phase, "restarting");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn boot_verifier_rollback_records_the_reason_on_the_persisted_job() {
+        let home = crate::test_support::TempHome::new();
+        let _guard = clear_jobs_for_test();
+        let running = home.path().join("k2-daemon");
+        let backup = home.path().join("backup");
+        std::fs::write(&running, b"NEW-BROKEN").expect("seed running");
+        std::fs::write(&backup, b"OLD-GOOD").expect("seed backup");
+        let plan = ApplyPlan {
+            job_id: "jr".into(),
+            target_version: "0.41.0".into(),
+            staged_path: home.path().join("staged"),
+            running_path: running,
+            backup_path: backup,
+        };
+        write_pending_update(&plan).expect("arm");
+        write_persisted_job(&rec("restarting", "0.41.0", true, "0.40.43")).expect("persist");
+
+        assert!(!verify_pending_update("0.40.43"));
+        assert!(!verify_pending_update("0.40.43"));
+        assert!(verify_pending_update("0.40.43"), "boot 3 rolls back");
+
+        reconcile_persisted_job("0.40.43");
+        let body = status_json("jr");
+        assert_eq!(body["phase"], "failed");
+        assert_eq!(
+            body["error"],
+            "v0.41.0 did not start after 3 tries; the previous version was put back"
+        );
     }
 }

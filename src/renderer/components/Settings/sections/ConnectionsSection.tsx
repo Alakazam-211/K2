@@ -68,7 +68,6 @@ import {
 import { isAirgap } from '@/lib/airgap'
 import { primaryScope } from '@/kessel/server-scope'
 import { onFederationPeersChanged } from '@/stores/session-events'
-import { isConnectionLevelError } from '@/lib/remote-retry'
 import { reviveRemoteSession } from '@/lib/remote-session'
 import { signOutOfHost } from '@/lib/host-pool-instance'
 import { recoveryStatusText } from '@/lib/remote-recovery'
@@ -85,6 +84,8 @@ import {
   updateForbiddenCopy,
   shouldAutoApplyAfterStage,
   shouldResolveComeback,
+  isAmbiguousApplyError,
+  pollErrorMeansRestart,
   type UpdateCheckResult,
   type UpdateStatusResult,
 } from './update-host'
@@ -1124,7 +1125,15 @@ function HostTile({
         // Only treat as "host going down for install" AFTER apply (Shape B)
         // or after staged on Shape A (app self-installs). Pre-apply blips are
         // real failures — never claim reconnecting success.
-        if (appliedSent || (sawStaged && !shouldAutoApplyAfterStage(kind))) {
+        // Shape A (0.46.3): the app posts applying/restarting and stops the
+        // daemon within milliseconds, so the poll rarely sees those phases
+        // (and Shape A never posts staged): a drop after start is the
+        // install, not a failure (pollErrorMeansRestart).
+        if (
+          appliedSent ||
+          (sawStaged && !shouldAutoApplyAfterStage(kind)) ||
+          pollErrorMeansRestart({ err: e, installKind: kind, applySent: appliedSent })
+        ) {
           return 'unreachable'
         }
         const m = errMsg(e)
@@ -1163,9 +1172,10 @@ function HostTile({
             await hostOpPost(creds, 'daemon/update/apply', 30000, { job_id: jobId })
           } catch (e) {
             const m = errMsg(e)
-            // Apply often races the host drop: connection error AFTER apply
-            // was attempted is the install/restart path, not a hard failure.
-            if (isConnectionLevelError(e) && !isForbiddenError(m) && !isAuthError(m)) {
+            // Apply often races the host drop: a connection error, gateway
+            // 502/503/504, or a retried apply that reached the NEW daemon
+            // ("not 'staged'") is the install/restart path, not a failure.
+            if (isAmbiguousApplyError(e) && !isAuthError(m)) {
               return 'unreachable'
             }
             clearIfAuthError(m)

@@ -145,6 +145,8 @@ export interface HostBootStatus {
   ready?: boolean
   /** The daemon's running version once it's back (used to refresh the tile). */
   version?: string
+  /** Per-process daemon id (0.40.48+): a new id means the daemon restarted. */
+  instanceId?: string
 }
 
 /**

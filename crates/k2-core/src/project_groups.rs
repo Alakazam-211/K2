@@ -1062,6 +1062,41 @@ pub fn list_messages_after_seq(group_id: &str, after_seq: i64, limit: Option<i64
     Ok(MessagePage { messages, truncated })
 }
 
+/// project-chat-paging-v1 (0.46.2): the page of messages with
+/// `seq < before_seq`, the NEWEST of them, returned OLDEST first (by seq),
+/// at most `limit` (default [`MESSAGES_DEFAULT_LIMIT`], max
+/// [`MESSAGES_AFTER_LIMIT`]). `truncated` = OLDER messages remain before
+/// the page. `before_seq` must be `>= 1` (seqs start at 1, so
+/// `before_seq = 1` is the empty page at the start of the chat).
+pub fn list_messages_before_seq(group_id: &str, before_seq: i64, limit: Option<i64>) -> Result<MessagePage, String> {
+    if before_seq < 1 {
+        return Err("usage: before_seq must be >= 1".to_string());
+    }
+    if let Some(l) = limit {
+        if l < 1 {
+            return Err("usage: limit must be >= 1".to_string());
+        }
+    }
+    let eff = limit.unwrap_or(MESSAGES_DEFAULT_LIMIT).min(MESSAGES_AFTER_LIMIT);
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, group_id, author, body, created_at, seq, author_kind FROM project_group_messages \
+             WHERE group_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
+        )
+        .map_err(|e| format!("prepare: {e}"))?;
+    let mut messages: Vec<ProjectGroupMessage> = stmt
+        .query_map(params![group_id, before_seq, eff + 1], row_to_message)
+        .map_err(|e| format!("query: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("row: {e}"))?;
+    let truncated = messages.len() as i64 > eff;
+    messages.truncate(eff as usize);
+    messages.reverse();
+    Ok(MessagePage { messages, truncated })
+}
+
 /// A group's dashboards, position order. V1 surfaces only the
 /// auto-created 'Main' row; everything is dashboard-id-addressed so
 /// V1.1 multi-dashboards needs no migration.
@@ -1632,6 +1667,33 @@ mod tests {
         assert!(remove_workspace_memberships_with(&conn, &wid("stranger"))
             .expect("no-op cleanup")
             .is_empty());
+    }
+
+    /// project-chat-paging-v1: `before_seq` pages back by seq, oldest first
+    /// inside a page, `truncated` while older messages remain.
+    #[test]
+    fn messages_before_seq_pages_back() {
+        let g = create_group(&gname("chat-before")).expect("create");
+        for i in 1..=7 {
+            assert_eq!(post_message(&g.id, "owner", &format!("b{i}")).expect("post").seq, i);
+        }
+        let seqs = |p: &MessagePage| p.messages.iter().map(|m| m.seq).collect::<Vec<_>>();
+        let p = list_messages_before_seq(&g.id, 8, Some(3)).expect("page 1");
+        assert_eq!((seqs(&p), p.truncated), (vec![5, 6, 7], true));
+        let p = list_messages_before_seq(&g.id, 5, Some(3)).expect("page 2");
+        assert_eq!((seqs(&p), p.truncated), (vec![2, 3, 4], true));
+        let p = list_messages_before_seq(&g.id, 2, Some(3)).expect("page 3");
+        assert_eq!((seqs(&p), p.truncated), (vec![1], false));
+        let p = list_messages_before_seq(&g.id, 1, Some(3)).expect("start");
+        assert_eq!((seqs(&p), p.truncated), (vec![], false));
+        // Past the newest seq: the newest page; default limit fits all 7.
+        let p = list_messages_before_seq(&g.id, 1_000, None).expect("default");
+        assert_eq!((seqs(&p), p.truncated), (vec![1, 2, 3, 4, 5, 6, 7], false));
+        assert_eq!(p.messages[0].body, "b1");
+        for (before, limit) in [(0, None), (-3, None), (5, Some(0)), (5, Some(-1))] {
+            let e = list_messages_before_seq(&g.id, before, limit).expect_err("bad params");
+            assert!(e.starts_with("usage: "), "{e}");
+        }
     }
 
     #[test]

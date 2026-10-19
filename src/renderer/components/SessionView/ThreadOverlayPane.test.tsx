@@ -102,6 +102,37 @@ describe('Thread overlay pane', () => {
     expect(screen.queryByTestId('overlay-load-older')).toBeNull()
   })
 
+  it('render window (0.46.2): a long Thread draws its newest 30; Earlier messages waits until memory runs out', () => {
+    const loadOlder = vi.fn(async () => {})
+    threadHook.items = Array.from({ length: 100 }, (_, i) => ({
+      collection: 'thread',
+      seq: i + 1,
+      id: `w${i}`,
+      doc: { id: `w${i}`, kind: 'text', from: 'sales', created_at: 1_700_000_000 + i, body: `message ${i}` },
+    }))
+    threadHook.hasMore = true
+    threadHook.loadOlder = loadOlder
+    renderInRoom(overlayRoom, <ThreadOverlayPane addr="sales" conversationId="c" />)
+    const rows = Array.from(document.querySelectorAll('[data-zen-message]')).map((el) => el.getAttribute('data-zen-message'))
+    expect(rows).toHaveLength(30)
+    expect(rows[0]).toBe('w70')
+    expect(rows[29]).toBe('w99')
+    // 70 older messages are still in memory: no fetch button yet.
+    expect(screen.queryByTestId('overlay-load-older')).toBeNull()
+    // Reaching the top draws from memory first, never fetches.
+    const list = overlayList()
+    const box = { scrollHeight: 800, clientHeight: 200, scrollTop: 0 }
+    stubListBox(list, box)
+    // The first scroll after the list gets a height is a resize (re-pin).
+    fireEvent.scroll(list)
+    expect(document.querySelectorAll('[data-zen-message]').length).toBe(30)
+    box.scrollTop = 0
+    fireEvent.scroll(list)
+    expect(loadOlder).not.toHaveBeenCalled()
+    expect(document.querySelectorAll('[data-zen-message]').length).toBe(50)
+    expect(document.querySelector('[data-zen-message]')?.getAttribute('data-zen-message')).toBe('w50')
+  })
+
   it('empty list shows the Zen Thread widget\'s centered line and names the agent', () => {
     renderInRoom(
       overlayRoom,

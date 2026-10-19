@@ -209,7 +209,7 @@ function Measured({ children }: { children: ReactNode }): React.JSX.Element {
   )
 }
 
-interface Sample {
+type Sample = {
   rows: number
   md: number
   ms: number

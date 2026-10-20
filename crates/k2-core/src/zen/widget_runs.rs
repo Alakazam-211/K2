@@ -112,6 +112,54 @@ pub fn run_text(r: &J) -> String {
     out
 }
 
+/// A placed widget's runtime errors on its saved version fail `k2 zen
+/// validate` only while they are this fresh (0.46.3): older ones, and any
+/// on a widget no Garden places, are warnings (validate reflects what runs
+/// now, not a log from days ago). `k2 zen widget errors <name> --clear`
+/// drops the ones that no longer count.
+pub const RUNTIME_FRESH_SECS: i64 = 24 * 60 * 60;
+
+/// Why a runtime error on the saved version doesn't fail validate.
+pub const STALE_UNPLACED: &str = "unplaced";
+pub const STALE_OLD: &str = "old";
+
+/// What validate makes of one widget version's runtime log (0.46.3).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RuntimeVerdict {
+    /// A frame said `ready` for this version.
+    pub ran: bool,
+    /// Where it is placed: `{garden, gardenName, placement}`.
+    pub placements: Vec<J>,
+    /// Errors that fail validate: placed, this version, fresh.
+    pub failing: Vec<J>,
+    /// Errors on this version that don't count (each with `staleReason`).
+    pub stale: Vec<J>,
+}
+
+impl RuntimeVerdict {
+    pub fn placed(&self) -> bool {
+        !self.placements.is_empty()
+    }
+}
+
+/// Seconds since a run row's `at`; `None` when it doesn't parse (such a
+/// row counts as fresh: never hide an error on a guess).
+fn row_age_secs(r: &J, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
+    let at = chrono::DateTime::parse_from_rfc3339(r["at"].as_str()?).ok()?;
+    Some((now - at.with_timezone(&chrono::Utc)).num_seconds())
+}
+
+/// The reason an error row of the saved version doesn't count, if any.
+fn stale_reason(r: &J, placed: bool, now: chrono::DateTime<chrono::Utc>) -> Option<&'static str> {
+    if !placed {
+        Some(STALE_UNPLACED)
+    } else if row_age_secs(r, now).is_some_and(|a| a > RUNTIME_FRESH_SECS) {
+        Some(STALE_OLD)
+    } else {
+        None
+    }
+}
+
 /// What one widget version (hash) has done at runtime.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunSummary {
@@ -328,17 +376,26 @@ impl ZenFiles {
             return Err(ZenError::NotFound(format!("{} has no folder", widget_label(&name))));
         }
         let current = self.current_hash(&name);
+        let placed = self.widget_is_placed(&name);
+        let now = chrono::Utc::now();
         let runs = self.read_runs(&name);
         let last = runs.last().and_then(|r| r["seq"].as_u64()).unwrap_or(0);
         let errors: Vec<J> = runs
             .into_iter()
             .filter(|r| r["event"] == "error" && r["seq"].as_u64().unwrap_or(0) > since.unwrap_or(0))
             .map(|mut r| {
-                r["current"] = J::Bool(current.as_deref().is_some_and(|h| r["hash"] == h));
+                let cur = current.as_deref().is_some_and(|h| r["hash"] == h);
+                r["current"] = J::Bool(cur);
+                // 0.46.3: does validate count it (placed, this version, fresh)?
+                let why = if cur { stale_reason(&r, placed, now) } else { Some("older-version") };
+                r["counted"] = J::Bool(why.is_none());
+                if let Some(w) = why {
+                    r["staleReason"] = J::String(w.into());
+                }
                 r
             })
             .collect();
-        Ok(json!({ "ok": true, "widget": name, "hash": current, "last": last, "errors": errors }))
+        Ok(json!({ "ok": true, "widget": name, "hash": current, "placed": placed, "last": last, "errors": errors }))
     }
 
     /// The bundle hash of the folder as it is on disk, when it bundles clean.
@@ -361,6 +418,90 @@ impl ZenFiles {
         let n = s.last.len();
         s.last.drain(..n.saturating_sub(3));
         s
+    }
+
+    /// Where a user widget is placed: `{garden, gardenName, placement}`.
+    pub fn widget_placements(&self, name: &str) -> Vec<J> {
+        self.custom_placements()
+            .into_iter()
+            .filter(|p| p.widget == name)
+            .map(|p| json!({ "garden": p.garden, "gardenName": p.garden_name, "placement": p.placement }))
+            .collect()
+    }
+
+    /// What validate makes of version `hash`'s runtime log now (0.46.3):
+    /// errors fail only when the widget is placed and they are fresh
+    /// ([`RUNTIME_FRESH_SECS`]); the rest are stale (warnings).
+    pub fn widget_runtime(&self, name: &str, hash: &str) -> RuntimeVerdict {
+        self.widget_runtime_at(name, hash, chrono::Utc::now())
+    }
+
+    /// [`Self::widget_runtime`] as of `now` (tests).
+    pub fn widget_runtime_at(&self, name: &str, hash: &str, now: chrono::DateTime<chrono::Utc>) -> RuntimeVerdict {
+        let mut v = RuntimeVerdict { placements: self.widget_placements(name), ..RuntimeVerdict::default() };
+        let placed = v.placed();
+        for mut r in self.read_runs(name).into_iter().filter(|r| r["hash"] == hash) {
+            if r["event"] == "ready" {
+                v.ran = true;
+            } else if r["event"] == "error" {
+                match stale_reason(&r, placed, now) {
+                    Some(why) => {
+                        r["staleReason"] = J::String(why.into());
+                        v.stale.push(r);
+                    }
+                    None => v.failing.push(r),
+                }
+            }
+        }
+        v
+    }
+
+    /// POST `/cli/zen/widget/errors/clear {widget, all?}` (0.46.3): drop
+    /// the runtime errors validate no longer counts (an older version's,
+    /// a widget no Garden places, older than [`RUNTIME_FRESH_SECS`]), or
+    /// every error with `all`. `ready` rows stay (validate's pending rule
+    /// reads them). Writes only the widget's `runtime.jsonl`.
+    pub fn clear_widget_errors(&self, widget: &str, all: bool) -> Result<J, ZenError> {
+        self.clear_widget_errors_at(widget, all, chrono::Utc::now())
+    }
+
+    /// [`Self::clear_widget_errors`] as of `now` (tests).
+    pub fn clear_widget_errors_at(&self, widget: &str, all: bool, now: chrono::DateTime<chrono::Utc>) -> Result<J, ZenError> {
+        self.require_set_up()?;
+        let name = self.run_widget(widget)?;
+        if !self.widget_dir(&name).is_dir() {
+            return Err(ZenError::NotFound(format!("{} has no folder", widget_label(&name))));
+        }
+        let current = self.current_hash(&name);
+        let placed = self.widget_is_placed(&name);
+        let _log = RUN_LOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let runs = self.read_runs(&name);
+        let before = runs.len();
+        let last_seq = runs.last().and_then(|r| r["seq"].as_u64()).unwrap_or(0);
+        let mut keep: Vec<J> = runs
+            .into_iter()
+            .filter(|r| {
+                if r["event"] != "error" {
+                    return true;
+                }
+                if all {
+                    return false;
+                }
+                // Kept: what validate still counts.
+                current.as_deref().is_some_and(|h| r["hash"] == h) && stale_reason(r, placed, now).is_none()
+            })
+            .collect();
+        let cleared = before - keep.len();
+        if cleared > 0 {
+            // A marker keeps the sequence going (`--since` never sees a
+            // number twice); validate and `widget errors` skip it.
+            keep.push(json!({ "seq": last_seq, "at": now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true), "event": "cleared", "count": cleared }));
+            let path = self.runs_path(&name);
+            let text: String = keep.iter().map(|r| r.to_string() + "\n").collect();
+            crate::fs_atomic::atomic_write_str(&path, &text).map_err(|e| io(e, &path))?;
+        }
+        let left = keep.iter().filter(|r| r["event"] == "error").count();
+        Ok(json!({ "ok": true, "widget": name, "cleared": cleared, "left": left, "all": all }))
     }
 
     /// `k2 zen validate --widget <name> --types[=all]`: the optional type

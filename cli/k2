@@ -29940,28 +29940,30 @@ cmd_schema() {
     },
     {
       "name": "zen widget errors",
-      "usage": "k2 zen widget errors <name> [--since <seq>] [--follow] [--json]",
-      "description": "Runtime errors your widget hit in a Zen window (uncaught errors and rejections, and bridge refusals such as not_bound), newest last, each with a suggestion and the version (bundle hash) that hit it. A refused sources.* call names its source address when a placement's config (or the manifest) names it; any other address is withheld. --follow keeps printing new ones.",
+      "usage": "k2 zen widget errors <name> [--since <seq>] [--follow] [--json] | k2 zen widget errors <name> --clear [--all] [--json]",
+      "description": "Runtime errors your widget hit in a Zen window (uncaught errors and rejections, and bridge refusals such as not_bound), newest last, each with a suggestion and the version (bundle hash) that hit it. A refused sources.* call names its source address when a placement's config (or the manifest) names it; any other address is withheld. --follow keeps printing new ones. Each error says whether validate counts it (0.46.3): only a placed widget's errors on its saved version from the last 24 h count; the rest are marked old. --clear drops the ones that no longer count (an older version's, an unplaced widget's, older than 24 h), --clear --all every error; the person or any local agent, audited. Exit 0 none counted, 1 some (or the widget is unknown).",
       "args": [{"name": "name", "required": true}],
       "flags": [
         {"name": "--since", "arg": "seq", "description": "Only errors after this sequence number."},
         {"name": "--follow", "arg": null, "description": "Keep watching (Ctrl+C stops)."},
-        {"name": "--json", "arg": null, "description": "{widget, hash, errors: [{seq, at, hash, current, message, stack, kind, class, code, line, address?, addressWithheld?, redacted?, suggestion}], last}."}
+        {"name": "--clear", "arg": null, "description": "Drop the logged errors validate no longer counts (ready marks and the sequence stay)."},
+        {"name": "--all", "arg": null, "description": "--clear: drop every logged error, counted or not."},
+        {"name": "--json", "arg": null, "description": "{widget, hash, placed, errors: [{seq, at, hash, current, counted, staleReason?, message, stack, kind, class, code, line, address?, addressWithheld?, redacted?, suggestion}], last}; --clear: {widget, cleared, left, all}."}
       ]
     },
     {
       "name": "zen validate",
       "usage": "k2 zen validate [--garden <name|id> [--from <file>|-] | --theme <name> | --widget <name> [--sign] [--types[=all]] | --dir <folder> [--as <name>] | --file <file>] [--strict] [--json]",
-      "description": "Validate Zen files without changing what Zen shows: widget scripts are parsed (oxc) and linted (catalog, leaks); prints file:line:col: message per finding with a suggestion line. --dir checks a STAGED widget folder anywhere on disk (code as text, images/fonts too) exactly like a widget folder, and --garden <g> --from <file> a staged Garden page; neither writes anything. A check never signs (0.46.1): --widget --sign signs a clean version as the caller. Exit 0 ok (and 'pending': a placed widget whose saved version has not run in a Zen window yet), 1 errors (including runtime errors the saved widget version hit), 2 usage or, with --strict, pending, 3 Zen not set up / Garden locked.",
+      "description": "Validate Zen files without changing what Zen shows: widget scripts are parsed (oxc) and linted (catalog, leaks); prints file:line:col: message per finding with a suggestion line. --dir checks a STAGED widget folder anywhere on disk (code as text, images/fonts too) exactly like a widget folder, and --garden <g> --from <file> a staged Garden page; neither writes anything. A check never signs (0.46.1): --widget --sign signs a clean version as the caller. Runtime errors (0.46.3) fail only for a widget a Garden places, on its saved version, from the last 24 h; an unplaced widget's or older ones are warnings (k2 zen widget errors <name> --clear drops them). With no target it reports each widget: where it is placed and its runtime state. Exit 0 ok (and 'pending': a placed widget whose saved version has not run in a Zen window yet), 1 errors (including a placed widget's recent runtime errors), 2 usage or, with --strict, pending or old runtime errors, 3 Zen not set up / Garden locked.",
       "args": [],
       "flags": [
         {"name": "--dir", "arg": "folder", "description": "A staged widget folder outside ~/.k2: checked by the daemon, nothing written, Zen needn't be set up. Never pending."},
         {"name": "--as", "arg": "name", "description": "--dir: the widget name to check as (default: manifest.json's id, else the folder name)."},
         {"name": "--from", "arg": "file|-", "description": "--garden: a staged page checked against that Garden; never written."},
         {"name": "--sign", "arg": null, "description": "--widget: when clean, sign this version as you (or this agent) for its Garden data calls. --no-sign is accepted and does nothing."},
-        {"name": "--strict", "arg": null, "description": "Exit 2 while a placed widget's saved version hasn't run yet (pending); without it pending exits 0."},
+        {"name": "--strict", "arg": null, "description": "Exit 2 while a placed widget's saved version hasn't run yet (pending), or while old runtime errors are logged (not confirmed clean); without it both exit 0."},
         {"name": "--types", "arg": null, "description": "--widget only: also type-check its scripts against k2.d.ts with tsc-rs (K2_TSC_RS or tsc-rs on PATH; K2_TS_CHECKER=tsc7 uses tsgo). Warnings only; lines without k2. are counted, --types=all lists them."},
-        {"name": "--json", "arg": null, "description": "{ok, status, errors, warnings, files, runtime, types, signed?}; --dir adds {widget, staged, manifest, bundleHash}."}
+        {"name": "--json", "arg": null, "description": "{ok, status, errors, warnings, files, runtime: {hash, placed, placements, ran, errorsSinceSave, staleErrors, note}, types, signed?}; no target adds {widgets: [{widget, placements, placed, ran, failing, stale, status}], staleRuntime}; --dir adds {widget, staged, manifest, bundleHash}."}
       ]
     },
     {
@@ -32686,8 +32688,11 @@ THE WIDGET DEV LOOP (keep your widget outside ~/.k2)
                                              --prune drops files it lacks)
   k2 zen validate --garden <id> --from page.toml   a staged page, unwritten
   k2 zen widget errors board                 runtime errors and refusals
+  k2 zen widget errors board --clear         drop the ones validate ignores
   validate never signs (--widget --sign does) and "pending" (not run in a
-  Zen window yet) exits 0; --strict keeps exit 2 for a loop. Without the
+  Zen window yet) exits 0; --strict keeps exit 2 for a loop. Runtime
+  errors fail validate only for a placed widget's saved version in the
+  last 24 h; older ones, or an unplaced widget's, are warnings. Without the
   switch, put --dir proposes each changed code file; preview needs it.
 
 THE WIDGET SDK (0.46.1, catalog 11)
@@ -55572,7 +55577,11 @@ COMMANDS
   validate  Check what is on disk now. Prints file:line:col: message for
             each error and exits 1; exits 0 when every file is clean (a
             placed widget not yet run in a Zen window is "pending": exit 0,
-            or 2 with --strict). --dir checks a staged widget folder
+            or 2 with --strict). Runtime errors fail only for a widget a
+            Garden places, on its saved version, from the last 24 h; the
+            rest are warnings (k2 zen widget errors <name> --clear drops
+            them). With no target it lists each widget, where it is placed
+            and its runtime state. --dir checks a staged widget folder
             anywhere on disk and --garden <g> --from <file> a staged page:
             nothing is written. A check never signs; --widget --sign does
             (--no-sign is still accepted and does nothing).
@@ -57052,6 +57061,11 @@ if err is not None:
     else:
         print("Error: %s" % (d.get("message") or err), file=sys.stderr)
     sys.exit(1)
+def stale_runtime(d):
+    """Old runtime errors validate didn\x27t count (0.46.3): an unplaced
+    widget\x27s, or older than 24 h."""
+    rt = d.get("runtime") if isinstance(d.get("runtime"), dict) else {}
+    return int(d.get("staleRuntime") or 0) + int(rt.get("staleErrors") or 0)
 if verb == "validate" and isinstance(d.get("locked"), dict):
     # §6: validating a locked Garden exits 3 with the message, so an agent
     # sees the lock even after a raw file edit K2 put back.
@@ -57066,6 +57080,10 @@ if as_json:
     # Loopable (decision-k2-runtime-v1 stage 0 (e)): "pending" = saved, not
     # run yet. 0.46.1: that is not a failure (exit 0); --strict keeps 2.
     if verb == "validate" and d.get("status") == "pending" and os.environ.get("ZEN_STRICT") == "true":
+        sys.exit(2)
+    # 0.46.3: old runtime errors are warnings; --strict treats them like
+    # pending (not confirmed clean).
+    if verb == "validate" and os.environ.get("ZEN_STRICT") == "true" and stale_runtime(d):
         sys.exit(2)
     sys.exit(0)
 
@@ -57151,6 +57169,16 @@ if verb in ("validate", "reload"):
     if verb == "validate":
         files = d.get("files") or []
         rt = d.get("runtime") if isinstance(d.get("runtime"), dict) else None
+        # 0.46.3: with no target, one line per widget: where it is placed
+        # and its saved version\x27s runtime state.
+        for w in d.get("widgets") or []:
+            where = ", ".join("%s/%s" % (p.get("gardenName") or p.get("garden"), p.get("placement")) for p in (w.get("placements") or [])) or "not placed"
+            extra = ""
+            if w.get("stale"):
+                extra = "; %s old runtime error(s), not counted" % w["stale"]
+            print("widget %s: %s (%s)%s" % (w.get("widget"), w.get("status"), where, extra))
+        if rt and rt.get("placements"):
+            print("placed: %s" % ", ".join("%s/%s" % (p.get("gardenName") or p.get("garden"), p.get("placement")) for p in rt["placements"]))
         if d.get("status") == "pending":
             print("pending: %s parses; %s" % (", ".join(files), rt.get("note") if rt else "it hasn\x27t run yet"))
             if os.environ.get("ZEN_STRICT") == "true":
@@ -57160,6 +57188,11 @@ if verb in ("validate", "reload"):
         print("ok: %s" % (", ".join(files) if files else "no files"))
         if rt and rt.get("note"):
             print("runtime: %s" % rt["note"])
+        if stale_runtime(d):
+            if os.environ.get("ZEN_STRICT") == "true":
+                print("--strict: old runtime errors are logged; exit 2 until they are cleared (k2 zen widget errors <name> --clear)", file=sys.stderr)
+                sys.exit(2)
+            print("(exit 0: old runtime errors are warnings; --strict exits 2 while they are logged)")
 elif verb == "reset":
     print("reset %s to %s" % (d.get("file"), d.get("restored")))
     if d.get("snapshot"):
@@ -57319,18 +57352,23 @@ elif verb == "widget-list":
 # runtime errors a widget hit in Zen windows (decision-k2-runtime-v1 stage 0
 # (d)). Each has a suggestion; `current` marks errors of the version on disk.
 cmd_zen_widget_errors() {
-    local name="" since="" follow=false as_json=false
+    local name="" since="" follow=false as_json=false clear=false all=false
     while [ $# -gt 0 ]; do
         case "$1" in
             --since) since="${2-}"; [ $# -ge 2 ] && shift 2 || shift ;;
             --since=*) since="${1#*=}"; shift ;;
             --follow|-f) follow=true; shift ;;
+            --clear) clear=true; shift ;;
+            --all) all=true; shift ;;
             --json) as_json=true; shift ;;
             -h|--help)
                 echo "Usage: k2 zen widget errors <name> [--since <seq>] [--follow] [--json]"
+                echo "       k2 zen widget errors <name> --clear [--all] [--json]"
                 echo "Runtime errors your widget hit in a Zen window, oldest first, each with a suggestion."
                 echo "--since <seq> shows only newer ones; --follow keeps printing new ones (Ctrl+C stops)."
-                echo "Exit 0 none for the version on disk now, 1 some (or the widget is unknown)."
+                echo "Validate counts only a placed widget's errors on its saved version from the last 24 h;"
+                echo "the rest are marked old. --clear drops those (--all: every error). Ready marks stay."
+                echo "Exit 0 none counted, 1 some (or the widget is unknown)."
                 exit 0 ;;
             -*) echo "Error: unexpected '$1' (k2 zen widget errors --help)" >&2; exit 2 ;;
             *) [ -z "$name" ] && name="$1" || { echo "Error: one widget name" >&2; exit 2; }; shift ;;
@@ -57338,7 +57376,35 @@ cmd_zen_widget_errors() {
     done
     [ -n "$name" ] || { echo "Error: k2 zen widget errors needs a widget name" >&2; exit 2; }
     case "$since" in ''|*[!0-9]*) [ -z "$since" ] || { echo "Error: --since is a sequence number" >&2; exit 2; } ;; esac
+    if [ "$all" = true ] && [ "$clear" != true ]; then
+        echo "Error: --all goes with --clear" >&2; exit 2
+    fi
     local raw code
+    if [ "$clear" = true ]; then
+        { [ -z "$since" ] && [ "$follow" != true ]; } || { echo "Error: --clear takes no --since or --follow" >&2; exit 2; }
+        local body
+        body=$(ZW="$name" ZA="$all" python3 -c 'import json, os; print(json.dumps({"widget": os.environ["ZW"], "all": os.environ["ZA"] == "true"}))')
+        raw=$(_zen_session_post "/cli/zen/widget/errors/clear" "$body") || raw=""
+        ZE_RAW="$raw" ZE_JSON="$as_json" python3 -c '
+import json, os, sys
+raw = os.environ.get("ZE_RAW") or ""
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: no usable answer from the K2 daemon on this computer", file=sys.stderr)
+    sys.exit(1)
+if not isinstance(d, dict) or d.get("error") is not None:
+    print("Error: %s" % ((d.get("message") if isinstance(d, dict) else None) or raw[:200]), file=sys.stderr)
+    sys.exit(1)
+if os.environ.get("ZE_JSON") == "true":
+    print(json.dumps(d, indent=2))
+    sys.exit(0)
+print("cleared %s runtime error(s) from widgets/%s%s; %s left" % (d.get("cleared"), d.get("widget"), " (all)" if d.get("all") else "", d.get("left")))
+if d.get("left"):
+    print("the ones left still count: a placed widget, this version, the last 24 h (k2 zen widget errors %s)" % d.get("widget"))
+'
+        exit $?
+    fi
     while :; do
         local -a q=("widget=$(urlencode "$name")")
         [ -n "$since" ] && q+=("since=$since")
@@ -57376,8 +57442,9 @@ else:
         if e.get("redacted"):
             t += " [text withheld: this widget reads data sources]"
         return t
+    OLD = {"older-version": " (older version)", "unplaced": " (not placed: not counted)", "old": " (over 24 h old: not counted)"}
     for e in errs:
-        print("#%s %s%s %s" % (e.get("seq"), e.get("at"), "" if e.get("current") else " (older version)", text(e)))
+        print("#%s %s%s %s" % (e.get("seq"), e.get("at"), OLD.get(e.get("staleReason"), "" if e.get("current") else " (older version)"), text(e)))
         for line in (e.get("stack") or "").splitlines()[:6]:
             print("    %s" % line)
         if e.get("suggestion"):
@@ -57386,7 +57453,10 @@ else:
         # 0.46.1: say what was checked ("since that one" named no seq).
         since = os.environ.get("ZE_SINCE") or ""
         print("no runtime errors after #%s" % since if since else "no runtime errors logged")
-sys.exit(1 if any(e.get("current") for e in errs) else 0)
+    if any(not e.get("counted", e.get("current")) for e in errs):
+        print("old ones aren\x27t counted by validate; drop them with k2 zen widget errors %s --clear" % d.get("widget"))
+# 0.46.3: exit 1 only for errors validate counts.
+sys.exit(1 if any(e.get("counted", e.get("current")) for e in errs) else 0)
 ' || code=$?
         [ "$code" -eq 3 ] && exit 1
         if [ "$follow" != true ]; then exit "$code"; fi
@@ -58381,13 +58451,16 @@ Usage: k2 zen validate [--json] [--strict]
 Check Zen files without changing what Zen shows. Prints file:line:col:
 message for each error (with a suggestion line) and warnings.
 
-  (no target)            every file in ~/.k2/zen.
+  (no target)            every file in ~/.k2/zen, and one line per widget:
+                         where it is placed and its runtime state.
   --garden <g>           one Garden page as it is on disk.
   --garden <g> --from F  a STAGED Garden page (a file anywhere, - for stdin)
                          checked against that Garden. Nothing is written.
   --widget <name>        a widget folder as it is on disk: manifest, folder
                          rules, bundle, scripts (oxc parse + catalog lints)
-                         and the runtime errors its saved version hit.
+                         and the runtime errors its saved version hit:
+                         errors only when a Garden places it and they are
+                         from the last 24 h; otherwise warnings.
   --dir <folder>         a STAGED widget folder anywhere on disk, checked
                          exactly like a widget folder. Nothing is written and
                          Zen needn't be set up. --as names it (default:
@@ -58399,17 +58472,20 @@ message for each error (with a suggestion line) and warnings.
                          accepted and does nothing. k2 zen widget sign <name>
                          signs without checking.
   --strict               exit 2 while a placed widget's saved version hasn't
-                         run in a Zen window yet ("pending"). Without it,
-                         pending exits 0 with a note.
+                         run in a Zen window yet ("pending"), or while old
+                         runtime errors are logged (not confirmed clean).
+                         Without it, both exit 0 with a note.
 
 The dev loop for a widget kept outside ~/.k2:
   k2 zen validate --dir ./board              check (writes nothing)
   k2 zen widget preview --dir ./board        try it on K2's preview Garden
   k2 zen widget put board --dir ./board      write it (or propose it)
   k2 zen widget errors board                 its runtime errors in Zen
+  k2 zen widget errors board --clear         drop old ones validate ignores
 
 Exit: 0 clean (or pending without --strict) · 1 errors · 2 usage, or pending
-with --strict · 3 Zen isn't set up, or the Garden is locked.
+or old runtime errors with --strict · 3 Zen isn't set up, or the Garden is
+locked.
 
 New to Gardens? k2 zen guide.
   k2 zen guide [<topic>] [--json]    short pages; no daemon needed

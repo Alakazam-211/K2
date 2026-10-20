@@ -87,6 +87,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/theme/set",
     "/cli/zen/widget/check",
     "/cli/zen/widget/claim",
+    "/cli/zen/widget/errors/clear",
     "/cli/zen/widget/folder/check",
     "/cli/zen/widget/folder/put",
     "/cli/zen/widget/new",
@@ -632,6 +633,30 @@ static RUN_ERRORS: Mutex<Option<HashMap<String, Vec<std::time::Instant>>>> = Mut
 
 /// POST `/cli/zen/widget/run` (the renderer, decision-k2-runtime-v1 stage 0
 /// (d)): a frame's `ready` or uncaught error, for the bundle hash it ran.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClearErrorsBody {
+    widget: String,
+    #[serde(default)]
+    all: bool,
+}
+
+/// POST `widget/errors/clear {widget, all?}` (0.46.3): drop the runtime
+/// errors validate no longer counts (or every one with `all`). The person
+/// or any local agent (it only trims the widget's own runtime log); every
+/// clear is audited.
+fn handle_widget_errors_clear(body: &[u8], caller: &Caller, ingress: &str) -> Result<J, ZenError> {
+    let b: ClearErrorsBody = parse_body(body, "widget/errors/clear takes {widget, all?}")?;
+    let v = files().clear_widget_errors(&b.widget, b.all)?;
+    audit(
+        "zen.widget.errors_cleared",
+        caller,
+        format!("widgets/{}: cleared {} runtime error(s){}", v["widget"].as_str().unwrap_or(&b.widget), v["cleared"], if b.all { " (all)" } else { "" }),
+        ingress,
+    );
+    Ok(v)
+}
+
 fn handle_widget_run(body: &[u8]) -> Result<J, ZenError> {
     let b: RunBody = parse_body(body, "widget/run takes {widget, hash, event, message?, stack?, kind?, class?, code?, line?, address?}")?;
     if b.event == "error" {
@@ -849,7 +874,7 @@ pub(crate) fn with_made_by(v: &mut J) -> Result<(), ZenError> {
 /// Passport-admitted widget writes (contract-garden-data-v1 §4.3): an
 /// agent or K2 terminal may make a widget folder and sign one. Never
 /// lock-checked: a widget folder isn't a Garden.
-pub const AGENT_WIDGET_WRITES: &[&str] = &["/cli/zen/widget/new", "/cli/zen/widget/sign"];
+pub const AGENT_WIDGET_WRITES: &[&str] = &["/cli/zen/widget/errors/clear", "/cli/zen/widget/new", "/cli/zen/widget/sign"];
 
 const CLAIM_OWNER_ONLY: &str = "Only you can claim a widget (It's mine), in Settings \u{2192} Gardens \u{2192} Local Data or from a terminal outside K2. Agents and K2 terminals can't.";
 
@@ -1286,6 +1311,7 @@ pub fn handle(
         }
         "/cli/zen/widget/new" => handle_widget_new(body, caller, ingress),
         "/cli/zen/widget/run" => handle_widget_run(body),
+        "/cli/zen/widget/errors/clear" => handle_widget_errors_clear(body, caller, ingress),
         "/cli/zen/widget/errors" => match param(params, "widget") {
             None => Err(ZenError::BadRequest("widget/errors needs widget=<name>".into())),
             Some(w) => {

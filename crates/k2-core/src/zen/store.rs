@@ -1731,11 +1731,13 @@ impl ZenFiles {
             warnings.extend(c.warnings);
             checked.push(f.label());
         }
+        let mut report = None;
         if target.is_none() {
             let (e, w, labels) = self.validate_all_widgets();
             errors.extend(e);
             warnings.extend(w);
             checked.extend(labels);
+            report = Some(self.widgets_runtime_report());
         }
         let mut out = json!({
             "ok": errors.is_empty(),
@@ -1743,6 +1745,11 @@ impl ZenFiles {
             "warnings": warnings,
             "files": checked,
         });
+        // 0.46.3: per widget, where it is placed and its runtime state.
+        if let Some(rows) = report {
+            out["staleRuntime"] = json!(rows.iter().filter_map(|r| r["stale"].as_u64()).sum::<u64>());
+            out["widgets"] = J::Array(rows);
+        }
         // §6: an agent checking a locked Garden learns it is locked (the
         // CLI exits 3), even after a raw file edit that was put back.
         if let Some(ZenFile::Garden(id)) = target {

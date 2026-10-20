@@ -655,7 +655,10 @@ document.querySelector('#grip').addEventListener('mousedown', (e) => {\n\
 3. `k2 zen validate --widget <name>` and `k2 zen validate --garden <id>` before you say\n\
    it's done. A folder with errors keeps serving its last good version. A plain\n\
    validate never signs; \"pending\" (placed, not run in a Zen window yet) exits 0\n\
-   (`--strict` exits 2).\n\
+   (`--strict` exits 2). Runtime errors fail validate only for a placed widget's saved\n\
+   version from the last 24 h; an unplaced widget's or older ones are warnings, and\n\
+   `k2 zen widget errors <name> --clear` drops them once fixed (`--strict` exits 2\n\
+   while they are logged). A plain `k2 zen validate` lists each widget and where it is placed.\n\
 4. Tell the human it's ready: it talks to their agents as soon as it's placed.\n\
 \n\
 **Keep the widget outside `~/.k2` (the dev loop).** Stage the folder in your\n\

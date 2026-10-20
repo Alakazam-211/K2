@@ -584,10 +584,9 @@ pub fn validate_step(verb: &str, args: &Value) -> Result<Class, (&'static str, S
                 return Err(bad("name at least one key=value".into()));
             }
             only_keys(a, POLICY_KEYS).map_err(bad)?;
-            if a.get("network").and_then(Value::as_str) == Some("none") {
-                use super::proto::refusal::{NETWORK_NONE_MESSAGE, NETWORK_NONE_NOT_ENFORCED};
-                return Err((NETWORK_NONE_NOT_ENFORCED, NETWORK_NONE_MESSAGE.to_string()));
-            }
+            // `network = "none"` passes here: a walled node (0.46.3+)
+            // enforces it, and an older node's executor refuses it itself
+            // (`network_none_not_enforced_yet`), so a mixed fleet stays honest.
         }
         "policy.narrow" => {
             only_keys(a, &["cpu_millis", "mem_bytes", "max_parallel"]).map_err(bad)?;
@@ -625,6 +624,17 @@ pub fn validate_step(verb: &str, args: &Value) -> Result<Class, (&'static str, S
                 return Err(bad("unit is k2-node or k2-node-packages".into()));
             }
         }
+        "wall.enable" => only_keys(a, &[]).map_err(bad)?,
+        "homes.private" => {
+            // Absent = every open home the node reports; else named ones.
+            only_keys(a, &["homes"]).map_err(bad)?;
+            if let Some(h) = a.get("homes") {
+                let list = h.as_array().ok_or_else(|| bad("homes is a list of paths".into()))?;
+                if list.is_empty() || !list.iter().all(|p| p.as_str().is_some_and(|s| s.starts_with('/'))) {
+                    return Err(bad("homes is a non-empty list of absolute paths".into()));
+                }
+            }
+        }
         _ => {}
     }
     Ok(class)
@@ -657,6 +667,16 @@ pub fn summarize(node: &str, verb: &str, args: &Value) -> String {
         "gc" => format!("clean old job folders on {node}{}", a.get("older_days").map(|d| format!(" (older than {d} days)")).unwrap_or_default()),
         "jobs.kill" => format!("kill job {} on {node}", s("job_id")),
         "unit.restart" => format!("restart {} on {node} (as root)", s("unit")),
+        "wall.enable" => format!(
+            "turn on the job wall on {node} (as root): create the k2job user, let it into the node home, run jobs as k2job; takes effect when k2-node restarts"
+        ),
+        "homes.private" => match a.get("homes").and_then(Value::as_array) {
+            Some(h) => format!(
+                "make home folders on {node} private (chmod o-rwx, as root): {}",
+                h.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")
+            ),
+            None => format!("make every home folder on {node} that others can read private (chmod o-rwx, as root)"),
+        },
         "power.set" if a.contains_key("preset") => format!("set {node} to the {} power preset (never sleep, power back on after a cut)", s("preset")),
         "power.set" => format!("change power settings on {node}: {}", arg_list(a)),
         "power.reboot" => format!("reboot {node}{}", a.get("in_secs").and_then(Value::as_i64).map(|n| format!(" in {n}s")).unwrap_or_default()),
@@ -1096,10 +1116,19 @@ mod tests {
         assert_eq!(validate_step("unit.restart", &json!({"unit": "k2-node"})).unwrap(), Class::Privileged);
         assert_eq!(validate_step("policy.set", &json!({"mem_cap_gb": 10})).unwrap(), Class::Privileged, "a proposed policy.set carries the owner signature");
         assert_eq!(validate_step("gc", &json!({"older_days": 3})).unwrap(), Class::Operate);
-        let (code, hint) = validate_step("policy.set", &json!({"network": "none", "mem_cap_gb": 4})).unwrap_err();
-        assert_eq!(code, "network_none_not_enforced_yet", "network = none isn't enforced yet");
-        assert!(hint.contains("0.46.3"), "{hint}");
+        // A walled node enforces network = none; an older one refuses it
+        // itself, so the controller lets the step through.
+        assert_eq!(validate_step("policy.set", &json!({"network": "none", "mem_cap_gb": 4})).unwrap(), Class::Privileged);
         assert_eq!(validate_step("policy.set", &json!({"network": "full"})).unwrap(), Class::Privileged);
+        assert_eq!(validate_step("homes.private", &json!({})).unwrap(), Class::Privileged, "root on people's files: always the owner");
+        assert_eq!(validate_step("homes.private", &json!({"homes": ["/Users/rosson"]})).unwrap(), Class::Privileged);
+        for bad in [json!({"homes": []}), json!({"homes": ["rel"]}), json!({"homes": "/Users/x"}), json!({"evil": 1})] {
+            assert_eq!(validate_step("homes.private", &bad).unwrap_err().0, codes::BAD_ARGS, "{bad}");
+        }
+        assert_eq!(validate_step("wall.enable", &json!({})).unwrap(), Class::Privileged);
+        assert_eq!(validate_step("wall.enable", &json!({"user": "root"})).unwrap_err().0, codes::BAD_ARGS, "the job user isn't the caller's to pick");
+        assert!(summarize("k2n2-m1", "wall.enable", &json!({})).contains("k2job"));
+        assert!(summarize("k2n2-m1", "homes.private", &json!({})).contains("private"));
         assert_eq!(validate_step("control.pause", &json!({})).unwrap(), Class::Operate);
         for v in ["sudo", "script", "power.set", "pkg.install"] {
             assert_eq!(validate_step(v, &json!({})).unwrap_err().0, codes::VERB_NOT_ALLOWED, "{v} isn't in the node's v1 catalog");

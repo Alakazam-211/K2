@@ -445,6 +445,14 @@ pub struct Plan {
 /// `Plan::stall_secs`.
 pub const FEATURE_STALL: &str = "stall";
 
+/// Offer feature: jobs run behind the job wall (Linux: the `k2job` user in
+/// a sandboxed systemd unit; macOS: a Seatbelt profile). A job can't read
+/// the node's key or state, or other people's home folders (0.46.3).
+pub const FEATURE_JOB_WALL: &str = "job-wall";
+/// Offer feature: this node enforces `network = "none"` (no job may open a
+/// network connection beyond loopback), so the owner may set it.
+pub const FEATURE_NETWORK_NONE: &str = "network-none";
+
 impl Plan {
     /// `sha256:<hex>` of the canonical JSON.
     pub fn digest(&self) -> Result<String, String> {

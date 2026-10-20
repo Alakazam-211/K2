@@ -136,7 +136,7 @@ pub fn set_policy(updates: &[(String, String)]) -> Result<toml::Table, String> {
                 if !enum_ok(k, &s) {
                     return Err(format!("{k} can't be '{v}'"));
                 }
-                if k == "network" && s == "none" {
+                if k == "network" && s == "none" && !local_node_enforces_network_none() {
                     return Err(network_none_refusal());
                 }
                 toml::Value::String(s)
@@ -147,6 +147,17 @@ pub fn set_policy(updates: &[(String, String)]) -> Result<toml::Table, String> {
     let body = toml::to_string(&t).map_err(|e| e.to_string())?;
     write_atomic(&p, &body)?;
     Ok(t)
+}
+
+/// Does this machine's node say it walls jobs off the network? Read from
+/// its `run/status.json` (`network_none`, k2-node 0.46.3+). An older node
+/// never writes it, so `none` stays refused there.
+pub fn local_node_enforces_network_none() -> bool {
+    std::fs::read_to_string(node_home().join("run/status.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("network_none").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
 }
 
 /// The refusal for `network = none`: `<code>: <sentence>`, so a caller can
@@ -291,7 +302,7 @@ mod tests {
             assert!(set_policy(&[("availability".into(), "sometimes".into())]).is_err());
             let before = std::fs::read_to_string(cfg.join("policy.toml")).unwrap();
             let e = set_policy(&[("cpu_cap_percent".into(), "50".into()), ("network".into(), "none".into())]).unwrap_err();
-            assert!(e.starts_with("network_none_not_enforced_yet: network = none isn't enforced"), "{e}");
+            assert!(e.starts_with("network_none_not_enforced_yet: network = none isn't enforced on this node"), "{e}");
             assert_eq!(std::fs::read_to_string(cfg.join("policy.toml")).unwrap(), before, "nothing written");
             set_policy(&[("network".into(), "full".into())]).unwrap();
             let s = status();
@@ -299,6 +310,23 @@ mod tests {
             assert_eq!(s["node"]["state"], "online");
             assert_eq!(s["control"]["state"], "paused");
             assert_eq!(s["policy"]["cpu_cap_percent"], 60);
+        });
+    }
+
+    /// A walled local node (k2-node 0.46.3+ writes `network_none: true`)
+    /// may be set to `network = none`; an older one (field absent or
+    /// false) stays refused.
+    #[test]
+    fn network_none_follows_what_the_local_node_enforces() {
+        with_dirs(|home, cfg| {
+            std::fs::write(home.join("run/status.json"), r#"{"state":"online","network_none":false}"#).unwrap();
+            let e = set_policy(&[("network".into(), "none".into())]).unwrap_err();
+            assert!(e.starts_with("network_none_not_enforced_yet:"), "{e}");
+            std::fs::write(home.join("run/status.json"), r#"{"state":"online","network_none":true}"#).unwrap();
+            let p = set_policy(&[("network".into(), "none".into())]).unwrap();
+            assert_eq!(p["network"].as_str(), Some("none"));
+            let t: toml::Table = std::fs::read_to_string(cfg.join("policy.toml")).unwrap().parse().unwrap();
+            assert_eq!(t["network"].as_str(), Some("none"));
         });
     }
 

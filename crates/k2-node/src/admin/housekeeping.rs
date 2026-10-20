@@ -177,6 +177,7 @@ pub async fn gc(node: &Node, args: &Value) -> Result<Value, AdminRefusal> {
         }
         let dir = node.layout().job_dir(&r.job_id, r.generation);
         if dir.exists() {
+            node.reclaim_blocking(&dir);
             remove(&dir, &mut freed, &mut job_dirs);
         }
         let _ = node.ledger.lock().unwrap().mark_cleaned(&r.job_id, r.generation);

@@ -126,6 +126,19 @@ pub fn serve_conn(exec: &Executor, rule: &PeerRule, mut s: UnixStream) {
         Ok(r) => r,
         Err(_) => return reply(&mut s, refusal(code::MALFORMED, "request does not parse")),
     };
+    if let LocalRequest::Job { job } = &req {
+        // A start brings the job's stdout/stderr as SCM_RIGHTS.
+        let fds = if matches!(job, super::jobs::JobOp::Start(_)) {
+            match super::fdpass::recv_fds(&s) {
+                Ok(f) => f,
+                Err(_) => return reply(&mut s, refusal(code::MALFORMED, "a job start carries its stdout and stderr")),
+            }
+        } else {
+            Vec::new()
+        };
+        let a = exec.handle_job(job, fds);
+        return reply(&mut s, LocalResponse::Job(a));
+    }
     let payload = if let LocalRequest::Update { size, .. } = &req {
         if *size == 0 || *size > MAX_UPDATE_BYTES {
             return reply(&mut s, refusal(code::TOO_LARGE, "build size out of range"));
@@ -219,6 +232,30 @@ pub fn request(socket: &Path, req: &LocalRequest, payload: Option<&[u8]>, timeou
     serde_json::from_slice(&r).map_err(|e| unreachable(format!("executor answer unreadable: {e}")))
 }
 
+/// Node side: one job-wall op, with fds for a start (blocking).
+pub fn job_request(socket: &Path, op: &super::jobs::JobOp, fds: &[std::os::fd::RawFd], timeout: Duration) -> Result<super::jobs::JobAnswer, AdminRefusal> {
+    let unreachable = |e: String| AdminRefusal::new(code::EXECUTOR_UNREACHABLE, e);
+    let mut s = UnixStream::connect(socket).map_err(|e| unreachable(format!("{}: {e}", socket.display())))?;
+    let _ = s.set_read_timeout(Some(timeout));
+    let _ = s.set_write_timeout(Some(timeout));
+    let h = serde_json::to_vec(&LocalRequest::Job { job: op.clone() }).map_err(|e| AdminRefusal::new(code::MALFORMED, e.to_string()))?;
+    write_frame(&mut s, &h).map_err(unreachable)?;
+    if !fds.is_empty() {
+        super::fdpass::send_fds(&s, fds).map_err(|e| unreachable(format!("pass fds: {e}")))?;
+    }
+    let r = read_frame(&mut s, 4 << 20).map_err(unreachable)?;
+    match serde_json::from_slice::<LocalResponse>(&r) {
+        Ok(LocalResponse::Job(a)) => Ok(a),
+        // An older executor: it doesn't know `job` and says so.
+        Ok(LocalResponse::Result(res)) => Err(AdminRefusal::new(
+            res.code.as_deref().unwrap_or(code::MALFORMED),
+            format!("the executor doesn't know job ops (an older k2-node admin?): {}", res.message.unwrap_or_default()),
+        )),
+        Ok(_) => Err(AdminRefusal::new(code::MALFORMED, "unexpected executor answer")),
+        Err(e) => Err(unreachable(format!("executor answer unreadable: {e}"))),
+    }
+}
+
 /// Test helper: a socket path short enough for `sun_path` (macOS temp
 /// dirs are too long), unique per test. Removed with the temp dir's owner.
 #[cfg(test)]
@@ -244,6 +281,38 @@ mod tests {
     fn peer_uid_is_ours_on_a_socketpair() {
         let (a, _b) = UnixStream::pair().unwrap();
         assert_eq!(peer_uid(&a).unwrap(), unsafe { libc::geteuid() });
+    }
+
+    /// Mixed fleet: a node updated before its executor (or an executor
+    /// rolled back) gets a plain refusal for job ops, and the node then
+    /// runs jobs without the wall rather than failing them.
+    #[test]
+    fn an_older_executor_answers_job_ops_with_a_refusal() {
+        use super::super::jobs::JobOp;
+        let d = crate::util::temp_dir("old-exec");
+        let p = short_sock(&d);
+        let l = UnixListener::bind(&p).unwrap();
+        let t = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let h = read_frame(&mut s, MAX_HEADER_BYTES).unwrap();
+            // What a 0.46.2 executor does with `op: job`: no such variant.
+            #[derive(serde::Deserialize)]
+            #[serde(tag = "op", rename_all = "snake_case")]
+            #[allow(dead_code)]
+            enum OldRequest {
+                Status,
+            }
+            assert!(serde_json::from_slice::<OldRequest>(&h).is_err(), "an older executor can't parse a job op");
+            let r = LocalResponse::Result(AdminResult::refused("", "", &AdminRefusal::new(code::MALFORMED, "request does not parse")));
+            write_frame(&mut s, &serde_json::to_vec(&r).unwrap()).unwrap();
+        });
+        let e = job_request(&p, &JobOp::Ready, &[], Duration::from_secs(5)).unwrap_err();
+        t.join().unwrap();
+        assert_eq!(e.code, code::MALFORMED);
+        assert!(e.message.contains("older"), "{}", e.message);
+        let _ = std::fs::remove_file(&p);
+        // Nobody listening: unreachable, never a panic.
+        assert_eq!(job_request(&p, &JobOp::Ready, &[], Duration::from_secs(1)).unwrap_err().code, code::EXECUTOR_UNREACHABLE);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use k2_node_proto::health::{DiskFact, ExecutorFact, Health, OsFact, Power, Sleep, Thermal, Updates};
+use k2_node_proto::health::{DiskFact, ExecutorFact, Health, OsFact, Power, SecurityFact, Sleep, Thermal, Updates};
 
 use crate::node::Node;
 
@@ -320,6 +320,7 @@ pub async fn collect(node: &std::sync::Arc<Node>, refresh_updates: bool) -> Heal
         os,
         executor: executor_fact(node).await,
         stuck_jobs: node.stuck_jobs(),
+        security: Some(security_fact(node)),
         errors,
     };
     if !h.fits() {
@@ -327,6 +328,37 @@ pub async fn collect(node: &std::sync::Arc<Node>, refresh_updates: bool) -> Heal
         h.errors.clear();
     }
     h
+}
+
+/// The job wall and the open home folders (0.46.3, V15/V16): the node
+/// doctor's warnings. Readable without root (homes are listed, never read).
+pub fn security_fact(node: &Node) -> SecurityFact {
+    let open: Vec<String> = crate::wall::open_homes_in(crate::wall::homes_root()).into_iter().map(|(p, m)| format!("{} ({m:o})", p.display())).collect();
+    security_fact_with(&node.wall, &node.opts.user, open)
+}
+
+pub fn security_fact_with(wall: &crate::wall::Wall, node_user: &str, open_homes: Vec<String>) -> SecurityFact {
+    use crate::wall::Wall;
+    let mut notes = Vec::new();
+    let job_user = match wall {
+        Wall::JobUser { user } => Some(user.clone()),
+        _ => Some(node_user.to_string()),
+    };
+    match wall {
+        Wall::None { why } => notes.push(format!(
+            "no job wall ({why}): jobs run as {node_user} and can read the node's key and state; run sudo k2-node setup (k2-node 0.46.3+) to add it"
+        )),
+        Wall::Seatbelt => notes.push("Seatbelt walls files and network; jobs share the node's user (a separate job user is later work)".into()),
+        Wall::JobUser { .. } => {}
+    }
+    if !open_homes.is_empty() {
+        notes.push(format!(
+            "{} home folder(s) others can read{}: fix at the machine with sudo k2-node admin homes --fix, or approve homes.private",
+            open_homes.len(),
+            if wall.is_walled() { " (the wall keeps jobs out; other local users still get in)" } else { " (jobs can read them)" }
+        ));
+    }
+    SecurityFact { wall: wall.label().to_string(), job_user, network_none: wall.network_none(), open_homes, notes }
 }
 
 /// The parts that count as "changed" (not the clock-driven ones).
@@ -350,6 +382,22 @@ pub fn same_facts(a: &Health, b: &Health) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The doctor's warnings: no wall says the key is readable; open homes
+    /// say how to fix them, never fix them.
+    #[test]
+    fn security_fact_warns_about_no_wall_and_open_homes() {
+        use crate::wall::Wall;
+        let none = security_fact_with(&Wall::None { why: "no k2job".into() }, "k2node", vec!["/home/a (755)".into()]);
+        assert_eq!((none.wall.as_str(), none.network_none), ("none", false));
+        assert!(none.notes.iter().any(|n| n.contains("can read the node's key") && n.contains("no k2job")), "{:?}", none.notes);
+        assert!(none.notes.iter().any(|n| n.contains("admin homes --fix") && n.contains("jobs can read them")), "{:?}", none.notes);
+        let walled = security_fact_with(&Wall::JobUser { user: "k2job".into() }, "k2node", vec![]);
+        assert_eq!((walled.wall.as_str(), walled.job_user.as_deref(), walled.network_none), ("job_user", Some("k2job"), true));
+        assert!(walled.notes.is_empty(), "{:?}", walled.notes);
+        let sb = security_fact_with(&Wall::Seatbelt, "_k2node", vec!["/Users/rosson (755)".into()]);
+        assert!(sb.notes.iter().any(|n| n.contains("the wall keeps jobs out")), "{:?}", sb.notes);
+    }
 
     #[test]
     fn pmset_and_therm() {

@@ -29,6 +29,7 @@ set -euo pipefail
 cd /
 
 NODE_USER="k2node"
+JOB_USER="k2job"
 HOME_DIR="/var/lib/k2node"
 CONFIG_DIR="/etc/k2-node"
 LIBEXEC="/usr/local/libexec"
@@ -151,6 +152,21 @@ if id -nG "$NODE_USER" | tr ' ' '\n' | grep -qx k2nodectl; then
 fi
 [ -n "$HUMAN" ] && usermod -aG k2nodectl "$HUMAN"
 
+# The job wall (0.46.3): jobs run as $JOB_USER (no login, no home, its own
+# group) in a sandboxed systemd unit the root executor starts, so a job
+# can't read the node's key or state, /home or /root.
+echo "== job user $JOB_USER"
+if ! id -u "$JOB_USER" >/dev/null 2>&1; then
+    useradd --system --user-group --home-dir /nonexistent --no-create-home \
+        --shell "$NOLOGIN" --comment "K2 compute jobs" "$JOB_USER"
+fi
+for g in $(id -nG "$JOB_USER"); do
+    case "$g" in
+        "$JOB_USER") ;;
+        *) die "$JOB_USER must be in no group but its own (it is in $g)" ;;
+    esac
+done
+
 echo "== files"
 install -d -m 0750 -o "$NODE_USER" -g k2nodectl "$HOME_DIR"
 install -d -m 0755 -o "$NODE_USER" -g "$NODE_USER" "$HOME_DIR/log"
@@ -169,6 +185,19 @@ for f in policy.toml control.toml; do
     [ -f "$CONFIG_DIR/$f" ] || install -m 0664 -o root -g k2nodectl "$tmp/$f" "$CONFIG_DIR/$f"
 done
 install -m 0644 -o root -g root "$tmp/k2-node.service" "$UNIT"
+
+# The job user enters the node home (traverse only, an ACL; the home stays
+# 0750 to everyone else) and jobs.toml turns the wall on. The executor
+# checks systemd (≥ 245) itself; without it jobs run as $NODE_USER.
+if command -v setfacl >/dev/null && setfacl -m "u:$JOB_USER:x" "$HOME_DIR"; then
+    "$BIN" admin job-user "$JOB_USER" --config-dir "$CONFIG_DIR" >/dev/null
+    chown root:root "$CONFIG_DIR/jobs.toml"
+    chmod 0644 "$CONFIG_DIR/jobs.toml"
+    WALL_STATUS="on: jobs run as $JOB_USER in a sandboxed systemd unit (no node key or state, no /home or /root; network = none works)"
+else
+    rm -f "$CONFIG_DIR/jobs.toml"
+    WALL_STATUS="OFF: setfacl is missing (install the acl package, then rerun setup); jobs run as $NODE_USER and can read its key"
+fi
 
 # The human's K2 must reach the node now, not after a new login (group
 # membership only applies to new logins): per-user ACLs on the config dir
@@ -288,6 +317,24 @@ systemctl restart k2-node.service
 sleep 2
 systemctl --no-pager --lines=0 status k2-node.service >/dev/null 2>&1 || die "k2-node.service didn't start: journalctl -u k2-node -n 50"
 
+# Everyone else's home (V16): shown, and made private only when asked.
+open_homes="$("$BIN" admin homes --json 2>/dev/null || echo '[]')"
+if [ "$open_homes" != "[]" ]; then
+    echo "== home folders other users can read"
+    "$BIN" admin homes || true
+    if [ "$PRIVATE_HOME" != "0" ] && [ -t 0 ]; then
+        printf "   Make these private too (chmod 700)? [y/N] "
+        read -r answer
+        case "$answer" in y|Y|yes) "$BIN" admin homes --fix --yes ;; esac
+    fi
+fi
+open_homes="$("$BIN" admin homes --json 2>/dev/null || echo '[]')"
+if [ "$open_homes" = "[]" ]; then
+    HOMES_STATUS="every home under /home is private"
+else
+    HOMES_STATUS="some homes are readable by others: $BIN admin homes (fix: sudo $BIN admin homes --fix)"
+fi
+
 TOOLS_STATUS="none preinstalled (jobs install what they declare on demand)"
 if [ -n "$TOOLS" ]; then
     echo "== toolchains: $TOOLS"
@@ -310,6 +357,8 @@ Done.
   service:     k2-node.service (running as $NODE_USER)
   enrollment:  $ENROLL_STATUS
   home folder: $HOME_STATUS
+  other homes: $HOMES_STATUS
+  job wall:    $WALL_STATUS
   your access: $ACCESS_STATUS
   packages:    $PKG_STATUS
   toolchains:  $TOOLS_STATUS

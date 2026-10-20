@@ -46,6 +46,14 @@ Remote admin (prd-k2-node-admin-v1; root, at this machine):
   sudo k2-node admin audit [--tail N] [--json]   check + print the root audit chain
   k2-node admin status                           what the root executor says
   k2-node admin serve --config-dir D --state-dir S --home H --binary B   (the root executor; started by systemd/launchd)
+  sudo k2-node admin job-user <name>             Linux: jobs run as <name> in a walled unit (setup: k2job)
+  k2-node admin homes [--json]                   home folders other users (and unwalled jobs) can read
+  sudo k2-node admin homes --fix [--yes]         make them private (chmod 700); asks first unless --yes
+
+The job wall (0.46.3): Linux jobs run as k2job in a sandboxed systemd unit; macOS
+jobs run under a Seatbelt profile. Neither can read the node's key or state or
+people's home folders, and network = "none" keeps them off the network.
+  k2-node wall-probe [--read P]... [--list D]... [--connect IP:PORT]...   (tests: what this process can reach)
 
 Agents never run this: they use `k2 compute` on their K2 server."#;
 
@@ -66,6 +74,8 @@ const SWITCHES: &[&str] = &[
     "--no-private-home",
     "--reenroll",
     "--nextest",
+    "--fix",
+    "--yes",
 ];
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -488,14 +498,86 @@ fn cmd_admin(a: &Args) -> Result<(), String> {
             }
             Ok(())
         }
-        Some(o) => Err(format!("admin {o:?}: use level, pin, audit, status, serve")),
-        None => Err("admin: use level, pin, audit, status, serve".into()),
+        Some("job-user") => {
+            if !is_root() {
+                return Err("admin job-user writes /etc/k2-node/jobs.toml: run it with sudo".into());
+            }
+            let name = a.positional.get(2).ok_or("admin job-user <name> (k2job)")?;
+            let node_user = acfg::read(&config_dir.join(acfg::ADMIN_FILE))
+                .ok()
+                .flatten()
+                .map(|c| c.node_user)
+                .unwrap_or_else(|| acfg::default_node_user().to_string());
+            println!("{}", k2_node::admin::jobs::write_jobs_file(&config_dir, name, &node_user)?);
+            Ok(())
+        }
+        Some("homes") => cmd_homes(a),
+        Some(o) => Err(format!("admin {o:?}: use level, pin, audit, status, serve, job-user, homes")),
+        None => Err("admin: use level, pin, audit, status, serve, job-user, homes".into()),
     }
+}
+
+/// `admin homes [--fix [--yes]] [--json]`: the open home folders, and the
+/// owner's fix (never silent: --fix, then a yes at a terminal or --yes).
+fn cmd_homes(a: &Args) -> Result<(), String> {
+    let root = k2_node::wall::homes_root();
+    let open = k2_node::wall::open_homes_in(root);
+    if a.has("--json") && !a.has("--fix") {
+        let v: Vec<_> = open.iter().map(|(p, m)| serde_json::json!({"home": p, "mode": format!("{m:o}")})).collect();
+        println!("{}", serde_json::Value::Array(v));
+        return Ok(());
+    }
+    if open.is_empty() {
+        println!("Every home folder under {} is private.", root.display());
+        return Ok(());
+    }
+    println!("Home folders under {} that other users can read or enter:", root.display());
+    for (p, m) in &open {
+        println!("  {} (mode {m:o})", p.display());
+    }
+    if !a.has("--fix") {
+        println!("Jobs behind the job wall can't read them, but other local users (and jobs on an older k2-node) can.");
+        println!("Fix (owner only): sudo k2-node admin homes --fix");
+        return Ok(());
+    }
+    if !is_root() {
+        return Err("--fix changes other people's folders: run it with sudo".into());
+    }
+    if !a.has("--yes") {
+        use std::io::{BufRead, IsTerminal, Write};
+        if !std::io::stdin().is_terminal() {
+            return Err("not a terminal: pass --yes to make these private".into());
+        }
+        print!("Make them private (chmod 700: only the owner)? [y/N] ");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line).map_err(|e| e.to_string())?;
+        if !matches!(line.trim(), "y" | "Y" | "yes") {
+            println!("Left as they are.");
+            return Ok(());
+        }
+    }
+    for (p, _) in &open {
+        match k2_node::wall::make_private(root, p) {
+            Ok((was, now)) => println!("  {}: {was:o} → {now:o}", p.display()),
+            Err(e) => eprintln!("  {}: {e}", p.display()),
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    // The Linux job unit's shim (runs as the job user): exec or fail.
+    if raw.first().map(String::as_str) == Some("job-exec") {
+        let Some(spec) = raw.get(1) else {
+            eprintln!("k2-node job-exec <spec>");
+            return ExitCode::from(2);
+        };
+        eprintln!("{}", k2_node::wall::job_exec(std::path::Path::new(spec)));
+        return ExitCode::from(127);
+    }
     let a = match parse(&raw) {
         Ok(a) => a,
         Err(e) => {
@@ -531,6 +613,11 @@ async fn main() -> ExitCode {
         }
         Some("check-home") => cmd_check_home(&a),
         Some("admin") => cmd_admin(&a),
+        Some("wall-probe") => {
+            let list = |k: &str| a.flags.get(k).cloned().unwrap_or_default();
+            println!("{}", k2_node::wall::probe(&list("read"), &list("list"), &list("connect")));
+            Ok(())
+        }
         Some("version") => {
             println!("k2-node {NODE_VERSION} (protocol {})", k2_node_proto::PROTOCOL);
             let _ = k2_node::build_marker();

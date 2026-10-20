@@ -5,8 +5,9 @@
 //!
 //! - unattributed, or already this workspace's → go ahead;
 //! - held by ANOTHER workspace → `409 label_owned_by_other_workspace`.
-//!   Only an owner/admin caller is told which workspace holds it; agents
-//!   and members get a neutral message;
+//!   Every caller is told which agent holds it (`owner: {agent, handle,
+//!   address}`, N6: so agents can `k2 msg` each other); only an
+//!   owner/admin caller also gets the workspace's id, name and path;
 //! - an owner/admin may move it deliberately with an explicit transfer
 //!   (`transfer=1`, CLI `--transfer`). Every transfer is audited
 //!   (`~/.k2/auth-audit.jsonl`, event `label-transfer`).
@@ -122,10 +123,18 @@ fn workspace_label(conn: &Connection, project_id: &str) -> (Option<String>, Opti
     .unwrap_or((None, None))
 }
 
-/// The 409 for a label held by another workspace. Names the owner only
-/// to an owner/admin caller.
+/// The 409 for a label held by another workspace. Every caller hears
+/// which agent holds it, by display name and `k2 msg` address (N6, F7:
+/// agents coordinate instead of guessing); only an owner/admin caller also
+/// gets the workspace's id, name and folder path.
 pub fn owned_by_other(conn: &Connection, label: &str, owner: &str, caller: &Caller) -> Refusal {
     let label = label.trim().to_ascii_lowercase();
+    let m = crate::apps::coordination::maintainer_with(conn, owner);
+    let mut owner_json = m.json();
+    let ask = match (&m.address, m.kind) {
+        (Some(a), "agent") => format!(" Ask it: k2 msg {a} \"…\""),
+        _ => String::new(),
+    };
     let body = if caller.is_manager() {
         let (name, path) = workspace_label(conn, owner);
         let who = match (&name, &path) {
@@ -133,24 +142,24 @@ pub fn owned_by_other(conn: &Connection, label: &str, owner: &str, caller: &Call
             (Some(n), None) => format!("workspace '{n}'"),
             _ => format!("workspace {owner}"),
         };
+        owner_json["projectId"] = serde_json::json!(owner);
+        owner_json["name"] = serde_json::json!(name);
+        owner_json["path"] = serde_json::json!(path);
         serde_json::json!({
-            "error": format!("{CODE}: '{label}' belongs to {who}."),
+            "error": format!("{CODE}: '{label}' belongs to {who}, {}.", m.phrase()),
             "code": CODE,
             "label": label,
             "hint": "To move it to this workspace on purpose, rerun with --transfer \
                      (owner/admin only; recorded in the access audit log).",
-            "owner": {
-                "projectId": owner,
-                "name": name,
-                "path": path,
-            },
+            "owner": owner_json,
         })
     } else {
         serde_json::json!({
-            "error": format!("{CODE}: '{label}' belongs to another workspace on this server."),
+            "error": format!("{CODE}: '{label}' belongs to another workspace on this server, {}.{ask}", m.phrase()),
             "code": CODE,
             "label": label,
-            "hint": "Pick another name, or ask the server owner to transfer this one.",
+            "hint": "Pick another name, ask the agent that holds it, or ask the server owner to transfer this one.",
+            "owner": owner_json,
         })
     };
     Refusal {
@@ -348,22 +357,29 @@ mod tests {
         assert_eq!(current(), Caller::Member, "slot must clear after the request");
     }
 
+    /// N6: agents and members hear which agent holds the label and its
+    /// `k2 msg` address, never the workspace's id or folder path.
     #[test]
-    fn other_workspace_is_refused_with_neutral_message_for_agents_and_members() {
+    fn other_workspace_is_refused_naming_the_agent_never_the_path_for_agents_and_members() {
         let a = make_project("a");
         let b = make_project("b");
         let l = label("n");
         claim_checked(&l, &a, None, false).expect("A claims a free label");
+        let a_path = format!("/tmp/label-owner-a-{a}");
         for caller in [Caller::Agent, Caller::Member] {
             let db = k2_core::db::shared();
             let conn = db.lock();
             let r = decide(&conn, &l, &b, false, &caller).expect_err("B must be refused");
             assert_eq!(r.status, "409 Conflict");
             assert_eq!(r.body["code"], CODE);
-            assert!(r.body.get("owner").is_none(), "no owner for {caller:?}: {}", r.body);
+            assert_eq!(r.body["owner"]["agent"], "ws-a", "{caller:?}: {}", r.body);
+            assert_eq!(r.body["owner"]["kind"], "agent", "{}", r.body);
+            let addr = r.body["owner"]["address"].as_str().expect("an address to k2 msg");
+            assert!(addr.starts_with("ws-a"), "the address is the agent's handle (::host when Connected): {addr}");
+            assert!(r.body["owner"].get("path").is_none() && r.body["owner"].get("projectId").is_none(), "{}", r.body);
             let text = r.body.to_string();
-            assert!(!text.contains(&a), "neutral message must not leak the owner id: {text}");
-            assert!(!text.contains("ws-a"), "neutral message must not name the owner: {text}");
+            assert!(!text.contains(&a), "the owner's id must not leak: {text}");
+            assert!(!text.contains(&a_path) && !text.contains("/tmp/"), "never a folder path: {text}");
         }
         assert_eq!(owner(&l).as_deref(), Some(a.as_str()));
         drop_label(&l);

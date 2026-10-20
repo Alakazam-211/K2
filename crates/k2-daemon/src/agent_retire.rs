@@ -262,6 +262,10 @@ pub fn handle_agent_retire(body: &[u8]) -> CliResponse {
         if let Some(resp) = crate::project_group_routes::poc_removal_block(&project_id, &name) {
             return resp;
         }
+        // Q8: never under the workspace's Apps (not `--force`-able either).
+        if let Some(resp) = crate::apps::ownership::removal_block(&project_id, &name) {
+            return resp;
+        }
     }
 
     let folder_exists = Path::new(&path).is_dir();

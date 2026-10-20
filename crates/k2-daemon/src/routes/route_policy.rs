@@ -231,6 +231,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/grant/revoke", Member),
     get("/cli/app/grants", Member),
     both("/cli/app/guest/rooms", Member),
+    // Q8 (prd-agent-app-permissions-v1 §6): the owner hands an App to
+    // another workspace (handler: owner token or Owner login only).
+    post("/cli/app/handover", Owner),
     get("/cli/app/history", Member),
     get("/cli/app/inspect", Member),
     post("/cli/app/install", Member),
@@ -248,10 +251,15 @@ pub const ROUTES: &[Route] = &[
     // Room-scope R9 (0.46.1): who holds a grant on a room (owner/admin any
     // room; a passport its own room; a member login is refused).
     get("/cli/app/members", Member),
+    // Q8: park stops an App and holds it for the owner (lowering: Admin).
+    post("/cli/app/park", Admin),
     // S19: per-App quotas. Lowering applies now (manage); a raise is the
     // owner's, anyone else's is a held `quota` request (handler).
     get("/cli/app/quota", Member),
     post("/cli/app/quota/set", Member),
+    // Q8: one way out for every App of a workspace before its removal
+    // (uninstall / park: Admin; handover: the handler holds it to the owner).
+    post("/cli/app/release", Admin),
     // AR10: remote App passes. Listing and revoking (narrows) are Member;
     // minting is a credential mint, the owner's (handler refuses passports).
     get("/cli/app/remote-pass", Member),
@@ -273,6 +281,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/suspend", Member),
     // purge (deletes the App's data) is owner-only in the handler.
     post("/cli/app/uninstall", Member),
+    // Q8: the owner gives a parked App to a workspace.
+    post("/cli/app/unpark", Owner),
     // Room-scope R16: an App's quotas and per-call counts from its audit.
     get("/cli/app/usage", Member),
     post("/cli/app/validate", Member),

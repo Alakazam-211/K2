@@ -321,12 +321,15 @@ struct Live {
 
 impl Live {
     fn start() -> Live {
+        Live::start_with(&[])
+    }
+    fn start_with(extra: &[(&str, &str)]) -> Live {
         let root = PathBuf::from(format!("/tmp/k2pf-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
         let _ = std::fs::remove_dir_all(&root);
         let home = root.join(".k2");
         std::fs::create_dir_all(&home).unwrap();
-        let child = Command::new(PTYD)
-            .arg("--serve")
+        let mut cmd = Command::new(PTYD);
+        cmd.arg("--serve")
             .env_clear()
             .env("K2_HOME", &home)
             .env("HOME", &root)
@@ -334,9 +337,11 @@ impl Live {
             .env("TMPDIR", "/tmp")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn k2-ptyd");
+            .stderr(Stdio::null());
+        for (k, v) in extra {
+            cmd.env(k, v);
+        }
+        let child = cmd.spawn().expect("spawn k2-ptyd");
         let live = Live { root, home, child };
         let t = Instant::now();
         while !(live.paths().key.exists() && UnixStream::connect(live.paths().client_sock()).is_ok()) {
@@ -348,8 +353,24 @@ impl Live {
     fn paths(&self) -> Paths {
         Paths::resolve(&self.home, Path::new("/tmp"))
     }
+    /// Exit status (if ptyd is gone) and the tail of its own log, so a
+    /// failure says whether ptyd crashed, exited on purpose, or is wedged.
+    fn diag(&mut self) -> String {
+        let status = self.child.try_wait().unwrap();
+        let log = std::fs::read_to_string(&self.paths().log).unwrap_or_else(|e| format!("<no log: {e}>"));
+        let tail: Vec<&str> = log.lines().rev().take(15).collect::<Vec<_>>().into_iter().rev().collect();
+        format!("ptyd status: {status:?}; log tail:\n{}", tail.join("\n"))
+    }
     fn assert_alive(&mut self, ctx: &str) {
-        assert!(self.child.try_wait().unwrap().is_none(), "k2-ptyd DIED ({ctx}): {:?}", self.child.try_wait());
+        if self.child.try_wait().unwrap().is_some() {
+            panic!("k2-ptyd DIED ({ctx}): {}", self.diag());
+        }
+    }
+    fn connect_raw(&mut self, ctx: &str) -> UnixStream {
+        match UnixStream::connect(self.paths().client_sock()) {
+            Ok(s) => s,
+            Err(e) => panic!("connect failed ({ctx}): {e}; {}", self.diag()),
+        }
     }
     fn owner(&self) -> Client {
         let c = Client::connect_owner(&self.paths(), "fuzz", true).expect("owner connect");
@@ -413,16 +434,30 @@ fn fuzz_live_ptyd_survives_hostile_unauthenticated_and_data_connections() {
     let s = seed();
     let mut r = Rng(s);
     let mut live = Live::start();
+    // An owner stays connected for the whole run, as a running daemon
+    // does. Without one, ptyd's P7 idle exit (60 s, no owner + no
+    // sessions) ends it cleanly mid-run — what job 661802f5 hit; pinned by
+    // `unauthenticated_peers_cannot_keep_ptyd_alive_and_idle_exit_is_clean`.
+    let mut keeper = live.owner();
     let mut b = Budget::new(300);
     while b.more() {
-        let mut sock = UnixStream::connect(live.paths().client_sock()).expect("connect");
+        let ctx = format!("seed {s} case {}", b.done);
+        let mut sock = live.connect_raw(&ctx);
         sock.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
         // Half the time get past the hello as a real data client first.
         if r.chance(50) {
-            let key = k2_ptyd::auth::read_key(&live.paths().key).unwrap();
-            let mut conn = Conn::connect(&live.paths().client_sock()).unwrap();
+            let key = match k2_ptyd::auth::read_key(&live.paths().key) {
+                Ok(k) => k,
+                Err(e) => panic!("read key ({ctx}): {e}; {}", live.diag()),
+            };
+            let mut conn = match Conn::connect(&live.paths().client_sock()) {
+                Ok(c) => c,
+                Err(e) => panic!("data connect ({ctx}): {e}; {}", live.diag()),
+            };
             conn.set_timeout(Some(Duration::from_secs(5))).unwrap();
-            conn.handshake(&key, "fuzz", Role::Data, false).expect("data hello");
+            if let Err(e) = conn.handshake(&key, "fuzz", Role::Data, false) {
+                panic!("data hello ({ctx}): {e:?}; {}", live.diag());
+            }
             sock = conn.stream;
         }
         for _ in 0..1 + r.below(4) {
@@ -440,10 +475,46 @@ fn fuzz_live_ptyd_survives_hostile_unauthenticated_and_data_connections() {
             let _ = sock.shutdown(std::net::Shutdown::Write);
         }
         drop(sock);
-        live.assert_alive(&format!("seed {s} case {}", b.done));
+        live.assert_alive(&ctx);
+        if b.done % 25 == 0 && !ping(&mut keeper) {
+            panic!("{ctx}: the owner's ping went unanswered during the flood; {}", live.diag());
+        }
     }
+    assert!(ping(&mut keeper), "seed {s}: the owner connection survived the run");
     let mut c = live.owner();
-    assert!(ping(&mut c), "seed {s}: ptyd answers ping after the run");
+    assert!(ping(&mut c), "seed {s}: ptyd answers a new owner after the run");
+}
+
+/// Pinned from the long fuzz run (job 661802f5, 2026-10-20): with no owner
+/// and no sessions, a flood of unauthenticated and data-role peers must
+/// NOT keep ptyd alive (P7 idle exit still fires), and the exit is clean:
+/// status 0, `idle exit` logged, socket and key removed. Minimal input: no
+/// owner for longer than the idle timeout; the garbage only proves peers
+/// don't reset the timer.
+#[test]
+fn unauthenticated_peers_cannot_keep_ptyd_alive_and_idle_exit_is_clean() {
+    // Clock from before the spawn: ptyd's idle timer starts at its init.
+    let t = Instant::now();
+    let mut live = Live::start_with(&[("K2_PTYD_TEST_IDLE_SECS", "2")]);
+    let mut r = Rng(seed());
+    let status = loop {
+        if let Some(st) = live.child.try_wait().unwrap() {
+            break st;
+        }
+        assert!(t.elapsed() < Duration::from_secs(15), "ptyd never idle-exited under the flood; {}", live.diag());
+        if let Ok(mut s) = UnixStream::connect(live.paths().client_sock()) {
+            let body = arb_frame_body(&mut r);
+            let _ = s.write_all(&framed(&body));
+            drain(&mut s);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(t.elapsed() >= Duration::from_secs(2), "exited before the idle timeout: {:?}", t.elapsed());
+    assert!(status.success(), "idle exit must be clean, got {status:?}; {}", live.diag());
+    let log = std::fs::read_to_string(&live.paths().log).expect("ptyd log");
+    assert!(log.contains("idle exit"), "exit reason not logged: {}", live.diag());
+    assert!(!live.paths().sock.exists(), "socket left behind");
+    assert!(!live.paths().key.exists(), "key left behind");
 }
 
 #[test]

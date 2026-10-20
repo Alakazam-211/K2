@@ -62,25 +62,56 @@ pub enum Exit {
 
 // ---------------------------------------------------------------- logging
 
+/// Size at which `ptyd.log` rotates to `ptyd.log.1` (one generation kept).
+/// Any peer can make ptyd log a line (e.g. `frame_too_large` per bad
+/// frame) and ptyd lives as long as the agents, so the log is bounded
+/// (fuzz finding, 2026-10-20).
+pub const LOG_MAX_BYTES: u64 = 8 << 20;
+
 pub struct Log {
+    path: PathBuf,
     f: Option<std::fs::File>,
+    written: u64,
+    max: u64,
 }
 
 impl Log {
     fn open(path: &Path) -> Log {
-        use std::os::unix::fs::OpenOptionsExt;
+        Log::open_capped(path, LOG_MAX_BYTES)
+    }
+
+    pub fn open_capped(path: &Path, max: u64) -> Log {
         if let Some(d) = path.parent() {
             let _ = std::fs::create_dir_all(d);
         }
+        let (f, written) = Log::open_file(path);
+        Log { path: path.to_path_buf(), f, written, max }
+    }
+
+    fn open_file(path: &Path) -> (Option<std::fs::File>, u64) {
+        use std::os::unix::fs::OpenOptionsExt;
         let f = std::fs::OpenOptions::new().create(true).append(true).mode(0o600).open(path).ok();
-        Log { f }
+        let len = f.as_ref().and_then(|f| f.metadata().ok()).map(|m| m.len()).unwrap_or(0);
+        (f, len)
     }
 
     /// S-4/P8: callers pass only fixed text, sids, pids and error kinds.
     /// Never PTY bytes, env values or meta.
     pub fn line(&mut self, msg: &str) {
+        if self.written >= self.max {
+            let mut rotated = self.path.clone().into_os_string();
+            rotated.push(".1");
+            self.f = None;
+            let _ = std::fs::rename(&self.path, &rotated);
+            let (f, len) = Log::open_file(&self.path);
+            self.f = f;
+            self.written = len;
+        }
         if let Some(f) = self.f.as_mut() {
-            let _ = writeln!(f, "{} k2-ptyd[{}] {}", now_secs(), std::process::id(), msg);
+            let line = format!("{} k2-ptyd[{}] {}\n", now_secs(), std::process::id(), msg);
+            if f.write_all(line.as_bytes()).is_ok() {
+                self.written += line.len() as u64;
+            }
         }
     }
 }
@@ -1505,5 +1536,41 @@ fn signal_session(s: &Session, sig: Sig, target: SigTarget) -> Reply {
             }
             None => err("exited", ""),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Fuzz finding (2026-10-20): any peer can make ptyd log a line per
+    /// bad frame, so the log rotates at its cap and never grows past
+    /// cap + one line, keeping exactly one older generation.
+    #[test]
+    fn log_rotates_at_its_cap_and_keeps_one_generation() {
+        let dir = std::env::temp_dir().join(format!("k2-ptyd-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("logs").join("ptyd.log");
+        let rotated = dir.join("logs").join("ptyd.log.1");
+        let mut log = Log::open_capped(&path, 4096);
+        for i in 0..2000 {
+            log.line(&format!("frame_too_large: closing connection {i}"));
+            let len = std::fs::metadata(&path).unwrap().len();
+            assert!(len <= 4096 + 128, "log grew past its cap: {len} bytes at line {i}");
+        }
+        assert!(rotated.is_file(), "no rotated generation");
+        assert!(std::fs::metadata(&rotated).unwrap().len() <= 4096 + 128);
+        let entries = std::fs::read_dir(dir.join("logs")).unwrap().count();
+        assert_eq!(entries, 2, "exactly ptyd.log and ptyd.log.1");
+        let last = std::fs::read_to_string(&path).unwrap();
+        assert!(last.contains("closing connection 1999"), "newest line is in the live log");
+        // Reopening resumes the size count (a restart can't reset the cap).
+        drop(log);
+        let mut again = Log::open_capped(&path, 4096);
+        for _ in 0..200 {
+            again.line("x");
+            assert!(std::fs::metadata(&path).unwrap().len() <= 4096 + 128);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

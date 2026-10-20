@@ -244,6 +244,8 @@ text in `LICENSE.txt` (Apache-2.0 libraries include their upstream NOTICE).
 | Caveat (handwriting font) (`font-caveat`) | 5.3.0 | OFL-1.1 | Copyright 2014 The Caveat Project Authors (https://github.com/googlefonts/caveat) | shipped in the app, `src/renderer/zen-lib/font-caveat@5.3.0/` |
 | Babylon.js (`babylonjs`) | 8.52.1 | Apache-2.0 | Copyright 2023 The Babylon.js team | downloaded on first use by this computer's K2 (not shipped); licence kept at `src/renderer/zen-lib/babylonjs@8.52.1/LICENSE.txt` |
 | Plotly (`plotly.js-dist-min`) | 4.1.1 | MIT | Copyright (c) 2016-2024 Plotly Technologies Inc. | downloaded on first use by this computer's K2 (not shipped); licence kept at `src/renderer/zen-lib/plotly.js-dist-min@4.1.1/LICENSE.txt` |
+| K2 help button (widget kit) (`k2-help`) | 1.0.0 | FSL-1.1-Apache-2.0 | Copyright 2025-2026 Alakazam Labs | shipped in the app, `src/renderer/zen-lib/k2-help@1.0.0/` |
+| K2 Thread panel (widget kit) (`k2-thread`) | 1.0.0 | FSL-1.1-Apache-2.0 | Copyright 2025-2026 Alakazam Labs | shipped in the app, `src/renderer/zen-lib/k2-thread@1.0.0/` |
 
 K2 code remains **FSL-1.1-Apache-2.0**. These libraries keep their own
 licences and do **not** relicense K2.

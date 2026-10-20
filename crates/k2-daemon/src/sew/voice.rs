@@ -960,6 +960,10 @@ pub fn forget(env: &Env, st: &VoiceState) -> Vec<String> {
     if let Err(e) = env.ops.voice_save(None) {
         w.push(e);
     }
+    // front443 routes the TURN name from the voice record: rebuild its
+    // table now that the record is gone (voice uninstall and purge), not at
+    // the next voice install.
+    env.ops.front_routes_changed();
     w
 }
 

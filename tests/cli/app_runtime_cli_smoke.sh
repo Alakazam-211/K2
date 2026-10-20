@@ -131,7 +131,9 @@ out="$(k2 app validate "${SEED1:0:16}")"
 expect_has "one k2 app validate also takes a stored Seed" "$out" "ok — checks: manifest, contract, code"
 
 echo "== install / deploy / rollback =="
-out="$(k2 app install smoke --memory none)"
+# 0.46.3: a new App defaults to a container; this smoke drives the
+# unwalled process engine, so it asks for it.
+out="$(k2 app install smoke --memory none --engine process)"
 expect_has "installed" "$out" "App smoke installed"
 FRONT="$(k2 app list --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["apps"][0]["frontPort"])')"
 out="$(k2 app deploy smoke "$SEED1")"

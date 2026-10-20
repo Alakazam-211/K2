@@ -165,7 +165,16 @@ async function bundle(lib: LibSpec, file: { name: string; bundle: string }): Pro
   return `/*! ${lib.title} ${lib.version} (${lib.license}), pre-bundled for K2 as a classic script; global ${lib.global}. */\n${text}`
 }
 
+/** K2's own files (`own` libraries), read from the checked-in folder before
+ *  the build loop clears it: that folder is their source. */
+const ownTexts = new Map<string, string>()
+
 async function fileText(lib: LibSpec, f: LibFile): Promise<string> {
+  if ('own' in f) {
+    const text = ownTexts.get(`${lib.id}@${lib.version}/${f.name}`)
+    if (text === undefined) die(`${lib.id}@${lib.version}/${f.name}: K2's own file is missing from src/renderer/zen-lib/`)
+    return text
+  }
   if ('copy' in f) {
     // A prebuilt UMD may carry its dependencies inside; credit the whole
     // production dependency tree (a superset of what it bundles).
@@ -245,7 +254,12 @@ async function licenseText(lib: LibSpec): Promise<string> {
   for (const l of lib.licenses) {
     let text: string
     let label = l
-    if (l.startsWith('url:')) {
+    if (l.startsWith('k2:')) {
+      // K2's own licence file in this repo (`own` libraries only).
+      if (!lib.own) die(`${lib.id}: k2: licences are for K2's own libraries`)
+      label = `${l.slice(3)} (K2)`
+      text = readFileSync(join(ROOT, l.slice(3)), 'utf8')
+    } else if (l.startsWith('url:')) {
       label = l.slice(4)
       text = (await fetchBytes(label)).toString('utf8')
     } else if (l.startsWith('header:')) {
@@ -258,6 +272,7 @@ async function licenseText(lib: LibSpec): Promise<string> {
     }
     parts.push(`==== ${label} ====\n\n${text.trimEnd()}\n`)
   }
+  if (lib.own) return `${lib.title} ${lib.version} - licence texts. K2's own code (Alakazam Labs), under K2's licence.\n\n${parts.join('\n')}`
   return `${lib.title} ${lib.version} — licence texts, as shipped upstream.\n\n${parts.join('\n')}`
 }
 
@@ -285,6 +300,16 @@ for (const lib of LIBS) {
   if (seen.has(key)) die(`duplicate ${key}`)
   seen.add(key)
   const dir = join(outRoot, key)
+  if (lib.own) {
+    if (lib.files.some((f) => !('own' in f))) die(`${key}: K2's own library ships only {own: true} files`)
+    for (const f of lib.files) {
+      const p = join(OUT, key, f.name)
+      if (!existsSync(p)) die(`${key}/${f.name}: K2's own file is missing from src/renderer/zen-lib/`)
+      ownTexts.set(`${key}/${f.name}`, readFileSync(p, 'utf8'))
+    }
+  } else if (lib.files.some((f) => 'own' in f)) {
+    die(`${key}: {own: true} files are for K2's own libraries`)
+  }
   rmSync(dir, { recursive: true, force: true })
   mkdirSync(dir, { recursive: true })
 
@@ -308,7 +333,10 @@ for (const lib of LIBS) {
       files.push({ name, bytes: buf.length, sha256: sha256(buf), url })
     }
   }
-  if (!licenceOk(lib.license)) die(`${key}: licence "${lib.license}" is not on the shippable list; flag it, don't guess`)
+  // K2's own kit carries K2's licence; every other library a shippable one.
+  if (lib.own ? lib.license !== 'FSL-1.1-Apache-2.0' : !licenceOk(lib.license)) {
+    die(`${key}: licence "${lib.license}" is not on the shippable list; flag it, don't guess`)
+  }
 
   const lic = (await licenseText(lib)) + dependencyLicences(lib)
   // Each `; `-separated part (a `name: ` prefix aside) must appear in the

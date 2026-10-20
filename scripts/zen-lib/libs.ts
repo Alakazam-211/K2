@@ -29,6 +29,9 @@ export type LibFile =
   /** Hand-written glue shipped next to the library (kept tiny). A function
    *  gets `dataUrl(packagePath)` to inline an installed file. */
   | { name: string; glue: string | ((ctx: GlueContext) => string) }
+  /** K2's own file (a library with `own`): the checked-in file in
+   *  `src/renderer/zen-lib/<id>@<version>/` IS its source, kept as is. */
+  | { name: string; own: true }
 
 export interface GlueContext {
   dataUrl(packagePath: string): string
@@ -62,6 +65,11 @@ export interface LibSpec {
   /** Download libraries: pinned URL per file name. */
   urls?: Record<string, string>
   notes?: string
+  /** K2's own widget kit (0.46.3: k2-thread, k2-help): no npm package; its
+   *  files are `{own: true}`, its licence is K2's (FSL-1.1-Apache-2.0, only
+   *  allowed here) and `licenses` names `k2:LICENSE.md`. A change ships as
+   *  a new version folder; a shipped one is never edited. */
+  own?: boolean
 }
 
 const THREE_ADDONS: [string, string][] = [
@@ -531,5 +539,34 @@ export const LIBS: LibSpec[] = [
     files: [],
     urls: { 'plotly.min.js': 'https://cdn.jsdelivr.net/npm/plotly.js-dist-min@4.1.1/plotly.min.js' },
     notes: 'Downloaded once by K2 on first use (about 4.8 MB), then cached; refused on air-gapped computers.',
+  },
+  // ── K2's own widget kit (0.46.3) ────────────────────────────────────
+  {
+    id: 'k2-help',
+    version: '1.0.0',
+    title: 'K2 help button (widget kit)',
+    global: 'K2Help',
+    license: 'FSL-1.1-Apache-2.0',
+    copyright: 'Copyright 2025-2026 Alakazam Labs',
+    source: 'bundled',
+    own: true,
+    licenses: ['k2:LICENSE.md'],
+    files: [{ name: 'k2-help.js', own: true }],
+    notes:
+      "K2's own: the (i) help button. K2Help.tip(text, {label, key, title}) returns an (i) that shows a tooltip on hover or focus and pins it on click, tap, Enter or Space; text over 160 characters opens a popover with Close instead. Esc, a tap outside or the same (i) closes it; it stays inside the frame and follows the Garden's light/dark. Markup works too: class=\"k2h-btn\" with data-tip, or data-help=\"<id>\" for a popover. Put explanations behind an (i), not on the canvas.",
+  },
+  {
+    id: 'k2-thread',
+    version: '1.0.0',
+    title: 'K2 Thread panel (widget kit)',
+    global: 'K2Thread',
+    license: 'FSL-1.1-Apache-2.0',
+    copyright: 'Copyright 2025-2026 Alakazam Labs',
+    source: 'bundled',
+    own: true,
+    licenses: ['k2:LICENSE.md'],
+    files: [{ name: 'k2-thread.js', own: true }],
+    notes:
+      "K2's own: a Thread panel to talk to one agent inside a widget. K2Thread.mount(el, {look: 'chamfer' or 'glass', address: 'handle::host'}) then panel.open(address, label), panel.post(text), panel.setLook(look), panel.destroy(). chamfer is K2's Thread with chamfered corners in the Garden theme's colours; glass is K2 Companion's round look and palette. Both: bubbles with author and time, choice cards, Enter sends (Shift+Enter a new line), the working tab with counters and clock, stick-to-bottom scrolling with a new-messages pill, a narrow layout, file chips and data: images for attachments. Needs thread:read and thread:post (agents:read for names and counters). Add marked and dompurify for markdown bodies.",
   },
 ]

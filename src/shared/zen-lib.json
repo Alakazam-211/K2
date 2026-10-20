@@ -538,6 +538,42 @@
         }
       ],
       "notes": "Downloaded once by K2 on first use (about 4.8 MB), then cached; refused on air-gapped computers."
+    },
+    {
+      "id": "k2-help",
+      "version": "1.0.0",
+      "title": "K2 help button (widget kit)",
+      "global": "K2Help",
+      "license": "FSL-1.1-Apache-2.0",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright 2025-2026 Alakazam Labs",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "k2-help.js",
+          "bytes": 14631,
+          "sha256": "3adca8a2a8af38fd97f3eb885f6a03d8f1133022cc9308f87ccddf110a716609"
+        }
+      ],
+      "notes": "K2's own: the (i) help button. K2Help.tip(text, {label, key, title}) returns an (i) that shows a tooltip on hover or focus and pins it on click, tap, Enter or Space; text over 160 characters opens a popover with Close instead. Esc, a tap outside or the same (i) closes it; it stays inside the frame and follows the Garden's light/dark. Markup works too: class=\"k2h-btn\" with data-tip, or data-help=\"<id>\" for a popover. Put explanations behind an (i), not on the canvas."
+    },
+    {
+      "id": "k2-thread",
+      "version": "1.0.0",
+      "title": "K2 Thread panel (widget kit)",
+      "global": "K2Thread",
+      "license": "FSL-1.1-Apache-2.0",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright 2025-2026 Alakazam Labs",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "k2-thread.js",
+          "bytes": 51208,
+          "sha256": "badcd8274a39e39a7322375879a2ea5426b6e32f49226df4c9a299d09e133289"
+        }
+      ],
+      "notes": "K2's own: a Thread panel to talk to one agent inside a widget. K2Thread.mount(el, {look: 'chamfer' or 'glass', address: 'handle::host'}) then panel.open(address, label), panel.post(text), panel.setLook(look), panel.destroy(). chamfer is K2's Thread with chamfered corners in the Garden theme's colours; glass is K2 Companion's round look and palette. Both: bubbles with author and time, choice cards, Enter sends (Shift+Enter a new line), the working tab with counters and clock, stick-to-bottom scrolling with a new-messages pill, a narrow layout, file chips and data: images for attachments. Needs thread:read and thread:post (agents:read for names and counters). Add marked and dompurify for markdown bodies."
     }
   ]
 }

@@ -941,6 +941,9 @@ pub fn k2_alarms(env: &Env, row: &Row, sew_status: Option<&Value>, now: i64) -> 
     if !helper_pin_matches(env) {
         a.push("k2_helper_pin_mismatch".into());
     }
+    if env.ops.record_load(JWKS_RECORD).is_some() {
+        a.push(ALARM_JWKS_DRIFT.into());
+    }
     if row.ship_kind == "none" {
         a.push("k2_backup_offbox_none".into());
     }
@@ -1019,10 +1022,25 @@ fn sew_alarms(sew_status: Option<&Value>, which: &[&str]) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// What a purge must be confirmed with: the Sew public host, else the box's
-/// hostname.
+/// What a purge must be confirmed with (K2's lean on Rosson's open
+/// question, 2026-10-15): Sew's public host — the S29 §18 chat host, else
+/// the host of the `server.public_url` K2 set (`k2 hostchat config`), the
+/// name people reach Sew by — else the box's hostname.
 pub fn purge_hostname(env: &Env, row: &Row) -> String {
-    row.host.clone().filter(|h| !h.is_empty()).unwrap_or_else(|| env.ops.hostname())
+    row.host
+        .clone()
+        .filter(|h| !h.is_empty())
+        .or_else(|| public_url(env).and_then(|u| url_host_of(&u)))
+        .unwrap_or_else(|| env.ops.hostname())
+}
+
+/// `https://host[:port][/…]` → `host` (lowercase); `None` when empty.
+fn url_host_of(url: &str) -> Option<String> {
+    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit_once('@').map(|(_, h)| h).unwrap_or(host);
+    let host = host.split(':').next().unwrap_or("").trim().to_ascii_lowercase();
+    (!host.is_empty()).then_some(host)
 }
 
 /// `GET /cli/sew/status[?health=1]`. `ok` is the envelope.
@@ -1162,6 +1180,138 @@ pub fn health_tick(env: &Env) -> Option<String> {
     Some(new)
 }
 
+// ── boot: JWKS URL drift + install id (S29 §19 steps 2–3) ──────────────
+
+/// K2's record of a JWKS drift it could not fix (`k2_jwks_url_drift`).
+pub const JWKS_RECORD: &str = "jwks";
+/// The alarm while Sew verifies chat passes against an old JWKS URL.
+pub const ALARM_JWKS_DRIFT: &str = "k2_jwks_url_drift";
+
+/// The JWKS URL Sew must use on a K2-identity install (S28: the daemon's
+/// own loopback port; the same string `enable` passes to `sew install`).
+pub fn jwks_url_for(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/v1/chat/jwks")
+}
+
+/// Whether a [`jwks_drift_check`] answer is final for this daemon process
+/// (the port only changes with a restart). The retry results (Sew down,
+/// port unknown, a lifecycle step running, mgmt unreachable) are not.
+pub fn jwks_settled(v: &Value) -> bool {
+    matches!(
+        v["result"].as_str(),
+        Some("match" | "fixed" | "failed" | "unreported" | "not_applicable")
+    )
+}
+
+fn jwks_drift_failed(env: &Env, have: &str, want: &str, why: String) -> Value {
+    let rec = json!({"have": have, "want": want, "error": why, "at": env.ops.now()});
+    if let Err(e) = env.ops.record_save(JWKS_RECORD, Some(&rec)) {
+        k2_core::log_debug!("[sew] jwks record: {e}");
+    }
+    changed("jwks");
+    json!({"result": "failed", "have": have, "want": want, "error": why})
+}
+
+/// S29 §19 boot task: a K2-identity install verifies chat passes against
+/// `http://127.0.0.1:<daemon port>/v1/chat/jwks`. When the daemon came back
+/// on another port, Sew still asks the old one and every pass fails. Read
+/// Sew's `status.identity.jwks_url`; if it differs, set
+/// `identity.k2.jwks_url` through the helper's `config` verb, restart
+/// `sew`, wait for health and read it back. A fix that does not take is
+/// the `k2_jwks_url_drift` alarm until a later check matches. Also stores
+/// Sew's install id when it changed (a restore from another box's bundle),
+/// so person confirms bind to the live install.
+///
+/// Answers `{result, …}`: `match`, `fixed`, `failed`, `unreported` (Sew
+/// does not report the URL yet: skipped), `not_applicable` (no install,
+/// standalone identity), or a retry (`sew_down`, `no_port`, `busy`,
+/// `mgmt_unreachable`).
+pub fn jwks_drift_check(env: &Env) -> Value {
+    if !env.ops.linux() {
+        return json!({"result": "not_applicable", "why": "not Linux"});
+    }
+    let Some(row) = store::load() else {
+        return json!({"result": "not_applicable", "why": "no Sew install"});
+    };
+    if row_provider(&row) != pin::PROVIDER_K2 {
+        return json!({"result": "not_applicable", "why": "standalone identity has no K2 JWKS"});
+    }
+    if !matches!(row.status.as_str(), "running" | "degraded" | "stopped" | "error") {
+        return json!({"result": "sew_down", "why": format!("Sew is {}", row.status)});
+    }
+    if !(env.ops.unit(UNIT_DB).is_active() && env.ops.unit(UNIT_SEW).is_active()) {
+        return json!({"result": "sew_down", "why": "sew-db or sew is not active"});
+    }
+    let Some(port) = env.ops.daemon_port() else {
+        return json!({"result": "no_port"});
+    };
+    let want = jwks_url_for(port);
+    let st = match mgmt(env, "GET", "/mgmt/v1/status", None) {
+        Ok(s) => s,
+        Err(e) => return json!({"result": "mgmt_unreachable", "error": e.to_string()}),
+    };
+    let mut out = serde_json::Map::new();
+    if let Some(id) = st
+        .get("install_id")
+        .map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string()))
+        .filter(|s| s != "none" && pin::install_id_ok(s))
+    {
+        if row.install_id.as_deref() != Some(id.as_str()) {
+            if store::update(env.ops.now(), |r| r.install_id = Some(id.clone())).is_ok() {
+                out.insert("installId".into(), json!({"from": row.install_id, "to": id}));
+                changed("install-id");
+            }
+        }
+    }
+    let have = st.pointer("/identity/jwks_url").and_then(Value::as_str).map(str::to_string);
+    let Some(have) = have else {
+        out.insert("result".into(), json!("unreported"));
+        return Value::Object(out);
+    };
+    if have == want {
+        if env.ops.record_load(JWKS_RECORD).is_some() {
+            let _ = env.ops.record_save(JWKS_RECORD, None);
+            changed("jwks");
+        }
+        out.insert("result".into(), json!("match"));
+        return Value::Object(out);
+    }
+    if helper_check(env).is_err() {
+        return jwks_drift_failed(env, &have, &want, "the root helper can't run engine sew".into());
+    }
+    let Ok(latch) = begin(env) else {
+        return json!({"result": "busy", "have": have, "want": want});
+    };
+    let body = json!({"identity.k2.jwks_url": want});
+    let fixed = (|| -> Result<(), String> {
+        let o = helper(env, &["config"], Some(body.to_string().as_bytes()))?;
+        if let Some(n) = sew_exit(&o).filter(|n| *n != 0) {
+            return Err(format!("Sew refused identity.k2.jwks_url (exit {n}): {}", sew_message(&o)));
+        }
+        helper(env, &["systemctl", "restart"], None)?;
+        poll_active(env, &[UNIT_DB, UNIT_SEW], 60)?;
+        *env.token.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        wait_health(env, 30)?;
+        let back = mgmt(env, "GET", "/mgmt/v1/status", None).map_err(|e| e.to_string())?;
+        match back.pointer("/identity/jwks_url").and_then(Value::as_str) {
+            Some(u) if u == want => Ok(()),
+            other => Err(format!("after the restart Sew reports {}", other.unwrap_or("no JWKS URL"))),
+        }
+    })();
+    drop(latch);
+    match fixed {
+        Ok(()) => {
+            let _ = env.ops.record_save(JWKS_RECORD, None);
+            changed("jwks");
+            out.insert("result".into(), json!("fixed"));
+            out.insert("from".into(), json!(have));
+            out.insert("to".into(), json!(want));
+            Value::Object(out)
+        }
+        Err(e) => jwks_drift_failed(env, &have, &want, e),
+    }
+}
+
 /// The 60 s health cadence (Linux only), plus the boot recovery of an
 /// upgrade or restore the last daemon died in.
 pub fn spawn_background() {
@@ -1180,10 +1330,20 @@ pub fn spawn_background() {
                 }
             }
         }
+        // S29 §19: the JWKS check runs until it settles for this process
+        // (the daemon port changes only with a restart).
+        let mut jwks_done = false;
         loop {
             std::thread::sleep(std::time::Duration::from_secs(60));
             if let Some(s) = health_tick(&env) {
                 k2_core::log_debug!("[sew] state → {s}");
+            }
+            if !jwks_done {
+                let j = jwks_drift_check(&env);
+                if j["result"] != "match" && j["result"] != "not_applicable" {
+                    k2_core::log_debug!("[sew] jwks check: {j}");
+                }
+                jwks_done = jwks_settled(&j);
             }
             super::voice::tick(&env);
         }
@@ -1422,6 +1582,13 @@ pub fn purge(env: &Env, confirm_hostname: &str, keep_backups: bool) -> R<Value> 
     }
     *env.token.lock().unwrap_or_else(|p| p.into_inner()) = None;
     store::delete().map_err(|e| no("db_error", 500, e))?;
+    // Sew's config went with it: K2's records of what it set there (the
+    // public URL, a JWKS drift) describe nothing now.
+    for rec in [SERVER_RECORD, JWKS_RECORD] {
+        if let Err(e) = env.ops.record_save(rec, None) {
+            k2_core::log_debug!("[sew] purge: record {rec}: {e}");
+        }
+    }
     // Sew's purge removed sew-media too: drop K2's voice record, TURN DNS
     // record, nested label and TURN key.
     let voice_left = super::voice::forget(env, &super::voice::load(env));
@@ -2360,7 +2527,10 @@ pub fn doctor(env: &Env) -> R<Value> {
         r.doctor_at = Some(now);
     })
     .map_err(|e| no("db_error", 500, e))?;
-    Ok(json!({"ok": true, "exit": exit, "report": report, "at": now}))
+    // A person (or a Manage-Sew agent) re-runs the S29 §19 JWKS check here
+    // after a `k2_jwks_url_drift` alarm.
+    let jwks = jwks_drift_check(env);
+    Ok(json!({"ok": true, "exit": exit, "report": report, "at": now, "jwks": jwks}))
 }
 
 pub fn job(env: &Env, id: &str) -> R<Value> {

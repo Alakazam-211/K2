@@ -163,8 +163,9 @@ fn person_only_steps_refuse_every_passport_and_need_the_owner_and_a_confirm() {
             assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "person_only"), "{who:?} {path}");
         }
     }
-    // An admin login is not the owner.
-    assert_eq!(code(&t.call(&login(Role::Admin), "/cli/sew/server/recovery-key", json!({})).1), "owner_only");
+    // An admin login reaches the confirm check (K2's lean); a member never does.
+    assert_eq!(code(&t.call(&login(Role::Admin), "/cli/sew/server/recovery-key", json!({})).1), "owner_confirm_required");
+    assert_eq!(code(&t.call(&login(Role::Member), "/cli/sew/server/recovery-key", json!({})).1), "owner_only");
     // The owner without a confirm, with one for another action or install,
     // and with a used one.
     assert_eq!(code(&t.call(&Who::Owner, "/cli/sew/server/recovery-key", json!({})).1), "owner_confirm_required");
@@ -199,6 +200,50 @@ fn purge_needs_the_confirm_and_the_hostname_and_then_removes_everything() {
     assert_eq!(v["purged"], true);
     assert_eq!(v["confirmedBy"], "vault-password");
     assert!(crate::sew::store::load().is_none());
+}
+
+/// Rosson's open question (2026-10-15), K2's lean: purge stays the
+/// owner's; an Admin login with its own confirm may reveal the recovery key
+/// and drop the previous master key. The admin's confirm is stamped with
+/// its own name: the owner's confirm is not theirs to spend.
+#[test]
+fn admin_with_a_confirm_may_reveal_the_key_and_drop_prev_but_never_purge() {
+    let t = t();
+    t.enable();
+    let vault = crate::vault::ensure_test_vault();
+    let admin = login(Role::Admin);
+    // Purge: owner only, even with an admin's own confirm. Nothing ran.
+    let tok = vault.confirm.mint(CONFIRM_PURGE, Some(INSTALL_ID), "connect:ana", "connect-password");
+    let (st, v) = t.call(&admin, "/cli/sew/server/uninstall", json!({"purge": true, "confirmToken": tok, "confirmHostname": "lztek"}));
+    assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "owner_only"), "{v}");
+    assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
+    assert!(crate::sew::store::load().is_some(), "purge refused: the install stays");
+    // The owner's confirm is not the admin's.
+    let owners = vault.confirm.mint(CONFIRM_RECOVERY, Some(INSTALL_ID), "owner", "vault-password");
+    assert_eq!(code(&t.call(&admin, "/cli/sew/server/recovery-key", json!({"confirmToken": owners})).1), "owner_confirm_required");
+    // The admin's own confirm reveals the key.
+    let mine = vault.confirm.mint(CONFIRM_RECOVERY, Some(INSTALL_ID), "connect:ana", "connect-password");
+    let (st, v) = t.call(&admin, "/cli/sew/server/recovery-key", json!({"confirmToken": mine}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert!(k2_root_proto::sew::master_key_text_ok(v["recoveryKey"].as_str().expect("recoveryKey")));
+    // drop-prev after a rotation, with the admin's own confirm.
+    let (st, v) = t.call(&admin, "/cli/sew/server/rotate-master", json!({"phase": "start"}));
+    assert_eq!(st, "200 OK", "{v}");
+    let mine = vault.confirm.mint(CONFIRM_DROP_PREV, Some(INSTALL_ID), "connect:ana", "connect-password");
+    let (st, v) = t.call(&admin, "/cli/sew/server/rotate-master", json!({"phase": "drop-prev", "confirmToken": mine}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!(v["dropped"], true);
+    assert_eq!(v["confirmedBy"], "connect-password");
+    // A member login never reaches a confirm for any of the three.
+    for (path, body) in [
+        ("/cli/sew/server/recovery-key", json!({})),
+        ("/cli/sew/server/rotate-master", json!({"phase": "drop-prev"})),
+    ] {
+        assert_eq!(code(&t.call(&login(Role::Member), path, body).1), "owner_only", "{path}");
+    }
+    // The route floors match: Admin for the reveal, never Member.
+    let floor = crate::routes::route_policy::lookup("/cli/sew/server/recovery-key").unwrap().post.unwrap();
+    assert!(floor.admits(Role::Admin) && !floor.admits(Role::Member));
 }
 
 #[test]

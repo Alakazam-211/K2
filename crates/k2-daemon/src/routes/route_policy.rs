@@ -1055,7 +1055,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sew/server/disable", Admin),
     post("/cli/sew/server/doctor", Admin),
     post("/cli/sew/server/enable", Admin),
-    post("/cli/sew/server/recovery-key", Owner),
+    post("/cli/sew/server/recovery-key", Admin),
     post("/cli/sew/server/restore", Admin),
     post("/cli/sew/server/rollback", Admin),
     post("/cli/sew/server/rotate-master", Admin),

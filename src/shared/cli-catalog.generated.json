@@ -1006,7 +1006,7 @@
    {
     "name": "hostchat",
     "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|uninstall|purge|recovery-key|job|media|users> ...",
-    "description": "The Sew chat (and voice) server on this box, over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Sew (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (owner + vault confirm, from a terminal outside K2). Linux boxes only. Exit 2 = bad request, 3 = refused or infra."
+    "description": "The Sew chat (and voice) server on this box, over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Sew (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge is the owner's, the other two the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra."
    },
    {
     "name": "hostchat enable",

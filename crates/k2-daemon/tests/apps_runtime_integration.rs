@@ -330,7 +330,13 @@ async fn s7_passport_rules_and_memory_setting() {
     let r = post(d.port, "/cli/app/config", &pass, json!({"app": "s7mine-app", "memory": "8G"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["app"]["memoryLimitBytes"], 8i64 << 30);
+    // Clearing the limit is a raise: an agent with only "Build and run
+    // Apps" proposes it (prd-agent-app-permissions-v1 §2.1); the owner
+    // (or an agent with "…and manage them end to end") makes it.
     let r = post(d.port, "/cli/app/config", &pass, json!({"app": "s7mine-app", "memory": "none"})).await;
+    assert_eq!((r.status, r.json()["status"].as_str()), (202, Some("held")), "{}", r.body);
+    assert_eq!(r.json()["app"]["memoryLimitBytes"], 8i64 << 30, "held: unchanged");
+    let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "s7mine-app", "memory": "none"})).await;
     assert_eq!(r.json()["app"]["memoryLimitBytes"], serde_json::Value::Null);
 
     // Every POST route answers 405 on GET.

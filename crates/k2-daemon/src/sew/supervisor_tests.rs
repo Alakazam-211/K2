@@ -1537,7 +1537,9 @@ fn jwks_url_drift_is_fixed_on_boot_through_config_restart_and_read_back() {
     assert_eq!(v["from"], OLD_JWKS);
     assert_eq!(v["to"], "http://127.0.0.1:38471/v1/chat/jwks");
     assert!(jwks_settled(&v));
-    assert_eq!(t.ops.effects(), vec!["engine sew config", "engine sew systemctl restart"]);
+    // config, restart, then the mgmt token is fetched afresh (as after any
+    // restart in health_check).
+    assert_eq!(t.ops.effects(), vec!["engine sew config", "engine sew systemctl restart", "engine sew token"]);
     // Exactly the one key, on stdin (never argv).
     let calls = t.ops.calls.lock().unwrap();
     let cfg = calls.iter().find(|c| c.argv == "engine sew config").unwrap();

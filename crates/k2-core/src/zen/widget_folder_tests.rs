@@ -146,20 +146,33 @@ fn a_folder_put_lands_whole_only_when_clean_and_prunes_only_on_request() {
 }
 
 #[test]
-fn proposal_changes_hold_code_files_only() {
+fn a_folder_proposal_holds_code_changes_and_keeps_the_rest_by_hash() {
     let (_t, f) = set_up("changes");
     let files = staged_files(&staged("board", HTML)).unwrap();
     f.put_widget_folder("board", &files, false).expect("put");
-    assert!(f.widget_folder_changes("board", &files).unwrap().is_empty(), "nothing changed");
+    assert!(f.widget_folder_proposal("board", &files).unwrap().is_none(), "nothing changed");
     let mut next = files.clone();
-    next.insert("index.html".into(), b"<p>v2</p><script src=\"app.js\"></script>".to_vec());
-    let ch = f.widget_folder_changes("board", &next).unwrap();
-    assert_eq!(ch.len(), 1);
-    assert_eq!(ch[0].0, "index.html");
-    assert_eq!(ch[0].2.as_deref(), Some(HTML), "the base is the file on disk");
+    let v2 = "<p>v2</p><script src=\"app.js\"></script>";
+    next.insert("index.html".into(), v2.as_bytes().to_vec());
+    let p = f.widget_folder_proposal("board", &next).unwrap().expect("a change");
+    assert_eq!(p.files.len(), 1);
+    assert_eq!((p.files[0].name.as_str(), p.files[0].text.as_str()), ("index.html", v2));
+    assert_eq!(p.files[0].base, text_hash(Some(HTML)), "the base is the file on disk");
+    assert_eq!(p.keep.len(), files.len() - 1, "every other staged file is kept by hash");
+    assert!(p.keep.iter().all(|k| k.hash == bytes_hash(files.get(&k.name).map(Vec::as_slice))));
+    assert!(f.folder_proposal_stale("board", &p).unwrap().is_empty());
     let mut asset = files.clone();
     asset.insert("logo.png".into(), [PNG, b"x"].concat());
-    assert!(matches!(f.widget_folder_changes("board", &asset), Err(ZenError::BadRequest(m)) if m.contains("image or font")));
+    assert!(matches!(f.widget_folder_proposal("board", &asset), Err(ZenError::BadRequest(m)) if m.contains("image or font")));
+    // A kept file that moves makes it stale, and applying writes nothing.
+    let kept = p.keep[0].name.clone();
+    fs::write(f.widget_dir("board").join(&kept), b"moved").unwrap();
+    assert_eq!(f.folder_proposal_stale("board", &p).unwrap(), vec![kept.clone()]);
+    match f.apply_folder_proposal("board", &p).unwrap() {
+        Err(stale) => assert_eq!(stale, vec![kept]),
+        Ok(v) => panic!("a stale folder proposal must not apply: {v}"),
+    }
+    assert_eq!(fs::read_to_string(f.widget_dir("board").join("index.html")).unwrap(), HTML, "nothing written");
 }
 
 #[test]

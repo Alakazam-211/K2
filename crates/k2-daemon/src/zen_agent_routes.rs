@@ -12,7 +12,7 @@
 //! | GET  proposals, proposals/show| yes    | yes                   | yes         |
 //! | POST proposals/approve        | yes    | yes (audited)         | 403         |
 //! | POST proposals/reject         | yes    | yes (audited)         | own only (withdraw) |
-//! | POST widget/folder/put        | writes | writes (audited)      | proposes (code files, one per file) |
+//! | POST widget/folder/put        | writes | writes (audited)      | proposes (code files, ONE proposal for the folder, 0.46.3) |
 //! | POST widget/folder/check, garden/check | yes | yes            | yes (writes nothing) |
 //! | POST widget/preview           | yes    | yes (audited)         | 403     |
 //!
@@ -195,7 +195,9 @@ fn after_write() {
     }
 }
 
-fn propose(caller: &Caller, kind: ProposalKind, target: &str, file: Option<&str>, text: &str, base: Option<&str>, note: Option<&str>) -> CliResponse {
+/// Save one proposal. `base_hash`: [`agent_edit::text_hash`] of the file
+/// it is made against, or a folder proposal's own fingerprint.
+fn propose(caller: &Caller, kind: ProposalKind, target: &str, file: Option<&str>, text: &str, base_hash: &str, note: Option<&str>) -> CliResponse {
     let Some(project) = project_of(caller) else {
         return refuse("403 Forbidden", "zen_local_only", "only a person or a local agent may change Gardens");
     };
@@ -210,7 +212,7 @@ fn propose(caller: &Caller, kind: ProposalKind, target: &str, file: Option<&str>
             target,
             file,
             content: text,
-            base_hash: &agent_edit::text_hash(base),
+            base_hash,
             note,
             made_by: &made_by,
             made_by_project: project,
@@ -240,9 +242,13 @@ fn propose(caller: &Caller, kind: ProposalKind, target: &str, file: Option<&str>
 }
 
 fn describe(p: &Proposal) -> String {
-    match &p.file {
-        Some(f) => format!("widgets/{}/{f}", p.target),
-        None => format!("gardens/{}.toml", p.target),
+    match (&p.kind, &p.file) {
+        (ProposalKind::Folder, _) => {
+            let files = p.folder().map(|f| f.files.iter().map(|x| x.name.clone()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+            format!("widgets/{}/ ({files})", p.target)
+        }
+        (_, Some(f)) => format!("widgets/{}/{f}", p.target),
+        (_, None) => format!("gardens/{}.toml", p.target),
     }
 }
 
@@ -276,7 +282,7 @@ fn garden_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
                 Ok((_, t)) => t,
                 Err(e) => return zen_err(e),
             };
-            propose(caller, ProposalKind::Garden, &id, None, &b.text, base.as_deref(), note.as_deref())
+            propose(caller, ProposalKind::Garden, &id, None, &b.text, &agent_edit::text_hash(base.as_deref()), note.as_deref())
         }
     }
 }
@@ -311,7 +317,7 @@ fn widget_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
                 Ok((_, t)) => t,
                 Err(e) => return zen_err(e),
             };
-            propose(caller, ProposalKind::Widget, &name, Some(&b.file), &b.text, base.as_deref(), note.as_deref())
+            propose(caller, ProposalKind::Widget, &name, Some(&b.file), &b.text, &agent_edit::text_hash(base.as_deref()), note.as_deref())
         }
     }
 }
@@ -406,8 +412,9 @@ fn folder_check(body: &[u8]) -> CliResponse {
 
 /// POST `widget/folder/put`: the whole folder in one checked write. The
 /// person and an agent with the switch write (a folder with errors is
-/// refused, nothing written); any other agent's put becomes one proposal
-/// per changed code file (images and fonts need a writer; no prune).
+/// refused, nothing written); any other agent's put becomes ONE proposal
+/// for the folder (0.46.3; its changed code files, images and fonts need a
+/// writer, no prune), approved and written as one.
 fn folder_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
     let b: FolderPut = match parse(body, "widget/folder/put takes {widget, files: [{name, text|base64}], prune?, note?}") {
         Ok(b) => b,
@@ -445,39 +452,41 @@ fn folder_put(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
                 Ok(n) => n,
                 Err(e) => return zen_err(e),
             };
-            let changes = match f.widget_folder_changes(&name, &staged) {
-                Ok(c) => c,
+            let proposal = match f.widget_folder_proposal(&name, &staged) {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    return resp("200 OK", json!({ "ok": true, "widget": name, "proposed": false, "changed": false, "proposals": [] }));
+                }
                 Err(e) => return zen_err(e),
             };
-            if changes.is_empty() {
-                return resp("200 OK", json!({ "ok": true, "widget": name, "proposed": false, "changed": false, "proposals": [] }));
+            // 0.46.3: the whole folder is ONE proposal, approved (and
+            // written) as one, never file by file.
+            let content = match serde_json::to_string(&proposal) {
+                Ok(c) => c,
+                Err(e) => return refuse("500 Internal Server Error", "internal", format!("the folder proposal didn't encode: {e}")),
+            };
+            let names: Vec<&str> = proposal.files.iter().map(|x| x.name.as_str()).collect();
+            let r = propose(caller, ProposalKind::Folder, &name, None, &content, &proposal.base_hash(), note.as_deref());
+            if r.status != "200 OK" {
+                return r;
             }
-            let n = changes.len();
-            let mut proposals = Vec::new();
-            for (i, (file, text, base)) in changes.iter().enumerate() {
-                let part = format!("folder put {}/{n}", i + 1);
-                let note = Some(match &note {
-                    Some(t) => format!("{part}: {t}"),
-                    None => part,
-                });
-                let r = propose(caller, ProposalKind::Widget, &name, Some(file), text, base.as_deref(), note.as_deref());
-                let v: J = serde_json::from_str(&r.body).unwrap_or(J::Null);
-                if r.status != "200 OK" {
-                    return r;
-                }
-                proposals.push(v["proposal"].clone());
-            }
-            let ids: Vec<&str> = proposals.iter().filter_map(|p| p["id"].as_str()).collect();
+            let v: J = match serde_json::from_str(&r.body) {
+                Ok(v) => v,
+                Err(e) => return refuse("500 Internal Server Error", "internal", format!("the proposal answer isn't JSON: {e}")),
+            };
+            let id = v["proposal"]["id"].as_str().unwrap_or_default().to_string();
             resp(
                 "200 OK",
                 json!({
                     "ok": true,
                     "widget": name,
                     "proposed": true,
-                    "proposals": proposals,
+                    "proposal": v["proposal"],
+                    "proposals": [v["proposal"]],
                     "message": format!(
-                        "Proposed {n} file change(s) to widgets/{name}/ ({}). A person approves them (Settings → Gardens, or k2 zen proposals approve <id> outside K2), or an agent with \"Manage Gardens and data sources\". Until every one is approved the widget keeps running its last good version.",
-                        ids.join(", ")
+                        "Proposed one change to widgets/{name}/ as {id} ({} file(s): {}). A person approves it (Settings → Gardens, or k2 zen proposals approve {id} outside K2), or an agent with \"Manage Gardens and data sources\"; approving writes the whole folder at once. Until then the widget keeps running its last good version.",
+                        names.len(),
+                        names.join(", ")
                     ),
                 }),
             )
@@ -569,6 +578,9 @@ fn show(params: &HashMap<String, String>) -> CliResponse {
         Err(e) => return e,
     };
     let f = files();
+    if p.kind == ProposalKind::Folder {
+        return show_folder(&f, &p);
+    }
     let current = current_text(&f, &p).ok().flatten();
     let stale = agent_edit::text_hash(current.as_deref()) != p.base_hash;
     let mut v = p.summary();
@@ -576,6 +588,29 @@ fn show(params: &HashMap<String, String>) -> CliResponse {
     v["current"] = json!(current);
     v["stale"] = json!(stale);
     v["path"] = json!(describe(&p));
+    resp("200 OK", json!({ "ok": true, "proposal": v }))
+}
+
+/// `show` for a folder proposal: `content` is its changed files
+/// (`[{name, text, base}]`), `current` each one's text on disk now (`null`:
+/// no file), `staleFiles` the files (changed or kept) that moved since.
+fn show_folder(f: &ZenFiles, p: &Proposal) -> CliResponse {
+    let fp = match p.folder() {
+        Ok(fp) => fp,
+        Err(m) => return refuse("500 Internal Server Error", "internal", m),
+    };
+    let mut current = serde_json::Map::new();
+    for c in &fp.files {
+        let now = f.widget_file_text(&p.target, &c.name).ok().and_then(|(_, t)| t);
+        current.insert(c.name.clone(), json!(now));
+    }
+    let stale_files = f.folder_proposal_stale(&p.target, &fp).unwrap_or_else(|e| vec![format!("(can't check: {e})")]);
+    let mut v = p.summary();
+    v["content"] = json!(fp.files);
+    v["current"] = J::Object(current);
+    v["stale"] = json!(!stale_files.is_empty());
+    v["staleFiles"] = json!(stale_files);
+    v["path"] = json!(describe(p));
     resp("200 OK", json!({ "ok": true, "proposal": v }))
 }
 
@@ -603,20 +638,43 @@ fn approve(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
         return refuse("409 Conflict", "not_pending", format!("{} is {}, not waiting", p.id, p.status));
     }
     let f = files();
-    let current = match current_text(&f, &p) {
-        Ok(t) => t,
-        Err(e) => return zen_err(e),
-    };
-    if agent_edit::text_hash(current.as_deref()) != p.base_hash {
-        return refuse(
-            "409 Conflict",
-            "proposal_stale",
-            format!("{} changed since this was proposed; reject it and ask for a new one", describe(&p)),
-        );
-    }
-    let applied = match (&p.kind, &p.file) {
-        (ProposalKind::Widget, Some(file)) => f.put_widget_file(&p.target, file, &p.content),
-        _ => f.put_garden(&p.target, &p.content, r == Role::Person),
+    let applied = if p.kind == ProposalKind::Folder {
+        // The whole folder at once (0.46.3), or nothing.
+        let fp = match p.folder() {
+            Ok(fp) => fp,
+            Err(m) => return refuse("500 Internal Server Error", "internal", m),
+        };
+        match f.apply_folder_proposal(&p.target, &fp) {
+            Ok(Ok(v)) => Ok(v),
+            Ok(Err(stale)) => {
+                return refuse(
+                    "409 Conflict",
+                    "proposal_stale",
+                    format!(
+                        "widgets/{}/ changed since this was proposed ({}); nothing was written. Reject it and ask for a new one",
+                        p.target,
+                        stale.join(", ")
+                    ),
+                );
+            }
+            Err(e) => Err(e),
+        }
+    } else {
+        let current = match current_text(&f, &p) {
+            Ok(t) => t,
+            Err(e) => return zen_err(e),
+        };
+        if agent_edit::text_hash(current.as_deref()) != p.base_hash {
+            return refuse(
+                "409 Conflict",
+                "proposal_stale",
+                format!("{} changed since this was proposed; reject it and ask for a new one", describe(&p)),
+            );
+        }
+        match (&p.kind, &p.file) {
+            (ProposalKind::Widget, Some(file)) => f.put_widget_file(&p.target, file, &p.content),
+            _ => f.put_garden(&p.target, &p.content, r == Role::Person),
+        }
     };
     let v = match applied {
         Ok(v) => v,

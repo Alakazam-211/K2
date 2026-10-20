@@ -21,6 +21,14 @@
 //! and data sources" proposes the same change; a person (or an agent with
 //! the switch) approves it, which applies it only if the file is still the
 //! one the proposal was made against (`base_hash`).
+//!
+//! A folder put (`k2 zen widget put <name> --dir`) is ONE proposal for the
+//! whole folder (0.46.3, "Remaining Garden gaps"): approving it writes every
+//! changed file at once, or nothing. No migration: 0181's `kind` CHECK
+//! allows only 'garden' and 'widget', so a folder proposal is stored as a
+//! widget row whose `file` is [`FOLDER_FILE`] (`*`, never a valid file
+//! name) and whose `content` is the [`super::widget_folder::FolderProposal`]
+//! JSON. The API names its kind `folder` and gives it no `file`.
 
 use std::fs;
 
@@ -38,12 +46,20 @@ pub const MAX_PUT_BYTES: usize = super::bundle::MAX_CODE_BYTES;
 pub const MAX_GARDEN_BYTES: usize = 256 * 1024;
 /// A proposal note is at most this many characters.
 pub const MAX_NOTE_CHARS: usize = 500;
+/// The `file` column of a folder proposal's row (see the module doc).
+pub const FOLDER_FILE: &str = "*";
 
 /// `sha256` hex of `text`, or `""` for a file that doesn't exist.
 pub fn text_hash(text: Option<&str>) -> String {
-    match text {
+    bytes_hash(text.map(str::as_bytes))
+}
+
+/// `sha256` hex of `bytes`, or `""` for a file that doesn't exist (the same
+/// value as [`text_hash`] for text).
+pub fn bytes_hash(bytes: Option<&[u8]>) -> String {
+    match bytes {
         None => String::new(),
-        Some(t) => Sha256::digest(t.as_bytes()).iter().map(|b| format!("{b:02x}")).collect(),
+        Some(b) => Sha256::digest(b).iter().map(|b| format!("{b:02x}")).collect(),
     }
 }
 
@@ -192,13 +208,16 @@ impl ZenFiles {
 pub enum ProposalKind {
     Garden,
     Widget,
+    /// A whole widget folder (stored as a widget row, file [`FOLDER_FILE`]).
+    Folder,
 }
 
 impl ProposalKind {
+    /// The row's `kind` column.
     pub fn code(self) -> &'static str {
         match self {
             ProposalKind::Garden => "garden",
-            ProposalKind::Widget => "widget",
+            ProposalKind::Widget | ProposalKind::Folder => "widget",
         }
     }
 }
@@ -230,7 +249,27 @@ impl Proposal {
     pub fn summary(&self) -> J {
         let mut v = serde_json::to_value(self).unwrap_or(J::Null);
         v["bytes"] = json!(self.content.len());
+        if self.kind == ProposalKind::Folder {
+            // A folder proposal also names the files it changes and how
+            // many staged files it keeps as they are.
+            match self.folder() {
+                Ok(f) => {
+                    v["files"] = json!(f.files.iter().map(|x| x.name.as_str()).collect::<Vec<_>>());
+                    v["unchanged"] = json!(f.keep.len());
+                }
+                Err(e) => v["error"] = json!(e),
+            }
+        }
         v
+    }
+
+    /// A folder proposal's files. `Err` for any other kind, or content that
+    /// doesn't parse (K2 never writes such a row).
+    pub fn folder(&self) -> Result<super::widget_folder::FolderProposal, String> {
+        if self.kind != ProposalKind::Folder {
+            return Err(format!("{} is not a folder proposal", self.id));
+        }
+        serde_json::from_str(&self.content).map_err(|e| format!("{}: the folder proposal doesn't parse: {e}", self.id))
     }
 }
 
@@ -253,11 +292,17 @@ const COLS: &str = "id, kind, target, file, content, base_hash, note, status, ma
 
 fn row(r: &Row) -> rusqlite::Result<Proposal> {
     let kind: String = r.get(1)?;
+    let file: Option<String> = r.get(3)?;
+    let (kind, file) = match (kind.as_str(), file) {
+        ("widget", Some(f)) if f == FOLDER_FILE => (ProposalKind::Folder, None),
+        ("widget", f) => (ProposalKind::Widget, f),
+        (_, f) => (ProposalKind::Garden, f),
+    };
     Ok(Proposal {
         id: r.get(0)?,
-        kind: if kind == "widget" { ProposalKind::Widget } else { ProposalKind::Garden },
+        kind,
         target: r.get(2)?,
-        file: r.get(3)?,
+        file,
         content: r.get(4)?,
         base_hash: r.get(5)?,
         note: r.get(6)?,
@@ -271,8 +316,17 @@ fn row(r: &Row) -> rusqlite::Result<Proposal> {
     })
 }
 
+/// Save a new pending proposal. A folder proposal names no `file` (its row
+/// gets [`FOLDER_FILE`]); a widget one names a real file, never the mark.
 pub fn insert(conn: &Connection, p: &NewProposal<'_>) -> rusqlite::Result<Proposal> {
     let id = format!("zp-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
+    let file = match p.kind {
+        ProposalKind::Folder => Some(FOLDER_FILE),
+        _ if p.file == Some(FOLDER_FILE) => {
+            return Err(rusqlite::Error::InvalidParameterName(format!("'{FOLDER_FILE}' marks a folder proposal; it is not a file")));
+        }
+        _ => p.file,
+    };
     conn.execute(
         "INSERT INTO zen_proposals (id, kind, target, file, content, base_hash, note, status, made_by, \
          made_by_project, made_by_session, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?9, ?10, ?11)",
@@ -280,7 +334,7 @@ pub fn insert(conn: &Connection, p: &NewProposal<'_>) -> rusqlite::Result<Propos
             id,
             p.kind.code(),
             p.target,
-            p.file,
+            file,
             p.content,
             p.base_hash,
             p.note,
@@ -378,5 +432,95 @@ mod tests {
             [],
         );
         assert!(bad.is_err(), "a Garden proposal names no file");
+    }
+
+    #[test]
+    fn a_folder_proposal_is_one_widget_row_marked_star_and_reads_back_as_folder() {
+        use super::super::widget_folder::{FolderChange, FolderKeep, FolderProposal};
+        let _db = crate::db::scoped_for_test();
+        let h = crate::db::shared();
+        let conn = h.lock();
+        let fp = FolderProposal {
+            files: vec![
+                FolderChange { name: "app.js".into(), text: "x()".into(), base: text_hash(Some("y()")) },
+                FolderChange { name: "index.html".into(), text: "<p>2</p>".into(), base: String::new() },
+            ],
+            keep: vec![FolderKeep { name: "logo.png".into(), hash: bytes_hash(Some(&[1, 2, 3])) }],
+        };
+        let content = serde_json::to_string(&fp).expect("encode");
+        let p = insert(
+            &conn,
+            &NewProposal {
+                kind: ProposalKind::Folder,
+                target: "board",
+                file: None,
+                content: &content,
+                base_hash: &fp.base_hash(),
+                note: None,
+                made_by: "agent:w-1",
+                made_by_project: "w-1",
+                made_by_session: None,
+                now: 10,
+            },
+        )
+        .expect("insert folder");
+        assert_eq!((p.kind, p.file.as_deref()), (ProposalKind::Folder, None));
+        let (kind, file): (String, Option<String>) = conn
+            .query_row("SELECT kind, file FROM zen_proposals WHERE id = ?1", params![p.id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .expect("row");
+        assert_eq!((kind.as_str(), file.as_deref()), ("widget", Some(FOLDER_FILE)), "no migration: a widget row marked *");
+        assert_eq!(p.folder().expect("folder"), fp);
+        let v = p.summary();
+        assert_eq!((v["kind"].clone(), v["files"].clone(), v["unchanged"].clone()), (json!("folder"), json!(["app.js", "index.html"]), json!(1)), "{v}");
+        assert!(v.get("content").is_none(), "{v}");
+        // The mark is never a widget file of its own.
+        let mark = insert(
+            &conn,
+            &NewProposal {
+                kind: ProposalKind::Widget,
+                target: "board",
+                file: Some(FOLDER_FILE),
+                content: "",
+                base_hash: "",
+                note: None,
+                made_by: "agent:w-1",
+                made_by_project: "w-1",
+                made_by_session: None,
+                now: 11,
+            },
+        );
+        assert!(mark.is_err(), "a widget proposal can't name the folder mark");
+        // A one-file widget proposal still reads back as a widget.
+        let w = insert(
+            &conn,
+            &NewProposal {
+                kind: ProposalKind::Widget,
+                target: "board",
+                file: Some("app.js"),
+                content: "z()",
+                base_hash: "",
+                note: None,
+                made_by: "agent:w-1",
+                made_by_project: "w-1",
+                made_by_session: None,
+                now: 12,
+            },
+        )
+        .expect("insert widget");
+        assert_eq!((w.kind, w.file.as_deref()), (ProposalKind::Widget, Some("app.js")));
+        assert!(w.folder().is_err());
+    }
+
+    #[test]
+    fn a_folder_fingerprint_follows_every_file_in_any_order() {
+        use super::super::widget_folder::{FolderChange, FolderKeep, FolderProposal};
+        let a = FolderChange { name: "a.js".into(), text: "1".into(), base: "h1".into() };
+        let b = FolderChange { name: "b.js".into(), text: "2".into(), base: String::new() };
+        let k = FolderKeep { name: "c.css".into(), hash: "h3".into() };
+        let one = FolderProposal { files: vec![a.clone(), b.clone()], keep: vec![k.clone()] };
+        let two = FolderProposal { files: vec![b.clone(), a.clone()], keep: vec![k.clone()] };
+        assert_eq!(one.base_hash(), two.base_hash());
+        let moved = FolderProposal { files: vec![a, b], keep: vec![FolderKeep { name: "c.css".into(), hash: "h4".into() }] };
+        assert_ne!(one.base_hash(), moved.base_hash(), "a kept file is part of the fingerprint");
     }
 }

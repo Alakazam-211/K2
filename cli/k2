@@ -14156,9 +14156,8 @@ Agents:
                  From a git worktree inside the workspace (.claude/worktrees/x) the
                  workspace is found for you, and run takes HEAD and --dirty from
                  that worktree; from anywhere else pass --workspace <handle>.
-  k2 compute get <job> [--json]              --json: the job; its result (exit, duration,
-                                             node, artifacts + sha256, tests, receipt id)
-                                             is under "result"
+  k2 compute get <job> [--json]              --json: the result (exit, duration, node,
+                                             artifacts + sha256, tests, receipt id)
   k2 compute fetch <job> [NAME...] [--out DIR] [--json]
                                              copy kept artifacts here (all, or NAMEs)
   k2 compute wait <job>... [--failures] [--max-wait 9m] [--quiet] [--json]
@@ -15926,7 +15925,8 @@ cmd_compute() {
             fi
             [ -n "${1:-}" ] || { echo "usage: k2 compute get <job> [--json]" >&2; exit 2; }
             _CP_404_EXIT=4 _compute_call GET /cli/compute/jobs/get "job=$(urlencode "$1")"
-            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            # --json: the one result object (compute B), as run --json prints.
+            [ "$as_json" = "1" ] && { printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin).get("result"), indent=2))'; exit 0; }
             _compute_render get
             ;;
         fetch) cmd_compute_fetch "$@" ;;

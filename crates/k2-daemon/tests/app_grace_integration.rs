@@ -449,6 +449,8 @@ async fn publish_run_mapping_notice_now_held_when_enforced_and_the_admin_switche
     assert_eq!((r.status, r.json()["kind"].clone()), (202, json!("publish_run")), "{}", r.body);
     let r = post(d.port, "/cli/agent-access/set", OWNER, json!({"workspace": ws.id, "toggle": "apps_build", "value": true})).await;
     assert_eq!((r.status, r.json()["level"].clone()), (200, json!("build")), "{}", r.body);
+    let r = post(d.port, "/cli/publish/stop", &agent, json!({"name": "svc-a"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
     let r = post(d.port, "/cli/publish/run", &agent, run("svc-a", free())).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(r.json().get("crossover").is_none(), "a legacy re-run under switch 1 is free: {}", r.body);

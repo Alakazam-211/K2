@@ -477,6 +477,13 @@ async fn the_app_link_serves_every_new_thread_row() {
         caps: vec!["thread:read".into(), "thread:post".into(), "files:read".into()],
         rooms: vec![ws.id.clone()],
     };
+    // The gateway tells the App's agent about its first write verbs
+    // (apps::alerts, §5.5) through a `k2 msg` wake. Record it instead: in
+    // this harness that wake can't spawn and re-pins the room's Chat to a
+    // fresh session, which moved the address under the mark-read below.
+    let alerts = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+    let a2 = alerts.clone();
+    k2_daemon::apps::alerts::set_sink(Some(Box::new(move |w, t| a2.lock().unwrap().push((w.to_string(), t.to_string())))));
     let pass = gateway::open(spec, None).expect("open link");
     let lport = gateway::port_of(&format!("par{tag}")).expect("listening");
 
@@ -518,4 +525,7 @@ async fn the_app_link_serves_every_new_thread_row() {
     assert_eq!(r.status, 200, "a post with a file on the link: {}", r.body);
     assert_eq!(r.json()["attachments"][0]["path"], "out/notes.md");
     gateway::close(&format!("par{tag}"), None, true);
+    k2_daemon::apps::alerts::set_sink(None);
+    let seen = alerts.lock().unwrap().clone();
+    assert!(seen.iter().all(|(w, _)| *w == ws.id), "alerts go to the App's own workspace: {seen:?}");
 }

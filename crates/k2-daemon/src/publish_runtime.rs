@@ -2587,7 +2587,9 @@ mod tests {
             assert_eq!(err.status, "409 Conflict", "skin={skin} msg={}", err.message);
             let body = err.body.as_ref().expect("structured body");
             assert_eq!(body["code"], crate::label_owner::CODE, "skin={skin}");
-            assert!(body.get("owner").is_none(), "default caller gets the neutral message");
+            // N6: the holder's agent, never its folder path.
+            assert!(body["owner"]["agent"].is_string(), "skin={skin} {body}");
+            assert!(body["owner"].get("path").is_none(), "skin={skin} {body}");
             assert!(!marker.exists(), "must not spawn (skin={skin})");
             assert!(load_row(&b, &name).is_none(), "no service row for B (skin={skin})");
         }

@@ -3088,7 +3088,10 @@ mod subdomain_attribution_route_tests {
         assert_eq!(resp.status, "409 Conflict", "body={}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
         assert_eq!(v["code"], "label_owned_by_other_workspace");
-        assert!(v.get("owner").is_none(), "member must not see the owner: {v}");
+        // N6: the holder's agent and address, never its id or path.
+        assert!(v["owner"]["agent"].is_string(), "{v}");
+        assert!(v["owner"].get("path").is_none() && v["owner"].get("projectId").is_none(), "{v}");
+        assert!(!resp.body.contains(&id_a), "no id leak: {v}");
         assert_eq!(attribution_of(&label).as_deref(), Some(id_a.as_str()));
 
         let resp = handle_subdomain_claim(&params(&[

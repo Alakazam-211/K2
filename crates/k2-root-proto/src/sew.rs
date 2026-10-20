@@ -261,6 +261,20 @@ pub struct SewRelease {
     pub recorder: Option<SewSidecar>,
 }
 
+/// The PostgreSQL major Sew's private `sew-db` runs on, for the pinned
+/// releases (0.2.x, 0.3.0). Always passed as `sew install`'s `pg_major`:
+/// without it Sew takes the highest major under `/usr/lib/postgresql` at
+/// install time, and from 0.46.3 K2 installs PGDG 17 next to 16 for its own
+/// databases, so a fresh install could silently land on 17. Moves with the
+/// pin (a Sew release that wants another major bumps it here, in the same
+/// change). sew-db is socket-only (`/run/sew-db`, no TCP), so it never
+/// clashes with K2's clusters; the `postgresql-16` package must stay
+/// installed on a box with Sew (the preflight checks these binaries).
+pub const SEW_PG_MAJOR: u32 = 16;
+
+/// The server binaries [`SEW_PG_MAJOR`] needs (`/usr/lib/postgresql/<M>/bin/`).
+pub const SEW_PG_BINARIES: [&str; 4] = ["postgres", "initdb", "pg_dump", "pg_restore"];
+
 /// Every Sew release K2 has ever pinned, oldest first. The LAST entry is
 /// the pin. A pin bump appends: old entries stay so the helper still
 /// recognises the binary already on a box (upgrade source, rollback).
@@ -929,6 +943,7 @@ impl InstallRequest {
         let mut v = serde_json::json!({
             "provider": self.provider(),
             "profile": "shared",
+            "pg_major": SEW_PG_MAJOR,
             "mgmt_allow_uids": [daemon_uid],
         });
         if let Some(u) = &self.jwks_url {
@@ -1468,6 +1483,9 @@ mod tests {
         let inputs = r.sew_inputs(1001);
         assert_eq!(inputs["provider"], "k2");
         assert_eq!(inputs["k2_jwks_url"], "http://127.0.0.1:38471/v1/chat/jwks");
+        // The PG major is always explicit (never Sew's "highest found").
+        assert_eq!(inputs["pg_major"], serde_json::json!(16));
+        assert_eq!(SEW_PG_MAJOR, 16, "Sew 0.2.x / 0.3.0 run sew-db on PostgreSQL 16");
         // Standalone (0.46.0 demo): no JWKS, Sew's own password logins.
         let sa: InstallRequest =
             serde_json::from_str(r#"{"provider":"standalone","masterKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#).unwrap();
@@ -1475,6 +1493,7 @@ mod tests {
         let si = sa.sew_inputs(1001);
         assert_eq!(si["provider"], "standalone");
         assert!(si.get("k2_jwks_url").is_none());
+        assert_eq!(si["pg_major"], serde_json::json!(SEW_PG_MAJOR));
         assert_eq!(si["mgmt_allow_uids"], serde_json::json!([1001]));
         for bad in [
             r#"{"provider":"standalone","jwksUrl":"http://127.0.0.1:1/v1/chat/jwks","masterKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}"#,

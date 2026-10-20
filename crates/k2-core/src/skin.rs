@@ -5056,6 +5056,8 @@ fn create_hooked_grant(
         Ok(grant)
     })?;
     crate::tool_hook::kick();
+    // K31: a Sew member grant decides App Space membership too.
+    crate::tool_hook::kick_app_spaces();
     members::changed(None);
     Ok(grant)
 }
@@ -5107,6 +5109,8 @@ pub fn update_grant_scope(id: &str, scope: &str, actor: &str) -> Result<SkinGran
     })?;
     if changed {
         crate::tool_hook::kick();
+        // K31: a Sew member grant decides App Space membership too.
+        crate::tool_hook::kick_app_spaces();
         members::changed(None);
     }
     Ok(grant)
@@ -5150,6 +5154,8 @@ fn delete_hooked_grant(
     })?;
     if r.is_some() {
         crate::tool_hook::kick();
+        // K31: a Sew member grant decides App Space membership too.
+        crate::tool_hook::kick_app_spaces();
         members::changed(None);
     }
     Ok(r)
@@ -5289,6 +5295,8 @@ fn set_hooked_grant_enabled(
     })?;
     if changed {
         crate::tool_hook::kick();
+        // K31: a Sew member grant decides App Space membership too.
+        crate::tool_hook::kick_app_spaces();
         members::changed(None);
     }
     Ok(grant)

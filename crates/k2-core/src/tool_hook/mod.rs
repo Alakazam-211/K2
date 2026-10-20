@@ -439,6 +439,23 @@ pub fn kick() {
     notify().notify_one();
 }
 
+/// K31: after a chat grant change, ask for a sweep only when some Space
+/// is bound to an App (the sweep plans App Space membership). Never
+/// creates `skin.db`.
+pub fn kick_app_spaces() {
+    if !skin_store_exists() {
+        return;
+    }
+    let bound = crate::skin::with_skin_conn(|conn| {
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM tool_app_spaces)", [], |r| r.get::<_, bool>(0))
+            .map_err(|e| e.to_string())
+    })
+    .unwrap_or(false);
+    if bound {
+        kick_reconcile();
+    }
+}
+
 /// Ask for a reconcile sweep soon (debounced by the worker). For writes
 /// outside skin.db: workspace handle / display name, owner name, project
 /// delete, App user changes. Non-blocking; harmless with no worker.

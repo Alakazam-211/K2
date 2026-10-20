@@ -17,9 +17,15 @@
 //!
 //! Who: the dispatcher resolves the credential to a LOGIN (owner token →
 //! `owner`, a live Connect session → its username) and refuses anything
-//! else with 403 (agent passports, app passes, API keys): agents have no
-//! read state. Each login sees and changes only its own person's state.
+//! else with 403 (agent passports, API keys): agents have no read state.
+//! Each login sees and changes only its own person's state.
 //! A GET on a POST route is 405 (house rule), checked before auth.
+//!
+//! **App guests and App passes** (App parity, 0.46.3, Rosson 2026-10-20;
+//! [`handle_guest`]): `POST /cli/thread/read` and `GET /cli/thread/unread`
+//! only, on their own cursors (`guest:<principal>` / `app:<App>`, never a
+//! person's), for the pinned Chats of rooms where they hold `thread:read`.
+//! Mute and project chat stay people-only.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -251,6 +257,115 @@ fn group_id(f: &Fields) -> Result<String, CliResponse> {
             usage(format!("'{sel}' matches several projects: {}", names.join(", ")))
         }
     })
+}
+
+/// The read-state key of an App guest (its login principal) or an App's
+/// own pass (its App). Never collides with a person key (those are
+/// `owner` or a Connect username, which never holds a `:`).
+pub fn guest_person_key(pass: &k2_core::skin::SkinPass) -> String {
+    if let Some(p) = pass.principal_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        return format!("guest:{p}");
+    }
+    if let Some(link) = crate::apps::gateway::current() {
+        return format!("app:{}", link.app_id);
+    }
+    if !pass.app.trim().is_empty() {
+        return format!("app:{}", pass.app.trim());
+    }
+    format!("pass:{}", pass.id)
+}
+
+fn guest_person(pass: &k2_core::skin::SkinPass) -> Person {
+    let user = pass.username.trim();
+    Person::app_guest(&guest_person_key(pass), if user.is_empty() { "skin" } else { user })
+}
+
+/// A guest's own post (or card answer) advances its own cursor, as a
+/// person's does. Runs under the caller's DB lock.
+pub fn note_guest_thread_read(conn: &rusqlite::Connection, pass: &k2_core::skin::SkinPass, conversation_id: &str, seq: i64) {
+    if !read_state::tables_exist(conn) {
+        return;
+    }
+    if let Err(e) = read_state::ack(conn, &guest_person_key(pass), KIND_THREAD, conversation_id, Some(seq)) {
+        k2_core::log_debug!("[read] guest own-post advance in {conversation_id}: {e}");
+    }
+}
+
+/// thread-read for an App guest / App pass (`pass` is bound on this thread
+/// by the dispatcher). `POST /cli/thread/read {addr|conversationId, seq?}`
+/// → `{ok, changed, …State}`; `GET /cli/thread/unread` → `{ok, total,
+/// waitingTotal, byConversation:[State + addr]}` over its readable rooms.
+/// Mute and project chat: 403 (people only). No push, no live frames: a
+/// guest has neither.
+pub fn handle_guest(is_post: bool, path: &str, params: &HashMap<String, String>, body: &[u8], pass: &k2_core::skin::SkinPass) -> CliResponse {
+    if is_post_only(path) && !is_post {
+        return CliResponse::method_not_allowed();
+    }
+    if path == UNREAD_PATH && is_post {
+        return CliResponse::method_not_allowed();
+    }
+    if path != READ_PATH && path != UNREAD_PATH {
+        return not_a_person();
+    }
+    let fields = match Fields::parse(params, body) {
+        Ok(f) => f,
+        Err(r) => return r,
+    };
+    let person = guest_person(pass);
+    let now = read_state::now_secs();
+    if path == UNREAD_PATH {
+        let rooms = crate::overlay_routes::guest_room_threads(pass);
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let mut rows = Vec::new();
+        let (mut total, mut waiting) = (0i64, 0i64);
+        for (addr, conv) in rooms {
+            match read_state::item(&conn, &person, KIND_THREAD, &conv, now) {
+                Ok(item) => {
+                    if !item.muted {
+                        total += item.unread;
+                    }
+                    waiting += item.waiting;
+                    let mut v = state_json(&item);
+                    v["addr"] = serde_json::json!(addr);
+                    rows.push(v);
+                }
+                // A pinned Chat with no Thread yet has nothing unread.
+                Err(ReadError::NotFound(_)) => {}
+                Err(e) => return read_error(e),
+            }
+        }
+        return CliResponse::ok_json(
+            serde_json::json!({ "ok": true, "total": total, "waitingTotal": waiting, "byConversation": rows }).to_string(),
+        );
+    }
+    let Some(addr) = fields.str(&["addr", "conversationId", "conversation_id", "id"]) else {
+        return usage("missing addr (or conversationId)");
+    };
+    let conv = match crate::overlay_routes::guest_thread_target(&addr) {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let seq = match fields.int("seq") {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let changed = match read_state::ack(&conn, &person.key, KIND_THREAD, &conv, seq) {
+        Ok(c) => c,
+        Err(e) => return read_error(e),
+    };
+    match read_state::item(&conn, &person, KIND_THREAD, &conv, now) {
+        Ok(item) => {
+            let mut v = state_json(&item);
+            v["ok"] = serde_json::json!(true);
+            v["changed"] = serde_json::json!(changed);
+            v["addr"] = serde_json::json!(addr);
+            CliResponse::ok_json(v.to_string())
+        }
+        Err(e) => read_error(e),
+    }
 }
 
 /// Route entry. `login` is the dispatcher-resolved person login.

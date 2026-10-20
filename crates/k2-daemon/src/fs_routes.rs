@@ -210,6 +210,45 @@ pub fn handle_resolve_links(body: &[u8]) -> CliResponse {
     )
 }
 
+/// `POST /cli/fs/resolve-links` for an App guest or App pass (App parity,
+/// 0.46.3; catalog `files.resolveLinks`): the same answer shape, cut down
+/// to what its own file rights cover. `workspace` must be one of its rooms
+/// (else the uniform `skin_room`), it needs `files:read` there, and a
+/// candidate is linkable only when its real path is inside the room, is
+/// not a secret, and sits under its folder scope. The answer never carries
+/// the room's host path (`root`, `prefixes`, `path`): only `rel`. A `~`
+/// path is never expanded.
+pub fn handle_resolve_links_guest(body: &[u8], pass: &SkinPass) -> CliResponse {
+    let parsed: ResolveLinksBody = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
+    };
+    let ws = match resolve_skin_workspace(pass, &parsed.workspace) {
+        Ok(w) => w,
+        Err(r) => return r,
+    };
+    if !pass.has_cap_in_room(&ws.project_id, crate::skin_routes::FILES_READ) {
+        return crate::thread_attachments::cap_refused(crate::skin_routes::FILES_READ);
+    }
+    let root = PathBuf::from(&ws.path);
+    let links: Vec<serde_json::Value> = k2_core::file_links::resolve_links(&root, None, &parsed.paths)
+        .into_iter()
+        .map(|a| {
+            let rel = a.rel.clone().unwrap_or_default();
+            let ok = a.linkable
+                && !rel.is_empty()
+                && !k2_core::secret_paths::is_secret_rel(&rel)
+                && guest_may_read_rel(pass, &ws.project_id, &ws.path, &rel);
+            if ok {
+                serde_json::json!({ "input": a.input, "linkable": true, "kind": a.kind, "rel": rel })
+            } else {
+                serde_json::json!({ "input": a.input, "linkable": false })
+            }
+        })
+        .collect();
+    CliResponse::ok_json(serde_json::json!({ "links": links }).to_string())
+}
+
 #[derive(Deserialize)]
 struct WriteFileBody {
     path: String,

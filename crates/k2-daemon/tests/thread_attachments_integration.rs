@@ -4,7 +4,8 @@
 //!
 //! - Send-time checks: inside the workspace (realpath), a file, not a
 //!   secret (path or content); outside / symlink escape / `..` / folder /
-//!   missing / >10 refused, all or nothing; App guests can't attach.
+//!   missing / >10 refused, all or nothing; App guests attach only what
+//!   their own file rights cover (0.46.3).
 //! - The live state on read: ok → changed → gone; a `touch` stays ok on
 //!   the route's re-hash.
 //! - Guests: a pointer, never a grant. Files inside the guest's folder
@@ -358,9 +359,15 @@ async fn thread_attachments_send_view_open_and_scope() {
     assert_eq!(r.status, 403, "{}", r.body);
     assert_eq!(r.json()["error"]["code"], "cap_not_granted", "{}", r.body);
     assert_eq!(r.json()["error"]["cap"], "thread:read", "{}", r.body);
-    // A guest can't attach.
+    // A guest attaches only what its own file rights cover (App parity,
+    // 0.46.3; was "can't attach" in 0.46.1): docs/ yes, private/ no, and
+    // a guest with no files:read nothing (the coded missing-cap 403).
     let r = thread_post(port, &scoped, &addr, "here", json!([{ "path": "docs/plan.md" }])).await;
-    assert_eq!(r.status, 403, "{}", r.body);
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = thread_post(port, &scoped, &addr, "here", json!([{ "path": "private/notes.txt" }])).await;
+    assert_eq!((r.status, r.json()), (403, cap_body.clone()), "{}", r.body);
+    let r = thread_post(port, &no_files, &addr, "here", json!([{ "path": "docs/plan.md" }])).await;
+    assert_eq!((r.status, r.json()), (403, cap_body.clone()), "{}", r.body);
     // A guest's thread rights stop at its rooms.
     let r = att_get(port, &scoped, &other.handle, &id, 0, "mode=meta").await;
     assert_eq!((r.status, code_of(&r).as_str()), (403, "skin_room"), "{}", r.body);

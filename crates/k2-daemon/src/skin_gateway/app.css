@@ -37,3 +37,8 @@ label { display: block; margin: .75rem 0; }
 label input { width: 100%; margin-top: .25rem; padding: .5rem; background: #1a1a1a; color: var(--fg); border: 1px solid var(--line); }
 .err { color: #f88; }
 body:has(.card) { display: block; }
+.att { margin: .3rem 0; color: var(--muted); font-size: .85rem; }
+.att img { display: block; max-width: 15rem; max-height: 15rem; border-radius: 6px; cursor: zoom-in; margin-bottom: .2rem; }
+.att.chip { cursor: pointer; text-decoration: underline; }
+.att.gone { text-decoration: line-through; }
+.att.hidden { font-style: italic; }

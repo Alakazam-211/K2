@@ -92,6 +92,9 @@ pub struct Person {
     /// Lowercased login names that are this person (`owner` plus the
     /// linked accounts for the owner person).
     logins: Vec<String>,
+    /// An App guest or App pass (App parity, 0.46.3): the username its
+    /// posts carry as a `guest` author. `None` for people.
+    guest: Option<String>,
 }
 
 impl Person {
@@ -106,7 +109,14 @@ impl Person {
         }
         logins.sort();
         logins.dedup();
-        Self { key, logins }
+        Self { key, logins, guest: None }
+    }
+
+    /// An App guest (or an App's own pass) as a reader: its own cursors
+    /// under `key` (never a person key: callers prefix it, `guest:` /
+    /// `app:`), and its own posts are the `guest` author `username`.
+    pub fn app_guest(key: &str, username: &str) -> Self {
+        Self { key: key.to_string(), logins: Vec::new(), guest: Some(username.trim().to_string()) }
     }
 
     fn is_login(&self, login: &str) -> bool {
@@ -117,6 +127,9 @@ impl Person {
     /// True when this person wrote this Thread doc (the credential stamp
     /// `author`, never `from`).
     pub fn wrote_thread_doc(&self, doc: &OverlayDoc) -> bool {
+        if let Some(g) = &self.guest {
+            return doc.author.as_ref().is_some_and(|a| a.kind == overlay::doc::AUTHOR_GUEST && a.login == *g);
+        }
         match &doc.author {
             Some(a) if a.kind == overlay::doc::AUTHOR_OWNER => self.key == OWNER,
             Some(a) if a.kind == overlay::doc::AUTHOR_USER => self.is_login(&a.login),

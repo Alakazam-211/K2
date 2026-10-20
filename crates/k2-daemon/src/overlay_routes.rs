@@ -268,6 +268,38 @@ fn resolve_skin_thread_addr(addr: &str, pass: &SkinPass) -> Result<ResolvedOverl
     })
 }
 
+/// thread-read for an App guest (App parity, 0.46.3): the conversation
+/// `addr` reaches for the guest bound on this thread, with `thread:read`
+/// in that room (the same gate as a Thread read; no existence oracle).
+pub(crate) fn guest_thread_target(addr: &str) -> Result<String, CliResponse> {
+    let resolved = resolve_thread_addr(addr)?;
+    // A coded refusal (`cap_not_granted`), as the attachment route's.
+    if require_skin_cap_in_resolved(&resolved, k2_core::skin::CAP_THREAD_READ).is_err() {
+        return Err(crate::thread_attachments::cap_refused(k2_core::skin::CAP_THREAD_READ));
+    }
+    Ok(resolved.conversation_id)
+}
+
+/// Every room Thread an App guest may read: `(room handle, pinned Chat
+/// conversation id)` for each of its rooms with `thread:read` and a pinned
+/// Chat.
+pub(crate) fn guest_room_threads(pass: &SkinPass) -> Vec<(String, String)> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut out = Vec::new();
+    for room in &pass.rooms {
+        if !pass.has_cap_in_room(room, k2_core::skin::CAP_THREAD_READ) {
+            continue;
+        }
+        if let Ok(Some(conv)) = pinned_chat_id(&conn, room) {
+            let handle =
+                k2_core::workspace_session_handles::workspace_address_name(&conn, room).unwrap_or_else(|_| room.clone());
+            out.push((handle, conv));
+        }
+    }
+    out
+}
+
 fn resolve_thread_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
     if let Some(pass) = request_skin() {
         return resolve_skin_thread_addr(addr, &pass);
@@ -1175,11 +1207,6 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
             "skin tokens cannot use via=compose",
         );
     }
-    // App guests can't attach in v1: an attachment would point other
-    // viewers at room files (their uploads already arrive as text).
-    if request_skin().is_some() && !attach_reqs.is_empty() {
-        return error_json("403 Forbidden", "forbidden", "App guests can't attach files to a Thread message");
-    }
     let resolved = match resolve_thread_addr(&addr) {
         Ok(r) => r,
         Err(e) => return e,
@@ -1261,6 +1288,21 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         let Some(root) = crate::thread_attachments::project_root(&resolved.project_id) else {
             return not_found("this Thread's workspace folder is not registered");
         };
+        // App parity (0.46.3, Rosson 2026-10-20): an App guest or App pass
+        // attaches only files its OWN file rights cover (files:read in the
+        // room and its folder scope), named room-relative. Checked before
+        // the files are touched, with the uniform missing-cap refusal, so a
+        // post can't probe what exists outside its scope.
+        if let Some(pass) = request_skin() {
+            if let Err(r) = crate::thread_attachments::guest_may_attach(&pass, &resolved.project_id, &root, &attach_reqs) {
+                crate::thread_attachments::audit(
+                    "thread.attachment.refused",
+                    &from,
+                    format!("to={} reason=guest_scope count={}", resolved.addr, attach_reqs.len()),
+                );
+                return r;
+            }
+        }
         let home = dirs::home_dir();
         match k2_core::overlay::attachments::snapshot_all(&root, home.as_deref(), &attach_reqs) {
             Ok(a) => {
@@ -1295,10 +1337,11 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
         }
     };
     let n_files = attachments.len();
-    // What the agent gets on a person's compose post with files: the
-    // absolute paths ride the injected line (the agent reads from disk).
+    // What the agent gets on a person's (or an App guest's) post with
+    // files: the absolute paths ride the injected line (the agent reads
+    // from disk).
     let inject_text = match &workspace_root {
-        Some(root) if via == "compose" && !bound => {
+        Some(root) if (via == "compose" && !bound) || request_skin().is_some() => {
             let mut t = text.clone();
             for a in &attachments {
                 if !t.is_empty() {
@@ -1329,6 +1372,9 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
             // cursor (they have read up to what they answered), before
             // the frames go out.
             crate::read_routes::note_own_thread_read(&conn, item.doc.author.as_ref(), &resolved.conversation_id, item.seq);
+            if let Some(pass) = request_skin() {
+                crate::read_routes::note_guest_thread_read(&conn, &pass, &resolved.conversation_id, item.seq);
+            }
             crate::overlay_ws::emit_links(&links, &item.doc);
             drop(conn);
             if !bound && via == "compose" {
@@ -1351,7 +1397,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                     );
                 }
             } else if request_skin().is_some() {
-                inject_skin_thread(&resolved, &from, &text, ThreadTurn::new(&resolved, &item.id, received_at));
+                inject_skin_thread(&resolved, &from, &inject_text, ThreadTurn::new(&resolved, &item.id, received_at));
             } else {
                 // TW4 (a): the agent answered in Thread (not the compose
                 // bar, not an app guest): the strip ends with the reply.

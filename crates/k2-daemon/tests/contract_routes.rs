@@ -106,8 +106,12 @@ fn exposure_counts_are_pinned() {
     // (app + garden-local). Room-scope 0.46.1: + room.members, app.self and
     // app.usage on both transports and the Garden's widget.self (garden-local).
     // Room-scope R3: + files.stat (GET /cli/fs/stat).
+    // Thread parity (0.46.3, catalog v16): widget + thread.attachment,
+    // thread.open, thread.links, thread.pickFiles and thread.markRead (was
+    // none, UW51); app + thread.attachmentGet, thread.catchup,
+    // thread.setRead, thread.unread and files.resolveLinks.
     let garden_local = c.verbs_exposed_to(Exposure::GardenLocal).len();
-    assert_eq!((widget, app, garden_local), (24, 66, 21), "per-exposure verb counts (widget, app, garden-local)");
+    assert_eq!((widget, app, garden_local), (29, 71, 21), "per-exposure verb counts (widget, app, garden-local)");
     assert_eq!(
         c.verbs.len(),
         128,

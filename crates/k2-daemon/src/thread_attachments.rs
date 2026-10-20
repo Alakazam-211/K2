@@ -15,6 +15,11 @@
 //! - **The read door** `GET /cli/thread/attachment` (previews and ranged
 //!   downloads for the phone): Thread read rights plus the viewer's own
 //!   file rights. POST is 405 (central guard).
+//! - **Thumbnails** (thread-images-v1, 0.46.3, S3): `mode=thumb&px=256|512`
+//!   for every image type (PNG, JPEG, GIF, WebP, BMP, TIFF, HEIC/HEIF,
+//!   SVG), made by `k2_core::overlay::thumbs` and cached. An SVG is never
+//!   served raw: thumb and preview both answer the allowlist rewrite
+//!   (`sanitized: true`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -28,6 +33,8 @@ use crate::cli_response::CliResponse;
 
 /// `/boot-status` feature key. A client shows no chips without it.
 pub const FEATURE: &str = "thread-attachments-v1";
+/// `/boot-status` feature key for `mode=thumb` (inline images, S3).
+pub const FEATURE_IMAGES: &str = "thread-images-v1";
 /// Route path.
 pub const ROUTE: &str = "/cli/thread/attachment";
 /// `mode=preview` for text: the first this-many bytes.
@@ -57,6 +64,31 @@ pub(crate) enum Viewer<'a> {
 
 fn guest_sees(pass: &SkinPass, project_id: &str, root: &Path, a: &ThreadAttachment) -> bool {
     crate::fs_routes::guest_may_read_rel(pass, project_id, &root.to_string_lossy(), &a.path)
+}
+
+/// May an App guest (or App pass) attach these files to a post in
+/// `project_id`'s Thread? Each must be named room-relative (no absolute,
+/// `~` or `..` path) and sit under its own `files:read` folder scope.
+/// Err = the uniform `files:read` missing-cap 403 (no existence oracle).
+pub(crate) fn guest_may_attach(
+    pass: &SkinPass,
+    project_id: &str,
+    root: &Path,
+    reqs: &[k2_core::overlay::attachments::AttachmentRequest],
+) -> Result<(), CliResponse> {
+    let root_s = root.to_string_lossy();
+    for r in reqs {
+        let rel = r.path.trim();
+        let relative = !rel.is_empty()
+            && !rel.starts_with('/')
+            && !rel.starts_with('~')
+            && !rel.contains('\\')
+            && Path::new(rel).components().all(|c| matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir));
+        if !relative || !crate::fs_routes::guest_may_read_rel(pass, project_id, &root_s, rel) {
+            return Err(cap_refused(crate::skin_routes::FILES_READ));
+        }
+    }
+    Ok(())
 }
 
 /// The attachments of one doc as `viewer` sees them, with live state.
@@ -170,9 +202,13 @@ pub(crate) fn handle_get(params: &HashMap<String, String>, resolved: &ResolvedTh
         Err(_) => return error_json("400 Bad Request", "usage", "n must be the attachment's index (0-based)"),
     };
     let mode = opt_param(params, "mode").unwrap_or_else(|| "meta".into());
-    if !matches!(mode.as_str(), "meta" | "preview" | "range") {
-        return error_json("400 Bad Request", "usage", "mode is meta, preview or range");
+    if !matches!(mode.as_str(), "meta" | "preview" | "range" | "thumb") {
+        return error_json("400 Bad Request", "usage", "mode is meta, preview, thumb or range");
     }
+    let px = match k2_core::overlay::thumbs::parse_px(opt_param(params, "px").as_deref()) {
+        Ok(px) => px,
+        Err(e) => return error_json("400 Bad Request", "usage", e),
+    };
     let doc = match k2_core::overlay::get_thread_doc(&resolved.conversation_id, id.trim()) {
         Ok(Some(d)) => d,
         Ok(None) => return error_json("404 Not Found", "not_found", "no such message in this Thread"),
@@ -238,12 +274,13 @@ pub(crate) fn handle_get(params: &HashMap<String, String>, resolved: &ResolvedTh
             CliResponse::ok_json(v.to_string())
         }
         "preview" => preview(a, &real, size, att::live_state(&root, a, true)),
+        "thumb" => thumb(&resolved.project_id, a, &real, &meta, px),
         _ => range(params, &real),
     }
 }
 
 fn preview_kind(mime: &str) -> Option<&'static str> {
-    if matches!(mime, "image/png" | "image/jpeg" | "image/gif" | "image/webp" | "image/heic" | "image/tiff" | "image/svg+xml") {
+    if k2_core::overlay::thumbs::is_image_mime(mime) {
         Some("image")
     } else if mime == "application/pdf" {
         Some("pdf")
@@ -285,6 +322,27 @@ fn preview(a: &ThreadAttachment, real: &Path, size: u64, state: &str) -> CliResp
                 .to_string(),
             )
         }
+        Some("image") if a.mime == "image/svg+xml" => {
+            // Never the raw SVG: the same allowlist rewrite as a thumb.
+            match k2_core::overlay::thumbs::make(real, &a.mime, k2_core::overlay::thumbs::PX_LARGE) {
+                Ok(t) => CliResponse::ok_json(
+                    serde_json::json!({
+                        "ok": true,
+                        "kind": "image",
+                        "mime": t.mime,
+                        "name": a.name,
+                        "size": size,
+                        "state": state,
+                        "sanitized": true,
+                        "width": t.width,
+                        "height": t.height,
+                        "base64": base64::engine::general_purpose::STANDARD.encode(&t.bytes),
+                    })
+                    .to_string(),
+                ),
+                Err(e) => thumb_error(e),
+            }
+        }
         Some(kind) => {
             if size > PREVIEW_BINARY_MAX {
                 return error_json(
@@ -311,6 +369,54 @@ fn preview(a: &ThreadAttachment, real: &Path, size: u64, state: &str) -> CliResp
         }
         None => error_json("415 Unsupported Media Type", "no_preview", "this file type has no preview; download it"),
     }
+}
+
+fn thumb_error(e: k2_core::overlay::thumbs::ThumbError) -> CliResponse {
+    use k2_core::overlay::thumbs::ThumbError;
+    let status = match &e {
+        ThumbError::Unsupported(_) | ThumbError::Bad(_) => "415 Unsupported Media Type",
+        ThumbError::TooLarge(_) => "413 Payload Too Large",
+        ThumbError::Io(_) => "500 Internal Server Error",
+    };
+    error_json(status, e.code(), e.hint())
+}
+
+/// `mode=thumb` (thread-images-v1): an image attachment's thumbnail, from
+/// the cache when the file is unchanged since it was made.
+fn thumb(project_id: &str, a: &ThreadAttachment, real: &Path, meta: &std::fs::Metadata, px: u32) -> CliResponse {
+    use k2_core::overlay::thumbs;
+    if !thumbs::is_image_mime(&a.mime) {
+        return error_json("415 Unsupported Media Type", "no_thumbnail", "this file isn't an image; open it or download it");
+    }
+    let key = thumbs::cache_key(project_id, &a.path, meta.len(), att::modified_ms(meta), px);
+    let dir = thumbs::cache_dir();
+    let t = match thumbs::cache_get(&dir, &key) {
+        Some(t) => t,
+        None => match thumbs::make(real, &a.mime, px) {
+            Ok(t) => {
+                thumbs::cache_put(&dir, &key, &t, thumbs::CACHE_MAX_BYTES);
+                t
+            }
+            Err(e) => return thumb_error(e),
+        },
+    };
+    let unchanged = meta.len() == a.size && att::modified_ms(meta) == a.modified_at;
+    let mut v = serde_json::json!({
+        "ok": true,
+        "kind": "image",
+        "mime": t.mime,
+        "name": a.name,
+        "size": meta.len(),
+        "state": if unchanged { att::STATE_OK } else { att::STATE_CHANGED },
+        "width": t.width,
+        "height": t.height,
+        "px": px,
+        "base64": base64::engine::general_purpose::STANDARD.encode(&t.bytes),
+    });
+    if t.sanitized {
+        v["sanitized"] = serde_json::json!(true);
+    }
+    CliResponse::ok_json(v.to_string())
 }
 
 fn read_prefix(path: &Path, n: usize) -> Result<Vec<u8>, String> {
@@ -361,6 +467,9 @@ mod tests {
     #[test]
     fn preview_kinds() {
         assert_eq!(preview_kind("image/png"), Some("image"));
+        for m in ["image/bmp", "image/heif", "image/heic", "image/tiff", "image/svg+xml", "image/gif", "image/webp"] {
+            assert_eq!(preview_kind(m), Some("image"), "{m}");
+        }
         assert_eq!(preview_kind("application/pdf"), Some("pdf"));
         assert_eq!(preview_kind("text/markdown"), Some("text"));
         assert_eq!(preview_kind("text/plain"), Some("text"));

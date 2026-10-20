@@ -44,6 +44,31 @@ fn helper_bundle_id_matches_build_script() {
     );
 }
 
+/// k2-ptyd is nested beside k2-daemon under the name the daemon looks
+/// for (`shipped_binary`), and every macOS build path passes it to
+/// `k2_daemon_helper_assemble` (which requires it).
+#[cfg(unix)]
+#[test]
+fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let read = |rel: &str| std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"));
+    let helper = read("scripts/macos-daemon-helper-app.sh");
+    let name = k2_core::terminal::ptyd::client::PTYD_BINARY_NAME;
+    assert!(
+        helper.contains(&format!("K2_DAEMON_HELPER_PTYD=\"{name}\"")),
+        "scripts/macos-daemon-helper-app.sh ptyd name drifted from PTYD_BINARY_NAME"
+    );
+    for script in ["scripts/release.sh", "scripts/build-app.sh", "scripts/dev-build.sh", "scripts/build-local.sh"] {
+        let body = read(script);
+        assert!(body.contains("cargo build --release -p k2-ptyd --bin k2-ptyd"), "{script} does not build k2-ptyd");
+        let call = body
+            .lines()
+            .find(|l| l.trim_start().starts_with("k2_daemon_helper_assemble "))
+            .unwrap_or_else(|| panic!("{script} does not assemble K2 Daemon.app"));
+        assert!(call.contains("target/release/k2-ptyd") || call.contains("$PTYD_SRC"), "{script} assembles without k2-ptyd: {call}");
+    }
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn app_resolves_nested_daemon_on_macos() {

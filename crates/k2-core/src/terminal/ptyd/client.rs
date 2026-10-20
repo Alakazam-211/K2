@@ -332,16 +332,22 @@ impl Ptyd {
     }
 }
 
+/// File name of the ptyd binary beside the daemon. Pinned against
+/// `scripts/macos-daemon-helper-app.sh` (`K2_DAEMON_HELPER_PTYD`) and the
+/// Linux packages by the k2-daemon layout tests.
+pub const PTYD_BINARY_NAME: &str = "k2-ptyd";
+
 /// The shipped binary: `K2_PTYD_BIN` (dev/tests) or `k2-ptyd` beside the
-/// daemon executable (the macOS bundle nests it beside `k2-daemon`).
-/// Linux's embedded copy (P84) is S6.
+/// daemon executable (the macOS bundle nests it beside `k2-daemon` in
+/// `K2 Daemon.app/Contents/MacOS`; the Linux packages install it beside
+/// `/usr/bin/k2-daemon`). Linux release daemons also embed it (P84).
 pub fn shipped_binary() -> Result<PathBuf, String> {
     if let Some(p) = std::env::var_os("K2_PTYD_BIN").filter(|p| !p.is_empty()) {
         let p = PathBuf::from(p);
         return if p.is_file() { Ok(p) } else { Err("bin_env_missing".into()) };
     }
     let exe = std::env::current_exe().map_err(|_| "no_current_exe".to_string())?;
-    let sib = exe.parent().map(|d| d.join("k2-ptyd")).ok_or("no_exe_dir")?;
+    let sib = exe.parent().map(|d| d.join(PTYD_BINARY_NAME)).ok_or("no_exe_dir")?;
     if sib.is_file() {
         Ok(sib)
     } else {

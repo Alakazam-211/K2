@@ -134,9 +134,15 @@ build() {
     # as the Omarchy artifact (O17). beforeBuildCommand runs vite + fetch-frpc.
     bunx tauri build --no-bundle
 
+    # k2-ptyd P84: the daemon embeds the PTY host (no separate file in
+    # /usr/bin; the daemon places a hash-checked copy under ~/.k2/bin/ptyd).
+    # shellcheck source=../../scripts/linux-ptyd-embed.sh
+    source scripts/linux-ptyd-embed.sh
+    k2_ptyd_build_for_embed
     # Never `--features airgap` (O12).
     cargo build --release -p k2-daemon --bin k2-daemon
     assert_daemon_oauth_not_placeholder "${CARGO_TARGET_DIR}/release/k2-daemon"
+    assert_daemon_embeds_ptyd "${CARGO_TARGET_DIR}/release/k2-daemon"
     # Compute nodes: "Make this computer a compute node" installs from
     # this binary (k2-node setup copies it to /usr/local/libexec as root).
     cargo build --release -p k2-node --bin k2-node

@@ -70,12 +70,17 @@ fi
 require_mail_oauth_build_env
 
 echo "package-daemon-deb: building k2-daemon v$VERSION ($ARCH, release)"
+# k2-ptyd P84: the daemon embeds the PTY host (no separate /usr/bin file).
+# shellcheck source=scripts/linux-ptyd-embed.sh
+. "$_ROOT/scripts/linux-ptyd-embed.sh"
+k2_ptyd_build_for_embed
 cargo build --release -p k2-daemon --bin k2-daemon
 cargo build --release -p k2-node --bin k2-node
 BIN="${CARGO_TARGET_DIR:-target}/release/k2-daemon"
 NODE_BIN="${CARGO_TARGET_DIR:-target}/release/k2-node"
 [ -x "$BIN" ] || { echo "package-daemon-deb: FATAL — $BIN missing after build" >&2; exit 1; }
 assert_daemon_oauth_not_placeholder "$BIN"
+assert_daemon_embeds_ptyd "$BIN"
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT

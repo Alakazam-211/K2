@@ -488,9 +488,20 @@ if [ ! -x "$DAEMON_SRC" ]; then
     exit 1
 fi
 assert_daemon_oauth_not_placeholder "$DAEMON_SRC"
+# k2-ptyd (PRD prd-k2-ptyd-v1 §7.1): the PTY host the daemon launches so
+# agents can outlive it. Nested beside k2-daemon in K2 Daemon.app (the
+# daemon looks next to its own exe), signed inside k2_daemon_helper_sign
+# (hardened runtime, no entitlements), notarized with the app below.
+# Own version line: release.sh never bumps crates/k2-ptyd.
+cargo build --release -p k2-ptyd --bin k2-ptyd
+PTYD_SRC="target/release/k2-ptyd"
+if [ ! -x "$PTYD_SRC" ]; then
+    echo "  FATAL: k2-ptyd not at $PTYD_SRC after cargo build" >&2
+    exit 1
+fi
 # shellcheck source=scripts/macos-daemon-helper-app.sh
 source "$PROJECT_DIR/scripts/macos-daemon-helper-app.sh"
-k2_daemon_helper_assemble "target/release/bundle/macos/K2.app" "$DAEMON_SRC"
+k2_daemon_helper_assemble "target/release/bundle/macos/K2.app" "$DAEMON_SRC" "$PTYD_SRC"
 k2_daemon_helper_verify "target/release/bundle/macos/K2.app"
 # Heartbeat S2 (D11): the macOS wake helper, built by the same cargo
 # build. The daemon copies it to /Library/PrivilegedHelperTools only
@@ -580,7 +591,7 @@ codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app"
-echo "  Signed (main + K2 Daemon.app + frpc + bundle) with entitlements."
+echo "  Signed (main + K2 Daemon.app + k2-ptyd + frpc + bundle) with entitlements."
 k2_daemon_helper_verify "target/release/bundle/macos/K2.app"
 k2_daemon_helper_verify_signed "target/release/bundle/macos/K2.app"
 

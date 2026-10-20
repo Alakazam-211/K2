@@ -67,9 +67,11 @@ echo ""; echo "Step 2: bundling k2-daemon sidecar..."
 cargo build --release -p k2-daemon || { echo "FATAL: k2-daemon build failed" >&2; exit 1; }
 [ -x "target/release/k2-daemon" ] || { echo "FATAL: k2-daemon missing after build" >&2; exit 1; }
 assert_daemon_oauth_not_placeholder "target/release/k2-daemon"
+# k2-ptyd rides beside the daemon in K2 Daemon.app (prd-k2-ptyd-v1 §7.1).
+cargo build --release -p k2-ptyd --bin k2-ptyd || { echo "FATAL: k2-ptyd build failed" >&2; exit 1; }
 # macOS: the daemon lives in a nested background-only helper app so
 # Activity Monitor shows the K2 icon + "K2 Daemon".
-k2_daemon_helper_assemble "$APP" "target/release/k2-daemon" || exit 1
+k2_daemon_helper_assemble "$APP" "target/release/k2-daemon" "target/release/k2-ptyd" || exit 1
 k2_daemon_helper_verify "$APP" || exit 1
 # Heartbeat S2 (D11): the wake helper, built by the same cargo build. The
 # daemon copies it to /Library/PrivilegedHelperTools only after the user

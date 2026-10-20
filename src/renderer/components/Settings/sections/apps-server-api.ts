@@ -12,6 +12,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorOf } from '@/lib/daemon-error'
+import { settingsUpdate } from '@/lib/daemon-settings'
 import { primaryScope } from '@/kessel/server-scope'
 
 export type CheckStatus = 'ok' | 'warn' | 'fail' | 'unknown'
@@ -34,6 +35,16 @@ export interface BoxDoctor {
   appsMinProtocol: number
   runtime: string | null
   checks: BoxCheck[]
+  /** 0.46.3: the automatic box prep (`appsAutoPrepare`); null on older daemons. */
+  autoPrepare: AutoPrepareStatus | null
+}
+
+export interface AutoPrepareStatus {
+  enabled: boolean
+  /** `ready` | `prepared` | `skipped` | `failed`; null before the first run. */
+  state: string | null
+  /** Why it skipped or failed, or what it changed. */
+  detail: string | null
 }
 
 export interface PodmanBundle {
@@ -90,7 +101,24 @@ export function parseDoctor(raw: unknown): BoxDoctor {
     appsMinProtocol: typeof v.appsMinProtocol === 'number' ? v.appsMinProtocol : 0,
     runtime: str(v.runtime),
     checks,
+    autoPrepare: parseAutoPrepare(v.autoPrepare),
   }
+}
+
+export function parseAutoPrepare(raw: unknown): AutoPrepareStatus | null {
+  if (!isObj(raw)) return null
+  const o = isObj(raw.outcome) ? raw.outcome : null
+  const changed = o && Array.isArray(o.changed) ? o.changed.filter((c): c is string => typeof c === 'string') : []
+  return {
+    enabled: raw.enabled === true,
+    state: o ? str(o.state) : null,
+    detail: o ? (str(o.why) ?? str(o.error) ?? (changed.length ? changed.join('; ') : null)) : null,
+  }
+}
+
+/** The owner's "Prepare this box automatically" (`appsAutoPrepare`). */
+export async function setAutoPrepare(on: boolean): Promise<void> {
+  await settingsUpdate({ appsAutoPrepare: on })
 }
 
 export function parseDryRun(raw: unknown): PrepareDryRun {

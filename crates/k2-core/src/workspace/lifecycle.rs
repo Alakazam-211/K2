@@ -309,6 +309,10 @@ pub fn remove_workspace_db_only(path: &str) -> Result<String, String> {
         )
         .map_err(|_| format!("Workspace not found: {}", path))?;
 
+    // Q8 (prd-agent-app-permissions-v1 §6): never under the workspace's
+    // Apps. The routes refuse first with the ways out; this is the floor.
+    crate::deploy::store::workspace_has_apps_error(&conn, &project_id)?;
+
     // Project-group memberships first (no SQL FK on workspace_id —
     // 0066): callers are §4.5 PoC-guarded, so this only ever removes
     // plain memberships. Affected groups get members-changed below.

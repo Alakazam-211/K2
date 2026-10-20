@@ -598,6 +598,8 @@ pub fn projects_update(
 pub fn projects_delete(id: &str) -> Result<(), String> {
     let db = db::shared();
     let conn = db.lock();
+    // Q8: never under the workspace's Apps (see `remove_workspace_db_only`).
+    crate::deploy::store::workspace_has_apps_error(&conn, id)?;
     // Project-group memberships first (no SQL FK on workspace_id —
     // 0066): callers are §4.5 PoC-guarded (poc_removal_block), so this
     // only ever removes plain memberships.

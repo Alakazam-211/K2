@@ -229,8 +229,9 @@ pub fn app_id_problem(id: &str) -> Option<(&'static str, String)> {
 }
 
 /// A per-App memory limit (`k2 app config --memory 8G|512M|none`). `none`
-/// (the default) = no per-App limit: the user decides App memory (Rosson
-/// 2026-10-10); stage R keeps a protected reserve for K2 and the cores.
+/// = no per-App limit, the owner's explicit choice (Rosson 2026-10-10). An
+/// install that names no memory gets 512 MiB (0.46.3, F2), and the box's
+/// pool admits budgets (the daemon's `apps::admission`).
 pub fn parse_memory(raw: &str) -> Result<Option<i64>, String> {
     let s = raw.trim();
     if s.is_empty() || s.eq_ignore_ascii_case("none") {

@@ -452,10 +452,21 @@ async fn the_app_link_serves_every_new_thread_row() {
         assert!(!gateway::route_allowed(m, p, "", false), "{m} {p} stays off the link");
     }
 
-    let r = post(port, "/cli/thread/post", OWNER, json!({ "addr": addr, "text": "the chart", "attachments": [{ "path": "out/chart.png" }] })).await;
+    // The agent posts the chart to its own Thread (an owner-token post is
+    // delivered to the agent: in this harness that wake can't spawn and
+    // re-pins the room's Chat to a fresh session, moving the address).
+    let agent = passport(&ws);
+    let r = post(port, "/cli/thread/post", &agent, json!({ "addr": addr, "text": "the chart", "attachments": [{ "path": "out/chart.png" }] })).await;
     assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["conversation_id"], conv.as_str(), "{}", r.body);
     let id = r.json()["id"].as_str().unwrap().to_string();
     let seq = r.json()["seq"].as_i64().unwrap();
+    let head = |c: &str| -> Option<i64> {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::read_state::head(&conn, "thread", c).expect("head")
+    };
+    assert_eq!(head(&conv), Some(seq), "the post's seq is the Thread's head");
 
     let svc = format!("svc-{tag}");
     let spec = LinkSpec {
@@ -485,26 +496,12 @@ async fn the_app_link_serves_every_new_thread_row() {
 
     let r = link(lport, "GET", "/cli/thread/unread".into(), pass.clone(), None).await;
     assert_eq!(r.status, 200, "unread on the link: {}", r.body);
-    assert_eq!(r.json()["byConversation"][0]["id"], conv.as_str(), "{}", r.body);
-    let pin_now = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        WorkspaceSession::get(&conn, &ws.id).expect("row").and_then(|s| s.session_id)
-    };
-    assert_eq!(pin_now.as_deref(), Some(conv.as_str()), "the room's pinned Chat moved under the test");
+    let row = r.json()["byConversation"][0].clone();
+    assert_eq!((row["id"].clone(), row["lastSeq"].clone()), (json!(conv), json!(seq)), "head now {:?}: {}", head(&conv), r.body);
     let r = link(lport, "POST", "/cli/thread/read".into(), pass.clone(), Some(json!({ "addr": addr, "seq": seq }))).await;
-    assert_eq!(r.status, 200, "mark-read on the link (conv {conv}): {}", r.body);
-    // The route answers the App pass's own state for its room's Thread.
-    // (The cursor arithmetic is pinned on the main port in
-    // app_guests_attach_read_cursors_and_file_links: in this in-process
-    // harness the link listener's blocking threads read the read-state
-    // tables from a different test DB handle than the main port's, so the
-    // head seq isn't comparable here. One DB in production.)
+    assert_eq!(r.status, 200, "mark-read on the link: {}", r.body);
     let v = r.json();
-    assert_eq!((v["ok"].clone(), v["id"].clone(), v["kind"].clone()), (json!(true), json!(conv), json!("thread")), "{}", r.body);
-    for k in ["changed", "lastReadSeq", "lastSeq", "unread", "waiting"] {
-        assert!(v.get(k).is_some(), "{k}: {}", r.body);
-    }
+    assert_eq!((v["id"].clone(), v["lastReadSeq"].clone(), v["lastSeq"].clone(), v["unread"].clone()), (json!(conv), json!(seq), json!(seq), json!(0)), "{}", r.body);
 
     let r = link(lport, "POST", "/cli/fs/resolve-links".into(), pass.clone(), Some(json!({ "workspace": addr, "paths": ["out/notes.md"] }))).await;
     assert_eq!(r.status, 200, "links on the link: {}", r.body);

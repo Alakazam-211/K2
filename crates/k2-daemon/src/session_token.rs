@@ -757,6 +757,10 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/app/box",
         "/cli/app/box/prepare",
         "/cli/app/build",
+        // 0.46.3: data in, and the label from its own legacy service.
+        "/cli/app/data/put",
+        "/cli/app/label/take",
+        "/cli/app/label/return",
         "/cli/app/config",
         "/cli/app/deploy",
         "/cli/app/deployment",

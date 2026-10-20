@@ -103,6 +103,8 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     "appsPreview",
     // The unwalled process engine: App code as the daemon's user, no wall.
     "appsProcessEngine",
+    // The automatic App box prep through the root helper (0.46.3).
+    "appsAutoPrepare",
     // Clone permissions (prd-clone-carries-threads-and-vault-v1 CL22): the
     // master switch for cloning agents to people's personal computers.
     "allowClonePersonalComputers",
@@ -298,6 +300,7 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
             k2_core::compute::set_enabled(merged.compute_preview);
             k2_core::deploy::set_enabled(merged.apps);
             k2_core::deploy::set_process_engine(merged.apps_process_engine);
+            k2_core::deploy::set_auto_prepare(merged.apps_auto_prepare);
             // The process engine turned off: what runs unwalled stops now,
             // not at the next restart.
             crate::apps::supervisor::spawn_stop_unwalled_if_off("owner");
@@ -350,6 +353,7 @@ pub fn handle_settings_reset(actor: SettingsActor) -> CliResponse {
             k2_core::compute::set_enabled(defaults.compute_preview);
             k2_core::deploy::set_enabled(defaults.apps);
             k2_core::deploy::set_process_engine(defaults.apps_process_engine);
+            k2_core::deploy::set_auto_prepare(defaults.apps_auto_prepare);
             crate::apps::supervisor::spawn_stop_unwalled_if_off("owner");
             // …and the /v1 API switch back to its default (OFF) too (1c).
             k2_core::app_settings::set_api_enabled(defaults.api_enabled);

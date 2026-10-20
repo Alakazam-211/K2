@@ -95,6 +95,14 @@ pub(crate) fn install_route(who: &Who, body: &J) -> R<J> {
     if !matches!(who, Who::Owner | Who::Login { role: Role::Owner, .. }) {
         return Err(no("owner_only", 403, "installing the App engine is the owner's: ask your owner to run it (Settings → Apps → This server → Install App engine, or k2 app engine install from a terminal outside K2)"));
     }
+    let from = body.get("from").and_then(J::as_str).map(str::trim).filter(|s| !s.is_empty());
+    install_core(from)
+}
+
+/// The install itself (the owner's route, and the automatic box prep the
+/// owner's `appsAutoPrepare` allows): this daemon's signed build, checked,
+/// installed through the root helper, then waited on.
+pub(crate) fn install_core(from: Option<&str>) -> R<J> {
     if !cfg!(target_os = "linux") {
         return Err(no("linux_only", 409, "the App engine runs on Linux boxes only"));
     }
@@ -103,7 +111,6 @@ pub(crate) fn install_route(who: &Who, body: &J) -> R<J> {
         return Err(no("helper_needed", 409, root_helper::helper_needed("the App engine", APPS_MIN_PROTOCOL, &st)));
     }
     let arch = arch().ok_or_else(|| no("unsupported", 409, "no k2-app-engine build for this CPU"))?;
-    let from = body.get("from").and_then(J::as_str).map(str::trim).filter(|s| !s.is_empty());
     let (bin, sig) = obtain(from, arch).map_err(|e| no("engine_download_failed", 409, e))?;
     let checked = check(&bin, &sig, arch, env!("CARGO_PKG_VERSION"), &keys()).map_err(|e| no("engine_refused", 409, e))?;
     let out = root_helper::call_text(&["apps".into(), "install-engine".into()], Some(&encode_payload(&sig, &bin)))

@@ -5,8 +5,8 @@
 //! preview flag.
 //!
 //! ```text
-//! GET  /cli/app/warnings   [app]           what breaks at the 0.46.2 cut-over, per service
-//! POST /cli/app/clean-mode {app, on, restart?}   opt into the 0.46.2 behaviour early
+//! GET  /cli/app/warnings   [app]           what breaks at the 0.46.4 cut-over, per service
+//! POST /cli/app/clean-mode {app, on, restart?}   opt into the 0.46.4 behaviour early
 //! POST /cli/app/key/mint   {app, scopes, rooms?, roles?, label?, deliver?, confirmToken?}
 //! GET  /cli/app/keys       [app]           App-scoped keys (never the key)
 //! POST /cli/app/key/revoke {id}

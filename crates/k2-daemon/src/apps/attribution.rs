@@ -7,7 +7,7 @@
 //! the daemon's), then the process holding that socket inode among the
 //! processes whose session is a live service's. The hit is counted per
 //! (service, route) in `app_owner_token_uses`, and refused when the service
-//! runs in clean mode (the cut-over behaviour, 0.46.2, opted into early).
+//! runs in clean mode (the cut-over behaviour, 0.46.4, opted into early).
 //!
 //! **Linux only.** On macOS nothing is attributed (Apps run walled on
 //! Linux only); the warnings there rely on the code scan.

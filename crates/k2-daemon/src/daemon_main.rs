@@ -385,6 +385,7 @@ async fn async_main() {
         let s = k2_core::app_settings::load();
         k2_core::deploy::set_enabled(s.apps);
         k2_core::deploy::set_process_engine(s.apps_process_engine);
+        k2_core::deploy::set_auto_prepare(s.apps_auto_prepare);
     }
     // S17 / AR18: in a delegated unit (box prep's cores slice), agent
     // sessions get their own memory budget beside the daemon.
@@ -392,6 +393,10 @@ async fn async_main() {
     // App box prep: the nft table and io.cost don't survive a reboot.
     // Re-apply on a prepared box (Linux, preview on, helper protocol 6).
     crate::apps::box_prep::spawn_boot_reapply();
+    // 0.46.3: with the owner's appsAutoPrepare on and their root helper
+    // installed, K2 prepares the box for walled Apps by itself (after every
+    // update = every boot; ~3 min in, then daily). Linux only.
+    crate::apps::auto_prepare::spawn();
     // 0.40.43 (1c): same deal for the public /v1 API switch — a daemon that
     // boots with the Settings toggle already ON must serve /v1 immediately.
     // misc_routes::api_enabled() reads this mirror per request; the K2_API

@@ -439,7 +439,7 @@ fn spawn_prepared(
     c.stdin(Stdio::null()).stdout(out).stderr(err);
     // Clean mode (0.46.0 grace) sets the system PATH itself: no login-shell
     // enrichment, so a program found only through the daemon user's own
-    // bin folders shows up now, not at the 0.46.2 cut-over.
+    // bin folders shows up now, not at the 0.46.4 cut-over.
     if enrich {
         enrich_path(&mut c);
     }
@@ -735,6 +735,13 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
     }
     if row.kind != KIND_SKIN && status == STATUS_RUNNING {
         json.frame_warning = frame_warning_get(&row.project_id, &row.name);
+    }
+    // 0.46.3: the legacy label (a --cmd service no wall runs), and the App
+    // serving its public label when its agent moved that over.
+    if crate::apps::legacy::is_legacy(row) {
+        json.legacy_label = Some(k2_core::app_grace::legacy_label());
+        json.legacy_hint = Some(k2_core::app_grace::LEGACY_HINT.to_string());
+        json.label_moved_to = crate::apps::labels::moved_to(&row.id);
     }
     if row.kind != KIND_SKIN {
         json.clean_mode = crate::vault::publish_env::is_clean_mode(&row.id);

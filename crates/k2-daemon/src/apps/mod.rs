@@ -5,6 +5,14 @@
 //! are `k2_core::deploy`.
 
 pub mod access;
+/// Automatic App box prep through the owner's root helper (0.46.3).
+pub mod auto_prepare;
+/// `k2 app data put`: a workspace's files into an App's data folder.
+pub mod data_put;
+/// `k2 app label take|return`: a legacy service's label to its App.
+pub mod labels;
+/// Legacy `--cmd` services, labelled (0.46.3).
+pub mod legacy;
 /// Admission-lite: the box's App memory pool (`check_memory`, §4.3).
 pub mod admission;
 pub mod alerts;

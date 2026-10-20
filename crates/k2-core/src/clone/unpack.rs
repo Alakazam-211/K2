@@ -137,6 +137,9 @@ pub fn unpack_bundle(
             continue;
         }
 
+        // The source file's permission bits (an executable script stays
+        // executable on the clone).
+        let mode = entry_mode(entry.header());
         let mut buf = Vec::new();
         std::io::Read::read_to_end(&mut entry, &mut buf)
             .map_err(|e| format!("read entry {}: {e}", archive_path.display()))?;
@@ -182,6 +185,7 @@ pub fn unpack_bundle(
                     }
                     std::fs::write(&out, &buf)
                         .map_err(|e| format!("write {}: {e}", out.display()))?;
+                    apply_mode(&out, mode)?;
                     if let Some(slug) = gemini_slug_from_rest(&rest) {
                         gemini_slugs.insert(slug);
                     }
@@ -219,6 +223,7 @@ pub fn unpack_bundle(
 
         std::fs::write(&out, &buf)
             .map_err(|e| format!("write {}: {e}", out.display()))?;
+        apply_mode(&out, mode)?;
     }
 
     // Merge Gemini dest_path → slug into projects.json (additive).
@@ -237,6 +242,30 @@ pub fn unpack_bundle(
         },
         manifest,
     ))
+}
+
+/// The permission bits a bundle entry carries for a regular file, without
+/// setuid, setgid and sticky (a clone never makes a privileged file).
+/// `None` for anything else, or a header without a readable mode.
+pub(crate) fn entry_mode(header: &tar::Header) -> Option<u32> {
+    if !header.entry_type().is_file() {
+        return None;
+    }
+    header.mode().ok().map(|m| m & 0o777)
+}
+
+/// Give an unpacked file the mode it had on the source (`fs::write` makes
+/// new files 0666 & umask: every script lost its +x before 0.46.3).
+fn apply_mode(out: &Path, mode: Option<u32>) -> Result<(), String> {
+    #[cfg(unix)]
+    if let Some(m) = mode {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(out, std::fs::Permissions::from_mode(m))
+            .map_err(|e| format!("chmod {:o} {}: {e}", m, out.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = (out, mode);
+    Ok(())
 }
 
 /// Read `threads/threads.json` from the archive, refusing more than the

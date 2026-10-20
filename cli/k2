@@ -20636,6 +20636,7 @@ USAGE
   k2 publish ps|status [--json]       (ps = list)
   k2 publish env <name> [clean|legacy] · k2 publish secret add|remove|list <name> …
   k2 publish frame <name> (--allow <origin> ... | --none | --reset) [--json]
+  k2 publish client-ip [<label> on|off] [--json]
   k2 publish subdomain <create|list|point|target|rm|claim|unclaim> ...
 
 run
@@ -21064,6 +21065,9 @@ cmd_publish() {
         frame)
             cmd_publish_frame "$@"
             ;;
+        client-ip)
+            cmd_publish_client_ip "$@"
+            ;;
         # K2 vault (§10.5): secrets a published service gets at start.
         secret|secrets)
             local act="${1:-}" label="${2:-}" sname="${3:-}"
@@ -21329,6 +21333,68 @@ print(json.dumps(b))
     RESP=$(cli_send cli_post_json "/cli/publish/frame" "$body") || RESP=""
     local AS_JSON="$as_json" P_MODE="service" P_VERB="frame"
     _publish_handle_resp
+}
+
+# `k2 publish client-ip [<label> on|off] [--json]` (0.46.3). A nested service
+# (https://<label>.<host>.k2.dev) is a raw byte splice by default, whatever its
+# protocol. `on`: K2 rewrites each HTTP/1.1 request instead. It drops client
+# copies of X-Forwarded-For / X-Real-IP / Forwarded / X-K2-Client-IP and sets
+# X-K2-Client-IP (+ X-Forwarded-For, X-Real-IP) to the client K2 saw. A
+# non-HTTP/1.x request gets a 400. Apps get the rewrite by default; their
+# manifest's "host": {"clientIp": false} turns it off. No args: list the
+# labels that are on.
+cmd_publish_client_ip() {
+    if _wants_help "$@"; then _publish_usage; exit 0; fi
+    local label="" state="" as_json=false
+    local usage="usage: k2 publish client-ip [<label> on|off] [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --help|-h) _publish_usage; exit 0 ;;
+            -*) echo "unknown flag '$1' — $usage" >&2; exit 2 ;;
+            *)
+                if [ -z "$label" ]; then label="$1"
+                elif [ -z "$state" ]; then state="$1"
+                else echo "unexpected argument '$1' — $usage" >&2; exit 2
+                fi
+                shift ;;
+        esac
+    done
+    local RESP
+    if [ -z "$label" ]; then
+        RESP=$(cli_send cli_request "/cli/publish/client-ip") || RESP=""
+    else
+        case "$state" in
+            on|true) state=true ;;
+            off|false) state=false ;;
+            *) echo "$usage" >&2; exit 2 ;;
+        esac
+        local body
+        body=$(P_LABEL="$label" P_ON="$state" python3 -c '
+import json, os
+print(json.dumps({"label": os.environ["P_LABEL"], "on": os.environ["P_ON"]}))
+')
+        RESP=$(cli_send cli_post_json "/cli/publish/client-ip" "$body") || RESP=""
+    fi
+    RESP="$RESP" AS_JSON="$as_json" python3 -c '
+import json, os, sys
+raw = os.environ.get("RESP", "")
+try:
+    d = json.loads(raw)
+except Exception:
+    print("k2 publish client-ip: no answer from the daemon: %s" % (raw.strip() or "(empty)"), file=sys.stderr)
+    sys.exit(1)
+if not isinstance(d, dict) or d.get("error"):
+    print("k2 publish client-ip: %s" % (d.get("error") if isinstance(d, dict) else raw), file=sys.stderr)
+    sys.exit(2)
+if os.environ["AS_JSON"] == "true":
+    print(json.dumps(d))
+    sys.exit(0)
+if "label" in d:
+    print("%s: client IP %s" % (d["label"], "on (HTTP/1.1 rewrite, X-K2-Client-IP)" if d["clientIp"] else "off (raw splice)"))
+labels = d.get("labels") or []
+print("Nested services with the client-IP rewrite: %s" % (", ".join(labels) if labels else "none (all raw)"))
+'
 }
 
 cmd_publish_start() { _publish_named_post start "/cli/publish/start" "$@"; }

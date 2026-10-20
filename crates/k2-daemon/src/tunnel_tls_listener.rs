@@ -949,12 +949,12 @@ async fn serve_one(
             // App runtime (AR4): a deploy moves an App's backend by the
             // daemon-local override, never by a control-plane write. Only a
             // label the control plane already routes here can be overridden.
-            if let Some(be) = subdomains::current()
-                .nested_label(&sni)
-                .and_then(|label| crate::apps::router::live(&label))
+            let label = subdomains::current().nested_label(&sni);
+            if let Some((label, be)) =
+                label.and_then(|l| crate::apps::router::live(&l).map(|be| (l, be)))
             {
                 log_debug!("[daemon/e2e] routing {sni} → App backend :{}", be.port);
-                let mode = crate::client_ip::Mode::Tunnel(client_ip);
+                let mode = crate::apps::router::rewrite_mode(&be, &label, crate::client_ip::Mode::Tunnel(client_ip));
                 if let Err(e) = crate::apps::router::splice(&mut tls, be, mode).await {
                     log_debug!("[daemon/e2e] {sni}: {e} — answering 502");
                     write_unreachable_502(&mut tls).await;
@@ -982,14 +982,25 @@ async fn serve_one(
                     }
                 };
             log_debug!("[daemon/e2e] routing {sni} → internal endpoint {target}");
-            // A nested service is an App too: same rewrite (client copies
-            // of the forwarding headers dropped, K2's added). The hop lets
-            // an App front port on the other end keep the address.
+            // A nested service stays a raw splice (any protocol), as before
+            // 0.46.3, unless its label opted in to the client-IP rewrite
+            // (`k2 publish client-ip <label> on`). The hop lets an App front
+            // port on the other end keep the address either way.
             let _hop = crate::client_ip::register_hop(&upstream, client_ip);
-            let mode = crate::client_ip::Mode::Tunnel(client_ip);
-            let res = crate::client_ip::forward(&mut tls, &mut upstream, mode)
-                .await
-                .map_err(|e| format!("splice TLS↔internal {target}: {e}"));
+            let opted_in = subdomains::current()
+                .nested_label(&sni)
+                .is_some_and(|label| k2_core::tunnel::client_ip_labels::enabled(&label));
+            let res = if opted_in {
+                let mode = crate::client_ip::Mode::Tunnel(client_ip);
+                crate::client_ip::forward(&mut tls, &mut upstream, mode)
+                    .await
+                    .map_err(|e| format!("splice TLS↔internal {target}: {e}"))
+            } else {
+                tokio::io::copy_bidirectional(&mut tls, &mut upstream)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| format!("splice TLS↔internal {target}: {e}"))
+            };
             // H6: clean close_notify after the splice on the nested path too.
             let _ = tls.shutdown().await;
             res
@@ -1539,10 +1550,11 @@ mod tests {
     }
 
     /// 0.46.3 end to end: a fake frpc writes the relay's PROXY v2 header,
-    /// then TLS. The App behind its label (the router override) and a
-    /// nested service both get exactly one K2-set client IP on every
+    /// then TLS. The App behind its label (the router override) and an
+    /// opted-in nested service get exactly one K2-set client IP on every
     /// keep-alive request, with every client copy gone; a WebSocket upgrade
-    /// still works. No header (old frpc config) or a loopback source (old
+    /// still works. A nested service that didn't opt in, and an App with
+    /// `host.clientIp: false`, stay a raw splice exactly as before. No header (old frpc config) or a loopback source (old
     /// relay) → no client-IP headers at all. A malformed header → the
     /// connection is dropped before TLS.
     #[tokio::test]
@@ -1560,8 +1572,11 @@ mod tests {
         let mut targets = std::collections::HashMap::new();
         targets.insert("shop".to_string(), format!("localhost:{}", closed.port()));
         targets.insert("svc".to_string(), format!("127.0.0.1:{svc}"));
+        targets.insert("rawapp".to_string(), format!("localhost:{}", closed.port()));
         subdomains::store(SubdomainMap { primary: "example".to_string(), targets });
         crate::apps::router::switch("shop", app);
+        // `host.clientIp: false`: the escape hatch.
+        crate::apps::router::switch_with("rawapp", app, false);
 
         let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
         let (cert_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert("example").expect("cert");
@@ -1575,7 +1590,33 @@ mod tests {
 
         let relay_saw = |src: &str| Some(proxy_v2::header(src.parse().unwrap(), "127.0.0.1:443".parse().unwrap()));
 
-        // The App (router override) and a nested service, keep-alive.
+        // Raw by default (nested service) and by escape hatch (App): the
+        // request reaches the App byte for byte, spoofs and all, no K2
+        // header, and a non-HTTP/1.x request is not refused.
+        for sni in ["svc.example.k2.dev", "rawapp.example.k2.dev"] {
+            let mut tls = frpc_session(&cert_pem, https_port, sni, relay_saw("203.0.113.7:51515"))
+                .await
+                .expect("TLS");
+            let req = format!("GET /raw HTTP/1.1\r\nHost: {sni}\r\n{SPOOFED}\r\n");
+            tls.write_all(req.as_bytes()).await.unwrap();
+            let (head, seen) = next_response(&mut tls, &mut Vec::new()).await;
+            assert!(head.starts_with("HTTP/1.1 200 OK"), "{sni}: {head}");
+            assert_eq!(seen, req, "{sni}: raw splice, unchanged");
+            let mut tls = frpc_session(&cert_pem, https_port, sni, relay_saw("203.0.113.7:51515"))
+                .await
+                .expect("TLS");
+            // h2c-style bytes are not answered 400 by K2 (the echo App just
+            // waits for a head it never gets; K2 sends nothing).
+            tls.write_all(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n").await.unwrap();
+            let mut b = [0u8; 64];
+            let r = tokio::time::timeout(Duration::from_millis(500), tls.read(&mut b)).await;
+            assert!(r.is_err(), "{sni}: raw path must not answer for the App, got {r:?}");
+        }
+
+        // Opt the nested service in: now it is rewritten too.
+        k2_core::tunnel::client_ip_labels::set("svc", true).expect("opt in");
+
+        // The App (router override) and the opted-in nested service, keep-alive.
         for sni in ["shop.example.k2.dev", "svc.example.k2.dev"] {
             let mut tls = frpc_session(&cert_pem, https_port, sni, relay_saw("203.0.113.7:51515"))
                 .await
@@ -1628,7 +1669,18 @@ mod tests {
         let refused = frpc_session(&cert_pem, https_port, "shop.example.k2.dev", Some(bad)).await;
         assert!(refused.is_err(), "a malformed PROXY header must drop the connection");
 
+        // Opting out restores the raw splice on the next connection.
+        k2_core::tunnel::client_ip_labels::set("svc", false).expect("opt out");
+        let mut tls = frpc_session(&cert_pem, https_port, "svc.example.k2.dev", relay_saw("203.0.113.7:1"))
+            .await
+            .expect("TLS");
+        let req = format!("GET /again HTTP/1.1\r\nHost: svc.example.k2.dev\r\n{SPOOFED}\r\n");
+        tls.write_all(req.as_bytes()).await.unwrap();
+        let (_, seen) = next_response(&mut tls, &mut Vec::new()).await;
+        assert_eq!(seen, req, "opted out: raw again");
+
         crate::apps::router::clear("shop");
+        crate::apps::router::clear("rawapp");
         subdomains::store(SubdomainMap::default());
     }
 

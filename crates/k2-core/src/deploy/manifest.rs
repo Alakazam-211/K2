@@ -136,6 +136,15 @@ pub struct Host {
     /// default 30 s, games longer).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drain_secs: Option<u64>,
+    /// 0.46.3: K2 rewrites every HTTP/1.1 request from the K2 Connect
+    /// tunnel. Client copies of the forwarding headers are dropped, and
+    /// `X-K2-Client-IP` / `X-Forwarded-For` / `X-Real-IP` are set when K2
+    /// knows the client. `false` is the escape hatch for an App that speaks
+    /// something other than HTTP/1.1 on its port (raw TCP, h2c, a custom
+    /// protocol): its connections are spliced raw, as before 0.46.3, with
+    /// no client IP. Absent = `true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_ip: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -172,6 +181,12 @@ impl Manifest {
 
     pub fn wants_test_guest_probe(&self) -> bool {
         self.host.health.as_ref().is_some_and(|h| h.as_test_guest)
+    }
+
+    /// K2's client-IP rewrite applies to this App (`host.clientIp`, default
+    /// on).
+    pub fn wants_client_ip(&self) -> bool {
+        self.host.client_ip.unwrap_or(true)
     }
 
     /// The health check is a TCP accept (K5's folder manifests).
@@ -246,6 +261,17 @@ mod tests {
         assert_eq!(m.health_path(), "/healthz");
         assert!(!m.wants_test_guest_probe());
         assert_eq!(m.data_revision, 0);
+    }
+
+    #[test]
+    fn client_ip_defaults_on_and_can_be_turned_off() {
+        assert!(parse(OK).unwrap().wants_client_ip(), "absent = on");
+        let off = OK.replace("\"mode\": \"cmd\",", "\"mode\": \"cmd\", \"clientIp\": false,");
+        let m = parse(&off).expect("clientIp parses");
+        assert!(!m.wants_client_ip());
+        let on = OK.replace("\"mode\": \"cmd\",", "\"mode\": \"cmd\", \"clientIp\": true,");
+        assert!(parse(&on).unwrap().wants_client_ip());
+        assert!(parse(&OK.replace("\"mode\": \"cmd\",", "\"mode\": \"cmd\", \"clientIp\": \"no\",")).is_err());
     }
 
     #[test]

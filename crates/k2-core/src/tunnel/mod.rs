@@ -48,6 +48,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod cert_broker;
+pub mod client_ip_labels;
 pub mod config;
 pub mod connector;
 pub mod cp_proxy;

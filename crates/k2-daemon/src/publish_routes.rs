@@ -126,6 +126,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/publish/logs" => handle_logs(params),
         "/cli/publish/leftovers" => handle_leftovers(params),
         "/cli/publish/validate" => handle_validate(params),
+        "/cli/publish/client-ip" => handle_client_ip_list(),
         "/cli/publish/run"
         | "/cli/publish/start"
         | "/cli/publish/stop"
@@ -309,7 +310,41 @@ pub fn dispatch_post(path: &str, params: &HashMap<String, String>) -> CliRespons
         "/cli/publish/subdomain/claim" => handle_subdomain_claim(params),
         "/cli/publish/subdomain/unclaim" => handle_subdomain_unclaim(params),
         "/cli/publish/frame" => handle_frame(params),
+        "/cli/publish/client-ip" => handle_client_ip_set(params),
         _ => CliResponse::not_found(),
+    }
+}
+
+/// `GET /cli/publish/client-ip`: the nested labels that opted in to K2's
+/// client-IP rewrite (0.46.3). Every other nested label is a raw splice.
+fn handle_client_ip_list() -> CliResponse {
+    let labels: Vec<String> = k2_core::tunnel::client_ip_labels::load().into_iter().collect();
+    CliResponse::ok_json(serde_json::json!({ "labels": labels }).to_string())
+}
+
+/// `POST /cli/publish/client-ip` `{label, on}`: opt a nested service in or
+/// out of the client-IP rewrite. `on` = its HTTP/1.1 requests get
+/// `X-K2-Client-IP` (client copies of the forwarding headers dropped;
+/// non-HTTP/1.x answered 400). `off` = the raw splice (the default).
+/// Applies to the next connection. Apps use their manifest
+/// (`host.clientIp`), not this list.
+fn handle_client_ip_set(params: &HashMap<String, String>) -> CliResponse {
+    let label = str_param(params, "label");
+    let on = match opt_param(params, "on").as_deref().map(str::trim) {
+        Some("true" | "1" | "on") => true,
+        Some("false" | "0" | "off") => false,
+        _ => return CliResponse::bad_request("pass on=true|false (k2 publish client-ip <label> on|off)"),
+    };
+    match k2_core::tunnel::client_ip_labels::set(&label, on) {
+        Ok(labels) => CliResponse::ok_json(
+            serde_json::json!({
+                "label": label.trim().to_ascii_lowercase(),
+                "clientIp": on,
+                "labels": labels.into_iter().collect::<Vec<_>>(),
+            })
+            .to_string(),
+        ),
+        Err(e) => CliResponse::bad_request(e),
     }
 }
 

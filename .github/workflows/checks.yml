@@ -111,7 +111,17 @@ jobs:
       - name: cargo check (deny warnings, all targets)
         env:
           RUSTFLAGS: -D warnings
-        run: cargo check -p k2-core -p k2-daemon -p k2-node-proto -p k2-node -p k2-root-proto -p k2-root-helper -p k2-app-engine --all-targets
+        run: cargo check -p k2-core -p k2-daemon -p k2-node-proto -p k2-node -p k2-root-proto -p k2-root-helper -p k2-app-engine -p k2-ptyd --all-targets
+
+      # k2-ptyd (prd-k2-ptyd-v1 R1: single point of failure for every
+      # agent): the PTY host's own suite incl. the bounded protocol fuzz,
+      # plus the daemon-side backend against the real binary. Runs the
+      # binary against temp homes only; never ~/.k2.
+      - name: cargo test k2-ptyd (Linux)
+        run: |
+          cargo build -p k2-ptyd --bin k2-ptyd
+          cargo test -p k2-ptyd
+          cargo test -p k2-core --test ptyd_backend
 
       # K2 root helper (prd-k2-root-helper-v1 RH16): a REQUIRED test step —
       # a bug here is a root bug. Pure unit tests over temp roots + the

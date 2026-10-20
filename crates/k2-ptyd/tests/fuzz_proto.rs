@@ -361,8 +361,18 @@ impl Live {
 impl Drop for Live {
     fn drop(&mut self) {
         if self.child.try_wait().unwrap().is_none() {
-            // SAFETY: our own test child; its sessions get SIGHUP from the
-            // closed masters.
+            // SIGKILL every session first: `hup-ignore` agents would
+            // outlive ptyd's closed masters.
+            if let Ok(mut c) = Client::connect_owner(&self.paths(), "fuzz-teardown", true) {
+                let _ = c.conn.set_timeout(Some(Duration::from_secs(5)));
+                if let Ok(Reply::Sessions { sessions }) = c.request(Request::List) {
+                    for s in sessions {
+                        // SAFETY: our own test agents.
+                        unsafe { libc::kill(s.pid, libc::SIGKILL) };
+                    }
+                }
+            }
+            // SAFETY: our own test child.
             unsafe { libc::kill(self.child.id() as i32, libc::SIGKILL) };
             let _ = self.child.wait();
         }
@@ -539,8 +549,17 @@ fn kill_with_edge_grace_values_keeps_ptyd_up() {
             Reply::Spawned { .. } => {}
             other => panic!("{other:?}"),
         }
-        // Let the agent install its SIGHUP ignore.
-        std::thread::sleep(Duration::from_millis(150));
+        // The agent prints READY after installing its SIGHUP ignore.
+        {
+            let mut d = c.attach(&sid, 0).expect("attach");
+            d.stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+            let (mut acc, mut buf) = (Vec::new(), [0u8; 256]);
+            while !String::from_utf8_lossy(&acc).contains("READY") {
+                let n = d.read(&mut buf).expect("READY before timeout");
+                assert!(n > 0, "agent output ended before READY: {:?}", String::from_utf8_lossy(&acc));
+                acc.extend_from_slice(&buf[..n]);
+            }
+        }
         c.conn.set_timeout(Some(Duration::from_millis(500))).unwrap();
         // The reply only comes once the child is gone: at once for grace 0
         // (SIGKILL), never within the timeout for the long graces.

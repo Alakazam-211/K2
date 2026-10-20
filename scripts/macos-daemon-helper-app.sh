@@ -5,6 +5,9 @@
 #   K2.app/Contents/Helpers/K2 Daemon.app/
 #     Contents/Info.plist               generated here (versions from tauri.conf.json)
 #     Contents/MacOS/k2-daemon          the daemon binary (CFBundleExecutable)
+#     Contents/MacOS/k2-ptyd            the PTY host (k2-ptyd PRD P84/§7.1): the
+#                                       daemon finds it beside its own exe
+#                                       (k2_core terminal::ptyd::client::shipped_binary)
 #     Contents/Resources/K2.icns        src-tauri/icons/icon.icns
 #
 # Sourced (not executed) by scripts/build-app.sh, scripts/dev-build.sh,
@@ -23,6 +26,7 @@ K2_DAEMON_HELPER_BUNDLE_ID="dev.k2.app.daemon"
 K2_DAEMON_HELPER_NAME="K2 Daemon"
 K2_DAEMON_HELPER_EXE="k2-daemon"
 K2_DAEMON_HELPER_ICON="K2.icns"
+K2_DAEMON_HELPER_PTYD="k2-ptyd"
 
 # Path of the nested helper app inside APP.
 k2_daemon_helper_dir() {
@@ -39,11 +43,17 @@ _k2_daemon_helper_version() {
         | sed 's/.*: *"\([^"]*\)".*/\1/'
 }
 
-# k2_daemon_helper_assemble APP DAEMON_SRC
-# Builds K2 Daemon.app inside APP from DAEMON_SRC and removes the pre-0.43.2
+# Path of the nested k2-ptyd inside APP.
+k2_daemon_helper_ptyd() {
+    printf '%s/Contents/MacOS/%s' "$(k2_daemon_helper_dir "$1")" "$K2_DAEMON_HELPER_PTYD"
+}
+
+# k2_daemon_helper_assemble APP DAEMON_SRC PTYD_SRC
+# Builds K2 Daemon.app inside APP from DAEMON_SRC (+ k2-ptyd from PTYD_SRC,
+# nested beside the daemon) and removes the pre-0.43.2
 # APP/Contents/MacOS/k2-daemon. Exits non-zero on any failure.
 k2_daemon_helper_assemble() {
-    local app="$1" daemon_src="$2"
+    local app="$1" daemon_src="$2" ptyd_src="$3"
     local helper version icon_src
     helper="$(k2_daemon_helper_dir "$app")"
     version="$(_k2_daemon_helper_version)"
@@ -51,6 +61,8 @@ k2_daemon_helper_assemble() {
 
     [ -d "$app/Contents" ] || { echo "FATAL: $app is not an app bundle" >&2; return 1; }
     [ -x "$daemon_src" ] || { echo "FATAL: daemon binary missing at $daemon_src" >&2; return 1; }
+    [ -n "$ptyd_src" ] && [ -x "$ptyd_src" ] \
+        || { echo "FATAL: k2-ptyd binary missing at '${ptyd_src}' (cargo build --release -p k2-ptyd --bin k2-ptyd)" >&2; return 1; }
     [ -f "$icon_src" ] || { echo "FATAL: K2 icon missing at $icon_src" >&2; return 1; }
     [ -n "$version" ] || { echo "FATAL: no version in src-tauri/tauri.conf.json" >&2; return 1; }
 
@@ -58,6 +70,8 @@ k2_daemon_helper_assemble() {
     mkdir -p "$helper/Contents/MacOS" "$helper/Contents/Resources" || return 1
     cp "$daemon_src" "$helper/Contents/MacOS/$K2_DAEMON_HELPER_EXE" || return 1
     chmod 0755 "$helper/Contents/MacOS/$K2_DAEMON_HELPER_EXE" || return 1
+    cp "$ptyd_src" "$helper/Contents/MacOS/$K2_DAEMON_HELPER_PTYD" || return 1
+    chmod 0755 "$helper/Contents/MacOS/$K2_DAEMON_HELPER_PTYD" || return 1
     cp "$icon_src" "$helper/Contents/Resources/$K2_DAEMON_HELPER_ICON" || return 1
 
     cat > "$helper/Contents/Info.plist" <<EOF
@@ -98,7 +112,7 @@ EOF
     # Pre-0.43.2 layout. Leaving it would keep a second, stale daemon in the
     # bundle and let an old LaunchAgent plist keep launching it.
     rm -f "$app/Contents/MacOS/$K2_DAEMON_HELPER_EXE"
-    echo "  K2 Daemon.app assembled (v${version}, ${K2_DAEMON_HELPER_BUNDLE_ID})."
+    echo "  K2 Daemon.app assembled (v${version}, ${K2_DAEMON_HELPER_BUNDLE_ID}, + ${K2_DAEMON_HELPER_PTYD})."
 }
 
 _k2_plist_get() {
@@ -148,23 +162,48 @@ k2_daemon_helper_verify() {
         echo "FATAL: legacy $app/Contents/MacOS/$K2_DAEMON_HELPER_EXE still present" >&2
         return 1
     fi
-    echo "  ✓ K2 Daemon.app present: Info.plist, icon $icon, ${K2_DAEMON_HELPER_BUNDLE_ID}, v${want_version}."
+    # k2-ptyd rides beside the daemon (never in K2.app/Contents/MacOS: the
+    # daemon only looks next to its own executable).
+    # Not exec'd here: an unsigned Mach-O inside an app bundle can sit in
+    # dyld start-up waiting on the first-launch policy check. The signed
+    # check (k2_daemon_helper_verify_signed) execs it.
+    local ptyd ptyd_kind
+    ptyd="$(k2_daemon_helper_ptyd "$app")"
+    [ -x "$ptyd" ] || { echo "FATAL: k2-ptyd missing at $ptyd" >&2; return 1; }
+    ptyd_kind="$(file -b "$ptyd")"
+    case "$ptyd_kind" in *Mach-O*) ;; *) echo "FATAL: $ptyd is not a Mach-O executable: $ptyd_kind" >&2; return 1 ;; esac
+    if [ -e "$app/Contents/MacOS/$K2_DAEMON_HELPER_PTYD" ]; then
+        echo "FATAL: stray $app/Contents/MacOS/$K2_DAEMON_HELPER_PTYD (it belongs in $K2_DAEMON_HELPER_APP)" >&2
+        return 1
+    fi
+    echo "  ✓ K2 Daemon.app present: Info.plist, icon $icon, ${K2_DAEMON_HELPER_BUNDLE_ID}, v${want_version}, ${K2_DAEMON_HELPER_PTYD}."
 }
 
 # k2_daemon_helper_sign APP IDENTITY ENTITLEMENTS
-# Signs the nested helper app (its main executable gets the daemon's
-# entitlements + hardened runtime). Call BEFORE signing the outer APP.
+# Signs the nested k2-ptyd (hardened runtime, NO entitlements: it only
+# forks/execs agents and links system libraries), then the helper app (its
+# main executable gets the daemon's entitlements + hardened runtime). The
+# helper's seal covers the already-signed k2-ptyd, so it must be signed
+# first. Call BEFORE signing the outer APP.
 k2_daemon_helper_sign() {
     local app="$1" identity="$2" entitlements="$3"
-    local helper
+    local helper ptyd
     helper="$(k2_daemon_helper_dir "$app")"
+    ptyd="$(k2_daemon_helper_ptyd "$app")"
+    [ -x "$ptyd" ] || { echo "FATAL: k2-ptyd missing at $ptyd (assemble first)" >&2; return 1; }
+    codesign --force --options runtime --timestamp \
+        --identifier "dev.k2.app.ptyd" \
+        --sign "$identity" \
+        "$ptyd" || { echo "FATAL: codesign of $ptyd failed" >&2; return 1; }
+    codesign --verify --strict "$ptyd" \
+        || { echo "FATAL: $ptyd signature does not verify" >&2; return 1; }
     codesign --force --options runtime --timestamp \
         --entitlements "$entitlements" \
         --sign "$identity" \
         "$helper" || { echo "FATAL: codesign of $helper failed" >&2; return 1; }
     codesign --verify --strict "$helper" \
         || { echo "FATAL: $helper signature does not verify" >&2; return 1; }
-    echo "  Signed K2 Daemon.app."
+    echo "  Signed K2 Daemon.app (+ k2-ptyd)."
 }
 
 # k2_daemon_helper_verify_signed APP
@@ -204,5 +243,34 @@ k2_daemon_helper_verify_signed() {
         return 1
     fi
     [ "$rc" -eq 0 ] || { echo "FATAL: signed k2-daemon --version exited rc=$rc: ${out:0:400}" >&2; return 1; }
-    echo "  ✓ K2 Daemon.app signed (runtime + entitlements); daemon execs past AMFI: $out"
+
+    # k2-ptyd: same Team ID as the daemon, hardened runtime, no
+    # entitlements at all (it holds agent PTYs; nothing may attach to it),
+    # and it execs past AMFI.
+    local ptyd pinfo pents team pteam pout prc
+    ptyd="$(k2_daemon_helper_ptyd "$app")"
+    pinfo="$(codesign -dv "$ptyd" 2>&1)" \
+        || { echo "FATAL: codesign -dv $ptyd failed: $pinfo" >&2; return 1; }
+    grep -q "^Identifier=dev.k2.app.ptyd\$" <<<"$pinfo" \
+        || { echo "FATAL: k2-ptyd code identifier is not dev.k2.app.ptyd" >&2; return 1; }
+    grep -q "flags=.*runtime" <<<"$pinfo" \
+        || { echo "FATAL: k2-ptyd is not signed with the hardened runtime" >&2; return 1; }
+    team="$(sed -n 's/^TeamIdentifier=//p' <<<"$info")"
+    pteam="$(sed -n 's/^TeamIdentifier=//p' <<<"$pinfo")"
+    { [ -n "$team" ] && [ "$team" != "not set" ] && [ "$team" = "$pteam" ]; } \
+        || { echo "FATAL: k2-ptyd Team ID '$pteam' differs from the daemon's '$team'" >&2; return 1; }
+    pents="$(codesign -d --entitlements - "$ptyd" 2>/dev/null)" \
+        || { echo "FATAL: cannot read k2-ptyd entitlements" >&2; return 1; }
+    if grep -q "<key>" <<<"$pents"; then
+        echo "FATAL: k2-ptyd carries entitlements; it must have none" >&2
+        return 1
+    fi
+    prc=0
+    pout="$("$ptyd" --version 2>&1)" || prc=$?
+    if [ "$prc" -eq 137 ]; then
+        echo "FATAL: signed k2-ptyd SIGKILL'd at exec (137 = AMFI). Output: ${pout:0:400}" >&2
+        return 1
+    fi
+    [ "$prc" -eq 0 ] || { echo "FATAL: signed k2-ptyd --version exited rc=$prc: ${pout:0:400}" >&2; return 1; }
+    echo "  ✓ K2 Daemon.app signed (runtime + entitlements); daemon execs past AMFI: $out; $pout (runtime, no entitlements, team $pteam)"
 }

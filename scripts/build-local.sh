@@ -158,9 +158,16 @@ if [ ! -x "$DAEMON_SRC" ]; then
     exit 1
 fi
 assert_daemon_oauth_not_placeholder "$DAEMON_SRC"
+# k2-ptyd rides beside the daemon in K2 Daemon.app (prd-k2-ptyd-v1 §7.1).
+cargo build --release -p k2-ptyd --bin k2-ptyd
+PTYD_SRC="target/release/k2-ptyd"
+if [ ! -x "$PTYD_SRC" ]; then
+    echo "  FATAL: k2-ptyd not at $PTYD_SRC after cargo build" >&2
+    exit 1
+fi
 # shellcheck source=scripts/macos-daemon-helper-app.sh
 source "$PROJECT_DIR/scripts/macos-daemon-helper-app.sh"
-k2_daemon_helper_assemble "target/release/bundle/macos/K2.app" "$DAEMON_SRC"
+k2_daemon_helper_assemble "target/release/bundle/macos/K2.app" "$DAEMON_SRC" "$PTYD_SRC"
 k2_daemon_helper_verify "target/release/bundle/macos/K2.app"
 
 echo ""

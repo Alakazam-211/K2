@@ -188,6 +188,13 @@ jobs:
           # shellcheck source=scripts/require-mail-oauth-build-env.sh
           source scripts/require-mail-oauth-build-env.sh
           require_mail_oauth_build_env
+          # k2-ptyd P84: the daemon embeds the PTY host (install-daemon.sh
+          # and the self-updater fetch only k2-daemon). Built first for the
+          # same target; K2_REQUIRE_PTYD_EMBED=1 fails the daemon build
+          # without it.
+          # shellcheck source=scripts/linux-ptyd-embed.sh
+          source scripts/linux-ptyd-embed.sh
+          k2_ptyd_build_for_embed "${{ matrix.target }}"
           cargo build --release \
             --target ${{ matrix.target }} \
             --bin k2-daemon \
@@ -196,6 +203,7 @@ jobs:
           TARGET_DIR="${CARGO_TARGET_DIR:-target}"
           cp "$TARGET_DIR/${{ matrix.target }}/release/k2-daemon" \
              "${{ matrix.asset }}"
+          assert_daemon_embeds_ptyd "${{ matrix.asset }}"
           # The root helper (prd-k2-root-helper-v1): its own crate, no
           # features (never test-keys). Signed LATER on z3mbpZ with the
           # separate root-helper key (scripts/sign-root-helper.sh); CI

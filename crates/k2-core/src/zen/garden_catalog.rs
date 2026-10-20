@@ -60,9 +60,9 @@ use serde::{Deserialize, Serialize};
 pub const DIARY_TEMPLATE_ID: &str = "k2.diary@2";
 
 /// The Kanban New Garden makes: `kanban-<n>.toml` (k2.kanban@1 was the
-/// first, 0.45.7; @2 moved to `k2:kanban@2`, 0.46.1; @3 moves to
-/// `k2:kanban@3`, 0.46.3).
-pub const KANBAN_TEMPLATE_ID: &str = "k2.kanban@3";
+/// first, 0.45.7; @2 moved to `k2:kanban@2`, 0.46.1; @3 moved to
+/// `k2:kanban@3` and @4 moves to `k2:kanban@4` (Thread parity), both 0.46.3).
+pub const KANBAN_TEMPLATE_ID: &str = "k2.kanban@4";
 
 include!(concat!(env!("OUT_DIR"), "/zen_garden_catalog.rs"));
 
@@ -329,7 +329,9 @@ kind = "columns"
     /// K2 Companion's colours); `kanban-1.toml` still ships for own copies.
     /// 0.46.3 (Rosson 2026-10-20): `kanban-3.toml` is the newest, on
     /// `k2:kanban@3` (the panel keeps a scrolled-up reader in place);
-    /// `kanban-2.toml` still ships for own copies.
+    /// `kanban-2.toml` still ships for own copies. Thread parity (Rosson
+    /// 2026-10-20, 0.46.3): `kanban-4.toml` is the newest, on `k2:kanban@4`
+    /// (the Thread's files and links); `kanban-3.toml` still ships.
     #[test]
     fn the_kanban_is_offered_after_the_diary_and_not_preinstalled() {
         let one = garden_catalog().iter().find(|e| e.template_id == "k2.kanban@1").expect("kanban-1.toml still ships");
@@ -338,8 +340,11 @@ kind = "columns"
         let two = garden_catalog().iter().find(|e| e.template_id == "k2.kanban@2").expect("kanban-2.toml still ships");
         assert_eq!((two.file, two.version), ("kanban-2.toml", 2));
         assert!(super::super::schema::is_template_id("k2.kanban@2"));
-        let e = garden_catalog().iter().find(|e| e.template_id == KANBAN_TEMPLATE_ID).expect("kanban-3.toml ships");
-        assert_eq!((e.file, e.version), ("kanban-3.toml", 3));
+        let three = garden_catalog().iter().find(|e| e.template_id == "k2.kanban@3").expect("kanban-3.toml still ships");
+        assert_eq!((three.file, three.version), ("kanban-3.toml", 3));
+        assert!(super::super::schema::is_template_id("k2.kanban@3"));
+        let e = garden_catalog().iter().find(|e| e.template_id == KANBAN_TEMPLATE_ID).expect("kanban-4.toml ships");
+        assert_eq!((e.file, e.version), ("kanban-4.toml", 4));
         assert_eq!(e.meta.label, one.meta.label, "the same Garden, a newer page");
         assert_eq!(e.meta.description, one.meta.description);
         assert_eq!(e.meta.order, one.meta.order);
@@ -388,20 +393,22 @@ kind = "columns"
                 }
             }
         }
-        assert_eq!(a, b, "kanban-3.toml is kanban-1.toml on k2:kanban@3");
-        // And @2's page is the same page on @2's widget.
-        let mut c: toml::Value = toml::from_str(two.toml).expect("parses");
-        {
-            let t = c.as_table_mut().expect("table");
-            t.remove("id");
-            for w in t.get_mut("widget").and_then(toml::Value::as_array_mut).expect("widgets") {
-                if w.get("kind").and_then(toml::Value::as_str) == Some("custom") {
-                    assert_eq!(w.get("widget").and_then(toml::Value::as_str), Some("k2:kanban@2"));
-                    w.as_table_mut().expect("widget").remove("widget");
+        assert_eq!(a, b, "kanban-4.toml is kanban-1.toml on k2:kanban@4");
+        // And @2's and @3's pages are the same page on their own widgets.
+        for (older, widget) in [(two, "k2:kanban@2"), (three, "k2:kanban@3")] {
+            let mut c: toml::Value = toml::from_str(older.toml).expect("parses");
+            {
+                let t = c.as_table_mut().expect("table");
+                t.remove("id");
+                for w in t.get_mut("widget").and_then(toml::Value::as_array_mut).expect("widgets") {
+                    if w.get("kind").and_then(toml::Value::as_str) == Some("custom") {
+                        assert_eq!(w.get("widget").and_then(toml::Value::as_str), Some(widget));
+                        w.as_table_mut().expect("widget").remove("widget");
+                    }
                 }
             }
+            assert_eq!(c, b, "kanban-4.toml is {} on k2:kanban@4", older.file);
         }
-        assert_eq!(c, b, "kanban-3.toml is kanban-2.toml on k2:kanban@3");
     }
 
     /// Integration (Zen v2, B1 × B2): every catalog template, every shipped

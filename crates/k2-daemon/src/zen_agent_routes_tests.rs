@@ -228,8 +228,106 @@ fn a_folder_put_writes_whole_with_the_switch_and_refuses_a_broken_folder() {
     assert_eq!(s, "400 Bad Request", "{v}");
 }
 
+/// The folder with `app.js` changed too (two code files differ from v1).
+fn folder_two_changes(id: &str, body: &str) -> J {
+    let mut f = folder(id, body);
+    f[2]["text"] = json!("console.log(2)\n");
+    f
+}
+
 #[test]
-fn without_the_switch_a_folder_put_proposes_each_changed_code_file() {
+fn without_the_switch_a_folder_put_is_one_proposal_approved_as_one() {
+    let e = env();
+    let plain = workspace("w-fone", false);
+    let (s, v) = call("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": folder("board", "v1")}));
+    assert_eq!(s, "200 OK", "{v}");
+    let (s, v) = call("/cli/zen/widget/folder/put", false, &plain, json!({"widget": "board", "files": folder_two_changes("board", "v2"), "note": "bigger"}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["proposed"], true, "{v}");
+    let props = v["proposals"].as_array().expect("proposals").clone();
+    assert_eq!(props.len(), 1, "two changed files are ONE proposal: {v}");
+    let p = &v["proposal"];
+    assert_eq!(p, &props[0], "{v}");
+    assert_eq!((p["kind"].as_str(), p["target"].as_str()), (Some("folder"), Some("board")), "{p}");
+    assert!(p["file"].is_null(), "a folder proposal names no file: {p}");
+    assert_eq!(p["files"], json!(["app.js", "index.html"]), "{p}");
+    assert_eq!(p["unchanged"], 2, "manifest.json and logo.png are kept as they are: {p}");
+    assert_eq!(p["note"], "bigger", "{p}");
+    assert!(file(&e.f, "board", "index.html").is_some_and(|t| t.contains("v1")), "a proposal writes nothing");
+    assert_eq!(file(&e.f, "board", "app.js").as_deref(), Some("console.log(1)\n"));
+    let id = p["id"].as_str().expect("id").to_string();
+    // Listed once; show carries every changed file and the disk now.
+    let (_, l) = get("/cli/zen/proposals", &plain, &[]);
+    let rows: Vec<&J> = l["proposals"].as_array().expect("list").iter().filter(|r| r["target"] == "board").collect();
+    assert_eq!(rows.len(), 1, "{l}");
+    assert_eq!(rows[0]["kind"], "folder", "{l}");
+    let (s, sh) = get("/cli/zen/proposals/show", &plain, &[("id", &id)]);
+    assert_eq!(s, "200 OK", "{sh}");
+    let content = sh["proposal"]["content"].as_array().expect("content is the changed files").clone();
+    let names: Vec<&str> = content.iter().map(|c| c["name"].as_str().expect("name")).collect();
+    assert_eq!(names, vec!["app.js", "index.html"], "{sh}");
+    assert_eq!(content[0]["text"], "console.log(2)\n", "{sh}");
+    assert_eq!(sh["proposal"]["current"]["app.js"], "console.log(1)\n", "{sh}");
+    assert_eq!((sh["proposal"]["stale"].as_bool(), sh["proposal"]["staleFiles"].clone()), (Some(false), json!([])), "{sh}");
+    assert_eq!(sh["proposal"]["path"], "widgets/board/ (app.js, index.html)", "{sh}");
+    // The person approves: both files land at once.
+    let (s, v) = call("/cli/zen/proposals/approve", true, &Caller::Owner, json!({"id": id}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["applied"]["written"], json!(["app.js", "index.html"]), "{v}");
+    assert!(file(&e.f, "board", "index.html").is_some_and(|t| t.contains("v2")));
+    assert_eq!(file(&e.f, "board", "app.js").as_deref(), Some("console.log(2)\n"));
+    assert!(has_audit("zen-proposal-approve", &id), "{:?}", audit_events());
+    let (s, v) = call("/cli/zen/proposals/approve", true, &Caller::Owner, json!({"id": id}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("409 Conflict", Some("not_pending")), "{v}");
+}
+
+#[test]
+fn a_folder_proposal_whose_files_moved_writes_nothing() {
+    let e = env();
+    let plain = workspace("w-fstale", false);
+    let mgr = workspace("w-fstale-mgr", true);
+    call("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": folder("board", "v1")}));
+    // A kept file (not one it changes) moves after the proposal: stale too.
+    let (_, v) = call("/cli/zen/widget/folder/put", false, &plain, json!({"widget": "board", "files": folder("board", "v2")}));
+    let id = v["proposal"]["id"].as_str().expect("id").to_string();
+    assert_eq!(v["proposal"]["files"], json!(["index.html"]), "{v}");
+    let mut moved = folder("board", "v1");
+    moved[2]["text"] = json!("console.log('person')\n");
+    let (s, v) = call("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": moved}));
+    assert_eq!(s, "200 OK", "{v}");
+    let (_, sh) = get("/cli/zen/proposals/show", &plain, &[("id", &id)]);
+    assert_eq!((sh["proposal"]["stale"].as_bool(), sh["proposal"]["staleFiles"].clone()), (Some(true), json!(["app.js"])), "{sh}");
+    let (s, v) = call("/cli/zen/proposals/approve", false, &mgr, json!({"id": id}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("409 Conflict", Some("proposal_stale")), "{v}");
+    assert!(v["message"].as_str().is_some_and(|m| m.contains("app.js") && m.contains("nothing was written")), "{v}");
+    assert!(file(&e.f, "board", "index.html").is_some_and(|t| t.contains("v1")), "a stale folder proposal never lands any file");
+    assert_eq!(file(&e.f, "board", "app.js").as_deref(), Some("console.log('person')\n"));
+    let (s, v) = call("/cli/zen/proposals/reject", false, &plain, json!({"id": id}));
+    assert_eq!((s.as_str(), v["status"].as_str()), ("200 OK", Some("withdrawn")), "{v}");
+}
+
+#[test]
+fn a_new_widget_folder_is_one_proposal_and_lands_whole() {
+    let e = env();
+    let plain = workspace("w-fnew", false);
+    let mut code_only = folder("fresh", "first");
+    code_only.as_array_mut().expect("files").truncate(3);
+    let (s, v) = call("/cli/zen/widget/folder/put", false, &plain, json!({"widget": "fresh", "files": code_only}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["proposal"]["files"], json!(["app.js", "index.html", "manifest.json"]), "{v}");
+    assert_eq!(v["proposal"]["unchanged"], 0, "{v}");
+    assert!(!e.f.widget_dir("fresh").exists(), "a proposal makes no folder");
+    let id = v["proposal"]["id"].as_str().expect("id").to_string();
+    let (s, v) = call("/cli/zen/proposals/approve", true, &Caller::Owner, json!({"id": id}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!(v["applied"]["validate"]["ok"], true, "{v}");
+    for name in ["app.js", "index.html", "manifest.json"] {
+        assert!(file(&e.f, "fresh", name).is_some(), "{name} landed");
+    }
+}
+
+#[test]
+fn without_the_switch_a_folder_put_proposes_only_what_changed() {
     let e = env();
     let plain = workspace("w-fplain", false);
     let (s, v) = call("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": folder("board", "v1")}));
@@ -238,9 +336,9 @@ fn without_the_switch_a_folder_put_proposes_each_changed_code_file() {
     assert_eq!(s, "200 OK", "{v}");
     assert_eq!(v["proposed"], true, "{v}");
     let props = v["proposals"].as_array().expect("proposals").clone();
-    assert_eq!(props.len(), 1, "only index.html changed: {v}");
-    assert_eq!(props[0]["file"], "index.html");
-    assert_eq!(props[0]["note"], "folder put 1/1: bigger");
+    assert_eq!(props.len(), 1, "one proposal: {v}");
+    assert_eq!(props[0]["files"], json!(["index.html"]), "only index.html changed: {v}");
+    assert_eq!(props[0]["note"], "bigger");
     assert!(file(&e.f, "board", "index.html").is_some_and(|t| t.contains("v1")), "a proposal writes nothing");
     // Nothing changed: no proposals.
     let (s, v) = call("/cli/zen/widget/folder/put", false, &plain, json!({"widget": "board", "files": folder("board", "v1")}));

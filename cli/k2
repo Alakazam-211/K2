@@ -30281,7 +30281,7 @@ cmd_schema() {
     {
       "name": "zen widget put",
       "usage": "k2 zen widget put <name> <file> --from <path>|- [--note \"…\"] [--json] | k2 zen widget put [<name>] --dir <folder> [--prune] [--note \"…\"] [--json]",
-      "description": "Change a custom widget through K2 from anywhere on disk (never edit ~/.k2 yourself). One code file (.html .js .css .json; written even if the widget then has errors, the last good version keeps running), or with --dir the whole staged folder (code, images, .woff2 fonts) in one checked write: a folder with errors is refused and nothing is written; files the folder lacks are left alone unless --prune. The person or an agent with Manage Gardens and data sources writes (audited); any other agent's put becomes proposals (one per changed code file; images, fonts and --prune need a writer). K2's built-in widgets are never written. k2 zen widget apply --from <folder> is the same as put --dir. Exit 0 written or proposed, 1 refused, 2 usage, 3 needs a person / Zen not set up, 4 no such widget.",
+      "description": "Change a custom widget through K2 from anywhere on disk (never edit ~/.k2 yourself). One code file (.html .js .css .json; written even if the widget then has errors, the last good version keeps running), or with --dir the whole staged folder (code, images, .woff2 fonts) in one checked write: a folder with errors is refused and nothing is written; files the folder lacks are left alone unless --prune. The person or an agent with Manage Gardens and data sources writes (audited); any other agent's put becomes a proposal, and a --dir put ONE proposal for the whole folder (its changed code files; images, fonts and --prune need a writer) that approving writes at once or not at all. K2's built-in widgets are never written. k2 zen widget apply --from <folder> is the same as put --dir. Exit 0 written or proposed, 1 refused, 2 usage, 3 needs a person / Zen not set up, 4 no such widget.",
       "args": [{"name": "name", "required": false}, {"name": "file", "required": false}],
       "flags": [
         {"name": "--from", "arg": "path|-", "description": "One code file's new text (- reads stdin)."},
@@ -58508,7 +58508,10 @@ if view == "put":
 elif view == "folder":
     if d.get("proposed"):
         for p in d.get("proposals") or []:
-            print("Proposed %s (widgets/%s/%s)" % (p.get("id"), p.get("target"), p.get("file")))
+            if p.get("kind") == "folder":
+                print("Proposed %s (widgets/%s/: %s): nothing written yet." % (p.get("id"), p.get("target"), ", ".join(p.get("files") or [])))
+            else:
+                print("Proposed %s (widgets/%s/%s)" % (p.get("id"), p.get("target"), p.get("file")))
         print(d.get("message") or "")
     elif d.get("proposed") is False:
         print("No change: widgets/%s matches the folder." % d.get("widget"))
@@ -58542,16 +58545,30 @@ elif view == "list":
     if not rows:
         print("No Garden proposals waiting."); sys.exit(0)
     for p in rows:
-        what = ("widgets/%s/%s" % (p["target"], p["file"])) if p.get("file") else ("gardens/%s.toml" % p["target"])
+        if p.get("kind") == "folder":
+            what = "widgets/%s/ (%d files)" % (p["target"], len(p.get("files") or []))
+        elif p.get("file"):
+            what = "widgets/%s/%s" % (p["target"], p["file"])
+        else:
+            what = "gardens/%s.toml" % p["target"]
         print("%s  %-9s %-36s by %s  %s B%s" % (p["id"], p["status"], what, p.get("madeBy"), p.get("bytes"), ("  — " + p["note"]) if p.get("note") else ""))
     print()
     print("Review: k2 zen proposals show <id> · approve <id> · reject <id>")
 elif view == "show":
     p = d.get("proposal") or {}
-    print("%s  %s  %s  by %s%s" % (p.get("id"), p.get("status"), p.get("path"), p.get("madeBy"), "  (STALE: the file changed since)" if p.get("stale") else ""))
-    if p.get("note"): print("note: %s" % p["note"])
-    print("--- proposed content ---")
-    print(p.get("content") or "")
+    if p.get("kind") == "folder":
+        stale = p.get("staleFiles") or []
+        print("%s  %s  %s  by %s%s" % (p.get("id"), p.get("status"), p.get("path"), p.get("madeBy"), ("  (STALE: changed since: %s)" % ", ".join(stale)) if stale else ""))
+        if p.get("note"): print("note: %s" % p["note"])
+        print("One proposal for the folder: approving writes every file below at once (%s other staged file(s) stay as they are)." % p.get("unchanged", 0))
+        for f in p.get("content") or []:
+            print("--- %s (%s) ---" % (f.get("name"), "new file" if not f.get("base") else "changed"))
+            print(f.get("text") or "")
+    else:
+        print("%s  %s  %s  by %s%s" % (p.get("id"), p.get("status"), p.get("path"), p.get("madeBy"), "  (STALE: the file changed since)" if p.get("stale") else ""))
+        if p.get("note"): print("note: %s" % p["note"])
+        print("--- proposed content ---")
+        print(p.get("content") or "")
 elif view == "decide":
     print("%s: %s" % (d.get("id"), d.get("status")))
 '
@@ -58755,10 +58772,11 @@ on disk. You never edit ~/.k2 yourself.
   apply --from <folder>  the same as put --dir.
 
 Who may write: the person (outside K2), or an agent with "Manage Gardens and
-data sources". Any other agent's put becomes proposals (one per changed code
-file; images, fonts and --prune need a writer), approved with
-k2 zen proposals approve <id>. K2's built-in widgets (k2:<name>) are never
-written.
+data sources". Any other agent's put becomes a proposal: one file, or with
+--dir ONE proposal for the whole folder (its changed code files; images,
+fonts and --prune need a writer), approved with k2 zen proposals approve
+<id>, which writes every file at once or nothing. K2's built-in widgets
+(k2:<name>) are never written.
 
 Check first, write nothing:  k2 zen validate --dir <folder>
 Try it on K2's preview page: k2 zen widget preview --dir <folder>

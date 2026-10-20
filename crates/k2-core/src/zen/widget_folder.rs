@@ -16,6 +16,10 @@
 //!   written, unlike a one-file put). Files the staged folder doesn't have
 //!   are left alone, or removed with `prune` (code files, images and fonts
 //!   only; dotfiles, README and LICENSE are never touched).
+//! - [`ZenFiles::widget_folder_proposal`] (0.46.3): an agent without the
+//!   switch puts a folder as ONE proposal ([`FolderProposal`]), and
+//!   [`ZenFiles::apply_folder_proposal`] lands it whole when it is approved
+//!   (every file still as it was proposed against), or writes nothing.
 //! - [`ZenFiles::preview_widget_folder`] writes the folder as
 //!   `widgets/preview-<name>/` and places it alone on K2's own preview
 //!   Garden, "Widget preview" (made when missing, never one of the person's
@@ -27,10 +31,10 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use base64::Engine as _;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as J};
 
-use super::agent_edit::{text_hash, valid_widget_file};
+use super::agent_edit::{bytes_hash, text_hash, valid_widget_file};
 use super::builtin_widgets::BUILTIN_PREFIX;
 use super::bundle::asset_mime;
 use super::schema::Diagnostic;
@@ -64,6 +68,51 @@ pub struct StagedFile {
     pub text: Option<String>,
     #[serde(default)]
     pub base64: Option<String>,
+}
+
+/// One changed code file of a folder proposal: its new text, and the hash
+/// of the file on disk when it was proposed (`""`: a new file).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FolderChange {
+    pub name: String,
+    pub text: String,
+    pub base: String,
+}
+
+/// A staged file the folder proposal keeps as it is (code, image or font),
+/// by hash: approving it needs the file still the same.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FolderKeep {
+    pub name: String,
+    pub hash: String,
+}
+
+/// A folder put by an agent without "Manage Gardens and data sources", as
+/// ONE proposal (0.46.3): the changed code files and the unchanged rest of
+/// the staged folder. Approving it lands the whole staged folder or nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FolderProposal {
+    pub files: Vec<FolderChange>,
+    #[serde(default)]
+    pub keep: Vec<FolderKeep>,
+}
+
+impl FolderProposal {
+    /// The row's `base_hash`: one hash over every file's name and the hash
+    /// it was proposed against (a fingerprint; approval checks each file).
+    pub fn base_hash(&self) -> String {
+        let mut lines: Vec<String> = self
+            .files
+            .iter()
+            .map(|f| format!("{}\t{}", f.name, f.base))
+            .chain(self.keep.iter().map(|k| format!("{}\t{}", k.name, k.hash)))
+            .collect();
+        lines.sort();
+        bytes_hash(Some(lines.join("\n").as_bytes()))
+    }
 }
 
 /// An image or font name a widget folder may hold: one segment, letters,
@@ -195,17 +244,27 @@ impl ZenFiles {
         Ok(name)
     }
 
-    /// The text of each staged code file that differs from what is on disk
-    /// (`None` on disk: a new file), for a proposal per file.
-    pub fn widget_folder_changes(&self, name: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<Vec<(String, String, Option<String>)>, ZenError> {
-        let mut out = Vec::new();
+    /// A file of `widgets/<name>/` as bytes (`None`: no such file).
+    fn widget_disk_file(&self, name: &str, file: &str) -> Result<Option<Vec<u8>>, ZenError> {
+        let p = self.widget_dir(name).join(file);
+        match fs::read(&p) {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(ZenError::Io(format!("{}: {e}", p.display()))),
+        }
+    }
+
+    /// The ONE proposal a staged folder makes against `widgets/<name>/`
+    /// (0.46.3): every code file that differs from the disk, with the hash
+    /// it was proposed against, and every other staged file as it is.
+    /// `None` when nothing differs. An image or font that differs is 400:
+    /// proposals hold code files only.
+    pub fn widget_folder_proposal(&self, name: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<Option<FolderProposal>, ZenError> {
+        let mut out = FolderProposal::default();
         for (file, bytes) in files {
-            let current = match fs::read(self.widget_dir(name).join(file)) {
-                Ok(b) => Some(b),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                Err(e) => return Err(ZenError::Io(format!("{}: {e}", self.widget_dir(name).join(file).display()))),
-            };
+            let current = self.widget_disk_file(name, file)?;
             if current.as_deref() == Some(bytes.as_slice()) {
+                out.keep.push(FolderKeep { name: file.clone(), hash: bytes_hash(Some(bytes)) });
                 continue;
             }
             if !valid_widget_file(file) {
@@ -214,13 +273,49 @@ impl ZenFiles {
                 )));
             }
             let text = String::from_utf8(bytes.clone()).map_err(|_| ZenError::BadRequest(format!("{file} is not UTF-8 text")))?;
-            let current = match current {
-                None => None,
-                Some(b) => Some(String::from_utf8(b).map_err(|_| ZenError::BadRequest(format!("{file} on disk is not UTF-8 text")))?),
-            };
-            out.push((file.clone(), text, current));
+            out.files.push(FolderChange { name: file.clone(), text, base: bytes_hash(current.as_deref()) });
         }
-        Ok(out)
+        Ok(if out.files.is_empty() { None } else { Some(out) })
+    }
+
+    /// The files of a folder proposal that changed on disk since it was
+    /// made (sorted). Empty: it still applies.
+    pub fn folder_proposal_stale(&self, name: &str, p: &FolderProposal) -> Result<Vec<String>, ZenError> {
+        let mut stale = Vec::new();
+        let expected = p.files.iter().map(|f| (&f.name, &f.base)).chain(p.keep.iter().map(|k| (&k.name, &k.hash)));
+        for (file, hash) in expected {
+            if !valid_widget_file(file) && !valid_asset_file(file) {
+                return Err(ZenError::BadRequest(format!("'{file}' can't be in a widget folder")));
+            }
+            if &bytes_hash(self.widget_disk_file(name, file)?.as_deref()) != hash {
+                stale.push(file.clone());
+            }
+        }
+        stale.sort();
+        Ok(stale)
+    }
+
+    /// Approve a folder proposal: `Ok(Err(files))` when any of its files
+    /// changed since (nothing written); else the whole staged folder (its
+    /// changed files plus the kept ones, read back from the disk) goes
+    /// through [`Self::put_widget_folder`] without prune, so it is checked
+    /// again and written at once, or refused with nothing written.
+    pub fn apply_folder_proposal(&self, widget: &str, p: &FolderProposal) -> Result<Result<J, Vec<String>>, ZenError> {
+        self.require()?;
+        let name = self.user_widget_name(widget)?;
+        let stale = self.folder_proposal_stale(&name, p)?;
+        if !stale.is_empty() {
+            return Ok(Err(stale));
+        }
+        let mut staged = BTreeMap::new();
+        for k in &p.keep {
+            let bytes = self.widget_disk_file(&name, &k.name)?.ok_or_else(|| ZenError::Io(format!("{} went missing", k.name)))?;
+            staged.insert(k.name.clone(), bytes);
+        }
+        for f in &p.files {
+            staged.insert(f.name.clone(), f.text.as_bytes().to_vec());
+        }
+        self.put_widget_folder(&name, &staged, false).map(Ok)
     }
 
     /// Write a staged folder into `widgets/<name>/` (made if missing) after

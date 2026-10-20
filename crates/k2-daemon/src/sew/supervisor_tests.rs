@@ -679,7 +679,9 @@ fn enable_points_the_grant_hook_at_sew_and_records_it() {
     // Sew's socket, and Sew's own token file: the worker asks the helper.
     assert_eq!(hook_calls(&t), vec![format!("on {} {}", pin::SEW_MGMT_SOCKET, pin::SEW_MGMT_TOKEN)]);
     let p = t.row().enable_progress.unwrap();
-    assert_eq!(p["grantHook"], json!({"target": "on"}));
+    // S30 K15: the chat backend never installs in unit tests (process-wide
+    // registry); production reports "on" here.
+    assert_eq!(p["grantHook"], json!({"target": "on", "chat": "off"}));
     assert_eq!(p["owner"], "queued");
     // Boot re-asserts it for an installed Sew (idempotent).
     assert_eq!(grant_hook_boot(&t.env())["target"], "on");

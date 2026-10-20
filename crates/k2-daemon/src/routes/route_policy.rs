@@ -1017,35 +1017,77 @@ pub const ROUTES: &[Route] = &[
     // ingress, LAN, air-gap) at once — Owner only.
     post("/cli/settings/reset", Owner),
     post("/cli/settings/update", Member),
-    // Sew on K2 (S29 K12): reads for any login; the server lifecycle is
-    // Admin for logins (owner token, or an agent passport whose workspace
-    // has "Manage Sew" on, pass through to the handler). Purge, the
-    // recovery key and rotate-master drop-prev are person-only in the
-    // handler (owner + a vault confirm).
+    // Sew on K2. Floors are for Connect logins; the owner token and agent
+    // passports pass to the handlers, which apply the real gates:
+    // - S29 server (K12) and S28 keys/pass/handoff: reads for any login,
+    //   the lifecycle Admin (or a passport with "Manage Sew"); purge, the
+    //   recovery key and drop-prev are person-only (owner + vault confirm).
+    // - S30 `k2 chat` agent verbs `/cli/sew/chat/*` incl. community
+    //   management `/cli/sew/chat/manage/*` (K17, K20): passports only
+    //   (NoLogin); manage also needs Manage Sew + level manage.
+    // - S30 approvals and the admin plane (K18, K19): Admin for logins, or
+    //   a Manage-Sew passport (no self-loosening; approve is person-only
+    //   with a vault confirm unless approvals.by allows agents).
+    // - S30 on-behalf opt-ins: the person themselves (the handler refuses
+    //   everyone else and passports), so any login reaches the handler.
+    get("/cli/sew/admin/agents", Admin),
+    post("/cli/sew/admin/agents/grant", Admin),
+    post("/cli/sew/admin/agents/revoke", Admin),
+    post("/cli/sew/admin/agents/set", Admin),
+    get("/cli/sew/admin/log", Admin),
+    get("/cli/sew/admin/people", Admin),
+    post("/cli/sew/admin/people/grant", Admin),
+    post("/cli/sew/admin/people/revoke", Admin),
+    post("/cli/sew/admin/people/update", Admin),
+    get("/cli/sew/approvals", Admin),
+    post("/cli/sew/approvals/approve", Admin),
+    post("/cli/sew/approvals/approve-batch", Admin),
+    post("/cli/sew/approvals/deny", Admin),
+    get("/cli/sew/approvals/policy", Admin),
+    post("/cli/sew/approvals/policy/set", Admin),
     get("/cli/sew/backups", Member),
+    get("/cli/sew/chat/access", NoLogin),
+    get("/cli/sew/chat/channels", NoLogin),
+    post("/cli/sew/chat/delete", NoLogin),
+    post("/cli/sew/chat/dm", NoLogin),
+    post("/cli/sew/chat/edit", NoLogin),
+    post("/cli/sew/chat/manage/ban", NoLogin),
+    post("/cli/sew/chat/manage/channel/create", NoLogin),
+    post("/cli/sew/chat/manage/channel/perms", NoLogin),
+    post("/cli/sew/chat/manage/channel/set", NoLogin),
+    post("/cli/sew/chat/manage/role/add", NoLogin),
+    post("/cli/sew/chat/manage/role/create", NoLogin),
+    post("/cli/sew/chat/manage/role/remove", NoLogin),
+    post("/cli/sew/chat/manage/space/create", NoLogin),
+    get("/cli/sew/chat/manage/space/members", NoLogin),
+    post("/cli/sew/chat/manage/space/members/add", NoLogin),
+    post("/cli/sew/chat/manage/space/members/remove", NoLogin),
+    post("/cli/sew/chat/manage/timeout", NoLogin),
+    post("/cli/sew/chat/manage/unban", NoLogin),
+    get("/cli/sew/chat/messages", NoLogin),
+    get("/cli/sew/chat/outbox", NoLogin),
+    post("/cli/sew/chat/outbox/cancel", NoLogin),
+    get("/cli/sew/chat/read", NoLogin),
+    post("/cli/sew/chat/reply", NoLogin),
+    post("/cli/sew/chat/send", NoLogin),
+    get("/cli/sew/chat/spaces", NoLogin),
+    get("/cli/sew/chat/wait", NoLogin),
+    get("/cli/sew/chat/whoami", NoLogin),
     get("/cli/sew/job", Member),
-    // Sew chat-pass keys (S28 §10, K6): Owner/Admin people; the emergency
-    // wipe additionally needs a vault confirm (person-proof).
     get("/cli/sew/keys", Admin),
     post("/cli/sew/keys/drop-previous", Admin),
     post("/cli/sew/keys/rotate", Admin),
-    // Voice (K13) and standalone users: the same Manage Sew gate in the
-    // handler; Admin floor for logins.
     post("/cli/sew/media/install", Admin),
     get("/cli/sew/media/preflight", Member),
     post("/cli/sew/media/probe", Admin),
     post("/cli/sew/media/renew", Admin),
     post("/cli/sew/media/uninstall", Admin),
     post("/cli/sew/media/url", Admin),
-    // K-M2: the reserved `meet` label → an App's front port.
     post("/cli/sew/meet/bind", Admin),
     post("/cli/sew/meet/unbind", Admin),
-    // Sew owner handoff mint (S32 §11.1, K7): the owner token or an
-    // Owner-role Connect login, plus a vault confirm (person-proof).
+    get("/cli/sew/on-behalf", Member),
+    post("/cli/sew/on-behalf/set", Member),
     post("/cli/sew/owner-handoff", Owner),
-    // Sew chat pass (S28 §9, K7): every Connect login role mints its own
-    // member pass; App sessions, the owner token and a handoff code
-    // (no credential) pass the login gate to the handler's own checks.
     post("/cli/sew/pass", Member),
     get("/cli/sew/preflight", Member),
     post("/cli/sew/server/backup", Admin),

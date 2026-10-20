@@ -105,6 +105,16 @@ pub enum PushEvent {
     /// else a fixed line by message kind or count. A secret card's name
     /// and prompt never ride a push.
     ThreadPost(ThreadPush),
+    /// Sew chat S30 (plan-sew-s30-s32-on-k2-v1 §1 S30 amend 6): an agent's
+    /// post is waiting in the chat approval queue. CONTENT-FREE: the
+    /// agent's name and the `out_…` id ONLY — never the message body, the
+    /// channel or the person it's for. Targeted at the people who may
+    /// approve (the owner and admin logins); empty = nobody.
+    ChatApprovalRequested {
+        agent_name: String,
+        outbox_id: String,
+        approvers: Vec<String>,
+    },
 }
 
 /// One person's project chat push (thread-read-v1).
@@ -320,7 +330,8 @@ impl PushEvent {
             Self::FeedbackCreated { .. }
             | Self::FeedbackCommented { .. }
             | Self::ProjectMessageCreated { .. }
-            | Self::ProjectPost(_) => "K2".to_string(),
+            | Self::ProjectPost(_)
+            | Self::ChatApprovalRequested { .. } => "K2".to_string(),
             // Silent: no visible text.
             Self::Badge(_) => String::new(),
             // §7: the agent's display name; name-only.
@@ -343,6 +354,9 @@ impl PushEvent {
             }
             Self::Badge(_) => String::new(),
             Self::ThreadPost(t) => thread_body(t.msg_kind, t.count, t.shown_preview()),
+            Self::ChatApprovalRequested { agent_name, .. } => {
+                format!("{agent_name} has a chat post waiting for your approval")
+            }
         }
     }
 
@@ -356,7 +370,8 @@ impl PushEvent {
             | Self::ProjectMessageCreated { .. }
             | Self::ProjectPost(_)
             | Self::Badge(_)
-            | Self::ThreadPost(_) => "",
+            | Self::ThreadPost(_)
+            | Self::ChatApprovalRequested { .. } => "",
         }
     }
 
@@ -375,6 +390,8 @@ impl PushEvent {
             Self::ThreadPost(t) => Some(t.device_usernames.as_slice()),
             Self::ProjectPost(p) => Some(p.device_usernames.as_slice()),
             Self::Badge(b) => Some(b.device_usernames.as_slice()),
+            // Always targeted: only the people who may approve.
+            Self::ChatApprovalRequested { approvers, .. } => Some(approvers.as_slice()),
             _ => None,
         }
     }
@@ -476,6 +493,11 @@ impl PushEvent {
                 ("avatarRev", t.avatar_rev.clone()),
                 ("agentColor", t.agent_color.clone()),
             ]),
+            Self::ChatApprovalRequested { outbox_id, agent_name, .. } => PushData::of(&[
+                ("kind", PUSH_KIND_CHAT_APPROVAL.to_string()),
+                ("outboxId", outbox_id.clone()),
+                ("agentName", agent_name.clone()),
+            ]),
             // Legacy desktop-era events carry no mobile deep link.
             Self::AgentNeedsAttention { .. } | Self::HeartbeatFailed { .. } => PushData::default(),
         }
@@ -535,6 +557,9 @@ pub const PUSH_KIND_THREAD: &str = "thread";
 
 /// Push `data.kind` for a silent badge correction (thread-read-v1).
 pub const PUSH_KIND_BADGE: &str = "badge";
+
+/// Push `data.kind` for a Sew chat post waiting for approval (S30).
+pub const PUSH_KIND_CHAT_APPROVAL: &str = "chat_approval";
 
 /// What happens when a push attempt fails. Adapters return `Err` after
 /// exhausting their own retry policy; the daemon does not queue events for

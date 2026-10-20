@@ -30,6 +30,15 @@
 //!   `email`/`title`/`pronouns` (SW14) unless `set_list_profile_fields(false)`
 //!   (a pre-SW14 Sew). Provision has no `skipped` field (HC2 is on member-add).
 //! - Unknown paths → 404 and recorded in `bad_paths`.
+//!
+//! S30 K15 (`k2 chat`'s real backend, Sew 0.3.0 act-as): a small `/api/v1`
+//! slice — `me`, `spaces`, `resolve`, `channels/{id}`, `members?ids=`,
+//! `channels/{id}/messages` (POST) — answered only under act-as
+//! (`Sew-Act-As` + `Sew-Via`, both parsed with the vendored `sew-proto`
+//! grammar; a bad or missing pair is recorded in `bad_headers` and refused),
+//! and `POST /mgmt/v1/spaces/create` (SW11; never under act-as; an agent
+//! owner is 400). One fixed Space `hearth` (id 201) with `general` (id 301);
+//! the acting member is whoever `seed` gave that external id.
 
 #![allow(dead_code)]
 
@@ -74,6 +83,9 @@ pub struct Call {
     pub body: Value,
     pub status: u16,
     pub replayed: bool,
+    /// `Sew-Act-As` / `Sew-Via` (S30 K15 act-as calls).
+    pub act_as: Option<String>,
+    pub via: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +118,10 @@ struct State {
     bad_bodies: Vec<String>,
     /// Every `sessions/revoke` body that answered 200 (S28 §12).
     revoked: Vec<RevokeSessionsRequest>,
+    /// S30 K15: act-as header pairs Sew would refuse.
+    bad_headers: Vec<String>,
+    /// S30 K15: messages posted through `/api/v1` (id, author, body).
+    chat_posts: Vec<(u64, u64, String)>,
 }
 
 pub struct FakeSew {
@@ -321,7 +337,17 @@ impl FakeSew {
                 "bodies sew-proto refuses: {:?}",
                 s.bad_bodies
             );
+            assert!(
+                s.bad_headers.is_empty(),
+                "act-as headers Sew refuses: {:?}",
+                s.bad_headers
+            );
         })
+    }
+
+    /// S30 K15: messages posted through `/api/v1` (id, author member id, body).
+    pub fn chat_posts(&self) -> Vec<(u64, u64, String)> {
+        self.with(|s| s.chat_posts.clone())
     }
 
     /// Bounded wait (≤ 5 s) for `pred` over the fake's state.
@@ -392,6 +418,7 @@ async fn serve(mut stream: UnixStream, state: Arc<Mutex<State>>) {
     let key = header(&head, "idempotency-key");
     let actor = header(&head, "sew-actor");
     let auth = header(&head, "authorization");
+    let act = (header(&head, "sew-act-as"), header(&head, "sew-via"));
 
     let (status, out, extra, drop_conn) = {
         let mut s = state.lock().unwrap();
@@ -403,6 +430,7 @@ async fn serve(mut stream: UnixStream, state: Arc<Mutex<State>>) {
             auth.as_deref(),
             key.as_deref(),
             actor.as_deref(),
+            &act,
             &body,
         )
     };
@@ -435,6 +463,7 @@ fn handle(
     auth: Option<&str>,
     key: Option<&str>,
     actor: Option<&str>,
+    act: &(Option<String>, Option<String>),
     body: &str,
 ) -> (u16, String, String, bool) {
     let parsed: Value = serde_json::from_str(body).unwrap_or(Value::Null);
@@ -447,6 +476,8 @@ fn handle(
             body: parsed.clone(),
             status,
             replayed,
+            act_as: act.0.clone(),
+            via: act.1.clone(),
         });
     };
     if auth != Some(&format!("Bearer {}", s.token)) {
@@ -454,7 +485,25 @@ fn handle(
         record(s, st, false);
         return (st, b, String::new(), false);
     }
+    // S30 K15: `/api/v1` only under act-as; `/mgmt` never.
+    let acting = match chat_acting(s, path, act) {
+        Ok(a) => a,
+        Err((st, b)) => {
+            record(s, st, false);
+            return (st, b, String::new(), false);
+        }
+    };
+    if let Some(a) = actor {
+        if !sew_client::proto::mgmt::is_sew_actor(a) {
+            s.bad_headers.push(format!("Sew-Actor {a:?}"));
+        }
+    }
     if method == "GET" {
+        if let Some(me) = acting {
+            let (st, b) = chat_get(s, me, path, query);
+            record(s, st, false);
+            return (st, b, String::new(), false);
+        }
         let (st, b) = match path {
             sew_wire::MGMT_STATUS => (
                 200,
@@ -536,6 +585,8 @@ fn handle(
         sew_wire::MGMT_DEPROVISION => deprovision(s, body),
         sew_wire::MGMT_OWNER_SET => owner_set(s, body),
         sew_wire::MGMT_SESSIONS_REVOKE => sessions_revoke(s, body),
+        p if acting.is_some() => chat_post(s, acting.expect("acting"), p, body),
+        sew_client::proto::routes::MGMT_SPACES_CREATE => space_create(s, body),
         _ => {
             s.bad_paths.push(format!("POST {path}"));
             err(
@@ -551,6 +602,152 @@ fn handle(
     }
     record(s, st, false);
     (st, b, String::new(), drop_conn)
+}
+
+// ── S30 K15: the act-as `/api/v1` slice and SW11 spaces/create ─────────
+
+const TS: &str = "2026-10-20T00:00:00.000Z";
+const SPACE_ID: &str = "201";
+const CHANNEL_ID: &str = "301";
+
+/// `Ok(Some(member id))` for a valid act-as pair on `/api/v1`, `Ok(None)`
+/// for a plain mgmt call, `Err` for what Sew refuses (recorded).
+fn chat_acting(
+    s: &mut State,
+    path: &str,
+    act: &(Option<String>, Option<String>),
+) -> Result<Option<u64>, (u16, String)> {
+    use sew_client::proto::mgmt::{ActAsTarget, SewVia};
+    let api = path.starts_with("/api/v1/");
+    match (api, act) {
+        (false, (None, None)) => Ok(None),
+        (false, _) => {
+            s.bad_headers.push(format!("act-as on mgmt {path}"));
+            Err(err(400, "bad_request", "act-as is for /api/v1 only", json!({})))
+        }
+        (true, (Some(t), Some(v))) => {
+            let target: Result<ActAsTarget, _> = t.parse();
+            let via: Result<SewVia, _> = v.parse();
+            let (Ok(ActAsTarget::External(ext)), Ok(_)) = (target, via) else {
+                s.bad_headers.push(format!("Sew-Act-As {t:?} / Sew-Via {v:?}"));
+                return Err(err(400, "bad_request", "bad act-as headers", json!({})));
+            };
+            let ext = ext.to_string();
+            match s.members.get(&ext) {
+                Some(m) if !m.deactivated => Ok(Some(m.member_id)),
+                _ => Err(err(403, "act_as_unknown", "no active member has that external id", json!({}))),
+            }
+        }
+        (true, _) => {
+            s.bad_headers.push(format!("{path} without act-as"));
+            Err(err(401, "unauthenticated", "the service token needs act-as on /api/v1", json!({})))
+        }
+    }
+}
+
+fn member_json(m: &Member) -> Value {
+    json!({
+        "id": m.member_id.to_string(),
+        "kind": if m.kind == MemberKind::Agent { "agent" } else { "person" },
+        "install_role": "member",
+        "username": m.username,
+        "display_name": m.display_name,
+        "deactivated": m.deactivated,
+        "created_at": TS,
+    })
+}
+
+fn channel_json() -> Value {
+    json!({
+        "id": CHANNEL_ID, "space_id": SPACE_ID, "type": "text", "visibility": "public",
+        "slug": "general", "name": "general", "position": 0, "synced": true, "head_seq": 1,
+        "dm_member_ids": [], "my_perms": "7", "created_at": TS,
+    })
+}
+
+fn chat_get(s: &mut State, me: u64, path: &str, query: &str) -> (u16, String) {
+    let q = |k: &str| {
+        query.split('&').find_map(|kv| kv.split_once('=').filter(|(a, _)| *a == k).map(|(_, v)| v.to_string()))
+    };
+    match path {
+        "/api/v1/me" => {
+            let m = s.members.values().find(|m| m.member_id == me).expect("acting member").clone();
+            (200, member_json(&m).to_string())
+        }
+        "/api/v1/spaces" => (
+            200,
+            json!({"items": [{"id": SPACE_ID, "slug": "hearth", "name": "Hearth", "owner_id": "1",
+                "member_count": 2, "created_at": TS}], "has_more": false})
+            .to_string(),
+        ),
+        "/api/v1/resolve" => match q("addr").as_deref() {
+            Some("hearth/general") => (200, json!({"space_id": SPACE_ID, "channel_id": CHANNEL_ID}).to_string()),
+            _ => err(404, "not_found", "channel not found", json!({})),
+        },
+        "/api/v1/channels/301" => (200, channel_json().to_string()),
+        "/api/v1/spaces/201/channels" => (200, json!({"items": [channel_json()], "has_more": false}).to_string()),
+        "/api/v1/members" => {
+            let ids: Vec<String> = q("ids").map(|l| l.replace("%2C", ",").split(',').map(str::to_string).collect()).unwrap_or_default();
+            let items: Vec<Value> =
+                s.members.values().filter(|m| ids.contains(&m.member_id.to_string())).map(member_json).collect();
+            (200, json!({"items": items, "has_more": false}).to_string())
+        }
+        _ => {
+            s.bad_paths.push(format!("GET {path}"));
+            err(404, "not_found", "unknown route", json!({"reason": "unknown_route"}))
+        }
+    }
+}
+
+fn chat_post(s: &mut State, me: u64, path: &str, body: &str) -> (u16, String) {
+    use sew_client::proto::api::messages::CreateMessageRequest;
+    if path != "/api/v1/channels/301/messages" {
+        s.bad_paths.push(format!("POST {path}"));
+        return err(404, "not_found", "unknown route", json!({"reason": "unknown_route"}));
+    }
+    let req: CreateMessageRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "create message", e, body),
+    };
+    let id = 400 + s.chat_posts.len() as u64 + 1;
+    s.chat_posts.push((id, me, req.body.clone()));
+    (
+        200,
+        json!({
+            "id": id.to_string(), "channel_id": CHANNEL_ID, "author_id": me.to_string(), "body": req.body,
+            "also_in_channel": false,
+            "mentions": {"members": [], "roles": [], "groups": [], "channel": false, "here": false},
+            "reactions": [], "attachments": [], "pinned": false, "seq": id, "created_at": TS,
+        })
+        .to_string(),
+    )
+}
+
+fn space_create(s: &mut State, body: &str) -> (u16, String) {
+    use sew_client::proto::mgmt::MgmtSpaceCreateRequest;
+    let req: MgmtSpaceCreateRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "spaces/create", e, body),
+    };
+    let owner = req.owner.to_string();
+    if owner.starts_with("k2:workspace:") {
+        return err(400, "validation_failed", "an agent never owns a Space", json!({"field": "owner"}));
+    }
+    let owner_id = s.members.get(&owner).map(|m| m.member_id).unwrap_or(1);
+    let managers: Vec<String> = req
+        .managers
+        .iter()
+        .filter_map(|e| s.members.get(&e.to_string()).map(|m| m.member_id.to_string()))
+        .collect();
+    (
+        200,
+        json!({
+            "space_id": "202", "slug": req.slug.as_str(), "name": req.name,
+            "owner_member_id": owner_id.to_string(), "created": true,
+            "manager_member_ids": managers,
+        })
+        .to_string(),
+    )
 }
 
 fn bad_body(s: &mut State, what: &str, e: impl std::fmt::Display, body: &str) -> (u16, String) {

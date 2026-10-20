@@ -421,6 +421,17 @@ pub(crate) fn deliver_badge(event: PushEvent) {
     }
 }
 
+/// Sew chat S30: an agent's post waits in the chat approval queue → push to
+/// the people who may approve. CONTENT-FREE: agent name + `out_…` id only,
+/// never the body, channel or person it's for.
+pub fn notify_chat_approval_requested(agent_name: &str, outbox_id: &str, approvers: &[String]) {
+    dispatch_push(PushEvent::ChatApprovalRequested {
+        agent_name: agent_name.to_string(),
+        outbox_id: outbox_id.to_string(),
+        approvers: approvers.to_vec(),
+    });
+}
+
 /// How long a resolved gateway config is reused before it is read again
 /// (settings JSON + `tunnel.json`, maybe the token vault). Short, so a
 /// pairing or a settings change applies without a restart.

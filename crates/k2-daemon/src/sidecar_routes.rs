@@ -1502,6 +1502,9 @@ fn handle_access(
             k2_core::agent_hooks::HookEvent::SyncProjects,
             serde_json::Value::Null,
         );
+        // S30 K21: the chat teaching follows the switch (AGENTS.md line,
+        // `k2-chat` skill, `k2 hostchat` shown or hidden).
+        crate::sew_chat::routes_admin::teach_refresh(&ws.path);
         return Ok((
             serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "chat_manage", "agentsCanManageChat": value }),
             format!("ok {} chat_manage={value}", ws.handle),

@@ -15,6 +15,13 @@
 //!
 //! Retention: rows are kept [`KEEP_CALL_DAYS`] days, then rolled into
 //! per-day, per-verb summaries kept [`KEEP_SUMMARY_DAYS`] days.
+//!
+//! **Failures** (schema 2): one row per crash of a running instance, deploy
+//! that failed its health gate (or otherwise never went live), and failed
+//! build: time, App, deployment, kind, exit code or signal, a short reason,
+//! the restart count and whether K2 rolled back. No App output is stored
+//! here (the reason is K2's own words); `k2 app logs` has the output. Kept
+//! [`KEEP_FAILURE_DAYS`] days.
 
 use std::path::{Path, PathBuf};
 
@@ -23,11 +30,13 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 /// `PRAGMA user_version` of a current file.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 /// Call rows are kept this many days (then summarised).
 pub const KEEP_CALL_DAYS: i64 = 30;
 /// Daily summaries are kept this many days.
 pub const KEEP_SUMMARY_DAYS: i64 = 365;
+/// Failure rows are kept this many days.
+pub const KEEP_FAILURE_DAYS: i64 = 90;
 
 /// `~/.k2/apps/app-audit.db`.
 pub fn db_path() -> PathBuf {
@@ -68,6 +77,23 @@ CREATE TABLE IF NOT EXISTS daily (
 );
 ";
 
+const SCHEMA_V2: &str = "
+CREATE TABLE IF NOT EXISTS failures (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at_ms INTEGER NOT NULL,
+  app_id TEXT NOT NULL,
+  deployment TEXT,
+  kind TEXT NOT NULL,
+  exit_code INTEGER,
+  signal INTEGER,
+  reason TEXT NOT NULL,
+  restart_count INTEGER NOT NULL DEFAULT 0,
+  rolled_back INTEGER NOT NULL DEFAULT 0,
+  woke INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS failures_app_at ON failures (app_id, at_ms);
+";
+
 /// Open (and create or upgrade) the audit file at `path`. The file is
 /// owner-only (0600) on Unix.
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
@@ -99,7 +125,103 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         conn.execute_batch(SCHEMA_V1)?;
         conn.execute_batch("PRAGMA user_version = 1")?;
     }
+    if v < 2 {
+        conn.execute_batch(SCHEMA_V2)?;
+        conn.execute_batch("PRAGMA user_version = 2")?;
+    }
     Ok(())
+}
+
+// ── failures ─────────────────────────────────────────────────────────
+
+/// A running instance exited or stopped answering its health checks.
+pub const FAILURE_CRASH: &str = "crash";
+/// A deploy failed its health gate (or, inside the watch window, its
+/// health checks).
+pub const FAILURE_HEALTH: &str = "health";
+/// A build for a deploy failed.
+pub const FAILURE_BUILD: &str = "build";
+/// A deploy failed before its health gate (the engine couldn't prepare or
+/// start it, the Seed didn't verify).
+pub const FAILURE_DEPLOY: &str = "deploy";
+pub const FAILURE_KINDS: &[&str] = &[FAILURE_CRASH, FAILURE_HEALTH, FAILURE_BUILD, FAILURE_DEPLOY];
+
+/// One failure of an App, as K2 saw it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Failure {
+    pub at_ms: i64,
+    pub app_id: String,
+    /// The deployment (`d-…`), or the build log id (`b-…`) of a failed build.
+    pub deployment: Option<String>,
+    /// One of [`FAILURE_KINDS`].
+    pub kind: String,
+    pub exit_code: Option<i32>,
+    pub signal: Option<i32>,
+    /// K2's own short words (never App output).
+    pub reason: String,
+    /// Restarts inside the crash-loop breaker's window, this one counted.
+    pub restart_count: u32,
+    /// K2 switched back to the previous version.
+    pub rolled_back: bool,
+    /// The App's agent was woken for it (else it was folded into an
+    /// earlier wake or the crash-loop alert).
+    pub woke: bool,
+}
+
+/// One stored failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailureRow {
+    pub id: i64,
+    #[serde(flatten)]
+    pub failure: Failure,
+}
+
+/// Store one failure; returns its id.
+pub fn record_failure(conn: &Connection, f: &Failure) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO failures (at_ms, app_id, deployment, kind, exit_code, signal, reason, restart_count, rolled_back, woke) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![f.at_ms, f.app_id, f.deployment, f.kind, f.exit_code, f.signal, f.reason, f.restart_count, f.rolled_back, f.woke],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Which failures [`list_failures`] returns.
+#[derive(Debug, Clone, Default)]
+pub struct FailureQuery<'a> {
+    pub app_id: &'a str,
+    pub since_ms: Option<i64>,
+    /// One of [`FAILURE_KINDS`].
+    pub kind: Option<&'a str>,
+    pub limit: i64,
+}
+
+/// An App's failures, newest first. Only that App's rows.
+pub fn list_failures(conn: &Connection, q: &FailureQuery<'_>) -> rusqlite::Result<Vec<FailureRow>> {
+    let mut st = conn.prepare(
+        "SELECT id, at_ms, app_id, deployment, kind, exit_code, signal, reason, restart_count, rolled_back, woke FROM failures \
+         WHERE app_id = ?1 AND (?2 IS NULL OR at_ms >= ?2) AND (?3 IS NULL OR kind = ?3) ORDER BY at_ms DESC, id DESC LIMIT ?4",
+    )?;
+    let rows = st.query_map(params![q.app_id, q.since_ms, q.kind, q.limit.clamp(1, 5000)], |r| {
+        Ok(FailureRow {
+            id: r.get(0)?,
+            failure: Failure {
+                at_ms: r.get(1)?,
+                app_id: r.get(2)?,
+                deployment: r.get(3)?,
+                kind: r.get(4)?,
+                exit_code: r.get(5)?,
+                signal: r.get(6)?,
+                reason: r.get(7)?,
+                restart_count: r.get::<_, i64>(8)?.clamp(0, u32::MAX as i64) as u32,
+                rolled_back: r.get(9)?,
+                woke: r.get(10)?,
+            },
+        })
+    })?;
+    rows.collect()
 }
 
 /// One call, as the gateway saw it.
@@ -360,6 +482,7 @@ pub fn prune(conn: &Connection, now_ms: i64) -> rusqlite::Result<usize> {
     )?;
     let n = tx.execute("DELETE FROM calls WHERE day < ?1", params![cut])?;
     tx.execute("DELETE FROM daily WHERE day < ?1", params![cut_summary])?;
+    tx.execute("DELETE FROM failures WHERE at_ms < ?1", params![now_ms - KEEP_FAILURE_DAYS * 86_400_000])?;
     tx.commit()?;
     Ok(n)
 }
@@ -477,6 +600,65 @@ mod tests {
         let c = open(&p).unwrap();
         assert_eq!(list(&c, &Query { app_id: "jobs", limit: 5, ..Default::default() }).unwrap().len(), 1);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn failure(at_ms: i64, app: &str, kind: &str) -> Failure {
+        Failure {
+            at_ms,
+            app_id: app.into(),
+            deployment: Some("d-0123456789ab".into()),
+            kind: kind.into(),
+            exit_code: Some(1),
+            reason: "exited".into(),
+            restart_count: 1,
+            woke: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_version_1_file_gains_the_failures_table() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(SCHEMA_V1).unwrap();
+        c.execute_batch("PRAGMA user_version = 1").unwrap();
+        append(&c, &[call(DAY1, "jobs", "GET /cli/thread", 200)]).unwrap();
+        migrate(&c).unwrap();
+        let v: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 2);
+        assert_eq!(list(&c, &Query { app_id: "jobs", limit: 5, ..Default::default() }).unwrap().len(), 1, "calls kept");
+        record_failure(&c, &failure(DAY1, "jobs", FAILURE_CRASH)).unwrap();
+        assert_eq!(list_failures(&c, &FailureQuery { app_id: "jobs", limit: 5, ..Default::default() }).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn failures_filter_by_app_time_and_kind_newest_first() {
+        let c = mem();
+        let mut sig = failure(DAY1 + 1, "jobs", FAILURE_CRASH);
+        sig.exit_code = None;
+        sig.signal = Some(9);
+        sig.restart_count = 2;
+        sig.woke = false;
+        record_failure(&c, &failure(DAY1, "jobs", FAILURE_CRASH)).unwrap();
+        record_failure(&c, &sig).unwrap();
+        let mut h = failure(DAY1 + 2, "jobs", FAILURE_HEALTH);
+        h.rolled_back = true;
+        h.exit_code = None;
+        record_failure(&c, &h).unwrap();
+        record_failure(&c, &failure(DAY1 + 3, "other", FAILURE_BUILD)).unwrap();
+        let all = list_failures(&c, &FailureQuery { app_id: "jobs", limit: 50, ..Default::default() }).unwrap();
+        assert_eq!(all.len(), 3, "only this App's rows");
+        assert_eq!(all[0].failure, h, "newest first, every field kept");
+        assert_eq!(all[1].failure, sig);
+        let crashes = list_failures(&c, &FailureQuery { app_id: "jobs", kind: Some(FAILURE_CRASH), limit: 50, ..Default::default() }).unwrap();
+        assert_eq!(crashes.len(), 2);
+        let since = list_failures(&c, &FailureQuery { app_id: "jobs", since_ms: Some(DAY1 + 1), limit: 50, ..Default::default() }).unwrap();
+        assert_eq!(since.len(), 2);
+        assert!(list_failures(&c, &FailureQuery { app_id: "jobs", kind: Some(FAILURE_BUILD), limit: 50, ..Default::default() }).unwrap().is_empty());
+        let j = serde_json::to_value(&all[0]).unwrap();
+        assert_eq!((j["kind"].as_str(), j["rolledBack"].as_bool(), j["restartCount"].as_u64()), (Some("health"), Some(true), Some(1)), "{j}");
+        // Pruned after KEEP_FAILURE_DAYS.
+        prune(&c, DAY1 + (KEEP_FAILURE_DAYS + 1) * DAY).unwrap();
+        assert!(list_failures(&c, &FailureQuery { app_id: "jobs", limit: 50, ..Default::default() }).unwrap().is_empty());
     }
 
     #[test]

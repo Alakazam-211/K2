@@ -55,6 +55,7 @@ const NO_CLAIM_NEEDED: Record<string, string> = {
   'components/Settings/sections/HeartbeatsSection.tsx': 'Settings is open: Browser tabs are hidden',
   'components/Settings/sections/EmailHostingSection.tsx': 'Settings is open: Browser tabs are hidden',
   'components/Settings/sections/ComputeServersParts.tsx': 'Settings is open: Browser tabs are hidden (Compute\'s revoke and owner confirms are inline panels)',
+  'components/Settings/sections/sew-ui.tsx': 'Settings is open: Browser tabs are hidden (an inline shown-once secret box)',
   'components/Settings/shared/AgentAccountsColumn.tsx': 'Settings is open: Browser tabs are hidden',
   'components/Settings/shared/LlmLoginSheet.tsx': 'Settings is open: Browser tabs are hidden',
   'components/Projects/ProjectsPage.tsx': 'Projects page: the room is hidden',

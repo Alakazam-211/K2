@@ -187,6 +187,10 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.3 Settings → Access → Permission Cards (Beta): the window's
   // server's switches, agents and requests waiting on you.
   'components/Settings/sections/permission-cards-api.ts',
+  // S32 K27 Settings → Chat Hosting: the window's server's Sew install, and
+  // its `sew_changed` refetch event.
+  'components/Settings/sections/sew-api.ts',
+  'components/Settings/sections/SewSection.tsx',
   // 0.45.4 federation: peer-list change events for the window's server.
   'components/Settings/sections/ConnectionsSection.tsx',
   // 0.45.5 Settings → Notifications (Thread push): the window's server's

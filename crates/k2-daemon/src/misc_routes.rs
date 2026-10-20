@@ -477,14 +477,22 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             let mut v = serde_json::to_value(k2_core::tunnel::tunnel_status())
                 .unwrap_or_else(|_| serde_json::json!({ "running": false }));
             if let Some(obj) = v.as_object_mut() {
+                let settings = k2_core::app_settings::load();
                 obj.insert(
                     "loginIngress".to_string(),
-                    serde_json::Value::String(
-                        k2_core::app_settings::load()
-                            .connect_login_ingress()
-                            .as_wire()
-                            .to_string(),
-                    ),
+                    serde_json::Value::String(settings.connect_login_ingress().as_wire().to_string()),
+                );
+                // PRD boot-status-ghost §2.3: the effective public
+                // `/boot-status` view (compat|ghost) and whether the owner
+                // chose it (false = the release default), for
+                // `k2 tunnel status` / `k2 tunnel boot-status`.
+                obj.insert(
+                    "bootStatus".to_string(),
+                    serde_json::Value::String(settings.boot_status_public().as_wire().to_string()),
+                );
+                obj.insert(
+                    "bootStatusExplicit".to_string(),
+                    serde_json::Value::Bool(settings.boot_status_public.is_some()),
                 );
                 // 0.45.2: which name the E2E listener's certificate serves
                 // (null = no listener). After a switch it must equal the
@@ -1708,6 +1716,40 @@ pub fn handle_api_key_create(body: &[u8], actor: &str) -> CliResponse {
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
     };
     let label = v.get("label").and_then(|x| x.as_str()).unwrap_or("");
+    // PRD boot-status-ghost §5.1: `scope` picks the key family. Absent /
+    // `owner` = today's key; `status` = a read-only status key for the
+    // fleet monitor (full `/boot-status` only, no doors, no workspaces, no
+    // LLM key — every other field is refused rather than silently dropped).
+    // Anything else is 400.
+    match v.get("scope") {
+        None | Some(serde_json::Value::Null) => {}
+        Some(serde_json::Value::String(s)) if s == "owner" => {}
+        Some(serde_json::Value::String(s)) if s == k2_core::api_keys::STATUS_SCOPE => {
+            const STATUS_FORBIDDEN: &[&str] = &[
+                "anthropicKey", "anthropic_key", "llmKey", "llm_key", "provider", "baseUrl", "base_url",
+                "workspaces", "allowedWorkspaces", "allowed_workspaces", "capabilities", "caps", "allow",
+                "deny", "hire",
+            ];
+            if let Some(bad) = STATUS_FORBIDDEN.iter().find(|k| v.get(**k).is_some_and(|x| !x.is_null())) {
+                return CliResponse::bad_request(format!(
+                    "a status key is read-only: it takes a label only (got {bad:?})"
+                ));
+            }
+            return match k2_core::api_keys::create_status_key(label) {
+                Ok((id, raw)) => {
+                    k2_core::log_debug!("[api-keys] created status key {id} (label {label:?}) by {actor}");
+                    CliResponse::ok_json(
+                        serde_json::json!({ "id": id, "key": raw, "scope": k2_core::api_keys::STATUS_SCOPE })
+                            .to_string(),
+                    )
+                }
+                Err(e) => CliResponse::bad_request(e),
+            };
+        }
+        Some(other) => {
+            return CliResponse::bad_request(format!("unknown scope {other}; accepted: owner|status"));
+        }
+    }
     // Accept either `anthropicKey` (camel) or `anthropic_key` (snake) — plus
     // the W5 provider-neutral aliases `llmKey`/`llm_key` (the same stored
     // credential; the historical names win when both are present).

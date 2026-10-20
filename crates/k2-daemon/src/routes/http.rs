@@ -973,12 +973,20 @@ pub(crate) fn session_password_gate(
     // after login while `must_change_password` is still set. Without it,
     // forced-rotation users on Linux/cloud hosts (seed-users with the flag)
     // get 403 on the policy fetch. POST policy stays blocked (owner write).
+    //
+    // PRD boot-status-ghost §2.1 (Q7): `/boot-status`, `/ping` and
+    // `/health` are allowlisted so a flagged session gets the PUBLIC
+    // boot-status view (200), never a 403 — a client polling with its
+    // token must still see the box is up.
     if matches!(
         path,
         "/cli/auth/whoami"
             | "/cli/auth/change-password"
             | "/cli/auth/logout"
             | "/cli/auth/login"
+            | "/boot-status"
+            | "/ping"
+            | "/health"
     ) || (path == "/cli/users/policy" && !is_post)
     {
         return None;

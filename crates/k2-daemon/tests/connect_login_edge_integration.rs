@@ -741,14 +741,22 @@ async fn ingress_mode_any_allows_tunnel_login_and_off_refuses_everything() {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let body = r#"{"username":"modeuser","password":"password123"}"#;
 
-        // Default (edge) advertised on /boot-status.
+        // Default (edge) advertised on /boot-status — to an authed caller.
+        // PRD boot-status-ghost (B11): a stranger on the tunnel gets the
+        // compat view, which never carries `connectLogin`.
+        let owner_bearer = format!("Authorization: Bearer {OWNER_TOKEN}");
         let r = http(d.tunnel_port, "GET", "/boot-status", None, &[]);
         let bs: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(bs["view"], "compat", "{}", r.body);
+        assert!(bs.get("connectLogin").is_none(), "compat hides the login mode: {}", r.body);
+        let r = http(d.tunnel_port, "GET", "/boot-status", None, &[&owner_bearer]);
+        let bs: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(bs["view"], "full", "{}", r.body);
         assert_eq!(bs["connectLogin"]["ingress"], "edge");
 
         // any → unattested tunnel login works (old behaviour), audited as tunnel.
         set_ingress_mode("any");
-        let r = http(d.tunnel_port, "GET", "/boot-status", None, &[]);
+        let r = http(d.tunnel_port, "GET", "/boot-status", None, &[&owner_bearer]);
         let bs: serde_json::Value = serde_json::from_str(&r.body).unwrap();
         assert_eq!(bs["connectLogin"]["ingress"], "any");
         let r = http(d.tunnel_port, "POST", LOGIN, Some(body), &[]);

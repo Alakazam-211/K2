@@ -1512,3 +1512,162 @@ fn rollback_with_voice_surfaces_doctor_disagreement_and_engine_failure() {
     let e = t.row().last_error.unwrap();
     assert!(e.contains("voice engine was not put back") && e.contains("exit 3") && e.contains("media_unpinned_build"), "{e}");
 }
+
+// ── boot: JWKS URL drift + install id (S29 §19, 0.46.3) ──────────────────
+
+const OLD_JWKS: &str = "http://127.0.0.1:41111/v1/chat/jwks";
+
+fn sew_reports_jwks(t: &T, url: Option<&str>) {
+    let mut st = t.ops.mgmt_status.lock().unwrap();
+    match url {
+        Some(u) => st["identity"]["jwks_url"] = json!(u),
+        None => {
+            st["identity"].as_object_mut().unwrap().remove("jwks_url");
+        }
+    }
+}
+
+#[test]
+fn jwks_url_drift_is_fixed_on_boot_through_config_restart_and_read_back() {
+    let t = t();
+    t.enabled();
+    sew_reports_jwks(&t, Some(OLD_JWKS));
+    let v = jwks_drift_check(&t.env());
+    assert_eq!(v["result"], "fixed", "{v}");
+    assert_eq!(v["from"], OLD_JWKS);
+    assert_eq!(v["to"], "http://127.0.0.1:38471/v1/chat/jwks");
+    assert!(jwks_settled(&v));
+    assert_eq!(t.ops.effects(), vec!["engine sew config", "engine sew systemctl restart"]);
+    // Exactly the one key, on stdin (never argv).
+    let calls = t.ops.calls.lock().unwrap();
+    let cfg = calls.iter().find(|c| c.argv == "engine sew config").unwrap();
+    let body: Value = serde_json::from_slice(cfg.stdin.as_ref().unwrap()).unwrap();
+    assert_eq!(body, json!({"identity.k2.jwks_url": "http://127.0.0.1:38471/v1/chat/jwks"}));
+    drop(calls);
+    assert!(t.ops.records.lock().unwrap().get(JWKS_RECORD).is_none());
+    assert!(!t.latch.load(std::sync::atomic::Ordering::SeqCst), "latch released");
+    // A second check matches and changes nothing.
+    t.ops.clear();
+    assert_eq!(jwks_drift_check(&t.env())["result"], "match");
+    assert!(t.ops.effects().is_empty());
+}
+
+#[test]
+fn a_jwks_fix_that_does_not_take_is_the_alarm_until_a_check_matches() {
+    let t = t();
+    t.enabled();
+    sew_reports_jwks(&t, Some(OLD_JWKS));
+    // Sew accepts the key but keeps reporting the old URL after the restart.
+    t.ops.queue("engine sew config", Ok(json!({"sewExit": 0, "results": []})));
+    let v = jwks_drift_check(&t.env());
+    assert_eq!(v["result"], "failed", "{v}");
+    assert!(v["error"].as_str().unwrap().contains(OLD_JWKS), "{v}");
+    assert!(jwks_settled(&v), "no restart loop: one try per daemon start");
+    store::update(1, |r| {
+        r.ship_kind = "dir".into();
+        r.recovery_shown_at = Some(1);
+    })
+    .unwrap();
+    let s = status(&t.env(), false);
+    assert!(s["alarms"].as_array().unwrap().contains(&json!(ALARM_JWKS_DRIFT)), "{}", s["alarms"]);
+    assert_eq!(s["state"], "degraded");
+    // Sew refusing the key outright fails the same way, naming Sew's reason.
+    t.ops.queue("engine sew config", Ok(json!({"sewExit": 2, "reason": "identity.k2.jwks_url: not settable"})));
+    let v = jwks_drift_check(&t.env());
+    assert_eq!(v["result"], "failed");
+    assert!(v["error"].as_str().unwrap().contains("not settable"), "{v}");
+    // The doctor re-runs the check: now the fix takes and the alarm clears.
+    let d = doctor(&t.env()).unwrap();
+    assert_eq!(d["jwks"]["result"], "fixed", "{d}");
+    let s = status(&t.env(), false);
+    assert!(!s["alarms"].as_array().unwrap().contains(&json!(ALARM_JWKS_DRIFT)), "{}", s["alarms"]);
+}
+
+#[test]
+fn the_jwks_check_skips_what_it_cannot_judge_and_retries_what_may_change() {
+    let t = t();
+    // No install: final, nothing called.
+    let v = jwks_drift_check(&t.env());
+    assert_eq!(v["result"], "not_applicable");
+    assert!(jwks_settled(&v));
+    t.enabled();
+    // Sew does not report the URL (pre-G5): skipped, never "fixed" blind.
+    sew_reports_jwks(&t, None);
+    let v = jwks_drift_check(&t.env());
+    assert_eq!(v["result"], "unreported");
+    assert!(t.ops.effects().is_empty());
+    // Retries: units down, port unknown, a lifecycle step holding the latch.
+    sew_reports_jwks(&t, Some(OLD_JWKS));
+    t.ops.set_unit(k2_root_proto::sew::UNIT_SEW, "inactive", 0);
+    let v = jwks_drift_check(&t.env());
+    assert_eq!(v["result"], "sew_down");
+    assert!(!jwks_settled(&v));
+    t.ops.set_unit(k2_root_proto::sew::UNIT_SEW, "active", 0);
+    *t.ops.port.lock().unwrap() = None;
+    assert_eq!(jwks_drift_check(&t.env())["result"], "no_port");
+    *t.ops.port.lock().unwrap() = Some(38471);
+    let held = begin(&t.env()).unwrap();
+    let v = jwks_drift_check(&t.env());
+    assert_eq!(v["result"], "busy");
+    assert!(!jwks_settled(&v));
+    drop(held);
+    assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
+    // A disabled install is waited for, not settled.
+    store::update(1, |r| r.status = "disabled".into()).unwrap();
+    assert!(!jwks_settled(&jwks_drift_check(&t.env())));
+}
+
+#[test]
+fn a_standalone_install_has_no_jwks_to_check() {
+    let t = t();
+    let req = EnableRequest { provider: Some("standalone".into()), ..t.req() };
+    t.ops.mgmt_status.lock().unwrap()["provider"] = json!("standalone");
+    let env = t.env();
+    let l = enable_begin(&env, &req).unwrap().unwrap();
+    enable_machine(&env, &req).unwrap();
+    drop(l);
+    t.ops.clear();
+    sew_reports_jwks(&t, Some(OLD_JWKS));
+    let v = jwks_drift_check(&t.env());
+    assert_eq!(v["result"], "not_applicable", "{v}");
+    assert!(t.ops.effects().is_empty());
+}
+
+#[test]
+fn the_boot_check_stores_a_changed_install_id_for_person_confirms() {
+    let t = t();
+    t.enabled();
+    sew_reports_jwks(&t, Some("http://127.0.0.1:38471/v1/chat/jwks"));
+    t.ops.mgmt_status.lock().unwrap()["install_id"] = json!("99931765147549702");
+    let v = jwks_drift_check(&t.env());
+    assert_eq!(v["result"], "match");
+    assert_eq!(v["installId"]["from"], INSTALL_ID);
+    assert_eq!(v["installId"]["to"], "99931765147549702");
+    assert_eq!(t.row().install_id.as_deref(), Some("99931765147549702"));
+    // A malformed id is never stored.
+    t.ops.mgmt_status.lock().unwrap()["install_id"] = json!("none");
+    assert!(jwks_drift_check(&t.env()).get("installId").is_none());
+    assert_eq!(t.row().install_id.as_deref(), Some("99931765147549702"));
+}
+
+/// Rosson's open question (a), K2's lean: purge types back Sew's public
+/// host (the server.public_url K2 set), else the box hostname. A purge
+/// also forgets K2's records of Sew's config.
+#[test]
+fn purge_types_back_sews_public_host_and_forgets_k2s_sew_records() {
+    let t = t();
+    t.enabled();
+    assert_eq!(purge_hostname(&t.env(), &t.row()), "lztek", "no public URL: the box hostname");
+    t.ops.records.lock().unwrap().insert(SERVER_RECORD.into(), json!({"publicUrl": "https://Hearth.lztek.k2.dev:443/x"}));
+    t.ops.records.lock().unwrap().insert(JWKS_RECORD.into(), json!({"have": OLD_JWKS}));
+    assert_eq!(purge_hostname(&t.env(), &t.row()), "hearth.lztek.k2.dev");
+    assert_eq!(status(&t.env(), false)["purgeConfirmHostname"], "hearth.lztek.k2.dev");
+    let f = purge(&t.env(), "lztek", false).unwrap_err();
+    assert_eq!(f.code, "confirm_hostname_mismatch");
+    assert!(f.hint.contains("--confirm-hostname hearth.lztek.k2.dev"), "{}", f.hint);
+    assert!(t.ops.effects().is_empty());
+    let r = purge(&t.env(), "hearth.lztek.k2.dev", false).unwrap();
+    assert_eq!(r["purged"], true);
+    let recs = t.ops.records.lock().unwrap();
+    assert!(recs.get(SERVER_RECORD).is_none() && recs.get(JWKS_RECORD).is_none(), "{recs:?}");
+}

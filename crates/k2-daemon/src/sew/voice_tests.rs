@@ -811,3 +811,126 @@ fn a_sew_without_passthrough_keeps_turn_on_5349() {
     assert!(t.ops.effects().is_empty(), "no helper call");
     assert_eq!(t.state().turn_tier.as_deref(), Some("direct"));
 }
+
+// ── outside probe → status, call capacity (0.46.3 S29 wrap-up) ───────────
+
+/// A quiet server: Sew's public URL set, the chat-side K2 alarms cleared,
+/// the engine with no alarms. Only the probe can move the verdict.
+fn quiet(t: &T) {
+    t.voice();
+    t.ops.records.lock().unwrap().insert("server".into(), json!({"publicUrl": "https://hearth.lztek.k2.dev"}));
+    store::update(1, |r| {
+        r.ship_kind = "dir".into();
+        r.recovery_shown_at = Some(1);
+    })
+    .unwrap();
+    *t.ops.media_state.lock().unwrap() = json!({"state": "running", "alarms": []});
+}
+
+fn codes(s: &Value) -> Vec<String> {
+    s["warnings"].as_array().unwrap().iter().map(|w| w["code"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn a_failed_outside_probe_degrades_and_names_the_leg() {
+    let t = t();
+    quiet(&t);
+    let s = crate::sew::supervisor::status(&t.env(), false);
+    assert_eq!(s["state"], "running", "{}", s["alarms"]);
+    assert_eq!(codes(&s), vec!["voice_unprobed"]);
+    assert_eq!(s["voice"]["probeVerdict"], Value::Null);
+
+    // UDP and TURN-TLS answered, ICE-TCP did not.
+    let out = probe_record(&t.env(), true, false, true).unwrap();
+    assert_eq!(out["alarm"], ALARM_PROBE_FAILED);
+    let hint = out["hint"].as_str().unwrap();
+    assert!(hint.contains("TCP 7881") && !hint.contains("UDP") && !hint.contains("TURN-TLS"), "{hint}");
+    assert!(t.ops.effects().contains(&"engine sew media probe-record ok fail ok".to_string()), "{:?}", t.ops.effects());
+    let p = t.state().probe.unwrap();
+    assert_eq!(p["nodeIp"], "203.0.113.7");
+    assert_eq!(p["tier"], "direct");
+    assert_eq!(p["turnTlsPort"], 5349);
+    let s = crate::sew::supervisor::status(&t.env(), false);
+    assert_eq!(s["state"], "degraded");
+    assert!(s["alarms"].as_array().unwrap().contains(&json!(ALARM_PROBE_FAILED)), "{}", s["alarms"]);
+    assert_eq!(s["voice"]["state"], "degraded");
+    assert_eq!(s["voice"]["probeVerdict"], "failed");
+    assert!(codes(&s).is_empty(), "{:?}", codes(&s));
+
+    // A passing probe clears it.
+    let out = probe_record(&t.env(), true, true, true).unwrap();
+    assert!(out.get("alarm").is_none(), "{out}");
+    let s = crate::sew::supervisor::status(&t.env(), false);
+    assert_eq!(s["state"], "running", "{}", s["alarms"]);
+    assert_eq!(s["voice"]["probeVerdict"], "ok");
+}
+
+#[test]
+fn a_probe_goes_stale_after_30_days_or_a_node_ip_or_tier_change_and_never_degrades() {
+    let t = t();
+    quiet(&t);
+    // A failed probe that is no longer current is a setup warning only.
+    probe_record(&t.env(), false, true, true).unwrap();
+    assert_eq!(crate::sew::supervisor::status(&t.env(), false)["state"], "degraded");
+    t.advance(PROBE_FRESH_SECS + 1);
+    let s = crate::sew::supervisor::status(&t.env(), false);
+    assert_eq!(s["voice"]["probeVerdict"], "stale");
+    assert!(!s["alarms"].as_array().unwrap().contains(&json!(ALARM_PROBE_FAILED)), "{}", s["alarms"]);
+    assert!(codes(&s).contains(&"voice_probe_stale".to_string()), "{:?}", codes(&s));
+
+    // Fresh again, then the box moves to another IP.
+    probe_record(&t.env(), true, true, true).unwrap();
+    assert_eq!(crate::sew::supervisor::status(&t.env(), false)["voice"]["probeVerdict"], "ok");
+    update(&t.env(), |s| s.node_ip = Some("198.51.100.9".into()));
+    let s = crate::sew::supervisor::status(&t.env(), false);
+    assert_eq!(s["voice"]["probeVerdict"], "stale", "the probe tested 203.0.113.7");
+    assert_eq!(s["state"], "running", "{}", s["alarms"]);
+
+    // Fresh on the new IP, then the tier moves to passthrough (TURN on 443).
+    probe_record(&t.env(), true, true, true).unwrap();
+    assert_eq!(crate::sew::supervisor::status(&t.env(), false)["voice"]["probeVerdict"], "ok");
+    update(&t.env(), |s| s.turn_tier = Some(TIER_PASSTHROUGH.into()));
+    assert_eq!(crate::sew::supervisor::status(&t.env(), false)["voice"]["probeVerdict"], "stale");
+    probe_record(&t.env(), true, true, true).unwrap();
+    assert_eq!(t.state().probe.unwrap()["turnTlsPort"], 443, "a passthrough probe tested :443");
+
+    // A record from before 0.46.3 (no nodeIp/tier) is judged by age only.
+    let now = *t.ops.clock.lock().unwrap();
+    update(&t.env(), |s| s.probe = Some(json!({"udp": "ok", "tcp": "ok", "turnTls": "ok", "at": now})));
+    assert_eq!(probe_verdict(&t.state(), now), Some("ok"));
+    assert_eq!(probe_verdict(&t.state(), now + PROBE_FRESH_SECS + 1), Some("stale"));
+}
+
+#[test]
+fn call_capacity_matches_sews_shared_profile_table() {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    // Sew `sew-deploy/tests/media_units.rs` install_cap_per_profile + docs/voice.md.
+    assert_eq!(call_capacity(8 * GIB), (768, 210));
+    assert_eq!(call_capacity(16 * GIB), (1280, 440));
+    assert_eq!(call_capacity(4 * GIB), (768, 210), "the 768 MiB floor");
+    assert_eq!(call_capacity(64 * GIB), (3072, 500), "the 3 GiB ceiling and the 500 cap");
+    assert_eq!(call_capacity(62 * GIB), (3072, 500), "sewlab");
+    let mut prev = 0;
+    for g in 1..=128u64 {
+        let (m, c) = call_capacity(g * GIB);
+        assert_eq!(m % 64, 0);
+        assert_eq!(c % 10, 0);
+        assert!((200..=500).contains(&c), "{g} GiB → {c}: a room always fits on the shared floor");
+        assert!(c >= prev, "monotonic");
+        prev = c;
+    }
+}
+
+#[test]
+fn voice_preflight_states_the_call_capacity() {
+    let t = t();
+    t.chat();
+    *t.ops.mem.lock().unwrap() = Some(8 * 1024 * 1024 * 1024);
+    let c = preflight(&t.env());
+    let cap = c.iter().find(|x| x["id"] == "capacity").expect("capacity check");
+    assert_eq!(cap["status"], "info");
+    let d = cap["detail"].as_str().unwrap();
+    assert!(d.contains("up to 210 people") && d.contains("8 GiB") && d.contains("768 MiB"), "{d}");
+    *t.ops.mem.lock().unwrap() = None;
+    assert!(preflight(&t.env()).iter().all(|x| x["id"] != "capacity"), "no RAM figure, no claim");
+}

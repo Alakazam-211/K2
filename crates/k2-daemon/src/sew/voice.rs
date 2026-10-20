@@ -41,6 +41,11 @@
 //! - **Status**: `sew media status` mapped into `/cli/sew/status` `voice`,
 //!   with `voice_*` / `k2_turn_*` alarms (degraded) and setup warnings
 //!   (TURN not on 443, no outside probe yet: never degraded).
+//! - **Outside probe** (S49 §17.1 ask 13): a person or agent tests a call
+//!   from another network and records it (`k2 hostchat media probe`). A
+//!   current probe (under 30 days, same node IP and TURN tier) with a
+//!   failed leg is `k2_voice_probe_failed` (degraded); an older one is the
+//!   `voice_probe_stale` setup warning. K2 cannot probe from outside itself.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -282,6 +287,16 @@ pub fn preflight(env: &Env) -> Vec<Value> {
         ));
     } else {
         c.push(check("ports", "fail", format!("taken: {}", taken.join(", ")), "free them or stop what holds them"));
+    }
+    // S49 §17.1 ask 10: say the box's call capacity before installing.
+    if let Some(mem) = env.ops.mem_total() {
+        let (m, cap) = call_capacity(mem);
+        c.push(check(
+            "capacity",
+            "info",
+            format!("up to {cap} people in calls at once on this {:.0} GiB box (sew-media gets {m} MiB)", mem as f64 / (1024.0 * 1024.0 * 1024.0)),
+            "Sew's shared profile; more RAM raises it (at most 500)",
+        ));
     }
     if env.ops.front_serving() {
         c.push(check("turn_443", "ok", "K2's :443 front serves this box", "TURN-TLS rides :443 (passthrough tier): networks that allow only 443 can join calls"));
@@ -913,9 +928,72 @@ pub fn probe_record(env: &Env, udp: bool, tcp: bool, tls: bool) -> R<Value> {
     let r = |b: bool| if b { "ok" } else { "fail" };
     sup::sew_run(env, &["media", "probe-record", r(udp), r(tcp), r(tls)], None).map_err(|e| no("probe_record_failed", 500, e))?;
     let now = env.ops.now();
-    update(env, |s| s.probe = Some(json!({"udp": r(udp), "tcp": r(tcp), "turnTls": r(tls), "at": now})));
+    // The config the probe tested: a later node IP or tier change makes it
+    // stale (Sew's doctor: a record must match the current config).
+    let st = load(env);
+    let (ip, t) = (st.node_ip.clone(), tier(&st).to_string());
+    let port = tier_port(&t);
+    update(env, |s| {
+        s.probe = Some(json!({"udp": r(udp), "tcp": r(tcp), "turnTls": r(tls), "at": now, "nodeIp": ip, "tier": t, "turnTlsPort": port}))
+    });
     sup::changed("voice-probe");
-    Ok(json!({"ok": true, "probe": {"udp": r(udp), "tcp": r(tcp), "turnTls": r(tls)}}))
+    let mut out = json!({"ok": true, "probe": {"udp": r(udp), "tcp": r(tcp), "turnTls": r(tls), "turnTlsPort": port}});
+    if !(udp && tcp && tls) {
+        out["alarm"] = json!(ALARM_PROBE_FAILED);
+        out["hint"] = json!(probe_fail_hint(udp, tcp, tls, port));
+    }
+    Ok(out)
+}
+
+/// A fresh outside probe recorded a failure: degraded (S49 §17.1 ask 13).
+pub const ALARM_PROBE_FAILED: &str = "k2_voice_probe_failed";
+/// An outside probe is current for this long (Sew's doctor: 30 days).
+pub const PROBE_FRESH_SECS: i64 = 30 * 86_400;
+
+fn probe_fail_hint(udp: bool, tcp: bool, tls: bool, port: u16) -> String {
+    let mut legs = Vec::new();
+    if !udp {
+        legs.push(format!("UDP {SEW_MEDIA_UDP_PORT}"));
+    }
+    if !tcp {
+        legs.push(format!("TCP {SEW_MEDIA_TCP_PORT}"));
+    }
+    if !tls {
+        legs.push(format!("TURN-TLS on TCP {port}"));
+    }
+    format!(
+        "from outside, {} did not answer: open it in the host AND provider firewalls (K2 opens none), then test again \
+         and record it with k2 hostchat media probe",
+        legs.join(", ")
+    )
+}
+
+/// How the recorded outside probe reads now: `None` (never probed),
+/// `stale` (older than 30 days, or the node IP / TURN tier changed since),
+/// `failed` (current, a leg failed) or `ok`.
+pub fn probe_verdict(st: &VoiceState, now: i64) -> Option<&'static str> {
+    let p = st.probe.as_ref()?;
+    let at = p.get("at").and_then(Value::as_i64).unwrap_or(0);
+    let moved = |k: &str, cur: Option<&str>| p.get(k).and_then(Value::as_str).is_some_and(|v| Some(v) != cur);
+    if now - at > PROBE_FRESH_SECS || moved("nodeIp", st.node_ip.as_deref()) || moved("tier", Some(tier(st))) {
+        return Some("stale");
+    }
+    let leg_ok = |k: &str| p.get(k).and_then(Value::as_str) == Some("ok");
+    Some(if leg_ok("udp") && leg_ok("tcp") && leg_ok("turnTls") { "ok" } else { "failed" })
+}
+
+/// Sew's install participant cap for a K2 box (`sew media capacity
+/// --profile shared`, S49 §7.3 / rev 88 D8), mirrored so the preflight can
+/// say it before anything is installed: `sew-media` `MemoryMax` = 8% of RAM
+/// rounded down to 64 MiB, clamped to 768 MiB … 3 GiB; cap = min(500,
+/// floor10((0.9 × M − 256 MiB) / 2.0 MiB)). Sew's install writes the
+/// authoritative number. Returns `(memory_max_mib, cap)`.
+pub fn call_capacity(total_bytes: u64) -> (u64, u64) {
+    let ram_mib = total_bytes / (1024 * 1024);
+    let m = (ram_mib * 8 / 100 / 64 * 64).clamp(768, 3 * 1024);
+    let usable_tenths = (9 * m).saturating_sub(256 * 10);
+    let n = usable_tenths / 20;
+    (m, (n / 10 * 10).min(500))
 }
 
 /// Remove voice: `sew media uninstall`, the TURN DNS record, the nested
@@ -1027,8 +1105,14 @@ pub fn status(env: &Env, live: bool) -> (Value, Vec<String>, Vec<Value>) {
     if served.as_deref() == Some("mismatch") {
         alarms.push("k2_turn_tls_mismatch".into());
     }
-    if st.probe.is_none() {
-        warnings.push(json!({"code": "voice_unprobed", "message": "no outside probe yet: test a call from another network, then k2 hostchat media probe"}));
+    match probe_verdict(&st, now) {
+        None => warnings.push(json!({"code": "voice_unprobed", "message": "no outside probe yet: test a call from another network, then k2 hostchat media probe"})),
+        Some("stale") => warnings.push(json!({
+            "code": "voice_probe_stale",
+            "message": "the last outside probe is older than 30 days or tested another node IP or TURN tier: test a call from another network again, then k2 hostchat media probe",
+        })),
+        Some("failed") => alarms.push(ALARM_PROBE_FAILED.into()),
+        _ => {}
     }
     if state == "running" && !alarms.is_empty() {
         state = "degraded".into();
@@ -1049,6 +1133,7 @@ pub fn status(env: &Env, live: bool) -> (Value, Vec<String>, Vec<Value>) {
         "voiceLabel": st.voice_label,
         "ports": {"udp": SEW_MEDIA_UDP_PORT, "tcp": SEW_MEDIA_TCP_PORT, "turnTls": tier_port(tier(&st))},
         "probe": st.probe,
+        "probeVerdict": probe_verdict(&st, now),
         "unit": unit.json(),
         "engine": engine,
         "alarms": alarms,

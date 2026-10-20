@@ -11,8 +11,10 @@
 //!   here (plan S30 amend 1): it needs the switch too. Turning the switch on
 //!   is `/cli/agent-access/set` (Owner/Admin), never an agent verb.
 //! - **Person-only** (purge, the recovery key, `rotate-master drop-prev`):
-//!   the owner (token or Owner login) AND a fresh vault confirm bound to
-//!   this install (`confirmToken` from `/cli/vault/confirm/finish`, action
+//!   a person AND a fresh vault confirm bound to this install. Purge is the
+//!   owner's (token or Owner login); the recovery key and drop-prev also
+//!   take an Admin login (K2's lean, [`PersonFloor`]). The confirm is bound
+//!   to this install (`confirmToken` from `/cli/vault/confirm/finish`, action
 //!   `sew-purge` / `sew-recovery-key` / `sew-drop-prev`, `secretId` = the
 //!   install id or `none`). Never a passport, even with Manage Sew on. On
 //!   boxes where agents have root this is evidence, not prevention (KM13
@@ -188,9 +190,21 @@ pub fn need_manage(who: &Who) -> R<()> {
     }
 }
 
-/// Person-only: the owner AND a fresh vault confirm for `action` on this
+/// Who may do a person-only step besides needing a confirm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersonFloor {
+    /// The owner token or an Owner Connect login (purge).
+    Owner,
+    /// The owner, or an Owner/Admin Connect login (the recovery key,
+    /// `drop-prev`). K2's lean on Rosson's open question (2026-10-15):
+    /// "Connect owners/admins manage the Sew install", and the confirm
+    /// still proves a person; purge stays the owner's.
+    Admin,
+}
+
+/// Person-only: `floor` AND a fresh vault confirm for `action` on this
 /// install. Returns the confirm method (audit).
-pub fn need_person(who: &Who, body: &Value, action: &str, secret_id: &str) -> R<String> {
+pub fn need_person(who: &Who, body: &Value, action: &str, secret_id: &str, floor: PersonFloor) -> R<String> {
     need_credential(who)?;
     if who.passport().is_some() {
         return Err(no(
@@ -200,14 +214,20 @@ pub fn need_person(who: &Who, body: &Value, action: &str, secret_id: &str) -> R<
              k2 hostchat from a terminal outside K2",
         ));
     }
-    if !who.is_owner() {
-        return Err(no("owner_only", 403, "only the server's owner does this, with a confirm"));
+    match floor {
+        PersonFloor::Owner if !who.is_owner() => {
+            return Err(no("owner_only", 403, "only the server's owner does this, with a confirm"));
+        }
+        PersonFloor::Admin if !who.is_admin() => {
+            return Err(no("owner_only", 403, "only the server's owner or an admin does this, with a confirm"));
+        }
+        _ => {}
     }
     let token = body
         .get("confirmToken")
         .and_then(Value::as_str)
         .filter(|t| !t.is_empty())
-        .ok_or_else(|| no("owner_confirm_required", 403, "this needs a fresh owner confirm (Touch ID, your login or the vault password)"))?;
+        .ok_or_else(|| no("owner_confirm_required", 403, "this needs a fresh person confirm (Touch ID, your login or the vault password)"))?;
     let stamp = match who {
         Who::Owner => "owner".to_string(),
         Who::Login { username, .. } => format!("connect:{username}"),
@@ -512,7 +532,7 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
             let v = json_body(body)?;
             if b(&v, "purge") {
                 // Person-only, and the hostname typed back.
-                let method = need_person(who, &v, CONFIRM_PURGE, &confirm_secret_id())?;
+                let method = need_person(who, &v, CONFIRM_PURGE, &confirm_secret_id(), PersonFloor::Owner)?;
                 let host = s(&v, "confirmHostname").ok_or_else(|| no("bad_request", 400, "purge needs confirmHostname"))?;
                 let mut r = sup::purge(&env, host, b(&v, "keepBackups"))?;
                 r["confirmedBy"] = json!(method);
@@ -584,7 +604,7 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
                     sup::rotate_start(&env)
                 }
                 "drop-prev" | "finish" => {
-                    let method = need_person(who, &v, CONFIRM_DROP_PREV, &confirm_secret_id())?;
+                    let method = need_person(who, &v, CONFIRM_DROP_PREV, &confirm_secret_id(), PersonFloor::Admin)?;
                     let mut r = sup::rotate_drop_prev(&env)?;
                     r["confirmedBy"] = json!(method);
                     Ok(r)
@@ -594,7 +614,7 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
         }
         "/cli/sew/server/recovery-key" => {
             let v = json_body(body)?;
-            let method = need_person(who, &v, CONFIRM_RECOVERY, &confirm_secret_id())?;
+            let method = need_person(who, &v, CONFIRM_RECOVERY, &confirm_secret_id(), PersonFloor::Admin)?;
             let r = sup::recovery_key(&env)?;
             crate::vault::auth_audit("sew-recovery-key", &who.label(), &format!("shown via {method}"), "cli");
             Ok(r)

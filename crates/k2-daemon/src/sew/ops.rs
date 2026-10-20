@@ -940,7 +940,14 @@ pub mod fake {
                     Self::sew_exit(0, json!({"removed": ["sew-media"]}))
                 }
                 a if a.starts_with("engine sew media probe-record ") => Self::sew_exit(0, json!({"recorded": true})),
-                "engine sew config" => json!({"sewExit": 0, "results": []}),
+                "engine sew config" => {
+                    // Sew reports the JWKS URL it was set to (status.identity).
+                    let req: Value = stdin.and_then(|b| serde_json::from_slice(b).ok()).unwrap_or(Value::Null);
+                    if let Some(u) = req.get("identity.k2.jwks_url").and_then(Value::as_str) {
+                        self.mgmt_status.lock().unwrap()["identity"]["jwks_url"] = json!(u);
+                    }
+                    json!({"sewExit": 0, "results": []})
+                }
                 "engine sew unstage" => json!({"removed": []}),
                 "engine sew install-bin" => {
                     *self.on_disk.lock().unwrap() = Some(pin.into());

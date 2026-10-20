@@ -175,6 +175,68 @@ describe('the wire', () => {
     expect(err.code).toBe('cap_not_granted')
   })
 
+  it('Thread parity (catalog v16): afterSeq deltas, attachments without a path, catch-up, read cursors, links', async () => {
+    const k2 = client()
+    const att = { kind: 'file', state: 'ok', path: 'docs/a.png', name: 'a.png', size: 9, mime: 'image/png', modifiedAt: 1.7e12, sha256: 'ab' }
+    const item = (seq: number, id: string, attachments: unknown[]) => ({
+      collection: 'thread', seq, id, conversation_id: 'conv-1',
+      doc: { id, kind: 'text', from: 'dana', created_at: 1, body: 'hi', attachments },
+    })
+    answer = (s) =>
+      s.url.startsWith('/cli/thread?')
+        ? {
+            status: 200,
+            body: {
+              ok: true, collection: 'thread', addr: 'sales', conversation_id: 'conv-1', after_seq: 4, has_more: false, pastAddresses: [], rev: 9,
+              items: [item(5, 'd5', [att, { kind: 'file', state: 'hidden' }])],
+              changed: [item(3, 'd3', [])],
+              removed: [{ id: 'd2', seq: 2 }],
+            },
+          }
+        : s.url.startsWith('/cli/thread/catchup')
+          ? { status: 200, body: { ok: true, has_more: false, threads: [{ addr: 'sales', conversation_id: 'conv-1', after_seq: 4, items: [], has_more: false, changed: [], removed: [] }, { addr: 'ops', error: { code: 'skin_room', hint: 'x' } }], groups: [] } }
+          : s.url.startsWith('/cli/thread/read')
+            ? { status: 200, body: { ok: true, changed: true, kind: 'thread', id: 'conv-1', seq: 5, lastReadSeq: 5, lastSeq: 5, unread: 0, waiting: 0, muted: false, addr: 'sales' } }
+            : s.url.startsWith('/cli/fs/resolve-links')
+              ? { status: 200, body: { links: [{ input: 'docs/a.png', linkable: true, kind: 'file', rel: 'docs/a.png' }, { input: 'x', linkable: false }] } }
+              : { status: 200, body: { ok: true, kind: 'image', mime: 'image/jpeg', width: 256, height: 128, base64: 'AA==', state: 'ok', name: 'a.png', size: 9, px: 256 } }
+    const g = k2.asGuest(GUEST)
+
+    const delta = await g.thread.page({ addr: 'sales', afterSeq: 4 })
+    const u = new URL(gw.seen[0]?.url ?? '', gw.url)
+    expect(u.searchParams.get('after_seq')).toBe('4')
+    expect(delta).toEqual({
+      ok: true, collection: 'thread', addr: 'sales', conversation: 'conv-1', after_seq: 4, has_more: false, pastAddresses: [],
+      items: [{ collection: 'thread', seq: 5, id: 'd5', doc: { id: 'd5', kind: 'text', from: 'dana', created_at: 1, body: 'hi', attachments: [
+        { kind: 'file', state: 'ok', name: 'a.png', size: 9, mime: 'image/png', modifiedAt: 1.7e12 },
+        { kind: 'file', state: 'hidden' },
+      ] } }],
+      changed: [{ collection: 'thread', seq: 3, id: 'd3', doc: { id: 'd3', kind: 'text', from: 'dana', created_at: 1, body: 'hi', attachments: [] } }],
+      removed: [{ id: 'd2', seq: 2 }],
+    })
+    expect(JSON.stringify(delta)).not.toContain('docs/a.png')
+
+    const thumb = await g.thread.attachmentGet({ addr: 'sales', id: 'd5', n: 0, mode: 'thumb', px: 256 })
+    expect(Object.fromEntries(new URL(gw.seen[1]?.url ?? '', gw.url).searchParams)).toEqual({ addr: 'sales', id: 'd5', n: '0', mode: 'thumb', px: '256' })
+    expect(thumb).toEqual({ ok: true, kind: 'image', mime: 'image/jpeg', width: 256, height: 128, base64: 'AA==', state: 'ok', name: 'a.png', size: 9 })
+
+    const cu = await g.thread.catchup({ threads: [{ addr: 'sales', afterSeq: 4 }, { addr: 'ops', newest: true }] })
+    expect(gw.seen[2]?.method).toBe('POST')
+    expect(JSON.parse(gw.seen[2]?.body ?? '')).toEqual({ threads: [{ addr: 'sales', afterSeq: 4 }, { addr: 'ops', newest: true }] })
+    expect(cu.threads[0]).toEqual({ addr: 'sales', conversation: 'conv-1', after_seq: 4, items: [], has_more: false, changed: [], removed: [] })
+    expect(cu.threads[1]).toEqual({ addr: 'ops', error: { code: 'skin_room', hint: 'x' } })
+
+    const rd = await g.thread.setRead({ addr: 'sales', seq: 5 })
+    expect(JSON.parse(gw.seen[3]?.body ?? '')).toEqual({ addr: 'sales', seq: 5 })
+    expect(rd).toEqual({ ok: true, changed: true, id: 'conv-1', lastReadSeq: 5, lastSeq: 5, unread: 0, waiting: 0 })
+
+    const links = await g.files.resolveLinks({ workspace: 'sales', paths: ['docs/a.png', 'x'] })
+    expect(links).toEqual({ links: [{ input: 'docs/a.png', linkable: true, kind: 'file', rel: 'docs/a.png' }, { input: 'x', linkable: false }] })
+
+    await g.thread.send({ addr: 'sales', text: '', attachments: [{ relPath: 'docs/a.png', line: 2 }] })
+    expect(JSON.parse(gw.seen[5]?.body ?? '')).toEqual({ addr: 'sales', text: '', attachments: [{ relPath: 'docs/a.png', line: 2 }] })
+  })
+
   it('a browser-only verb and an unknown verb never reach K2', async () => {
     const k2 = client()
     const g = k2.asGuest(GUEST) as unknown as { call: (v: string, a?: unknown) => Promise<unknown> }

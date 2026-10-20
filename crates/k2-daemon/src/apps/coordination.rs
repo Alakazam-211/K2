@@ -160,12 +160,18 @@ fn switches(conn: &Connection, ws: &str) -> J {
     if ws.is_empty() {
         return J::Null;
     }
-    let build: Option<i64> =
-        conn.query_row("SELECT agents_can_manage_skin FROM projects WHERE id = ?1", rusqlite::params![ws], |r| r.get(0)).ok();
-    let Some(build) = build else { return J::Null };
+    let row: Option<(i64, String)> = conn
+        .query_row("SELECT agents_can_manage_skin, app_cores FROM projects WHERE id = ?1", rusqlite::params![ws], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .ok();
+    let Some((build, cores)) = row else { return J::Null };
+    let cores = k2_core::workspace::settings::normalize_app_cores(&serde_json::from_str::<Vec<String>>(&cores).unwrap_or_default());
     json!({
         "buildAndRun": build == 1,
         "manageEndToEnd": super::limits::full_manage_with(conn, ws),
+        // The ticked App cores (slice B): which ones, never what's inside.
+        "cores": cores,
     })
 }
 
@@ -181,7 +187,7 @@ fn hostnames(conn: &Connection, app: &AppRow) -> Vec<String> {
 }
 
 /// One App in the box view: footprint and maintainer, nothing inside it.
-fn box_row(conn: &Connection, app: &AppRow, names: &mut HashMap<String, Maintainer>) -> J {
+fn box_row(conn: &Connection, app: &AppRow, names: &mut HashMap<String, Maintainer>, person: bool) -> J {
     let m = names.entry(app.owner_workspace.clone()).or_insert_with(|| maintainer_with(conn, &app.owner_workspace)).clone();
     let cfg = appcfg::load(conn, &app.app_id).unwrap_or_default();
     let services: Vec<String> = k2_core::deploy::box_service::list(conn, &app.app_id)
@@ -190,11 +196,17 @@ fn box_row(conn: &Connection, app: &AppRow, names: &mut HashMap<String, Maintain
         .filter(|r| r.status == k2_core::deploy::box_service::STATUS_ALLOWED)
         .map(|r| r.name)
         .collect();
+    let mut maintainer = m.json();
+    // People (Settings → Apps) also get the workspace id, to open its card
+    // and show the agent's colour and picture. Never a folder path.
+    if person && m.kind == "agent" {
+        maintainer["workspaceId"] = json!(app.owner_workspace);
+    }
     json!({
         "appId": app.app_id,
         "state": app.state,
         "parked": app.state == store::STATE_PARKED,
-        "maintainer": m.json(),
+        "maintainer": maintainer,
         "memory": {
             "limitBytes": app.memory_limit_bytes,
             "countedBytes": super::admission::counted(app.memory_limit_bytes),
@@ -218,7 +230,8 @@ pub(crate) fn box_view(who: &Who) -> R<J> {
     let conn = db.lock();
     let apps = store::list_apps(&conn, None).map_err(db_err)?;
     let mut names = HashMap::new();
-    let rows: Vec<J> = apps.iter().map(|a| box_row(&conn, a, &mut names)).collect();
+    let person = super::routes::agent_ws(who).is_none();
+    let rows: Vec<J> = apps.iter().map(|a| box_row(&conn, a, &mut names, person)).collect();
     let used: i64 =
         apps.iter().filter(|a| a.state != store::STATE_PARKED).map(|a| super::admission::counted(a.memory_limit_bytes)).sum();
     Ok(json!({

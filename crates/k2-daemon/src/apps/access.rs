@@ -82,8 +82,9 @@ pub const LOOSENING_KINDS: &[&str] = &[reqs::KIND_DB_RAW, reqs::KIND_OVERCOMMIT,
 pub const SELF_APPLY_KINDS: &[&str] = &[reqs::KIND_EGRESS, reqs::KIND_BOX_SERVICE];
 
 /// App caps that reach the agent itself (its config files, its wake
-/// prompt): person-present even when their core is ticked (N3). Slice B
-/// reads this list; until then every new cap is held for the owner (S20).
+/// prompt): person-present even when their core is ticked (N3). They
+/// belong to no core (`app_core_of_cap`), so `super::cores` never
+/// pre-approves them: a deploy asking for one is held for the owner.
 pub const LOOSENING_CAPS: &[&str] = &[k2_core::skin::CAP_FILES_AGENT_CONFIG, k2_core::skin::CAP_HEARTBEATS_WRITE];
 
 // ── levels ───────────────────────────────────────────────────────────
@@ -309,7 +310,8 @@ fn on_off(b: bool) -> &'static str {
     }
 }
 
-fn core_name(c: &str) -> &str {
+/// A core's name in notes and hints.
+pub(crate) fn core_name(c: &str) -> &str {
     match c {
         "db" => "Database",
         "files" => "Files",
@@ -322,40 +324,47 @@ fn core_name(c: &str) -> &str {
 
 /// The audit rows, the settings event and the agent's note for a change.
 fn changed(ws_id: &str, handle: &str, before: Level, after: Level, by: &str) {
-    let apps: Vec<String> = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        let ids: Vec<String> =
-            deploy::store::list_apps(&conn, Some(ws_id)).map(|a| a.into_iter().map(|r| r.app_id).collect()).unwrap_or_default();
-        for app in &ids {
-            if let Err(e) = deploy::audit::append(
-                &conn,
-                deploy::audit::SUBJECT_APP,
-                app,
-                "access_changed",
-                by,
-                None,
-                &json!({ "workspace": handle, "from": before.as_str(), "to": after.as_str() }),
-            ) {
-                k2_core::log_debug!("[apps] audit {app} access_changed: {e}");
-            }
-        }
-        ids
-    };
+    let apps = audit_apps(ws_id, by, json!({ "workspace": handle, "from": before.as_str(), "to": after.as_str() }));
     k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, J::Null);
     k2_core::agent_hooks::emit(
         k2_core::agent_hooks::HookEvent::SyncSettings,
         json!({ "apps": "access", "workspace": handle, "level": after.as_str(), "appIds": apps }),
     );
-    let cores: Vec<String> = k2_core::workspace::settings::agents_app_cores(ws_id).iter().map(|c| core_name(c).to_string()).collect();
+    tell_agent(ws_id, handle, by);
+}
+
+/// One `access_changed` deploy-audit row per App the workspace maintains
+/// (the switches and the cores share it). Returns the App ids.
+pub(crate) fn audit_apps(ws_id: &str, by: &str, payload: J) -> Vec<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let ids: Vec<String> =
+        deploy::store::list_apps(&conn, Some(ws_id)).map(|a| a.into_iter().map(|r| r.app_id).collect()).unwrap_or_default();
+    for app in &ids {
+        if let Err(e) = deploy::audit::append(&conn, deploy::audit::SUBJECT_APP, app, "access_changed", by, None, &payload) {
+            k2_core::log_debug!("[apps] audit {app} access_changed: {e}");
+        }
+    }
+    ids
+}
+
+/// The agent's inbox note (no wake) with its App access as it is now:
+/// both switches and the ticked cores (prd §5 "Audit and note").
+pub(crate) fn tell_agent(ws_id: &str, handle: &str, by: &str) {
+    let now = level(ws_id);
+    let ticked = k2_core::workspace::settings::agents_app_cores(ws_id);
+    let cores: Vec<String> = ticked.iter().map(|c| core_name(c).to_string()).collect();
+    let later = ticked.iter().any(|c| !super::cores::enforced(c));
     let text = format!(
         "Your App access changed: Build and run Apps {}, manage them end to end {}; cores: {} (by {by}).\n\n\
          With Build and run Apps you build, install, deploy, run and uninstall your own Apps; with manage end to end you \
-         also raise their budgets, quotas, egress hosts, box services and keys yourself. Anything that loosens an App's \
-         wall still waits for the owner in person. Check with k2 app access {handle}.",
-        on_off(after >= Level::Build),
-        on_off(after == Level::Full),
+         also raise their budgets, quotas, egress hosts, box services and keys yourself. A ticked core lets your Apps use \
+         that core inside their own slice without waiting for the owner. Anything that loosens an App's wall still waits \
+         for the owner in person.{} Check with k2 app access {handle}.",
+        on_off(now >= Level::Build),
+        on_off(now == Level::Full),
         if cores.is_empty() { "none".to_string() } else { cores.join(", ") },
+        if later { " Mail and Sew take effect when App mail and Sew for Apps land." } else { "" },
     );
     super::alerts::note(ws_id, "Your App access changed", &text);
 }
@@ -392,6 +401,21 @@ pub fn review_json() -> J {
         .filter(|(id, _)| ws_by_id(id).is_some())
         .map(|(id, at)| json!({ "workspace": id, "handle": ws_handle(&id), "level": level(&id).as_str(), "notedAt": at }))
         .collect::<Vec<_>>())
+}
+
+/// The owner (or an Admin) reviewed this agent: it leaves the review list
+/// and the Settings → Apps banner (`agent-access/set {toggle:
+/// "app_review", value: false}`). Returns whether a row was removed.
+pub fn review_done(project_id: &str) -> bool {
+    let n = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("DELETE FROM app_access_review WHERE project_id = ?1", rusqlite::params![project_id]).unwrap_or(0)
+    };
+    if n > 0 {
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, json!({ "apps": "access-review", "workspace": project_id }));
+    }
+    n > 0
 }
 
 /// Daemon boot: tell the owner once which agents kept "Build and run

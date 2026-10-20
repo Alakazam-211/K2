@@ -1264,6 +1264,68 @@ fn caller_is_owner(caller: &Caller) -> bool {
     }
 }
 
+/// `owner:<u>` / `admin:<u>` for a login, else the audit user: who the
+/// agent's App access note names.
+fn access_by(caller: &Caller) -> String {
+    match caller {
+        Caller::Login { username } => match k2_core::connect_users::role_for_user(username) {
+            Some(k2_core::connect_users::Role::Owner) => format!("owner:{username}"),
+            Some(k2_core::connect_users::Role::Admin) => format!("admin:{username}"),
+            _ => format!("user:{username}"),
+        },
+        other => other.audit_user(),
+    }
+}
+
+/// App cores (prd-agent-app-permissions-v1 §3, slice B) and the Q4 review
+/// list. `app_core`: `{workspace, core, value}` or `{workspace, cores:
+/// {db: true, files: false, …}}` — the owner ticks, an Admin only unticks
+/// (`apps::cores::set_cores`). `app_review`: `{workspace, value: false}`
+/// takes that agent off the one-time review list (Settings → Apps banner,
+/// owner or Admin).
+fn handle_app_core(
+    caller: &Caller,
+    v: &serde_json::Value,
+    toggle: &str,
+) -> Result<(serde_json::Value, String), SidecarError> {
+    let ws = target_workspace(caller, str_field(v, "workspace"))?;
+    if toggle == "app_review" {
+        if v.get("value") != Some(&serde_json::Value::Bool(false)) {
+            return Err(err("bad_request", 400, "app_review takes value false (reviewed: off the list)"));
+        }
+        let removed = crate::apps::access::review_done(&ws.id);
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": toggle, "reviewed": true, "changed": removed }),
+            format!("ok {} app_review done", ws.handle),
+        ));
+    }
+    let as_bool = |x: &serde_json::Value| match x {
+        serde_json::Value::Bool(b) => Some(*b),
+        serde_json::Value::Number(n) if n.as_i64() == Some(1) => Some(true),
+        serde_json::Value::Number(n) if n.as_i64() == Some(0) => Some(false),
+        serde_json::Value::String(s) if s == "on" => Some(true),
+        serde_json::Value::String(s) if s == "off" => Some(false),
+        _ => None,
+    };
+    let mut changes: Vec<(String, bool)> = Vec::new();
+    if let Some(serde_json::Value::Object(m)) = v.get("cores") {
+        for (core, on) in m {
+            let on = as_bool(on).ok_or_else(|| err("bad_request", 400, format!("cores.{core} must be true or false")))?;
+            changes.push((core.clone(), on));
+        }
+    } else {
+        let core = str_field(v, "core").ok_or_else(|| err("bad_request", 400, "give core (db, files, thread, mail, sew) and value, or cores {…}"))?;
+        let on = v.get("value").and_then(as_bool).ok_or_else(|| err("bad_request", 400, "value must be true or false"))?;
+        changes.push((core.to_string(), on));
+    }
+    let out = crate::apps::cores::set_cores(&ws.id, &changes, caller_is_owner(caller), &access_by(caller))
+        .map_err(|r| err(r.code, r.status, r.hint))?;
+    let summary: Vec<String> = changes.iter().map(|(c, on)| format!("{c}={}", if *on { "on" } else { "off" })).collect();
+    let mut out = out;
+    out["toggle"] = serde_json::json!(toggle);
+    Ok((out, format!("ok {} app_core {}", ws.handle, summary.join(","))))
+}
+
 fn handle_access(
     caller: &Caller,
     body: &[u8],
@@ -1293,12 +1355,17 @@ fn handle_access(
         && toggle != "chat_manage"
         && toggle != "gardens_manage"
         && toggle != "compute_manage"
+        && toggle != "app_core"
+        && toggle != "app_review"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'apps_build', 'apps_manage_full', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'gardens_manage', 'projects_manage' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'compute', 'compute_manage', 'compute_operate', 'gardens_manage', 'projects_manage' or 'vault_manage'",
         ));
+    }
+    if toggle == "app_core" || toggle == "app_review" {
+        return handle_app_core(caller, &v, toggle);
     }
     if toggle == "compute_manage" && !caller_is_owner(caller) {
         // "Allow managing compute nodes" hands an agent owner verbs (node
@@ -1413,14 +1480,7 @@ fn handle_access(
         };
         let before = crate::apps::access::level(&ws.id);
         // The agent's note names who changed it: `owner:<u>` / `admin:<u>`.
-        let by = match caller {
-            Caller::Login { username } => match k2_core::connect_users::role_for_user(username) {
-                Some(k2_core::connect_users::Role::Owner) => format!("owner:{username}"),
-                Some(k2_core::connect_users::Role::Admin) => format!("admin:{username}"),
-                _ => format!("user:{username}"),
-            },
-            other => other.audit_user(),
-        };
+        let by = access_by(caller);
         let mut out = crate::apps::access::set_switches(&ws.id, change, caller_is_owner(caller), &by)
             .map_err(|r| err(r.code, r.status, r.hint))?;
         out["toggle"] = serde_json::json!(toggle);

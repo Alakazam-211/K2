@@ -1461,6 +1461,12 @@ async fn async_main() {
     crate::apps::routes::log_upgrade_notices();
     // prd-agent-app-permissions-v1 Q4: tell the owner once which agents
     // kept "Build and run Apps" from the old switch (0197's review list).
+    // First, once: 0197's cap → core backfill put two agent-reaching caps
+    // in a core (slice B); rows still as 0197 wrote them are re-derived.
+    let fixed = crate::apps::cores::fix_backfill_once();
+    if !fixed.is_empty() {
+        k2_core::log_debug!("[apps] 0197 cores backfill corrected for {} workspace(s)", fixed.len());
+    }
     if let Some(id) = crate::apps::access::review_note_once() {
         k2_core::log_debug!("[apps] access review note filed: {id}");
     }

@@ -1180,7 +1180,65 @@ pub fn agents_app_cores(project_id: &str) -> Vec<String> {
     conn.query_row("SELECT app_cores FROM projects WHERE id = ?1", rusqlite::params![project_id], |r| r.get::<_, String>(0))
         .ok()
         .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+        .map(|v| normalize_app_cores(&v))
         .unwrap_or_default()
+}
+
+/// The App cores, in display order (prd-agent-app-permissions-v1 §3):
+/// Database, Files/rooms, Thread, Mail (Stalwart), Sew.
+pub const APP_CORES: &[&str] = &["db", "files", "thread", "mail", "sew"];
+
+/// Which core an App cap belongs to (§3.1, the Use layer). `None` for a
+/// cap in no core: `heartbeats:write` and `files:agentconfig` reach the
+/// agent itself (person-present, N3), and unknown caps are never carried.
+/// Mail and Sew have no App caps yet (MCS11–12, the Sew App slice).
+pub fn app_core_of_cap(cap: &str) -> Option<&'static str> {
+    use crate::skin::*;
+    match cap.trim() {
+        c if c == CAP_FILES_READ
+            || c == CAP_FILES_WRITE
+            || c == CAP_ROOM_MEMBERS
+            || c == CAP_WIKI_READ
+            || c == CAP_TICKETS_READ
+            || c == CAP_TICKETS_POST
+            || c == CAP_ACTIVITY_READ =>
+        {
+            Some("files")
+        }
+        c if c == CAP_THREAD_READ || c == CAP_THREAD_POST || c == CAP_HEARTBEATS_READ || c == CAP_AGENT_IDENTITY || c == CAP_AGENT_HANDLE => {
+            Some("thread")
+        }
+        c if c == CAP_STORE_READ || c == CAP_STORE_WRITE => Some("db"),
+        _ => None,
+    }
+}
+
+/// Known cores only, de-duplicated, in [`APP_CORES`] order.
+pub fn normalize_app_cores(cores: &[String]) -> Vec<String> {
+    APP_CORES.iter().filter(|c| cores.iter().any(|x| x.trim() == **c)).map(|c| c.to_string()).collect()
+}
+
+/// Persist the ticked cores (`projects.app_cores`). Written only by
+/// `POST /cli/agent-access/set {toggle: "app_core"}` (the owner ticks, an
+/// Admin unticks; `apps::cores::set_cores` checks that). Unknown core →
+/// error; unknown workspace → error.
+pub fn set_agents_app_cores(project_id: &str, cores: &[String]) -> Result<(), String> {
+    if let Some(bad) = cores.iter().find(|c| !APP_CORES.contains(&c.trim())) {
+        return Err(format!("unknown core '{bad}' (cores: {})", APP_CORES.join(", ")));
+    }
+    let set = normalize_app_cores(cores);
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let n = conn
+        .execute(
+            "UPDATE projects SET app_cores = ?1 WHERE id = ?2",
+            rusqlite::params![serde_json::to_string(&set).map_err(|e| e.to_string())?, project_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("Project not found: {project_id}"));
+    }
+    Ok(())
 }
 
 /// k2 sidecar v1 — "Allow hiring and managing agents"
@@ -2349,6 +2407,46 @@ mod tests {
         assert!(update_project_setting(&path, "app_cores", "[\"db\"]").is_err());
         assert_eq!(agents_app_switches("no-such-workspace"), (false, false));
         assert!(set_agents_can_manage_apps_full("no-such-workspace", false).is_err());
+    }
+
+    /// 0197 cores (slice B): the writer keeps known cores in display
+    /// order, refuses an unknown core and an unknown workspace; the cap
+    /// map puts each App cap in its core and the agent-reaching caps in
+    /// none.
+    #[test]
+    fn app_cores_round_trip_and_cap_map() {
+        let path = unique_path("agents-app-cores");
+        let pid = insert_project(&path);
+        let v = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        set_agents_app_cores(&pid, &v(&["thread", "db", "db", "sew"])).unwrap();
+        assert_eq!(agents_app_cores(&pid), v(&["db", "thread", "sew"]));
+        let err = set_agents_app_cores(&pid, &v(&["db", "postgres"])).expect_err("unknown core");
+        assert!(err.contains("postgres"), "{err}");
+        assert_eq!(agents_app_cores(&pid), v(&["db", "thread", "sew"]), "a refused write changes nothing");
+        assert!(set_agents_app_cores("no-such-workspace", &v(&["db"])).is_err());
+        set_agents_app_cores(&pid, &[]).unwrap();
+        assert!(agents_app_cores(&pid).is_empty());
+        for (cap, core) in [
+            ("files:read", Some("files")),
+            ("files:write", Some("files")),
+            ("room:members", Some("files")),
+            ("wiki:read", Some("files")),
+            ("tickets:read", Some("files")),
+            ("tickets:post", Some("files")),
+            ("activity:read", Some("files")),
+            ("thread:read", Some("thread")),
+            ("thread:post", Some("thread")),
+            ("heartbeats:read", Some("thread")),
+            ("agent:identity", Some("thread")),
+            ("agent:handle", Some("thread")),
+            ("store:read", Some("db")),
+            ("store:write", Some("db")),
+            ("heartbeats:write", None),
+            ("files:agentconfig", None),
+            ("bogus:cap", None),
+        ] {
+            assert_eq!(app_core_of_cap(cap), core, "{cap}");
+        }
     }
 
     /// Column-only hosted-mail passport. Default OFF; unknown path

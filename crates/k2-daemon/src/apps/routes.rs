@@ -859,6 +859,29 @@ fn hold_new_caps(who: &Who, app: &AppRow, seed: &str, v: &J) -> R<Option<J>> {
     };
     let DeployCheck::Held { kind, add, set } = check else { return Ok(None) };
     let first = kind == k2_core::app_grace::requests::KIND_INSTALL;
+    // Slice B: the cores ticked for the App's agent are the owner's
+    // pre-approval. New caps that all sit in them (switch 1 on) are
+    // recorded and the deploy goes on, with no Approvals hold.
+    if super::cores::pre_approves(&app.owner_workspace, &add) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        grants::record(&conn, &app.app_id, &set).map_err(db_err)?;
+        if let Err(e) = deploy::audit::append(
+            &conn,
+            deploy::audit::SUBJECT_APP,
+            &app.app_id,
+            "caps_preapproved",
+            &actor(who),
+            None,
+            &json!({ "add": add, "approvedAfter": set, "first": first, "cores": super::cores::ticked(&app.owner_workspace) }),
+        ) {
+            k2_core::log_debug!("[apps] audit {} caps_preapproved: {e}", app.app_id);
+        }
+        return Ok(None);
+    }
+    let (core_reasons, core_diff) = super::cores::hold_detail(&app.owner_workspace, &add);
+    let mut diff = grants::diff_json(kind, &add, &set);
+    diff["cores"] = core_diff;
     let summary = if first {
         format!("first install of {}: approve caps {}", app.app_id, add.join(", "))
     } else {
@@ -871,16 +894,22 @@ fn hold_new_caps(who: &Who, app: &AppRow, seed: &str, v: &J) -> R<Option<J>> {
         label: &app.app_id,
         workspace: &app.owner_workspace,
         body: json!({ "app": app.app_id, "seed": seed, "reason": s(v, "reason") }),
-        diff: grants::diff_json(kind, &add, &set),
+        diff,
         summary,
-        reasons: vec![if first {
+        reasons: std::iter::once(if first {
             "an App's first install sets the caps it may use: the owner approves them".to_string()
         } else {
             "new caps beyond the App's approved set wait for the owner (every caller)".to_string()
-        }],
+        })
+        .chain(core_reasons)
+        .collect(),
         reason: s(v, "reason"),
     })?;
     let mut out = super::approvals::held_answer(&r);
+    if let Some(tick) = super::cores::tick_hint(&app.owner_workspace, &add) {
+        let rest = out["hint"].as_str().unwrap_or("").to_string();
+        out["hint"] = json!(format!("{tick} {rest}"));
+    }
     out["seed"] = json!(seed);
     out["note"] = json!(if app.live_seed.is_some() { "the live Seed keeps serving until the owner approves" } else { "nothing runs until the owner approves" });
     Ok(Some(out))
@@ -1347,6 +1376,28 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
             }
             within_limits = super::limits::covers(&op);
         }
+        // Slice B: the App's own private database is the Database core's
+        // Use layer. An agent turns it on with Database ticked (switch 1 is
+        // enough); without the tick it waits for the owner, switch 2
+        // included. The replay of a `manage` request the owner approved
+        // for this exact call keeps that approval.
+        let private_db_on = matches!(op, Op::DbPrivate(true));
+        if let (true, Some(ws)) = (private_db_on, agent_ws(who)) {
+            if class != Class::Narrow && !super::approvals::manage_approved_now() {
+                if super::cores::ticked(ws).iter().any(|c| c == "db") {
+                    now_ops.push(op);
+                } else {
+                    let h = ws_handle(ws);
+                    let line = format!(
+                        "{}: the Database core isn't ticked for {h}: the owner ticks it (k2 app access {h} --core db=on) \
+                         or approves this",
+                        appcfg::describe(&op, &state)
+                    );
+                    held.push((op, line));
+                }
+                continue;
+            }
+        }
         match super::access::config_rule(who, &op, class, within_limits) {
             Ok(()) => now_ops.push(op),
             Err(why) => {
@@ -1571,11 +1622,15 @@ fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
         "apps": apps.iter().map(app_summary).collect::<Vec<_>>(),
         "notices": if agent_ws(who).is_some() { vec![] } else { upgrade_notices() },
     });
-    match agent_ws(who) {
-        // The agent's own switches (prd-agent-app-permissions-v1 §2).
-        Some(ws) => out["access"] = json!({ "level": super::access::level(ws).as_str() }),
+    // The workspace's switches and cores (prd-agent-app-permissions-v1 §2,
+    // §3): the agent's own, or the one a person asked for
+    // (`k2 app access <ws>` reads it here).
+    if let Some(ws) = filter.as_deref() {
+        out["access"] = super::cores::access_json(ws);
+    }
+    if agent_ws(who).is_none() {
         // Q4: the agents 0197 kept on "Build and run Apps" (Settings → Apps).
-        None => out["accessReview"] = super::access::review_json(),
+        out["accessReview"] = super::access::review_json();
     }
     Ok(out)
 }

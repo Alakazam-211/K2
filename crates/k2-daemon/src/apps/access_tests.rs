@@ -218,7 +218,10 @@ fn agent_switch_matrix_off_build_full() {
         ("/cli/app/quota/set", true, json!({"app": "jobs", "rps": 900}), Held, Held, Run),
         ("/cli/app/config", true, json!({"app": "jobs", "memory": "3G"}), Held, Held, Run),
         ("/cli/app/config", true, json!({"app": "jobs", "cpuWeight": 400}), Held, Held, Run),
-        ("/cli/app/config", true, json!({"app": "plain", "dbPrivate": "on"}), Held, Held, Run),
+        // The App's own database is the Database core's (slice B): with no
+        // core ticked it waits in every state, switch 2 included
+        // (cores_tests: ticked, switch 1 applies it).
+        ("/cli/app/config", true, json!({"app": "plain", "dbPrivate": "on"}), Held, Held, Held),
         ("/cli/app/config", true, json!({"app": "plain", "io": {"wbps": "500M"}}), Held, Held, Run),
         // Loosening the wall: the person, in every state (§2.2).
         ("/cli/app/config", true, json!({"app": "jobs", "path": "open"}), Held, Held, Held),

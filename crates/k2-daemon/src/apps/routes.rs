@@ -877,6 +877,33 @@ fn hold_new_caps(who: &Who, app: &AppRow, seed: &str, v: &J) -> R<Option<J>> {
         ) {
             k2_core::log_debug!("[apps] audit {} caps_preapproved: {e}", app.app_id);
         }
+        // A request held earlier for this same Seed (before the tick) is
+        // moot now: withdraw it, so a later approval can't redeploy an old
+        // Seed over whatever runs by then.
+        let pending = k2_core::app_grace::requests::list(
+            &conn,
+            &k2_core::app_grace::requests::Filter {
+                app_id: Some(&app.app_id),
+                status: Some(k2_core::app_grace::requests::STATUS_PENDING),
+                ..Default::default()
+            },
+            100,
+        )
+        .map_err(db_err)?;
+        for r in pending.iter().filter(|r| {
+            (r.kind == k2_core::app_grace::requests::KIND_INSTALL || r.kind == k2_core::app_grace::requests::KIND_DEPLOY)
+                && r.body.get("seed").and_then(J::as_str) == Some(seed)
+        }) {
+            let _ = k2_core::app_grace::requests::decide(
+                &conn,
+                &r.id,
+                k2_core::app_grace::requests::STATUS_WITHDRAWN,
+                &actor(who),
+                Some("cores"),
+                Some("the ticked cores cover these caps now"),
+                deploy::now(),
+            );
+        }
         return Ok(None);
     }
     let (core_reasons, core_diff) = super::cores::hold_detail(&app.owner_workspace, &add);

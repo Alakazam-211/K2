@@ -184,11 +184,13 @@ fn ticked_cores_pre_approve_new_caps_and_an_unticked_core_is_held() {
     assert!(reasons.contains("tick Files and Thread for"), "{reasons}");
     assert_eq!(recorded("jobs"), None, "nothing recorded while held");
 
-    // Thread alone isn't enough.
+    // Thread alone isn't enough. (The same pending request is found again,
+    // so its stored diff stays as filed; the hint is today's.)
     set_cores(&f.ws_a, &["thread"]);
     let (st, v) = deploy(&a, S_TF);
     assert!(is_held(st, &v), "{st} {v}");
-    assert_eq!(v["diff"]["cores"]["missing"], json!(["files"]), "{v}");
+    let hint = v["hint"].as_str().unwrap();
+    assert!(hint.starts_with("Tick Files for ") && hint.contains("--core files=on "), "{hint}");
 
     // Both ticked: the first install records its set and goes on.
     set_cores(&f.ws_a, &["thread", "files"]);
@@ -199,6 +201,21 @@ fn ticked_cores_pre_approve_new_caps_and_an_unticked_core_is_held() {
     let pre = ev.iter().find(|(e, _)| e == "caps_preapproved").expect("a caps_preapproved audit row");
     assert_eq!(pre.1["first"], json!(true), "{:?}", pre.1);
     assert_eq!(pre.1["cores"], json!(["files", "thread"]), "{:?}", pre.1);
+    // The install held before the ticks (same Seed) is withdrawn: approving
+    // it later can't redeploy an old Seed.
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let rows = k2_core::app_grace::requests::list(
+            &conn,
+            &k2_core::app_grace::requests::Filter { app_id: Some("jobs"), ..Default::default() },
+            50,
+        )
+        .unwrap();
+        let installs: Vec<(&str, Option<&str>)> =
+            rows.iter().filter(|r| r.kind == "install").map(|r| (r.status.as_str(), r.confirm_via.as_deref())).collect();
+        assert_eq!(installs, vec![("withdrawn", Some("cores"))], "{rows:?}");
+    }
 
     // A later deploy adding a Database cap: held without the Database
     // core, switch 2 included (switch 2 never adds a core).

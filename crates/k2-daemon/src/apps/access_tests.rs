@@ -257,7 +257,7 @@ fn agent_switch_matrix_off_build_full() {
     assert_eq!(plain.memory_limit_bytes, Some(1 << 30), "switch 1 raised its own memory inside the default limits");
     assert_eq!(store::get_app(&conn, "jobs").unwrap().unwrap().memory_limit_bytes, Some(3 << 30), "switch 2 raised past them");
     let cfg = k2_core::app_grace::config::load(&conn, "plain").unwrap();
-    assert!(cfg.db.private, "switch 2 turned its own private database on");
+    assert!(!cfg.db.private, "no Database core ticked: switch 2 doesn't turn its private database on (slice B)");
     let jobs = store::get_app(&conn, "jobs").unwrap().unwrap();
     assert_eq!((jobs.path.as_str(), jobs.isolation.as_str()), ("guarded", "vm"), "the wall never moved");
     let jcfg = k2_core::app_grace::config::load(&conn, "jobs").unwrap();

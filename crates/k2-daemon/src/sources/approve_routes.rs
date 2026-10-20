@@ -56,7 +56,7 @@ pub(crate) mod util {
             Who::Login { username, .. } => (format!("login:{username}"), "login"),
             Who::Agent { project_id, .. } => (format!("agent:{project_id}"), "agent"),
             Who::Shell { project_id, .. } => (format!("shell:{project_id}"), "shell"),
-            Who::Wrong | Who::Invalid => ("-".into(), "daemon"),
+            Who::Wrong | Who::Invalid | Who::Tenant(_) => ("-".into(), "daemon"),
         }
     }
 

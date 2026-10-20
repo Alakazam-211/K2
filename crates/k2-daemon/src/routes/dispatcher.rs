@@ -6841,6 +6841,53 @@ async fn handle_one_request(
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // The compute hub's tenant routes (prd-compute-shared-queue-v1
+        // S1/S2): no token, the signed `X-K2-Hub` header is the credential
+        // (verified in `compute_hub::authenticate`, fail-closed). Dark while
+        // compute or federation is off (a tenant is a paired server).
+        p if crate::compute_hub::is_route(p) => {
+            if !k2_core::compute::enabled() || !k2_core::federation::enabled() {
+                let _ = stream.read(&mut buf).await;
+                let r = if k2_core::compute::enabled() {
+                    crate::compute_routes::refusal_response(&crate::compute_routes::no(
+                        "federation_off",
+                        404,
+                        "this server isn't a compute hub (federation is off)",
+                    ))
+                } else {
+                    crate::compute_routes::dark()
+                };
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            // The signature covers the raw query exactly as sent.
+            let raw_query = headers_blob
+                .lines()
+                .next()
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|pq| pq.split_once('?').map(|(_, q)| q.to_string()))
+                .unwrap_or_default();
+            let header = super::http::extract_header(&headers_blob, k2_core::compute::hub::HEADER).map(str::to_string);
+            let body_bytes = match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::compute_routes::MAX_BODY).await {
+                Ok(b) => b,
+                Err(_) => {
+                    let r = crate::compute_routes::too_large();
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let p_owned = p.to_string();
+            let method_owned = method.clone();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::compute_hub::handle_request(&p_owned, &method_owned, &raw_query, header.as_deref(), &body_bytes)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if crate::compute_routes::is_route(p) => {
             if !k2_core::compute::enabled() {
                 let _ = stream.read(&mut buf).await;

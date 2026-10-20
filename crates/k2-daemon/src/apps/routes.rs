@@ -214,7 +214,7 @@ pub(crate) fn actor(who: &Who) -> String {
         Who::Login { username, .. } => format!("user:{username}"),
         Who::Agent { project_id, .. } => format!("agent:{}", ws_handle(project_id)),
         Who::Shell { project_id, .. } => format!("shell:{}", ws_handle(project_id)),
-        Who::Wrong => "wrong-credential".into(),
+        Who::Wrong | Who::Tenant(_) => "wrong-credential".into(),
         Who::Invalid => "-".into(),
     }
 }

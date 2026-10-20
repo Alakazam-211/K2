@@ -402,6 +402,21 @@ pub const ROUTES: &[Route] = &[
     get("/cli/compute/grants", Member),
     post("/cli/compute/grants/revoke", Admin),
     post("/cli/compute/grants/set", Admin),
+    // The compute hub's tenant routes (prd-compute-shared-queue-v1 S1/S2):
+    // other K2 servers, no login and no token; the signed X-K2-Hub header
+    // is checked in `compute_hub::authenticate` (fail-closed).
+    post("/cli/compute/hub/changes", Public),
+    post("/cli/compute/hub/hello", Public),
+    post("/cli/compute/hub/jobs", Public),
+    post("/cli/compute/hub/jobs/artifact", Public),
+    post("/cli/compute/hub/jobs/cancel", Public),
+    post("/cli/compute/hub/jobs/get", Public),
+    post("/cli/compute/hub/jobs/logs", Public),
+    post("/cli/compute/hub/jobs/receipt", Public),
+    post("/cli/compute/hub/jobs/retry", Public),
+    post("/cli/compute/hub/nodes", Public),
+    post("/cli/compute/hub/prepare", Public),
+    post("/cli/compute/hub/run", Public),
     get("/cli/compute/jobs", Member),
     get("/cli/compute/jobs/artifact", Member),
     post("/cli/compute/jobs/cancel", Member),
@@ -432,6 +447,15 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/nodes/routes", Admin),
     post("/cli/compute/nodes/update", Admin),
     post("/cli/compute/run", Member),
+    // The hub owner's tenants: adding or widening one is the owner's.
+    get("/cli/compute/tenants", Admin),
+    post("/cli/compute/tenants/add", Owner),
+    post("/cli/compute/tenants/grant", Owner),
+    post("/cli/compute/tenants/resume", Owner),
+    post("/cli/compute/tenants/revoke", Owner),
+    post("/cli/compute/tenants/set", Owner),
+    post("/cli/compute/tenants/suspend", Owner),
+    post("/cli/compute/tenants/ungrant", Owner),
     get("/cli/compute/usage", Admin),
     // 0.45.7: the CLI's K2 Connect control-plane calls, made with the
     // daemon-held tunnel token. Logins: Owner/Admin (the handler's

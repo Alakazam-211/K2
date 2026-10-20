@@ -878,6 +878,7 @@ fn running_job(job: &str, node: &str, ws: &str) {
         detach: true,
         retry_interrupted: false,
         ctl: Default::default(),
+        tenant: Default::default(),
     };
     k2_core::compute::store::insert_job(&conn, &new_job).expect("job");
     k2_core::compute::store::set_job_state(&conn, job, JobState::Assigned, None, None, 11).expect("assigned");

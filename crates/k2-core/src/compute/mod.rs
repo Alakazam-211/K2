@@ -17,6 +17,7 @@ pub mod access;
 pub mod admin;
 pub mod advertise;
 pub mod enroll;
+pub mod hub;
 pub mod local;
 pub mod logs;
 pub mod message;

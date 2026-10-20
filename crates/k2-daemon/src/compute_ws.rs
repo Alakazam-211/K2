@@ -54,6 +54,10 @@ enum Out {
 struct Conn {
     conn_id: u64,
     tx: mpsc::UnboundedSender<Out>,
+    /// Frames queued for the writer and not yet sent (a file-backed
+    /// transfer waits while this is high, so a big bundle never sits in
+    /// memory whole, V21).
+    pending: Arc<AtomicU64>,
     route: &'static str,
     offer: Option<Offer>,
     bytes_in: Arc<AtomicU64>,
@@ -465,6 +469,7 @@ async fn run_session(
     let node_id = row.id.clone();
     let route = route_label(ingress);
     let (tx, mut rx) = mpsc::unbounded_channel::<Out>();
+    let pending = Arc::new(AtomicU64::new(0));
     let bytes_in = Arc::new(AtomicU64::new(0));
     let bytes_out = Arc::new(AtomicU64::new(0));
     let conn_id = with_engine(|e| {
@@ -472,7 +477,7 @@ async fn run_session(
         let id = e.next_conn;
         if let Some(old) = e.conns.insert(
             node_id.clone(),
-            Conn { conn_id: id, tx: tx.clone(), route, offer: None, bytes_in: bytes_in.clone(), bytes_out: bytes_out.clone() },
+            Conn { conn_id: id, tx: tx.clone(), pending: pending.clone(), route, offer: None, bytes_in: bytes_in.clone(), bytes_out: bytes_out.clone() },
         ) {
             let _ = old.tx.send(Out::Close);
         }
@@ -539,6 +544,7 @@ async fn run_session(
             out = rx.recv() => {
                 match out {
                     Some(Out::Frame(f)) => {
+                        let _ = pending.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
                         let text = match frames::seal(&key, Direction::ControllerToNode, &session, seq_out, &f) {
                             Ok(t) => t,
                             Err(e) => { log_debug!("[compute] seal {}: {e}", f.kind()); continue; }
@@ -789,6 +795,11 @@ pub fn finalize(job_id: &str) {
         if job.ctl.shard.is_some() {
             return;
         }
+        // A compute hub tenant's job: its own server's poller delivers the
+        // message to the session that asked (V24); nothing goes out here.
+        if job.tenant_id != k2_core::compute::hub::LOCAL {
+            return;
+        }
         // Detached jobs always get a message. An attached job gets one too
         // when nobody is following its logs any more (the agent's shell
         // tool timed out and killed `k2 compute run`): otherwise its result
@@ -1025,6 +1036,15 @@ pub fn artifact_cache_path(job_id: &str, generation: i64, sha256: &str) -> std::
     compute::compute_dir().join("artifacts").join(format!("{job_id}-g{generation}")).join(sha256)
 }
 
+/// Where a job's fetched artifact is cached: a hub tenant's under
+/// `tenants/<id>/artifacts/` (V32), this server's own as before.
+pub fn job_artifact_path(job: &store::JobRow, sha256: &str) -> std::path::PathBuf {
+    if job.tenant_id == k2_core::compute::hub::LOCAL {
+        return artifact_cache_path(&job.id, job.generation, sha256);
+    }
+    k2_core::compute::hub::tenant_dir(&job.tenant_id).join("artifacts").join(format!("{}-g{}", job.id, job.generation)).join(sha256)
+}
+
 fn finish_pull(p: &mut Pull, r: Result<(), (String, String)>) {
     p.file = None;
     if r.is_err() {
@@ -1080,7 +1100,7 @@ fn on_artifact_failed(node_id: &str, f: ArtifactFailed) {
 /// Make sure the controller has `info` for this attempt, pulling it from
 /// the node when needed (blocking, up to `timeout`). `Err((code, hint))`.
 pub fn fetch_artifact(job: &store::JobRow, info: &ArtifactInfo, timeout: Duration) -> Result<std::path::PathBuf, (String, String)> {
-    let dst = artifact_cache_path(&job.id, job.generation, &info.sha256);
+    let dst = job_artifact_path(job, &info.sha256);
     if compute::sync::file_sha256(&dst).is_ok_and(|(sha, n)| sha == info.sha256 && n == info.bytes) {
         return Ok(dst);
     }
@@ -1180,6 +1200,7 @@ fn on_need(node_id: &str, route: &'static str, n: Need) {
             let job = store::job_by_id(&conn, &n.job_id);
             let path = job
                 .as_ref()
+                .filter(|j| j.tenant_id == k2_core::compute::hub::LOCAL)
                 .and_then(|j| k2_core::db::schema::Project::get(&conn, &j.workspace_id).ok().map(|p| p.path));
             (job, path)
         };
@@ -1189,15 +1210,29 @@ fn on_need(node_id: &str, route: &'static str, n: Need) {
         let Some(src) = job.plan().and_then(|p| p.src) else {
             return fail("no_source", "this job has no source".into());
         };
+        let tenant = (job.tenant_id != k2_core::compute::hub::LOCAL).then(|| job.tenant_id.clone());
         let blob = match n.kind {
             TransferKind::Bundle => {
                 if n.want != src.commit {
                     return fail("bad_need", "the node asked for another commit".into());
                 }
-                let Some(ws) = ws_path else { return fail("workspace_gone", "the workspace is gone".into()) };
-                let root = match compute::sync::repo_root(std::path::Path::new(&ws)) {
-                    Ok(r) => r,
-                    Err(e) => return fail("sync_failed", e),
+                // A hub tenant's code: its mirror on this hub (S2, V20);
+                // this server's own job: the workspace repo, as before.
+                let root = match &tenant {
+                    Some(t) => {
+                        let m = k2_core::compute::hub::tenant_mirror(t, &src.project_key);
+                        if !m.join("objects").is_dir() {
+                            return fail("sync_failed", "the tenant's code isn't on this hub any more".into());
+                        }
+                        m
+                    }
+                    None => {
+                        let Some(ws) = ws_path else { return fail("workspace_gone", "the workspace is gone".into()) };
+                        match compute::sync::repo_root(std::path::Path::new(&ws)) {
+                            Ok(r) => r,
+                            Err(e) => return fail("sync_failed", e),
+                        }
+                    }
                 };
                 let dir = compute::compute_dir().join("blobs");
                 if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -1209,7 +1244,15 @@ fn on_need(node_id: &str, route: &'static str, n: Need) {
                     Err(e) => return fail("sync_failed", e),
                 }
             }
-            TransferKind::Dirty => (dirty_blob_path(&job.id), false),
+            TransferKind::Dirty => match (&tenant, src.dirty.as_ref()) {
+                (Some(t), Some(d)) => {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    k2_core::compute::hub::touch_blob(&conn, t, &d.sha256, compute::now());
+                    (k2_core::compute::hub::blob_path(t, &d.sha256), false)
+                }
+                _ => (dirty_blob_path(&job.id), false),
+            },
         };
         let (path, delete_after) = blob;
         let (sha, bytes) = match compute::sync::file_sha256(&path) {
@@ -1230,31 +1273,75 @@ fn on_need(node_id: &str, route: &'static str, n: Need) {
                 return fail("sync_failed", "the dirty blob changed since submit".into());
             }
         }
-        let data = match std::fs::read(&path) {
-            Ok(d) => d,
-            Err(e) => return fail("sync_failed", format!("read blob: {e}")),
-        };
+        // File-backed (V21): one chunk at a time from disk, waiting while
+        // the node's writer has a full window, so a big bundle is never in
+        // memory whole.
+        let sent = stream_file(&node, &path, &job.id, n.generation, n.kind, bytes, &sha);
         if delete_after {
             let _ = std::fs::remove_file(&path);
         }
-        let chunks: Vec<&[u8]> = if data.is_empty() { vec![&[][..]] } else { data.chunks(frames::TRANSFER_CHUNK).collect() };
-        let last = chunks.len().saturating_sub(1);
-        for (i, c) in chunks.into_iter().enumerate() {
-            send_to(
-                &node,
-                Frame::Transfer(Transfer {
-                    job_id: job.id.clone(),
-                    generation: n.generation,
-                    kind: n.kind,
-                    seq: i as u32,
-                    data: crypto::b64(c),
-                    last: i == last,
-                    total_bytes: bytes,
-                    sha256: sha.clone(),
-                }),
-            );
+        if let Err(e) = sent {
+            fail("sync_failed", e);
         }
     });
+}
+
+/// Send `path` to `node` as `Transfer` frames of `TRANSFER_CHUNK`, reading
+/// as it goes. An empty file is one empty last chunk.
+#[allow(clippy::too_many_arguments)]
+fn stream_file(node: &str, path: &std::path::Path, job_id: &str, generation: u32, kind: TransferKind, total: u64, sha: &str) -> Result<(), String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path).map_err(|e| format!("read blob: {e}"))?;
+    let mut buf = vec![0u8; frames::TRANSFER_CHUNK];
+    let mut sent: u64 = 0;
+    let mut seq: u32 = 0;
+    loop {
+        let mut filled = 0;
+        while filled < buf.len() {
+            let n = f.read(&mut buf[filled..]).map_err(|e| format!("read blob: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            filled += n;
+        }
+        sent += filled as u64;
+        let last = sent >= total || filled < buf.len();
+        if sent > total {
+            return Err("the blob grew while it was sent".into());
+        }
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            match pending_frames(node) {
+                None => return Err("the node went offline during the transfer".into()),
+                Some(p) if p < TRANSFER_WINDOW => break,
+                Some(_) if Instant::now() >= deadline => return Err("the node isn't reading the transfer".into()),
+                Some(_) => std::thread::sleep(Duration::from_millis(5)),
+            }
+        }
+        let ok = send_to(
+            node,
+            Frame::Transfer(Transfer {
+                job_id: job_id.to_string(),
+                generation,
+                kind,
+                seq,
+                data: crypto::b64(&buf[..filled]),
+                last,
+                total_bytes: total,
+                sha256: sha.to_string(),
+            }),
+        );
+        if !ok {
+            return Err("the node went offline during the transfer".into());
+        }
+        if last {
+            if sent != total {
+                return Err("the blob shrank while it was sent".into());
+            }
+            return Ok(());
+        }
+        seq += 1;
+    }
 }
 
 /// Queue a frame on a node's live session (node admin). False when the
@@ -1264,19 +1351,34 @@ pub fn send_frame(node_id: &str, f: Frame) -> bool {
 }
 
 fn send_to(node_id: &str, f: Frame) -> bool {
-    let tx = with_engine(|e| e.conns.get(node_id).map(|c| c.tx.clone()));
-    tx.is_some_and(|tx| tx.send(Out::Frame(Box::new(f))).is_ok())
+    let conn = with_engine(|e| e.conns.get(node_id).map(|c| (c.tx.clone(), c.pending.clone())));
+    conn.is_some_and(|(tx, pending)| {
+        pending.fetch_add(1, Ordering::Relaxed);
+        tx.send(Out::Frame(Box::new(f))).is_ok()
+    })
 }
+
+/// Frames queued for a node's writer (None = not connected).
+fn pending_frames(node_id: &str) -> Option<u64> {
+    with_engine(|e| e.conns.get(node_id).map(|c| c.pending.load(Ordering::Relaxed)))
+}
+
+/// At most this many frames wait for a node's writer while a transfer
+/// streams from disk (each up to `TRANSFER_CHUNK`).
+const TRANSFER_WINDOW: u64 = 32;
 
 // ── placement ────────────────────────────────────────────────────────
 
 /// Queued jobs on a node as the scheduler sees them.
 pub fn queued_view(conn: &rusqlite::Connection, node_id: &str) -> (Vec<scheduler::QueuedJob>, scheduler::Load) {
     let now = compute::now();
+    let held = held_tenants(conn);
     let queue = store::jobs_in_states(conn, node_id, &["queued"])
         .into_iter()
         // A retry waiting out its backoff isn't placeable yet.
         .filter(|j| j.ctl.not_before.is_none_or(|nb| nb <= now))
+        // Nor is a suspended (or revoked) hub tenant's job.
+        .filter(|j| !held.contains(&j.tenant_id))
         .map(|j| {
             let plan = j.plan();
             scheduler::QueuedJob {
@@ -1299,6 +1401,13 @@ pub fn queued_view(conn: &rusqlite::Connection, node_id: &str) -> (Vec<scheduler
     (queue, load)
 }
 
+/// Hub tenants whose queued jobs may not start (suspended or revoked).
+fn held_tenants(conn: &rusqlite::Connection) -> HashSet<String> {
+    conn.prepare("SELECT id FROM compute_tenants WHERE state != 'active'")
+        .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.filter_map(Result::ok).collect()))
+        .unwrap_or_default()
+}
+
 /// The scheduler's current view of a node (for display): position and
 /// reason per queued job.
 pub fn decision_for(node_id: &str) -> scheduler::Decision {
@@ -1308,13 +1417,30 @@ pub fn decision_for(node_id: &str) -> scheduler::Decision {
     let conn = db.lock();
     let pause = store::node_by_id(&conn, node_id).and_then(|n| n.controller_pause);
     let (queue, load) = queued_view(&conn, node_id);
-    let caps: HashMap<String, u32> = store::grants(&conn, Some(node_id), None)
+    let mut caps: HashMap<String, u32> = store::grants(&conn, Some(node_id), None)
         .into_iter()
         .map(|g| (g.workspace_id, g.max_parallel.max(1) as u32))
         .collect();
+    // A hub tenant's job key reads its tenant's grant on this node (S1;
+    // per tenant workspace until the fair queue v2, S3).
+    for q in queue.iter().map(|q| q.workspace_id.clone()).chain(load.running_by_workspace.keys().cloned()) {
+        if k2_core::compute::hub::parse_tenant_ws_key(&q).is_some() && !caps.contains_key(&q) {
+            let cap = store::grant(&conn, node_id, &q).map(|g| g.max_parallel.max(1) as u32).unwrap_or(1);
+            caps.insert(q, cap);
+        }
+    }
     let mut d = scheduler::decide(&queue, last.as_deref(), &load, &|ws| caps.get(ws).copied().unwrap_or(1), offer.as_ref(), pause.as_deref());
     let now = compute::now();
+    let held = held_tenants(&conn);
     for j in store::jobs_in_states(&conn, node_id, &["queued"]) {
+        if held.contains(&j.tenant_id) {
+            let pos = d.waiting.len() + 1;
+            d.waiting.insert(
+                j.id.clone(),
+                (pos, frames::Refusal::new(crate::compute_hub::TENANT_STATE_WAIT, "the hub owner suspended this server's compute")),
+            );
+            continue;
+        }
         if let Some(nb) = j.ctl.not_before.filter(|nb| *nb > now) {
             let pos = d.waiting.len() + 1;
             d.waiting.insert(
@@ -1466,8 +1592,9 @@ fn ensure_ticker() {
                         }
                     }
                     if daily {
-                        logs::sweep(14);
+                        logs::sweep(k2_core::compute::hub::LOG_KEEP_DAYS as u64);
                         sweep_artifact_cache();
+                        crate::compute_hub::sweep_tenants();
                     }
                     // Machines switched off in Settings: remove once idle.
                     crate::compute_routes::sweep_retiring();
@@ -1505,7 +1632,7 @@ mod tests {
         };
         store::insert_job(
             conn,
-            &store::NewJob { plan: &plan, client_job_id: id, session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl: Default::default() },
+            &store::NewJob { plan: &plan, client_job_id: id, session_id: None, request_sha256: "h", detach: false, retry_interrupted: false, ctl: Default::default(), tenant: Default::default() },
         )
         .expect("insert job")
     }

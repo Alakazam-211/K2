@@ -214,6 +214,9 @@ pub mod ticket_settings_routes;
 // K2 compute nodes (prd-k2-compute-nodes-v1): routes + the live engine.
 pub mod compute_admin;
 pub mod compute_advertise;
+// The compute hub (prd-compute-shared-queue-v1 S1/S2): tenants, signed
+// tenant routes, the tenant's code store.
+pub mod compute_hub;
 pub mod compute_local;
 // "Allow managing compute nodes" (`compute_manage`, 0194).
 pub mod compute_manage;

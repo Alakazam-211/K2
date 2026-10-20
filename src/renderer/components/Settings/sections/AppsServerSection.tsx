@@ -38,6 +38,7 @@ import {
   prepareApply,
   prepareDryRun,
   prepareNeeded,
+  setAutoPrepare,
   type BoxCheck,
   type BoxDoctor,
   type PrepareDryRun,
@@ -77,7 +78,7 @@ export function AppsServerSection(): React.JSX.Element {
   const [switchBusy, setSwitchBusy] = useState(false)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [dry, setDry] = useState<PrepareDryRun | null>(null)
-  const [busy, setBusy] = useState<null | 'dry' | 'apply' | 'engine'>(null)
+  const [busy, setBusy] = useState<null | 'dry' | 'apply' | 'engine' | 'auto'>(null)
   const mounted = useRef(true)
 
   const isOwner = role === 'owner'
@@ -151,6 +152,19 @@ export function AppsServerSection(): React.JSX.Element {
         text: `${daemonErrorText(e)} (the checks below show where the box is now)`,
       })
       await load()
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const flipAuto = async (next: boolean): Promise<void> => {
+    setBusy('auto')
+    setNotice(null)
+    try {
+      await setAutoPrepare(next)
+      await load()
+    } catch (e) {
+      setNotice({ tone: 'error', text: daemonErrorText(e) })
     } finally {
       setBusy(null)
     }
@@ -256,6 +270,31 @@ export function AppsServerSection(): React.JSX.Element {
               <div className="py-2 space-y-3" data-testid="apps-setup">
                 {!isOwner && role !== null ? (
                   <p className={`text-[11px] ${secondary}`}>Only the server&apos;s owner can prepare the box or install the engine.</p>
+                ) : null}
+                {doctor.autoPrepare ? (
+                  <div className="flex items-start gap-3" data-testid="apps-auto-prepare">
+                    <Toggle
+                      checked={doctor.autoPrepare.enabled}
+                      onChange={(v) => void flipAuto(v)}
+                      disabled={!isOwner || busy !== null}
+                      aria-label="Prepare this box automatically"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs text-[var(--color-text-primary)]">Prepare this box automatically</div>
+                      <p className={`text-[11px] ${muted} mt-0.5`}>
+                        After each K2 update, K2 sets the box up for walled Apps by itself through its root helper (the
+                        steps below, plus K2&apos;s Podman where needed and the App engine), so agents you allow can
+                        deploy with nobody running sudo. It stops on a box whose sub-UIDs already overlap (rootless
+                        Docker) and tells you what it changed.
+                      </p>
+                      {doctor.autoPrepare.state ? (
+                        <p className={`text-[11px] ${secondary} mt-1`} data-testid="apps-auto-prepare-last">
+                          Last run: {doctor.autoPrepare.state}
+                          {doctor.autoPrepare.detail ? ` — ${doctor.autoPrepare.detail}` : ''}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
                 ) : null}
                 <div className="space-y-2">
                   <div className="text-xs text-[var(--color-text-primary)]">Prepare this box</div>

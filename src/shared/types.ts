@@ -147,6 +147,9 @@ export interface AppSettingsResponse {
   appsPreview?: boolean
   // The unwalled process engine (Owner-only opt-in, default off).
   appsProcessEngine?: boolean
+  // 0.46.3: K2 prepares the box for walled Apps by itself through the
+  // owner's root helper (Owner-only; default off until reviewed).
+  appsAutoPrepare?: boolean
   // 0.40.43 (1c) — public /v1 API master switch (K2 Connect → Enable
   // public API). ORed with the K2_API env flag server-side and checked
   // per request, so flipping it needs NO daemon restart. Owner/Admin-only

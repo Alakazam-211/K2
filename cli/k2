@@ -7255,6 +7255,10 @@ Make and ship:
 
 See and run it:
   k2 app list [--workspace WS]         Apps, state, live Seed, URL.
+  k2 app list --box                    Every App on this box with the agent that
+                                       maintains it (k2 msg <address>), its
+                                       memory/disk budgets, hostnames, ports and
+                                       box services. Never its data or logs.
   k2 app inspect <app-id>              Runtime, Seed, createdWith, audit chain.
   k2 app history <app-id>              Deploys: who, from, to, why, result.
   k2 app history --widget <name>       A Garden widget's version history.
@@ -7290,6 +7294,13 @@ See and run it:
                                        agent logins); k2 app room-names <room>
                                        hide|show (owner). k2 app surfaces.
   k2 app uninstall <app-id> [--purge]  --purge also deletes its data (owner).
+  k2 app handover <app-id> --to WS     Owner: give the App to another workspace.
+  k2 app park <app-id> [--reason T]    Owner/admin: stop it and hold it for the
+                                       owner (no agent maintains it).
+  k2 app unpark <app-id> --to WS       Owner: give a parked App to a workspace.
+  k2 app release <workspace> --apps handover:<ws>|uninstall|park
+                                       One way out for every App a workspace
+                                       maintains (before k2 workspace remove).
   k2 app config <app-id> [--memory 8G|512M|none] [--cpu-weight N] [--tasks N]
                  [--disk 2G] [--egress add|rm HOST:PORT] [--egress-mode allowlist|broad]
                  [--port add|rm 5000/udp] [--recycle-every 24h] [--recycle-at 85%]
@@ -8003,12 +8014,13 @@ if io:
 print(v.get("note", ""))'
 }
 
-# k2 app list [--workspace WS] [--json]
+# k2 app list [--workspace WS] [--box] [--json]
 cmd_app_list() {
-    local ws="" json_out=0
+    local ws="" json_out=0 box=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --workspace) ws="${2:-}"; shift 2 ;;
+            --box) box=1; shift ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -8016,8 +8028,34 @@ cmd_app_list() {
     done
     local q=""
     [ -n "$ws" ] && q="workspace=$(urlencode "$ws")"
+    [ "$box" = 1 ] && q="box=1"
     _compute_call GET /cli/app/list "$q"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    if [ "$box" = 1 ]; then
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+mib = lambda b: "-" if b is None else "%d MiB" % (b >> 20)
+m = v.get("memory", {})
+pool = m.get("pool", {}).get("poolBytes")
+print("App memory on this box: %s used of %s (%s free)" % (mib(m.get("usedBytes")), mib(pool) if pool and pool < 1 << 60 else "unknown", mib(m.get("freeBytes")) if pool and pool < 1 << 60 else "-"))
+for a in v.get("apps", []):
+    who = a.get("maintainer") or {}
+    by = ("%s (%s)" % (who.get("agent"), who.get("address"))) if who.get("kind") == "agent" else "parked: held by the owner"
+    print("%-20s %-12s %s" % (a["appId"], a["state"], by))
+    extra = ["memory " + mib(a["memory"].get("limitBytes"))]
+    if a.get("disk", {}).get("budgetBytes") is not None:
+        extra.append("disk " + mib(a["disk"]["budgetBytes"]))
+    if a.get("hostnames"):
+        extra.append("hosts " + ", ".join(a["hostnames"]))
+    if a.get("ports"):
+        extra.append("ports " + ", ".join("%s/%s" % (p["port"], p["proto"]) for p in a["ports"]))
+    if a.get("boxServices"):
+        extra.append("box services " + ", ".join(a["boxServices"]))
+    print("%-20s %s" % ("", "  ".join(extra)))
+'
+        return 0
+    fi
     printf '%s' "$_CP_BODY" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
@@ -8241,6 +8279,64 @@ cmd_app_uninstall() {
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     if [ "$purge" = 1 ]; then echo "App $app uninstalled; its data folder is gone."; else
         echo "App $app uninstalled. Its data folder stays (~/.k2/apps/$app); its Seeds go with the nightly sweep."; fi
+}
+
+# k2 app handover|unpark <app-id> --to WS [--json]; k2 app park <app-id> [--reason T] [--json]
+# (prd-agent-app-permissions-v1 Q8: people only, never a passport).
+cmd_app_ownership() {
+    local verb="$1"; shift
+    local app="" to="" reason="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --to) to="${2:-}"; shift 2 ;;
+            --reason) reason="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_rt_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) app="$1"; shift ;;
+        esac
+    done
+    if [ -z "$app" ] || { [ "$verb" != park ] && [ -z "$to" ]; }; then
+        if [ "$verb" = park ]; then echo "usage: k2 app park <app-id> [--reason TEXT]" >&2
+        else echo "usage: k2 app $verb <app-id> --to <workspace>" >&2; fi
+        exit 2
+    fi
+    _app_rt_post "/cli/app/$verb" "$(_compute_json K2_CJ_app="$app" K2_CJ_to="$to" K2_CJ_reason="$reason")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    case "$verb" in
+        park) echo "App $app is parked: stopped and held for the owner (k2 app unpark $app --to <workspace>)." ;;
+        *) echo "App $app now belongs to $(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("workspace",""))')." ;;
+    esac
+}
+
+# k2 app release <workspace> --apps handover:<ws>|uninstall|park [--json]
+cmd_app_release() {
+    local ws="" apps="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --apps) apps="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_rt_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) ws="$1"; shift ;;
+        esac
+    done
+    if [ -z "$ws" ] || [ -z "$apps" ]; then
+        echo "usage: k2 app release <workspace> --apps handover:<workspace>|uninstall|park" >&2
+        exit 2
+    fi
+    _app_rt_post /cli/app/release "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_apps="$apps")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+r = v.get("results", [])
+print("%s: %d App%s released (%s)." % (v.get("workspace"), len(r), "" if len(r) == 1 else "s", v.get("way")))
+for x in r:
+    print("  " + x["app"])
+'
 }
 
 # k2 app exec <app-id> [--timeout 60|10m] [--json] -- <command…>   (S28)
@@ -9933,6 +10029,8 @@ cmd_app() {
         logs) shift; cmd_app_logs "$@" ;;
         errors) shift; cmd_app_errors "$@" ;;
         uninstall) shift; cmd_app_uninstall "$@" ;;
+        handover|park|unpark) cmd_app_ownership "$@" ;;
+        release) shift; cmd_app_release "$@" ;;
         exec) shift; cmd_app_exec "$@" ;;
         shell) shift; cmd_app_shell "$@" ;;
         exception) shift; cmd_app_exception "$@" ;;
@@ -25394,11 +25492,15 @@ cmd_workspace_preview() {
 }
 
 cmd_workspace_remove() {
-    local target_path="" mode=""
+    local target_path="" mode="" apps_way=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --mode) mode="$2"; shift 2 ;;
             --mode=*) mode="${1#--mode=}"; shift ;;
+            # Q8: a workspace that maintains Apps goes only after they do:
+            # handover:<ws> (owner) | uninstall | park (k2 app release).
+            --apps) apps_way="${2:-}"; shift 2 ;;
+            --apps=*) apps_way="${1#--apps=}"; shift ;;
             -*) echo "Unknown flag: $1" >&2; exit 1 ;;
             *) if [ -z "$target_path" ]; then target_path="$1"; fi; shift ;;
         esac
@@ -25412,6 +25514,9 @@ cmd_workspace_remove() {
         echo "  --mode restore-original  Restore pre-K2 files from .k2/migration/; files K2" >&2
         echo "                           created fresh are removed. .k2/ stays intact for reconnect." >&2
         echo "  (no mode)                DB-only deregister; filesystem untouched (symlinks remain)." >&2
+        echo "  --apps handover:<ws>|uninstall|park" >&2
+        echo "                           First release the Apps this workspace maintains (a" >&2
+        echo "                           workspace with Apps is never removed under them)." >&2
         exit 1
     fi
     # Resolve to absolute path
@@ -25435,6 +25540,10 @@ except Exception:
         exit 4
     fi
     target_path="$resolved"
+    if [ -n "$apps_way" ]; then
+        _app_rt_post /cli/app/release "$(_compute_json K2_CJ_workspace="$target_path" K2_CJ_apps="$apps_way")"
+        [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    fi
     local resp
     if [ -n "$mode" ]; then
         resp=$(cli_request_post "/cli/workspace/remove" \

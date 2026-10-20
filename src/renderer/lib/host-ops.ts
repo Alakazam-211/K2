@@ -15,6 +15,7 @@
 
 import type { ConnectHost } from '@/stores/connect-host'
 import { withRemoteRetry } from '@/lib/remote-retry'
+import { bootStatusUrl, shouldRetryWithoutToken } from '@/lib/boot-status-view'
 import {
   updateAvailableCopy,
   newerNoArtifactCopy,
@@ -137,6 +138,10 @@ export async function hostOpGet<T = unknown>(
  *  fields the post-restart/update reconnect poller reads. The full daemon
  *  shape is `{version, protocol, phase, detail?}` (see ConnectionGate). */
 export interface HostBootStatus {
+  /** 0.46.3+: `public` | `compat` | `full` (absent on older daemons). With
+   *  the host's token the daemon answers `full`; a stranger's view may lack
+   *  `version` (ghost). See lib/boot-status-view. */
+  view?: string
   /** `'starting' | 'migrating' | 'ready' | 'error' | …` — readiness is
    *  ONLY ever `phase === 'ready'`; the poller never assumes a delay. */
   phase?: string
@@ -150,10 +155,16 @@ export interface HostBootStatus {
 }
 
 /**
- * GET `<base>/boot-status` from a SPECIFIC host — the daemon's PUBLIC,
- * unauthenticated readiness handshake. This is a TOP-LEVEL route
- * (`<base>/boot-status`), NOT under `/cli/`, and needs NO token (so it does
- * NOT go through `hostOpGet`).
+ * GET `<base>/boot-status` from a SPECIFIC host — the daemon's readiness
+ * handshake. This is a TOP-LEVEL route (`<base>/boot-status`), NOT under
+ * `/cli/`, so it does NOT go through `hostOpGet`.
+ *
+ * PRD boot-status-ghost (0.46.3): the host's own token rides `?token=` when
+ * the host is signed in, so the daemon answers its FULL body (version
+ * included) even when the host hides its details from strangers (ghost).
+ * Without a token (signed out) the request is exactly as before. A ≤0.46.2
+ * daemon ignores the token, except that it 403s a must-change-password
+ * session on every path: then retry once without it.
  *
  * Used to poll a host back to life after the owner triggers a restart/update
  * from its tile: each fetch is wrapped in `withRemoteRetry`, so the
@@ -168,10 +179,17 @@ export async function hostBootStatus(
 ): Promise<HostBootStatus | null> {
   try {
     return await withRemoteRetry(async () => {
-      const res = await fetch(`${creds.base}/boot-status`, {
+      const tokenSent = !!creds.token
+      let res = await fetch(bootStatusUrl(creds.base, creds.token), {
         method: 'GET',
         signal: AbortSignal.timeout(timeoutMs),
       })
+      if (shouldRetryWithoutToken(tokenSent, res.status)) {
+        res = await fetch(bootStatusUrl(creds.base, null), {
+          method: 'GET',
+          signal: AbortSignal.timeout(timeoutMs),
+        })
+      }
       return parse<HostBootStatus>(res)
     })
   } catch {

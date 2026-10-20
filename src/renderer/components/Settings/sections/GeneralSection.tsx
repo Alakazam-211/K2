@@ -34,7 +34,7 @@ import {
   type UpdatePhase,
 } from './update-host'
 // Comeback watcher (0.40.48 remote-update ergonomics): after the update
-// job reaches `restarting`, poll the host's PUBLIC /boot-status until it's
+// job reaches `restarting`, poll the host's /boot-status (host token) until it's
 // back on the new version — same helper + pattern the Connections tiles'
 // waitForHostReady uses (hostBootStatus's retry loop also evicts the dead
 // pooled socket, so observing 'ready' implies a healthy pool).
@@ -1463,7 +1463,7 @@ function RestartHostRow(): React.JSX.Element | null {
 //     lacks the routes hides the control instead of 404ing.
 //   * Owner/Admin on the active host (host-aware auth/whoami role). The
 //     routes are owner-token-gated, so a 403 surfaces as a clear toast.
-function UpdateHostRow(): React.JSX.Element | null {
+export function UpdateHostRow(): React.JSX.Element | null {
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const supportsUpdate = useServerSupports('remote-update')
   const confirm = useConfirmDialogStore((s) => s.confirm)
@@ -1590,8 +1590,10 @@ function UpdateHostRow(): React.JSX.Element | null {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per failure phase
   }, [phase, hostLabel, check?.current, addToast])
 
-  // Comeback watcher: poll the host's PUBLIC /boot-status (no token needed;
-  // hostBootStatus's retry loop evicts dead pooled sockets) plus the job
+  // Comeback watcher: poll the host's /boot-status (with the host's own
+  // token, so a host that hides its details from strangers still reports
+  // its version — PRD boot-status-ghost; hostBootStatus's retry loop
+  // evicts dead pooled sockets) plus the job
   // until there is a verdict — success (back on the expected version, or the
   // job says done), failed (the job's real reason, or back on another
   // version), or unconfirmed after ~10 min (never reported as a failure).

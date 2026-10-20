@@ -47,7 +47,11 @@ fn base(name: &str, args: &BTreeMap<String, String>) -> Option<Result<Json, Spec
                 ]
             })
         }),
-        // One K2 server's public readiness probe.
+        // One K2 server's readiness probe. Since 0.46.3 an unauthenticated
+        // read gets the compat view (version shown) or, on a box in ghost
+        // mode, phase only: bind a status key (`k2 api-key create --status`)
+        // as this source's secret (default `Authorization: Bearer {}`) to
+        // read the version (PRD boot-status-ghost §5.4).
         "k2-boot-status" => arg(args, "url").map(|u| {
             json!({
                 "preset": "k2-boot-status",

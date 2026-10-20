@@ -87,7 +87,10 @@ sudo ./provision-k2-server.sh
 
 ## Verify
 
-- `curl https://<your-subdomain>.k2.dev/boot-status` returns `{"phase":"ready", …}`.
+- `curl https://<your-subdomain>.k2.dev/boot-status` returns `{"view":"compat","phase":"ready", …}`.
+  Strangers never see the full status; to hide the version too, run
+  `k2 tunnel boot-status ghost`. A monitor can read the full status with a
+  read-only key from `k2 api-key create --status` (`Authorization: Bearer <key>`).
 - `k2 connect status` shows your subdomain.
 - Sign in at your subdomain — or via the K2 desktop app's Remote Sign-In — with your
   owner login.

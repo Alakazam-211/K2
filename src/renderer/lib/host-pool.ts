@@ -37,6 +37,7 @@
 import { createStore, type StoreApi } from 'zustand/vanilla'
 import type { ConnectHost, LoginResult } from '@/stores/connect-host'
 import { LOCAL_HOME_HOST, savedHostForKey } from '@/lib/host-key'
+import { bootViewOf, isPartialBootView } from '@/lib/boot-status-view'
 import type { LoginCoordinator, LoginBlock } from '@/lib/host-login-coord'
 import type { PresenceActivity, PresenceWorkspace } from '@/lib/home-status'
 import type { ActivityDisplay } from '@/stores/session-events'
@@ -95,6 +96,10 @@ export interface PoolBoot {
   instanceId: string | null
   /** `/boot-status` `features` (REPORTED_FEATURES); `[]` from an older daemon. */
   features: string[]
+  /** 0.46.3+: which view the server answered (`null` = an older daemon,
+   *  always full). A `public` view without a known version is "sign in
+   *  to see", not "an older K2". */
+  view?: 'public' | 'compat' | 'full' | null
   at: number
 }
 
@@ -126,6 +131,7 @@ export interface HostEntry {
 
 /** `/boot-status` body fields the pool reads. */
 export interface BootBody {
+  view?: unknown
   phase?: unknown
   ready?: unknown
   version?: unknown
@@ -154,8 +160,10 @@ export interface HostPoolDeps {
   /** One HTTP request to `hostKey` under its `/cli` cap, with one quick
    *  retry on a connection-level error. Throws on a network failure. */
   http: (hostKey: string, url: string, init?: RequestInit) => Promise<Response>
-  /** `GET <base>/boot-status`, or null when unreachable. */
-  bootStatus: (hostKey: string, base: string) => Promise<BootBody | null>
+  /** `GET <base>/boot-status`, or null when unreachable. `token` (non-empty
+   *  for a signed-in remote) rides `?token=` so the server answers its full
+   *  body (PRD boot-status-ghost). */
+  bootStatus: (hostKey: string, base: string, token: string) => Promise<BootBody | null>
   resolvePassword: (hostId: string) => Promise<string | null>
   /** `loginToHost`: commits the token to the store and the keychain, and
    *  fires the login-landed broadcast. */
@@ -301,6 +309,7 @@ function parseBoot(b: BootBody, at: number): PoolBoot {
     protocol: typeof b.protocol === 'number' ? b.protocol : null,
     instanceId: str(b.instanceId),
     features: Array.isArray(b.features) ? b.features.filter((f): f is string => typeof f === 'string') : [],
+    view: bootViewOf(b) ?? null,
     at,
   }
 }
@@ -594,15 +603,28 @@ export function createHostPool(deps: HostPoolDeps): HostPool {
       }
     }
 
-    const body = await deps.bootStatus(hostKey, base)
+    // PRD boot-status-ghost: a remote server gets its own token so it
+    // answers the full body (version + features) even when it hides them
+    // from strangers. Local is loopback (always full): no token.
+    const body = await deps.bootStatus(hostKey, base, isLocal ? '' : token)
     const at = deps.now()
     if (!body) {
       const prev = read(hostKey)
       return write(hostKey, { reach: 'offline', offlineStreak: prev.offlineStreak + 1, checkedAt: at })
     }
-    const boot = parseBoot(body, at)
     const prevBoot = read(hostKey).boot
-    deps.noteVersion(hostKey, boot.version, boot.features)
+    // B3 no clobber: a stranger's view (public/compat) keeps the version
+    // and features an earlier full body taught; it moves phase + instanceId.
+    const partial = isPartialBootView(body)
+    const parsed = parseBoot(body, at)
+    const boot: PoolBoot = partial
+      ? {
+          ...parsed,
+          version: parsed.version ?? prevBoot?.version ?? null,
+          features: Array.isArray(body.features) ? parsed.features : prevBoot?.features ?? [],
+        }
+      : parsed
+    if (!partial || parsed.version !== null) deps.noteVersion(hostKey, boot.version, boot.features)
     write(hostKey, { boot, reach: boot.ready ? 'live' : 'starting', offlineStreak: 0, checkedAt: at })
     // MS29: a new instanceId means this server restarted. Only its own
     // listeners hear about it.

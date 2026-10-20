@@ -15,8 +15,91 @@ const {
   isAtLeast,
   pickVersionField,
   acceptVersion,
+  isPublicView,
+  pickPointerVersion,
+  resolveVersion,
   MIN_SUPPORT_VERSION,
 } = require('./loader.js');
+
+// PRD boot-status-ghost §3.1 — a server in ghost mode answers a signed-out
+// browser without `version`; the loader takes /app/current.json instead.
+describe('boot-status views', () => {
+  function stubBootStatus(body) {
+    const prev = globalThis.fetch;
+    const urls = [];
+    globalThis.fetch = async (url) => {
+      urls.push(url);
+      if (url === '/boot-status') return { ok: true, status: 200, json: async () => body };
+      throw new Error('unexpected fetch ' + url);
+    };
+    return { urls, restore: () => { globalThis.fetch = prev; } };
+  }
+
+  it('isPublicView only for view:"public"', () => {
+    assert.equal(isPublicView({ view: 'public', phase: 'ready' }), true);
+    assert.equal(isPublicView({ view: 'compat', version: '0.46.3' }), false);
+    assert.equal(isPublicView({ version: '0.46.2' }), false);
+    assert.equal(isPublicView(null), false);
+  });
+
+  it('pickPointerVersion checks the protocol range', () => {
+    const st = { view: 'public', protocol: 1, protocolMin: 1 };
+    assert.deepEqual(pickPointerVersion(st, { version: '0.46.3', protocol: 1 }), { ok: true, version: '0.46.3' });
+    assert.equal(pickPointerVersion({ ...st, protocol: 3, protocolMin: 2 }, { version: '0.46.3', protocol: 1 }).reason, 'below_floor');
+    assert.equal(pickPointerVersion(st, null).reason, 'boot_parse');
+    assert.equal(pickPointerVersion(st, { protocol: 1 }).reason, 'boot_parse');
+  });
+
+  it('a compat / full / old body keeps the version path (no pointer fetch)', async () => {
+    for (const body of [
+      { view: 'compat', phase: 'ready', version: '0.46.3' },
+      { view: 'full', phase: 'ready', version: '0.46.3' },
+      { phase: 'ready', version: '0.46.2' },
+    ]) {
+      const s = stubBootStatus(body);
+      try {
+        const v = await resolveVersion({
+          override: null,
+          fetchCurrentPointer: async () => { throw new Error('pointer must not be read'); },
+        });
+        assert.equal(v, body.version);
+        assert.deepEqual(s.urls, ['/boot-status']);
+      } finally {
+        s.restore();
+      }
+    }
+  });
+
+  it('a public body loads the published current bundle', async () => {
+    const s = stubBootStatus({ view: 'public', phase: 'ready', protocol: 1, protocolMin: 1, instanceId: 'x' });
+    try {
+      const v = await resolveVersion({ override: null, fetchCurrentPointer: async () => ({ version: '0.46.3', protocol: 1 }) });
+      assert.equal(v, '0.46.3');
+    } finally {
+      s.restore();
+    }
+  });
+
+  it('a public body with no pointer / a bad pointer fails loudly, never loads junk', async () => {
+    const s = stubBootStatus({ view: 'public', phase: 'ready', protocol: 1, protocolMin: 1, instanceId: 'x' });
+    try {
+      await assert.rejects(
+        resolveVersion({ override: null, fetchCurrentPointer: async () => ({ version: '../evil', protocol: 1 }) }),
+        (e) => e.code === 'malformed',
+      );
+      await assert.rejects(
+        resolveVersion({ override: null, fetchCurrentPointer: async () => ({ version: '0.46.3', protocol: 9 }) }),
+        (e) => e.code === 'below_floor',
+      );
+      await assert.rejects(
+        resolveVersion({ override: null, fetchCurrentPointer: async () => null }),
+        (e) => e.code === 'boot_parse',
+      );
+    } finally {
+      s.restore();
+    }
+  });
+});
 
 describe('isValidVersion', () => {
   it('accepts plain and pre-release semver-ish', () => {

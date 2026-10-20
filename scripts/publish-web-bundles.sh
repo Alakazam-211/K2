@@ -737,6 +737,83 @@ for pref in prefixes:
 PY
 }
 
+# PRD boot-status-ghost §3.1: `app/current.json` names the newest published
+# bundle. A server that hides its version from strangers (ghost) answers a
+# signed-out browser's /boot-status without `version`; the loader then loads
+# this bundle as the sign-in shell (after checking `protocol`), and the SPA
+# reloads onto the server's own version once signed in. Written after the
+# bundle itself, so the pointer never names a missing bundle. Short cache.
+CURRENT_POINTER_KEY="app/current.json"
+CURRENT_POINTER_CACHE="public, max-age=60"
+# Must match crates/k2-daemon/src/boot_status.rs PROTOCOL.
+WEB_PROTOCOL=1
+
+upload_current_pointer() {
+  local body
+  body="{\"version\":\"${VERSION}\",\"protocol\":${WEB_PROTOCOL}}"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "  [dry-run] would write ${CURRENT_POINTER_KEY} = ${body}"
+    return 0
+  fi
+  local tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/k2-current.XXXXXX")"
+  printf '%s' "$body" > "$tmp"
+  echo "  Writing ${CURRENT_POINTER_KEY} → ${VERSION} ..."
+  if [ "$have_aws" -eq 1 ]; then
+    local region
+    for region in auto us-east-1; do
+      if run_with_tls_retry aws s3 cp "$tmp" "s3://${BUCKET}/${CURRENT_POINTER_KEY}" \
+        --endpoint-url "$ENDPOINT" \
+        --region "$region" \
+        --cache-control "$CURRENT_POINTER_CACHE" \
+        --content-type "application/json" \
+        --only-show-errors; then
+        rm -f "$tmp"
+        echo "    ok ${CURRENT_POINTER_KEY} (region=${region})"
+        return 0
+      fi
+    done
+  else
+    if R2_ENDPOINT="$ENDPOINT" R2_BUCKET="$BUCKET" R2_POINTER_FILE="$tmp" \
+      R2_POINTER_KEY="$CURRENT_POINTER_KEY" R2_POINTER_CACHE="$CURRENT_POINTER_CACHE" \
+      python3 - <<'PY'
+import os, sys
+import boto3
+from botocore.config import Config
+for region in ("auto", "us-east-1"):
+    try:
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=os.environ["R2_ENDPOINT"],
+            region_name=region,
+            aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+            config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+        )
+        with open(os.environ["R2_POINTER_FILE"], "rb") as fh:
+            s3.put_object(
+                Bucket=os.environ["R2_BUCKET"],
+                Key=os.environ["R2_POINTER_KEY"],
+                Body=fh.read(),
+                CacheControl=os.environ["R2_POINTER_CACHE"],
+                ContentType="application/json",
+            )
+        print(f"    ok {os.environ['R2_POINTER_KEY']} (region={region})")
+        sys.exit(0)
+    except Exception as e:  # noqa: BLE001 - report and try the next region
+        print(f"    region={region} failed: {e}", file=sys.stderr)
+sys.exit(1)
+PY
+    then
+      rm -f "$tmp"
+      return 0
+    fi
+  fi
+  rm -f "$tmp"
+  echo "ERROR: writing ${CURRENT_POINTER_KEY} failed." >&2
+  return 1
+}
+
 # ── main ──────────────────────────────────────────────────────────────────
 ensure_build
 prepare_loader
@@ -753,6 +830,7 @@ else
   upload_with_boto
   upload_loader_with_boto
 fi
+upload_current_pointer
 
 if [ "$DO_PRUNE" -eq 1 ]; then
   echo ""

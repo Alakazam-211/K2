@@ -23,6 +23,7 @@ import { isWebClient } from '@/lib/is-web'
 import { onLoginLanded, onSavedHostRekey } from '@/lib/connect-host-hooks'
 import { CLI_CONNECTED_RETRY_DELAYS_MS, withRemoteRetry } from '@/lib/remote-retry'
 import { noteServerId } from '@/lib/server-ids'
+import { bootStatusUrl, shouldRetryWithoutToken } from '@/lib/boot-status-view'
 import {
   forgetToken,
   hostBaseUrl,
@@ -55,15 +56,24 @@ export const hostPool: HostPool = createHostPool({
         delaysMs: CLI_CONNECTED_RETRY_DELAYS_MS,
       }),
     ),
-  bootStatus: async (hostKey, base) => {
+  bootStatus: async (hostKey, base, token) => {
     try {
       return await withHostCliSlot(scopeForHost(hostKey), () =>
         withRemoteRetry(
           async () => {
-            const res = await fetch(`${base}/boot-status`, {
+            const tokenSent = token.length > 0
+            let res = await fetch(bootStatusUrl(base, tokenSent ? token : null), {
               method: 'GET',
               signal: AbortSignal.timeout(4_000),
             })
+            // A ≤0.46.2 daemon 403s a must-change-password session on every
+            // path: retry once without the token (its body is full anyway).
+            if (shouldRetryWithoutToken(tokenSent, res.status)) {
+              res = await fetch(bootStatusUrl(base, null), {
+                method: 'GET',
+                signal: AbortSignal.timeout(4_000),
+              })
+            }
             if (!res.ok) return null
             const body = (await res.json()) as BootBody & { serverId?: unknown }
             // homes-sync-v1: remember which box this host is (Home rows

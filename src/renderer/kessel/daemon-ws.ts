@@ -30,6 +30,8 @@ import { assertServerScope } from '@/kessel/assert-scope'
  *  built from `creds.host` is byte-identical to the pre-host-aware code
  *  that hardcoded `127.0.0.1`. */
 const LOCAL_HOST = '127.0.0.1'
+/** {@link LOCAL_HOST}, for callers that must tell local creds from remote. */
+export const LOCAL_DAEMON_HOST = LOCAL_HOST
 
 export type DaemonWsState =
   | { state: 'available'; port: number; token: string }

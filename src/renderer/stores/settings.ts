@@ -8,6 +8,12 @@ import type { ConnectLoginIngress, EditorSettingsBackend, StyleSettingsBackend }
 export function normalizeConnectLoginIngress(raw: unknown): ConnectLoginIngress {
   return raw === 'any' || raw === 'off' ? raw : 'edge'
 }
+/** What strangers see on `/boot-status` (PRD boot-status-ghost). Absent =
+ *  the release default, `compat` in 0.46.3. */
+export type BootStatusPublic = 'compat' | 'ghost'
+export function normalizeBootStatusPublic(raw: unknown): BootStatusPublic {
+  return raw === 'ghost' ? 'ghost' : 'compat'
+}
 // Style System — live selection is per-client view state in style.ts
 // (localStorage SSOT). settings.ts only keeps a convenience mirror of
 // the selection for the settings store shape; it must NEVER POST style
@@ -206,6 +212,12 @@ interface SettingsState {
   // per request on tunnel ingress.
   connectLoginIngress: ConnectLoginIngress
 
+  // PRD boot-status-ghost §2.3 — what strangers see on `/boot-status`:
+  // 'compat' (the 0.46.3 default; version + features stay visible for older
+  // phones) | 'ghost' (phase + protocol range + restart id only). Signed-in
+  // clients always get the full body. Owner/admin gated (REMOTE_ACCESS_KEYS).
+  bootStatusPublic: BootStatusPublic
+
   // Cross-server federation master switch (K2 Connect → Enable federation).
   // Persisted per-server; the daemon's /cli/federation/* gate honors it via
   // federation::set_enabled(). DEFAULTS OFF (dark by default).
@@ -314,6 +326,7 @@ interface SettingsState {
   setDnsManageEnabled: (enabled: boolean) => void
   setAgentsCanCreateConnections: (enabled: boolean) => void
   setConnectLoginIngress: (mode: ConnectLoginIngress) => void
+  setBootStatusPublic: (mode: BootStatusPublic) => void
   setFederationEnabled: (enabled: boolean) => void
   setComputePreview: (enabled: boolean) => void
   setApps: (enabled: boolean) => void
@@ -498,6 +511,7 @@ async function persistAndApply(
       dnsManageEnabled: result.dnsManageEnabled ?? false,
       agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
       connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
+      bootStatusPublic: normalizeBootStatusPublic(result.bootStatusPublic),
       federationEnabled: result.federationEnabled ?? false,
       computePreview: result.computePreview ?? false,
       apps: appsSwitchFrom(result),
@@ -546,6 +560,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   dnsManageEnabled: false,
   agentsCanCreateConnections: false,
   connectLoginIngress: 'edge',
+  bootStatusPublic: 'compat',
   federationEnabled: false,
   computePreview: false,
   apps: true,
@@ -770,6 +785,19 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  setBootStatusPublic: async (mode: BootStatusPublic) => {
+    const prev = get().bootStatusPublic
+    set({ bootStatusPublic: mode }) // optimistic
+    try {
+      // Partial update; the daemon applies it on the next /boot-status (no
+      // restart). Owner/admin gated server-side; host-aware like its siblings.
+      await persistAndApply(set, { bootStatusPublic: mode })
+    } catch (err) {
+      console.error('[settings] Failed to persist boot-status-public:', err)
+      set({ bootStatusPublic: prev })
+    }
+  },
+
   setFederationEnabled: async (enabled: boolean) => {
     const prev = get().federationEnabled
     set({ federationEnabled: enabled }) // optimistic
@@ -951,6 +979,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       dnsManageEnabled: result.dnsManageEnabled ?? false,
       agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
       connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
+      bootStatusPublic: normalizeBootStatusPublic(result.bootStatusPublic),
       federationEnabled: result.federationEnabled ?? false,
       computePreview: result.computePreview ?? false,
       apps: appsSwitchFrom(result),
@@ -1018,6 +1047,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       dnsManageEnabled: result.dnsManageEnabled ?? false,
       agentsCanCreateConnections: result.agentsCanCreateConnections ?? false,
       connectLoginIngress: normalizeConnectLoginIngress(result.connectLoginIngress),
+      bootStatusPublic: normalizeBootStatusPublic(result.bootStatusPublic),
       federationEnabled: result.federationEnabled ?? false,
       computePreview: result.computePreview ?? false,
       apps: appsSwitchFrom(result),

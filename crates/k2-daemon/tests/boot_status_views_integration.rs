@@ -293,8 +293,16 @@ async fn every_credential_earns_full_and_nothing_else_does() {
     with_temp_home(|| {
         let d = futures_block(test_harness::start(OWNER_TOKEN));
         let iid = boot(d.port, &[]).json()["instanceId"].as_str().expect("instanceId").to_string();
-        // apiEnabled so /v1 answers 401 (not the surface-off 404) below.
-        k2_core::app_settings::update(serde_json::json!({ "apiEnabled": true })).expect("apiEnabled");
+        // apiEnabled (through the route, which also flips the live gate) so
+        // /v1 answers 401 (not the surface-off 404) below.
+        let r = http(
+            d.port,
+            "POST",
+            &format!("/cli/settings/update?token={OWNER_TOKEN}"),
+            Some(r#"{"apiEnabled":true}"#),
+            &[],
+        );
+        assert_eq!(r.status, 200, "apiEnabled: {}", r.body);
         set_mode("ghost");
 
         let session = session_for("bsvmember");
@@ -611,7 +619,9 @@ fn update_flow_handshake_survives_a_real_restart_in_compat_and_ghost() {
     assert!(r.status == 404 || r.status == 400, "update/status reachable with the session (unknown job): {} {}", r.status, r.body);
     drop(a); // the restart an update does
 
-    let (b, _) = spawn_daemon(&root, &rt, &shim);
+    // The owner (boot) token rotates on every start; the Connect session
+    // does not — it is what a remote client holds across the restart.
+    let (b, owner_b) = spawn_daemon(&root, &rt, &shim);
     let back_old = wait_comeback(b.port, None, &iid_a);
     assert_eq!(back_old["view"], "compat", "old clients still read their fields after the restart");
     assert_eq!(back_old["version"], env!("CARGO_PKG_VERSION"), "old client sees the running version");
@@ -623,7 +633,7 @@ fn update_flow_handshake_survives_a_real_restart_in_compat_and_ghost() {
     assert_ne!(iid_b, iid_a, "a new process");
 
     // ── ghost: a stranger sees the restart, the client still gets the version ──
-    let r = post(b.port, &format!("/cli/settings/update?token={owner}"), r#"{"bootStatusPublic":"ghost"}"#);
+    let r = post(b.port, &format!("/cli/settings/update?token={owner_b}"), r#"{"bootStatusPublic":"ghost"}"#);
     assert_eq!(r.status, 200, "{}", r.body);
     let ghost_before = remote_poll(b.port, None).expect("ghost poll");
     assert_eq!(ghost_before.as_object().map(|o| o.len()), Some(5), "public view: {ghost_before}");

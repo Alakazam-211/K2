@@ -3360,16 +3360,24 @@ cmd_daemon_stop() {
 
 # Poll <base>/boot-status until phase=ready (or timeout). On success prints
 # "Daemon back up on <version>" and returns 0; on timeout prints a message
-# and returns 1. boot-status is UNAUTHENTICATED, so no token is needed.
-# Args: $1 = base URL (no trailing slash). Polls every ~2s up to ~60s.
+# and returns 1. boot-status answers without a token, but a remote host in
+# ghost mode tells only a signed-in caller its version (PRD boot-status-
+# ghost), so the token rides `Authorization: Bearer` (curl config on stdin,
+# never argv) when one is given.
+# Args: $1 = base URL (no trailing slash), $2 = token (optional).
+# Polls every ~2s up to ~60s.
 _daemon_wait_ready() {
-    local base="$1"
-    local attempt=0 max_attempts=30 status_json phase version
+    local base="$1" token="${2:-}"
+    local attempt=0 max_attempts=30 status_json phase version _K2_CFG=""
+    _k2_cfg_add url "${base}/boot-status"
+    if [ -n "$token" ]; then
+        _k2_cfg_add header "Authorization: Bearer ${token}"
+    fi
     # Give the supervisor a moment to tear down the old process before the
     # first poll, so we don't immediately see the OUTGOING daemon as ready.
     sleep 2
     while [ "$attempt" -lt "$max_attempts" ]; do
-        status_json=$(curl -s "${base}/boot-status" \
+        status_json=$(_k2_curl "$_K2_CFG" -s \
             --connect-timeout 3 --max-time 5 2>/dev/null) || true
         case "$status_json" in
             *'"phase":"ready"'*|*'"phase": "ready"'*)
@@ -3443,7 +3451,7 @@ cmd_daemon_restart() {
                 echo "Remote daemon at ${base} is restarting."
                 echo "$resp"
                 if [ "$wait" = "1" ]; then
-                    _daemon_wait_ready "$base" || exit 1
+                    _daemon_wait_ready "$base" "$token" || exit 1
                 fi
                 return 0
                 ;;
@@ -6301,8 +6309,15 @@ if not on:
             # the unauthenticated handshake carrying the api capability
             # object (env OR setting, evaluated per request); the persisted
             # switch rides the authenticated settings snapshot.
-            local boot settings
-            boot="$(curl -s "${BASE_URL}/boot-status" --connect-timeout 5 --max-time 10 2>/dev/null || true)"
+            # `api` rides the FULL body only (PRD boot-status-ghost): send
+            # the token (config on stdin, never argv) so a remote host
+            # (K2_HOST) answers it too; loopback is full anyway.
+            local boot settings _K2_CFG=""
+            _k2_cfg_add url "${BASE_URL}/boot-status"
+            if [ -n "$TOKEN" ]; then
+                _k2_cfg_add header "Authorization: Bearer ${TOKEN}"
+            fi
+            boot="$(_k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 10 2>/dev/null || true)"
             settings="$(cli_request "/cli/settings/get" || true)"
             K2_API_BOOT="$boot" K2_API_SETTINGS="$settings" python3 <<'PY'
 import json, os
@@ -6394,9 +6409,14 @@ cmd_api_key() {
             local label="" anthropic="" provider="" base_url="" workspaces="" allow="" deny=""
             local key_stdin=0 key_on_argv=0
             local hire=0 h_day="" h_live="" h_team="" h_db="" h_link=0 h_targets="" h_retire=0 h_reach="" h_folder="" h_apps=""
+            local status_key=0 other_flags=0
             while [[ $# -gt 0 ]]; do
+                [ "$1" != "--label" ] && [ "$1" != "--status" ] && other_flags=1
                 case "$1" in
                     --label)        label="${2:-}"; shift 2 ;;
+                    # PRD boot-status-ghost §5.1: a read-only STATUS key for a
+                    # fleet monitor — full /boot-status only, no doors.
+                    --status)       status_key=1; shift ;;
                     --hire)         hire=1; shift ;;
                     --max-per-day)  h_day="${2:-}"; shift 2 ;;
                     --max-live)     h_live="${2:-}"; shift 2 ;;
@@ -6428,6 +6448,28 @@ cmd_api_key() {
                     *)              echo "Unknown flag: $1" >&2; exit 1 ;;
                 esac
             done
+            if [ "$status_key" = "1" ]; then
+                if [ "$other_flags" = "1" ]; then
+                    echo "Error: a status key is read-only: --status takes --label only." >&2
+                    exit 2
+                fi
+                K2_AK_LABEL="$label" python3 -c 'import json,os; print(json.dumps({"label": os.environ.get("K2_AK_LABEL",""), "scope": "status"}))' \
+                    | cli_post_json_stdin "/cli/api-keys/create" \
+                    | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print("Error: no answer from the daemon", file=sys.stderr); sys.exit(1)
+if "error" in d:
+    print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+print("Status key created (id: %s). It reads this server'"'"'s full /boot-status and nothing else." % d.get("id",""))
+print("")
+print("  %s" % d.get("key",""))
+print("")
+print("STORE THIS KEY NOW — it is shown only once. Send it as: Authorization: Bearer <key>")
+print("Rotate: mint a new one, switch the monitor, then k2 api-key revoke <old id>.")' || exit 1
+                return 0
+            fi
             if [ "$key_stdin" = "1" ]; then
                 if [ "$key_on_argv" = "1" ]; then
                     echo "Error: give the LLM key with --key-stdin or --llm-key, not both." >&2
@@ -6717,6 +6759,8 @@ except Exception as e:
             echo "          [--hire [--max-per-day N] [--max-live N] [--max-per-team N] [--hire-db off|read|write]" >&2
             echo "                  [--link] [--link-targets ws1,ws2] [--retire] [--reach none|message|host-sessions]" >&2
             echo "                  [--folder SUB] [--app-login APP[:ROOMS[:ROLES]]]...]   (asks for the owner confirm)" >&2
+            echo "  create --status [--label L]   A read-only status key (fleet monitor): reads this" >&2
+            echo "                 server's full /boot-status and opens nothing else (not /v1, not /cli)" >&2
             echo "  list" >&2
             echo "  hire-ceiling <id> (--app-login APP[:ROOMS[:ROLE]]... | --none)" >&2
             echo "                 A hire key's App access limit: the App, rooms (self = the hired agent's own)" >&2
@@ -21222,6 +21266,12 @@ else:
 if d.get("loginIngress"):
     li = d["loginIngress"]
     print(f"  Login ingress: {li}")
+# PRD boot-status-ghost: what strangers see on /boot-status (compat|ghost).
+# Pre-0.46.3 daemons omit it -> print nothing.
+if d.get("bootStatus"):
+    bs = d["bootStatus"]
+    note = "" if d.get("bootStatusExplicit") else " (default)"
+    print(f"  Boot status: {bs}{note}")
 # Tri-state truth (PRD tunnel-disable-unpair §4): never hide WHY the
 # tunnel is down. Pre-PRD daemons omit the fields -> show nothing extra.
 if not d.get("running"):
@@ -21351,6 +21401,7 @@ USAGE
   k2 tunnel forget --confirm       (local only: stale config from another machine)
   k2 tunnel status [--json]
   k2 tunnel subdomains [--json]
+  k2 tunnel boot-status [ghost|compat]   what strangers see on /boot-status (Owner/Admin to set)
 
 OUTPUT CONTRACT
   status / subdomains: human by default; --json → single JSON object on stdout
@@ -21361,8 +21412,58 @@ EXIT CODES
 EOF
             exit 0
             ;;
+        boot-status)
+            # PRD boot-status-ghost §2.3: what a caller with no valid sign-in
+            # sees on /boot-status over the tunnel, the app edge, a front
+            # door or the LAN. This computer and signed-in callers always
+            # get the full body. Writing it is Owner/Admin (REMOTE_ACCESS_KEYS).
+            local mode="${1:-}"
+            case "$mode" in
+                "")
+                    cli_request "/cli/tunnel/status" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception as e:
+    print(f"Failed to parse tunnel status: {e}", file=sys.stderr); sys.exit(1)
+if d.get("error"):
+    print("Error: " + str(d["error"]), file=sys.stderr); sys.exit(1)
+bs = d.get("bootStatus")
+if not bs:
+    print("This daemon predates boot-status views (0.46.3): every caller gets the full /boot-status.")
+    sys.exit(0)
+note = "" if d.get("bootStatusExplicit") else " (the default)"
+print(f"Boot status: {bs}{note}")
+if bs == "ghost":
+    print("Strangers see: phase, protocol range, restart id. /ping says k2-daemon (no version).")
+else:
+    print("Strangers see: phase, protocol range, restart id, version, features, serverId, publicHost, airgap.enabled.")
+print("Signed-in callers and this computer always get the full status.")
+'
+                    ;;
+                ghost|compat)
+                    cli_post_json "/cli/settings/update" "{\"bootStatusPublic\":\"${mode}\"}" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: daemon returned an unparseable response: %r" % raw[:200], file=sys.stderr); sys.exit(1)
+if "error" in d:
+    print("Error: %s" % d["error"], file=sys.stderr); sys.exit(1)
+print("Boot status: %s (live now, no restart)" % (d.get("bootStatusPublic") or sys.argv[1]))
+' "$mode" || exit 1
+                    ;;
+                *)
+                    echo "Usage: k2 tunnel boot-status [ghost|compat]" >&2
+                    echo "  ghost   strangers see only phase, protocol range and restart id" >&2
+                    echo "  compat  strangers also see version + features (older phone apps need them; the 0.46.3 default)" >&2
+                    exit 2
+                    ;;
+            esac
+            ;;
         *)
-            echo "Usage: k2 tunnel <start [--subdomain <s>]|stop|disable|enable [--subdomain <s>]|release --confirm|status [--json]|subdomains [--json]>" >&2
+            echo "Usage: k2 tunnel <start [--subdomain <s>]|stop|disable|enable [--subdomain <s>]|release --confirm|status [--json]|subdomains [--json]|boot-status [ghost|compat]>" >&2
             echo "  disable  pause the tunnel, persisted on disk (survives restarts/reboots)" >&2
             echo "  enable   undo disable and bring the tunnel up" >&2
             echo "  release  permanently unpair THIS DEVICE from its subdomain (destructive)" >&2

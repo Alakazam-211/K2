@@ -13,6 +13,7 @@ import { createLoginCoordinator, type CoordStorage } from './host-login-coord'
 import { createHostSessionSync, type HostSessionEvent, type HostSessionSync } from './host-session-sync'
 import type { ConnectHost, LoginResult } from '@/stores/connect-host'
 import type { LoginLanded } from './connect-host-hooks'
+import { homeRoomVerdict } from './home-room-floor'
 
 class MemStorage implements CoordStorage {
   map = new Map<string, string>()
@@ -46,6 +47,12 @@ interface FakeDaemon {
   /** Extra `/cli/presence/summary` fields (0.43.2 `agentActivity`,
    *  `activeProjectIds`); null = a server before 0.43.2. */
   summaryExtra: Record<string, unknown> | null
+  /** PRD boot-status-ghost: a 0.46.3 daemon in ghost mode — a live token
+   *  gets `view:"full"`, anyone else the public view. False = an older
+   *  daemon (one body for everyone, no `view`). */
+  ghost?: boolean
+  /** Every `/boot-status` URL the pool requested. */
+  bootUrls?: string[]
 }
 
 function daemon(base: string): FakeDaemon {
@@ -86,7 +93,12 @@ function serve(url: string, init?: RequestInit): Response {
   if (!d || !d.up) throw new TypeError('Load failed')
   const token = u.searchParams.get('token') ?? ''
   if (u.pathname === '/boot-status') {
+    ;(d.bootUrls ??= []).push(url)
+    if (d.ghost && !d.tokens.has(token)) {
+      return json(200, { view: 'public', phase: d.phase, protocol: 1, protocolMin: 1, instanceId: d.instanceId })
+    }
     return json(200, {
+      ...(d.ghost ? { view: 'full', protocolMin: 1 } : {}),
       version: d.version,
       protocol: 1,
       phase: d.phase,
@@ -167,9 +179,9 @@ function makeWindow(id: string, savedHosts: ConnectHost[]): FakeWindow {
       throw new Error('no local daemon in this test')
     },
     http: async (_key, url, init) => serve(url, init),
-    bootStatus: async (_key, base) => {
+    bootStatus: async (_key, base, token) => {
       try {
-        const res = serve(`${base}/boot-status`)
+        const res = serve(token ? `${base}/boot-status?token=${encodeURIComponent(token)}` : `${base}/boot-status`)
         return (await res.json()) as Record<string, unknown>
       } catch {
         return null
@@ -343,6 +355,55 @@ describe('pool state transitions', () => {
     expect(e.hostId).toBe('id-b-readded')
     expect(e.role).toBeNull()
     expect(e.auth).toBe('signin-required')
+  })
+})
+
+// PRD boot-status-ghost (0.46.3, R4): the pool sends each remote its own
+// token, and a stranger's view never wipes what a full body taught (B3).
+describe('boot-status views (R4)', () => {
+  it("a signed-in remote's boot-status carries its token; a signed-out one does not", async () => {
+    const w = makeWindow('w1', [hostFor(B_BASE), hostFor(C_BASE, { token: '' })])
+    await w.pool.check('b.k2.dev')
+    await w.pool.check('c.k2.dev')
+    expect(B().bootUrls).toEqual([`${B_BASE}/boot-status?token=tok-0`])
+    expect(daemons.get(C_BASE)!.bootUrls).toEqual([`${C_BASE}/boot-status`])
+  })
+
+  it('ghost host: the token earns the full body; a later public body keeps version + features and never notes null', async () => {
+    const w = makeWindow('w1', [hostFor(B_BASE)])
+    B().ghost = true
+    B().features = ['thread-delta-v1', 'boot-status-views-v1']
+    const first = await w.pool.check('b.k2.dev')
+    expect(first.boot?.view).toBe('full')
+    expect(first.boot?.version).toBe('0.41.6')
+    expect(first.boot?.features).toEqual(['thread-delta-v1', 'boot-status-views-v1'])
+    expect(noted).toEqual([{ hostKey: 'b.k2.dev', version: '0.41.6', features: ['thread-delta-v1', 'boot-status-views-v1'] }])
+
+    // The session dies (no remembered password): the poll now gets the public view.
+    B().tokens.clear()
+    B().instanceId = 'inst-b-restarted'
+    const second = await w.pool.check('b.k2.dev')
+    expect(second.reach).toBe('live')
+    expect(second.boot?.view).toBe('public')
+    expect(second.boot?.instanceId).toBe('inst-b-restarted')
+    expect(second.boot?.version).toBe('0.41.6')
+    expect(second.boot?.features).toEqual(['thread-delta-v1', 'boot-status-views-v1'])
+    expect(noted).toHaveLength(1)
+    expect(homeRoomVerdict(second.boot)).toBe(homeRoomVerdict(first.boot))
+    expect(homeRoomVerdict(second.boot)).toBe('view-only')
+  })
+
+  it('a ghost host we never signed in to reads "unknown" (sign in), not "an older K2"', async () => {
+    const w = makeWindow('w1', [hostFor(B_BASE, { token: '' })])
+    B().ghost = true
+    const e = await w.pool.check('b.k2.dev')
+    expect(e.boot?.view).toBe('public')
+    expect(e.boot?.version).toBeNull()
+    expect(e.auth).toBe('signin-required')
+    expect(homeRoomVerdict(e.boot)).toBe('unknown')
+    expect(noted).toEqual([])
+    // An older daemon without a version is still "switch".
+    expect(homeRoomVerdict({ ...e.boot!, view: null })).toBe('switch')
   })
 })
 

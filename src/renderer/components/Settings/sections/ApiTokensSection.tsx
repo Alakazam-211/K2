@@ -227,6 +227,46 @@ export function ApiTokensSection(): React.JSX.Element {
           {keys.map((k) => {
             const state = keyState(k)
             const busy = busyId === k.id
+            // PRD boot-status-ghost B6: a `status` key (fleet monitor) reads
+            // this server's full /boot-status and nothing else — no doors,
+            // no workspaces, no LLM key. Label it and offer Revoke only.
+            if (k.scope === 'status') {
+              return (
+                <div
+                  key={k.id}
+                  data-testid={`status-key-${k.id}`}
+                  className="p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"
+                >
+                  <div className="min-w-0 space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[12px] font-medium text-[var(--color-text-primary)]">
+                        {k.label || '(no label)'}
+                      </span>
+                      <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-secondary)]">
+                        Status (read-only)
+                      </span>
+                      {stateBadge(state)}
+                    </div>
+                    <p className="text-[10px] font-mono text-[var(--color-text-muted)] break-all">{k.id}</p>
+                    <p className="text-[11px] text-[var(--color-text-secondary)]">
+                      Reads this server&apos;s status (version, phase) for a monitor. Opens nothing else.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 flex-shrink-0">
+                    {state !== 'revoked' && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void act(k.id, 'revoke')}
+                        className="px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-status-error-soft)] hover:border-[var(--color-status-error-soft)] cursor-pointer disabled:opacity-50"
+                      >
+                        Revoke
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            }
             return (
               <div key={k.id} className="p-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 space-y-1">

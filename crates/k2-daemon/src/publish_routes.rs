@@ -126,8 +126,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/publish/logs" => handle_logs(params),
         "/cli/publish/leftovers" => handle_leftovers(params),
         "/cli/publish/validate" => handle_validate(params),
-        "/cli/publish/client-ip" => handle_client_ip_list(),
-        "/cli/publish/run"
+        "/cli/publish/client-ip/list" => handle_client_ip_list(),
+        "/cli/publish/client-ip"
+        | "/cli/publish/run"
         | "/cli/publish/start"
         | "/cli/publish/stop"
         | "/cli/publish/rm"
@@ -338,7 +339,7 @@ pub fn dispatch_post(path: &str, params: &HashMap<String, String>) -> CliRespons
     }
 }
 
-/// `GET /cli/publish/client-ip`: the nested labels that opted in to K2's
+/// `GET /cli/publish/client-ip/list`: the nested labels that opted in to K2's
 /// client-IP rewrite (0.46.3). Every other nested label is a raw splice.
 fn handle_client_ip_list() -> CliResponse {
     let labels: Vec<String> = k2_core::tunnel::client_ip_labels::load().into_iter().collect();

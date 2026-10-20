@@ -8758,6 +8758,15 @@ WHO MAY
   owner's, with a fresh confirm every time (k2 app access <ws> sets the
   switches; the owner turns them on, an Admin only off).
 
+CORES (what your Apps may use)
+  The owner ticks cores for you: Database, Files and rooms, Thread (Mail
+  and Sew take effect when App mail and Sew for Apps land). A deploy or
+  first install whose caps all sit in ticked cores goes on at once; any
+  other cap waits for the owner (exit 2), and the hold names the core to
+  tick. Switch 2 never adds a core. heartbeats:write and
+  files:agentconfig reach you yourself: always the owner's, in person.
+  --db-private needs Database. k2 app access <your-workspace> shows them.
+
 EXIT CODES
   0 live/ok · 1 failed check or health gate · 2 usage or still pending
   · 3 infra/permission (JSON {error, hint}).
@@ -9098,16 +9107,22 @@ k2 app — getting existing Apps ready for K2 0.46.2 (0.46.0 and 0.46.1 remove n
                                        from a terminal outside K2.
   k2 app deny <request-id> [--reason R]
                                        Owner/Admin; an agent withdraws its own.
-  k2 app access <workspace> [--build on|off] [--manage on|off] [--json]
-                                       The agent's two App switches: --build =
-                                       "Build and run Apps" (switch 1), --manage
-                                       = the nested "…and manage them end to
-                                       end" (switch 2: it raises its own budgets,
-                                       quotas, egress, box services and keys).
-                                       The owner turns them on, from a terminal
-                                       outside K2; an Admin may only turn them
-                                       off. Anything that loosens an App's
-                                       wall still waits for the owner in
+  k2 app access <workspace> [--build on|off] [--manage on|off]
+                 [--core db|files|thread|mail|sew=on|off[,…]] [--json]
+                                       No flags: show the agent's switches and
+                                       cores. --build = "Build and run Apps"
+                                       (switch 1), --manage = the nested "…and
+                                       manage them end to end" (switch 2: it
+                                       raises its own budgets, quotas, egress,
+                                       box services and keys). --core ticks a
+                                       core: its Apps then use Database, Files
+                                       and rooms, or Thread inside their own
+                                       slice with no hold (Mail and Sew take
+                                       effect when App mail and Sew for Apps
+                                       land). The owner turns things on, from
+                                       a terminal outside K2; an Admin may only
+                                       turn them off. Anything that loosens an
+                                       App's wall still waits for the owner in
                                        person. (--open is retired.)
 
 A new --cmd service from an agent is an open-path App: from 0.46.3 each one
@@ -9416,20 +9431,60 @@ import json, sys
 r = json.load(sys.stdin)["request"]
 print("%s %s: %s" % (r["id"], r["status"], r["summary"]))'
 }
+_app_access_print() {
+    # The switches and cores as `GET /cli/app/list?workspace=` answers them.
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin).get("access") or {}
+print("%s: Build and run Apps %s, manage them end to end %s" % (v.get("workspace"), "on" if v.get("buildAndRun") else "off", "on" if v.get("manageEndToEnd") else "off"))
+for c in v.get("coreList") or []:
+    later = c.get("later")
+    print("  [%s] %-16s %s%s" % ("x" if c.get("ticked") else " ", c.get("label", c.get("core")), c.get("core"), "  (" + later + ")" if later else ""))'
+}
+
 cmd_app_access() {
-    local ws="" build="" manage="" open="" json_out=0
+    local ws="" build="" manage="" open="" json_out=0 cores=""
+    local _usage="usage: k2 app access <workspace> [--build on|off] [--manage on|off] [--core db|files|thread|mail|sew=on|off[,…]]… [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --build) build="${2:-}"; shift 2 ;;
             --manage) manage="${2:-}"; shift 2 ;;
             --open) open="${2:-}"; shift 2 ;;
+            --core|--cores) cores="${cores:+$cores,}${2:-}"; shift 2 ;;
             --json) json_out=1; shift ;;
             -h|--help) _app_grace_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) ws="$1"; shift ;;
         esac
     done
-    [ -z "$ws" ] && { echo "usage: k2 app access <workspace> [--build on|off] [--manage on|off] [--json]" >&2; exit 2; }
+    [ -z "$ws" ] && { echo "$_usage" >&2; exit 2; }
+    # --core db=on,files=off → {"db": true, "files": false} (checked here;
+    # the daemon checks the core names and who may tick).
+    local cores_j=""
+    if [ -n "$cores" ]; then
+        cores_j="$(K2_CORES="$cores" python3 -c '
+import json, os, sys
+out = {}
+for part in os.environ["K2_CORES"].split(","):
+    part = part.strip()
+    if not part:
+        continue
+    k, sep, v = part.partition("=")
+    if not sep or v not in ("on", "off") or not k:
+        sys.exit(1)
+    out[k.strip()] = v == "on"
+print(json.dumps(out))')" || { echo "usage: --core <core>=on|off[,<core>=on|off…] (cores: db, files, thread, mail, sew)" >&2; exit 2; }
+    fi
+    if [ -z "$build" ] && [ -z "$manage" ] && [ -z "$cores_j" ] && [ -z "$open" ]; then
+        # No change asked: show the switches and cores.
+        _compute_call GET /cli/app/list "workspace=$(urlencode "$ws")"
+        if [ "$json_out" = 1 ]; then
+            printf '%s' "$_CP_BODY" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin).get("access")))'
+            return 0
+        fi
+        printf '%s' "$_CP_BODY" | _app_access_print
+        return 0
+    fi
     if [ -n "$open" ]; then
         # N1 (0.46.3): the standing approval for the open path is retired.
         echo "k2: --open is retired: each open-path move (a new --cmd service, --path open, extra ports, broad egress) is held" >&2
@@ -9446,10 +9501,6 @@ cmd_app_access() {
         # Deprecation line: before 0.46.3 --manage was switch 1.
         echo "k2: note: --manage is now switch 2 (\"…and manage them end to end\"); \"Build and run Apps\" is --build." >&2
     fi
-    if [ -z "$build" ] && [ -z "$manage" ]; then
-        echo "usage: k2 app access <workspace> [--build on|off] [--manage on|off] [--json]" >&2
-        exit 2
-    fi
     # Switch 1 first when turning on; switch 2 first when turning off.
     local order="build manage"
     [ "$build" = off ] && order="manage build"
@@ -9460,11 +9511,25 @@ cmd_app_access() {
         [ "$t" = manage ] && toggle="apps_manage_full"
         _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle="$toggle" K2_CJ_value_b="$([ "$v" = on ] && echo 1 || echo 0)")"
     done
+    if [ -n "$cores_j" ]; then
+        # The cores in one call (one note to the agent): the owner ticks, an
+        # Admin may only untick.
+        _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle=app_core K2_CJ_cores_j="$cores_j")"
+    fi
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
-    printf '%s' "$_CP_BODY" | python3 -c '
+    # Show where the agent stands now (the read needs Apps on; without it,
+    # say what changed).
+    local last="$_CP_BODY" raw
+    raw="$(_compute_send GET /cli/app/list "workspace=$(urlencode "$ws")")"
+    _compute_split "$raw"
+    if [ "$_CP_STATUS" = "200" ]; then
+        printf '%s' "$_CP_BODY" | _app_access_print
+    else
+        printf '%s' "$last" | python3 -c '
 import json, sys
 v = json.load(sys.stdin)
-print("%s: Build and run Apps %s, manage them end to end %s" % (v.get("workspace"), "on" if v.get("agentsCanBuildApps") else "off", "on" if v.get("agentsCanManageAppsFull") else "off"))'
+print("%s: changed (k2 app access %s shows it once Apps (beta) are on)" % (v.get("workspace"), v.get("workspace")))'
+    fi
 }
 
 # ── The 0.46.1 door (lane 2: S19, AR10) ──────────────────────────────

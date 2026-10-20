@@ -18,6 +18,8 @@ pub mod egress_routes;
 pub mod box_service_routes;
 /// The box view and clash naming (agents talk to each other, §4.1–4.2).
 pub mod coordination;
+/// Pre-approved App cores, the Use layer (slice B, §3).
+pub mod cores;
 pub mod engine_install;
 pub mod exception;
 pub mod exec;
@@ -59,3 +61,7 @@ mod surfaces_tests;
 /// Slices D, F, G of prd-agent-app-permissions-v1 (0.46.3).
 #[cfg(test)]
 mod ownership_tests;
+
+/// Slice B of prd-agent-app-permissions-v1: the App cores (0.46.3).
+#[cfg(test)]
+mod cores_tests;

@@ -148,6 +148,8 @@ pub fn mime_for_name(name: &str) -> &'static str {
         "gif" => "image/gif",
         "webp" => "image/webp",
         "heic" => "image/heic",
+        "heif" => "image/heif",
+        "bmp" => "image/bmp",
         "tif" | "tiff" => "image/tiff",
         "svg" => "image/svg+xml",
         "txt" | "log" => "text/plain",

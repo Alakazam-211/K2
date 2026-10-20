@@ -8,6 +8,8 @@ import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingC
 import type { SettingEntry } from '../searchManifest'
 import { primaryScope } from '@/kessel/server-scope'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
+import { SewPersonAccess } from './SewAccessParts'
+import type { ChatGrant } from './sew-api'
 
 export const PEOPLE_MANIFEST: SettingEntry[] = [
   {
@@ -55,6 +57,9 @@ type GrantRow = {
   roleId: string | null
   scope: string | null
   enabled: boolean
+  /** Sew S27 §17.1: hooked (chat) grants carry the sync state. */
+  hookState?: string
+  hookError?: string
 }
 
 type AppOption = { id: string; name: string; kind: string }
@@ -163,6 +168,8 @@ function parseGrants(raw: unknown): GrantRow[] {
       roleId: asString(rec.roleId) ?? asString(rec.role_id),
       scope: asString(rec.scope),
       enabled: typeof enabled === 'boolean' ? enabled : enabled !== 0,
+      ...(asString(rec.hookState) ? { hookState: asString(rec.hookState) as string } : {}),
+      ...(asString(rec.hookError) ? { hookError: asString(rec.hookError) as string } : {}),
     }]
   })
 }
@@ -434,11 +441,18 @@ export function PeopleSection(): React.JSX.Element {
     }
   }, [newUsername, newFullName, newPassword, newEmail, refresh])
 
+  // Chat (Sew) grants have their own row (SewPersonAccess), not the
+  // generic list.
   const personGrants = person?.id
     ? grants.filter(
-        (g) => g.subjectKind === 'principal' && g.subjectId === person.id && g.kind !== 'mailbox',
+        (g) => g.subjectKind === 'principal' && g.subjectId === person.id && g.kind !== 'mailbox' && g.kind !== 'chat',
       )
     : []
+  const sewGrantOf = (id: string | null): ChatGrant | null => {
+    if (!id) return null
+    const g = grants.find((x) => x.kind === 'chat' && x.subjectKind === 'principal' && x.subjectId === id)
+    return g ? { id: g.id, subjectKind: g.subjectKind, subjectId: g.subjectId, scope: g.scope, enabled: g.enabled, hookState: g.hookState, hookError: g.hookError } : null
+  }
   const hostGrant = personGrants.find((g) => g.kind === 'app' && g.targetId === 'host')
   const appChoices = apps.map((app) => ({
     value: app.id,
@@ -487,6 +501,11 @@ export function PeopleSection(): React.JSX.Element {
                 {row.fullName ? (
                   <span className="block text-[10px] text-[var(--color-text-muted)] truncate">
                     {row.fullName}
+                  </span>
+                ) : null}
+                {sewGrantOf(row.id) ? (
+                  <span data-testid={`sew-tag-${row.username}`} className="block text-[9px] text-[var(--color-text-muted)] truncate">
+                    Sew {sewGrantOf(row.id)?.scope === 'guest' ? 'guest' : 'member'}
                   </span>
                 ) : null}
               </button>
@@ -555,6 +574,8 @@ export function PeopleSection(): React.JSX.Element {
         {person ? (
           <PersonDetail
             person={person}
+            sewGrant={sewGrantOf(person.id)}
+            onSewChanged={refresh}
             grants={personGrants}
             roles={roles}
             hostOn={Boolean(hostGrant)}
@@ -721,6 +742,8 @@ export function ResetPanel({ person }: { person: PersonRow }): React.JSX.Element
 
 function PersonDetail({
   person,
+  sewGrant,
+  onSewChanged,
   grants,
   roles,
   hostOn,
@@ -751,6 +774,8 @@ function PersonDetail({
   onAddGrant,
 }: {
   person: PersonRow
+  sewGrant: ChatGrant | null
+  onSewChanged: () => Promise<void>
   grants: GrantRow[]
   roles: RoleRow[]
   hostOn: boolean
@@ -828,6 +853,8 @@ function PersonDetail({
       </form>
 
       <ResetPanel key={person.username} person={person} />
+
+      <SewPersonAccess principalId={person.id} username={person.username} grant={sewGrant} onChanged={onSewChanged} />
 
       <SettingsGroup title="Grants">
         {grants.length === 0 ? (

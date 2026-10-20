@@ -21,7 +21,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { Button, Callout } from '@/components/ui'
+import { Button, Callout, SquareCheckbox, SquareRadio } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { isWebClient } from '@/lib/is-web'
 import { onSewChanged } from '@/stores/session-events'
@@ -242,12 +242,11 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
       <fieldset className="space-y-1" disabled={!canMutate}>
         <legend className="text-xs font-medium text-[var(--color-text-primary)]">Identity</legend>
         <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
-          <input type="radio" name="sew-identity" checked={identity === 'k2'} onChange={() => setIdentity('k2')} aria-label="K2 logins" />
+          <SquareRadio name="sew-identity" checked={identity === 'k2'} onChange={() => setIdentity('k2')} aria-label="K2 logins" />
           K2 logins (people sign in with their K2 account)
         </label>
         <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
-          <input
-            type="radio"
+          <SquareRadio
             name="sew-identity"
             checked={identity === 'standalone'}
             onChange={() => setIdentity('standalone')}
@@ -260,7 +259,7 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
 
       <fieldset className="space-y-1" disabled={!canMutate}>
         <label className={`flex items-center gap-2 text-xs ${secondary}`}>
-          <input type="checkbox" checked={voiceOn} onChange={(e) => setVoiceOn(e.target.checked)} aria-label="Also set up voice" />
+          <SquareCheckbox checked={voiceOn} onChange={(e) => setVoiceOn(e.target.checked)} aria-label="Also set up voice" />
           Also set up voice
         </label>
         {voiceOn ? (
@@ -626,18 +625,18 @@ function DangerZone({ status, sample, canMutate, reload }: PanelProps): React.JS
         </Button>
       ) : null}
       <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
-        <input type="checkbox" checked={dropGrants} disabled={!canMutate} onChange={(e) => setDropGrants(e.target.checked)} aria-label="Also remove everyone's Sew access" />
+        <SquareCheckbox checked={dropGrants} disabled={!canMutate} onChange={(e) => setDropGrants(e.target.checked)} aria-label="Also remove everyone's Sew access" />
         Also remove everyone&apos;s Sew access
       </label>
       <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
-        <input type="checkbox" checked={purge} disabled={!canPurge} onChange={(e) => setPurge(e.target.checked)} aria-label="Also delete all Sew data" />
+        <SquareCheckbox checked={purge} disabled={!canPurge} onChange={(e) => setPurge(e.target.checked)} aria-label="Also delete all Sew data" />
         Also delete all Sew data {you.canPurge ? '' : '(the box owner only)'}
       </label>
       {purge ? (
         <div className="space-y-1 pl-5">
           <TypeToConfirm label={`Type ${expectHost} to confirm`} expect={expectHost} value={typed} onChange={setTyped} disabled={!canPurge} />
           <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
-            <input type="checkbox" checked={keepBackups} onChange={(e) => setKeepBackups(e.target.checked)} aria-label="Keep backup bundles" />
+            <SquareCheckbox checked={keepBackups} onChange={(e) => setKeepBackups(e.target.checked)} aria-label="Keep backup bundles" />
             Keep backup bundles
           </label>
         </div>
@@ -926,15 +925,15 @@ function OffboxBlock({
     <fieldset className="space-y-1 border border-[var(--color-border)] p-3" disabled={disabled}>
       <legend className="text-xs font-medium text-[var(--color-text-primary)] px-1">{title}</legend>
       <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
-        <input type="radio" name={`${slug}-kind`} checked={kind === 'none'} onChange={() => setKind('none')} aria-label={`${title}: none`} />
+        <SquareRadio name={`${slug}-kind`} checked={kind === 'none'} onChange={() => setKind('none')} aria-label={`${title}: none`} />
         None ({noun} stay on this machine)
       </label>
       <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
-        <input type="radio" name={`${slug}-kind`} checked={kind === 'dir'} onChange={() => setKind('dir')} aria-label={`${title}: a folder on another disk`} />
+        <SquareRadio name={`${slug}-kind`} checked={kind === 'dir'} onChange={() => setKind('dir')} aria-label={`${title}: a folder on another disk`} />
         A folder on another disk
       </label>
       <label className={`flex items-center gap-2 text-[11px] ${muted}`}>
-        <input type="radio" name={`${slug}-kind`} disabled aria-label={`${title}: Alakazam escrow`} />
+        <SquareRadio name={`${slug}-kind`} disabled aria-label={`${title}: Alakazam escrow`} />
         Alakazam escrow (coming later)
       </label>
       {kind === 'dir' ? (

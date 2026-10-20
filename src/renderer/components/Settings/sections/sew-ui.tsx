@@ -4,7 +4,7 @@
 // page has its own copies and S32 does not refactor it.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Button } from '@/components/ui'
+import { Button, SquareCheckbox } from '@/components/ui'
 import { finishSewConfirm, sewStateChip, startSewConfirm, type SewConfirmAction } from './sew-api'
 
 export const muted = 'text-[var(--color-text-muted)]'
@@ -101,7 +101,7 @@ export function OnceSecret({
         </Button>
       </div>
       <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
-        <input type="checkbox" checked={stored} onChange={(e) => setStored(e.target.checked)} aria-label="I stored it off this machine" />
+        <SquareCheckbox checked={stored} onChange={(e) => setStored(e.target.checked)} aria-label="I stored it off this machine" />
         I stored it off this machine
       </label>
       <Button variant="accent" disabled={!stored} onClick={onDone}>

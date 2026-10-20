@@ -47,6 +47,7 @@ import {
   useOwnerAccounts,
 } from './OwnerAccountToggle'
 import { threadPushAvailable } from './useNotifyPrefs'
+import { SewAdminAccessState } from './SewAccessParts'
 import { Toggle } from '@/components/ui'
 import { AllowRemoteInstructRow } from '../shared/AllowRemoteInstructRow'
 import { DnsManageEnabledRow } from '../shared/DnsManageEnabledRow'
@@ -2188,6 +2189,9 @@ export function K2ConnectSection({
                 ))}
               </div>
             )}
+            {/* Sew S32 K28: read-only Sew state per Connect login, only where
+                its own `connect` chat grant exists. No provisioning here. */}
+            <SewAdminAccessState users={users} />
             </>
             )}
           </div>

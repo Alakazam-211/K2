@@ -194,6 +194,7 @@ pub const RM: &str = "/usr/bin/rm";
 pub const MKDIR: &str = "/usr/bin/mkdir";
 pub const STAT: &str = "/usr/bin/stat";
 pub const OS_RELEASE: &str = "/etc/os-release";
+pub const OS_RELEASE_VENDOR: &str = "/usr/lib/os-release";
 /// The compiled-in PGDG key lands here (`Signed-By:` of K2's source).
 pub const PGDG_KEYRING: &str = "/etc/apt/keyrings/k2-pgdg.asc";
 /// postgresql-common's own copy of the PGDG key; ours must match it.

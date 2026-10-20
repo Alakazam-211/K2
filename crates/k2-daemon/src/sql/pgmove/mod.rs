@@ -25,6 +25,8 @@
 pub mod catalog;
 pub mod check;
 pub mod helper_ops;
+pub mod request;
+pub mod worker;
 
 #[cfg(test)]
 mod tests;

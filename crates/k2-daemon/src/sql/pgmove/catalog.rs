@@ -36,7 +36,7 @@ pub fn facts_sql(db: &str) -> String {
          'eventTriggers', (SELECT count(*) FROM pg_event_trigger), \
          'publications', (SELECT count(*) FROM pg_publication), \
          'subscriptions', (SELECT count(*) FROM pg_subscription s JOIN pg_database d ON d.oid = s.subdbid WHERE d.datname = current_database()), \
-         'tablespaces', (SELECT count(*) FROM pg_class WHERE reltablespace <> 0) \
+         'tablespaces', (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.reltablespace <> 0 AND {USER_NS}) \
             + (SELECT count(*) FROM pg_database d JOIN pg_tablespace t ON t.oid = d.dattablespace WHERE d.datname = current_database() AND t.spcname <> 'pg_default'), \
          'largeObjects', (SELECT count(*) FROM pg_largeobject_metadata), \
          'dbSettings', (SELECT count(*) FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase WHERE d.datname = current_database()), \

@@ -140,8 +140,14 @@ fn sew_status(ctx: &Ctx) -> (bool, Option<u32>) {
     (present, toml.and_then(|t| sew_pg_major(&String::from_utf8_lossy(&t))))
 }
 
+/// `/etc/os-release`, else `/usr/lib/os-release` (os-release(5)): on
+/// Ubuntu and Debian the first is a link to the second, and the helper
+/// never follows a link, so the vendor file is read directly.
 fn codename(ctx: &Ctx) -> Option<String> {
-    let t = read_small(ctx, OS_RELEASE, 64 * 1024).ok().flatten()?;
+    let t = read_small(ctx, OS_RELEASE, 64 * 1024)
+        .ok()
+        .flatten()
+        .or_else(|| read_small(ctx, OS_RELEASE_VENDOR, 64 * 1024).ok().flatten())?;
     os_release_codename(&String::from_utf8_lossy(&t))
 }
 

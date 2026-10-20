@@ -85,7 +85,10 @@ fn pg_box() -> (T, W) {
     }));
     let root = t.root.clone();
     mkdirs(&root, &["/etc/apt/sources.list.d", "/etc/apt/preferences.d", "/etc/postgresql/16/main/conf.d", "/var/lib/postgresql/16/main"]);
-    std::fs::write(under(&root, "/etc/os-release"), "NAME=\"Ubuntu\"\nVERSION_CODENAME=noble\n").unwrap();
+    // Like Ubuntu: /etc/os-release is a link to /usr/lib/os-release.
+    mkdirs(&root, &["/usr/lib"]);
+    std::fs::write(under(&root, "/usr/lib/os-release"), "NAME=\"Ubuntu\"\nVERSION_CODENAME=noble\n").unwrap();
+    symlink("../usr/lib/os-release", under(&root, "/etc/os-release")).unwrap();
     std::fs::write(under(&root, "/etc/postgresql/16/main/start.conf"), "# distro\nauto\n").unwrap();
     for b in [PG_LSCLUSTERS, PG_CREATECLUSTER, SS, APT, DPKG_QUERY, APT_MARK] {
         touch(&root, b);
@@ -438,7 +441,8 @@ fn add_major_refusals() {
 
     // Not an allow-listed distro.
     let (t, _w) = pg_box();
-    std::fs::write(t.p("/etc/os-release"), "ID=fedora\nVERSION_CODENAME=\n").unwrap();
+    std::fs::remove_file(t.p("/etc/os-release")).unwrap();
+    std::fs::write(t.p("/usr/lib/os-release"), "ID=fedora\nVERSION_CODENAME=\n").unwrap();
     let o = t.call(&["pg", "add-major", "17"]);
     assert_eq!(o.code, exit::STATE);
     assert!(o.stderr.starts_with("unsupported_distro"), "{}", o.stderr);

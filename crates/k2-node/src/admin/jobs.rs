@@ -147,9 +147,11 @@ pub struct UnitStatus {
 
 impl UnitStatus {
     /// The command is over (the unit may still hold leftovers until
-    /// `stop`).
+    /// `stop`). Asked only about a unit that started (`start` waits for it
+    /// to load), so one systemd no longer knows ended and was collected:
+    /// a stopped unit is unloaded at once, `RemainAfterExit` or not.
     pub fn ended(&self) -> bool {
-        self.loaded && (self.active_state == "failed" || self.active_state == "inactive" || (self.active_state == "active" && self.sub_state == "exited"))
+        !self.loaded || self.active_state == "failed" || self.active_state == "inactive" || (self.active_state == "active" && self.sub_state == "exited")
     }
 
     /// (exit code, signal) of the main process, when it ended.
@@ -643,9 +645,13 @@ mod tests {
         let oom = parse_show("LoadState=loaded\nActiveState=failed\nSubState=failed\nResult=oom-kill\nExecMainCode=2\nExecMainStatus=9\n");
         assert!(oom.ended() && oom.oom());
         assert_eq!(oom.exit(), Some((None, Some(9))));
-        // A unit systemd doesn't know reads as defaults: never "ended".
+        // A started unit systemd no longer knows was stopped and collected
+        // (found on Ubuntu 24.04, systemd 255): ended, with no exit to tell
+        // and never a made-up "success" exit code.
         let gone = parse_show("LoadState=not-found\nActiveState=inactive\nSubState=dead\nResult=success\nExecMainCode=0\nExecMainStatus=0\n");
-        assert!(!gone.ended());
+        assert!(gone.ended());
+        assert_eq!(gone.exit(), None);
+        assert!(!gone.oom());
         assert_eq!(parse_oom_kills("low 0\nhigh 0\nmax 12\noom 1\noom_kill 2\noom_group_kill 0\n"), 2);
         assert_eq!(parse_oom_kills(""), 0);
         assert_eq!(systemd_version("systemd 255 (255.4-1ubuntu8.18)\n+PAM +AUDIT"), Some(255));

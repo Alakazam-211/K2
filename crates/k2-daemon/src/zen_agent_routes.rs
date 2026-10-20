@@ -15,6 +15,7 @@
 //! | POST widget/folder/put        | writes | writes (audited)      | proposes (code files, ONE proposal for the folder, 0.46.3) |
 //! | POST widget/folder/check, garden/check | yes | yes            | yes (writes nothing) |
 //! | POST widget/preview           | yes    | yes (audited)         | 403     |
+//! | POST widget/shot              | yes    | yes                   | yes (writes nothing) |
 //!
 //! The widget dev loop (0.46.1 S3, no migration): a whole staged folder in
 //! one body (`k2 zen widget put <name> --dir`, `k2 zen validate --dir`,
@@ -51,13 +52,15 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/widget/folder/put",
     "/cli/zen/widget/preview",
     "/cli/zen/widget/put",
+    "/cli/zen/widget/shot",
 ];
 
 pub const GET_ROUTES: &[&str] = &["/cli/zen/proposals", "/cli/zen/proposals/show"];
 
 /// The widget dev loop's folder routes (0.46.1 S3): a whole staged folder
 /// in one body, so they take up to `widget_folder::MAX_FOLDER_BODY`.
-pub const FOLDER_ROUTES: &[&str] = &["/cli/zen/widget/folder/check", "/cli/zen/widget/folder/put", "/cli/zen/widget/preview"];
+pub const FOLDER_ROUTES: &[&str] =
+    &["/cli/zen/widget/folder/check", "/cli/zen/widget/folder/put", "/cli/zen/widget/preview", "/cli/zen/widget/shot"];
 
 pub fn is_route(p: &str) -> bool {
     POST_ROUTES.contains(&p) || GET_ROUTES.contains(&p)
@@ -181,6 +184,7 @@ pub fn handle(path: &str, owner_token: bool, caller: &Caller, params: &HashMap<S
         "/cli/zen/widget/folder/check" => folder_check(body),
         "/cli/zen/widget/folder/put" => folder_put(r, caller, body),
         "/cli/zen/widget/preview" => preview(r, caller, body),
+        "/cli/zen/widget/shot" => shot(body),
         "/cli/zen/proposals" => list(params),
         "/cli/zen/proposals/show" => show(params),
         "/cli/zen/proposals/approve" => approve(r, caller, body),
@@ -609,6 +613,75 @@ fn preview(r: Role, caller: &Caller, body: &[u8]) -> CliResponse {
             }
             resp("200 OK", v)
         }
+        Err(e) => zen_err(e),
+    }
+}
+
+/// `{widget?, fallback?, files, config?, scheme?, theme?, width?, height?,
+/// data?}`: a staged folder to shoot headless (0.46.3).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ShotBody {
+    #[serde(default)]
+    widget: Option<String>,
+    #[serde(default)]
+    fallback: Option<String>,
+    files: Vec<StagedFile>,
+    #[serde(default)]
+    config: BTreeMap<String, String>,
+    /// `light` | `dark`; absent: the theme's own fixed scheme, else light.
+    #[serde(default)]
+    scheme: Option<String>,
+    /// A built-in Zen theme (default `basic`).
+    #[serde(default)]
+    theme: Option<String>,
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
+    #[serde(default)]
+    data: Option<J>,
+}
+
+/// POST `widget/shot`: the page for a headless shot of a staged folder
+/// (`k2 zen widget preview --dir … --shot`). Any caller Zen admits: it
+/// writes nothing (no Garden, no widget folder, no store) and needs no Zen
+/// folder. A folder with errors answers them (`ok: false`), like
+/// `widget/folder/check`.
+fn shot(body: &[u8]) -> CliResponse {
+    use k2_core::zen::widget_shot::{self, Scheme, ShotOptions};
+    let b: ShotBody = match parse(
+        body,
+        "widget/shot takes {widget?, fallback?, files: [{name, text|base64}], config?, scheme?, theme?, width?, height?, data?}",
+    ) {
+        Ok(b) => b,
+        Err(e) => return e,
+    };
+    let scheme = match b.scheme.as_deref() {
+        None => None,
+        Some(s) => match Scheme::parse(s) {
+            Some(s) => Some(s),
+            None => return refuse("400 Bad Request", "bad_request", format!("--theme is dark or light, not '{s}'")),
+        },
+    };
+    let staged = match widget_folder::staged_files(&b.files) {
+        Ok(s) => s,
+        Err(e) => return zen_err(e),
+    };
+    let name = match widget_folder::staged_name(b.widget.as_deref(), &staged, b.fallback.as_deref()) {
+        Ok(n) => n,
+        Err(e) => return zen_err(e),
+    };
+    let o = ShotOptions {
+        scheme,
+        theme: b.theme.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| k2_core::zen::DEFAULT_THEME.to_string()),
+        config: b.config,
+        data: b.data,
+        width: b.width.unwrap_or(widget_shot::DEFAULT_WIDTH),
+        height: b.height.unwrap_or(widget_shot::DEFAULT_HEIGHT),
+    };
+    match widget_shot::shot_page(&name, &staged, &o) {
+        Ok(v) => resp("200 OK", v),
         Err(e) => zen_err(e),
     }
 }

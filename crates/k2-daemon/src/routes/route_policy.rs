@@ -1462,6 +1462,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/zen/widget/put", Member),
     post("/cli/zen/widget/resume", Member),
     post("/cli/zen/widget/run", Member),
+    // 0.46.3: a staged folder's page for a headless shot (writes nothing).
+    post("/cli/zen/widget/shot", Member),
     get("/cli/zen/widget/show", Member),
     post("/cli/zen/widget/sign", Member),
     get("/cli/zen/widgets", Member),

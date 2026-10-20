@@ -539,3 +539,65 @@ fn validate_all_reports_each_widget_and_an_unplaced_ones_errors_never_fail() {
     let row = v["widgets"].as_array().expect("widgets").iter().find(|r| r["widget"] == "fleet-ops-alerts").expect("row").clone();
     assert_eq!((row["status"].as_str(), row["placed"].as_bool()), (Some("unplaced"), Some(false)), "{v}");
 }
+
+// ── headless shots (0.46.3) ──────────────────────────────────────────────
+
+/// K2's own `k2:fleet-grid@2` card files, staged as a folder.
+fn fleet_grid_folder() -> J {
+    let w = k2_core::zen::builtin_widgets::BUILTIN_WIDGETS
+        .iter()
+        .find(|w| w.name == "fleet-grid" && w.version == 2)
+        .expect("k2:fleet-grid@2");
+    J::Array(w.files.iter().map(|(n, t)| json!({"name": n, "text": t})).collect())
+}
+
+#[test]
+fn any_local_agent_gets_a_shot_page_and_nothing_is_written() {
+    let _home = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    let f = ZenFiles::local();
+    assert!(!f.root().exists(), "Zen isn't set up in this test");
+    let plain = workspace("w-shot", false);
+    let (s, v) = call(
+        "/cli/zen/widget/shot",
+        false,
+        &plain,
+        json!({"files": fleet_grid_folder(), "fallback": "fleet-grid", "scheme": "dark", "config": {"source": "fleet"}, "width": 500, "height": 300}),
+    );
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!((v["ok"].as_bool(), v["widget"].as_str(), v["scheme"].as_str()), (Some(true), Some("fleet-grid"), Some("dark")), "{v}");
+    assert_eq!((v["width"].as_u64(), v["height"].as_u64()), (Some(500), Some(300)));
+    assert!(v["frame"].as_str().is_some_and(|t| t.contains("color-scheme:dark!important")), "{v}");
+    assert!(v["host"].as_str().is_some_and(|t| t.contains("__K2_SHOT_FRAME__") && t.contains("width:500px")), "{v}");
+    assert!(!f.root().exists(), "a shot never makes or writes the Zen folder");
+}
+
+#[test]
+fn a_shot_refuses_a_bad_scheme_reports_a_broken_folder_and_turns_away_logins() {
+    let e = env();
+    let plain = workspace("w-shot2", false);
+    let before: Vec<(String, Option<String>)> = e.f.gardens().into_iter().map(|g| (g.id.clone(), disk(&e.f, &g.id))).collect();
+    let (s, v) = call("/cli/zen/widget/shot", false, &plain, json!({"files": fleet_grid_folder(), "fallback": "x", "scheme": "dim"}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("400 Bad Request", Some("bad_request")), "{v}");
+    let mut broken = fleet_grid_folder();
+    let i = broken.as_array().expect("files").iter().position(|f| f["name"] == "manifest.json").expect("manifest");
+    broken[i]["text"] = json!("{ not json");
+    let (s, v) = call("/cli/zen/widget/shot", false, &plain, json!({"files": broken, "fallback": "x"}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!((v["ok"].as_bool(), v["status"].as_str()), (Some(false), Some("failed")), "{v}");
+    let (s, v) = call("/cli/zen/widget/shot", false, &plain, json!({"files": fleet_grid_folder(), "fallback": "x", "theme": "nope"}));
+    assert_eq!(s, "400 Bad Request", "{v}");
+    let login = Caller::Login { username: "ada".into() };
+    let (s, v) = call("/cli/zen/widget/shot", false, &login, json!({"files": fleet_grid_folder(), "fallback": "x"}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("403 Forbidden", Some("zen_local_only")), "{v}");
+    let after: Vec<(String, Option<String>)> = e.f.gardens().into_iter().map(|g| (g.id.clone(), disk(&e.f, &g.id))).collect();
+    assert_eq!(before, after, "a shot never touches a Garden");
+    assert!(e.f.find_garden("Widget preview").is_none(), "nor makes the preview Garden");
+}
+
+#[test]
+fn the_shot_route_is_a_post_folder_row() {
+    assert!(crate::zen_agent_routes::FOLDER_ROUTES.contains(&"/cli/zen/widget/shot"));
+    assert!(crate::zen_routes::POST_ROUTES.contains(&"/cli/zen/widget/shot"));
+    assert_eq!(crate::zen_routes::max_body("/cli/zen/widget/shot"), k2_core::zen::widget_folder::MAX_FOLDER_BODY);
+}

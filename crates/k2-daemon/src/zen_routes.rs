@@ -96,6 +96,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/widget/put",
     "/cli/zen/widget/resume",
     "/cli/zen/widget/run",
+    "/cli/zen/widget/shot",
     "/cli/zen/widget/sign",
 ];
 

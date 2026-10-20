@@ -248,6 +248,15 @@ impl Dir {
         Ok(())
     }
 
+    /// Rename `from` in this directory to `to` in `dest` (same filesystem;
+    /// never follows either final component).
+    pub fn rename_to(&self, from: &OsStr, dest: &Dir, to: &OsStr) -> io::Result<()> {
+        let (a, b) = (cstr(from)?, cstr(to)?);
+        // SAFETY: valid dirfds and names.
+        check(unsafe { libc::renameat(self.raw(), a.as_ptr(), dest.raw(), b.as_ptr()) })?;
+        Ok(())
+    }
+
     /// Hard link `from` → `to` in this directory (no follow).
     pub fn link(&self, from: &OsStr, to: &OsStr) -> io::Result<()> {
         let (a, b) = (cstr(from)?, cstr(to)?);

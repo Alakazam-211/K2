@@ -93,6 +93,98 @@ pub const UNIT_BACKUP_TIMER: &str = "sew-backup.timer";
 pub const UNIT_DRILL_TIMER: &str = "sew-drill.timer";
 pub const UNIT_MEDIA: &str = "sew-media.service";
 
+// ── K2's own teardown of an unrecognised Sew (0.46.3) ───────────────────
+//
+// `engine sew purge` on a box whose `/usr/local/bin/sew` is missing or not
+// a release this build knows: the helper never executes that binary, so it
+// does what `sew uninstall --purge` does itself (sew-ops `install.rs`
+// `uninstall`, media `uninstall`, `sysctl::remove`), on Sew's fixed layout
+// (`sew-deploy/src/paths.rs`), plus the binaries. Users and groups stay
+// (Sew's own uninstall keeps them too).
+
+/// Sew's own staging name for an upgrade's atomic swap (`sew upgrade`).
+pub const SEW_BIN_SEW_STAGING: &str = "/usr/local/bin/.sew.new";
+/// `sew.prev`, `sew.prev.json`, `upgrade-state.json`, and the sidecars'
+/// directories (`media/`, `recorder/`, `transcriber/`).
+pub const SEW_LIB_DIR: &str = "/usr/local/lib/sew";
+/// Shared read-only data (the speech models under `asr/`).
+pub const SEW_SHARE_DIR: &str = "/usr/local/share/sew";
+/// The sysctl originals `sew media install` recorded before it raised them
+/// (`{"format":1,"rmem_max":N,"wmem_max":N,…}`, root 0600). Read BEFORE
+/// `/etc/sew` goes.
+pub const SEW_MEDIA_SYSCTL_BASELINE: &str = "/etc/sew/media-sysctl.baseline";
+/// The live values the drop-in raises.
+pub const PROC_RMEM_MAX: &str = "/proc/sys/net/core/rmem_max";
+pub const PROC_WMEM_MAX: &str = "/proc/sys/net/core/wmem_max";
+/// The recovery text `sew install` writes when it generates the key. K2
+/// passes the key on stdin, so it is normally absent; a teardown KEEPS it
+/// (it is a key the operator may still want) and reports it.
+pub const SEW_RECOVERY_FILE: &str = "/root/sew-master-key.recovery";
+/// systemd's credential stores (encrypted ≥ 250, plain 249).
+pub const CREDSTORE_DIRS: [&str; 2] = ["/etc/credstore.encrypted", "/etc/credstore"];
+/// Sew's credential names: the master key and the retiring one (Sew's
+/// purge), and every name the media sidecars own (`sew-media-…`,
+/// `sew-recorder-…`, `sew-transcriber-…`, Sew's own cleanup rule). Never
+/// a wider glob.
+pub const SEW_CRED_NAMES: [&str; 2] = ["sew-master-key", "sew-master-key-prev"];
+pub const SEW_CRED_PREFIXES: [&str; 3] = ["sew-media-", "sew-recorder-", "sew-transcriber-"];
+/// Sew's system accounts (kept by a teardown; checked for login rights).
+pub const SEW_ACCOUNTS: [&str; 5] = ["sew", "sew-db", "sew-media", "sew-transcriber", "sew-recorder"];
+/// The largest baseline file read (Sew writes ~100 bytes).
+pub const MAX_SYSCTL_BASELINE: usize = 4096;
+/// Largest sysctl value accepted from a baseline (`i32::MAX`).
+pub const MAX_SYSCTL_VALUE: u64 = 2_147_483_647;
+
+/// Is `name` a unit file (or an enablement link) in Sew's namespace:
+/// `sew.service`, `sew-<name>.service`, `sew-<name>.timer`, a template
+/// `sew-<name>@.service`, or an instance `sew-<name>@<inst>.service`.
+/// `<name>` is `[a-z0-9-]+`, `<inst>` `[A-Za-z0-9_:-]*`. Nothing outside
+/// the `sew` / `sew-` prefix ever matches.
+pub fn sew_unit_name_ok(name: &str) -> bool {
+    if name == UNIT_SEW {
+        return true;
+    }
+    let Some(rest) = name.strip_prefix("sew-") else { return false };
+    let Some(mid) = rest.strip_suffix(".service").or_else(|| rest.strip_suffix(".timer")) else { return false };
+    let (base, inst) = match mid.split_once('@') {
+        Some((b, i)) => (b, Some(i)),
+        None => (mid, None),
+    };
+    if base.is_empty() || !base.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') {
+        return false;
+    }
+    match inst {
+        None => true,
+        // Templates and their instances are services only.
+        Some(i) => {
+            name.ends_with(".service") && i.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b':' || b == b'-')
+        }
+    }
+}
+
+/// A unit template (`sew-backup@.service`): never `disable`d by name, its
+/// instances are stopped by pattern.
+pub fn sew_unit_is_template(name: &str) -> bool {
+    name.ends_with("@.service")
+}
+
+/// Sew's recorded sysctl originals, strictly: at most
+/// [`MAX_SYSCTL_BASELINE`] bytes, a JSON object with `format == 1` and
+/// `rmem_max` / `wmem_max` integers in `1..=`[`MAX_SYSCTL_VALUE`]. Root's
+/// file, but read as untrusted input: anything else is `None`.
+pub fn parse_sysctl_baseline(bytes: &[u8]) -> Option<(u64, u64)> {
+    if bytes.len() > MAX_SYSCTL_BASELINE {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let o = v.as_object()?;
+    if o.get("format")?.as_u64()? != 1 {
+        return None;
+    }
+    let get = |k: &str| o.get(k)?.as_u64().filter(|n| (1..=MAX_SYSCTL_VALUE).contains(n));
+    Some((get("rmem_max")?, get("wmem_max")?))
+}
+
 /// Sew's client API on loopback (C5).
 pub const SEW_CLIENT_PORT: u16 = 8470;
 /// Voice: sew-media's loopback signalling port and its public ports
@@ -1537,5 +1629,74 @@ mod tests {
         d[0] = 0xff;
         d[7] = 0x01;
         assert_eq!(kek_id_from_derived(&d), "7f00000000000001");
+    }
+
+    #[test]
+    fn teardown_unit_names_stay_in_sews_namespace() {
+        for ok in [
+            "sew.service",
+            "sew-db.service",
+            "sew-migrate.service",
+            "sew-media.service",
+            "sew-recorder.service",
+            "sew-transcriber.service",
+            "sew-backup.timer",
+            "sew-drill.timer",
+            "sew-backup@.service",
+            "sew-drill@.service",
+            "sew-backup@daily.service",
+            "sew-drill@latest.service",
+        ] {
+            assert!(sew_unit_name_ok(ok), "{ok}");
+        }
+        for bad in [
+            "sew",
+            "sew.timer",
+            "sewing.service",
+            "sewer.service",
+            "sew-.service",
+            "sew-db.socket",
+            "sew-db.service.d",
+            "sew-../x.service",
+            "sew-a/b.service",
+            "sew-Db.service",
+            "sew-x@.timer",
+            "sew-x@a.b.service",
+            "k2-sew.service",
+            "postgresql.service",
+            "sew-db.service~",
+        ] {
+            assert!(!sew_unit_name_ok(bad), "{bad}");
+        }
+        assert!(sew_unit_is_template("sew-backup@.service"));
+        assert!(!sew_unit_is_template("sew-backup@daily.service"));
+    }
+
+    #[test]
+    fn sysctl_baseline_parses_strictly() {
+        assert_eq!(
+            parse_sysctl_baseline(br#"{"format":1,"rmem_max":212992,"wmem_max":212992,"recorded_at":"x","boot_id":"y"}"#),
+            Some((212_992, 212_992))
+        );
+        assert_eq!(parse_sysctl_baseline(br#"{"format":1,"rmem_max":2147483647,"wmem_max":1}"#), Some((2_147_483_647, 1)));
+        for bad in [
+            &br#"{"format":2,"rmem_max":1,"wmem_max":1}"#[..],
+            br#"{"rmem_max":1,"wmem_max":1}"#,
+            br#"{"format":1,"rmem_max":0,"wmem_max":1}"#,
+            br#"{"format":1,"rmem_max":2147483648,"wmem_max":1}"#,
+            br#"{"format":1,"rmem_max":-1,"wmem_max":1}"#,
+            br#"{"format":1,"rmem_max":"212992","wmem_max":1}"#,
+            br#"{"format":1,"rmem_max":1.5,"wmem_max":1}"#,
+            br#"{"format":1,"rmem_max":1}"#,
+            br#"[1,2]"#,
+            b"rmem_max=1",
+            b"",
+        ] {
+            assert_eq!(parse_sysctl_baseline(bad), None, "{}", String::from_utf8_lossy(bad));
+        }
+        let mut big = br#"{"format":1,"rmem_max":1,"wmem_max":1,"pad":""#.to_vec();
+        big.extend(std::iter::repeat(b'a').take(MAX_SYSCTL_BASELINE));
+        big.extend(br#""}"#);
+        assert_eq!(parse_sysctl_baseline(&big), None, "over the size cap");
     }
 }

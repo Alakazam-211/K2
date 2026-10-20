@@ -476,8 +476,9 @@ fn every_root_exec_verb_refuses_an_unknown_or_missing_binary_and_runs_nothing() 
             (vec!["engine", "sew", "config"], br#"{"keys.mirror.kind":"none"}"#.to_vec()),
             (vec!["engine", "sew", "upgrade"], vec![]),
             (vec!["engine", "sew", "rollback"], vec![]),
+            // Plain uninstall keeps refusing (data kept for a Sew K2 does
+            // not know); purge is K2's own teardown (its tests below).
             (vec!["engine", "sew", "uninstall"], vec![]),
-            (vec!["engine", "sew", "purge", "none"], vec![]),
             (vec!["engine", "sew", "doctor"], vec![]),
             (vec!["engine", "sew", "rotate-master"], KEY.as_bytes().to_vec()),
             (vec!["engine", "sew", "drop-prev"], vec![]),
@@ -782,6 +783,288 @@ fn rollback_purge_and_uninstall_argv_never_widen() {
         ]
     );
     assert!(!argvs.concat().iter().any(|a| a.contains("accept-data-loss")));
+}
+
+/// A known binary: purge is still Sew's own `uninstall --purge`, nothing
+/// of K2's teardown runs (Sew's layout is Sew's to remove).
+#[test]
+fn known_binary_purge_runs_sews_own_uninstall_and_k2_removes_nothing_of_sews() {
+    let t = box_root();
+    with_pin_installed(&t);
+    write(&t, SEW_CONFIG, "[server]\n");
+    write(&t, "/etc/systemd/system/sew.service", "[Unit]\n");
+    sew_answers(&t, 0, r#"{"removed":[],"purged":true}"#);
+    let o = t.call(&["engine", "sew", "purge", "48831765147549701"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["teardown"], "sew");
+    assert_eq!(v["sewExit"], 0);
+    assert_eq!(sew_calls(&t).len(), 1);
+    assert_eq!(sew_calls(&t)[0].0, vec!["uninstall", "--purge", "--yes-delete-all-data=48831765147549701", "--json"]);
+    assert!(systemctl_calls(&t).is_empty(), "K2 touched no unit: {:?}", systemctl_calls(&t));
+    assert!(t.p(SEW_CONFIG).exists(), "the fake Sew removed nothing and K2 removed nothing either");
+    assert!(t.p("/etc/systemd/system/sew.service").exists());
+    assert!(t.p(SEW_BIN).exists(), "Sew's purge keeps its binary");
+}
+
+// ── K2's teardown of an unrecognised Sew (0.46.3) ────────────────────────
+
+fn link(t: &T, abs: &str, target: &str) {
+    let p = t.p(abs);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    symlink(target, p).unwrap();
+}
+
+const BASELINE: &str = r#"{"format":1,"rmem_max":212992,"wmem_max":212992,"recorded_at":"2026-10-01T00:00:00Z","boot_id":"b"}"#;
+
+/// A box laid out the way an old dev K2 + Sew 0.1.2 test build left
+/// sewlab: Sew's files, units, links, credentials and sysctl drop-in, next
+/// to things that are NOT Sew's and must survive.
+fn sewlab(t: &T) {
+    install_binary(t, b"#!/bin/sh\n# sew 0.1.2 test build: no pin vouches for it\nexit 0\n");
+    write(t, SEW_CONFIG, "[server]\n");
+    write(t, SEW_MGMT_TOKEN, &format!("sewsvc_{KEY}\n"));
+    write(t, SEW_MEDIA_SYSCTL_BASELINE, BASELINE);
+    write(t, SEW_MEDIA_SYSCTL, "net.core.rmem_max = 26214400\nnet.core.wmem_max = 26214400\n");
+    write(t, PROC_RMEM_MAX, "26214400\n");
+    write(t, PROC_WMEM_MAX, "26214400\n");
+    write(t, "/var/lib/sew/db/PG_VERSION", "16\n");
+    write(t, "/var/lib/sew/blobs/x", "blob");
+    write(t, "/usr/local/lib/sew/sew.prev", "old");
+    write(t, "/usr/local/lib/sew/media/sew-media", "engine");
+    write(t, "/usr/local/share/sew/asr/model.bin", "model");
+    write(t, SEW_BIN_SEW_STAGING, "half an upgrade");
+    for u in [
+        "sew.service",
+        "sew-db.service",
+        "sew-migrate.service",
+        "sew-backup@.service",
+        "sew-backup.timer",
+        "sew-drill@.service",
+        "sew-drill.timer",
+        "sew-media.service",
+    ] {
+        write(t, &format!("/etc/systemd/system/{u}"), "[Unit]\n");
+    }
+    write(t, "/etc/systemd/system/sew.service.d/20-credentials.conf", "[Service]\n");
+    write(t, "/etc/systemd/system/sew-media.service.d/10-k2.conf", "[Service]\n");
+    link(t, "/etc/systemd/system/multi-user.target.wants/sew.service", "/etc/systemd/system/sew.service");
+    link(t, "/etc/systemd/system/timers.target.wants/sew-backup.timer", "/etc/systemd/system/sew-backup.timer");
+    write(t, "/etc/credstore.encrypted/sew-master-key", "k");
+    write(t, "/etc/credstore.encrypted/sew-master-key-prev", "k");
+    write(t, "/etc/credstore.encrypted/sew-media-keys", "k");
+    write(t, "/etc/credstore/sew-transcriber-key", "k");
+    write(t, SEW_RECOVERY_FILE, "recovery words\n");
+    write(t, "/etc/passwd", "root:x:0:0:root:/root:/bin/bash\nsew:x:1001:1001::/home/sew:/bin/bash\nsew-db:x:991:991::/var/lib/sew/db:/usr/sbin/nologin\n");
+    write(t, "/etc/shadow", "root:*:1::::::\nsew:$y$j9T$abc:1::::::\nsew-db:!:1::::::\n");
+    // Not Sew's: must survive.
+    for u in ["postgresql.service", "sewing.service", "k2-daemon.service"] {
+        write(t, &format!("/etc/systemd/system/{u}"), "[Unit]\n");
+    }
+    write(t, "/etc/systemd/system/postgresql.service.d/k2-ram.conf", "[Service]\n");
+    link(t, "/etc/systemd/system/multi-user.target.wants/k2-daemon.service", "/etc/systemd/system/k2-daemon.service");
+    write(t, "/etc/credstore.encrypted/other-service-key", "k");
+    write(t, "/etc/credstore/sewing-key", "k");
+    write(t, "/var/lib/sewing/keep", "k");
+    write(t, "/usr/local/bin/sewing", "k");
+}
+
+const GONE: &[&str] = &[
+    SEW_BIN,
+    SEW_BIN_SEW_STAGING,
+    SEW_CONFIG_DIR,
+    SEW_DATA_DIR,
+    SEW_LIB_DIR,
+    SEW_SHARE_DIR,
+    SEW_MEDIA_SYSCTL,
+    "/etc/systemd/system/sew.service",
+    "/etc/systemd/system/sew-db.service",
+    "/etc/systemd/system/sew-migrate.service",
+    "/etc/systemd/system/sew-backup@.service",
+    "/etc/systemd/system/sew-backup.timer",
+    "/etc/systemd/system/sew-drill@.service",
+    "/etc/systemd/system/sew-drill.timer",
+    "/etc/systemd/system/sew-media.service",
+    "/etc/systemd/system/sew.service.d",
+    "/etc/systemd/system/sew-media.service.d",
+    "/etc/systemd/system/multi-user.target.wants/sew.service",
+    "/etc/systemd/system/timers.target.wants/sew-backup.timer",
+    "/etc/credstore.encrypted/sew-master-key",
+    "/etc/credstore.encrypted/sew-master-key-prev",
+    "/etc/credstore.encrypted/sew-media-keys",
+    "/etc/credstore/sew-transcriber-key",
+];
+
+const KEPT: &[&str] = &[
+    "/etc/systemd/system/postgresql.service",
+    "/etc/systemd/system/postgresql.service.d/k2-ram.conf",
+    "/etc/systemd/system/sewing.service",
+    "/etc/systemd/system/k2-daemon.service",
+    "/etc/systemd/system/multi-user.target.wants/k2-daemon.service",
+    "/etc/credstore.encrypted/other-service-key",
+    "/etc/credstore/sewing-key",
+    "/var/lib/sewing/keep",
+    "/usr/local/bin/sewing",
+    SEW_RECOVERY_FILE,
+    "/etc/passwd",
+];
+
+fn gone(t: &T, abs: &str) -> bool {
+    std::fs::symlink_metadata(t.p(abs)).is_err()
+}
+
+#[test]
+fn unknown_binary_purge_never_runs_it_and_tears_sews_layout_down() {
+    let t = box_root();
+    sewlab(&t);
+    // Notices, a kept engine and staging the helper left behind.
+    ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+    write(&t, &format!("{SEW_DOC_DIR}/LICENSE"), "l");
+    write(&t, &format!("{SEW_MEDIA_DOC_DIR}/LICENSE"), "l");
+    write(&t, &kept_media_path("0.0.2").unwrap(), "t");
+    let o = t.call(&["engine", "sew", "purge", "48831765147549701"]);
+    ok(&o);
+    let v = json(&o);
+    assert!(sew_calls(&t).is_empty(), "the unrecognised binary was never executed: {:?}", sew_calls(&t));
+    assert_eq!(v["teardown"], "k2");
+    assert_eq!(v["binary"]["known"], false);
+    assert_eq!(v["binary"]["executed"], false);
+    assert_eq!(v["installIdChecked"], false);
+    // Units: sidecar first, the server, timers/one-shots, the database last;
+    // templates are never disabled by name, their instances are stopped.
+    assert_eq!(
+        systemctl_calls(&t),
+        vec![
+            "disable --now sew-media.service",
+            "disable --now sew.service",
+            "disable --now sew-backup.timer",
+            "disable --now sew-drill.timer",
+            "disable --now sew-migrate.service",
+            "disable --now sew-db.service",
+            "stop sew-backup@*.service sew-drill@*.service",
+            "daemon-reload",
+            "reset-failed sew.service sew-*.service sew-*.timer",
+        ]
+    );
+    for p in GONE {
+        assert!(gone(&t, p), "{p} should be gone");
+    }
+    for p in KEPT {
+        assert!(!gone(&t, p), "{p} is not Sew's (or is kept) and must stay");
+    }
+    let removed: Vec<&str> = v["removed"].as_array().unwrap().iter().map(|x| x.as_str().unwrap()).collect();
+    for p in GONE {
+        assert!(removed.contains(p), "{p} not reported in removed: {removed:?}");
+    }
+    // sysctls: Sew's originals written back, the drop-in gone, read back.
+    assert_eq!(v["sysctl"]["state"], "restored");
+    assert_eq!(std::fs::read_to_string(t.p(PROC_RMEM_MAX)).unwrap(), "212992\n");
+    assert_eq!(std::fs::read_to_string(t.p(PROC_WMEM_MAX)).unwrap(), "212992\n");
+    // The helper's own Sew state goes too.
+    assert!(gone(&t, SEW_STAGE_TARBALL));
+    assert!(gone(&t, SEW_DOC_DIR));
+    assert!(gone(&t, SEW_MEDIA_DOC_DIR));
+    assert!(gone(&t, &kept_media_path("0.0.2").unwrap()));
+    // Accounts are kept; a login-like `sew` is reported, never deleted.
+    let sew = v["accounts"].as_array().unwrap().iter().find(|a| a["name"] == "sew").expect("sew account").clone();
+    assert_eq!(sew["loginLike"], true);
+    let reasons = sew["reasons"].to_string();
+    for r in ["uid 1001", "home /home/sew", "login shell /bin/bash", "a password set"] {
+        assert!(reasons.contains(r), "{reasons}");
+    }
+    let db = v["accounts"].as_array().unwrap().iter().find(|a| a["name"] == "sew-db").expect("sew-db account").clone();
+    assert_eq!(db["loginLike"], false, "{db}");
+    assert!(std::fs::read_to_string(t.p("/etc/passwd")).unwrap().contains("sew:x:1001"));
+    let left = v["left"].to_string();
+    assert!(left.contains(SEW_RECOVERY_FILE), "{left}");
+    assert!(left.contains("service_account_unsafe"), "{left}");
+    assert!(v["keptBackups"].is_null());
+}
+
+#[test]
+fn missing_binary_purge_is_the_same_teardown_and_keeps_backups_when_asked() {
+    let t = box_root();
+    sewlab(&t);
+    std::fs::remove_file(t.p(SEW_BIN)).unwrap();
+    write(&t, "/var/lib/sew/backups/20260927T031512Z/manifest.json", "{}");
+    let o = t.call(&["engine", "sew", "purge", "none", "keep-backups"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["teardown"], "k2");
+    assert_eq!(v["binary"]["present"], false);
+    let at = v["keptBackups"].as_str().expect("kept backups path").to_string();
+    assert!(at.starts_with("/var/lib/sew-backups-") && at.ends_with('Z'), "{at}");
+    assert_eq!(std::fs::read_to_string(t.p(&format!("{at}/20260927T031512Z/manifest.json"))).unwrap(), "{}");
+    assert!(gone(&t, SEW_DATA_DIR));
+    assert!(sew_calls(&t).is_empty());
+    // Run again on the now-empty box: idempotent, nothing to remove.
+    t.exec.0.borrow_mut().calls.clear();
+    let v = json(&t.call(&["engine", "sew", "purge", "none"]));
+    assert_eq!(v["teardown"], "k2");
+    assert_eq!(v["removed"], serde_json::json!([]));
+    assert_eq!(v["sysctl"]["state"], "untouched");
+    assert_eq!(systemctl_calls(&t), vec!["stop sew-backup@*.service sew-drill@*.service", "daemon-reload", "reset-failed sew.service sew-*.service sew-*.timer"]);
+    assert!(!gone(&t, &at), "a second purge never touches the kept backups");
+}
+
+#[test]
+fn a_drop_in_without_a_readable_baseline_is_deleted_and_the_live_values_left() {
+    for baseline in [None, Some(r#"{"format":1,"rmem_max":0,"wmem_max":212992}"#), Some("rmem_max=212992")] {
+        let t = box_root();
+        sewlab(&t);
+        match baseline {
+            None => std::fs::remove_file(t.p(SEW_MEDIA_SYSCTL_BASELINE)).unwrap(),
+            Some(b) => write(&t, SEW_MEDIA_SYSCTL_BASELINE, b),
+        }
+        let v = json(&t.call(&["engine", "sew", "purge", "none"]));
+        assert_eq!(v["sysctl"]["state"], "sysctl_baseline_missing", "{baseline:?}");
+        assert!(gone(&t, SEW_MEDIA_SYSCTL));
+        assert_eq!(std::fs::read_to_string(t.p(PROC_RMEM_MAX)).unwrap(), "26214400\n", "live values left");
+        assert!(v["left"].to_string().contains("sysctl_baseline_missing"));
+    }
+}
+
+#[test]
+fn a_baseline_that_does_not_read_back_is_sysctl_not_restored() {
+    let t = box_root();
+    sewlab(&t);
+    std::fs::remove_file(t.p(PROC_WMEM_MAX)).unwrap();
+    let v = json(&t.call(&["engine", "sew", "purge", "none"]));
+    assert_eq!(v["sysctl"]["state"], "sysctl_not_restored");
+    assert!(gone(&t, SEW_MEDIA_SYSCTL), "the drop-in goes in every case");
+    assert_eq!(std::fs::read_to_string(t.p(PROC_RMEM_MAX)).unwrap(), "212992\n");
+    assert!(v["left"].to_string().contains("sysctl_not_restored"));
+}
+
+/// Something that cannot be removed fails the verb (so the daemon keeps
+/// the vault key and the row), after every other step was tried.
+#[test]
+fn a_teardown_that_cannot_remove_everything_fails_after_trying_the_rest() {
+    let t = box_root();
+    sewlab(&t);
+    std::fs::create_dir_all(t.p("/etc/credstore.encrypted/sew-media-token-key")).unwrap();
+    let o = t.call(&["engine", "sew", "purge", "none"]);
+    assert_eq!(o.code, exit::IO, "{}", o.stderr);
+    assert!(o.stderr.contains("sew-media-token-key"), "{}", o.stderr);
+    assert!(o.stderr.contains("nothing in the K2 vault was deleted"), "{}", o.stderr);
+    assert!(gone(&t, SEW_CONFIG_DIR), "the rest was still torn down");
+    assert!(gone(&t, SEW_BIN));
+    assert!(sew_calls(&t).is_empty());
+}
+
+/// A link (or a file the helper will not hash) at /usr/local/bin/sew is
+/// still refused before anything, purge included.
+#[test]
+fn a_linked_sew_binary_refuses_purge_before_any_effect() {
+    let t = box_root();
+    sewlab(&t);
+    std::fs::remove_file(t.p(SEW_BIN)).unwrap();
+    link(&t, SEW_BIN, "/usr/local/bin/sewing");
+    let o = t.call(&["engine", "sew", "purge", "none"]);
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.contains("not a regular file"), "{}", o.stderr);
+    assert!(!gone(&t, SEW_CONFIG_DIR));
+    assert!(systemctl_calls(&t).is_empty());
 }
 
 #[test]

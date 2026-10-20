@@ -16,7 +16,10 @@
 //!   the binaries. The binary member is still the only thing ever executed.
 //! - **Known binary.** Before any root exec of `/usr/local/bin/sew` the file
 //!   must be a regular, root-owned, not group/other-writable file whose
-//!   sha256 is a release this build knows (S29 §7.3).
+//!   sha256 is a release this build knows (S29 §7.3). One exception that
+//!   still runs nothing: `purge` of a missing or unrecognised binary is
+//!   K2's own teardown of Sew's layout (`sew_teardown`, 0.46.3), so a box
+//!   with a Sew no pin vouches for is never stuck.
 //! - **Inputs.** URLs and keys arrive on stdin (`InstallRequest`,
 //!   `ConfigRequest`, `MediaRequest`, key text), validated here before
 //!   anything runs. Sew reads JSON configs from fixed files under
@@ -98,20 +101,29 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
             require_known(ctx)?;
             run_sew(ctx, &["uninstall"], None)
         }
-        SewVerb::Purge { install_id, keep_backups } => {
-            require_known(ctx)?;
-            let confirm = format!("--yes-delete-all-data={install_id}");
-            let mut args = vec!["uninstall", "--purge", confirm.as_str()];
-            if *keep_backups {
-                args.push("--keep-backups");
+        SewVerb::Purge { install_id, keep_backups } => match on_disk(ctx)? {
+            // A release this build knows: Sew's own `uninstall --purge`.
+            Some((_, Some(_))) => {
+                let confirm = format!("--yes-delete-all-data={install_id}");
+                let mut args = vec!["uninstall", "--purge", confirm.as_str()];
+                if *keep_backups {
+                    args.push("--keep-backups");
+                }
+                let mut out = run_sew(ctx, &args, None)?;
+                out["teardown"] = json!("sew");
+                if out["sewExit"] == 0 {
+                    out["noticesRemoved"] = notices_or_error(remove_all_notices(ctx));
+                    out["keptRemoved"] = notices_or_error(remove_kept(ctx));
+                }
+                Ok(out)
             }
-            let mut out = run_sew(ctx, &args, None)?;
-            if out["sewExit"] == 0 {
-                out["noticesRemoved"] = notices_or_error(remove_all_notices(ctx));
-                out["keptRemoved"] = notices_or_error(remove_kept(ctx));
-            }
-            Ok(out)
-        }
+            // Missing or unrecognised (0.46.3): never executed; K2 tears
+            // Sew's layout down itself (`sew_teardown`). A file the helper
+            // refuses to even hash (a link, not root-owned, writable) was
+            // refused by `on_disk` above.
+            Some((sha, None)) => crate::sew_teardown::purge(ctx, Some(&sha), install_id, *keep_backups),
+            None => crate::sew_teardown::purge(ctx, None, install_id, *keep_backups),
+        },
         SewVerb::Doctor => {
             require_known(ctx)?;
             run_sew(ctx, &["doctor"], None)
@@ -177,7 +189,7 @@ fn installs(verb: &SewVerb) -> bool {
     )
 }
 
-fn split(abs: &str) -> (&str, &str) {
+pub(crate) fn split(abs: &str) -> (&str, &str) {
     let i = abs.rfind('/').expect("absolute");
     (if i == 0 { "/" } else { &abs[..i] }, &abs[i + 1..])
 }
@@ -188,7 +200,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// The directory of a fixed path, `None` when it (or a parent) is missing.
-fn open_parent(ctx: &Ctx, abs: &str) -> HResult<Option<(Dir, String)>> {
+pub(crate) fn open_parent(ctx: &Ctx, abs: &str) -> HResult<Option<(Dir, String)>> {
     let (parent, name) = split(abs);
     match ctx.dir(parent) {
         Ok(d) => Ok(Some((d, name.to_string()))),
@@ -650,7 +662,7 @@ fn stage(ctx: &Ctx, tarball: &[u8], media: bool) -> HResult<J> {
     Ok(json!({"staged": version, "kind": if media { "media" } else { "core" }, "tarballSha256": sha}))
 }
 
-fn unstage(ctx: &Ctx) -> HResult<J> {
+pub(crate) fn unstage(ctx: &Ctx) -> HResult<J> {
     let mut removed = Vec::new();
     for abs in [SEW_STAGE_TARBALL, SEW_STAGE_MEDIA_TARBALL, SEW_STAGE_INSTALL_JSON, SEW_STAGE_MEDIA_JSON, SEW_STAGE_UPGRADE_BIN] {
         if remove_file(ctx, abs)? {
@@ -1001,7 +1013,7 @@ fn kept_media_versions(ctx: &Ctx) -> Vec<String> {
 }
 
 /// After a purge: the kept engine tarballs go too.
-fn remove_kept(ctx: &Ctx) -> HResult<J> {
+pub(crate) fn remove_kept(ctx: &Ctx) -> HResult<J> {
     let mut removed = Vec::new();
     for v in kept_media_versions(ctx) {
         if let Some(p) = kept_media_path(&v) {
@@ -1014,7 +1026,7 @@ fn remove_kept(ctx: &Ctx) -> HResult<J> {
 }
 
 /// A notice step after Sew already acted: what it wrote, or `{error}`.
-fn notices_or_error(r: HResult<J>) -> J {
+pub(crate) fn notices_or_error(r: HResult<J>) -> J {
     r.unwrap_or_else(|f| json!({"error": f.msg}))
 }
 

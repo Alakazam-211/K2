@@ -28,6 +28,7 @@ pub mod mail;
 pub mod mail_data;
 pub mod pg;
 pub mod sew;
+pub mod sew_teardown;
 pub mod podman;
 pub mod sys;
 

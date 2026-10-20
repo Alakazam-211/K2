@@ -671,6 +671,12 @@ workspace and go through K2; never copy files into `~/.k2` yourself:\n\
 - `k2 zen widget preview --dir ./board [--config sources=fleet,deploys]` places it\n\
   alone on K2's own \"Widget preview\" Garden as `preview-<name>` (never one of the\n\
   human's Gardens); `--clear` removes it. Person, or an agent with the switch.\n\
+- `k2 zen widget preview --dir ./board --shot board.png --theme dark [--width 420\n\
+  --height 360] [--data fixtures.json]` renders it headless to a PNG: K2's real frame\n\
+  on a Garden canvas, sample data from a stand-in bridge (or your `--data`: keys\n\
+  `\"<verb> <address>\"` or `\"<verb>\"`, and `\"store\"`). Writes nothing else; any agent.\n\
+  Look at the PNG in both themes before you say it's done; don't build your own\n\
+  headless render. Needs Node and Playwright's WebKit.\n\
 - `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\n\
   checked call (a folder with errors writes nothing). Without \"Manage Gardens and\n\
   data sources\" it becomes ONE proposal for the folder (its changed code files);\n\

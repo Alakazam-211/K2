@@ -30295,14 +30295,22 @@ cmd_schema() {
     },
     {
       "name": "zen widget preview",
-      "usage": "k2 zen widget preview --dir <folder> [<name>] [--config key=value]... [--json] | k2 zen widget preview --clear [--json]",
-      "description": "Try a staged widget folder in Zen without touching the person's Gardens: K2 writes it as widgets/preview-<name>/ (manifest id renamed) and places it alone on K2's own \"Widget preview\" Garden (made the first time; each preview replaces the last). --config sets the placement's config (a card that reads data sources takes sources=a,b). It has its own empty store; its runtime errors are k2 zen widget errors preview-<name>. --clear removes the preview Garden and every preview-* widget. The person, or an agent with Manage Gardens and data sources (exit 3 otherwise). Exit 0 previewed or cleared, 1 refused (errors), 2 usage, 3 needs a person / Zen not set up.",
+      "usage": "k2 zen widget preview --dir <folder> [<name>] [--config key=value]... [--json] | k2 zen widget preview --dir <folder> [<name>] --shot <png> [--theme dark|light] [--width N] [--height N] [--zen-theme <name>] [--data <file.json>] [--libs <dir>] [--wait-ms N] [--config key=value]... [--json] | k2 zen widget preview --clear [--json]",
+      "description": "Try a staged widget folder in Zen without touching the person's Gardens: K2 writes it as widgets/preview-<name>/ (manifest id renamed) and places it alone on K2's own \"Widget preview\" Garden (made the first time; each preview replaces the last). --config sets the placement's config (a card that reads data sources takes sources=a,b). It has its own empty store; its runtime errors are k2 zen widget errors preview-<name>. --clear removes the preview Garden and every preview-* widget. The person, or an agent with Manage Gardens and data sources (exit 3 otherwise). --shot <png> (0.46.3) renders the folder headless instead, with nobody at a Zen window: checked and bundled as Zen would, in K2's real widget frame on a Garden canvas, its calls answered by a stand-in bridge with sample data (or --data fixtures), drawn in WebKit at 2x; it writes only the PNG, any local agent may shoot, and Zen needn't be set up. Needs Node.js and Playwright's WebKit (npm install -g playwright && npx playwright install webkit). Exit 0 previewed, cleared or shot (the widget said ready), 1 refused (errors) or the shot widget threw / never said ready (PNG still written), 2 usage, 3 needs a person / Zen not set up / no Node or Playwright WebKit.",
       "args": [{"name": "name", "required": false}],
       "flags": [
         {"name": "--dir", "arg": "folder", "description": "The staged folder (checked first)."},
         {"name": "--config", "arg": "key=value", "description": "The preview placement's config; repeatable (up to 16 keys)."},
         {"name": "--clear", "arg": null, "description": "Remove the preview Garden and every preview-* widget."},
-        {"name": "--json", "arg": null, "description": "{ok, widget, preview, garden: {id, name}, placement, config, written, validate, page, open} or, with --clear, {ok, garden, removed}."}
+        {"name": "--shot", "arg": "png", "description": "Render headless to this PNG instead of placing the preview; writes nothing else."},
+        {"name": "--theme", "arg": "dark|light", "description": "--shot: the Garden's scheme (default: the Zen theme's own, else light)."},
+        {"name": "--zen-theme", "arg": "name", "description": "--shot: a built-in Zen theme (basic, paper, midnight, haunted, glass; default basic)."},
+        {"name": "--width", "arg": "N", "description": "--shot: width in CSS pixels, 120 to 2400 (default 420)."},
+        {"name": "--height", "arg": "N", "description": "--shot: height in CSS pixels, 120 to 2400 (default 360)."},
+        {"name": "--data", "arg": "file.json", "description": "--shot: fixtures for the stand-in bridge: keys \"<verb> <first arg>\" or \"<verb>\", and \"store\"."},
+        {"name": "--libs", "arg": "dir", "description": "--shot: K2's zen-lib folder for a widget with requires.libs (found by itself in a K2 checkout)."},
+        {"name": "--wait-ms", "arg": "N", "description": "--shot: settle time after the widget says ready (default 400)."},
+        {"name": "--json", "arg": null, "description": "{ok, widget, preview, garden: {id, name}, placement, config, written, validate, page, open}; with --clear {ok, garden, removed}; with --shot {ok, png, ready, errors, refusals, calls, width, height, scheme, ms}."}
       ]
     },
     {
@@ -33002,6 +33010,9 @@ THE WIDGET DEV LOOP (keep your widget outside ~/.k2)
   k2 zen widget preview --dir ./board --config sources=fleet
                                              K2's own "Widget preview" Garden,
                                              never one of the person's
+  k2 zen widget preview --dir ./board --shot board.png --theme dark
+                                             a headless PNG (sample data or
+                                             --data; writes nothing else)
   k2 zen widget put board --dir ./board      the whole folder, one checked
                                              write (errors: nothing written;
                                              --prune drops files it lacks)
@@ -55881,6 +55892,7 @@ USAGE
   k2 zen widget put [<name>] --dir <folder> [--prune] [--note "…"] [--json]   # the whole folder
   k2 zen widget apply --from <folder> [<name>] [--prune] [--json]            # = put --dir
   k2 zen widget preview --dir <folder> [<name>] [--config k=v]... | --clear [--json]
+  k2 zen widget preview --dir <folder> --shot <png> [--theme dark|light] [--width N] [--height N] [--data f.json]   # headless PNG
   k2 zen proposals [--all] [--json]       # Garden/widget changes waiting for approval
   k2 zen proposals show|approve|reject <id> [--json]
   k2 zen validate [--garden <name|id> [--from <file>|-] | --theme <name> | --widget <name> [--sign] [--types[=all]] | --dir <folder> [--as <name>] | --file <file>] [--strict] [--json]
@@ -55972,7 +55984,10 @@ COMMANDS
             preview-<name>, alone on K2's own "Widget preview" Garden
             (never one of yours), with --config key=value for its placement
             (e.g. sources=fleet). --clear removes it. The person, or an
-            agent with the switch.
+            agent with the switch. --shot <png> [--theme dark|light]
+            [--width N] [--height N] [--data f.json] renders it headless
+            instead (stand-in data, WebKit; writes only the PNG; any local
+            agent). Needs Node + Playwright WebKit.
   proposals Garden and widget changes waiting for approval. show prints the
             content; approve applies it (only if the file is unchanged since,
             else proposal_stale); reject drops it (an agent may withdraw its
@@ -58835,6 +58850,8 @@ message for each error (with a suggestion line) and warnings.
 The dev loop for a widget kept outside ~/.k2:
   k2 zen validate --dir ./board              check (writes nothing)
   k2 zen widget preview --dir ./board        try it on K2's preview Garden
+  k2 zen widget preview --dir ./board --shot board.png --theme dark
+                                             a headless PNG (writes nothing else)
   k2 zen widget put board --dir ./board      write it (or propose it)
   k2 zen widget errors board                 its runtime errors in Zen
   k2 zen widget errors board --clear         drop old ones validate ignores
@@ -58949,6 +58966,9 @@ cmd_zen_widget_apply() {
 _zen_help_widget_preview() {
     cat <<'EOF'
 Usage: k2 zen widget preview --dir <folder> [<name>] [--config key=value]... [--json]
+       k2 zen widget preview --dir <folder> [<name>] --shot <png> [--theme dark|light]
+                             [--width N] [--height N] [--zen-theme <name>]
+                             [--data <file.json>] [--config key=value]... [--json]
        k2 zen widget preview --clear [--json]
 
 Try a staged widget folder in Zen without touching your Gardens. K2 writes it
@@ -58968,13 +58988,136 @@ store, and its runtime errors are k2 zen widget errors preview-<name>.
 Who may preview: the person, or an agent with "Manage Gardens and data
 sources" (exit 3 otherwise). Check without writing: k2 zen validate --dir.
 
-Exit: 0 previewed or cleared · 1 refused (errors) · 2 usage · 3 needs a person
-or Zen isn't set up.
+--shot <png>: a picture instead, with nobody at a Zen window. K2 checks and
+bundles the folder exactly as Zen would, puts it in K2's real widget frame
+on a Garden canvas, answers its calls from a stand-in bridge with sample
+data, and renders it headless in WebKit (the engine of K2's desktop app).
+It writes only the PNG: no Garden, no widget folder, no store. Any local
+agent may shoot (no switch needed), and Zen needn't be set up.
+  --theme dark|light     the Garden's scheme (default: the theme's own, else
+                         light). The card follows the Garden, never the OS.
+  --zen-theme <name>     a built-in Zen theme: basic (default), paper,
+                         midnight, haunted, glass.
+  --width N --height N   the card's size in CSS pixels (default 420x360;
+                         120 to 2400). The PNG is drawn at 2x.
+  --data <file.json>     your own data instead of the samples: one object,
+                         keys "<verb> <first arg>" or "<verb>" (for example
+                         "sources.subscribe fleet": a card view, "agents.list":
+                         rows) and "store": {key: value} preloaded.
+  --libs <dir>           K2's zen-lib folder, for a widget with
+                         requires.libs (found by itself in a K2 checkout).
+  --wait-ms N            settle time after the widget says ready (default 400).
+Needs Node.js and Playwright's WebKit:
+  npm install -g playwright && npx playwright install webkit
+
+Exit: 0 previewed, cleared or shot (and the widget said ready) · 1 refused
+(errors), or the shot widget threw or never said ready (the PNG is still
+written) · 2 usage · 3 needs a person, Zen isn't set up, or --shot has no
+Node/Playwright WebKit.
 EOF
 }
 
+# k2 zen widget preview --dir <folder> --shot <png> (0.46.3): the daemon
+# answers the shot page (POST /cli/zen/widget/shot, writes nothing); the
+# runner next to this script (k2-widget-shot.mjs) renders it in Playwright's
+# WebKit and writes the PNG.
+# _zen_widget_shot <json> <dir> <name> <png> <theme> <zen-theme> <width> <height> <data> <libs> <wait-ms> [key=value...]
+_zen_widget_shot() {
+    local as_json="$1" dir="$2" name="$3" png="$4" theme="$5" zen_theme="$6" width="$7" height="$8" data="$9" libs="${10}" wait_ms="${11}"
+    shift 11
+    case "$theme" in ""|dark|light) ;; *) echo "Error: --theme is dark or light" >&2; exit 2 ;; esac
+    case "$png" in *.png) ;; *) echo "Error: --shot writes a .png file (got $png)" >&2; exit 2 ;; esac
+    for n in "$width" "$height" "$wait_ms"; do
+        case "$n" in ""|*[!0-9]*) [ -z "$n" ] || { echo "Error: --width, --height and --wait-ms are whole numbers" >&2; exit 2; } ;; esac
+    done
+    [ -z "$data" ] || [ -f "$data" ] || { echo "Error: no --data file $data" >&2; exit 2; }
+    local self runner
+    self="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$0")"
+    runner="$(dirname "$self")/k2-widget-shot.mjs"
+    [ -f "$runner" ] || { echo "Error: this K2 has no shot runner ($runner)" >&2; exit 3; }
+    command -v node >/dev/null 2>&1 || { echo "Error: --shot needs Node.js and Playwright's WebKit: install Node, then npm install -g playwright && npx playwright install webkit" >&2; exit 3; }
+    local extra
+    extra=$(ZW="$name" ZT="$theme" ZZ="$zen_theme" ZWI="$width" ZH="$height" ZD="$data" python3 -c '
+import json, os, sys
+b = {"config": {}}
+e = os.environ
+if e.get("ZW"): b["widget"] = e["ZW"]
+if e.get("ZT"): b["scheme"] = e["ZT"]
+if e.get("ZZ"): b["theme"] = e["ZZ"]
+if e.get("ZWI"): b["width"] = int(e["ZWI"])
+if e.get("ZH"): b["height"] = int(e["ZH"])
+if e.get("ZD"):
+    try:
+        d = json.load(open(e["ZD"]))
+    except Exception as x:
+        print("Error: --data %s is not JSON: %s" % (e["ZD"], x), file=sys.stderr); sys.exit(2)
+    if not isinstance(d, dict):
+        print("Error: --data is one JSON object (keys: \"<verb>\" or \"<verb> <address>\", and \"store\")", file=sys.stderr); sys.exit(2)
+    b["data"] = d
+for kv in sys.argv[1:]:
+    if "=" not in kv:
+        print("Error: --config takes key=value, not %r" % kv, file=sys.stderr); sys.exit(2)
+    k, v = kv.split("=", 1)
+    b["config"][k.strip()] = v
+print(json.dumps(b))' "$@") || exit $?
+    local body answer rc=0
+    body="$(mktemp "${TMPDIR:-/tmp}/k2-zen-shot-body.XXXXXX")" || { echo "Error: can't make a temp file" >&2; exit 1; }
+    answer="$(mktemp "${TMPDIR:-/tmp}/k2-zen-shot-page.XXXXXX")" || { rm -f "$body"; echo "Error: can't make a temp file" >&2; exit 1; }
+    _zen_dir_body "$dir" "$body" "$extra" fallback || rc=$?
+    if [ "$rc" -ne 0 ]; then rm -f "$body" "$answer"; exit "$rc"; fi
+    _zen_session_post_file "/cli/zen/widget/shot" "$body" > "$answer" || true
+    rm -f "$body"
+    # The daemon's answer: refused, a folder with errors, or the page.
+    ZA="$answer" ZJ="$as_json" python3 -c '
+import json, os, sys
+raw = open(os.environ["ZA"]).read()
+if not raw.strip():
+    print("Error: no response from the K2 daemon on this computer", file=sys.stderr); sys.exit(1)
+try:
+    d = json.loads(raw)
+except Exception:
+    print("Error: the daemon answered something that is not JSON: %s" % raw[:200], file=sys.stderr); sys.exit(1)
+err = d.get("error")
+if err:
+    if os.environ["ZJ"] == "true": print(json.dumps(d, indent=2))
+    else: print("Error: %s: %s" % (err, d.get("message") or ""), file=sys.stderr)
+    sys.exit(3 if err in ("person_only", "zen_local_only", "owner_only") else 1)
+if d.get("ok") is not True:
+    if os.environ["ZJ"] == "true": print(json.dumps(d, indent=2))
+    else:
+        print("The folder has errors; nothing was shot:", file=sys.stderr)
+        for e in d.get("errors") or []:
+            print("%s:%s:%s: %s" % (e.get("file"), e.get("line"), e.get("col"), e.get("message")), file=sys.stderr)
+    sys.exit(1)
+' || { rc=$?; rm -f "$answer"; exit "$rc"; }
+    local -a rargs=(--page "$answer" --out "$png")
+    [ -z "$libs" ] || rargs+=(--libs "$libs")
+    [ -z "$wait_ms" ] || rargs+=(--wait-ms "$wait_ms")
+    local out
+    out="$(node "$runner" "${rargs[@]}")" || rc=$?
+    rm -f "$answer"
+    [ -n "$out" ] || exit "${rc:-1}"
+    if [ "$as_json" = true ]; then
+        printf '%s\n' "$out"
+    else
+        ZO="$out" python3 -c '
+import json, os
+d = json.loads(os.environ["ZO"])
+print("Shot %s (%s, %sx%s) in %s ms" % (d["png"], d["scheme"], d["width"], d["height"], d["ms"]))
+if not d["ready"]:
+    print("The widget never said ready (k2.ready()): in Zen it would be stopped as not started.")
+for e in d["errors"]:
+    print("error: %s" % e)
+if d["refusals"]:
+    print("refused: %s" % ", ".join(d["refusals"]))
+print("The data is the K2 samples (alpha, bravo, charlie; a sample agent and Thread) unless --data <file.json> gave your own.")
+'
+    fi
+    exit "$rc"
+}
+
 cmd_zen_widget_preview() {
-    local as_json=false dir="" clear=false raw
+    local as_json=false dir="" clear=false raw shot="" theme="" zen_theme="" width="" height="" data="" libs="" wait_ms=""
     local -a pos=() cfg=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -58984,11 +59127,26 @@ cmd_zen_widget_preview() {
             --config) [ -n "${2:-}" ] || { echo "Error: --config needs key=value" >&2; exit 2; }; cfg+=("$2"); shift 2 ;;
             --config=*) cfg+=("${1#*=}"); shift ;;
             --clear) clear=true; shift ;;
+            --shot) [ -n "${2:-}" ] || { echo "Error: --shot needs a .png path" >&2; exit 2; }; shot="$2"; shift 2 ;;
+            --theme) [ -n "${2:-}" ] || { echo "Error: --theme needs dark or light" >&2; exit 2; }; theme="$2"; shift 2 ;;
+            --zen-theme) [ -n "${2:-}" ] || { echo "Error: --zen-theme needs a built-in theme name" >&2; exit 2; }; zen_theme="$2"; shift 2 ;;
+            --width) [ -n "${2:-}" ] || { echo "Error: --width needs pixels" >&2; exit 2; }; width="$2"; shift 2 ;;
+            --height) [ -n "${2:-}" ] || { echo "Error: --height needs pixels" >&2; exit 2; }; height="$2"; shift 2 ;;
+            --data) [ -n "${2:-}" ] || { echo "Error: --data needs a JSON file" >&2; exit 2; }; data="$2"; shift 2 ;;
+            --libs) [ -n "${2:-}" ] || { echo "Error: --libs needs K2's zen-lib folder" >&2; exit 2; }; libs="$2"; shift 2 ;;
+            --wait-ms) [ -n "${2:-}" ] || { echo "Error: --wait-ms needs milliseconds" >&2; exit 2; }; wait_ms="$2"; shift 2 ;;
             -h|--help) _zen_help_widget_preview; exit 0 ;;
             -*) echo "Error: unexpected '$1' (k2 zen widget preview --help)" >&2; exit 2 ;;
             *) pos+=("$1"); shift ;;
         esac
     done
+    if [ -n "$shot" ] || [ -n "$theme$zen_theme$width$height$data$libs$wait_ms" ]; then
+        [ -n "$shot" ] || { echo "Error: --theme, --zen-theme, --width, --height, --data, --libs and --wait-ms go with --shot <png>" >&2; exit 2; }
+        [ "$clear" = false ] || { echo "Error: --shot takes a staged folder, not --clear" >&2; exit 2; }
+        [ -n "$dir" ] && [ "${#pos[@]}" -le 1 ] || { echo "Error: k2 zen widget preview --dir <folder> [<name>] --shot <png> [--theme dark|light] [--width N] [--height N]" >&2; exit 2; }
+        _zen_widget_shot "$as_json" "$dir" "${pos[0]:-}" "$shot" "$theme" "$zen_theme" "$width" "$height" "$data" "$libs" "$wait_ms" ${cfg[@]+"${cfg[@]}"}
+        return
+    fi
     if [ "$clear" = true ]; then
         [ -z "$dir" ] && [ "${#pos[@]}" -eq 0 ] && [ "${#cfg[@]}" -eq 0 ] || { echo "Error: k2 zen widget preview --clear takes only --json" >&2; exit 2; }
         raw=$(_zen_session_post "/cli/zen/widget/preview" '{"clear":true}')

@@ -229,6 +229,37 @@ pub fn unpack(r: &mut dyn Read, dst: &Path) -> Result<usize, String> {
     Ok(n)
 }
 
+/// A build log id: `b-` and 12 hex digits.
+pub fn is_build_log_id(id: &str) -> bool {
+    id.len() == 14 && id.starts_with("b-") && id[2..].bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Keep a failed App build's output beside its deployment logs (capped,
+/// owner-only). `None` for the reserved build slot or no output.
+pub(crate) fn save_build_log(slot: &str, output: Option<&str>) -> Option<String> {
+    let out = output.filter(|o| !o.trim().is_empty())?;
+    if slot == BUILD_SLOT {
+        return None;
+    }
+    let id = new_build_id();
+    let p = deploy::deployment_log_path(slot, &id);
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).ok()?;
+    }
+    // The last MiB (the end of a build's output says why it failed).
+    let mut start = out.len().saturating_sub(1 << 20);
+    while !out.is_char_boundary(start) {
+        start += 1;
+    }
+    std::fs::write(&p, &out[start..]).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
+    }
+    Some(id)
+}
+
 /// The refusal for a failed build, its output attached as untrusted App
 /// text (§5.9: it is what the App's build printed).
 pub(crate) fn failed_refusal(slot: &str, f: Failed) -> super::routes::Refusal {
@@ -252,7 +283,20 @@ pub(crate) fn build_and_store(slot: &str, folder: &Path, signer: &str, opts: &de
         return Ok(Err(why));
     }
     let lines = std::sync::Mutex::new(Vec::<String>::new());
-    let built = run(slot, folder, &m, scripts, &|l| lines.lock().unwrap_or_else(|e| e.into_inner()).push(l.to_string())).map_err(|f| failed_refusal(slot, f))?;
+    let built = run(slot, folder, &m, scripts, &|l| lines.lock().unwrap_or_else(|e| e.into_inner()).push(l.to_string())).map_err(|f| {
+        // An App's failed build keeps its output as a build log (`b-…`, read
+        // with k2 app logs) and says which step failed, for the failure
+        // history and the agent's wake (0.46.3).
+        let log = save_build_log(slot, f.output.as_deref());
+        let mut r = failed_refusal(slot, f);
+        let mut extra = r.extra.take().unwrap_or_else(|| json!({}));
+        extra["buildStep"] = json!(m.build.join(" "));
+        if let Some(id) = log {
+            extra["buildLog"] = json!(id);
+        }
+        r.extra = Some(extra);
+        r
+    })?;
     let stored = {
         let db = k2_core::db::shared();
         let conn = db.lock();

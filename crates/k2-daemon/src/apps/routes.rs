@@ -654,7 +654,19 @@ fn seed_for_deploy(who: &Who, app: &AppRow, v: &J) -> R<String> {
         let folder = resolve_folder(who, f)?;
         let scripts = app.path == "open";
         let slot = if k2_root_proto::apps::AppId::parse(&app.app_id).is_some() { app.app_id.as_str() } else { super::wall_build::BUILD_SLOT };
-        return build_seed(who, &folder, v, slot, scripts).map(|(b, _)| b.seed.hash);
+        return build_seed(who, &folder, v, slot, scripts).map(|(b, _)| b.seed.hash).map_err(|r| {
+            // The failure history, and the App's agent hears (0.46.3).
+            let extra = r.extra.as_ref();
+            super::failures::build_failed(&super::failures::BuildFail {
+                app_id: &app.app_id,
+                actor: &actor(who),
+                code: r.code,
+                reason: &r.hint,
+                step: extra.and_then(|e| e["buildStep"].as_str()),
+                log: extra.and_then(|e| e["buildLog"].as_str()),
+            });
+            r
+        });
     }
     let t = s(v, "seed").ok_or_else(|| no(codes::BAD_REQUEST, 400, "give a seed (hash) or a folder"))?;
     let row = {
@@ -1560,6 +1572,21 @@ fn logs(who: &Who, params: &HashMap<String, String>) -> R<J> {
             }
         },
     };
+    // A failed build's log (`b-…`, named in k2 app errors): the App's own
+    // log folder, so only its owner can name it.
+    if super::wall_build::is_build_log_id(&dep) {
+        let p = deploy::deployment_log_path(&app.app_id, &dep);
+        let text = std::fs::read_to_string(&p).map_err(|_| no("not_found", 404, format!("no build log {dep} of {}", app.app_id)))?;
+        let tail = params.get("tail").and_then(|t| t.parse::<usize>().ok()).unwrap_or(200).clamp(1, 5000);
+        let lines: Vec<&str> = text.lines().collect();
+        let body = lines[lines.len().saturating_sub(tail)..].join("\n");
+        return Ok(json!({
+            "ok": true,
+            "app": app.app_id,
+            "deployment": dep,
+            "framed": deploy::framing::frame(&app.app_id, "build", &body, LOG_CAP),
+        }));
+    }
     if !dep.starts_with("d-") || !dep[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(no(codes::BAD_REQUEST, 400, "not a deployment id"));
     }
@@ -1593,14 +1620,43 @@ fn is_error_line(l: &str) -> bool {
         .any(|k| x.contains(k))
 }
 
-/// GET `/cli/app/errors?app=[&since=<secs>]`: failed/rolled-back/stalled
-/// deployments with their reason, and error-looking lines from recent
-/// deployment logs, framed as untrusted (§5.9).
+/// `since` for `k2 app errors`: seconds (`3600`) or `30m`, `1h`, `2d`,
+/// `45s`; default an hour.
+pub(crate) fn errors_since_secs(raw: Option<&str>) -> R<i64> {
+    let Some(t) = raw.map(str::trim).filter(|t| !t.is_empty()) else { return Ok(3600) };
+    let secs = if t.bytes().all(|b| b.is_ascii_digit()) {
+        t.parse::<i64>().ok()
+    } else {
+        super::audit::parse_since(t, 0).map(|ms| -ms / 1000).filter(|s| *s > 0)
+    };
+    secs.map(|s| s.max(1)).ok_or_else(|| no(codes::BAD_REQUEST, 400, format!("since is seconds or 30m, 1h, 2d, not '{t}'")))
+}
+
+/// GET `/cli/app/errors?app=[&since=<secs|1h>][&kind=crash|health|build|deploy]`:
+/// the App's failure history (crashes, failed health gates, deploys that
+/// couldn't start, failed builds; newest first, `kind` filters it), then
+/// failed/rolled-back/stalled deployments with their reason, and
+/// error-looking lines from recent deployment logs, framed as untrusted
+/// (§5.9). An agent reads only its own workspace's Apps.
 fn errors(who: &Who, params: &HashMap<String, String>) -> R<J> {
     need_credential(who)?;
     let app = app_for(who, params.get("app").map(String::as_str))?;
-    let since = params.get("since").and_then(|s| s.parse::<i64>().ok()).unwrap_or(3600).max(1);
+    let since = errors_since_secs(params.get("since").map(String::as_str))?;
+    let kind = match params.get("kind").map(|k| k.trim()).filter(|k| !k.is_empty()) {
+        None => None,
+        Some(k) => Some(
+            *k2_core::app_audit::FAILURE_KINDS
+                .iter()
+                .find(|x| **x == k)
+                .ok_or_else(|| no(codes::BAD_REQUEST, 400, format!("kind is crash, health, build or deploy, not '{k}'")))?,
+        ),
+    };
     let cutoff = deploy::now() - since;
+    let failures = {
+        let conn = k2_core::app_audit::open(&k2_core::app_audit::db_path()).map_err(|e| no("audit_unavailable", 503, format!("app-audit.db: {e}")))?;
+        let q = k2_core::app_audit::FailureQuery { app_id: &app.app_id, since_ms: Some(cutoff * 1000), kind, limit: 200 };
+        k2_core::app_audit::list_failures(&conn, &q).map_err(|e| no("audit_unavailable", 503, e.to_string()))?
+    };
     let deps = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1627,6 +1683,8 @@ fn errors(who: &Who, params: &HashMap<String, String>) -> R<J> {
         "ok": true,
         "app": app.app_id,
         "sinceSecs": since,
+        "kind": kind,
+        "failures": failures,
         "events": events,
         "framed": deploy::framing::frame(&app.app_id, "errors", &lines, LOG_CAP),
     }))

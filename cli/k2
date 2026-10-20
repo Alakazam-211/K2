@@ -7241,8 +7241,15 @@ Make and ship:
                                        Store the folder as an immutable Seed
                                        and print its hash. Deploys nothing.
   k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none]
-                 [--seed S | --folder F]
+                 [--engine guarded|process] [--seed S | --folder F]
                                        Create the App (and its URL with --tunnel).
+                                       It starts walled (guarded container),
+                                       even where the owner turned the
+                                       unwalled process engine on; --engine
+                                       process only there (an agent's ask is
+                                       held for the owner).
+  Moving a legacy --cmd service in: k2 study app-move (k2 app data put,
+  k2 app label take|return).
   k2 app deploy <app-id> <folder|seed> [--engine guarded|process]
                  [--reason TEXT] [--no-wait] [--types]
                                        Health gate, switch, drain; the old version
@@ -7402,6 +7409,19 @@ for c in b.get("checks", []):
     if c.get("fix") and c.get("status") in ("fail", "warn", "unknown"):
         line += "  -> " + c["fix"]
     print(line)
+# 0.46.3: the automatic box prep (the owner'"'"'s appsAutoPrepare).
+ap = v.get("autoPrepare")
+if isinstance(ap, dict):
+    o = ap.get("outcome") or {}
+    st = o.get("state") or "not run yet"
+    extra = o.get("why") or o.get("error") or ", ".join(o.get("changed") or [])
+    print("Automatic prep: %s; last: %s%s" % ("on" if ap.get("enabled") else "off (appsAutoPrepare)", st, (" — " + extra) if extra else ""))
+# 0.46.3: --cmd services no wall runs (not part of "ready").
+legacy = v.get("legacyServices") or []
+if legacy:
+    print("Legacy --cmd services (unwalled; the cut-over is %s):" % v.get("cutover", "?"))
+    for l in legacy:
+        print("  %-20s %-14s %s  -> %s" % (l.get("name"), l.get("workspaceHandle") or "", l.get("label", ""), l.get("hint", "")))
 '
 }
 
@@ -7742,12 +7762,13 @@ else:
 
 # k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none] [--seed S | --folder F] [--json]
 cmd_app_install() {
-    local app="" ws="" tunnel=0 memory="" seed="" folder="" json_out=0
+    local app="" ws="" tunnel=0 memory="" seed="" folder="" engine="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --workspace) ws="${2:-}"; shift 2 ;;
             --tunnel) tunnel=1; shift ;;
             --memory) memory="${2:-}"; shift 2 ;;
+            --engine) engine="${2:-}"; shift 2 ;;
             --seed) seed="${2:-}"; shift 2 ;;
             --folder) folder="$(_app_rt_abs "${2:-}")"; shift 2 ;;
             --json) json_out=1; shift ;;
@@ -7756,12 +7777,16 @@ cmd_app_install() {
             *) app="$1"; shift ;;
         esac
     done
-    [ -z "$app" ] && { echo "usage: k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none] [--seed S|--folder F]" >&2; exit 2; }
+    [ -z "$app" ] && { echo "usage: k2 app install <app-id> [--workspace WS] [--tunnel] [--memory 8G|none] [--engine guarded|process] [--seed S|--folder F]" >&2; exit 2; }
     ws="$(_compute_ws "$ws")"
     local wait=""
     { [ -n "$seed" ] || [ -n "$folder" ]; } && wait=150
     _app_rt_post /cli/app/install "$(_compute_json K2_CJ_app="$app" K2_CJ_workspace="$ws" K2_CJ_tunnel_b="$tunnel" \
-        K2_CJ_memory="$memory" K2_CJ_seed="$seed" K2_CJ_folder="$folder" K2_CJ_wait_n="$wait")"
+        K2_CJ_memory="$memory" K2_CJ_engine="$engine" K2_CJ_seed="$seed" K2_CJ_folder="$folder" K2_CJ_wait_n="$wait")"
+    # An agent asking for the unwalled process engine: held for the owner.
+    if [ "$_CP_STATUS" = "202" ] && [[ "$_CP_BODY" != *'"frontPort"'* ]]; then
+        _app_grace_done "$json_out"
+    fi
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     printf '%s' "$_CP_BODY" | python3 -c '
@@ -8060,12 +8085,18 @@ for a in v.get("apps", []):
 import json, sys
 v = json.load(sys.stdin)
 apps = v.get("apps", [])
-if not apps:
+legacy = v.get("legacy") or []
+if not apps and not legacy:
     print("No Apps on this box. Start with: k2 study app-deploys")
 for a in apps:
     print("%-20s %-12s %-14s seed %s  %s" % (a["appId"], a["state"], a.get("workspaceHandle") or "",
           (a.get("liveSeed") or "-")[:12], a.get("url") or ("127.0.0.1:%s" % a.get("frontPort"))))
     print("%-20s %s" % ("", a.get("label", "")))
+# 0.46.3: --cmd services no wall runs.
+for l in legacy:
+    moved = ("  (its label now serves App %s)" % l["labelMovedTo"]) if l.get("labelMovedTo") else ""
+    print("%-20s %-12s %-14s %s%s" % (l.get("name"), l.get("desired", ""), l.get("workspaceHandle") or "", l.get("label", ""), moved))
+    print("%-20s how: %s" % ("", l.get("hint", "")))
 for n in v.get("notices", []):
     print("note: " + n.get("hint", ""))
 '
@@ -8608,6 +8639,63 @@ if v.get("next"):
     print(v["next"])'
 }
 
+_study_page_app_move() {
+    cat <<'EOF'
+k2 study app-move — Moving your --cmd service to an App
+
+WHY. A service you started with `k2 publish run <name> --cmd "…"` runs
+unwalled: as the daemon's user, with the daemon's whole environment and
+reach to the owner token. Lists show it as "legacy (--cmd) — move it to an
+App before 0.46.4". In 0.46.3 nothing stops it. In 0.46.4 --cmd goes. You
+move it yourself: you need "Build and run Apps" on your workspace (your
+owner turns it on). No terminal on the box, no sudo: the box is prepared
+by K2 (k2 app doctor says whether it is ready).
+
+THE OLD SERVICE KEEPS RUNNING until you stop it, and its URL keeps serving
+it until you move the label. Nothing below is one-way.
+
+  1. Write a manifest from your start command: manifest.json at the root
+     of the folder you deploy (your code, not your data):
+       {"schema":1,"kind":"app","id":"jobs","name":"Jobs","version":"1.0.0",
+        "host":{"mode":"cmd","start":["node","server.js"],
+                "health":{"path":"/healthz"}},
+        "egress":{"hosts":["api.stripe.com"]}}
+     - listen on $PORT (not a fixed port); health = a 2xx on that path
+     - no K2_OWNER_TOKEN, no ~/.k2 files: call K2 with an App key
+       (k2 app key mint <app-id> --scopes …) at $K2_GATEWAY_URL
+     - secrets from the vault by name, granted to the App: k2 publish secret
+       add <app-id> NAME --as env (or ask your owner to grant them)
+     - files that must last go in $K2_APP_DATA (/data); the code is read-only
+     - outside hosts it calls go in "egress" (each new host waits for your
+       owner, or applies at once with "…and manage them end to end")
+     k2 app validate <folder> checks it; k2 app warnings <name> lists what
+     your old service reads that the wall won't give.
+  2. Install (a new App id; your old label can't be one: pick e.g. jobs2,
+     or `agent` → `jobs`, since k2 nouns are reserved):
+       k2 app install <app-id>                 512 MiB; --memory 1G for more
+  3. Deploy:
+       k2 app deploy <app-id> <folder>
+     It starts walled; traffic goes to it only when the health check passes.
+  4. Copy your data in (the App must be live):
+       k2 app data put <app-id> <your-data-folder> [--to <dir>]
+     Copies a file or folder of your workspace into $K2_APP_DATA. Copy
+     again right before step 6 if the old service keeps writing.
+  5. Check it:
+       k2 app deployment <app-id> ; k2 app logs <app-id> ; k2 app errors <app-id>
+       k2 app inspect <app-id>                 the front port: curl it
+  6. Take your hostname (the same URL; the App must be healthy):
+       k2 app label take <app-id> <old-name>
+     The old service keeps running, without a public label.
+  7. Stop the old service once you're sure:
+       k2 publish stop <old-name>
+  MOVE BACK (any time): start the old service (k2 publish start <old-name>)
+     and k2 app label return <app-id> <old-name>.
+
+Exit codes: 0 done, 2 held for your owner, 3 refused (JSON on stderr: the
+hint says why, e.g. app_not_healthy, label_owned_by_other_workspace).
+EOF
+}
+
 _study_page_app_deploys() {
     cat <<'EOF'
 k2 study app-deploys — Deploying Apps
@@ -9059,16 +9147,27 @@ print(("revoked %s (shut at once)" % v["name"]) if v.get("revoked") else v.get("
 # Canonical family. Token is nested here; leftover mint is top-level k2 skin-token.
 # k2 app update is unknown (usage), not the desktop updater (k2 update --app).
 # ── 0.46.0 App grace (Rosson's cross-over plan, 2026-10-14) ─────────────
-# 0.46.0 and 0.46.1 remove nothing for existing services; 0.46.2 is the
-# cut-over (with k2 app adopt).
+# Nothing before 0.46.4 removes anything for existing services; 0.46.4 is the
+# cut-over (in 0.46.3 each agent moves its service to an App: k2 study app-move).
 # These verbs are not behind the Apps (beta) switch: they serve every
 # published --cmd service (and every runtime App).
 
 _app_grace_usage() {
     cat <<'EOF'
-k2 app — getting existing Apps ready for K2 0.46.2 (0.46.0 and 0.46.1 remove nothing)
+k2 app — getting existing Apps ready for K2 0.46.4 (nothing before it removes anything)
 
-  k2 app warnings [<app>] [--json]     What breaks at the 0.46.2 cut-over: env
+Move a legacy --cmd service to an App yourself (walkthrough: k2 study app-move):
+  k2 app data put <app-id> <path> [--to <dir>]
+                                       Copy a file or folder of your workspace
+                                       into the App's data folder ($K2_APP_DATA,
+                                       /data in its wall). The App must be live.
+  k2 app label take <app-id> <label>   Your legacy service's public hostname
+                                       now serves the App (the App must be
+                                       healthy). The old service keeps running,
+                                       unrouted.
+  k2 app label return <app-id> <label> Move it back (the old service must answer).
+
+  k2 app warnings [<app>] [--json]     What breaks at the 0.46.4 cut-over: env
                                        names the code reads that only the daemon
                                        gives it, K2 files it touches
                                        (daemon.token, heartbeat.port), programs
@@ -9076,7 +9175,7 @@ k2 app — getting existing Apps ready for K2 0.46.2 (0.46.0 and 0.46.1 remove n
                                        K2 saw it make (Linux). No <app>: every
                                        --cmd service you can see.
   k2 app clean-mode <app> on|off [--restart]
-                                       Run it the 0.46.2 way now: clean env,
+                                       Run it the 0.46.4 way now: clean env,
                                        system PATH, its own HOME, owner-token
                                        calls refused (Linux). On narrows (agents
                                        may); off is the owner's (held otherwise).
@@ -9145,6 +9244,69 @@ for h in helds:
         exit 2
     fi
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+}
+
+# k2 app data put <app-id> <path> [--to <dir>] [--json] (0.46.3): copy a file
+# or folder of the App's workspace into its data folder.
+cmd_app_data() {
+    local sub="${1:-}"
+    shift || true
+    [ "$sub" = put ] || { echo "usage: k2 app data put <app-id> <path> [--to <dir>] [--json]" >&2; exit 2; }
+    local app="" from="" to="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --to) to="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_grace_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; else from="$1"; fi; shift ;;
+        esac
+    done
+    [ -z "$app" ] || [ -z "$from" ] && { echo "usage: k2 app data put <app-id> <path> [--to <dir>]" >&2; exit 2; }
+    [ -e "$from" ] && from="$(cd "$(dirname "$from")" && pwd -P)/$(basename "$from")"
+    local raw
+    raw="$(K2_CP_MAX_TIME=1800 _compute_send POST /cli/app/data/put "$(_compute_json K2_CJ_app="$app" K2_CJ_from="$from" K2_CJ_to="$to")")"
+    _compute_split "$raw"
+    _app_grace_done "$json_out"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("copied %s file(s) from %s into %s of App %s" % (v.get("files"), v.get("from"), v.get("to"), v.get("app")))'
+}
+
+# k2 app label take|return <app-id> <label> [--json] (0.46.3).
+cmd_app_label() {
+    local verb="${1:-}"
+    shift || true
+    case "$verb" in
+        take|return) ;;
+        *) echo "usage: k2 app label take|return <app-id> <label> [--json]" >&2; exit 2 ;;
+    esac
+    local app="" label="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_grace_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; else label="$1"; fi; shift ;;
+        esac
+    done
+    [ -z "$app" ] || [ -z "$label" ] && { echo "usage: k2 app label $verb <app-id> <label>" >&2; exit 2; }
+    _app_rt_post "/cli/app/label/$verb" "$(_compute_json K2_CJ_app="$app" K2_CJ_label="$label")"
+    _app_grace_done "$json_out"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("already"):
+    print("%s already serves %s" % (v.get("app"), v.get("label")))
+elif v.get("returnedTo"):
+    print("%s serves the legacy service again (port %s); App %s no longer has it" % (v.get("label"), v["returnedTo"].get("port"), v.get("app")))
+else:
+    print("%s now serves App %s (front port %s)" % (v.get("label"), v.get("app"), v.get("frontPort")))
+    if v.get("note"):
+        print(v["note"])'
 }
 
 cmd_app_warnings() {
@@ -10037,6 +10199,8 @@ cmd_app() {
         doctor) shift; cmd_app_doctor "$@" ;;
         box) shift; cmd_app_box "$@" ;;
         engine) shift; cmd_app_engine "$@" ;;
+        data) shift; cmd_app_data "$@" ;;
+        label) shift; cmd_app_label "$@" ;;
         warnings) shift; cmd_app_warnings "$@" ;;
         clean-mode) shift; cmd_app_clean_mode "$@" ;;
         key) shift; cmd_app_key "$@" ;;
@@ -19607,7 +19771,7 @@ for s in v.get("secrets") or []:
 if v.get("inheritedNames"):
     print("  inherits the daemon environment: %s" % ", ".join(v["inheritedNames"]))
 if v.get("mode") == "legacy":
-    print("  deprecated: inheriting the daemon environment ends in K2 %s — switch with: k2 publish env %s clean" % (v.get("envRemovedIn") or "0.46.2", v.get("service")))
+    print("  deprecated: inheriting the daemon environment ends in K2 %s — switch with: k2 publish env %s clean" % (v.get("envRemovedIn") or "0.46.4", v.get("service")))
 if v.get("restart"): print(v["restart"])'
             ;;
         reveal)
@@ -21420,7 +21584,7 @@ def env_legacy(s):
     return bool(s.get("envDeprecation"))
 
 def env_ends(s):
-    return str((s.get("envRemovedIn") if isinstance(s, dict) else None) or "0.46.2")
+    return str((s.get("envRemovedIn") if isinstance(s, dict) else None) or "0.46.4")
 
 def env_warning(n, s):
     return ("warning: %s still inherits the daemon environment; this ends in K2 %s. "
@@ -21504,7 +21668,9 @@ if mode == "list":
     rows = []
     warnings = []
     legacy = []
-    ends = "0.46.2"
+    unwalled = []
+    hint = "k2 study app-move"
+    ends = "0.46.4"
     for s in services:
         if not isinstance(s, dict):
             continue
@@ -21515,6 +21681,11 @@ if mode == "list":
             legacy.append(str(s.get("name") or "?"))
             ends = env_ends(s)
             u += "  [legacy env (ends %s)]" % ends
+        # 0.46.3: --cmd services no wall runs, and where a moved label went.
+        if s.get("legacyLabel"):
+            unwalled.append(str(s.get("name") or "?"))
+            hint = s.get("legacyHint") or "k2 study app-move"
+            u += "  [legacy (--cmd)%s]" % ((": label moved to App " + s["labelMovedTo"]) if s.get("labelMovedTo") else "")
         rows.append((
             str(s.get("name") or "?"),
             status_text(s),
@@ -21544,6 +21715,9 @@ if mode == "list":
               "Switch each with: k2 publish env <service> clean (grant secrets with k2 publish secret add <service> NAME)."
               % (len(legacy), "" if len(legacy) == 1 else "s", "s" if len(legacy) == 1 else "",
                  ", ".join(legacy), ends))
+    if unwalled:
+        print("legacy (--cmd): %s run%s unwalled; move %s to an App before K2 %s (%s)."
+              % (", ".join(unwalled), "s" if len(unwalled) == 1 else "", "it" if len(unwalled) == 1 else "them", ends, hint))
     sys.exit(0)
 
 svc = d.get("service") if isinstance(d.get("service"), dict) else d
@@ -29701,7 +29875,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-api app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources projects hooks agent-hire garden-data changes design"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-heartbeats app-tickets app-identity app-surfaces skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute vault notifications data-sources projects hooks agent-hire garden-data changes design"
 
 _study_usage() {
     cat <<'EOF'
@@ -29717,7 +29891,7 @@ Bounded teaching pages. Not a reprint of --help. Not a crawl of wiki or PRDs.
 
 Topics:
   what  source  map  identity  send  human  people  auth  errors
-  context  db  mail  connect-boundary  apps  app-deploys  app-api  app-heartbeats  app-tickets
+  context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  app-heartbeats  app-tickets
   app-identity  app-surfaces  skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens
   llm-accounts  publish-framing  compute  vault  notifications  data-sources  projects  hooks
   agent-hire  garden-data  changes
@@ -29741,6 +29915,7 @@ _study_title() {
         connect-boundary) echo "K2 vs Connect" ;;
         apps) echo "Apps" ;;
         app-deploys) echo "Deploying Apps" ;;
+        app-move) echo "Moving your --cmd service to an App" ;;
         app-api) echo "The App API: server SDK and gateway routes" ;;
         app-heartbeats) echo "Heartbeats in an app" ;;
         app-tickets) echo "Tickets in an app" ;;
@@ -29797,6 +29972,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
   apps                App guests; k2skn_ prefix never grid
   app-deploys         Host a server App: Seeds, deploys, rollback (beta)
+  app-move            Move your --cmd service to an App before 0.46.4, step by step
   app-api             An App's server calls: the SDK, every route, passes, refusals
   app-heartbeats      App heartbeats: routes, caps, wait reasons, contract
   app-tickets         App tickets: routes, live ticket_changed frames, contract
@@ -29842,6 +30018,7 @@ _study_page() {
         connect-boundary) _study_page_connect_boundary ;;
         apps) _study_page_skins ;;
         app-deploys) _study_page_app_deploys ;;
+        app-move) _study_page_app_move ;;
         app-api) _study_page_app_api ;;
         app-heartbeats) _study_page_app_heartbeats ;;
         app-tickets) _study_page_app_tickets ;;

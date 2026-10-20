@@ -182,7 +182,7 @@ async fn apps_on_without_the_process_engine_never_runs_unwalled() {
 // ── S7: the deploy pipeline ──────────────────────────────────────────
 
 async fn install(port: u16, token: &str, app: &str, ws: &Ws) -> u16 {
-    let r = post(port, "/cli/app/install", token, json!({"app": app, "workspace": ws.id})).await;
+    let r = post(port, "/cli/app/install", token, json!({"app": app, "workspace": ws.id, "engine": "process"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     r.json()["frontPort"].as_u64().unwrap() as u16
 }
@@ -475,7 +475,10 @@ async fn s8_history_audit_logs_errors_and_uninstall() {
     allow_manage(&ws, true);
     let pass = passport(&ws);
     // The agent installs and deploys its own App.
-    let r = post(d.port, "/cli/app/install", &pass, json!({"app": "s8app"})).await;
+    // The owner installs it on the process engine (0.46.3: new Apps
+    // default to a container; this harness has no container engine); the
+    // agent deploys its own App.
+    let r = post(d.port, "/cli/app/install", OWNER, json!({"app": "s8app", "workspace": ws.id, "engine": "process"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let v1 = app_folder(&ws.path.join("v1"), "s8app", "1.0.0", "v1");
     let d1 = deploy_folder(d.port, &pass, "s8app", &v1).await;

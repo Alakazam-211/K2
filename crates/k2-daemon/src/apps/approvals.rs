@@ -500,6 +500,10 @@ pub(crate) const MANAGE_HELD: &[&str] = &[
     "/cli/app/link/rotate",
     "/cli/app/exec",
     "/cli/app/quota/set",
+    // 0.46.3: moving a --cmd service in (its data, its public label).
+    "/cli/app/data/put",
+    "/cli/app/label/take",
+    "/cli/app/label/return",
 ];
 
 thread_local! {

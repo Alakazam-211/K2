@@ -69,6 +69,20 @@ pub fn nested_origin(name: &str, expose: &str, sub: &str) -> Option<String> {
 }
 
 /// The box's K2 Connect subdomain (`""` = none).
+/// The https origins of labels an App took over from its workspace's
+/// legacy services (`k2 app label take`, 0.46.3), after its own.
+pub fn with_taken_labels(mut origins: Vec<String>, labels: &[String]) -> Vec<String> {
+    let sub = box_subdomain();
+    for l in labels {
+        if let Some(o) = nested_origin(l, k2_core::published_services::EXPOSE_TUNNEL, &sub) {
+            if !origins.contains(&o) {
+                origins.push(o);
+            }
+        }
+    }
+    origins
+}
+
 fn box_subdomain() -> String {
     k2_core::tunnel::config::load()
         .ok()

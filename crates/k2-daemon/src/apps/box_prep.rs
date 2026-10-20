@@ -929,7 +929,13 @@ pub(crate) fn parse_opts(body: &J) -> R<PrepareOpts> {
 /// `GET /cli/app/box`.
 pub(crate) fn box_route(who: &Who) -> R<J> {
     need_credential(who)?;
-    Ok(doctor(&gather()))
+    let mut out = doctor(&gather());
+    // 0.46.3: legacy --cmd services (unwalled until moved to an App; the cut-over
+    // is 0.46.4). Reported, never part of `ready`.
+    out["legacyServices"] = json!(super::legacy::services(who));
+    out["autoPrepare"] = super::auto_prepare::status_json();
+    out["cutover"] = json!(k2_core::app_grace::CUTOVER_RELEASE);
+    Ok(out)
 }
 
 /// The Podman version the doctor goes by: the helper's view first (it
@@ -966,6 +972,15 @@ pub(crate) fn prepare_route(who: &Who, body: &J) -> R<J> {
         };
         return Ok(pi::dry_run(&d, &pod, &p, app_uid(), doctor(&f)));
     }
+    prepare_core(&opts, &pod, &super::routes::actor(who))
+}
+
+/// The prepare itself (the owner's route, and the automatic prep the
+/// owner's `appsAutoPrepare` allows, `auto_prepare`): K2's Podman when
+/// `pod.install` and the box needs it, then the plan, through the root
+/// helper. `by` is the audit actor.
+pub(crate) fn prepare_core(opts: &PrepareOpts, pod: &super::podman_install::PodmanOpts, by: &str) -> R<J> {
+    use super::podman_install as pi;
     if !cfg!(target_os = "linux") {
         return Err(no("linux_only", 409, "Apps run on Linux boxes only"));
     }
@@ -980,7 +995,7 @@ pub(crate) fn prepare_route(who: &Who, body: &J) -> R<J> {
     // Lane P: K2's Podman, opted in, before any step (never on upgrade).
     let before = gather();
     let d = pi::decide(podman_seen(&before).as_deref(), before.podman_bundle, before.os_release.as_deref());
-    let tarball = pi::prepare_step(&pod, &d, &st, app_uid())?;
+    let tarball = pi::prepare_step(pod, &d, &st, app_uid())?;
     let steps = match &tarball {
         Some(_) => pi::plan_with_install(plan(&opts)),
         None => plan(&opts),
@@ -1000,7 +1015,7 @@ pub(crate) fn prepare_route(who: &Who, body: &J) -> R<J> {
             Err(_) => "ok (a later box prep step failed)".to_string(),
         };
         let signed = tarball.as_ref().map(|t| format!(" from={} signedBy={} key={}", t.from, t.signer.role, t.signer.key_id)).unwrap_or_default();
-        pi::audit("app-podman-install", who, &format!("{r} version={}{signed}", k2_root_proto::podman::BUNDLE_VERSION));
+        super::grace::audit("app-podman-install", by, &format!("{r} version={}{signed}", k2_root_proto::podman::BUNDLE_VERSION));
     }
     let doc = doctor(&gather());
     match res {

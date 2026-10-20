@@ -36,6 +36,9 @@ pub const MAX_BODY: usize = 256 * 1024;
 
 /// Every runtime route.
 pub const ROUTES: &[&str] = &[
+    "/cli/app/data/put",
+    "/cli/app/label/return",
+    "/cli/app/label/take",
     "/cli/app/box",
     "/cli/app/box/podman/uninstall",
     "/cli/app/box/prepare",
@@ -65,6 +68,9 @@ pub const ROUTES: &[&str] = &[
 
 /// POST-only rows (`require_post` → 405 on GET).
 pub const POST_ROUTES: &[&str] = &[
+    "/cli/app/data/put",
+    "/cli/app/label/return",
+    "/cli/app/label/take",
     "/cli/app/box/podman/uninstall",
     "/cli/app/box/prepare",
     "/cli/app/build",
@@ -378,6 +384,10 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         // The guarded engine (S11): the owner installs or updates it.
         "/cli/app/engine/install" => json_body(body).and_then(|v| super::engine_install::install_route(&who, &v)),
         "/cli/app/build" => build(&who, body),
+        // 0.46.3: an agent moves its own --cmd service in: its data, then
+        // its public label (legacy.rs, data_put.rs, labels.rs).
+        "/cli/app/data/put" => super::data_put::route(&who, body),
+        p if super::labels::ROUTES.contains(&p) => super::labels::handle(p, &who, body),
         "/cli/app/validate" => validate(&who, body),
         "/cli/app/install" => install(&who, body),
         "/cli/app/deploy" => deploy_route(&who, body),
@@ -569,7 +579,7 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
             return Err(no(
                 codes::APP_EXISTS,
                 409,
-                format!("this workspace already publishes a service named '{app_id}'; pick another App id (adopting a published service comes later)"),
+                format!("this workspace already publishes a service named '{app_id}'; pick another App id, then move its public label over once the App is live (k2 app label take <app-id> {app_id}; k2 study app-move)"),
             ));
         }
         if let Some(holder) = holders.first() {
@@ -605,9 +615,14 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
     } else {
         None
     };
-    // 0.46.3: a new App starts out guarded unless the owner opted this box
-    // into the unwalled process engine (then stage 1's default stays).
-    let isolation = default_isolation();
+    // 0.46.3: a new App starts walled (the guarded container), even on a
+    // box whose owner opted into the unwalled process engine; that engine
+    // only when the install asks for it (`engine: process`) and the box
+    // allows it (`install_isolation`).
+    let isolation = match install_isolation(who, &v)? {
+        Ok(iso) => iso,
+        Err(held) => return Ok(held),
+    };
     if isolation == "container" && k2_root_proto::apps::AppId::parse(&app_id).is_none() {
         return Err(no(
             codes::APP_ID_INVALID,
@@ -688,13 +703,48 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
     Ok(out)
 }
 
-/// A new App's isolation: `process` only where the owner turned the
-/// unwalled process engine on; `container` (the guarded engine) otherwise.
+/// A new App's isolation when the install names none: always `container`
+/// (the guarded engine). Before 0.46.3's fix a box whose owner opted into
+/// the unwalled process engine (the preview carry-over) gave every new App
+/// `process`; now that engine is only ever an explicit ask.
 pub(crate) fn default_isolation() -> &'static str {
-    if deploy::process_engine_enabled() {
-        "process"
-    } else {
-        "container"
+    "container"
+}
+
+/// The isolation an install asks for (`engine`: `guarded`|`container`,
+/// default, or `process`). `process` needs the owner's opt-in on this box
+/// (`K2_APPS_PROCESS` / `appsProcessEngine`, else `409
+/// engine_unavailable`); the owner, an Admin or a shell tab picks it at
+/// once (the opt-in is the owner's standing choice for that dev box); an
+/// agent's ask lowers the wall, so it is a held request the owner approves
+/// in person (`Err(held answer)`), replayed as the agent.
+fn install_isolation(who: &Who, v: &J) -> R<Result<&'static str, J>> {
+    match s(v, "engine") {
+        None | Some("guarded") | Some("container") => Ok(Ok(default_isolation())),
+        Some("process") => {
+            if !deploy::process_engine_enabled() {
+                return Err(no(codes::ENGINE_UNAVAILABLE, 409, deploy::PROCESS_ENGINE_OFF_HINT));
+            }
+            let Some(ws) = agent_ws(who) else { return Ok(Ok("process")) };
+            if super::approvals::manage_approved_now() {
+                return Ok(Ok("process"));
+            }
+            let label = s(v, "app").unwrap_or("(new App)").to_ascii_lowercase();
+            let r = super::approvals::file(&super::approvals::Filing {
+                who,
+                kind: k2_core::app_grace::requests::KIND_MANAGE,
+                app: None,
+                label: &label,
+                workspace: ws,
+                body: json!({ "route": "/cli/app/install", "body": v }),
+                diff: json!({ "lines": [format!("k2 app install {label} --engine process")], "route": "/cli/app/install" }),
+                summary: format!("install {label} on the unwalled process engine"),
+                reasons: vec![super::access::WHY_LOOSEN.to_string()],
+                reason: s(v, "reason"),
+            })?;
+            Ok(Err(super::approvals::held_answer(&r)))
+        }
+        Some(other) => Err(no(codes::BAD_REQUEST, 400, format!("engine is guarded or process, not '{other}'"))),
     }
 }
 
@@ -1522,7 +1572,7 @@ pub fn upgrade_notices() -> Vec<J> {
                 out.push(json!({
                     "label": name,
                     "issue": "reserved",
-                    "hint": format!("'{name}' is a k2 app subcommand or k2 noun, so it can't become an App id; rename it before adopting (k2 publish rm, then run it under another name)"),
+                    "hint": format!("'{name}' is a k2 app subcommand or k2 noun, so it can't become an App id; its App takes another id; the label can still move over (k2 app label take <app-id> {name}; k2 study app-move)"),
                 }));
             }
         }
@@ -1531,7 +1581,7 @@ pub fn upgrade_notices() -> Vec<J> {
                 "label": name,
                 "issue": "duplicate",
                 "workspaces": owners.iter().map(|o| ws_handle(o)).collect::<Vec<_>>(),
-                "hint": format!("'{name}' is published by {} workspaces; App ids are unique on the box, so all but one must rename before adopting", owners.len()),
+                "hint": format!("'{name}' is published by {} workspaces; App ids are unique on the box, so each workspace's App takes its own id and moves its own label over (k2 study app-move)", owners.len()),
             }));
         }
     }
@@ -1566,9 +1616,16 @@ fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
         let conn = db.lock();
         store::list_apps(&conn, filter.as_deref()).map_err(db_err)?
     };
+    // 0.46.3: the legacy --cmd services next to the Apps, labelled, with
+    // where to read how to move them (a passport: its own workspace's).
+    let legacy: Vec<J> = super::legacy::services(who)
+        .into_iter()
+        .filter(|l| filter.as_deref().is_none_or(|w| l["workspace"] == w))
+        .collect();
     let mut out = json!({
         "ok": true,
         "apps": apps.iter().map(app_summary).collect::<Vec<_>>(),
+        "legacy": legacy,
         "notices": if agent_ws(who).is_some() { vec![] } else { upgrade_notices() },
     });
     match agent_ws(who) {
@@ -1837,6 +1894,9 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
         k2_core::published_services::get_by_id(&conn, &app.service_id).map_err(db_err)?
     };
     let tunnel = svc.as_ref().is_some_and(|r| r.expose == k2_core::published_services::EXPOSE_TUNNEL);
+    // 0.46.3: labels it took over from its workspace's legacy services go
+    // back to them (or their hostnames go, when the service is gone).
+    super::labels::give_back_all(&app);
     let label_is_ours = {
         let db = k2_core::db::shared();
         let conn = db.lock();

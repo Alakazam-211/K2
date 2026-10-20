@@ -26,7 +26,7 @@
 //! re-run takes a fresh snapshot. An agent's new service is held for the
 //! owner's in-person approval, one request per service (`publish_routes`;
 //! prd-agent-app-permissions-v1 N1 retired the standing approval). Existing `--cmd` services are untouched in
-//! 0.46.1 (Rosson: their environment ends in 0.46.2, with `adopt`). On a
+//! 0.46.1 (Rosson: their environment ends in 0.46.4; in 0.46.3 an agent moves its own into an App, `k2 study app-move`). On a
 //! box where the open path isn't ready (macOS, no root helper, no engine,
 //! the runtime off) `k2 publish run --cmd` keeps 0.46.0's behaviour and
 //! says why.

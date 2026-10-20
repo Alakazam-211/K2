@@ -33,7 +33,7 @@ pub struct ServiceEnv {
     /// Names (never values) a legacy service inherited at its last start.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inherited_names: Vec<String>,
-    /// 0.46.0 grace: the cut-over behaviour (0.46.2), opted into early (Rosson's
+    /// 0.46.0 grace: the cut-over behaviour (0.46.4), opted into early (Rosson's
     /// cross-over plan, 2026-10-14). Implies `clean`, plus: `PATH` is the
     /// system folders only, `HOME` is the service's own folder under
     /// `~/.k2/publish-homes/`, and an owner-token call the daemon traces
@@ -107,8 +107,9 @@ pub fn get(service_id: &str) -> ServiceEnv {
 /// daemon's environment, with this notice wherever the service shows
 /// (status, `k2 publish list`, the Published drawer, `k2 vault doctor`).
 /// New services start clean. The 2026-10-14 cross-over plan moved the end
-/// from 0.46.0 to 0.46.1, and Rosson moved it again to 0.46.2 (2026-10-18,
-/// with `k2 app adopt`): 0.46.0 and 0.46.1 remove nothing.
+/// from 0.46.0 to 0.46.1, Rosson moved it to 0.46.2 (2026-10-18) and then to
+/// 0.46.4 (2026-10-20: in 0.46.3 each agent moves its service to an App itself): nothing before
+/// 0.46.4 removes it.
 pub const LEGACY_ENV_REMOVED_IN: &str = k2_core::app_grace::CUTOVER_RELEASE;
 
 /// The deprecation notice for one service (`name` = its publish name).
@@ -119,7 +120,8 @@ pub fn legacy_env_notice(name: &str) -> String {
          clean environment plus only the secrets granted to it. Switch now with \
          `k2 publish env {name} clean` (grant what it needs with `k2 publish secret add {name} …`), \
          see what would break with `k2 app warnings {name}`, or try the whole \
-         {LEGACY_ENV_REMOVED_IN} behaviour first with `k2 app clean-mode {name} on`."
+         {LEGACY_ENV_REMOVED_IN} behaviour first with `k2 app clean-mode {name} on`. \
+         Move it to an App before then: `k2 study app-move`."
     )
 }
 
@@ -166,7 +168,7 @@ pub fn set(service_id: &str, mode: Option<&str>, env_file: Option<Option<String>
     Ok(out)
 }
 
-/// Turn clean mode (the cut-over behaviour, 0.46.2) on or off for one service. On
+/// Turn clean mode (the cut-over behaviour, 0.46.4) on or off for one service. On
 /// also switches the env mode to `clean`; off keeps `clean` (it never
 /// gives the daemon's environment back: that is `set(.., "legacy")`,
 /// owner only). Names recorded while the service was legacy are kept, so
@@ -553,7 +555,7 @@ mod tests {
             assert!(!is_legacy(&new), "a service with no entry is not legacy");
             assert_eq!(legacy_ids(), vec![old.clone()]);
             let n = legacy_env_notice("shop");
-            assert!(n.contains("0.46.2") && n.contains("k2 publish env shop clean") && n.contains("k2 app clean-mode shop on"), "{n}");
+            assert!(n.contains("0.46.4") && n.contains("k2 publish env shop clean") && n.contains("k2 app clean-mode shop on"), "{n}");
             set(&old, Some("clean"), None).expect("clean");
             assert!(!is_legacy(&old));
             assert!(legacy_ids().is_empty());

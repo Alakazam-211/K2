@@ -205,6 +205,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/clean-mode", Admin),
     // S13: narrowing applies now, widening fields are held.
     post("/cli/app/config", Admin),
+    // 0.46.3: copy workspace files into an App's data folder (handler:
+    // only the App's own workspace folder; switch 1 for passports).
+    post("/cli/app/data/put", Admin),
     // deny is an Owner/Admin human's, or the requester's withdraw (handler).
     post("/cli/app/deny", Admin),
     post("/cli/app/deploy", Admin),
@@ -247,6 +250,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/key/mint", Admin),
     post("/cli/app/key/revoke", Admin),
     get("/cli/app/keys", Member),
+    // 0.46.3: an App takes its own workspace's legacy label (and gives it
+    // back); the handler scopes passports to their workspace.
+    post("/cli/app/label/return", Admin),
+    post("/cli/app/label/take", Admin),
     // S14: the App's gateway link (status; rotate the App pass now).
     get("/cli/app/link", Member),
     post("/cli/app/link/rotate", Admin),

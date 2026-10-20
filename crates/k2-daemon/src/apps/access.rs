@@ -182,7 +182,7 @@ pub(crate) fn is_loosening(op: &Op, class: Class) -> bool {
     }
 }
 
-const WHY_LOOSEN: &str = "it loosens the App's wall: the owner confirms it in person (Touch ID or a password), from every caller, \
+pub(crate) const WHY_LOOSEN: &str = "it loosens the App's wall: the owner confirms it in person (Touch ID or a password), from every caller, \
                           the owner token included";
 const WHY_RAISE: &str = "a raise past what \"Build and run Apps\" covers (its default limits size memory, CPU weight and disk): an \
                          agent with \"…and manage them end to end\" makes it itself; otherwise the owner approves it";

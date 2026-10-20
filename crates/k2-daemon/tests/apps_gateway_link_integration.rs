@@ -260,7 +260,7 @@ async fn s14_k2_app_link_routes_scope_and_rotate() {
     let d = k2_daemon::test_harness::start(OWNER).await;
     let mine = seed_ws(&env, "linkmine");
     let theirs = seed_ws(&env, "linktheirs");
-    let r = post(d.port, "/cli/app/install", OWNER, json!({"app": "linkapp", "workspace": mine.id})).await;
+    let r = post(d.port, "/cli/app/install", OWNER, json!({"app": "linkapp", "workspace": mine.id, "engine": "process"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let svc = r.json()["app"]["serviceId"].as_str().map(str::to_string).unwrap_or_else(|| {
         let db = k2_core::db::shared();

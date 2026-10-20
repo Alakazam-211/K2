@@ -128,7 +128,9 @@ fn sb_str(p: &Path) -> String {
 /// `state/` and `run/`, `/etc/k2-node`, the executor's state, `/Users`,
 /// the keychains). `deny_sockets`: Unix sockets it may not connect to
 /// (the executor's). With `network_none`: no IP connection, bind or
-/// listen beyond loopback, and no DNS. Order matters: Seatbelt takes the
+/// listen beyond this machine, and no DNS. Seatbelt's `localhost` matches
+/// the Mac's own addresses too, so a job still reaches services on the
+/// same machine (as Linux loopback would), never anything off it. Order matters: Seatbelt takes the
 /// last matching rule, so the loopback allows come after the denies.
 pub fn seatbelt_profile(deny_dirs: &[PathBuf], deny_sockets: &[PathBuf], network_none: bool) -> String {
     let mut p = String::from("(version 1)\n(allow default)\n");

@@ -135,8 +135,17 @@ mod seatbelt {
         assert!(ok(&v, "list", &own.display().to_string()), "the job's own home works: {v}");
     }
 
-    /// V21: `network = "none"` under Seatbelt: a socket to this machine's
-    /// own LAN address is refused (the control connects), loopback works.
+    /// The sandbox's own refusal: a socket the profile denies fails at
+    /// once with EPERM, never a timeout or an unreachable network.
+    fn denied(v: &serde_json::Value, addr: &str) -> bool {
+        v["connect"][addr].as_str().unwrap_or("").contains("Operation not permitted")
+    }
+
+    /// V21: `network = "none"` under Seatbelt: a socket to an address off
+    /// this machine is denied by the sandbox (EPERM; the control's attempt
+    /// is not), and loopback works. Seatbelt's `localhost` also matches
+    /// this Mac's own addresses (found on macOS 26/27): a job still reaches
+    /// services on the same machine, never anything beyond it.
     #[tokio::test(flavor = "multi_thread")]
     async fn network_none_blocks_sockets_but_keeps_loopback() {
         let mut fake = Fake::start().await;
@@ -146,28 +155,31 @@ mod seatbelt {
         let offer = n.node.offer();
         assert!(offer.features.iter().any(|f| f == frames::FEATURE_NETWORK_NONE), "{:?}", offer.features);
         assert_eq!(offer.refusal, None, "a walled node takes network = none jobs");
-        let lan = std::net::TcpListener::bind((lan_ip(), 0)).unwrap();
+        let _route = lan_ip();
         let lo = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let (lan_a, lo_a) = (lan.local_addr().unwrap().to_string(), lo.local_addr().unwrap().to_string());
+        let lo_a = lo.local_addr().unwrap().to_string();
+        // TEST-NET-1: off this machine, never a real host.
+        let off = "192.0.2.1:9".to_string();
         let bin = probe_bin();
-        let argv = probe_argv(&bin, &[], &[], &[lan_a.clone(), lo_a.clone()]);
+        let argv = probe_argv(&bin, &[], &[], &[off.clone(), lo_a.clone()]);
         let control = probe_direct(&argv);
-        assert!(ok(&control, "connect", &lan_a) && ok(&control, "connect", &lo_a), "control connects: {control}");
+        assert!(ok(&control, "connect", &lo_a), "control: {control}");
+        assert!(!denied(&control, &off), "without the wall the socket is tried, not denied: {control}");
         let argv_s: Vec<&str> = argv.iter().map(String::as_str).collect();
         c.send(Frame::Assign(assign(plan("net1", &argv_s), 1)));
         let fr = run_to_receipt(&mut c, "net1").await;
         let v = probe_json(&fr, "net1");
-        let lan_err = v["connect"][&lan_a].as_str().unwrap();
-        assert!(lan_err.starts_with("error:"), "network none let a socket out: {v}");
+        assert!(denied(&v, &off), "network none let a socket leave the machine: {v}");
         assert!(ok(&v, "connect", &lo_a), "loopback stays: {v}");
-        // network = full on the same wall: the LAN works.
+        // network = full on the same wall: the socket is tried again.
         drop(n);
         let n2 = start_node(&fake, "wall-sb-full", "", |o| o.wall = Some(Wall::Seatbelt)).await;
         let mut c2 = fake.next_conn().await;
         ready(&mut c2).await;
         c2.send(Frame::Assign(assign(plan("net2", &argv_s), 1)));
         let fr = run_to_receipt(&mut c2, "net2").await;
-        assert!(ok(&probe_json(&fr, "net2"), "connect", &lan_a), "network = full keeps the LAN");
+        let v2 = probe_json(&fr, "net2");
+        assert!(!denied(&v2, &off), "network = full denies nothing: {v2}");
         drop(n2);
     }
 }

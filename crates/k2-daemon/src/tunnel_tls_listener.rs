@@ -865,7 +865,7 @@ where
 }
 
 async fn serve_one(
-    tcp: TcpStream,
+    mut tcp: TcpStream,
     acceptor: TlsAcceptor,
     http_port: u16,
 ) -> Result<(), String> {
@@ -875,8 +875,22 @@ async fn serve_one(
     // H2: bound the TLS handshake. A peer that opens the connection but
     // never finishes the handshake (slowloris) would otherwise pin this
     // task — and its connection permit — indefinitely. The timeout frees
-    // both deterministically.
-    let mut tls = match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(tcp)).await {
+    // both deterministically. One deadline covers frpc's PROXY header and
+    // the handshake.
+    let deadline = tokio::time::Instant::now() + TLS_HANDSHAKE_TIMEOUT;
+
+    // 0.46.3: frpc (`transport.proxyProtocolVersion = "v2"`) puts a PROXY
+    // v2 header carrying the address the relay saw in front of the TLS
+    // bytes. This listener is frpc's `localPort` on loopback and the only
+    // one that reads such a header (trust rules: `crate::client_ip`).
+    // `None` = no header, an old relay, or not a loopback peer: Apps then
+    // get no client-IP headers at all, never a client's.
+    let peer = tcp.peer_addr().map_err(|e| format!("peer address: {e}"))?;
+    let client_ip = crate::client_ip::read_tunnel_preamble(&mut tcp, peer, deadline)
+        .await
+        .map_err(|e| format!("TLS handshake failed: {e}"))?;
+
+    let mut tls = match tokio::time::timeout_at(deadline, acceptor.accept(tcp)).await {
         Ok(Ok(tls)) => tls,
         Ok(Err(e)) => return Err(format!("TLS handshake failed: {e}")),
         Err(_) => {
@@ -919,6 +933,9 @@ async fn serve_one(
             let mut upstream = connect_upstream(&("127.0.0.1", ingress_port))
                 .await
                 .map_err(|e| format!("connect to tunnel-ingress listener :{ingress_port}: {e}"))?;
+            // The dispatcher reads the client IP back by this hop's address
+            // (login throttle, auth audit). Registered before any byte.
+            let _hop = crate::client_ip::register_hop(&upstream, client_ip);
             let res = tokio::io::copy_bidirectional(&mut tls, &mut upstream)
                 .await
                 .map(|_| ())
@@ -937,7 +954,8 @@ async fn serve_one(
                 .and_then(|label| crate::apps::router::live(&label))
             {
                 log_debug!("[daemon/e2e] routing {sni} → App backend :{}", be.port);
-                if let Err(e) = crate::apps::router::splice(&mut tls, be).await {
+                let mode = crate::client_ip::Mode::Tunnel(client_ip);
+                if let Err(e) = crate::apps::router::splice(&mut tls, be, mode).await {
                     log_debug!("[daemon/e2e] {sni}: {e} — answering 502");
                     write_unreachable_502(&mut tls).await;
                     return Ok(());
@@ -975,9 +993,13 @@ async fn serve_one(
             }
             let _splice_mark = crate::splice_guard::mark(&upstream);
             log_debug!("[daemon/e2e] routing {sni} → internal endpoint {target}");
-            let res = tokio::io::copy_bidirectional(&mut tls, &mut upstream)
+            // A nested service is an App too: same rewrite (client copies
+            // of the forwarding headers dropped, K2's added). The hop lets
+            // an App front port on the other end keep the address.
+            let _hop = crate::client_ip::register_hop(&upstream, client_ip);
+            let mode = crate::client_ip::Mode::Tunnel(client_ip);
+            let res = crate::client_ip::forward(&mut tls, &mut upstream, mode)
                 .await
-                .map(|_| ())
                 .map_err(|e| format!("splice TLS↔internal {target}: {e}"));
             // H6: clean close_notify after the splice on the nested path too.
             let _ = tls.shutdown().await;
@@ -1536,6 +1558,183 @@ mod tests {
 
         crate::apps::router::clear("ovr");
         crate::apps::router::clear("nope");
+        subdomains::store(SubdomainMap::default());
+    }
+
+    // ── 0.46.3: the client IP from frpc's PROXY v2 header ──────────
+
+    /// A TLS session to the E2E listener as frpc opens it: `preamble`
+    /// (frpc's PROXY v2 header, or nothing for an old config) and then the
+    /// client's TLS bytes.
+    async fn frpc_session(
+        cert_pem: &str,
+        port: u16,
+        sni: &str,
+        preamble: Option<Vec<u8>>,
+    ) -> std::io::Result<tokio_rustls::client::TlsStream<TcpStream>> {
+        use rustls_pemfile::Item;
+        let mut roots = rustls::RootCertStore::empty();
+        for item in rustls_pemfile::read_all(&mut cert_pem.as_bytes()) {
+            if let Ok(Item::X509Certificate(der)) = item {
+                roots.add(der).expect("add self-signed cert to roots");
+            }
+        }
+        let cfg = rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
+        let mut tcp = TcpStream::connect(("127.0.0.1", port)).await?;
+        if let Some(p) = preamble {
+            tcp.write_all(&p).await?;
+        }
+        let name = rustls::pki_types::ServerName::try_from(sni.to_string()).expect("valid SNI");
+        tokio_rustls::TlsConnector::from(Arc::new(cfg)).connect(name, tcp).await
+    }
+
+    /// Read until `buf` holds `n` bytes.
+    async fn fill_to<S: tokio::io::AsyncRead + Unpin>(s: &mut S, buf: &mut Vec<u8>, n: usize) {
+        while buf.len() < n {
+            let mut b = [0u8; 4096];
+            let k = tokio::time::timeout(Duration::from_secs(10), s.read(&mut b))
+                .await
+                .expect("bytes in time")
+                .expect("read");
+            assert!(k > 0, "closed; have {:?}", String::from_utf8_lossy(buf));
+            buf.extend_from_slice(&b[..k]);
+        }
+    }
+
+    /// One `Content-Length` (or 101) response off `s`, keeping leftovers
+    /// in `buf`: (head, body).
+    async fn next_response<S: tokio::io::AsyncRead + Unpin>(s: &mut S, buf: &mut Vec<u8>) -> (String, String) {
+        let end = loop {
+            if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break i + 4;
+            }
+            let have = buf.len();
+            fill_to(s, buf, have + 1).await;
+        };
+        let head = String::from_utf8_lossy(&buf.drain(..end).collect::<Vec<u8>>()).to_string();
+        let len = if head.starts_with("HTTP/1.1 101") {
+            0
+        } else {
+            header_values(&head, "content-length").first().map(|v| v.parse::<usize>().unwrap()).unwrap_or(0)
+        };
+        fill_to(s, buf, len).await;
+        let body = String::from_utf8_lossy(&buf.drain(..len).collect::<Vec<u8>>()).to_string();
+        (head, body)
+    }
+
+    fn header_values(head: &str, name: &str) -> Vec<String> {
+        head.lines()
+            .filter_map(|l| {
+                let (n, v) = l.split_once(':')?;
+                n.trim().eq_ignore_ascii_case(name).then(|| v.trim().to_string())
+            })
+            .collect()
+    }
+
+    const SPOOFED: &str = "X-Forwarded-For: 6.6.6.6\r\nX-Real-IP: 6.6.6.6\r\nForwarded: for=6.6.6.6\r\nX-K2-Client-IP: 6.6.6.6\r\nX_Forwarded_For: 6.6.6.6\r\n";
+
+    /// What the echo App saw must carry exactly K2's headers (`want`) or
+    /// none, and never a client copy.
+    fn assert_app_saw(seen: &str, want: Option<&str>) {
+        assert!(!seen.contains("6.6.6.6"), "a client-sent copy reached the App:\n{seen}");
+        assert!(header_values(seen, "forwarded").is_empty(), "{seen}");
+        let want: Vec<String> = want.map(|w| vec![w.to_string()]).unwrap_or_default();
+        for h in ["x-k2-client-ip", "x-forwarded-for", "x-real-ip"] {
+            assert_eq!(header_values(seen, h), want, "{h}:\n{seen}");
+        }
+    }
+
+    /// 0.46.3 end to end: a fake frpc writes the relay's PROXY v2 header,
+    /// then TLS. The App behind its label (the router override) and a
+    /// nested service both get exactly one K2-set client IP on every
+    /// keep-alive request, with every client copy gone; a WebSocket upgrade
+    /// still works. No header (old frpc config) or a loopback source (old
+    /// relay) → no client-IP headers at all. A malformed header → the
+    /// connection is dropped before TLS.
+    #[tokio::test]
+    async fn frpc_proxy_v2_reaches_apps_as_k2_headers_only() {
+        use crate::front443::proxy_v2;
+        use k2_core::tunnel::subdomains::{self, SubdomainMap};
+
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _home = crate::test_support::TempHome::new();
+        let daemon_port = install_test_ingress_state();
+
+        let app = crate::client_ip::tests::echo_app().await;
+        let svc = crate::client_ip::tests::echo_app().await;
+        let closed = k2_core::test_env::ClosedPort::dual();
+        let mut targets = std::collections::HashMap::new();
+        targets.insert("shop".to_string(), format!("localhost:{}", closed.port()));
+        targets.insert("svc".to_string(), format!("127.0.0.1:{svc}"));
+        subdomains::store(SubdomainMap { primary: "example".to_string(), targets });
+        crate::apps::router::switch("shop", app);
+
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        let (cert_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert("example").expect("cert");
+        let server_config = k2_core::tunnel::tls::server_config(&cert_pem, &key_pem).expect("server config");
+        let shared = Arc::new(ArcSwap::from_pointee(server_config));
+        let tls_listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind tls");
+        let https_port = tls_listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            accept_loop(Arc::new(tls_listener), shared, daemon_port).await;
+        });
+
+        let relay_saw = |src: &str| Some(proxy_v2::header(src.parse().unwrap(), "127.0.0.1:443".parse().unwrap()));
+
+        // The App (router override) and a nested service, keep-alive.
+        for sni in ["shop.example.k2.dev", "svc.example.k2.dev"] {
+            let mut tls = frpc_session(&cert_pem, https_port, sni, relay_saw("203.0.113.7:51515"))
+                .await
+                .expect("TLS after frpc's header");
+            let mut buf = Vec::new();
+            for i in 0..3 {
+                let req = format!("GET /k{i} HTTP/1.1\r\nHost: {sni}\r\n{SPOOFED}\r\n");
+                tls.write_all(req.as_bytes()).await.unwrap();
+                let (head, seen) = next_response(&mut tls, &mut buf).await;
+                assert!(head.starts_with("HTTP/1.1 200 OK"), "{sni}: {head}");
+                assert!(seen.starts_with(&format!("GET /k{i} ")), "{sni}: {seen}");
+                assert_app_saw(&seen, Some("203.0.113.7"));
+            }
+        }
+
+        // WebSocket through the App: rewritten handshake, then raw.
+        let mut tls = frpc_session(&cert_pem, https_port, "shop.example.k2.dev", relay_saw("[2001:db8::7]:4000"))
+            .await
+            .expect("TLS");
+        let hs = format!(
+            "GET /ws HTTP/1.1\r\nHost: shop.example.k2.dev\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{SPOOFED}\r\n"
+        );
+        tls.write_all(hs.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        let (head, _) = next_response(&mut tls, &mut buf).await;
+        assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+        let n: usize = header_values(&head, "x-handshake-len")[0].parse().unwrap();
+        fill_to(&mut tls, &mut buf, n).await;
+        let seen = String::from_utf8_lossy(&buf.drain(..n).collect::<Vec<u8>>()).to_string();
+        assert_app_saw(&seen, Some("2001:db8::7"));
+        tls.write_all(b"\x81\x02hi").await.unwrap();
+        fill_to(&mut tls, &mut buf, 4).await;
+        assert_eq!(&buf[..4], b"\x81\x02hi", "raw WebSocket bytes after the 101");
+
+        // Old frpc config (no header) and an old relay (loopback source):
+        // spoofs still stripped, no client-IP header at all.
+        for (what, pre) in [("no header", None), ("old relay", relay_saw("127.0.0.1:40000"))] {
+            let mut tls = frpc_session(&cert_pem, https_port, "shop.example.k2.dev", pre).await.expect("TLS");
+            let req = format!("GET / HTTP/1.1\r\nHost: shop.example.k2.dev\r\n{SPOOFED}\r\n");
+            tls.write_all(req.as_bytes()).await.unwrap();
+            let (_, seen) = next_response(&mut tls, &mut Vec::new()).await;
+            assert!(seen.starts_with("GET / "), "{what}: {seen}");
+            assert_app_saw(&seen, None);
+        }
+
+        // A malformed header (version nibble 1) never reaches TLS.
+        let mut bad = relay_saw("203.0.113.7:1").unwrap();
+        bad[12] = 0x11;
+        let refused = frpc_session(&cert_pem, https_port, "shop.example.k2.dev", Some(bad)).await;
+        assert!(refused.is_err(), "a malformed PROXY header must drop the connection");
+
+        crate::apps::router::clear("shop");
         subdomains::store(SubdomainMap::default());
     }
 

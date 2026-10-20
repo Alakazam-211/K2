@@ -139,8 +139,11 @@ impl Drop for Guard {
 }
 
 /// Splice `client` to `be`, counted for drain and cut at its deadline.
-/// `Err` only when the backend can't be dialed (the caller answers 502).
-pub async fn splice<S>(client: &mut S, be: Arc<Backend>) -> Result<(), String>
+/// Every request is rewritten for `mode` (`crate::client_ip`: client
+/// copies of the forwarding headers dropped, `X-K2-Client-IP` added when
+/// K2 knows the client). `Err` only when the backend can't be dialed (the
+/// caller answers 502).
+pub async fn splice<S>(client: &mut S, be: Arc<Backend>, mode: crate::client_ip::Mode) -> Result<(), String>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -161,7 +164,7 @@ where
         return Ok(());
     }
     tokio::select! {
-        _ = tokio::io::copy_bidirectional(client, &mut upstream) => {}
+        _ = crate::client_ip::forward(&mut *client, &mut upstream, mode) => {}
         _ = cut.changed() => {}
     }
     let _ = upstream.shutdown().await;
@@ -183,18 +186,21 @@ fn own_answer(status: &str, body: &str) -> String {
 }
 
 /// Serve one connection for `app_id`: splice to its live backend, 503
-/// when it has none, 502 when the backend doesn't answer.
-pub async fn serve_app_conn<S>(client: &mut S, app_id: &str)
+/// when it has none, 502 when the backend doesn't answer. `peer` is the
+/// front port's caller (loopback): K2's own tunnel hop keeps its client
+/// IP; any other caller only loses `X-K2-Client-IP`.
+pub async fn serve_app_conn<S>(client: &mut S, app_id: &str, peer: Option<std::net::SocketAddr>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let mode = crate::client_ip::Mode::Local { peer };
     match live(app_id) {
         None => {
             consume_request_head(client).await;
             let _ = client.write_all(own_answer("503 Service Unavailable", UNAVAILABLE_BODY).as_bytes()).await;
         }
         Some(be) => {
-            if splice(client, be).await.is_err() {
+            if splice(client, be, mode).await.is_err() {
                 consume_request_head(client).await;
                 let _ = client.write_all(own_answer("502 Bad Gateway", BAD_GATEWAY_BODY).as_bytes()).await;
             }
@@ -258,9 +264,9 @@ pub fn ensure_front(handle: &tokio::runtime::Handle, app_id: &str, want: u16) ->
     let l = tokio::net::TcpListener::from_std(std_l).map_err(|e| e.to_string())?;
     let task = handle.spawn(async move {
         loop {
-            let Ok((mut s, _)) = l.accept().await else { continue };
+            let Ok((mut s, peer)) = l.accept().await else { continue };
             let app = app.clone();
-            tokio::spawn(async move { serve_app_conn(&mut s, &app).await });
+            tokio::spawn(async move { serve_app_conn(&mut s, &app, Some(peer)).await });
         }
     });
     f.insert(app_id.to_string(), Front { port, task });

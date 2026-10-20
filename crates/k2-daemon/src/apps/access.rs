@@ -231,6 +231,17 @@ pub(crate) fn set_switches(ws_id: &str, change: SwitchChange, caller_is_owner: b
     let (b0, f0) = (before >= Level::Build, before == Level::Full);
     let build = change.build.unwrap_or(b0);
     let mut full = change.full.unwrap_or(f0);
+    // Raising anything is the owner's, checked first (an Admin asking for
+    // switch 2 hears owner_only, never a hint to raise switch 1).
+    let asks_raise = (change.build == Some(true) && !b0) || (change.full == Some(true) && !f0);
+    if asks_raise && !caller_is_owner {
+        return Err(no(
+            codes::OWNER_ONLY,
+            403,
+            "only the server's owner turns an agent's App switches on (an Admin may turn them off): Settings → Workspaces → \
+             <agent> → Agent, or k2 app access <ws> --build on|--manage on from a terminal outside K2",
+        ));
+    }
     if change.full == Some(true) && !build {
         return Err(no(
             "parent_switch_off",

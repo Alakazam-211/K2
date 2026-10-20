@@ -1019,6 +1019,10 @@ pub fn handle_projects_delete(body: &[u8]) -> CliResponse {
         if let Some(resp) = crate::project_group_routes::poc_removal_block(&b.id, &display) {
             return resp;
         }
+        // Q8: never under the workspace's Apps.
+        if let Some(resp) = crate::apps::ownership::removal_block(&b.id, &display) {
+            return resp;
+        }
     }
     // GH #66: stop the workspace's sessions while the row still exists
     // (the nested-workspace check reads the registry).

@@ -438,6 +438,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 {
                     return Some(resp);
                 }
+                // Q8: never under the workspace's Apps (hand over /
+                // uninstall / park first: `k2 app release`).
+                if let Some(resp) = crate::apps::ownership::removal_block(project_id, &display) {
+                    return Some(resp);
+                }
                 // GH #66: stop the workspace's sessions before the row goes.
                 if let Err(e) = crate::v2_session_map::stop_workspace_sessions(project_id, &target)
                 {

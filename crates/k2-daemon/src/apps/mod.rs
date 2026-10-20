@@ -5,6 +5,8 @@
 //! are `k2_core::deploy`.
 
 pub mod access;
+/// Admission-lite: the box's App memory pool (`check_memory`, §4.3).
+pub mod admission;
 pub mod alerts;
 pub mod app_key_routes;
 pub mod approvals;
@@ -14,6 +16,8 @@ pub mod box_prep;
 pub mod egress_proxy;
 pub mod egress_routes;
 pub mod box_service_routes;
+/// The box view and clash naming (agents talk to each other, §4.1–4.2).
+pub mod coordination;
 pub mod engine_install;
 pub mod exception;
 pub mod exec;
@@ -24,7 +28,11 @@ pub mod grants;
 pub mod origins;
 pub mod guarded;
 pub mod guest_rooms;
+/// Switch-1 default limits (§4.3).
+pub mod limits;
 pub mod open;
+/// The delete guard, hand over / park / unpark, the orphan sweep (Q8).
+pub mod ownership;
 pub mod podman_install;
 pub mod process_engine;
 pub mod process_exception;
@@ -47,3 +55,7 @@ mod access_tests;
 /// Room-scope R9/R16 surface tests (0.46.1).
 #[cfg(test)]
 mod surfaces_tests;
+
+/// Slices D, F, G of prd-agent-app-permissions-v1 (0.46.3).
+#[cfg(test)]
+mod ownership_tests;

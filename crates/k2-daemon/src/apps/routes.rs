@@ -88,6 +88,7 @@ pub fn is_route(p: &str) -> bool {
         || super::egress_routes::ROUTES.contains(&p)
         || super::box_service_routes::ROUTES.contains(&p)
         || door_route(p)
+        || super::ownership::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -95,6 +96,8 @@ pub fn is_post_route(p: &str) -> bool {
         || super::egress_routes::POST_ROUTES.contains(&p)
         || super::box_service_routes::POST_ROUTES.contains(&p)
         || door_post_route(p)
+        // Hand over, park, unpark, release (slice D): all POST.
+        || super::ownership::ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -400,6 +403,8 @@ pub fn handle(path: &str, who: Who, body: &[u8], params: &HashMap<String, String
         p if super::egress_routes::ROUTES.contains(&p) => super::egress_routes::handle(p, &who, body, params),
         // Box services (0.46.0): forwards into the wall, held for the owner.
         p if super::box_service_routes::ROUTES.contains(&p) => super::box_service_routes::handle(p, &who, body, params),
+        // Q8 / slice D: who maintains an App when its workspace goes.
+        p if super::ownership::ROUTES.contains(&p) => super::ownership::handle(p, &who, body),
         // S28 and the process exception.
         "/cli/app/exec" => super::exec::exec_route(&who, body),
         "/cli/app/exception" => super::exception::route(&who, body),
@@ -531,6 +536,9 @@ fn audit_human(app_id: &str, event: &str, who: &Who, payload: J) {
 /// sentinel, AR5), its folder and its front listener; with `tunnel` the
 /// URL `<app>.<sub>.k2.dev` points at the front port (one control-plane
 /// write, here, never per deploy). With a Seed or folder it deploys too.
+/// No `memory` = 512 MiB (F2). The box's pool admits it (`admission`,
+/// every caller); an agent past its default limits is held (`limits`).
+/// A label another workspace holds is refused naming its agent (N6).
 fn install(who: &Who, body: &[u8]) -> R<J> {
     need_build(who)?;
     let v = json_body(body)?;
@@ -539,7 +547,12 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
         return Err(no(code, 400, msg));
     }
     let ws = target_ws(who, s(&v, "workspace"))?;
-    let memory = deploy::parse_memory(s(&v, "memory").unwrap_or("none")).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+    // F2: an install with no memory given gets the default 512 MiB (every
+    // caller); `none` is an explicit choice (agents: held, limits.rs).
+    let memory = match s(&v, "memory") {
+        None => Some(super::limits::DEFAULT_MEMORY),
+        Some(m) => deploy::parse_memory(m).map_err(|e| no(codes::BAD_REQUEST, 400, e))?,
+    };
     let tunnel = b(&v, "tunnel");
     {
         let db = k2_core::db::shared();
@@ -559,11 +572,34 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
                 format!("this workspace already publishes a service named '{app_id}'; pick another App id (adopting a published service comes later)"),
             ));
         }
-        if !holders.is_empty() {
-            return Err(no(codes::LABEL_TAKEN, 409, format!("'{app_id}' is already a published label on this box; App ids are unique box-wide")));
+        if let Some(holder) = holders.first() {
+            // N6: name the agent that holds it (never its folder).
+            let m = super::coordination::maintainer_with(&conn, holder);
+            let mut r = no(
+                codes::LABEL_TAKEN,
+                409,
+                format!("'{app_id}' is already a published label on this box, {}; App ids are unique box-wide. Pick another id, or talk to that agent{}", m.phrase(), m.address.as_ref().map(|a| format!(": k2 msg {a} \"…\"")).unwrap_or_default()),
+            );
+            r.extra = Some(json!({ "owner": m.json() }));
+            return Err(r);
         }
     }
-    crate::label_owner::check(&app_id, &ws.id, false).map_err(|r| no(codes::LABEL_TAKEN, 409, r.message()))?;
+    crate::label_owner::check(&app_id, &ws.id, false).map_err(|r| {
+        let mut out = no(codes::LABEL_TAKEN, 409, r.message());
+        if let Some(o) = r.body.get("owner") {
+            out.extra = Some(json!({ "owner": o }));
+        }
+        out
+    })?;
+    // §4.3 admission-lite: the box's App memory pool (every caller).
+    super::admission::check_memory(&app_id, memory)?;
+    // Switch-1 default limits: past them the install waits for the owner.
+    if let Some(bound) = super::limits::bound(who) {
+        let over = super::limits::install_overages(&bound, memory, tunnel)?;
+        if !over.is_empty() {
+            return super::limits::hold(who, "/cli/app/install", &v, &bound, over);
+        }
+    }
     let tunnel_cfg = if tunnel {
         Some(crate::publish_runtime::nested_preflight().map_err(|e| no(codes::ENGINE_UNAVAILABLE, 503, e.message))?)
     } else {
@@ -779,6 +815,7 @@ fn apply_engine(who: &Who, app: AppRow, v: &J) -> R<AppRow> {
 fn deploy_inner(who: &Who, v: &J) -> R<J> {
     let app = app_for(who, s(v, "app"))?;
     super::suspend::refuse_if_suspended(&app.app_id)?;
+    super::ownership::refuse_if_parked(&app)?;
     let app = apply_engine(who, app, v)?;
     let seed = seed_for_deploy(who, &app, v)?;
     // S20: caps past the App's approved set (or a first install) are held
@@ -863,6 +900,7 @@ fn rollback(who: &Who, body: &[u8]) -> R<J> {
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     super::suspend::refuse_if_suspended(&app.app_id)?;
+    super::ownership::refuse_if_parked(&app)?;
     let target = super::supervisor::rollback_target(&app, s(&v, "to"))?;
     super::supervisor::check_data_revision(&app, &target)?;
     if let Some(id) = super::supervisor::rollback_to_warm(&app, &target, &actor(who))? {
@@ -879,6 +917,9 @@ fn stop(who: &Who, body: &[u8]) -> R<J> {
     need_build(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
+    if app.state == store::STATE_PARKED {
+        return Ok(json!({ "ok": true, "app": app.app_id, "state": store::STATE_PARKED, "already": "parked (stopped)" }));
+    }
     super::supervisor::stop_app(&app, &actor(who))?;
     mirror(&app.app_id);
     Ok(json!({ "ok": true, "app": app.app_id, "state": store::STATE_STOPPED }))
@@ -891,6 +932,7 @@ fn start(who: &Who, body: &[u8], kind: &'static str) -> R<J> {
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     super::suspend::refuse_if_suspended(&app.app_id)?;
+    super::ownership::refuse_if_parked(&app)?;
     let seed = app
         .live_seed
         .clone()
@@ -1177,6 +1219,21 @@ fn exception_guard(app: &AppRow, after: &appcfg::State) -> R<()> {
     Ok(())
 }
 
+/// The box-level checks on config ops (every caller, now and on approve):
+/// a port another App opens (`409 port_owned`, naming its agent) and a
+/// memory raise past the box's pool (`409 box_budget_full`, §4.3).
+fn check_box_fit(app: &AppRow, ops: &[Op], state: &appcfg::State) -> R<()> {
+    super::coordination::port_clashes(&app.app_id, ops)?;
+    for op in ops {
+        if let Op::Memory(new) = op {
+            if appcfg::classify(op, state) == Class::Budget {
+                super::admission::check_memory(&app.app_id, *new)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Apply ops to an App now (callers decided they may). Audited, mirrored.
 pub(crate) fn apply_config_ops(app_id: &str, ops: &[Op], by: &str) -> R<J> {
     let app = {
@@ -1186,6 +1243,9 @@ pub(crate) fn apply_config_ops(app_id: &str, ops: &[Op], by: &str) -> R<J> {
     }
     .ok_or_else(|| no(codes::APP_NOT_FOUND, 404, format!("no App '{app_id}'")))?;
     let mut state = config_state(&app)?;
+    // Re-checked at apply time too (a held request approved later meets
+    // today's box): admission-lite on a memory raise, port clashes.
+    check_box_fit(&app, ops, &state)?;
     let lines: Vec<String> = ops.iter().map(|op| appcfg::describe(op, &state)).collect();
     for op in ops {
         appcfg::apply(op, &mut state);
@@ -1245,6 +1305,9 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
         appcfg::apply(op, &mut after);
     }
     exception_guard(&app, &after)?;
+    // A port another App holds, or memory the box doesn't have, is refused
+    // now (naming who holds it), whether the change would apply or wait.
+    check_box_fit(&app, &ops, &state)?;
     if egress.mode.as_deref() == Some("broad") && after.path != "open" {
         return Err(no(
             super::egress_routes::codes::OPEN_PATH_ONLY,
@@ -1256,16 +1319,34 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
     // for humans and agents with switch 2; loosening the wall is held for
     // the person from every caller (`super::access::config_rule`).
     let mut now_ops: Vec<Op> = Vec::new();
-    let mut held: Vec<(Op, &'static str)> = Vec::new();
+    let mut held: Vec<(Op, String)> = Vec::new();
+    // Switch-1 default limits (limits.rs): a budget past them is held.
+    let bound = super::limits::bound(who);
+    let mut limit_reasons: Vec<String> = Vec::new();
     for op in ops {
         let class = match op {
             Op::Io(_) if io_raise => Class::Owner,
             Op::Io(_) => Class::Narrow,
             _ => appcfg::classify(&op, &state),
         };
+        // A CPU weight is a share, not a cap: setting one where there was
+        // none (the classifier's "narrow") still raises past the default.
+        let raises = class == Class::Budget
+            || matches!(op, Op::CpuWeight(Some(w)) if w > state.config.resources.cpu_weight.unwrap_or(super::limits::CPU_WEIGHT_MAX));
+        if let (true, Some(ws)) = (raises, bound.as_deref()) {
+            if let Some(why) = super::limits::config_overage(ws, &app, &op, &state)? {
+                let line = format!("{}: past this agent's default App limits ({why})", appcfg::describe(&op, &state));
+                limit_reasons.push(line.clone());
+                held.push((op, line));
+                continue;
+            }
+        }
         match super::access::config_rule(who, &op, class) {
             Ok(()) => now_ops.push(op),
-            Err(why) => held.push((op, why)),
+            Err(why) => {
+                let line = format!("{}: {why}", appcfg::describe(&op, &state));
+                held.push((op, line));
+            }
         }
     }
     let io_changed = now_ops.iter().any(|o| matches!(o, Op::Io(_)));
@@ -1318,8 +1399,11 @@ fn config(who: &Who, body: &[u8]) -> R<J> {
     if !held.is_empty() {
         let t = super::grace::target(&Who::Owner, Some(&app.service_id))?;
         let diff: Vec<String> = held.iter().map(|(op, _)| appcfg::describe(op, &state)).collect();
-        let mut reasons: Vec<String> = held.iter().map(|(op, why)| format!("{}: {why}", appcfg::describe(op, &state))).collect();
+        let mut reasons: Vec<String> = held.iter().map(|(_, why)| why.clone()).collect();
         reasons.dedup();
+        if !limit_reasons.is_empty() {
+            out["limits"] = json!(limit_reasons);
+        }
         let ops: Vec<&Op> = held.iter().map(|(op, _)| op).collect();
         let h = super::grace::hold(
             who,
@@ -1456,9 +1540,14 @@ pub fn log_upgrade_notices() {
 }
 
 /// GET `/cli/app/list[?workspace=]`: a passport sees its own workspace's
-/// Apps; others see every App (or one workspace's).
+/// Apps; others see every App (or one workspace's). `?box=1` is the box
+/// view for every caller (§4.1): all Apps with their maintaining agent and
+/// footprint, nothing inside them (`coordination.rs`).
 fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
     need_credential(who)?;
+    if params.get("box").is_some_and(|b| matches!(b.trim(), "1" | "true" | "yes")) {
+        return super::coordination::box_view(who);
+    }
     let filter = match agent_ws(who) {
         Some(ws) => Some(ws.to_string()),
         None => match params.get("workspace").map(|s| s.trim()).filter(|s| !s.is_empty()) {
@@ -1711,7 +1800,7 @@ fn errors(who: &Who, params: &HashMap<String, String>) -> R<J> {
 /// `purge` also removes the App folder (its data): the owner in person,
 /// with a fresh vault confirm bound to the App, every time, the owner
 /// token included (slice E, F3); passports and shell tabs refused.
-fn uninstall(who: &Who, body: &[u8]) -> R<J> {
+pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
     need_build(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;

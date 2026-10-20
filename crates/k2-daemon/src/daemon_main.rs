@@ -1446,6 +1446,13 @@ async fn async_main() {
     crate::apps::gateway::install(state.clone());
     if k2_core::deploy::enabled() {
         crate::apps::supervisor::ensure_started();
+        // F4: Apps whose workspace was removed before 0.46.3 are parked
+        // (never deleted) and the owner hears once. After the supervisor
+        // re-adopted them, so a running orphan is drained and stopped.
+        let parked = crate::apps::ownership::sweep_orphans();
+        if !parked.is_empty() {
+            k2_core::log_debug!("[apps] parked {} orphaned App(s): {}", parked.len(), parked.join(", "));
+        }
     }
     // S9 (AR23): Garden widget versions write deploy_audit rows.
     k2_core::deploy::widget_events::install_db_sink();

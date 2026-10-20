@@ -657,7 +657,8 @@ workspace and go through K2; never copy files into `~/.k2` yourself:\n\
   human's Gardens); `--clear` removes it. Person, or an agent with the switch.\n\
 - `k2 zen widget put board --dir ./board [--prune]` writes the whole folder in one\n\
   checked call (a folder with errors writes nothing). Without \"Manage Gardens and\n\
-  data sources\" it becomes one proposal per changed code file.\n\
+  data sources\" it becomes ONE proposal for the folder (its changed code files);\n\
+  approving it writes them all at once, or nothing if a file moved since.\n\
 - `k2 zen validate --garden <id> --from page.toml` checks a staged Garden page;\n\
   `k2 zen garden put <id> --from page.toml` writes it.\n\
 5. `k2 zen widget list` shows each widget's state and placements; `k2 zen history --widget\n\
@@ -716,6 +717,10 @@ the source's **card view** from the server that runs it. Make and inspect source
   30 s). `data` gets a normalised view (`items` is always a list, `fields` an object); a\n\
   value that isn't a view reaches `error` as `bad_shape`. Nothing runs after `stop()`. Don't\n\
   write your own retry timer. Guards for other data: `k2.shape.view/list/obj/num/str`.\n\
+  Since 0.46.3 the old form `k2.sources.subscribe(address, cb, onError)` retries the same\n\
+  way (onError hears each refusal with `err.retrying`; `rate_limited` still ends it), and a\n\
+  new subscribe to the same source replaces a retry K2 has waiting, so old cards that\n\
+  re-subscribe in onError don't pile up.\n\
   Arguments must be plain data (else `bad_args`, refused in the frame).\n\n\
 ```js\n\
 k2.connected.then(() => {\n\

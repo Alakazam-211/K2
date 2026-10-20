@@ -231,7 +231,12 @@
         if (k.indexOf('--zen-') === 0 && typeof t.vars[k] === 'string') root.style.setProperty(k, t.vars[k])
       }
     }
-    if (t.scheme === 'light' || t.scheme === 'dark') root.setAttribute('data-zen-scheme', t.scheme)
+    if (t.scheme === 'light' || t.scheme === 'dark') {
+      root.setAttribute('data-zen-scheme', t.scheme)
+      // The Garden's scheme wins over the widget's own (0.46.3), as the
+      // frame's first style does: a switch keeps it in step.
+      root.style.setProperty('color-scheme', t.scheme, 'important')
+    }
   }
 
   /** @param {MessageEvent} e */
@@ -689,8 +694,11 @@
   var SHAPES = { 'sources.subscribe': view, 'store.changes': delivery }
 
   // A handler-object subscription: retries retryable refusals with capped
-  // backoff; nothing runs after its unsubscribe.
-  /** @param {string} verb @param {unknown[]} args @param {{data: (v: unknown) => void, error?: (e: K2Error) => void, state?: (s: string) => void}} h */
+  // backoff; nothing runs after its unsubscribe. `legacy` (0.46.3): a
+  // `sources.subscribe(address, cb, onError?)` gets the same retries, with
+  // its raw values (no shape guard) and never on rate_limited. With no error
+  // handler K2 hears of a refusal once per run of refusals, not per retry.
+  /** @param {string} verb @param {unknown[]} args @param {{data: (v: unknown) => void, error?: ((e: K2Error) => void) | null, state?: (s: string) => void, legacy?: boolean}} h */
   function watch(verb, args, h) {
     var live = true
     var attempt = 0
@@ -699,7 +707,7 @@
     var off = null
     /** @type {unknown} */
     var timer = null
-    var guard = SHAPES[verb]
+    var guard = h.legacy ? null : SHAPES[verb]
     /** @param {string} st */
     function state(st) {
       if (!live || st === now) return
@@ -715,7 +723,10 @@
     /** @param {K2Error} err */
     function fault(err) {
       if (!live) return
-      if (!h.error) return send({ error: { message: 'k2: ' + verb + ' (' + err.code + '): ' + err.message } })
+      if (!h.error) {
+        if (/** @type {any} */ (err).retrying && attempt > 1) return
+        return send({ error: { message: 'k2: ' + verb + ' (' + err.code + '): ' + err.message } })
+      }
       try {
         h.error(err)
       } catch (e) {
@@ -747,12 +758,15 @@
       attempt++
       var e = /** @type {any} */ (err)
       e.attempt = attempt
-      if (err.retryable) {
+      if (err.retryable && !(h.legacy && err.code === 'rate_limited')) {
         if (e.last !== undefined && guard) e.last = guard(e.last)
         e.retrying = true
-        fault(err)
+        // The old form is retrying before its onError runs, so an onError
+        // that subscribes again replaces this retry (no pile-up).
+        if (!h.legacy) fault(err)
         state('retrying')
         timer = g.setTimeout(start, Math.min(30000, 1000 * Math.pow(2, Math.min(attempt - 1, 5))))
+        if (h.legacy) fault(err)
         return
       }
       e.retrying = false
@@ -780,6 +794,47 @@
     }
   }
 
+  // Callback-form source subscriptions K2 is retrying, by verb + args. A new
+  // one to the same source replaces them, so a widget that re-subscribes in
+  // its own onError (as cards did before 0.46.3) never piles up retries.
+  /** @type {Map<string, Array<{st: string, stop: () => void}>>} */
+  var retried = new Map()
+
+  // `sources.subscribe(address, cb, onError?)` (0.46.3): a retryable refusal
+  // (the placement doesn't bind it yet, its server is away) reaches onError
+  // with `retrying` and K2 subscribes again by itself, like a handler object.
+  /** @param {string} verb @param {unknown[]} args @param {(v: unknown) => void} cb @param {((e: K2Error) => void) | null} onError */
+  function legacyWatch(verb, args, cb, onError) {
+    if (typeof cb !== 'function') throw new TypeError('k2.subscribe: the callback must be a function')
+    if (!plain(args, 0)) throw badArgs(verb)
+    if (!port && !early) throw notConnected(verb)
+    var key = verb + '\n' + JSON.stringify(args)
+    var list = (retried.get(key) || []).filter(function (w) {
+      if (w.st !== 'retrying') return true
+      w.stop()
+      return false
+    })
+    retried.set(key, list)
+    var w = { st: '', stop: function () {} }
+    var off = watch(verb, args, {
+      data: cb,
+      error: onError,
+      legacy: true,
+      state: function (st) {
+        w.st = st
+      },
+    })
+    w.stop = function () {
+      var now = retried.get(key) || []
+      var i = now.indexOf(w)
+      if (i >= 0) now.splice(i, 1)
+      if (!now.length) retried.delete(key)
+      off()
+    }
+    list.push(w)
+    return w.stop
+  }
+
   // Trailing function args are cb, onError?; or one handler object.
   /** @param {string} verb @param {unknown[]} rest */
   function subscribe(verb, rest) {
@@ -789,7 +844,9 @@
     var two = n >= 2 && typeof rest[n - 1] === 'function' && typeof rest[n - 2] === 'function'
     var cb = two ? rest[n - 2] : rest[n - 1]
     var onError = two ? /** @type {(e: K2Error) => void} */ (rest[n - 1]) : null
-    return transport.subscribe(verb, rest.slice(0, two ? -2 : -1), /** @type {(v: unknown) => void} */ (cb), onError)
+    var args = rest.slice(0, two ? -2 : -1)
+    if (verb === 'sources.subscribe') return legacyWatch(verb, args, /** @type {(v: unknown) => void} */ (cb), onError)
+    return transport.subscribe(verb, args, /** @type {(v: unknown) => void} */ (cb), onError)
   }
 
   /** @type {Record<string, any>} */

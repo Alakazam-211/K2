@@ -235,7 +235,10 @@ for (var k in t.vars) {
 if (k.indexOf('--zen-') === 0 && typeof t.vars[k] === 'string') root.style.setProperty(k, t.vars[k])
 }
 }
-if (t.scheme === 'light' || t.scheme === 'dark') root.setAttribute('data-zen-scheme', t.scheme)
+if (t.scheme === 'light' || t.scheme === 'dark') {
+root.setAttribute('data-zen-scheme', t.scheme)
+root.style.setProperty('color-scheme', t.scheme, 'important')
+}
 }
 
 function onHello(e) {
@@ -643,7 +646,7 @@ var attempt = 0
 var now = ''
 var off = null
 var timer = null
-var guard = SHAPES[verb]
+var guard = h.legacy ? null : SHAPES[verb]
 function state(st) {
 if (!live || st === now) return
 now = st
@@ -657,7 +660,10 @@ report(e)
 }
 function fault(err) {
 if (!live) return
-if (!h.error) return send({ error: { message: 'k2: ' + verb + ' (' + err.code + '): ' + err.message } })
+if (!h.error) {
+if (/** @type {any} */ (err).retrying && attempt > 1) return
+return send({ error: { message: 'k2: ' + verb + ' (' + err.code + '): ' + err.message } })
+}
 try {
 h.error(err)
 } catch (e) {
@@ -687,12 +693,13 @@ off = null
 attempt++
 var e = /** @type {any} */ (err)
 e.attempt = attempt
-if (err.retryable) {
+if (err.retryable && !(h.legacy && err.code === 'rate_limited')) {
 if (e.last !== undefined && guard) e.last = guard(e.last)
 e.retrying = true
-fault(err)
+if (!h.legacy) fault(err)
 state('retrying')
 timer = g.setTimeout(start, Math.min(30000, 1000 * Math.pow(2, Math.min(attempt - 1, 5))))
+if (h.legacy) fault(err)
 return
 }
 e.retrying = false
@@ -720,6 +727,39 @@ off = null
 }
 }
 
+var retried = new Map()
+
+function legacyWatch(verb, args, cb, onError) {
+if (typeof cb !== 'function') throw new TypeError('k2.subscribe: the callback must be a function')
+if (!plain(args, 0)) throw badArgs(verb)
+if (!port && !early) throw notConnected(verb)
+var key = verb + '\n' + JSON.stringify(args)
+var list = (retried.get(key) || []).filter(function (w) {
+if (w.st !== 'retrying') return true
+w.stop()
+return false
+})
+retried.set(key, list)
+var w = { st: '', stop: function () {} }
+var off = watch(verb, args, {
+data: cb,
+error: onError,
+legacy: true,
+state: function (st) {
+w.st = st
+},
+})
+w.stop = function () {
+var now = retried.get(key) || []
+var i = now.indexOf(w)
+if (i >= 0) now.splice(i, 1)
+if (!now.length) retried.delete(key)
+off()
+}
+list.push(w)
+return w.stop
+}
+
 function subscribe(verb, rest) {
 var last = /** @type {any} */ (rest[rest.length - 1])
 if (isObj(last) && typeof last.data === 'function') return watch(verb, rest.slice(0, -1), last)
@@ -727,7 +767,9 @@ var n = rest.length
 var two = n >= 2 && typeof rest[n - 1] === 'function' && typeof rest[n - 2] === 'function'
 var cb = two ? rest[n - 2] : rest[n - 1]
 var onError = two ? /** @type {(e: K2Error) => void} */ (rest[n - 1]) : null
-return transport.subscribe(verb, rest.slice(0, two ? -2 : -1), /** @type {(v: unknown) => void} */ (cb), onError)
+var args = rest.slice(0, two ? -2 : -1)
+if (verb === 'sources.subscribe') return legacyWatch(verb, args, /** @type {(v: unknown) => void} */ (cb), onError)
+return transport.subscribe(verb, args, /** @type {(v: unknown) => void} */ (cb), onError)
 }
 
 var k2 = {}

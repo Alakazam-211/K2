@@ -20,12 +20,15 @@ interface Realm {
   /** Run the timers due now (in order), returning their delays. */
   runTimers(): number[]
   pending(): number
+  /** Every `documentElement.style.setProperty` the runtime made. */
+  rootStyle(): Array<[string, string, string | undefined]>
 }
 
 const ports: MessagePort[] = []
 
 function realm(): Realm {
   const listeners = new Map<string, Listener[]>()
+  const rootStyle: Array<[string, string, string | undefined]> = []
   let timers: Array<{ id: number; f: () => void; ms: number }> = []
   let nextTimer = 1
   const parent = {}
@@ -42,7 +45,12 @@ function realm(): Realm {
     },
     parent,
     navigator: { platform: 'MacIntel' },
-    document: { documentElement: { style: { setProperty: () => undefined }, setAttribute: () => undefined } },
+    document: {
+      documentElement: {
+        style: { setProperty: (k: string, v: string, p?: string) => rootStyle.push([k, v, p]) },
+        setAttribute: () => undefined,
+      },
+    },
     console,
   }
   g.self = g
@@ -61,6 +69,7 @@ function realm(): Realm {
       return due.map((t) => t.ms)
     },
     pending: () => timers.filter((t) => t.id !== 1).length,
+    rootStyle: () => rootStyle,
   }
 }
 
@@ -287,7 +296,10 @@ describe('0.46.1: handler-object subscriptions re-subscribe on their own', () =>
     expect(errors.map((e) => e.code)).toEqual(['bad_shape'])
   })
 
-  it('the old (cb, onError) form is unchanged: one refusal ends it, no retry (the live Fleet Ops cards retry themselves)', async () => {
+})
+
+describe('0.46.3: a refused (cb, onError) source subscription is retried too', () => {
+  it('not_bound: onError hears it with retrying, K2 subscribes again, raw values flow when bound', async () => {
     const r = realm()
     const { host, heard } = connect(r)
     const errors: any[] = []
@@ -298,10 +310,110 @@ describe('0.46.1: handler-object subscriptions re-subscribe on their own', () =>
     host.postMessage({ sub: s1, value: { anything: true } })
     host.postMessage({ sub: s1, error: { code: 'not_bound', message: 'x' } })
     await tick()
-    expect(got).toEqual([{ anything: true }])
-    expect(errors.map((e) => [e.code, e.retryable, e.retrying])).toEqual([['not_bound', true, undefined]])
+    expect(got).toEqual([{ anything: true }], 'the old form gets raw values: no shape guard')
+    expect(errors.map((e) => [e.code, e.retryable, e.retrying, e.attempt])).toEqual([['not_bound', true, true, 1]])
+    expect(r.runTimers()).toEqual([1000])
+    await tick()
+    const [, s2] = subsOf(heard, 'sources.subscribe')
+    expect(heard.find((m) => m.sub === s2)!.args).toEqual(['x'])
+    host.postMessage({ sub: s2, value: VIEW })
+    await tick()
+    expect(got.at(-1)).toEqual(VIEW)
+  })
+
+  it('a refusal that isn’t retryable still ends it once; rate_limited is never retried in the old form', async () => {
+    for (const code of ['cap_not_granted', 'rate_limited']) {
+      const r = realm()
+      const { host, heard } = connect(r)
+      const errors: any[] = []
+      r.k2.sources.subscribe('x', () => undefined, (e: unknown) => errors.push(e))
+      await tick()
+      host.postMessage({ sub: subsOf(heard, 'sources.subscribe')[0], error: { code, message: 'no' } })
+      await tick()
+      expect(errors.map((e) => [e.code, e.retrying])).toEqual([[code, false]])
+      expect(r.pending()).toBe(0)
+      expect(subsOf(heard, 'sources.subscribe')).toHaveLength(1)
+    }
+  })
+
+  it('a card that re-subscribes in its own onError replaces K2’s retry: no pile-up', async () => {
+    const r = realm()
+    const { host, heard } = connect(r)
+    let offs = 0
+    const sub = (): void => {
+      r.k2.sources.subscribe('x', () => undefined, () => {
+        offs += 1
+        sub()
+      })
+    }
+    sub()
+    for (let i = 0; i < 5; i++) {
+      await tick()
+      host.postMessage({ sub: subsOf(heard, 'sources.subscribe').at(-1), error: { code: 'not_bound', message: 'x' } })
+      await tick()
+    }
+    expect(offs).toBe(5)
+    // Each card re-subscribe stopped the retry K2 had waiting: no timers left.
     expect(r.pending()).toBe(0)
-    expect(subsOf(heard, 'sources.subscribe')).toHaveLength(1)
+    expect(subsOf(heard, 'sources.subscribe')).toHaveLength(6)
+  })
+
+  it('a second live subscription to the same source is never stopped by a new one', async () => {
+    const r = realm()
+    const { host, heard } = connect(r)
+    const a: unknown[] = []
+    const b: unknown[] = []
+    r.k2.sources.subscribe('x', (v: unknown) => a.push(v))
+    r.k2.sources.subscribe('x', (v: unknown) => b.push(v))
+    await tick()
+    const [s1, s2] = subsOf(heard, 'sources.subscribe')
+    host.postMessage({ sub: s1, value: 1 })
+    host.postMessage({ sub: s2, value: 2 })
+    await tick()
+    expect([a, b]).toEqual([[1], [2]])
+    expect(heard.filter((m) => typeof m.unsub === 'number')).toEqual([])
+  })
+
+  it('with no onError K2 hears of a run of refusals once, not per retry', async () => {
+    const r = realm()
+    const { host, heard } = connect(r)
+    r.k2.sources.subscribe('x', () => undefined)
+    for (let i = 0; i < 4; i++) {
+      await tick()
+      host.postMessage({ sub: subsOf(heard, 'sources.subscribe').at(-1), error: { code: 'unreachable', message: 'down' } })
+      await tick()
+      r.runTimers()
+    }
+    await tick()
+    expect(heard.filter((m) => m.error && typeof m.error.message === 'string' && m.error.message.includes('sources.subscribe'))).toHaveLength(1)
+    expect(subsOf(heard, 'sources.subscribe')).toHaveLength(5)
+  })
+
+  it('other verbs keep the old form exactly: one refusal ends it', async () => {
+    const r = realm()
+    const { host, heard } = connect(r)
+    const errors: any[] = []
+    r.k2.subscribe('presence.subscribe', 'ada::rosson.k2.dev', () => undefined, (e: unknown) => errors.push(e))
+    await tick()
+    host.postMessage({ sub: subsOf(heard, 'presence.subscribe')[0], error: { code: 'not_bound', message: 'x' } })
+    await tick()
+    expect(errors.map((e) => [e.code, e.retrying])).toEqual([['not_bound', undefined]])
+    expect(r.pending()).toBe(0)
+  })
+})
+
+describe('0.46.3: the Garden’s scheme wins in the frame', () => {
+  it('a theme switch sets color-scheme !important on the root, over any widget rule', async () => {
+    const r = realm()
+    const { host, heard } = connect(r)
+    await tick()
+    const themeSub = subsOf(heard, 'theme.changed')[0]
+    host.postMessage({ sub: themeSub, value: { theme: { scheme: 'dark', vars: { '--zen-text': '#eee' } } } })
+    await tick()
+    expect(r.rootStyle()).toEqual([
+      ['--zen-text', '#eee', undefined],
+      ['color-scheme', 'dark', 'important'],
+    ])
   })
 })
 

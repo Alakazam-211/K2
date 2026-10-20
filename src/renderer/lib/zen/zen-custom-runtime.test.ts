@@ -313,7 +313,7 @@ describe('TUWA6: the frame runtime', () => {
     const sub = (heard[0] as { sub: number }).sub
     host.postMessage({ sub, value: { theme: { vars: { '--zen-text': '#111', color: 'red' }, scheme: 'dark' }, chrome: {}, motion: { reduced: false } } })
     await tick()
-    expect(r.rootStyle).toEqual({ '--zen-text': '#111' })
+    expect(r.rootStyle).toEqual({ '--zen-text': '#111', 'color-scheme': 'dark' })
     expect(r.rootAttrs).toEqual({ 'data-zen-scheme': 'dark' })
   })
 
@@ -429,7 +429,7 @@ describe('the frame prelude', () => {
     })
     const guard = `<script nonce="AAAAAAAAAAAAAAAAAAAAAA">${SEALED_FRAME_GUARD}</script>`
     expect(html.startsWith(guard)).toBe(true)
-    expect(html.slice(guard.length).startsWith('<style data-k2-theme="">:root{--zen-text:#111;color-scheme:light;')).toBe(true)
+    expect(html.slice(guard.length).startsWith('<style data-k2-theme="">:root{--zen-text:#111;color-scheme:light!important;')).toBe(true)
     expect(html).not.toContain('alert(1)')
     const scripts = [...html.matchAll(/<script nonce="AAAAAAAAAAAAAAAAAAAAAA">/g)]
     expect(scripts).toHaveLength(4)

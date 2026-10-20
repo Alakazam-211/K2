@@ -131,9 +131,12 @@ pub enum Op {
 pub enum Class {
     /// Takes something away (or changes nothing): never waits.
     Narrow,
-    /// A budget change "Allow this agent to manage Apps" covers.
+    /// A budget raise: humans and an agent with "…and manage them end to
+    /// end" (switch 2) make it; switch 1 proposes it.
     Budget,
-    /// An open-path feature: "…and publish open Apps" covers it.
+    /// An open-path feature: it loosens the wall, so the person confirms
+    /// it from every caller (prd-agent-app-permissions-v1 §2.2; the old
+    /// "…and publish open Apps" standing approval is retired).
     Open,
     /// A widening only the owner makes (agents propose).
     Owner,

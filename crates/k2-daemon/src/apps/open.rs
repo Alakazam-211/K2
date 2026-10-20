@@ -23,9 +23,9 @@
 //! stored as a Seed as it is (`k2_core::deploy::build::snapshot_folder`, a
 //! synthesized manifest in the row), deployed through the shared pipeline
 //! (health = the port answers, as `k2 publish run` always checked), and a
-//! re-run takes a fresh snapshot. An agent needs "Allow this agent to
-//! manage Apps" + "…and publish open Apps", or its run is held for the
-//! owner (`publish_routes`). Existing `--cmd` services are untouched in
+//! re-run takes a fresh snapshot. An agent's new service is held for the
+//! owner's in-person approval, one request per service (`publish_routes`;
+//! prd-agent-app-permissions-v1 N1 retired the standing approval). Existing `--cmd` services are untouched in
 //! 0.46.1 (Rosson: their environment ends in 0.46.2, with `adopt`). On a
 //! box where the open path isn't ready (macOS, no root helper, no engine,
 //! the runtime off) `k2 publish run --cmd` keeps 0.46.0's behaviour and

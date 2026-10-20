@@ -20741,8 +20741,9 @@ run
   an open-path App (a relaxed container with a fresh copy of the folder at each
   start; keep lasting files in $K2_APP_DATA; --port is its port inside; egress
   logged). Run it again to deploy changes; start|stop|rm map onto the App
-  (k2 app logs|inspect <name>). An agent needs "Allow this agent to manage Apps"
-  and "…and publish open Apps", or the run waits for the owner (exit 2).
+  (k2 app logs|inspect <name>). An agent's new service waits for the owner's
+  in-person approval (exit 2); re-running one it already has needs "Build and
+  run Apps".
   Services published before keep running as they are.
   Default (Pro): also creates nested https://<name>.<host>.k2.dev → localhost:<port>.
   <host> is the Connected host from `k2 publish status`.

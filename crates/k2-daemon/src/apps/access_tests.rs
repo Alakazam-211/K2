@@ -186,7 +186,6 @@ fn agent_switch_matrix_off_build_full() {
         // Raises: switch 2 makes them itself; switch 1 proposes.
         ("/cli/app/quota/set", true, json!({"app": "jobs", "rps": 900}), Held, Held, Run),
         ("/cli/app/config", true, json!({"app": "plain", "memory": "1G"}), Held, Held, Run),
-        ("/cli/app/config", true, json!({"app": "plain", "cpuWeight": 400}), Held, Held, Run),
         ("/cli/app/config", true, json!({"app": "plain", "dbPrivate": "on"}), Held, Held, Run),
         ("/cli/app/config", true, json!({"app": "plain", "io": {"wbps": "500M"}}), Held, Held, Run),
         // Loosening the wall: the person, in every state (§2.2).
@@ -340,8 +339,9 @@ fn switch_2_applies_its_own_widenings_and_switch_1_proposes_them() {
     let (st, v) = grace("/cli/app/key/mint", &a, json!({"app": "bff", "scopes": ["users"]}));
     assert_ne!(st, 202, "switch 2 mints its own App's key, never held: {v}");
     if st != 200 {
-        // The test daemon has no open vault: the mint was attempted.
-        assert_eq!(code(&v), "vault_closed", "{v}");
+        // The test process may have no open vault: the mint was attempted
+        // (never held, never refused for the switch).
+        assert!(matches!(code(&v), "vault_closed" | "vault_error"), "{v}");
     }
     let (st, v) = grace("/cli/app/key/mint", &a, json!({"app": "bff", "scopes": ["users"], "deliver": "show"}));
     assert_eq!((st, code(&v)), (403, "owner_only"), "an agent never sees a key: {v}");

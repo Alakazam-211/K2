@@ -1412,7 +1412,16 @@ fn handle_access(
             crate::apps::access::SwitchChange { build: Some(value), full: None }
         };
         let before = crate::apps::access::level(&ws.id);
-        let mut out = crate::apps::access::set_switches(&ws.id, change, caller_is_owner(caller), &caller.audit_user())
+        // The agent's note names who changed it: `owner:<u>` / `admin:<u>`.
+        let by = match caller {
+            Caller::Login { username } => match k2_core::connect_users::role_for_user(username) {
+                Some(k2_core::connect_users::Role::Owner) => format!("owner:{username}"),
+                Some(k2_core::connect_users::Role::Admin) => format!("admin:{username}"),
+                _ => format!("user:{username}"),
+            },
+            other => other.audit_user(),
+        };
+        let mut out = crate::apps::access::set_switches(&ws.id, change, caller_is_owner(caller), &by)
             .map_err(|r| err(r.code, r.status, r.hint))?;
         out["toggle"] = serde_json::json!(toggle);
         if toggle == "apps_manage" {

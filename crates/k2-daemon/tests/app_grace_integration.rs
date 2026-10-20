@@ -1,6 +1,6 @@
 //! The 0.46.0 App grace release, end to end through the REAL dispatcher
 //! (Rosson's cross-over plan, 2026-10-14: 0.46.0 adds the new ways and
-//! removes nothing; 0.46.1 is the cut-over).
+//! removes nothing; the cut-over is now 0.46.4, k2_core::app_grace::CUTOVER_RELEASE).
 //!
 //! - warnings per published `--cmd` service (env reads, K2 files, PATH);
 //! - clean mode: on narrows (an agent may), off is held for the owner;

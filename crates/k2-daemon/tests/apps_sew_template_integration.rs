@@ -24,7 +24,9 @@ use serde_json::json;
 const SEAL: &str = "K2_APP_SEAL_KEY";
 
 async fn install(port: u16, token: &str, app: &str, ws: &Ws) -> u16 {
-    let r = post(port, "/cli/app/install", token, json!({"app": app, "workspace": ws.id})).await;
+    // 0.46.3: new Apps default to a container; this harness has no
+    // container engine, so the owner installs on the process engine.
+    let r = post(port, "/cli/app/install", token, json!({"app": app, "workspace": ws.id, "engine": "process"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     r.json()["frontPort"].as_u64().unwrap() as u16
 }

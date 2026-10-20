@@ -32,7 +32,7 @@ use k2_core::deploy::{self, codes, store::AppRow};
 use k2_core::published_services as ps;
 use serde_json::{json, Value as J};
 
-use super::routes::{actor, app_for, db_err, json_body, need_build, no, s, Who, R};
+use super::routes::{actor, app_for, db_err, json_body, need_build, no, s, Refusal, Who, R};
 
 pub const ROUTES: &[&str] = &["/cli/app/label/return", "/cli/app/label/take"];
 
@@ -111,6 +111,27 @@ fn healthy(app: &AppRow) -> Result<u16, String> {
     Ok(front)
 }
 
+/// Another workspace holds `label`: refused naming the agent that holds it
+/// and its `k2 msg` address (N6), never its folder or id.
+fn foreign_refusal(label: &str, holder: &str) -> Refusal {
+    let m = super::coordination::maintainer_of(holder);
+    let ask = match (&m.address, m.kind) {
+        (Some(a), "agent") => format!(" Ask it: k2 msg {a} \"…\""),
+        _ => String::new(),
+    };
+    let mut r = no(
+        LABEL_FOREIGN,
+        403,
+        format!(
+            "'{label}' belongs to another workspace on this server, {}: an App only takes its own workspace's labels (moving one \
+             across workspaces is the owner's hand-over).{ask}",
+            m.phrase()
+        ),
+    );
+    r.extra = Some(json!({ "owner": m.json() }));
+    r
+}
+
 fn take(who: &Who, app: &AppRow, label: &str) -> R<J> {
     let ws = app.owner_workspace.clone();
     let row = {
@@ -129,12 +150,8 @@ fn take(who: &Who, app: &AppRow, label: &str) -> R<J> {
                 .ok();
             by_row.or_else(|| k2_core::db::schema::SubdomainWorkspace::owner_of(&conn, label).ok().flatten().filter(|o| o != &ws))
         };
-        if foreign.is_some() {
-            return Err(no(
-                LABEL_FOREIGN,
-                403,
-                format!("'{label}' belongs to another workspace: an App only takes its own workspace's labels (moving one across workspaces is the owner's hand-over)"),
-            ));
+        if let Some(holder) = foreign {
+            return Err(foreign_refusal(label, &holder));
         }
         return Err(no(codes::APP_NOT_FOUND, 404, format!("your workspace has no published service named '{label}' (k2 publish list)")));
     };
@@ -159,7 +176,13 @@ fn take(who: &Who, app: &AppRow, label: &str) -> R<J> {
             format!("{why}: deploy it and wait until it's live before it takes '{label}' (k2 app deployment {} ; k2 app logs {})", app.app_id, app.app_id),
         )
     })?;
-    crate::label_owner::check(label, &ws, false).map_err(|r| no(LABEL_FOREIGN, 403, r.message()))?;
+    crate::label_owner::check(label, &ws, false).map_err(|r| {
+        let mut out = no(LABEL_FOREIGN, 403, r.message());
+        if let Some(o) = r.body.get("owner") {
+            out.extra = Some(json!({ "owner": o }));
+        }
+        out
+    })?;
     point(&ws, label, front).map_err(|e| no(MOVE_FAILED, 409, format!("'{label}' still serves the legacy service: {e}")))?;
     // Unrouted: the legacy service runs on, and a restart of it never
     // points the label back.

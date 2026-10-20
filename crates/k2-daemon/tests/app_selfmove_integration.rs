@@ -296,6 +296,10 @@ async fn an_agent_moves_its_label_to_its_healthy_app_and_back() {
     // Another workspace's label: never across workspaces.
     let r = post(d.port, "/cli/app/label/take", &agent, json!({"app": "jobsapp", "label": "theirs"})).await;
     assert_eq!((r.status, r.code()), (403, "label_owned_by_other_workspace".to_string()), "{}", r.body);
+    // N6: it names the agent that holds it and its address, never its folder.
+    assert_eq!(r.json()["error"]["owner"]["kind"], "agent", "{}", r.body);
+    assert!(r.json()["error"]["owner"]["address"].is_string(), "{}", r.body);
+    assert!(!r.body.contains(&*other.path.to_string_lossy()), "no folder path: {}", r.body);
     // Another workspace's agent can't name this App at all.
     allow_manage(&other, true);
     let r = post(d.port, "/cli/app/label/take", &passport(&other), json!({"app": "jobsapp", "label": "theirs"})).await;

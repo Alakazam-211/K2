@@ -504,3 +504,63 @@ fn clashes_name_the_owning_agent_and_address_never_the_path() {
     assert!(v["error"]["owner"]["address"].is_string(), "{v}");
     assert_no_leak(&v, &[&f.a, &f.b]);
 }
+
+/// 0.46.3 interplay (selfmove × DFG N6): `k2 app label take` of a label
+/// another workspace holds is refused naming the agent that holds it and
+/// its `k2 msg` address, never its folder or id: a published service row
+/// of theirs and a bare subdomain stamp alike.
+#[test]
+fn label_take_of_another_workspaces_label_names_the_holding_agent() {
+    let f = fx("ltake");
+    switch(&f.a, true);
+    let a = agent(&f.a);
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::published_services::insert(&conn, &f.b, "oltake-svc", "python3 -m http.server", "/tmp", 8081, "tunnel", "stopped", "cmd", "")
+            .unwrap();
+        k2_core::db::schema::SubdomainWorkspace::self_stamp(&conn, "oltake-lbl", &f.b, None).unwrap();
+    }
+    for label in ["oltake-svc", "oltake-lbl"] {
+        let (st, v) = crate::label_owner::with_caller(crate::label_owner::Caller::Agent, || {
+            call("/cli/app/label/take", &a, json!({ "app": f.a1, "label": label }))
+        });
+        assert_eq!((st, code(&v)), (403, "label_owned_by_other_workspace"), "{label}: {v}");
+        assert_eq!(v["error"]["owner"]["agent"], "Ops ltake", "{label}: {v}");
+        assert_eq!(v["error"]["owner"]["kind"], "agent", "{label}: {v}");
+        let addr = v["error"]["owner"]["address"].as_str().unwrap_or_else(|| panic!("{label}: no address: {v}"));
+        let hint = v["error"]["hint"].as_str().unwrap();
+        assert!(hint.contains(&format!("k2 msg {addr}")), "{label}: {v}");
+        assert!(hint.contains("maintained by Ops ltake"), "{label}: {v}");
+        assert_no_leak(&v, &[&f.a, &f.b]);
+    }
+}
+
+/// 0.46.3 interplay (selfmove × sew-template × apps-on): an App made by
+/// the default install path lands in a container (walled), and its seal
+/// key reaches the guarded engine as the file `K2_APP_SEAL_KEY` (a secret
+/// the wall carries, never dropped, never an env variable).
+#[test]
+fn a_default_install_is_walled_and_its_seal_key_reaches_the_wall_as_a_file() {
+    let f = fx("sealw");
+    crate::vault::ensure_test_vault();
+    let _pool = super::admission::pool_for_test(64 * G);
+    // Unique App id: the test vault is shared by the test binary.
+    let app = format!("osealw-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+    let (st, v) = call("/cli/app/install", &Who::Owner, json!({ "app": app, "workspace": f.a }));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["app"]["isolation"], "container", "the default path is walled: {v}");
+    let r = row(&app);
+    assert_eq!(r.isolation, "container");
+    assert!(!super::supervisor::runs_unwalled(&r), "a default App never runs unwalled");
+    // What every start does before the engine reads the grants.
+    super::seal::ensure_for_start(&r.app_id, &r.service_id);
+    let g = crate::vault::publish_env::granted(&r.service_id, &f.a, std::path::Path::new("/nonexistent-sealw-cwd"));
+    assert!(g.env.iter().all(|(k, _)| k != super::seal::SEAL_FILE), "never an env variable");
+    let (items, dropped) = super::guarded::secret_items(g.env, g.files);
+    assert!(dropped.is_empty(), "the wall drops nothing: {dropped:?}");
+    let seal: Vec<_> = items.iter().filter(|i| i.file.as_deref() == Some(super::seal::SEAL_FILE)).collect();
+    assert_eq!(seal.len(), 1, "exactly one seal key file for the walled App");
+    assert!(seal[0].env.is_none(), "a file, not an env variable");
+    assert_eq!(seal[0].value_hex.len(), 86, "43 base64url characters, hex-encoded on the wire");
+}

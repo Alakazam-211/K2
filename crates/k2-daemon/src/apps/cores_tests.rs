@@ -452,3 +452,49 @@ fn the_0197_backfill_is_corrected_once() {
     assert!(super::cores::fix_backfill_once().is_empty());
     assert_eq!(super::cores::ticked(&f.ws_a), vec!["files", "thread"]);
 }
+
+/// 0.46.3 interplay (cores × selfmove): `label take`, `label return` and
+/// `data put` answer to the access.rs switches alone. Every core ticked
+/// never stands in for switch 1 (the move is a held `manage` request,
+/// nothing copied); with switch 1 on and no core ticked the move goes on.
+#[test]
+fn cores_never_stand_in_for_switch_1_on_label_take_and_data_put() {
+    let f = fx("move");
+    let src = std::path::PathBuf::from(ws_path(&f.ws_a)).join("old-data");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("jobs.sqlite3"), b"rows").unwrap();
+    let a = agent(&f.ws_a);
+    let dest = k2_core::deploy::app_dir("plain").join("data/jobs.sqlite3");
+
+    // Switch 1 off, every core ticked: each move is held for the owner.
+    set_cores(&f.ws_a, &["db", "files", "thread", "mail", "sew"]);
+    set_level(&f.ws_a, Level::Off);
+    for (path, body) in [
+        ("/cli/app/data/put", json!({"app": "plain", "from": "old-data/jobs.sqlite3"})),
+        ("/cli/app/label/take", json!({"app": "plain", "label": "nosuch"})),
+        ("/cli/app/label/return", json!({"app": "plain", "label": "nosuch"})),
+    ] {
+        let (st, v) = call(path, &a, body);
+        assert!(is_held(st, &v), "{path}: {st} {v}");
+        assert_eq!(v["kind"], "manage", "{path}: {v}");
+    }
+    assert!(!dest.exists(), "nothing copied while held");
+
+    // Switch 1 on, no core ticked: past the gate (the label check answers,
+    // the copy happens).
+    set_cores(&f.ws_a, &[]);
+    set_level(&f.ws_a, Level::Build);
+    let (st, v) = call("/cli/app/label/take", &a, json!({"app": "plain", "label": "nosuch"}));
+    assert_eq!((st, code(&v)), (404, "app_not_found"), "{v}");
+    let (st, v) = call("/cli/app/data/put", &a, json!({"app": "plain", "from": "old-data/jobs.sqlite3"}));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["files"], 1, "{v}");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"rows");
+
+    // Another workspace's switches never reach this App.
+    set_level(&f.ws_a, Level::Off);
+    set_level(&f.ws_b, Level::Full);
+    let (st, v) = call("/cli/app/data/put", &agent(&f.ws_b), json!({"app": "plain", "from": "old-data/jobs.sqlite3"}));
+    assert_eq!((st, code(&v)), (404, "app_not_found"), "{v}");
+    std::fs::remove_dir_all(ws_path(&f.ws_a)).unwrap();
+}

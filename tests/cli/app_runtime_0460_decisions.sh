@@ -71,9 +71,9 @@ class H(BaseHTTPRequestHandler):
         self.record(None)
         if u.path == "/cli/app/warnings":
             t = "on" if mode() == "linux" else "not available on macOS"
-            rep = {"app": {"handle": "shop", "envMode": "clean"}, "cutover": "0.46.2", "readyForCutover": True, "breaks": 0,
+            rep = {"app": {"handle": "shop", "envMode": "clean"}, "cutover": "0.46.4", "readyForCutover": True, "breaks": 0,
                    "warnings": [], "scan": {}, "ownerTokenAttribution": t}
-            return self.reply(200, {"cutover": "0.46.2", "services": [rep] if mode() != "empty" else [], "breaks": 0, "ownerTokenAttribution": t})
+            return self.reply(200, {"cutover": "0.46.4", "services": [rep] if mode() != "empty" else [], "breaks": 0, "ownerTokenAttribution": t})
         return self.reply(404, {"error": {"code": "not_found", "hint": u.path}})
     def do_POST(self):
         u = urlparse(self.path)

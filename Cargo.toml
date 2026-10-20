@@ -37,11 +37,6 @@ codegen-units = 1
 # objc2 0.6.4 expects a null selector (aborts sendEvent). tao 0.37.1 then
 # dereferences the null superclass pointer. Path-patched the same way.
 #
-# pg_query 5.1.1 (libpg_query 16-5.1.0) defines a static strchrnul() that
-# clashes with the macOS 15.4+ SDK declaration (fails on macOS 27 / Xcode 26
-# SDKs). Trimmed copy (sources needed by build.rs only) with the upstream
-# 17-6.1.0 rename backported; we stay on the PostgreSQL 16 grammar.
-#
 # tauri-runtime-wry 2.12.0: on Linux, child webviews (the Browser tab) go
 # into a per-window gtk::Fixed instead of the window's gtk::Box, so their
 # position and size hold (tauri#10420); see its src/child_container.rs.
@@ -55,7 +50,6 @@ codegen-units = 1
 # same bug on upstream master as of 2026-10-18, nothing filed yet. Diff and
 # PR text: third_party/upstream/vte-0001-*. Drop when a fixed vte ships.
 [patch.crates-io]
-pg_query = { path = "third_party/pg_query" }
 wry = { path = "third_party/wry" }
 objc2 = { path = "third_party/objc2" }
 tao = { path = "third_party/tao" }

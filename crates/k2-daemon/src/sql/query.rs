@@ -1,7 +1,13 @@
 //! One guest statement for `POST /cli/db/query`.
 //!
-//! Parsed in-process with the PostgreSQL 16 grammar (`pg_query` 5.1.1)
-//! before any user SQL is sent to psql.
+//! Parsed in-process with the PostgreSQL 17 grammar (`pg_query` 6.2.1)
+//! before any user SQL is sent to psql. Only the guest doors go through
+//! here (agents, migrators and Apps on a DSN never do), so the grammar is
+//! one per binary whatever major a database lives on: 16's guest SQL
+//! parses under 17 (the corpus test below), 17-only syntax sent to a 16
+//! database gets the server's own syntax error, and 18-only syntax is
+//! refused as unclassifiable until a crate with the 18 grammar exists
+//! (prd-pg17-and-db-upgrade-v1 §8, V14/V15/V41).
 
 use super::ops::OpsError;
 
@@ -26,35 +32,111 @@ fn strip_one_semi(sql: &str) -> String {
         .to_string()
 }
 
-fn forbidden_fn(parsed: &pg_query::ParseResult) -> bool {
-    parsed.functions().iter().any(|name| {
-        let n = name.to_ascii_lowercase();
-        n == "set_config"
-            || n.ends_with(".set_config")
-            || n == "set_principal"
-            || n.ends_with(".set_principal")
+/// Every function and relation a statement names.
+struct Names {
+    functions: Vec<String>,
+    tables: Vec<String>,
+    /// INSERT / UPDATE / DELETE nodes anywhere in the tree (a top-level
+    /// SELECT with a data-modifying CTE writes: it needs the write cap).
+    writes: usize,
+    /// MERGE anywhere (17 lets it sit in a WITH with RETURNING): refused.
+    merge: bool,
+}
+
+/// The `sval`s of a name list (`[{"node":{"String":{"sval":"k2"}}}, …]`)
+/// joined with `.`.
+fn dotted_name(list: &serde_json::Value) -> Option<String> {
+    let parts: Vec<&str> = list
+        .as_array()?
+        .iter()
+        .filter_map(|n| n.pointer("/node/String/sval").and_then(|s| s.as_str()))
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("."))
+}
+
+/// Walk the WHOLE parse tree for function calls and relations.
+/// `pg_query`'s own `functions()` / `tables()` follow a fixed list of node
+/// kinds (SelectStmt, FuncCall, SubLink, JoinExpr, RangeFunction, …) and
+/// never descend into `ARRAY[…]`, indirection, named arguments, window
+/// clauses, ROWS FROM column lists or 17's SQL/JSON nodes (JSON_TABLE,
+/// JSON_VALUE/QUERY/EXISTS, JSON_OBJECT, JSON_ARRAYAGG, JSON(), …), so a
+/// `set_config` hidden there would slip past them (V15). The protobuf
+/// types are `serde::Serialize`: every object with a `funcname` list is a
+/// call (or a DDL name, refused anyway) and every object with a `relname`
+/// is a RangeVar, wherever it sits. Collecting too much only refuses more.
+fn collect_names(parsed: &pg_query::ParseResult) -> Result<Names, OpsError> {
+    let tree = serde_json::to_value(&parsed.protobuf)
+        .map_err(|_| OpsError::Usage("unclassifiable SQL".into()))?;
+    let mut names = Names {
+        functions: parsed.functions(),
+        tables: parsed.tables(),
+        writes: 0,
+        merge: false,
+    };
+    let mut stack = vec![&tree];
+    while let Some(v) = stack.pop() {
+        match v {
+            serde_json::Value::Object(m) => {
+                // Node variants serialize externally tagged
+                // (`{"node": {"DeleteStmt": {…}}}`).
+                for k in ["InsertStmt", "UpdateStmt", "DeleteStmt"] {
+                    if m.contains_key(k) {
+                        names.writes += 1;
+                    }
+                }
+                if m.contains_key("MergeStmt") {
+                    names.merge = true;
+                }
+                if let Some(n) = m.get("funcname").and_then(dotted_name) {
+                    names.functions.push(n);
+                }
+                if let Some(rel) = m.get("relname").and_then(|r| r.as_str()) {
+                    let schema = m
+                        .get("schemaname")
+                        .and_then(|s| s.as_str())
+                        .filter(|s| !s.is_empty());
+                    names.tables.push(match schema {
+                        Some(s) => format!("{s}.{rel}"),
+                        None => rel.to_string(),
+                    });
+                }
+                stack.extend(m.values());
+            }
+            serde_json::Value::Array(a) => stack.extend(a.iter()),
+            _ => {}
+        }
+    }
+    Ok(names)
+}
+
+fn last_part_lower(name: &str) -> String {
+    name.rsplit('.').next().unwrap_or(name).to_ascii_lowercase()
+}
+
+/// `set_config` (any schema) and the principal setters/clearers: a guest
+/// must never move its own principal or actor.
+fn forbidden_fn(names: &Names) -> bool {
+    names.functions.iter().any(|name| {
+        matches!(
+            last_part_lower(name).as_str(),
+            "set_config" | "set_principal" | "clear_principal"
+        )
     })
 }
 
 /// K2's own tables (`_k2_migrations`, `_k2_store`) are sealed with row
 /// security against guest sessions; refuse direct references up front so
 /// the app gets a plain answer instead of an engine error.
-fn touches_k2_internal(parsed: &pg_query::ParseResult) -> bool {
-    parsed.tables().iter().any(|t| {
-        t.rsplit('.')
-            .next()
-            .unwrap_or(t)
-            .to_ascii_lowercase()
-            .starts_with("_k2_")
-    })
+fn touches_k2_internal(names: &Names) -> bool {
+    names.tables.iter().any(|t| last_part_lower(t).starts_with("_k2_"))
 }
 
 /// The per-connection principal and actor locks. Grants already keep a
 /// guest from writing them; refuse any reference up front too, so the
 /// only way to read who is calling is `k2.skin_uid()` / `k2.actor*()`.
-fn touches_session_lock(parsed: &pg_query::ParseResult) -> bool {
-    parsed.tables().iter().any(|t| {
-        let name = t.rsplit('.').next().unwrap_or(t).to_ascii_lowercase();
+fn touches_session_lock(names: &Names) -> bool {
+    names.tables.iter().any(|t| {
+        let name = last_part_lower(t);
         name == "k2_actor_lock" || name == "k2_principal_lock"
     })
 }
@@ -82,17 +164,21 @@ pub fn classify_guest_sql(sql: &str) -> Result<GuestStmt, OpsError> {
     if parsed.protobuf.stmts.len() != 1 {
         return Err(OpsError::Usage("one statement only".into()));
     }
-    if forbidden_fn(&parsed) {
+    let names = collect_names(&parsed)?;
+    if names.merge {
+        return Err(OpsError::Usage("unclassifiable SQL (MERGE is not allowed)".into()));
+    }
+    if forbidden_fn(&names) {
         return Err(OpsError::Usage(
             "set_config and k2.set_principal are not allowed".into(),
         ));
     }
-    if touches_k2_internal(&parsed) {
+    if touches_k2_internal(&names) {
         return Err(OpsError::Usage(
             "K2's own tables (_k2_*) are not available to apps".into(),
         ));
     }
-    if touches_session_lock(&parsed) {
+    if touches_session_lock(&names) {
         return Err(OpsError::Usage(
             "the session locks are K2's; read them with k2.skin_uid() and k2.actor_info()".into(),
         ));
@@ -114,7 +200,9 @@ pub fn classify_guest_sql(sql: &str) -> Result<GuestStmt, OpsError> {
             if select_has_into(sel) {
                 return Err(OpsError::Usage("SELECT INTO is not allowed".into()));
             }
-            (true, true)
+            // `WITH d AS (DELETE … RETURNING …) SELECT …` writes: it needs
+            // the write cap, never the read one.
+            (names.writes == 0, true)
         }
         pg_query::NodeEnum::InsertStmt(st) => (false, !st.returning_list.is_empty()),
         pg_query::NodeEnum::UpdateStmt(st) => (false, !st.returning_list.is_empty()),
@@ -563,6 +651,227 @@ mod tests {
         assert_eq!(cap.code(), "row_cap");
         assert_eq!(cap.status(), "409 Conflict");
         assert!(cap.hint().contains("nothing was written"), "{}", cap.hint());
+    }
+
+    /// Typical Postgres 16 guest SQL classifies the same under the 17
+    /// grammar: (statement, read, returns_rows). Recorded by hand from the
+    /// 16-grammar (pg_query 5.1.1) behaviour of the classifier: SELECT and
+    /// WITH…SELECT are reads with rows, writes return rows only with
+    /// RETURNING.
+    const PG16_CORPUS: &[(&str, bool, bool)] = &[
+        ("SELECT id, name FROM jobs WHERE id = $1", true, true),
+        ("SELECT * FROM jobs ORDER BY created_at DESC LIMIT 10 OFFSET 20", true, true),
+        ("WITH recent AS (SELECT * FROM jobs WHERE created_at > now() - interval '7 days') SELECT count(*) FROM recent", true, true),
+        ("WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 10) SELECT sum(n) FROM t", true, true),
+        ("SELECT id, row_number() OVER (PARTITION BY owner ORDER BY created_at) AS rn FROM jobs", true, true),
+        ("SELECT owner, avg(price) OVER w FROM jobs WINDOW w AS (PARTITION BY owner ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)", true, true),
+        ("SELECT doc->>'title', doc #> '{a,b}', doc @> '{\"x\":1}'::jsonb FROM docs WHERE doc ? 'title'", true, true),
+        ("SELECT jsonb_build_object('id', id, 'tags', tags), jsonb_set(doc, '{a}', '1') FROM jobs", true, true),
+        ("SELECT jsonb_path_query(doc, '$.items[*] ? (@.price > 10)') FROM docs", true, true),
+        ("SELECT doc IS JSON OBJECT, JSON_OBJECT('a': 1), JSON_ARRAY(1, 2), JSON_ARRAYAGG(id) FROM docs", true, true),
+        ("SELECT json_agg(t) FROM (SELECT id FROM jobs) t", true, true),
+        ("INSERT INTO jobs (id, name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name", false, false),
+        ("INSERT INTO jobs (id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING id", false, true),
+        ("INSERT INTO jobs SELECT * FROM staging", false, false),
+        ("UPDATE jobs SET n = n + 1 WHERE id = $1 RETURNING n", false, true),
+        ("UPDATE jobs SET (a, b) = (SELECT 1, 2) WHERE id = $1", false, false),
+        ("UPDATE jobs j SET owner = o.id FROM owners o WHERE o.name = j.owner_name", false, false),
+        ("DELETE FROM jobs USING owners o WHERE jobs.owner = o.id AND o.gone", false, false),
+        ("WITH moved AS (DELETE FROM queue WHERE id = $1 RETURNING *) INSERT INTO done SELECT * FROM moved", false, false),
+        ("SELECT j.id, l.* FROM jobs j CROSS JOIN LATERAL (SELECT * FROM logs WHERE logs.job = j.id ORDER BY at DESC LIMIT 1) l", true, true),
+        ("SELECT count(*) FILTER (WHERE done) AS done, count(*) FROM jobs", true, true),
+        ("SELECT DISTINCT ON (owner) owner, id FROM jobs ORDER BY owner, created_at DESC", true, true),
+        ("SELECT ARRAY[1,2,3] && tags, tags[1], array_agg(id ORDER BY id) FROM jobs GROUP BY tags", true, true),
+        ("SELECT unnest($1::int[])", true, true),
+        ("SELECT id::text, CAST(price AS numeric(10,2)), '2024-01-01'::date FROM jobs", true, true),
+        ("SELECT CASE WHEN n > 1 THEN 'many' ELSE 'one' END, COALESCE(name, ''), NULLIF(a, b) FROM jobs", true, true),
+        ("SELECT * FROM jobs WHERE name ILIKE '%x%' AND id = ANY($1::uuid[])", true, true),
+        ("SELECT * FROM jobs WHERE EXISTS (SELECT 1 FROM logs WHERE logs.job = jobs.id)", true, true),
+        ("SELECT owner, count(*) FROM jobs GROUP BY ROLLUP (owner) HAVING count(*) > 1", true, true),
+        ("SELECT * FROM jobs a JOIN owners b ON a.owner = b.id LEFT JOIN logs c USING (id)", true, true),
+        ("SELECT 1 UNION SELECT 2 INTERSECT SELECT 2 EXCEPT SELECT 3", true, true),
+        ("SELECT * FROM generate_series(1, 10) AS g(n)", true, true),
+        ("SELECT * FROM jobs FOR UPDATE SKIP LOCKED", true, true),
+        ("SELECT to_tsvector('english', body) @@ plainto_tsquery($1) FROM docs", true, true),
+        ("SELECT now() AT TIME ZONE 'UTC', extract(epoch FROM now())", true, true),
+        ("SELECT * FROM jobs TABLESAMPLE SYSTEM (10)", true, true),
+        ("SELECT k2.skin_uid(), k2.actor_info()", true, true),
+        ("select job_update($1,$2::jsonb)", true, true),
+    ];
+
+    #[test]
+    fn postgres_16_guest_sql_classifies_the_same_under_the_17_grammar() {
+        for (sql, read, rows) in PG16_CORPUS {
+            let stmt = classify_guest_sql(sql).unwrap_or_else(|e| panic!("{sql}: {}", e.hint()));
+            assert_eq!((stmt.read, stmt.returns_rows), (*read, *rows), "{sql}");
+            assert_eq!(stmt.sql, *sql, "user text kept as-is");
+        }
+        // The statements the other tests in this module accept, again.
+        for (sql, read, rows) in [
+            ("WITH c AS (SELECT 1) SELECT * FROM c", true, true),
+            ("WITH c AS (SELECT 1 AS id) INSERT INTO t SELECT * FROM c", false, false),
+            ("INSERT INTO t (id) VALUES (1) RETURNING id", false, true),
+            ("UPDATE t SET n = 1", false, false),
+            ("DELETE FROM jobs WHERE id = $1 RETURNING id", false, true),
+            ("SELECT k2.actor_kind(), k2.actor(), k2.actor_info()", true, true),
+            ("SELECT * FROM k2_jobs", true, true),
+            ("SELECT $1::text", true, true),
+        ] {
+            let stmt = classify_guest_sql(sql).unwrap_or_else(|e| panic!("{sql}: {}", e.hint()));
+            assert_eq!((stmt.read, stmt.returns_rows), (read, rows), "{sql}");
+        }
+    }
+
+    /// Words 17 made keywords (SQL/JSON, MERGE … RETURNING) still work as
+    /// bare column and table names where Postgres 17 allows them, so 16
+    /// guest SQL that used them keeps parsing.
+    #[test]
+    fn words_that_became_keywords_in_17_still_work_as_names() {
+        for sql in [
+            "SELECT json_table FROM t",
+            "SELECT merge_action FROM t",
+            "SELECT format, path, nested, plan FROM t",
+            "SELECT t.json_table, t.merge_action, t.path FROM t",
+            "SELECT empty, keep, omit, quotes, string, conditional, unconditional, scalar FROM t",
+            "SELECT id FROM path",
+            "SELECT id FROM nested",
+            "INSERT INTO t (path, nested, format) VALUES ($1, $2, $3)",
+            "UPDATE t SET path = $1, nested = $2 WHERE format = $3",
+            "SELECT 1 AS path, 2 AS nested, 3 AS format",
+        ] {
+            let stmt = classify_guest_sql(sql).unwrap_or_else(|e| panic!("{sql}: {}", e.hint()));
+            assert_eq!(stmt.sql, sql);
+        }
+    }
+
+    fn refused_for(sql: &str, needle: &str) {
+        let err = classify_guest_sql(sql).expect_err(sql);
+        assert_eq!(err.code(), "usage", "{sql}");
+        assert!(err.hint().contains(needle), "{sql}: {}", err.hint());
+    }
+
+    /// V15: the guest guards hold on 17 syntax. Calls and tables hidden in
+    /// the SQL/JSON nodes, arrays, named arguments, FILTER and window
+    /// clauses are refused, at any depth of CTE and subquery.
+    #[test]
+    fn guest_guards_hold_inside_17_sql_json_and_other_unwalked_nodes() {
+        const SC: &str = "set_config('k2.actor', 'agent:x', false)";
+        for call in [SC, "k2.set_principal(NULL)", "k2.clear_principal()", "pg_catalog.set_config('role', 'postgres', true)"] {
+            for sql in [
+                format!("SELECT * FROM JSON_TABLE({call}::jsonb, '$' COLUMNS (a int PATH '$.a')) jt"),
+                format!("SELECT * FROM JSON_TABLE('{{}}'::jsonb, '$' PASSING {call} AS v COLUMNS (a text PATH '$')) jt"),
+                format!("SELECT * FROM JSON_TABLE('[]'::jsonb, '$[*]' COLUMNS (a text PATH '$' DEFAULT {call} ON EMPTY)) jt"),
+                format!("SELECT * FROM JSON_TABLE('[]'::jsonb, '$[*]' COLUMNS (NESTED PATH '$.x' COLUMNS (b text PATH '$' DEFAULT {call} ON ERROR))) jt"),
+                format!("SELECT JSON_VALUE({call}::jsonb, '$')"),
+                format!("SELECT JSON_VALUE('{{}}'::jsonb, '$.a' RETURNING text DEFAULT {call} ON EMPTY)"),
+                format!("SELECT JSON_QUERY('{{}}'::jsonb, '$' PASSING {call} AS x)"),
+                format!("SELECT JSON_EXISTS(jsonb_build_object('a', {call}), '$.a')"),
+                format!("SELECT JSON_SERIALIZE(JSON({call}))"),
+                format!("SELECT JSON_SCALAR({call})"),
+                format!("SELECT JSON_OBJECT('k': {call})"),
+                format!("SELECT JSON_ARRAY({call}, 1)"),
+                format!("SELECT JSON_ARRAY(SELECT {call})"),
+                format!("SELECT JSON_ARRAYAGG({call}) FROM jobs"),
+                format!("SELECT JSON_OBJECTAGG('k': {call}) FROM jobs"),
+                format!("SELECT ARRAY[{call}]"),
+                format!("SELECT (ARRAY[{call}])[1]"),
+                format!("SELECT count(*) FILTER (WHERE {call} IS NOT NULL) FROM jobs"),
+                format!("SELECT row_number() OVER (ORDER BY {call}) FROM jobs"),
+                format!("SELECT job_update(x => {call})"),
+                format!("SELECT * FROM ROWS FROM (generate_series(1, 2), jsonb_each({call}::jsonb)) r"),
+                format!("UPDATE jobs SET doc = JSON_OBJECT('a': {call}) RETURNING id"),
+                format!("INSERT INTO jobs (doc) VALUES (JSON_ARRAY({call}))"),
+                format!("DELETE FROM jobs WHERE JSON_EXISTS(doc, '$ ? (@ == $v)' PASSING {call} AS v)"),
+                format!("WITH a AS (WITH b AS (SELECT JSON_VALUE({call}::jsonb, '$') AS v) SELECT * FROM b) SELECT * FROM a"),
+                format!("SELECT * FROM jobs WHERE id IN (SELECT id FROM (SELECT ARRAY[{call}] AS id) s)"),
+            ] {
+                refused_for(&sql, "set_config");
+            }
+        }
+        for table in ["_k2_store", "public._k2_migrations", "pg_temp.k2_principal_lock", "pg_temp.k2_actor_lock"] {
+            let needle = if table.contains("_k2_") { "_k2_" } else { "session locks" };
+            for sql in [
+                format!("SELECT * FROM JSON_TABLE((SELECT to_jsonb(x) FROM {table} x LIMIT 1), '$' COLUMNS (a text PATH '$.a')) jt"),
+                format!("SELECT JSON_VALUE((SELECT to_jsonb(x) FROM {table} x LIMIT 1), '$.a')"),
+                format!("SELECT JSON_OBJECT('a': (SELECT count(*) FROM {table}))"),
+                format!("SELECT JSON_ARRAY((SELECT count(*) FROM {table}))"),
+                format!("SELECT ARRAY[(SELECT count(*) FROM {table})]"),
+                format!("SELECT count(*) FILTER (WHERE EXISTS (SELECT 1 FROM {table})) FROM jobs"),
+                format!("WITH a AS (WITH b AS (SELECT JSON_QUERY((SELECT to_jsonb(x) FROM {table} x), '$') AS v) SELECT * FROM b) SELECT * FROM a"),
+            ] {
+                refused_for(&sql, needle);
+            }
+        }
+        // MERGE (17 adds RETURNING and merge_action()) stays unclassifiable.
+        for sql in [
+            "MERGE INTO jobs j USING (SELECT 1 AS id) s ON j.id = s.id WHEN MATCHED THEN UPDATE SET n = 1 RETURNING merge_action(), j.*",
+            "MERGE INTO jobs j USING (SELECT 1 AS id) s ON j.id = s.id WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id)",
+            "WITH m AS (MERGE INTO jobs j USING src s ON j.id = s.id WHEN MATCHED THEN DELETE RETURNING j.id) SELECT * FROM m",
+        ] {
+            let err = classify_guest_sql(sql).expect_err(sql);
+            assert_eq!(err.code(), "usage", "{sql}");
+            assert!(err.hint().contains("unclassifiable"), "{sql}: {}", err.hint());
+        }
+        // A SELECT on top of a data-modifying CTE writes: it needs the
+        // write cap (`read == false`), not the read one.
+        for sql in [
+            "WITH d AS (DELETE FROM jobs WHERE id = $1 RETURNING id) SELECT * FROM d",
+            "WITH u AS (UPDATE jobs SET n = 1 RETURNING id) SELECT count(*) FROM u",
+            "WITH i AS (INSERT INTO jobs (id) VALUES (1) RETURNING id) SELECT JSON_ARRAYAGG(id) FROM i",
+        ] {
+            let stmt = classify_guest_sql(sql).unwrap_or_else(|e| panic!("{sql}: {}", e.hint()));
+            assert!(!stmt.read && stmt.returns_rows, "{sql}");
+        }
+        let merge = classify_guest_sql(
+            "MERGE INTO jobs j USING (SELECT 1 AS id) s ON j.id = s.id WHEN MATCHED THEN UPDATE SET n = 1 RETURNING merge_action(), j.*",
+        )
+        .expect_err("merge");
+        assert!(merge.hint().contains("unclassifiable"), "{}", merge.hint());
+        // The plain SQL/JSON reads themselves are fine.
+        for sql in [
+            "SELECT * FROM JSON_TABLE(doc, '$.items[*]' COLUMNS (id int PATH '$.id', name text PATH '$.name')) jt",
+            "SELECT JSON_VALUE(doc, '$.a' RETURNING int), JSON_QUERY(doc, '$.b'), JSON_EXISTS(doc, '$.c') FROM docs",
+            "SELECT JSON_SERIALIZE(JSON('{\"a\":1}')), JSON_SCALAR(1)",
+        ] {
+            let ok = classify_guest_sql(sql).unwrap_or_else(|e| panic!("{sql}: {}", e.hint()));
+            assert!(ok.read && ok.returns_rows, "{sql}");
+        }
+    }
+
+    /// Verified, not assumed: pg_query's own walker misses calls in these
+    /// nodes, which is why the classifier walks the whole tree.
+    #[test]
+    fn pg_query_walker_misses_calls_the_full_walk_finds() {
+        for sql in [
+            "SELECT JSON_VALUE(set_config('a', 'b', false)::jsonb, '$')",
+            "SELECT ARRAY[set_config('a', 'b', false)]",
+        ] {
+            let parsed = pg_query::parse(sql).unwrap();
+            let lib = parsed.functions();
+            let ours = collect_names(&parsed).unwrap().functions;
+            assert!(ours.iter().any(|f| f == "set_config"), "{sql}: {ours:?}");
+            assert!(!lib.iter().any(|f| f == "set_config"), "{sql}: pg_query now walks this node ({lib:?}); keep the full walk anyway");
+        }
+    }
+
+    /// 18-only syntax doesn't parse under the 17 grammar, so the guest
+    /// door refuses it (fail closed) until a pg_query with the 18 grammar
+    /// exists. A bare `old.x` in RETURNING is a plain column reference to
+    /// 17 (the server answers it); 18's `RETURNING WITH (OLD AS …)` is not.
+    #[test]
+    fn postgres_18_only_syntax_is_refused() {
+        for sql in [
+            "UPDATE jobs SET n = 1 RETURNING WITH (OLD AS o, NEW AS n) o.n, n.n",
+            "DELETE FROM jobs RETURNING WITH (OLD AS o) o.*",
+            "INSERT INTO jobs (id) VALUES (1) RETURNING WITH (NEW AS n) n.id",
+            "CREATE TABLE r (id int, during tstzrange, PRIMARY KEY (id, during WITHOUT OVERLAPS))",
+            "CREATE TABLE v (a int, b int GENERATED ALWAYS AS (a * 2) VIRTUAL)",
+        ] {
+            assert!(pg_query::parse(sql).is_err(), "17 grammar parses an 18-only form: {sql}");
+            let err = classify_guest_sql(sql).expect_err(sql);
+            assert_eq!(err.code(), "usage", "{sql}");
+            assert!(err.hint().contains("unclassifiable"), "{sql}: {}", err.hint());
+        }
     }
 
     #[test]

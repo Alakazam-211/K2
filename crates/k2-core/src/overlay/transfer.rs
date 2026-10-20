@@ -888,6 +888,8 @@ impl Rewrite<'_> {
             delivery_id: None,
             handoff: None,
             attachments: Vec::new(),
+            summary: None,
+            summary_source: None,
         };
         let key = import_key(
             project_id,

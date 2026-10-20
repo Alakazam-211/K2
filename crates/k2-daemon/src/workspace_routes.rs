@@ -341,6 +341,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
             // prefix). Empty/absent → unchanged delivery. An older CLI
             // simply never sends this param.
             let command = opt_param(params, "command").unwrap_or_default();
+            // 0.46.3: the sender's one-line summary (`k2 msg --summary`).
+            // Kept on the Chatter line for people; never injected.
+            let summary = opt_param(params, "summary")
+                .and_then(|s| k2_core::overlay::summary::clean_sender_summary(&s));
             let via = opt_param(params, "via").unwrap_or_else(|| "msg".to_string());
             let via = match via.as_str() {
                 "talk" | "inbox" | "v1" | "msg" => via,
@@ -399,8 +403,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     on_behalf_of: None,
                 },
             };
-            let (resp, delivery) = crate::hire_routes::deliver_recorded(
+            let (resp, delivery) = crate::hire_routes::deliver_recorded_with_summary(
                 &workspace, &text, &from, &command, wake, wake_timeout, &via, &sender,
+                summary.as_deref(),
             );
             let mut body = serde_json::to_value(&resp)
                 .unwrap_or_else(|_| serde_json::json!({ "success": false }));

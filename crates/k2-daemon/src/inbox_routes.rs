@@ -317,9 +317,17 @@ pub fn handle_compose_post(params: &HashMap<String, String>) -> CliResponse {
         source.as_deref(),
         from.as_deref(),
     ) {
-        Ok(item) => CliResponse::ok_json(
-            serde_json::to_string(&item).unwrap_or_default(),
-        ),
+        Ok(mut item) => {
+            // 0.46.3: `--summary` rides in the item's frontmatter.
+            if let Some(raw) = opt_param(params, "summary") {
+                let path = k2_core::inbox::inbox_root(&workspace).join(&item.filename);
+                match k2_core::inbox::set_summary(&path, &raw) {
+                    Ok(s) => item.summary = s,
+                    Err(e) => return CliResponse::internal_error(format!("write the summary: {e}")),
+                }
+            }
+            CliResponse::ok_json(serde_json::to_string(&item).unwrap_or_default())
+        }
         Err(e) => CliResponse::bad_request(e),
     }
 }
@@ -601,9 +609,20 @@ fn finish_deliver_response(
     } else {
         package.sidecar_paths.len()
     };
+    // 0.46.3: the sender's one-line summary rides in the cover's frontmatter.
+    let summary = match opt_param(_params, "summary") {
+        Some(raw) => match k2_core::inbox::set_summary(std::path::Path::new(&package.cover_path), &raw) {
+            Ok(s) => s,
+            Err(e) => return CliResponse::internal_error(format!("write the summary: {e}")),
+        },
+        None => None,
+    };
     let mut out = serde_json::to_value(&package).unwrap_or_else(|_| serde_json::json!({}));
     if let Some(obj) = out.as_object_mut() {
         obj.insert("ok".into(), serde_json::json!(true));
+        if let Some(s) = &summary {
+            obj.insert("summary".into(), serde_json::json!(s));
+        }
         // Convenience flat aliases (camelCase already on DeliveredPackage).
         obj.insert("coverPath".into(), serde_json::json!(package.cover_path));
         obj.insert(

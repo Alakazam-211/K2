@@ -2852,6 +2852,7 @@ pub fn record_inject_chatter(
     text: &str,
     via: &str,
     delivery_id: Option<&str>,
+    summary: Option<&str>,
 ) {
     let recipient = match resolve_addr(workspace_token) {
         Ok(r) => r,
@@ -2863,7 +2864,7 @@ pub fn record_inject_chatter(
         .map(|s| (s.conversation_id.as_str(), s.project_id.as_str()));
     let db = k2_core::db::shared();
     let conn = db.lock();
-    match overlay::record_chatter(
+    match overlay::record_chatter_with_summary(
         &conn,
         &recipient.conversation_id,
         &recipient.project_id,
@@ -2874,6 +2875,7 @@ pub fn record_inject_chatter(
         via,
         "accepted",
         delivery_id,
+        summary,
     ) {
         Ok((doc, links)) => crate::overlay_ws::emit_links(&links, &doc),
         Err(e) => k2_core::log_debug!("[overlay] record chatter failed: {e}"),
@@ -3824,6 +3826,40 @@ mod tests {
         assert_eq!(line, "[from Rosson] [thread:sales/reviewer] ship it");
     }
 
+    /// 0.46.3 `k2 msg --summary`: the sender's line rides on the Chatter
+    /// doc (`summary` + `summarySource: sender`) in `/cli/chatter` and the
+    /// chatterlog; without one the doc carries the derived first line.
+    #[test]
+    fn msg_summary_is_on_the_chatter_doc_sender_or_derived() {
+        let handle = format!("ovlsum{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (project_id, _) = seed(&handle);
+        pin(&project_id, &uuid::Uuid::new_v4().to_string());
+        let long = format!("Here is the status. {}", "More detail follows. ".repeat(40));
+        record_inject_chatter(&handle, "peer", &long, "msg", Some("m_SUMMARY01"), Some("Need a review of hold/x"));
+        record_inject_chatter(&handle, "peer", "## Done\nBuilt all items. Tests green.", "msg", None, None);
+
+        let chatter = dispatch("/cli/chatter", &params_of(&[("addr", handle.as_str())])).expect("GET chatter");
+        let c = json_body(&chatter);
+        let items = c["items"].as_array().expect("chatter items");
+        assert_eq!(items.len(), 2, "{c}");
+        assert_eq!(items[0]["doc"]["summary"], "Need a review of hold/x");
+        assert_eq!(items[0]["doc"]["summarySource"], "sender");
+        assert_eq!(items[0]["doc"]["body"], long.as_str(), "the body is untouched");
+        assert_eq!(items[1]["doc"]["summary"], "Done: Built all items.");
+        assert_eq!(items[1]["doc"]["summarySource"], "derived");
+
+        let log = dispatch("/cli/chatterlog", &HashMap::new()).expect("chatterlog");
+        let l = json_body(&log);
+        let mine: Vec<_> = l["items"]
+            .as_array()
+            .expect("log items")
+            .iter()
+            .filter(|i| i["doc"]["deliveryId"] == "m_SUMMARY01")
+            .collect();
+        assert_eq!(mine.len(), 1, "{l}");
+        assert_eq!(mine[0]["doc"]["summary"], "Need a review of hold/x");
+    }
+
     #[test]
     fn msg_chatter_not_on_thread() {
         let handle = format!("ovlmsg{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -3834,7 +3870,7 @@ mod tests {
         sidecar(&project_id, &reviewer, "reviewer");
         let addr = format!("{handle}/reviewer");
 
-        record_inject_chatter(&addr, &handle, "ping", "msg", None);
+        record_inject_chatter(&addr, &handle, "ping", "msg", None, None);
 
         let thread =
             dispatch("/cli/thread", &params_of(&[("addr", addr.as_str())])).expect("GET thread");
@@ -3885,7 +3921,7 @@ mod tests {
         pin(&project_id, &uuid::Uuid::new_v4().to_string());
         sidecar(&project_id, &reviewer, "reviewer");
         let addr = format!("{handle}/reviewer");
-        record_inject_chatter(&addr, &handle, "ping-talk", "talk", None);
+        record_inject_chatter(&addr, &handle, "ping-talk", "talk", None, None);
         let chatter =
             dispatch("/cli/chatter", &params_of(&[("addr", addr.as_str())])).expect("chatter");
         let c = json_body(&chatter);

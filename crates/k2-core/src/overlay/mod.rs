@@ -10,6 +10,7 @@ pub mod catalog;
 pub mod doc;
 pub mod options;
 pub mod store;
+pub mod summary;
 pub mod transfer;
 pub mod vault;
 
@@ -792,6 +793,37 @@ pub fn record_chatter(
     inject: &str,
     delivery_id: Option<&str>,
 ) -> Result<(OverlayDoc, Vec<OverlayLink>), String> {
+    record_chatter_with_summary(
+        conn,
+        recipient_conversation_id,
+        recipient_project_id,
+        sender_conversation_id,
+        from,
+        to,
+        body,
+        via,
+        inject,
+        delivery_id,
+        None,
+    )
+}
+
+/// [`record_chatter`] with the sender's one-line summary (`k2 msg
+/// --summary`); without one the doc carries the derived line.
+#[allow(clippy::too_many_arguments)]
+pub fn record_chatter_with_summary(
+    conn: &Connection,
+    recipient_conversation_id: &str,
+    recipient_project_id: &str,
+    sender_conversation_id: Option<(&str, &str)>,
+    from: &str,
+    to: &str,
+    body: &str,
+    via: &str,
+    inject: &str,
+    delivery_id: Option<&str>,
+    sender_summary: Option<&str>,
+) -> Result<(OverlayDoc, Vec<OverlayLink>), String> {
     let _guard = WRITE.lock();
     let to_seq = catalog::next_chatter_seq(conn, recipient_conversation_id, recipient_project_id)?;
     let mut chatter_keys: Vec<(String, i64)> =
@@ -834,6 +866,7 @@ pub fn record_chatter(
         inject,
     );
     doc.delivery_id = delivery_id.map(str::trim).filter(|d| !d.is_empty()).map(str::to_string);
+    summary::apply(&mut doc, sender_summary);
     store::commit_write(&doc, None, &chatter_keys, Some(log_seq))?;
     Ok((doc, links))
 }
@@ -843,7 +876,15 @@ pub fn read_thread(conversation_id: &str, since_seq: i64) -> Result<Vec<OverlayI
 }
 
 pub fn read_chatter(conversation_id: &str, since_seq: i64) -> Result<Vec<OverlayItem>, String> {
-    store::read_chatter(conversation_id, since_seq)
+    store::read_chatter(conversation_id, since_seq).map(with_summaries)
+}
+
+/// Chatter docs from before the summary field get the derived line.
+fn with_summaries(mut items: Vec<OverlayItem>) -> Vec<OverlayItem> {
+    for i in &mut items {
+        summary::fill_derived(&mut i.doc);
+    }
+    items
 }
 
 /// Newest `limit` items with `seq > since_seq` (if set) and `seq < before_seq`
@@ -871,11 +912,14 @@ pub fn read_chatter_page(
     before_seq: Option<i64>,
     limit: usize,
 ) -> Result<OverlayPage, String> {
-    store::read_chatter_page(conversation_id, since_seq, before_seq, limit)
+    store::read_chatter_page(conversation_id, since_seq, before_seq, limit).map(|mut p| {
+        p.items = with_summaries(p.items);
+        p
+    })
 }
 
 pub fn read_chatterlog(since_seq: i64) -> Result<Vec<OverlayItem>, String> {
-    store::read_chatterlog(since_seq)
+    store::read_chatterlog(since_seq).map(with_summaries)
 }
 
 #[cfg(test)]

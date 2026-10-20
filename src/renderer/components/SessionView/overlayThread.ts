@@ -231,6 +231,11 @@ export interface OverlayDoc {
   /** Chatter only: the `m_…` id of this live message's `msg_deliveries`
    *  receipt (`k2 msg who <id>`). Absent on unrecorded sends and older docs. */
   deliveryId?: string | null
+  /** Chatter only (0.46.3): one line for people — the sender's
+   *  (`k2 msg --summary`) or derived from the body's first line. */
+  summary?: string | null
+  /** `sender` | `derived`: label a derived one "first line · no summary sent". */
+  summarySource?: 'sender' | 'derived' | null
   /** File objects riding the message (0.46.1, daemon feature
    *  `thread-attachments-v1`): pointers to files in the Thread's workspace,
    *  set only by the daemon. Absent on older docs and servers. */

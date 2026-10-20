@@ -858,6 +858,15 @@ pub fn deliver_live_with_via(
     deliver_live_inner(workspace_token, text, from, command, wake, wake_timeout, via, None)
 }
 
+/// A send's `msg_deliveries` receipt plus what the Chatter line keeps:
+/// the chatter `from`, the `m_…` id and the sender's one-line summary.
+#[derive(Clone, Copy)]
+struct Receipt<'a> {
+    from: &'a str,
+    delivery_id: &'a str,
+    summary: Option<&'a str>,
+}
+
 /// A live send that wrote a `msg_deliveries` receipt
 /// ([`crate::hire_routes::deliver_recorded`]): `stamp_from` is what the
 /// recipient sees after `[from` (`label · m_…`); the Chatter line keeps
@@ -873,6 +882,7 @@ pub(crate) fn deliver_live_with_receipt(
     wake: bool,
     wake_timeout: Duration,
     via: &str,
+    summary: Option<&str>,
 ) -> MsgResponse {
     deliver_live_inner(
         workspace_token,
@@ -882,7 +892,7 @@ pub(crate) fn deliver_live_with_receipt(
         wake,
         wake_timeout,
         via,
-        Some((from, delivery_id)),
+        Some(Receipt { from, delivery_id, summary }),
     )
 }
 
@@ -897,7 +907,7 @@ fn deliver_live_inner(
     wake: bool,
     wake_timeout: Duration,
     via: &str,
-    receipt: Option<(&str, &str)>,
+    receipt: Option<Receipt<'_>>,
 ) -> MsgResponse {
     // Resolve once (D12). Unknown token is permanent; surface immediately.
     let target = match resolve_msg_target(workspace_token) {
@@ -992,9 +1002,9 @@ fn deliver_live_inner(
             // Human Thread compose / card inject already stored on the
             // Thread collection — do not also stamp Chatter (that's k2 msg).
             if via != "compose" && via != "thread" {
-                let (chatter_from, delivery_id) = match receipt {
-                    Some((f, id)) => (f, Some(id)),
-                    None => (from, None),
+                let (chatter_from, delivery_id, summary) = match receipt {
+                    Some(r) => (r.from, Some(r.delivery_id), r.summary),
+                    None => (from, None, None),
                 };
                 crate::overlay_routes::record_inject_chatter(
                     workspace_token,
@@ -1002,6 +1012,7 @@ fn deliver_live_inner(
                     text,
                     via,
                     delivery_id,
+                    summary,
                 );
             }
             return result;

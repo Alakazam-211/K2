@@ -16,12 +16,16 @@
 //     SVG), else null — the App surface's rule. An offline server's rows read
 //     `state: "unreachable"`, `activity: "unreachable"` (UWB8, UWB11);
 //   - Thread items: `{seq, id, doc: {id, kind, from, to, created_at, body,
-//     via, choice}}` for `text` and `choice`; a `secret` card keeps only
+//     via, choice}}` for `text` and `choice`, plus `attachments` when the
+//     message carries files (0.46.3): each the catalog's ThreadFile `{kind,
+//     state, name?, size?, mime?, modifiedAt?, line?, lineEnd?}`, never its
+//     workspace path or hash (UWA6); a `hidden` one is `{kind, state}` (no
+//     name, type or size); a `secret` card keeps only
 //     `{id, kind}` (widgets can't answer secrets); any other kind is left
 //     out. `conversation_id` never crosses (it can be the pinned session id);
 //   - a Thread view: `{address, phase, note, items, hasMore, turn}`.
 
-import type { OverlayChoice, OverlayThreadItem } from '@/components/SessionView/overlayThread'
+import type { OverlayChoice, OverlayThreadItem, ThreadFileObject } from '@/components/SessionView/overlayThread'
 import type { UserWidgetCap } from '../k2-caps.generated'
 import { agentLookColor, agentLookImage } from '../agent-look'
 import type { ZenAgentRow, ZenPerson, ZenPreview, ZenThreadView } from './zen-data'
@@ -158,6 +162,35 @@ export interface ZenWidgetChoice {
   expiresAt: number | null
 }
 
+/** One file on a message as a widget sees it (the catalog's ThreadFile). */
+export interface ZenWidgetThreadFile {
+  kind: string
+  state: string
+  name?: string
+  size?: number
+  mime?: string
+  modifiedAt?: number
+  line?: number
+  lineEnd?: number
+}
+
+const FILE_STATES: ReadonlySet<string> = new Set(['ok', 'changed', 'gone', 'hidden'])
+
+/** One attachment, key by key: no path, no sha256; hidden keeps kind and state. */
+export function projectZenThreadFile(f: ThreadFileObject): ZenWidgetThreadFile {
+  const kind = typeof f.kind === 'string' && f.kind ? f.kind : 'file'
+  const state = typeof f.state === 'string' && FILE_STATES.has(f.state) ? f.state : 'ok'
+  if (state === 'hidden') return { kind, state }
+  const out: ZenWidgetThreadFile = { kind, state }
+  if (typeof f.name === 'string') out.name = f.name
+  if (typeof f.size === 'number' && Number.isFinite(f.size)) out.size = f.size
+  if (typeof f.mime === 'string') out.mime = f.mime
+  if (typeof f.modifiedAt === 'number' && Number.isFinite(f.modifiedAt)) out.modifiedAt = f.modifiedAt
+  if (typeof f.line === 'number' && Number.isInteger(f.line)) out.line = f.line
+  if (typeof f.lineEnd === 'number' && Number.isInteger(f.lineEnd)) out.lineEnd = f.lineEnd
+  return out
+}
+
 export interface ZenWidgetThreadItem {
   seq: number
   id: string
@@ -171,6 +204,7 @@ export interface ZenWidgetThreadItem {
         body: string | null
         via: string | null
         choice: ZenWidgetChoice | null
+        attachments?: ZenWidgetThreadFile[]
       }
     | { id: string; kind: 'secret' }
 }
@@ -217,6 +251,9 @@ export function projectZenThreadItem(item: OverlayThreadItem): ZenWidgetThreadIt
       body: d.body ?? null,
       via: d.via ?? null,
       choice: d.kind === 'choice' ? projectChoice(d.choice) : null,
+      ...(Array.isArray(d.attachments) && d.attachments.length > 0
+        ? { attachments: d.attachments.map(projectZenThreadFile) }
+        : {}),
     },
   }
 }
@@ -228,6 +265,28 @@ export function projectZenThreadItems(items: readonly OverlayThreadItem[]): ZenW
     if (p) out.push(p)
   }
   return out
+}
+
+/** A thread-delta-v1 read (`thread.read` with `afterSeq`). */
+export interface ZenWidgetThreadDelta {
+  items: ZenWidgetThreadItem[]
+  hasMore: boolean
+  changed: ZenWidgetThreadItem[]
+  removed: Array<{ id: string; seq: number }>
+}
+
+export function projectZenThreadDelta(d: {
+  items: readonly OverlayThreadItem[]
+  hasMore: boolean
+  changed: readonly OverlayThreadItem[]
+  removed: ReadonlyArray<{ id: string; seq: number }>
+}): ZenWidgetThreadDelta {
+  return {
+    items: projectZenThreadItems(d.items),
+    hasMore: d.hasMore === true,
+    changed: projectZenThreadItems(d.changed),
+    removed: d.removed.map((r) => ({ id: r.id, seq: r.seq })),
+  }
 }
 
 export interface ZenWidgetThreadView {

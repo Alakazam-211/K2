@@ -236,6 +236,19 @@ vi.mock('@/lib/daemon-cli', () => ({
       return { ok: true, id: item.id, seq: item.seq, from: 'you', body: item.doc.body, kind: 'text', via: 'compose', conversation_id: `c-${addr}` }
     }
     if (route === 'thread/answer') return { ok: true, id: body?.id, status: 'answered', answer: body?.answer }
+    // Thread file links / attachments (0.46.3): a path under a test
+    // workspace root (/w/<name>, /b/<name>) is a file there.
+    if (route === 'fs/resolve-links') {
+      const paths = (body?.paths as string[] | undefined) ?? []
+      return {
+        root: '/w',
+        prefixes: [],
+        links: paths.map((p) => {
+          const m = /^\/[wb]\/[^/]+\/(.+)$/.exec(p)
+          return m ? { input: p, linkable: true, kind: 'file', rel: m[1], path: p } : { input: p, linkable: false }
+        }),
+      }
+    }
     throw new Error(`unexpected POST ${route} on ${scope.hostKey}`)
   }),
   withHostCliSlot: async <T,>(_s: unknown, fn: () => Promise<T>): Promise<T> => fn(),
@@ -1942,9 +1955,10 @@ describe('Conversation widget', () => {
     expect(document.querySelector('[data-zen-thread-empty]')?.textContent).toBe(zenEmptyThreadText('cortana'))
   })
 
-  it('attachments use the existing path: an upload to the agent’s own server, or this computer’s paths', async () => {
+  it('attachments: path text on a server without thread-attachments-v1; files riding the post on one with it (0.46.3)', async () => {
     await mountZen()
-    // Remote: uploaded into that workspace's .k2/downloads on B, then sent.
+    // Remote B (no thread-attachments-v1): uploaded into that workspace's
+    // .k2/downloads on B, then sent as path text.
     await select(ROWS.sales.address)
     await threadReady(ROWS.sales.address)
     const attach = document.querySelector('[data-zen-attach]')
@@ -1961,7 +1975,10 @@ describe('Conversation widget', () => {
     ])
     expect(document.querySelector('[data-zen-attachment]')).toBeNull()
 
-    // Local: this computer's path as it is, no upload.
+    // This computer (every feature, Thread parity 0.46.3, Rosson
+    // 2026-10-20): the file rides the post as an attachment, as the desktop
+    // Thread does (S4). Outside the workspace, so copied into its
+    // .k2/downloads first; files alone are a message.
     await select(ROWS.cortana.address)
     await threadReady(ROWS.cortana.address)
     const attach2 = document.querySelector('[data-zen-attach]')
@@ -1974,11 +1991,15 @@ describe('Conversation widget', () => {
       fireEvent.click(document.querySelector('[data-zen-send]') as HTMLElement)
     })
     await waitFor(() => expect(h.calls.filter((c) => c.route === 'thread/post').length).toBe(2))
-    expect(h.remoteDrops.length).toBe(1)
+    expect(h.remoteDrops).toEqual([
+      { hostKey: B, paths: ['/Users/me/shot.png'], workspacePath: '/b/sales' },
+      { hostKey: 'local', paths: ['/Users/me/shot.png'], workspacePath: '/w/cortana' },
+    ])
     expect(h.calls.filter((c) => c.route === 'thread/post')[1].data).toEqual({
       addr: 'cortana-main',
-      text: '/Users/me/shot.png',
+      text: '',
       via: 'compose',
+      attachments: [{ path: '.k2/downloads/shot.png' }],
     })
   })
 

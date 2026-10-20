@@ -20,8 +20,10 @@
 //   5. the reach: an address must be one of the widget's rows (this
 //      computer's agents plus your Homes' rows now, `zenWidgetReachRows`)
 //      → `not_bound`. Thread verbs take any of them (UWB10);
-//   6. posting: text only, ≤ 4,000 characters, never files or secrets
-//      (UW19, UW50); every post and card answer carries the widget's
+//   6. posting: text ≤ 4,000 characters, never paths, uploads or secrets
+//      (UW19, UW50); files ride only as `attachments` the person picked
+//      with K2's own picker (`thread.pickFiles`, 0.46.3: ≤ 10 workspace-
+//      relative paths, which the agent's daemon checks again); every post and card answer carries the widget's
 //      Garden, placement and frame hash, and the daemon holding the Garden
 //      refuses it (`widget_not_approved` / `widget_cap_missing`) unless
 //      that placement's approved caps include `thread:post` (0.46.1); the
@@ -34,6 +36,13 @@
 //      and never in the first 2 s after mount; `canvas.setHitRegions` at
 //      most 32 finite rects (`zen-canvas`), `window.startDrag` only during
 //      a press in that frame.
+// 0.46.3 Thread parity (Rosson 2026-10-20): `thread.read` takes `afterSeq`
+// (a delta: items, hasMore, changed, removed), and `thread.markRead`,
+// `thread.attachment`, `thread.open`, `thread.links` and `thread.pickFiles`
+// are answered (`zen-thread-files`); attachments cross as the catalog's
+// ThreadFile (never a path), a hidden one as `{kind, state}`. The picker
+// opens only after the person's own press in the frame (or with its focus),
+// one at a time.
 // Then K2's own verb runs through the widget's inner bridge (built with the
 // effective caps) and the answer is projected to the guest shape
 // (`zen-custom-projection`) and cloned as plain JSON (functions dropped).
@@ -49,9 +58,12 @@ import type { ZenAgentRow, ZenPerson, ZenThreadView } from './zen-data'
 import {
   projectZenPeople,
   projectZenRows,
+  projectZenThreadDelta,
   projectZenThreadItems,
   projectZenThreadView,
 } from './zen-custom-projection'
+import { ZenThreadVerbError, projectZenThreadFileData, zenThreadAttachments, type ZenThreadDelta } from './zen-thread-files'
+import { DaemonHttpError } from '../daemon-http-error'
 import type { ZenWidgetStopReason } from './zen-custom-run'
 import { ZenCanvasError, zenHitRegionsFrom } from './zen-canvas'
 import type { ZenRect } from './zen-controls'
@@ -73,6 +85,9 @@ export const ZEN_WIDGET_BUDGET = {
   switchAfterMountMs: 2_000,
   postChars: 4_000,
 } as const
+
+/** How recent the person's press in a frame must be for `thread.pickFiles`. */
+export const ZEN_PICK_GESTURE_MS = 5_000
 
 /** R6: the runaway guard, per widget, over a sliding 10 minutes. */
 export const ZEN_RUNAWAY = { windowMs: 10 * 60_000, posts: 120, identical: 20 } as const
@@ -133,6 +148,9 @@ export interface ZenCustomLayerDeps {
   guests?: ZenCustomGuests
   /** Stop this widget (its frame goes; K2 draws the card). */
   stop(reason: ZenWidgetStopReason): void
+  /** Did the person just press in this frame (or does it have the focus)?
+   *  `thread.pickFiles` opens K2's picker only then. Absent: allowed. */
+  gesture?(): boolean
   /** Is posting paused now (the runaway guard, here or in the daemon)? */
   paused(): boolean
   /** The runaway guard tripped: pause posting (this window at once, and
@@ -330,6 +348,13 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     }
   }
 
+  const needInt = (verb: string, what: string, v: unknown, min: number): number => {
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < min) refuse('bad_args', `${verb}: ${what} is a whole number ≥ ${min}`)
+    return v as number
+  }
+
+  let picking = false
+
   const needText = (verb: string, v: unknown): string => {
     if (typeof v !== 'string') refuse('failed', `${verb} needs text`)
     const text = v as string
@@ -427,6 +452,14 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       const address = needAddress('thread.read', args[0])
       const o = isObj(args[1]) ? args[1] : {}
       const limit = typeof o.limit === 'number' ? Math.min(100, Math.max(1, Math.floor(o.limit))) : undefined
+      // thread-delta-v1: afterSeq, never with beforeSeq.
+      if (o.afterSeq !== undefined) {
+        const afterSeq = needInt('thread.read', 'afterSeq', o.afterSeq, 0)
+        if (o.beforeSeq !== undefined) refuse('bad_args', 'thread.read: afterSeq or beforeSeq, not both')
+        await deps.ensureConversation(address)
+        const d = (await inner('thread.read', address, { afterSeq, ...(limit !== undefined ? { limit } : {}) })) as ZenThreadDelta
+        return projectZenThreadDelta(d)
+      }
       await deps.ensureConversation(address)
       const opts = typeof o.beforeSeq === 'number' ? { beforeSeq: o.beforeSeq } : limit !== undefined ? { limit } : {}
       const r = (await inner('thread.read', address, opts)) as ZenThreadView | { items: OverlayThreadItem[]; hasMore: boolean }
@@ -436,15 +469,132 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     'thread.post': async (args) => {
       const address = needAddress('thread.post', args[0])
       const text = needText('thread.post', args[1])
-      if (!text.trim()) refuse('failed', 'Nothing to send.')
-      // UW19, UW49: text only. Any options (paths, files) are refused
-      // before anything is read or uploaded.
-      if (args.length > 2 && args[2] !== undefined && args[2] !== null) refuse('failed', 'Widgets send text only, never files.')
+      // UW19, UW49: never paths or uploads. The only option is
+      // `attachments`: workspace-relative files the person picked
+      // (`thread.pickFiles`), checked here before anything is sent.
+      let attachments: ReturnType<typeof zenThreadAttachments> = []
+      const o = args[2]
+      if (args.length > 2 && o !== undefined && o !== null) {
+        if (!isObj(o) || Object.keys(o).some((k) => k !== 'attachments')) {
+          refuse('failed', 'Widgets never send paths or files; attach what the person picks with thread.pickFiles.')
+        }
+        const raw = (o as Record<string, unknown>).attachments
+        if (raw !== undefined) {
+          try {
+            attachments = zenThreadAttachments(raw)
+          } catch (err) {
+            throw toRefusal(err)
+          }
+        }
+      }
+      if (!text.trim() && attachments.length === 0) refuse('failed', 'Nothing to send.')
       needSending()
-      guard(address, text)
+      guard(address, attachments.length > 0 ? `${text}\n${attachments.map((a) => a.relPath).join('\n')}` : text)
       await deps.ensureConversation(address)
-      const r = (await inner('thread.post', address, text, { origin: origin() })) as { id: string | null; seq: number | null }
+      const r = (await inner('thread.post', address, text, {
+        origin: origin(),
+        ...(attachments.length > 0 ? { attachments } : {}),
+      })) as { id: string | null; seq: number | null }
       return { id: r.id, seq: r.seq }
+    },
+    'thread.markRead': async (args) => {
+      const address = needAddress('thread.markRead', args[0])
+      const o = args[1]
+      if (o !== undefined && o !== null && !isObj(o)) refuse('bad_args', 'thread.markRead takes {seq?}')
+      const seq = isObj(o) && o.seq !== undefined ? needInt('thread.markRead', 'seq', o.seq, 0) : undefined
+      await deps.ensureConversation(address)
+      const r = (await inner('thread.markRead', address, seq !== undefined ? { seq } : {})) as Record<string, unknown> | null
+      const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+      return { changed: r?.changed === true, lastReadSeq: n(r?.lastReadSeq), lastSeq: n(r?.lastSeq), unread: n(r?.unread) }
+    },
+    'thread.attachment': async (args) => {
+      const address = needAddress('thread.attachment', args[0])
+      if (typeof args[1] !== 'string' || !args[1]) refuse('bad_args', 'thread.attachment needs a message id')
+      const n = needInt('thread.attachment', 'n', args[2], 0)
+      const o = args[3]
+      if (o !== undefined && o !== null && !isObj(o)) refuse('bad_args', 'thread.attachment takes {mode?, px?}')
+      const opts: { mode?: string; px?: number } = {}
+      if (isObj(o)) {
+        if (Object.keys(o).some((k) => k !== 'mode' && k !== 'px')) refuse('bad_args', 'thread.attachment takes {mode?, px?}')
+        if (o.mode !== undefined) {
+          if (o.mode !== 'meta' && o.mode !== 'preview' && o.mode !== 'thumb') refuse('bad_args', 'mode is meta, preview or thumb')
+          opts.mode = o.mode as string
+        }
+        if (o.px !== undefined) {
+          const px = needInt('thread.attachment', 'px', o.px, 64)
+          if (px > 512) refuse('bad_args', 'thread.attachment: px is 64 to 512')
+          opts.px = px
+        }
+      }
+      await deps.ensureConversation(address)
+      return projectZenThreadFileData(await inner('thread.attachment', address, args[1], n, opts))
+    },
+    'thread.open': async (args) => {
+      const address = needAddress('thread.open', args[0])
+      const t = args[1]
+      if (!isObj(t)) refuse('bad_args', 'thread.open takes {docId, n} or {rel, line?}')
+      const target = t as Record<string, unknown>
+      let clean: Record<string, unknown>
+      if (typeof target.docId === 'string' && target.docId) {
+        clean = { docId: target.docId, n: needInt('thread.open', 'n', target.n, 0) }
+      } else if (typeof target.rel === 'string' && target.rel.trim() && target.rel.length <= 4096) {
+        clean = { rel: target.rel, ...(target.line !== undefined ? { line: needInt('thread.open', 'line', target.line, 1) } : {}) }
+      } else {
+        return refuse('bad_args', 'thread.open takes {docId, n} or {rel, line?}')
+      }
+      await deps.ensureConversation(address)
+      const r = (await inner('thread.open', address, clean)) as { opened?: unknown } | null
+      return { opened: r?.opened === true }
+    },
+    'thread.links': async (args) => {
+      const address = needAddress('thread.links', args[0])
+      const list = args[1]
+      if (!Array.isArray(list) || list.some((c) => typeof c !== 'string' || c.length > 4096)) {
+        refuse('bad_args', 'thread.links takes a list of path-shaped strings')
+      }
+      if ((list as string[]).length > 200) refuse('bad_args', 'thread.links takes up to 200 candidates')
+      await deps.ensureConversation(address)
+      const r = (await inner('thread.links', address, [...(list as string[])])) as { links?: unknown } | null
+      const links = Array.isArray(r?.links) ? r.links : []
+      return {
+        // Built key by key: the host path and root never cross.
+        links: links.filter(isObj).map((a) => {
+          const out: { input: string; linkable: boolean; kind?: string; rel?: string } = {
+            input: typeof a.input === 'string' ? a.input : '',
+            linkable: a.linkable === true && typeof a.rel === 'string',
+          }
+          if (out.linkable) {
+            out.rel = a.rel as string
+            if (typeof a.kind === 'string') out.kind = a.kind
+          }
+          return out
+        }),
+      }
+    },
+    'thread.pickFiles': async (args) => {
+      const address = needAddress('thread.pickFiles', args[0])
+      if (deps.gesture && !deps.gesture()) refuse('failed', 'thread.pickFiles opens K2’s picker only when the person clicks in the widget.')
+      if (picking) refuse('rate_limited', 'K2’s file picker is already open.')
+      picking = true
+      try {
+        await deps.ensureConversation(address)
+        const r = (await inner('thread.pickFiles', address)) as { files?: unknown } | null
+        const files = Array.isArray(r?.files) ? r.files : []
+        return {
+          files: files.filter(isObj).flatMap((f) => {
+            if (typeof f.relPath !== 'string' || !f.relPath) return []
+            const out: { relPath: string; name: string; size?: number; mime?: string } = {
+              relPath: f.relPath,
+              name: typeof f.name === 'string' && f.name ? f.name : f.relPath.split('/').pop() || f.relPath,
+            }
+            if (typeof f.size === 'number' && Number.isFinite(f.size)) out.size = f.size
+            if (typeof f.mime === 'string' && f.mime) out.mime = f.mime
+            return [out]
+          }),
+        }
+      } finally {
+        picking = false
+      }
     },
     'thread.answer': async (args) => {
       const address = needAddress('thread.answer', args[0])
@@ -749,6 +899,9 @@ export function toRefusal(err: unknown): ZenCustomRefusal {
   }
   if (err instanceof ZenGuestsError) return new ZenCustomRefusal(err.wire.code, err.wire.message)
   if (err instanceof ZenCanvasError) return new ZenCustomRefusal(err.code, err.message)
+  // 0.46.3 Thread parity verbs keep their code (bad_args, verb_unavailable, too_large…).
+  if (err instanceof ZenThreadVerbError) return new ZenCustomRefusal(err.code, err.message)
+  if (err instanceof DaemonHttpError && err.status === 413) return new ZenCustomRefusal('too_large', err.message)
   // The daemon's own `thread:post` check (0.46.1, `zen/widget/check`).
   if (err instanceof ZenWidgetError && err.code === 'widget_cap_missing') {
     return new ZenCustomRefusal('cap_not_granted', err.message, { cap: 'thread:post' })

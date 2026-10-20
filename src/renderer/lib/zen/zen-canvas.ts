@@ -266,6 +266,14 @@ export function zenCanvasPointer(key: string, down: boolean, now: number = Date.
   if (down) e.downAt = now
 }
 
+/** Did a trusted primary-button press go down in this frame within `ms`?
+ *  (`thread.pickFiles`: K2's picker follows the person's own click.) Never
+ *  spends the press. */
+export function zenCanvasPressedWithin(key: string, ms: number, now: number = Date.now()): boolean {
+  const e = entries.get(key)
+  return !!e && e.downAt > 0 && now - e.downAt <= ms
+}
+
 /** `window.startDrag` for one frame: the checks, then the native drag. */
 export function startZenCanvasDrag(
   key: string,

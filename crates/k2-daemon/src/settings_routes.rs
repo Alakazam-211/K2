@@ -300,7 +300,12 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
             k2_core::compute::set_enabled(merged.compute_preview);
             k2_core::deploy::set_enabled(merged.apps);
             k2_core::deploy::set_process_engine(merged.apps_process_engine);
+            let auto_was = k2_core::deploy::auto_prepare_enabled();
             k2_core::deploy::set_auto_prepare(merged.apps_auto_prepare);
+            // Turned on: the automatic box prep runs now, not tomorrow.
+            if !auto_was && k2_core::deploy::auto_prepare_enabled() {
+                crate::apps::auto_prepare::wake();
+            }
             // The process engine turned off: what runs unwalled stops now,
             // not at the next restart.
             crate::apps::supervisor::spawn_stop_unwalled_if_off("owner");

@@ -10,6 +10,10 @@
 //   C. Prepare this box: a dry run first, every change listed, then an
 //      explicit Apply (with K2's Podman when the dry run says it's needed).
 //   D. Install App engine (the guarded engine, through the root helper).
+//   E. Undo box setup (owner): a dry run lists what it undoes and keeps,
+//      then an explicit second click undoes it; refused while Apps run.
+//      Automatic prep pauses until Retry (a stopped automatic prep shows
+//      why and the same Retry).
 //
 // Which agents may manage Apps stays on the Agent tab (a separate slice
 // reshapes those switches); this panel is independent of them.
@@ -38,10 +42,14 @@ import {
   prepareApply,
   prepareDryRun,
   prepareNeeded,
+  retryAutoPrepare,
   setAutoPrepare,
+  unprepApply,
+  unprepDryRun,
   type BoxCheck,
   type BoxDoctor,
   type PrepareDryRun,
+  type UnprepPlan,
 } from './apps-server-api'
 
 export const APPS_SERVER_MANIFEST: SettingEntry[] = [
@@ -78,7 +86,10 @@ export function AppsServerSection(): React.JSX.Element {
   const [switchBusy, setSwitchBusy] = useState(false)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [dry, setDry] = useState<PrepareDryRun | null>(null)
-  const [busy, setBusy] = useState<null | 'dry' | 'apply' | 'engine' | 'auto'>(null)
+  const [unprep, setUnprep] = useState<UnprepPlan | null>(null)
+  const [busy, setBusy] = useState<
+    null | 'dry' | 'apply' | 'engine' | 'auto' | 'retry' | 'unprep-dry' | 'unprep'
+  >(null)
   const mounted = useRef(true)
 
   const isOwner = role === 'owner'
@@ -97,6 +108,7 @@ export function AppsServerSection(): React.JSX.Element {
     mounted.current = true
     setBox({ kind: 'loading' })
     setDry(null)
+    setUnprep(null)
     setNotice(null)
     void load()
     void fetchViewerRole().then((r) => {
@@ -165,6 +177,52 @@ export function AppsServerSection(): React.JSX.Element {
       await load()
     } catch (e) {
       setNotice({ tone: 'error', text: daemonErrorText(e) })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const retryAuto = async (): Promise<void> => {
+    setBusy('retry')
+    setNotice(null)
+    try {
+      await retryAutoPrepare()
+      setNotice({ tone: 'info', text: 'Automatic prep will run again now.' })
+      await load()
+    } catch (e) {
+      setNotice({ tone: 'error', text: daemonErrorText(e) })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const unprepPlan = async (): Promise<void> => {
+    setBusy('unprep-dry')
+    setNotice(null)
+    try {
+      setUnprep(await unprepDryRun())
+    } catch (e) {
+      setNotice({ tone: 'error', text: daemonErrorText(e) })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const unprepConfirm = async (): Promise<void> => {
+    if (!unprep) return
+    setBusy('unprep')
+    setNotice(null)
+    try {
+      const r = await unprepApply()
+      setUnprep(null)
+      setNotice({
+        tone: 'ok',
+        text: `The box setup is undone.${r.note ? ` ${r.note}` : ''}`,
+      })
+      await load()
+    } catch (e) {
+      setNotice({ tone: 'error', text: `${daemonErrorText(e)} (the checks below show where the box is now)` })
+      await load()
     } finally {
       setBusy(null)
     }
@@ -293,6 +351,23 @@ export function AppsServerSection(): React.JSX.Element {
                           {doctor.autoPrepare.detail ? ` — ${doctor.autoPrepare.detail}` : ''}
                         </p>
                       ) : null}
+                      {doctor.autoPrepare.undoneAt !== null || doctor.autoPrepare.blocked ? (
+                        <div className="mt-1 space-y-1" data-testid="apps-auto-prepare-stopped">
+                          <p className={`text-[11px] ${STATUS_STYLE.warn}`}>
+                            {doctor.autoPrepare.undoneAt !== null
+                              ? 'Paused because you undid the box setup.'
+                              : `Stopped: ${doctor.autoPrepare.detail ?? doctor.autoPrepare.code ?? 'this box can’t be prepared'}.`}{' '}
+                            K2 won&apos;t try again until you press Retry or K2 updates.
+                          </p>
+                          <Button
+                            onClick={() => void retryAuto()}
+                            disabled={!isOwner || busy !== null}
+                            data-testid="apps-auto-prepare-retry"
+                          >
+                            {busy === 'retry' ? 'Retrying…' : 'Retry'}
+                          </Button>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 ) : null}
@@ -357,6 +432,55 @@ export function AppsServerSection(): React.JSX.Element {
                   >
                     {busy === 'engine' ? 'Installing…' : engineNeeded(doctor) ? 'Install App engine' : 'Reinstall App engine'}
                   </Button>
+                </div>
+                <div className="space-y-2 pt-2 border-t border-[var(--color-border)]" data-testid="apps-unprep">
+                  <div className="text-xs text-[var(--color-text-primary)]">Undo box setup</div>
+                  <p className={`text-[11px] ${muted}`}>
+                    Removes what box prep set up (the firewall table, AppArmor profile, limits, linger and the engine
+                    unit). The k2app user, its data and the distro packages stay. K2&apos;s Podman stays too (k2 app box
+                    podman uninstall removes it). Automatic prep pauses until you press Retry. Refused while any App runs.
+                  </p>
+                  {unprep ? (
+                    <div className="space-y-2" data-testid="apps-unprep-plan">
+                      <div className={`text-[11px] ${secondary}`}>Undo will remove:</div>
+                      <ul className="list-disc ml-5 space-y-0.5">
+                        {unprep.undoes.map((l, i) => (
+                          <li key={i} className="text-[11px] font-mono text-[var(--color-text-primary)] break-all">
+                            {l}
+                          </li>
+                        ))}
+                      </ul>
+                      {unprep.kept.length ? (
+                        <p className={`text-[11px] ${muted}`}>Kept: {unprep.kept.join('; ')}</p>
+                      ) : null}
+                      {unprep.runningApps.length ? (
+                        <p className={`text-[11px] ${STATUS_STYLE.warn}`} data-testid="apps-unprep-running">
+                          Stop these Apps first: {unprep.runningApps.join(', ')}
+                        </p>
+                      ) : null}
+                      <div className="flex gap-2">
+                        <Button
+                          variant="danger"
+                          onClick={() => void unprepConfirm()}
+                          disabled={!isOwner || busy !== null || unprep.runningApps.length > 0}
+                          data-testid="apps-unprep-confirm"
+                        >
+                          {busy === 'unprep' ? 'Undoing…' : 'Undo box setup'}
+                        </Button>
+                        <Button variant="ghost" onClick={() => setUnprep(null)} disabled={busy !== null}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <Button
+                      onClick={() => void unprepPlan()}
+                      disabled={!isOwner || busy !== null}
+                      data-testid="apps-unprep-start"
+                    >
+                      {busy === 'unprep-dry' ? 'Checking…' : 'Undo box setup…'}
+                    </Button>
+                  )}
                 </div>
               </div>
             </SettingsGroup>

@@ -199,6 +199,9 @@ pub const ROUTES: &[Route] = &[
     // Lane P: remove K2's Podman bundle (prepare --install-podman put it in).
     post("/cli/app/box/podman/uninstall", Owner),
     post("/cli/app/box/prepare", Owner),
+    // 0.46.3: undo box prep (F8) and Retry a blocked automatic prep (F6).
+    post("/cli/app/box/unprep", Owner),
+    post("/cli/app/box/auto-prepare/retry", Owner),
     post("/cli/app/build", Admin),
     // 0.46.0 grace: clean mode on narrows (anyone, own Apps for passports);
     // off is held unless the owner turns it off.

@@ -339,6 +339,8 @@ pub(crate) fn uninstall_route(who: &Who, _body: &J) -> R<J> {
             root_helper::helper_needed("removing K2's Podman", PODMAN_INSTALL_MIN_PROTOCOL, &st),
         ));
     }
+    // 0.46.3 F9: never inside another root sequence.
+    let _held = root_helper::busy::try_hold("a K2 Podman removal").map_err(|e| no("root_busy", 409, e))?;
     let res = root_helper::call_text(&["apps".into(), "podman".into(), "uninstall".into()], None);
     root_helper::invalidate();
     match res {

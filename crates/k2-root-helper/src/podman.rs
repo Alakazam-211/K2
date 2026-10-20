@@ -16,6 +16,11 @@
 //!    restricts user namespaces, the `k2-podman` AppArmor profiles;
 //! 6. the installed podman must answer the pinned version.
 //!
+//! Install refuses below box prep's disk floor (5 GiB free on `/` and
+//! `/var`, `k2_root_proto::apps::MIN_FREE_BYTES`) before it stages
+//! anything, and never touches the box's own Podman (distro or
+//! /usr/local): only k2app runs the bundle.
+//!
 //! Uninstall (daemon-only) is refused while any App process runs, removes
 //! only what install wrote (a generator K2 didn't write stays), and
 //! leaves the distro's Podman as it was.
@@ -268,6 +273,8 @@ pub fn install_with(ctx: &Ctx, stdin: &[u8], art: &PodmanArtifact, os: String) -
             art.asset
         )));
     }
+    // 0.46.3 F5: nothing staged on a nearly full disk.
+    crate::apps::disk_floor(ctx)?;
     let pw = app_user(ctx)?;
     let members = extract_members(stdin, art)?;
     let marker_bytes = marker(ctx.arch, art.sha256);

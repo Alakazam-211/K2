@@ -63,6 +63,8 @@ pub struct Facts {
     pub podman_bundle: bool,
     /// S17: `k2_core::agents_leaf::status_json()` (None off Linux).
     pub agents_leaf: Option<J>,
+    /// 0.46.3 F5: bytes free on `/` and `/var` (empty off Linux).
+    pub disk_free: Vec<(String, u64)>,
 }
 
 fn s(v: &Option<String>) -> &str {
@@ -563,6 +565,21 @@ pub fn doctor(f: &Facts) -> J {
         });
     }
 
+    // 0.46.3 F5: box prep refuses below the floor (never a readiness gate:
+    // a prepared box with a full disk is a disk problem, not a prep one).
+    if !f.disk_free.is_empty() {
+        let have = f.disk_free.iter().map(|(p, b)| format!("{} free on {p}", k2_root_proto::apps::gib(*b))).collect::<Vec<_>>().join(", ");
+        out.push(match k2_root_proto::apps::low_disk(&f.disk_free) {
+            Some(msg) => c("disk", "warn", msg.trim_start_matches("low_disk: ").to_string(), Some("free space on the box, then k2 app box prepare (owner)")),
+            None => c(
+                "disk",
+                "ok",
+                format!("{have} (box prep needs {})", k2_root_proto::apps::gib(k2_root_proto::apps::MIN_FREE_BYTES)),
+                None,
+            ),
+        });
+    }
+
     out.push(match f.ptrace_scope.as_deref().map(str::trim) {
         Some("0") => c(
             "ptraceScope",
@@ -770,11 +787,30 @@ pub fn gather() -> Facts {
         k2_root_proto::apps::CONMON.iter().find_map(|p| version_of(p))
     };
     f.headless_confirm = headless_confirm();
+    f.disk_free = disk_free_now();
     f.skopeo = std::path::Path::new(super::guarded::SKOPEO).exists();
     if std::path::Path::new(k2_root_proto::engine::SOCKET).exists() {
         f.engine = Some(super::guarded::engine_version());
     }
     f
+}
+
+/// Bytes free on [`k2_root_proto::apps::FREE_CHECK_PATHS`] (a path statvfs
+/// can't read is left out).
+pub fn disk_free_now() -> Vec<(String, u64)> {
+    k2_root_proto::apps::FREE_CHECK_PATHS
+        .iter()
+        .filter_map(|p| {
+            let c = std::ffi::CString::new(*p).ok()?;
+            // SAFETY: valid C string; statvfs fills the zeroed struct.
+            let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+            if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+                return None;
+            }
+            #[allow(clippy::unnecessary_cast)]
+            Some((p.to_string(), (st.f_bavail as u64).saturating_mul(st.f_frsize as u64)))
+        })
+        .collect()
 }
 
 fn apply_helper_status(
@@ -972,6 +1008,12 @@ pub(crate) fn prepare_route(who: &Who, body: &J) -> R<J> {
         };
         return Ok(pi::dry_run(&d, &pod, &p, app_uid(), doctor(&f)));
     }
+    if !cfg!(target_os = "linux") {
+        return Err(no("linux_only", 409, "Apps run on Linux boxes only"));
+    }
+    // F9: one root sequence at a time (hosted mail, the helper heal, the
+    // automatic prep, the engine install).
+    let _held = root_helper::busy::try_hold("an App box prep").map_err(|e| no("root_busy", 409, e))?;
     prepare_core(&opts, &pod, &super::routes::actor(who))
 }
 
@@ -991,6 +1033,10 @@ pub(crate) fn prepare_core(opts: &PrepareOpts, pod: &super::podman_install::Podm
             409,
             root_helper::helper_needed("App box prep", APPS_MIN_PROTOCOL, &st),
         ));
+    }
+    // F5: nothing starts on a nearly full disk (the helper checks again).
+    if let Some(msg) = k2_root_proto::apps::low_disk(&disk_free_now()) {
+        return Err(no("low_disk", 409, msg));
     }
     // Lane P: K2's Podman, opted in, before any step (never on upgrade).
     let before = gather();
@@ -1603,5 +1649,24 @@ mod tests {
         let pk = p.iter().position(|v| v == "apps packages install").unwrap();
         let aa = p.iter().position(|v| v == "apps apparmor on").unwrap();
         assert!(pk < aa, "{p:?}");
+    }
+
+    /// 0.46.3 F5: the doctor's disk line warns below the floor (where, how
+    /// much) and never gates readiness; no line off Linux.
+    #[test]
+    fn the_disk_row_warns_below_the_prep_floor() {
+        let gib = 1024 * 1024 * 1024;
+        let mut f = good();
+        f.disk_free = vec![("/".into(), 40 * gib), ("/var".into(), 4 * gib)];
+        let d = doctor(&f);
+        assert_eq!(status_of(&d, "disk"), "warn");
+        let row = d["checks"].as_array().unwrap().iter().find(|c| c["id"] == "disk").unwrap();
+        assert!(row["detail"].as_str().unwrap().starts_with("4.0 GiB free on /var;"), "{row}");
+        assert_eq!(d["ready"], true, "a full disk is not a prep gate");
+        f.disk_free = vec![("/".into(), 40 * gib), ("/var".into(), 40 * gib)];
+        let d = doctor(&f);
+        assert_eq!(status_of(&d, "disk"), "ok");
+        f.disk_free = vec![];
+        assert!(!doctor(&f)["checks"].as_array().unwrap().iter().any(|c| c["id"] == "disk"));
     }
 }

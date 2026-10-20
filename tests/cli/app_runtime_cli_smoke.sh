@@ -274,6 +274,19 @@ set +e
 k2 app box podman remove > "$SANDBOX/out" 2>&1; rc=$?
 set -e
 expect_eq "podman takes only uninstall (exit 2)" "$rc" "2"
+# F8: undoing box prep needs the helper on Linux too: refused here, exit 3.
+set +e
+k2 app box unprep --yes > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "unprep without a helper exits 3" "$rc" "3"
+case "$(cat "$SANDBOX/out")" in
+    *linux_only*|*helper_needed*) ok "unprep names why (linux_only / helper_needed)" ;;
+    *) bad "unprep names why: $(cat "$SANDBOX/out")" ;;
+esac
+set +e
+k2 app box auto-prepare again > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "auto-prepare takes only retry (exit 2)" "$rc" "2"
 
 echo "== guarded engine (S11/S12) =="
 # Same rule: a sandbox never has a protocol-6 helper, so the engine install

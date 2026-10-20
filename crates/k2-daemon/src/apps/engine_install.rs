@@ -96,6 +96,11 @@ pub(crate) fn install_route(who: &Who, body: &J) -> R<J> {
         return Err(no("owner_only", 403, "installing the App engine is the owner's: ask your owner to run it (Settings → Apps → This server → Install App engine, or k2 app engine install from a terminal outside K2)"));
     }
     let from = body.get("from").and_then(J::as_str).map(str::trim).filter(|s| !s.is_empty());
+    if !cfg!(target_os = "linux") {
+        return Err(no("linux_only", 409, "the App engine runs on Linux boxes only"));
+    }
+    // 0.46.3 F9: never inside another root sequence.
+    let _held = root_helper::busy::try_hold("an App engine install").map_err(|e| no("root_busy", 409, e))?;
     install_core(from)
 }
 

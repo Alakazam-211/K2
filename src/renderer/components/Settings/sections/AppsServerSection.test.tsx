@@ -10,7 +10,7 @@
 // Agent tab. Every call goes to the window's server (primaryScope).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, cleanup, within } from '@testing-library/react'
 
 const h = vi.hoisted(() => ({
   daemonCliGet: vi.fn(),
@@ -37,7 +37,7 @@ vi.mock('@/components/Presence/PresenceKickButton', () => ({ fetchViewerRole: vi
 import * as presence from '@/components/Presence/PresenceKickButton'
 import { useSettingsStore, appsSwitchFrom } from '@/stores/settings'
 import { AppsServerSection, APPS_SERVER_MANIFEST } from './AppsServerSection'
-import { changeLines, needsPodmanInstall, parseDoctor, parseDryRun } from './apps-server-api'
+import { changeLines, needsPodmanInstall, parseAutoPrepare, parseDoctor, parseDryRun, parseUnprepResult } from './apps-server-api'
 
 const role = vi.mocked(presence.fetchViewerRole)
 
@@ -265,6 +265,124 @@ describe('Install App engine', () => {
   })
 })
 
+describe('automatic prep stopped', () => {
+  const blocked = {
+    enabled: true,
+    default: false,
+    setting: 'appsAutoPrepare',
+    lastRun: 1,
+    outcome: { state: 'blocked', code: 'kernel_too_old', why: 'Linux 5.4: Apps need 5.11 or newer' },
+    nextAttempt: null,
+    blocked: true,
+    undoneAt: null,
+    retryRoute: '/cli/app/box/auto-prepare/retry',
+  }
+
+  it('shows why it stopped, and Retry posts the retry route', async () => {
+    gets({ 'app/box': () => doctor({ autoPrepare: blocked }) })
+    posts({ 'app/box/auto-prepare/retry': () => ({ ok: true, autoPrepare: { ...blocked, blocked: false, outcome: null } }) })
+    render(<AppsServerSection />)
+    const stopped = await screen.findByTestId('apps-auto-prepare-stopped')
+    expect(stopped.textContent).toMatch(/Stopped: Linux 5\.4: Apps need 5\.11 or newer/)
+    expect(stopped.textContent).toMatch(/until you press Retry or K2 updates/)
+    const retry = screen.getByTestId('apps-auto-prepare-retry') as HTMLButtonElement
+    await waitFor(() => expect(retry.disabled).toBe(false))
+    fireEvent.click(retry)
+    await screen.findByText('Automatic prep will run again now.')
+    expect(postsTo('app/box/auto-prepare/retry')).toEqual([{}])
+  })
+
+  it('an undone box says it is paused; Retry is the owner’s', async () => {
+    role.mockResolvedValue('admin')
+    gets({ 'app/box': () => doctor({ autoPrepare: { ...blocked, blocked: false, outcome: { state: 'ready' }, undoneAt: 5 } }) })
+    render(<AppsServerSection />)
+    const stopped = await screen.findByTestId('apps-auto-prepare-stopped')
+    expect(stopped.textContent).toMatch(/Paused because you undid the box setup/)
+    await screen.findByTestId('apps-switch-owner-only')
+    expect((screen.getByTestId('apps-auto-prepare-retry') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('a prep that is not stopped shows no Retry', async () => {
+    gets({ 'app/box': () => doctor({ autoPrepare: { ...blocked, blocked: false, outcome: { state: 'ready' } } }) })
+    render(<AppsServerSection />)
+    await screen.findByTestId('apps-auto-prepare-last')
+    expect(screen.queryByTestId('apps-auto-prepare-retry')).toBeNull()
+  })
+})
+
+describe('Undo box setup', () => {
+  const PLAN = {
+    ok: true,
+    dryRun: true,
+    changed: false,
+    undoes: ['nft remove', 'apparmor off', 'linger off'],
+    kept: ['the k2app user and its subordinate ids', 'distro packages'],
+    runningApps: [] as string[],
+  }
+
+  it('lists the plan first and undoes only on the second, explicit click', async () => {
+    gets({ 'app/box': () => doctor() })
+    posts({
+      'app/box/unprep': (b) =>
+        (b as { dryRun?: boolean }).dryRun
+          ? PLAN
+          : {
+              ok: true,
+              result: { unprepared: true, steps: [{ step: 'nft remove', changed: true }], kept: PLAN.kept },
+              kept: PLAN.kept,
+              note: "K2's Podman stays: k2 app box podman uninstall removes it.",
+              box: doctor(),
+            },
+    })
+    render(<AppsServerSection />)
+    const start = await screen.findByTestId('apps-unprep-start')
+    await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(start)
+    const plan = await screen.findByTestId('apps-unprep-plan')
+    expect(plan.textContent).toMatch(/nft remove/)
+    expect(plan.textContent).toMatch(/Kept: the k2app user/)
+    expect(postsTo('app/box/unprep')).toEqual([{ dryRun: true }])
+    fireEvent.click(screen.getByTestId('apps-unprep-confirm'))
+    const notice = await screen.findByTestId('apps-server-notice')
+    expect(notice.textContent).toMatch(/The box setup is undone\. K2's Podman stays/)
+    expect(postsTo('app/box/unprep')).toEqual([{ dryRun: true }, { confirm: true }])
+  })
+
+  it('Cancel posts nothing more', async () => {
+    gets({ 'app/box': () => doctor() })
+    posts({ 'app/box/unprep': () => PLAN })
+    render(<AppsServerSection />)
+    const start = await screen.findByTestId('apps-unprep-start')
+    await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(start)
+    const plan = await screen.findByTestId('apps-unprep-plan')
+    fireEvent.click(within(plan).getByText('Cancel'))
+    expect(screen.queryByTestId('apps-unprep-plan')).toBeNull()
+    expect(postsTo('app/box/unprep')).toEqual([{ dryRun: true }])
+  })
+
+  it('running Apps disable the confirm and are named', async () => {
+    gets({ 'app/box': () => doctor() })
+    posts({ 'app/box/unprep': () => ({ ...PLAN, runningApps: ['shop', 'blog'] }) })
+    render(<AppsServerSection />)
+    const start = await screen.findByTestId('apps-unprep-start')
+    await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(start)
+    const running = await screen.findByTestId('apps-unprep-running')
+    expect(running.textContent).toMatch(/Stop these Apps first: shop, blog/)
+    expect((screen.getByTestId('apps-unprep-confirm') as HTMLButtonElement).disabled).toBe(true)
+    expect(postsTo('app/box/unprep')).toEqual([{ dryRun: true }])
+  })
+
+  it('is the owner’s', async () => {
+    role.mockResolvedValue('admin')
+    gets({ 'app/box': () => doctor() })
+    render(<AppsServerSection />)
+    await screen.findByTestId('apps-switch-owner-only')
+    expect((screen.getByTestId('apps-unprep-start') as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
 describe('independent of the per-agent switches', () => {
   it('shows no agent switch of its own (they stay on the Agent tab)', async () => {
     gets({ 'app/box': () => doctor() })
@@ -290,6 +408,20 @@ describe('helpers', () => {
     expect(changeLines(d)).toContain('  writes /opt/k2/podman')
     expect(changeLines(d).slice(-3)).toEqual(DRY.steps)
     expect(needsPodmanInstall(parseDryRun({ podman: { action: 'keep' } }))).toBe(false)
+  })
+
+  it('reads the auto-prep stop and the undo result', () => {
+    expect(parseAutoPrepare({ enabled: true, outcome: { state: 'blocked', code: 'cgroup_v1', why: 'no cgroup v2' } })).toEqual({
+      enabled: true,
+      state: 'blocked',
+      detail: 'no cgroup v2',
+      blocked: true,
+      code: 'cgroup_v1',
+      undoneAt: null,
+    })
+    expect(parseAutoPrepare({ enabled: false, undoneAt: 7 })?.undoneAt).toBe(7)
+    const r = parseUnprepResult({ result: { steps: [{ step: 'nft remove', changed: true }], kept: ['x'] }, note: 'n' })
+    expect(r).toEqual({ steps: [{ step: 'nft remove', changed: true }], kept: ['x'], note: 'n', box: null })
   })
 
   it('the manifest points at the Apps section', () => {

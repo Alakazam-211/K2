@@ -21,6 +21,8 @@ pub mod approvals;
 pub mod audit;
 pub mod attribution;
 pub mod box_prep;
+/// Undo box setup: the owner's `k2 app box unprep` (0.46.3 F8).
+pub mod box_unprep;
 pub mod egress_proxy;
 pub mod egress_routes;
 pub mod box_service_routes;

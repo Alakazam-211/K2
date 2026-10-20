@@ -1221,7 +1221,7 @@ pub fn nft_remove(ctx: &Ctx) -> HResult<J> {
 // ── packages and the OCI runtime ────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Pm {
+pub(crate) enum Pm {
     Apt,
     Dnf,
     Pacman,
@@ -1247,27 +1247,127 @@ fn pm_name(pm: Pm) -> &'static str {
     }
 }
 
+/// Which Podman the box already has (0.46.3 F4). Whoever put it there,
+/// K2 never upgrades or replaces it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PodmanHave {
+    None,
+    /// `/usr/bin/podman` (the distro's package).
+    Distro,
+    /// Built from source and installed under /usr/local.
+    Local(&'static str),
+}
+
+pub(crate) fn podman_have(ctx: &Ctx) -> PodmanHave {
+    if exists(ctx, PODMAN) {
+        PodmanHave::Distro
+    } else if let Some(p) = LOCAL_PODMAN.iter().find(|p| exists(ctx, p)) {
+        PodmanHave::Local(p)
+    } else {
+        PodmanHave::None
+    }
+}
+
+/// The packages one prep installs (0.46.3 F3/F4), pure:
+/// - K2's Podman bundle runs k2app (`bundle`): the distro list minus what
+///   the bundle ships ([`BUNDLE_SHIPS`]); the box's own Podman, if any, is
+///   never touched.
+/// - else the distro list, minus `podman` when the box has one (a distro
+///   Podman is kept as it is); a source-built Podman in /usr/local with no
+///   bundle for this OS is a stop: the distro's would land next to it.
+pub(crate) fn select_packages(pm: Pm, bundle: bool, have: &PodmanHave) -> Result<Vec<&'static str>, String> {
+    let base = match pm {
+        Pm::Apt => APT_PACKAGES,
+        Pm::Dnf => DNF_PACKAGES,
+        Pm::Pacman => PACMAN_PACKAGES,
+    };
+    if bundle {
+        return Ok(base.iter().copied().filter(|p| !BUNDLE_SHIPS.contains(p)).collect());
+    }
+    match have {
+        PodmanHave::Local(path) => Err(format!(
+            "customer_podman: a Podman K2 didn't install is at {path}, and K2's Podman bundle isn't for this OS (Ubuntu 24.04 and \
+             Debian 12 only), so prep would put the distro's Podman next to it. K2 leaves it alone: install Podman 5 with the \
+             distro's packages yourself (or remove the source-built one), then press Retry"
+        )),
+        PodmanHave::Distro => Ok(base.iter().copied().filter(|p| *p != PODMAN_PACKAGE).collect()),
+        PodmanHave::None => Ok(base.to_vec()),
+    }
+}
+
+/// An `apt-get install -s` answer that would remove a package, or install
+/// or upgrade `podman` when `podman` isn't one K2 asked for (a dependency
+/// pulling the distro's Podman next to a source-built one, or upgrading
+/// the box's own): `Some(refusal)`. Pure.
+pub(crate) fn apt_sim_refusal(sim: &str, listed: &[&str]) -> Option<String> {
+    for line in sim.lines() {
+        let mut w = line.split_whitespace();
+        let (Some(op), Some(pkg)) = (w.next(), w.next()) else { continue };
+        let name = pkg.split(':').next().unwrap_or(pkg);
+        match op {
+            "Remv" => {
+                return Some(format!(
+                    "apt_would_remove: installing {} would remove {name}; K2 never removes packages (nothing changed)",
+                    listed.join(" ")
+                ))
+            }
+            "Inst" if name == PODMAN_PACKAGE && !listed.contains(&PODMAN_PACKAGE) => {
+                return Some(format!(
+                    "customer_podman: apt would {} podman ({}); K2 never upgrades the box's own Podman or adds one next to it (nothing changed)",
+                    if line.contains('[') { "upgrade" } else { "install" },
+                    line.trim()
+                ))
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// 0.46.3 F5: refuse below [`MIN_FREE_BYTES`] on `/` or `/var` before any
+/// package or bundle step.
+pub(crate) fn disk_floor(ctx: &Ctx) -> HResult<()> {
+    let free: Vec<(String, u64)> = FREE_CHECK_PATHS
+        .iter()
+        .filter_map(|p| (ctx.free_bytes)(&ctx.p(p)).ok().map(|b| (p.to_string(), b)))
+        .collect();
+    match low_disk(&free) {
+        Some(msg) => Err(Fail::state(msg)),
+        None => Ok(()),
+    }
+}
+
 fn install(ctx: &Ctx, pm: Pm, pkgs: &[&str]) -> HResult<()> {
     match pm {
         Pm::Apt => {
             let fe = "DEBIAN_FRONTEND=noninteractive";
             ctx.run_ok(ENV, &[fe, APT_GET, "update", "-q"], None)?;
-            let mut a = vec![
-                fe,
-                APT_GET,
-                "install",
-                "-y",
+            // --no-upgrade: a package already on the box stays at its
+            // version (the box's own Podman above all, F4).
+            let opts = [
                 "-q",
                 "--no-install-recommends",
+                "--no-upgrade",
                 "-o",
                 "Dpkg::Options::=--force-confdef",
                 "-o",
                 "Dpkg::Options::=--force-confold",
             ];
+            // Simulate first: no removal, no Podman K2 didn't ask for.
+            let mut sim = vec![fe, APT_GET, "install", "-s"];
+            sim.extend_from_slice(&opts);
+            sim.extend_from_slice(pkgs);
+            let out = ctx.run_ok(ENV, &sim, None)?;
+            if let Some(why) = apt_sim_refusal(&String::from_utf8_lossy(&out.stdout), pkgs) {
+                return Err(Fail::state(why));
+            }
+            let mut a = vec![fe, APT_GET, "install", "-y"];
+            a.extend_from_slice(&opts);
             a.extend_from_slice(pkgs);
             ctx.run_ok(ENV, &a, None)?;
         }
         Pm::Dnf => {
+            // `dnf install` leaves an installed package at its version.
             let mut a = vec!["install", "-y", "-q"];
             a.extend_from_slice(pkgs);
             ctx.run_ok(DNF, &a, None)?;
@@ -1365,22 +1465,41 @@ fn apparmor_packages(ctx: &Ctx, pm: Pm) -> Option<&'static [&'static str]> {
 pub fn packages_install(ctx: &Ctx) -> HResult<J> {
     let pm = package_manager(ctx)
         .ok_or_else(|| Fail::state("no supported package manager (apt-get, dnf, pacman)"))?;
-    let base = match pm {
-        Pm::Apt => APT_PACKAGES,
-        Pm::Dnf => DNF_PACKAGES,
-        Pm::Pacman => PACMAN_PACKAGES,
-    };
+    disk_floor(ctx)?;
+    // K2's Podman bundle goes in before this verb (`plan_with_install`):
+    // where it runs k2app, the distro's Podman stack isn't needed (F3).
+    let bundle = crate::podman::installed(ctx);
+    let have = podman_have(ctx);
+    let mut pkgs = select_packages(pm, bundle, &have).map_err(Fail::state)?;
     let aa = apparmor_packages(ctx, pm);
-    let mut pkgs: Vec<&str> = base.to_vec();
     pkgs.extend_from_slice(aa.unwrap_or(&[]));
     install(ctx, pm, &pkgs)?;
     let mut v = engine_json(ctx);
     if v["podmanOk"] != true {
+        let kept = if have == PodmanHave::Distro {
+            ", and K2 doesn't upgrade a Podman it didn't install"
+        } else {
+            ""
+        };
         return Err(Fail::state(format!(
-            "podman_too_old: the distro ships Podman {} (Apps need {PODMAN_MIN_MAJOR}+: Debian 13, Ubuntu 26.04, Fedora 40+, Arch)",
+            "podman_too_old: the box's Podman is {}{kept} (Apps need {PODMAN_MIN_MAJOR}+: Debian 13, Ubuntu 26.04, Fedora 40+, Arch; K2's own Podman covers Ubuntu 24.04 and Debian 12)",
             v["podman"].as_str().unwrap_or("none")
         )));
     }
+    if bundle && !exists(ctx, CONTAINERS_POLICY) {
+        return Err(Fail::state(format!(
+            "policy_missing: {CONTAINERS_POLICY} isn't there after the install (the distro's containers-common, which skopeo depends on, ships it)"
+        )));
+    }
+    v["packages"] = json!({
+        "path": if bundle { "bundle" } else { "distro" },
+        "requested": pkgs,
+        "boxPodman": match &have {
+            PodmanHave::None => J::Null,
+            PodmanHave::Distro => json!(PODMAN),
+            PodmanHave::Local(p) => json!(p),
+        },
+    });
     if v["pasta"] != true {
         return Err(Fail::state(
             "pasta_missing: the distro's passt package did not install /usr/bin/pasta",

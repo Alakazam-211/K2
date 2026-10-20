@@ -202,6 +202,9 @@ pub struct Ctx {
     pub out: RefCell<Vec<u8>>,
     /// Lock wait (30 s in production).
     pub lock_timeout_ms: u64,
+    /// Bytes free on a path's filesystem (statvfs in production; tests
+    /// pick an answer). Box prep's disk floor reads it (0.46.3 F5).
+    pub free_bytes: fn(&Path) -> Result<u64, String>,
 }
 
 impl Ctx {
@@ -222,6 +225,7 @@ impl Ctx {
             audit: Box::new(crate::sys::SyslogAudit),
             out: RefCell::new(Vec::new()),
             lock_timeout_ms: 30_000,
+            free_bytes: crate::mail_data::free_bytes,
         }
     }
 

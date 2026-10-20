@@ -323,10 +323,10 @@ impl HealOps for LiveOps {
         serde_json::from_str(&out).map_err(|_| "self-rollback answer is not JSON".into())
     }
     fn begin_busy(&self) -> bool {
-        crate::mail::supervisor::try_begin_enable()
+        super::busy::begin("the root helper's self-update")
     }
     fn end_busy(&self) {
-        crate::mail::supervisor::end_enable();
+        super::busy::end();
     }
 }
 

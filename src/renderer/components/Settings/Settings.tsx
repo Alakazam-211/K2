@@ -43,6 +43,7 @@ import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHos
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
 import { DataSection, DATA_MANIFEST } from './sections/DataSection'
 import { ComputeSection, COMPUTE_MANIFEST } from './sections/ComputeSection'
+import { SewSection, SEW_MANIFEST } from './sections/SewSection'
 import { SkinAccessSection, SKIN_ACCESS_MANIFEST } from './sections/SkinAccessSection'
 import { AppApprovalsSection, APP_APPROVALS_MANIFEST } from './sections/AppApprovalsSection'
 import { APPS_SERVER_MANIFEST } from './sections/AppsServerSection'
@@ -244,8 +245,8 @@ export function settingsNav({
       title: 'Cores',
       items: [
         { id: 'email-hosting', label: 'Email Hosting' },
-        // Sew, run on this box (Rosson 2026-10-15); `k2 hostchat` lands with S27–S32.
-        { label: 'Chat Hosting', soon: true },
+        // Sew, run on this box (Rosson 2026-10-15): the S32 K27 page (`k2 hostchat` headless).
+        { id: 'sew', label: 'Chat Hosting' },
         // Rosson 2026-10-15: Compute is a core (it sits on the runtime), between Chat Hosting and Database.
         { id: 'compute', label: 'Compute', beta: true },
         { id: 'data', label: 'Database' },
@@ -320,6 +321,7 @@ export default function Settings(): React.JSX.Element {
       ...DATA_SOURCES_MANIFEST,
       ...LOCAL_GROKBOTS_MANIFEST,
       ...EMAIL_HOSTING_MANIFEST,
+      ...SEW_MANIFEST,
       ...EMAIL_LINK_MANIFEST,
       ...DATA_MANIFEST,
       ...COMPUTE_MANIFEST,
@@ -535,6 +537,7 @@ export default function Settings(): React.JSX.Element {
           activeSection === 'connections' ||
           activeSection === 'agents' ||
           activeSection === 'email-hosting' ||
+          activeSection === 'sew' ||
           activeSection === 'email-link' ||
           activeSection === 'data' ||
           activeSection === 'skin-access' ||
@@ -697,6 +700,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'email-hosting' && (
           <SectionErrorBoundary>
             <EmailHostingSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'sew' && (
+          <SectionErrorBoundary>
+            <SewSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'email-link' && (

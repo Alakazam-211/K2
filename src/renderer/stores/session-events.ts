@@ -289,8 +289,9 @@ export interface MailChangedEvent {
  *  Server → Domains (`onDomainsChanged`). `reason` is `attached` |
  *  `removed` | `refreshed` | `status_changed` | `zone_missing`; `apex` is
  *  null when several domains changed. */
-/** APP-LEVEL — the Sew server on this box or its voice changed (S29 K14).
- *  Refetch signal for GET /cli/sew/status. Ignored by this client today. */
+/** APP-LEVEL — the Sew server on this box or its voice changed (S29 K14,
+ *  S32 K26). Refetch signal for GET /cli/sew/status. Consumer: Settings →
+ *  Cores → Chat Hosting (`onSewChanged`). */
 export interface SewChangedEvent {
   kind: 'sew_changed'
   reason: string
@@ -1315,6 +1316,8 @@ type OpenChangesHandler = (e: OpenChangesEvent) => void
 // Home 0.43.2 (Q7) — Settings → Email's refetch signal (`reason` unwrapped,
 // the onFeedbackChanged idiom).
 type MailChangedHandler = (reason: string) => void
+// S32 K27 — Settings → Chat Hosting's refetch signal (`reason` unwrapped).
+type SewChangedHandler = (reason: string) => void
 // DN12e — Settings → Domains' refetch signal.
 type DomainsChangedHandler = (e: DomainsChangedEvent) => void
 // 0.45.2 — Settings → Connections' refetch signal.
@@ -1372,6 +1375,7 @@ interface AppBusHandlers {
   gitNotesChanged: Set<GitNotesChangedHandler>
   openChanges: Set<OpenChangesHandler>
   mailChanged: Set<MailChangedHandler>
+  sewChanged: Set<SewChangedHandler>
   domainsChanged: Set<DomainsChangedHandler>
   federationPeersChanged: Set<FederationPeersChangedHandler>
   notifyPrefsChanged: Set<NotifyPrefsChangedHandler>
@@ -1425,6 +1429,7 @@ function createBusState(scopeId: string): BusState {
       gitNotesChanged: new Set(),
       openChanges: new Set(),
       mailChanged: new Set(),
+      sewChanged: new Set(),
       domainsChanged: new Set(),
       federationPeersChanged: new Set(),
       notifyPrefsChanged: new Set(),
@@ -1723,6 +1728,13 @@ export function onMailChanged(scope: ServerScope, fn: MailChangedHandler): Unsub
   return addHandler(busFor(scope).handlers.mailChanged, fn)
 }
 
+/** S32 K27 — subscribe to APP-LEVEL `sew_changed` (the Sew server, its
+ *  voice, backups or the grant hook changed on `scope`'s server). Refetch
+ *  signal; Settings → Chat Hosting is the consumer. */
+export function onSewChanged(scope: ServerScope, fn: SewChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.sewChanged, fn)
+}
+
 /** prd-dns-pending-and-cutover-safety-v1 DN12e — subscribe to APP-LEVEL
  *  `domains_changed` on `scope`'s server (custom domains attached, removed,
  *  re-checked, or flipped by the daemon's own pending-zone re-check).
@@ -1924,6 +1936,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   mail_changed: (h, m) => {
     for (const fn of h.mailChanged) fn(m.reason)
   },
+  sew_changed: (h, m) => {
+    for (const fn of h.sewChanged) fn(m.reason)
+  },
   domains_changed: (h, m) => {
     for (const fn of h.domainsChanged) fn(m)
   },
@@ -2007,6 +2022,7 @@ export interface AppBus {
   onGitNotesChanged(fn: GitNotesChangedHandler): UnsubscribeFn
   onOpenChanges(fn: OpenChangesHandler): UnsubscribeFn
   onMailChanged(fn: MailChangedHandler): UnsubscribeFn
+  onSewChanged(fn: SewChangedHandler): UnsubscribeFn
   onDomainsChanged(fn: DomainsChangedHandler): UnsubscribeFn
   onZenChanged(fn: ZenChangedHandler): UnsubscribeFn
   onSourcesChanged(fn: SourcesChangedHandler): UnsubscribeFn
@@ -2059,6 +2075,7 @@ export function openAppBus(scope: ServerScope): AppBus {
     onGitNotesChanged: (fn) => onGitNotesChanged(scope, fn),
     onOpenChanges: (fn) => onOpenChanges(scope, fn),
     onMailChanged: (fn) => onMailChanged(scope, fn),
+    onSewChanged: (fn) => onSewChanged(scope, fn),
     onDomainsChanged: (fn) => onDomainsChanged(scope, fn),
     onZenChanged: (fn) => onZenChanged(scope, fn),
     onSourcesChanged: (fn) => onSourcesChanged(scope, fn),

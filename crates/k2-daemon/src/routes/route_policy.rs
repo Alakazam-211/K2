@@ -1456,6 +1456,7 @@ pub const ROUTES: &[Route] = &[
     // owner token only; sign takes it or a local agent/shell passport.
     post("/cli/zen/widget/claim", Member),
     get("/cli/zen/widget/errors", Member),
+    post("/cli/zen/widget/errors/clear", Member),
     // The widget dev loop (0.46.1 S3): a staged folder checked, written
     // (or proposed) whole, or previewed on K2's own preview Garden.
     post("/cli/zen/widget/folder/check", Member),

@@ -452,6 +452,112 @@ fn runtime_errors_are_logged_per_version_and_validate_loops_on_them() {
     assert_eq!(e["errors"][0]["current"], false, "the old version's error: {e}");
 }
 
+/// Rewrite every logged run row's `at` (the log is the widget's
+/// `runtime.jsonl`), to make errors old.
+fn age_runs(f: &ZenFiles, name: &str, at: &str) {
+    let p = f.widget_history_dir(name).join("runtime.jsonl");
+    let text = fs::read_to_string(&p).expect("runtime log");
+    let out: String = text
+        .lines()
+        .map(|l| {
+            let mut r: J = serde_json::from_str(l).expect("row");
+            r["at"] = J::String(at.into());
+            r.to_string() + "\n"
+        })
+        .collect();
+    fs::write(&p, out).expect("write runtime log");
+}
+
+/// 0.46.3: validate reflects what runs now. Runtime errors on a widget no
+/// Garden places, or older than a day, are warnings (exit 0), not errors;
+/// a placed widget's fresh errors on its saved version still fail.
+#[test]
+fn only_a_placed_widgets_fresh_runtime_errors_fail_validate() {
+    let (_t, f) = set_up("runs-placed");
+    f.new_widget("agent-arcade", Some("hello")).expect("new widget");
+    let hash = f.validate_widget("agent-arcade").expect("validate")["runtime"]["hash"].as_str().expect("hash").to_string();
+    f.record_widget_run("agent-arcade", &hash, "error", Some("ReferenceError: draw is not defined"), None).expect("error");
+
+    // Unplaced: a warning that says why, never an error.
+    let v = f.validate_widget("agent-arcade").expect("validate");
+    assert_eq!((v["status"].as_str(), v["ok"].as_bool()), (Some("ok"), Some(true)), "{v}");
+    assert_eq!((v["runtime"]["placed"].as_bool(), v["runtime"]["staleErrors"].as_u64(), v["runtime"]["errorsSinceSave"].as_u64()), (Some(false), Some(1), Some(0)), "{v}");
+    let w = v["warnings"].as_array().expect("warnings");
+    assert!(w.iter().any(|d| d["message"].as_str().is_some_and(|m| m.contains("1 old runtime error(s)") && m.contains("no Garden places"))), "{v}");
+    let (all_errors, all_warnings, _) = f.validate_all_widgets();
+    assert!(!all_errors.iter().any(|d| d.message.contains("runtime error")), "unplaced never fails validate: {all_errors:?}");
+    assert!(all_warnings.iter().any(|d| d.message.contains("old runtime error")), "{all_warnings:?}");
+    let all = f.validate(None).expect("validate all");
+    let row = all["widgets"].as_array().expect("widgets").iter().find(|r| r["widget"] == "agent-arcade").expect("row").clone();
+    assert_eq!((row["status"].as_str(), row["stale"].as_u64(), row["failing"].as_u64()), (Some("unplaced"), Some(1), Some(0)), "{all}");
+    assert_eq!(all["staleRuntime"], 1, "{all}");
+    let e = f.widget_errors("agent-arcade", None).expect("errors");
+    assert_eq!((e["errors"][0]["counted"].as_bool(), e["errors"][0]["staleReason"].as_str()), (Some(false), Some("unplaced")), "{e}");
+
+    // Placed: the same fresh error fails, naming where it is placed.
+    write_garden(&f, &gid(&f, "Garden 2"), ARCADE_PAGE);
+    let v = f.validate_widget("agent-arcade").expect("validate");
+    assert_eq!((v["status"].as_str(), v["ok"].as_bool()), (Some("failed"), Some(false)), "{v}");
+    assert_eq!(v["runtime"]["placements"][0]["gardenName"], "Garden 2", "{v}");
+    assert_eq!(v["runtime"]["placements"][0]["placement"], "arcade", "{v}");
+    let all = f.validate(None).expect("validate all");
+    assert_eq!(all["ok"], false, "{all}");
+    let row = all["widgets"].as_array().expect("widgets").iter().find(|r| r["widget"] == "agent-arcade").expect("row").clone();
+    assert_eq!((row["status"].as_str(), row["failing"].as_u64(), row["placed"].as_bool()), (Some("failed"), Some(1), Some(true)), "{all}");
+
+    // A day later the same error is old: a warning.
+    let later = chrono::Utc::now() + chrono::Duration::seconds(runs::RUNTIME_FRESH_SECS + 60);
+    let rt = f.widget_runtime_at("agent-arcade", &hash, later);
+    assert!(rt.failing.is_empty(), "{rt:?}");
+    assert_eq!(rt.stale.len(), 1);
+    assert_eq!(rt.stale[0]["staleReason"], runs::STALE_OLD);
+    age_runs(&f, "agent-arcade", "2026-10-17T00:26:54.000Z");
+    let v = f.validate_widget("agent-arcade").expect("validate");
+    assert_eq!((v["status"].as_str(), v["ok"].as_bool(), v["runtime"]["staleErrors"].as_u64()), (Some("pending"), Some(true), Some(1)), "placed, old error, never ran: {v}");
+    assert!(v["warnings"].as_array().expect("w").iter().any(|d| d["message"].as_str().is_some_and(|m| m.contains("since 2026-10-17") && m.contains("older than 24 h"))), "{v}");
+
+    // A fresh error on top fails again.
+    f.record_widget_run("agent-arcade", &hash, "error", Some("TypeError: x is null"), None).expect("error");
+    assert_eq!(f.validate_widget("agent-arcade").expect("validate")["status"], "failed");
+}
+
+/// 0.46.3: `k2 zen widget errors <name> --clear` drops what validate no
+/// longer counts; `--all` drops every error; ready rows and the sequence
+/// survive.
+#[test]
+fn clearing_runtime_errors_keeps_what_still_counts_and_the_sequence() {
+    let (_t, f) = set_up("runs-clear");
+    f.new_widget("agent-arcade", Some("hello")).expect("new widget");
+    write_garden(&f, &gid(&f, "Garden 2"), ARCADE_PAGE);
+    let hash = f.validate_widget("agent-arcade").expect("validate")["runtime"]["hash"].as_str().expect("hash").to_string();
+    f.record_widget_run("agent-arcade", &hash, "ready", None, None).expect("ready");
+    f.record_widget_run("agent-arcade", &hash, "error", Some("old one"), None).expect("error");
+    age_runs(&f, "agent-arcade", "2026-10-17T00:00:00.000Z");
+    f.record_widget_run("agent-arcade", &hash, "error", Some("fresh one"), None).expect("error");
+    let other = "b".repeat(64);
+    f.record_widget_run("agent-arcade", &other, "error", Some("older version"), None).expect("error");
+
+    let c = f.clear_widget_errors("agent-arcade", false).expect("clear");
+    assert_eq!((c["cleared"].as_u64(), c["left"].as_u64()), (Some(2), Some(1)), "the old one and the other version's go: {c}");
+    let e = f.widget_errors("agent-arcade", None).expect("errors");
+    let msgs: Vec<&str> = e["errors"].as_array().expect("errors").iter().filter_map(|r| r["message"].as_str()).collect();
+    assert_eq!(msgs, vec!["fresh one"], "{e}");
+    assert_eq!(e["last"], 4, "the sequence never goes back: {e}");
+    let v = f.validate_widget("agent-arcade").expect("validate");
+    assert_eq!((v["status"].as_str(), v["runtime"]["ran"].as_bool()), (Some("failed"), Some(true)), "ready kept, fresh error still counts: {v}");
+    let n = f.record_widget_run("agent-arcade", &hash, "error", Some("next"), None).expect("error");
+    assert_eq!(n["seq"], 5, "{n}");
+
+    let c = f.clear_widget_errors("agent-arcade", true).expect("clear all");
+    assert_eq!((c["cleared"].as_u64(), c["left"].as_u64()), (Some(2), Some(0)), "{c}");
+    let v = f.validate_widget("agent-arcade").expect("validate");
+    assert_eq!(v["status"], "ok", "ran, no errors left: {v}");
+    let none = f.clear_widget_errors("agent-arcade", false).expect("clear again");
+    assert_eq!(none["cleared"], 0);
+    assert!(matches!(f.clear_widget_errors("k2:diary@2", false), Err(ZenError::BadRequest(_))));
+    assert!(matches!(f.clear_widget_errors("nope", false), Err(ZenError::NotFound(_))));
+}
+
 #[test]
 fn run_reports_refuse_builtins_bad_hashes_and_unknown_events() {
     let (_t, f) = set_up("runs-bad");

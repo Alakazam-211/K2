@@ -494,4 +494,46 @@ fn approving_a_proposal_on_the_persons_widget_says_keep_as_mine_without_a_note()
     let (_, v2) = call("/cli/zen/widget/folder/put", false, &mgr, json!({"widget": "other", "files": folder("other", "o2")}));
     assert_eq!((v["keepAsMine"].as_bool(), v2["keepAsMine"].as_bool()), (Some(false), Some(false)), "{v} {v2}");
     assert_eq!(keep_notes("w-keep-mgr2", "other"), 0);
+// ── validate reflects reality (0.46.3) ─────────────────────────────────
+
+#[test]
+fn clearing_runtime_errors_is_a_post_any_local_agent_may_make_and_it_is_audited() {
+    let e = env();
+    let plain = workspace("w-clear", false);
+    e.f.new_widget("board", Some("hello")).expect("new widget");
+    let hash = e.f.validate_widget("board").expect("validate")["runtime"]["hash"].as_str().expect("hash").to_string();
+    e.f.record_widget_run("board", &hash, "error", Some("boom"), None).expect("error");
+    // Unplaced: the error is a warning and the agent may clear it.
+    let (s, v) = call("/cli/zen/widget/errors/clear", false, &plain, json!({"widget": "board"}));
+    assert_eq!(s, "200 OK", "{v}");
+    assert_eq!((v["cleared"].as_u64(), v["left"].as_u64()), (Some(1), Some(0)), "{v}");
+    assert!(has_audit("zen.widget.errors_cleared", "widgets/board: cleared 1"), "{:?}", audit_events());
+    // The person may too, and `all` clears everything.
+    e.f.record_widget_run("board", &hash, "error", Some("again"), None).expect("error");
+    let (s, v) = call("/cli/zen/widget/errors/clear", true, &Caller::Owner, json!({"widget": "board", "all": true}));
+    assert_eq!((s.as_str(), v["cleared"].as_u64()), ("200 OK", Some(1)), "{v}");
+    // A Connect login is still turned away; a bad body is 400; a GET is 405.
+    let login = Caller::Login { username: "ada".into() };
+    let (s, v) = call("/cli/zen/widget/errors/clear", false, &login, json!({"widget": "board"}));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("403 Forbidden", Some("zen_local_only")), "{v}");
+    let (s, v) = call("/cli/zen/widget/errors/clear", true, &Caller::Owner, json!({"widget": "board", "hash": "x"}));
+    assert_eq!(s, "400 Bad Request", "{v}");
+    assert!(crate::zen_routes::POST_ROUTES.contains(&"/cli/zen/widget/errors/clear"));
+    assert!(crate::routes::route_policy::get_refused("/cli/zen/widget/errors/clear", ""), "GET on the clear row is 405");
+    assert!(!crate::routes::route_policy::get_refused("/cli/zen/widget/errors", "widget=board"), "reading errors stays a GET");
+}
+
+#[test]
+fn validate_all_reports_each_widget_and_an_unplaced_ones_errors_never_fail() {
+    let e = env();
+    e.f.new_widget("fleet-ops-alerts", Some("hello")).expect("new widget");
+    let hash = e.f.validate_widget("fleet-ops-alerts").expect("validate")["runtime"]["hash"].as_str().expect("hash").to_string();
+    e.f.record_widget_run("fleet-ops-alerts", &hash, "error", Some("TypeError: x is null"), None).expect("error");
+    let r = crate::zen_routes::handle("/cli/zen/validate", true, &Caller::Owner, "test", &HashMap::new(), b"");
+    let v: J = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("validate: not JSON ({e}): {}", r.body));
+    assert_eq!(r.status, "200 OK", "{v}");
+    assert_eq!(v["ok"], true, "an unplaced widget's runtime errors never fail validate: {v}");
+    assert_eq!(v["staleRuntime"], 1, "{v}");
+    let row = v["widgets"].as_array().expect("widgets").iter().find(|r| r["widget"] == "fleet-ops-alerts").expect("row").clone();
+    assert_eq!((row["status"].as_str(), row["placed"].as_bool()), (Some("unplaced"), Some(false)), "{v}");
 }

@@ -501,25 +501,31 @@ impl ZenFiles {
         let mut runtime = J::Null;
         let mut status = if errors.is_empty() { "ok" } else { "failed" };
         if let (Ok(WidgetRef::User(name)), true, Some(b)) = (parse_widget_ref(widget), errors.is_empty(), c.bundle.as_ref()) {
-            let s = self.widget_run_summary(&name, &b.hash);
-            let placed = self.widget_is_placed(&name);
-            errors.extend(runtime_diagnostics(&name, &s));
-            status = if s.errors > 0 {
+            // 0.46.3: only a placed widget's fresh errors on this version
+            // fail; the rest are warnings (and `--clear`able).
+            let v = self.widget_runtime(&name, &b.hash);
+            let placed = v.placed();
+            errors.extend(runtime_diagnostics(&name, &v.failing));
+            warnings.extend(stale_runtime_warnings(&name, &v.stale));
+            status = if !v.failing.is_empty() {
                 "failed"
-            } else if placed && !s.ran {
+            } else if placed && !v.ran {
                 "pending"
             } else {
                 "ok"
             };
             runtime = json!({
                 "hash": b.hash,
-                "errorsSinceSave": s.errors,
-                "ran": s.ran,
+                "errorsSinceSave": v.failing.len(),
+                "staleErrors": v.stale.len(),
+                "ran": v.ran,
                 "placed": placed,
+                "placements": v.placements,
                 "note": match status {
                     "pending" => "this version hasn't run in a Zen window yet (an open Zen window reloads it on its own); validate again to see its runtime errors",
                     "failed" => "these runtime errors happened in the version on disk now; fix, save and validate again",
                     _ if !placed => "not placed in any Garden: it runs once a Garden places it",
+                    _ if !v.stale.is_empty() => "no recent runtime errors; older ones are warnings (k2 zen widget errors <name> --clear drops them)",
                     _ => "ran in a Zen window with no runtime errors",
                 },
             });
@@ -543,7 +549,9 @@ impl ZenFiles {
             if let Some((c, e, w, _)) = self.check_now(&name) {
                 if e.is_empty() && c.errors.is_empty() {
                     if let Some(b) = c.bundle.as_ref() {
-                        errors.extend(runtime_diagnostics(&name, &self.widget_run_summary(&name, &b.hash)));
+                        let v = self.widget_runtime(&name, &b.hash);
+                        errors.extend(runtime_diagnostics(&name, &v.failing));
+                        warnings.extend(stale_runtime_warnings(&name, &v.stale));
                     }
                 }
                 errors.extend(e);
@@ -894,8 +902,8 @@ impl ZenFiles {
 
 /// "N runtime errors since your last save" as validate errors: one line
 /// per distinct message (newest three), placed at the widget's folder.
-fn runtime_diagnostics(name: &str, s: &runs::RunSummary) -> Vec<Diagnostic> {
-    if s.errors == 0 {
+fn runtime_diagnostics(name: &str, failing: &[J]) -> Vec<Diagnostic> {
+    if failing.is_empty() {
         return Vec::new();
     }
     let mut out = vec![Diagnostic {
@@ -903,9 +911,9 @@ fn runtime_diagnostics(name: &str, s: &runs::RunSummary) -> Vec<Diagnostic> {
         file: widget_label(name),
         line: 1,
         col: 1,
-        message: format!("{} runtime error(s) since your last save", s.errors),
+        message: format!("{} runtime error(s) since your last save", failing.len()),
     }];
-    for r in &s.last {
+    for r in &failing[failing.len().saturating_sub(3)..] {
         out.push(Diagnostic {
             suggestion: r["suggestion"].as_str().map(str::to_string),
             file: widget_label(name),
@@ -915,6 +923,64 @@ fn runtime_diagnostics(name: &str, s: &runs::RunSummary) -> Vec<Diagnostic> {
         });
     }
     out
+}
+
+/// 0.46.3: runtime errors on the saved version that don't fail validate
+/// (the widget isn't placed, or they are older than a day) as ONE warning
+/// that says why and how to drop them.
+fn stale_runtime_warnings(name: &str, stale: &[J]) -> Vec<Diagnostic> {
+    if stale.is_empty() {
+        return Vec::new();
+    }
+    let unplaced = stale.iter().any(|r| r["staleReason"] == runs::STALE_UNPLACED);
+    let oldest = stale.iter().filter_map(|r| r["at"].as_str()).min().unwrap_or("?");
+    let why = if unplaced {
+        "not counted: no Garden places this widget".to_string()
+    } else {
+        format!("not counted: older than {} h with no new ones", runs::RUNTIME_FRESH_SECS / 3600)
+    };
+    vec![Diagnostic {
+        suggestion: Some(format!(
+            "read them with k2 zen widget errors {name}; once fixed, drop them with k2 zen widget errors {name} --clear"
+        )),
+        file: widget_label(name),
+        line: 1,
+        col: 1,
+        message: format!("{} old runtime error(s) since {oldest} ({why})", stale.len()),
+    }]
+}
+
+impl ZenFiles {
+    /// `k2 zen validate` with no target (0.46.3): one row per user widget
+    /// that bundles clean: where it is placed and what its saved version's
+    /// runtime log says (`failing`, `stale`, `ran`, `status`).
+    pub fn widgets_runtime_report(&self) -> Vec<J> {
+        let mut out = Vec::new();
+        for name in self.widget_names() {
+            let Some(hash) = self.current_hash(&name) else { continue };
+            let v = self.widget_runtime(&name, &hash);
+            let status = if !v.failing.is_empty() {
+                "failed"
+            } else if v.placed() && !v.ran {
+                "pending"
+            } else if !v.placed() {
+                "unplaced"
+            } else {
+                "ok"
+            };
+            out.push(json!({
+                "widget": name,
+                "hash": hash,
+                "placements": v.placements,
+                "placed": v.placed(),
+                "ran": v.ran,
+                "failing": v.failing.len(),
+                "stale": v.stale.len(),
+                "status": status,
+            }));
+        }
+        out
+    }
 }
 
 // Runtime errors from widget frames (decision-k2-runtime-v1 stage 0 (d)).

@@ -34,6 +34,24 @@ pub struct AppConfig {
     /// relaxed container, behind K2's host port. `None` = `$PORT`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_port: Option<u16>,
+    /// Public labels this App took over from its own workspace's legacy
+    /// `--cmd` services (`k2 app label take`, 0.46.3). The legacy service
+    /// keeps running, unrouted; `k2 app label return` moves a label back.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<TakenLabel>,
+}
+
+/// A label an App serves for one of its workspace's legacy services.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TakenLabel {
+    pub label: String,
+    /// The legacy service's `published_services.id`.
+    pub service_id: String,
+    /// The legacy service's port (where `return` points the label).
+    pub legacy_port: u16,
+    pub taken_at: i64,
+    pub taken_by: String,
 }
 
 impl Default for AppConfig {
@@ -45,6 +63,7 @@ impl Default for AppConfig {
             risk: "normal".into(),
             db: Db::default(),
             app_port: None,
+            labels: Vec::new(),
         }
     }
 }

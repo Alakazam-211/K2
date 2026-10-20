@@ -84,6 +84,34 @@ pub fn process_engine_enabled() -> bool {
     env_on(PROCESS_ENGINE_ENV) || SETTING_PROCESS_ENGINE.load(Ordering::Relaxed)
 }
 
+/// The default of the owner-only `appsAutoPrepare` setting: K2 prepares a
+/// Linux box for walled Apps by itself (through the owner's root helper)
+/// after an update. **OFF until the design review of
+/// `design-apps-auto-prepare-0463` signs it off**; flipping it is this
+/// constant (and its test).
+pub const AUTO_PREPARE_DEFAULT: bool = false;
+
+static SETTING_AUTO_PREPARE: AtomicBool = AtomicBool::new(AUTO_PREPARE_DEFAULT);
+
+/// The env override for the automatic box prep: `0`/`off` forces it off,
+/// `1`/`on` forces it on (headless boxes, tests).
+pub const AUTO_PREPARE_ENV: &str = "K2_APPS_AUTO_PREPARE";
+
+/// Sync the persisted `appsAutoPrepare` setting into this process.
+pub fn set_auto_prepare(on: bool) {
+    SETTING_AUTO_PREPARE.store(on, Ordering::Relaxed);
+}
+
+/// May K2 prepare this box for Apps by itself? The env override wins,
+/// else the owner's `appsAutoPrepare` setting.
+pub fn auto_prepare_enabled() -> bool {
+    match std::env::var(AUTO_PREPARE_ENV).ok().map(|v| v.trim().to_ascii_lowercase()) {
+        Some(v) if matches!(v.as_str(), "0" | "off" | "false" | "no") => false,
+        Some(v) if matches!(v.as_str(), "1" | "on" | "true" | "yes") => true,
+        _ => SETTING_AUTO_PREPARE.load(Ordering::Relaxed),
+    }
+}
+
 /// What a refusal says when an App needs the process engine and it is off.
 pub const PROCESS_ENGINE_OFF_HINT: &str = "the unwalled process engine is off on this box (it would run App code as \
      the daemon's user): deploy guarded (k2 app deploy <app> <folder|seed> --engine guarded, on Linux with the App \

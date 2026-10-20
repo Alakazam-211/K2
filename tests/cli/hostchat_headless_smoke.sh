@@ -87,7 +87,29 @@ else
     expect_has "media install on a Mac → unsupported" "$(post /cli/sew/media/install '{}')" '"code":"unsupported"'
 fi
 
+echo "== S32 routes (K26/K27/K31) =="
+expect_has "status: you (owner token manages)" "$st" '"canManage":true'
+for p in /cli/sew/server/app-url /cli/sew/server/ship /cli/sew/server/mirror /cli/sew/app-spaces/bind /cli/sew/app-spaces/unbind; do
+    expect_eq "GET $p → 405" "$(curl -s -o /dev/null -w '%{http_code}' "$U$p?token=$TOK")" "405"
+    expect_eq "POST $p without a token → 403" "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d '{}' "$U$p")" "403"
+done
+expect_has "app-spaces is a read" "$(curl -s "$U/cli/sew/app-spaces?token=$TOK")" '"spaces":[]'
+expect_has "app-url without Sew → not_installed" "$(post /cli/sew/server/app-url '{"url":"https://hearth.example.test"}')" '"code":"not_installed"'
+expect_has "app-url validates first" "$(post /cli/sew/server/app-url '{}')" '"code":"bad_request"'
+expect_has "app-space bind refuses the box login" "$(post /cli/sew/app-spaces/bind '{"app":"host","spaceId":"spc_1"}')" '"code":"bad_request"'
+expect_has "app-space bind without Sew → not_installed" "$(post /cli/sew/app-spaces/bind '{"app":"hearth","spaceId":"spc_1"}')" '"code":"not_installed"'
+if [ "$LINUX" = 1 ]; then
+    expect_has "ship without Sew → not_installed" "$(post /cli/sew/server/ship '{"kind":"none"}')" '"code":"not_installed"'
+else
+    expect_has "ship on a Mac → unsupported" "$(post /cli/sew/server/ship '{"kind":"none"}')" '"code":"unsupported"'
+    expect_has "mirror on a Mac → unsupported" "$(post /cli/sew/server/mirror '{"kind":"none"}')" '"code":"unsupported"'
+fi
+
 echo "== k2 hostchat =="
+out="$(k2 hostchat app-url show 2>&1)"
+expect_eq "hostchat app-url show" "$out" "(not set)"
+out="$(k2 hostchat app-spaces 2>/dev/null)"
+expect_eq "hostchat app-spaces (none bound)" "$out" "(no App Spaces bound)"
 out="$(k2 hostchat status 2>&1)"
 expect_has "hostchat status prints" "$out" "Sew"
 set +e

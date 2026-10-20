@@ -147,6 +147,9 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   // 0.46.0: Settings → General → Your account reads this server's whoami/users.
   'components/Settings/sections/YourAccountRow.tsx',
   'components/Settings/sections/access-audit-api.ts',
+  // 0.46.3: Settings → Apps → This server reads and prepares the window's
+  // own server (the box doctor, prepare, engine install).
+  'components/Settings/sections/apps-server-api.ts',
   // 0.45.6 Garden v3: Settings → External Data lists this server's sources.
   'components/Settings/sections/DataSourcesSection.tsx',
   'components/Settings/sections/data-sources-ui.ts',

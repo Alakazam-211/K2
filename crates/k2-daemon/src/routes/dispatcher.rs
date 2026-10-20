@@ -1419,13 +1419,17 @@ async fn handle_one_request(
             // §2.4: a caller that would get the ghost `/boot-status` view
             // gets `k2-daemon` with no version; loopback, authed callers
             // and compat mode keep the banner.
-            let settings = k2_core::app_settings::load();
-            let view = crate::boot_status::view_for(
-                ingress,
-                super::http::extract_token(&query),
-                state.token.as_str(),
-                settings.boot_status_public(),
-            );
+            // Loopback (the local app's liveness poll) never reads settings.
+            let view = if ingress == Ingress::Loopback {
+                crate::boot_status::View::Full
+            } else {
+                crate::boot_status::view_for(
+                    ingress,
+                    super::http::extract_token(&query),
+                    state.token.as_str(),
+                    k2_core::app_settings::load().boot_status_public(),
+                )
+            };
             super::http::send_response(
                 &mut *stream,
                 "200 OK",

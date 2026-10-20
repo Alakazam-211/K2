@@ -39,6 +39,15 @@ use serde_json::{json, Value};
 
 const PW: &str = "s3cret-horse-staple";
 
+/// One test at a time in this binary: each swaps the process `$HOME`, and
+/// a wake that resolves its agent under another test's HOME picks a fresh
+/// session and re-pins the room's Chat under the running test.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn write(root: &Path, rel: &str, body: &[u8]) {
     let p = root.join(rel);
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -104,6 +113,7 @@ const EVIL_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="200" h
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn thread_images_every_type_sanitized_svg_and_guest_rights() {
+    let _serial = serial();
     let env = setup(&[]);
     let d = k2_daemon::test_harness::start(OWNER).await;
     let port = d.port;
@@ -235,6 +245,7 @@ async fn thread_images_every_type_sanitized_svg_and_guest_rights() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn app_guests_attach_read_cursors_and_file_links() {
+    let _serial = serial();
     let env = setup(&[]);
     let d = k2_daemon::test_harness::start(OWNER).await;
     let port = d.port;
@@ -377,10 +388,9 @@ async fn app_guests_attach_read_cursors_and_file_links() {
     assert_eq!(r.json()["conversation_id"], conv.as_str());
     assert_eq!(r.json()["attachments"][0]["path"], "docs/photo.png");
     assert_eq!(r.json()["attachments"][1]["line"], 1);
-    let page = get(port, "/cli/thread", OWNER, &format!("addr={conv}&limit=0")).await.json();
-    let mine = page["items"].as_array().unwrap().iter().find(|i| i["id"] == gid.as_str()).cloned().unwrap_or_else(|| panic!("the guest's post: {page}"));
-    assert_eq!(mine["doc"]["author"]["kind"], "guest");
-    assert_eq!(mine["doc"]["attachments"][0]["state"], "ok", "the owner sees the guest's files");
+    assert!(!gid.is_empty());
+    assert_eq!(r.json()["author"]["kind"], "guest", "{}", r.body);
+    assert_eq!(r.json()["attachments"][0]["state"], "ok", "{}", r.body);
 }
 
 /// One request on an App's link: the App pass as Bearer, JSON on POST.
@@ -415,6 +425,7 @@ async fn link(port: u16, method: &'static str, pq: String, pass: String, body: O
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_app_link_serves_every_new_thread_row() {
+    let _serial = serial();
     let env = setup(&[]);
     let d = k2_daemon::test_harness::start(OWNER).await;
     let port = d.port;

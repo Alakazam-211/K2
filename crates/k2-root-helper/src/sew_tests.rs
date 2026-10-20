@@ -1070,6 +1070,110 @@ fn a_linked_sew_binary_refuses_purge_before_any_effect() {
     assert!(systemctl_calls(&t).is_empty());
 }
 
+/// Every exec in order, as "prog argv…" (systemctl queries left out).
+fn ordered_calls(t: &T) -> Vec<String> {
+    t.calls()
+        .into_iter()
+        .filter(|(p, a, _)| !(p == SYSTEMCTL && (a.iter().any(|x| x == "MainPID") || a.iter().any(|x| x == "is-active"))))
+        .map(|(p, a, _)| format!("{p} {}", a.join(" ")))
+        .collect()
+}
+
+const RESET_FAILED: &str = "reset-failed sew-migrate.service sew.service";
+
+fn reset_failed_answers(t: &T, status: i32, stderr: &str) {
+    t.exec.0.borrow_mut().rules.push((
+        SYSTEMCTL.into(),
+        "reset-failed".into(),
+        ExecOut { status, stdout: vec![], stderr: stderr.as_bytes().to_vec() },
+    ));
+}
+
+/// Sew 2026-10-19: sew-migrate.service keeps systemd's default start limit
+/// and every sew start restarts it, so an upgrade (and Sew's own rollback)
+/// right after a few restarts hit start-limit-hit. The helper clears both
+/// units' start counters BEFORE `sew upgrade --binary` and `sew upgrade
+/// --rollback`, and says so in the answer and the audit line.
+#[test]
+fn upgrade_and_rollback_reset_the_start_limits_first() {
+    let t = box_root();
+    install_binary(&t, &member(&old_tarball(), "sew"));
+    ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+    sew_answers(&t, 0, r#"{"state":"upgraded"}"#);
+    let o = t.call(&["engine", "sew", "upgrade"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["resetFailed"]["result"], "reset", "{v}");
+    let calls = ordered_calls(&t);
+    let reset = calls.iter().position(|c| c == &format!("{SYSTEMCTL} {RESET_FAILED}")).expect("reset-failed ran");
+    let upgrade = calls.iter().position(|c| c.starts_with(&format!("{SEW_BIN} upgrade --binary "))).expect("sew upgrade ran");
+    assert!(reset < upgrade, "reset-failed precedes the upgrade: {calls:?}");
+    assert_eq!(calls.iter().filter(|c| c.contains("reset-failed")).count(), 1, "{calls:?}");
+    let line = t.audit.0.borrow().last().cloned().expect("audited");
+    assert!(line.contains(r#""resetFailed":"reset""#), "{line}");
+
+    let t = box_root();
+    with_pin_installed(&t);
+    sew_answers(&t, 0, r#"{"state":"rolled_back"}"#);
+    let o = t.call(&["engine", "sew", "rollback"]);
+    ok(&o);
+    assert_eq!(json(&o)["resetFailed"]["result"], "reset");
+    let calls = ordered_calls(&t);
+    let reset = calls.iter().position(|c| c == &format!("{SYSTEMCTL} {RESET_FAILED}")).expect("reset-failed ran");
+    let rollback = calls.iter().position(|c| c == &format!("{SEW_BIN} upgrade --rollback --json")).expect("rollback ran");
+    assert!(reset < rollback, "reset-failed precedes the rollback: {calls:?}");
+
+    // Already the pin: nothing runs, not even reset-failed.
+    let t = box_root();
+    with_pin_installed(&t);
+    ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+    ok(&t.call(&["engine", "sew", "upgrade"]));
+    assert!(systemctl_calls(&t).is_empty(), "{:?}", systemctl_calls(&t));
+
+    // Media has no migrate unit: its upgrade resets nothing.
+    let t = box_root();
+    with_pin_installed(&t);
+    ok(&t.call_in(&["engine", "sew", "stage-media"], &media_tarball()));
+    ok(&t.call(&["engine", "sew", "media", "upgrade"]));
+    assert!(!ordered_calls(&t).iter().any(|c| c.contains("reset-failed")));
+}
+
+/// Units systemd does not know (nothing to reset): the exit is ignored, the
+/// upgrade runs, and the answer says `not_loaded`. Any other reset-failed
+/// failure refuses before Sew runs or anything is staged.
+#[test]
+fn reset_failed_is_ignored_only_when_the_units_are_not_loaded() {
+    let t = box_root();
+    install_binary(&t, &member(&old_tarball(), "sew"));
+    ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+    reset_failed_answers(&t, 1, "Failed to reset failed state of unit sew-migrate.service: Unit sew-migrate.service not loaded.\n");
+    sew_answers(&t, 0, r#"{"state":"upgraded"}"#);
+    let o = t.call(&["engine", "sew", "upgrade"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["resetFailed"]["result"], "not_loaded", "{v}");
+    assert_eq!(v["resetFailed"]["exit"], 1, "{v}");
+    assert_eq!(sew_calls(&t).len(), 1, "the upgrade still ran");
+
+    for (verb, older) in [("upgrade", true), ("rollback", false)] {
+        let t = box_root();
+        if older {
+            install_binary(&t, &member(&old_tarball(), "sew"));
+            ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+        } else {
+            with_pin_installed(&t);
+        }
+        reset_failed_answers(&t, 1, "Failed to connect to bus: No such file or directory\n");
+        let o = t.call(&["engine", "sew", verb]);
+        assert_eq!(o.code, exit::IO, "{verb}: {}", o.stderr);
+        assert!(o.stderr.contains("reset-failed"), "{verb}: {}", o.stderr);
+        assert!(o.stderr.contains("Failed to connect to bus"), "{verb}: {}", o.stderr);
+        assert!(o.stderr.contains("Sew was not run"), "{verb}: {}", o.stderr);
+        assert!(sew_calls(&t).is_empty(), "{verb}: Sew never ran");
+        assert!(!t.p(SEW_STAGE_UPGRADE_BIN).exists(), "{verb}: nothing staged for Sew");
+    }
+}
+
 #[test]
 fn restore_stops_sew_restores_and_always_starts_it_again() {
     let t = box_root();

@@ -39,6 +39,11 @@
 //!   its `version`) and is removed after the call. The voice engine follows
 //!   in a separate verb, `media upgrade`, run by the NEW core once the
 //!   daemon has checked it (the sidecar pins are baked into `sew`).
+//! - **Start limits are cleared first** (Sew, 2026-10-19): `upgrade` and
+//!   `rollback` run `systemctl reset-failed sew-migrate.service
+//!   sew.service` before Sew, so systemd's default start limit on
+//!   `sew-migrate.service` cannot fail the upgrade and then Sew's own
+//!   rollback (`reset_start_limits`). `sew-media` has no migrate unit.
 //! - **Rollback mirrors it** (Sew, 2026-10-17): after the core rollback
 //!   and the daemon's check of the old core, `media rollback` has the OLD
 //!   core reinstall its own release's engine (`sew media upgrade --tarball
@@ -90,7 +95,9 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
         SewVerb::Upgrade => upgrade(ctx),
         SewVerb::Rollback => {
             require_known(ctx)?;
+            let reset = reset_start_limits(ctx)?;
             let mut out = run_sew(ctx, &["upgrade", "--rollback"], None)?;
+            out["resetFailed"] = reset;
             // Sew swapped sew and sew.prev: the notices follow the binary.
             if out["sewExit"] == 0 {
                 out["notices"] = notices_or_error(rollback_notices(ctx));
@@ -871,11 +878,13 @@ fn upgrade(ctx: &Ctx) -> HResult<J> {
     if !sha256_hex(&bin).eq_ignore_ascii_case(art.binary_sha256) {
         return Err(Fail::argv("upgrade: the staged tarball's sew member does not match the pin's binary sha256"));
     }
+    let reset = reset_start_limits(ctx)?;
     let staged_bin = put_upgrade_bin(ctx, &bin)?;
     let res = run_sew(ctx, &["upgrade", "--binary", &staged_bin, "--sha256", art.binary_sha256], None);
     // Sew copied it (or refused): the staged copy never outlives the call.
     let _ = remove_file(ctx, SEW_STAGE_UPGRADE_BIN);
     let mut out = res?;
+    out["resetFailed"] = reset;
     out["from"] = json!(from);
     out["to"] = json!(pinned().version);
     // The new binary is in place: its notices follow it. Sew's upgrade
@@ -884,6 +893,56 @@ fn upgrade(ctx: &Ctx) -> HResult<J> {
         out["notices"] = notices_or_error(upgrade_notices(ctx, &bytes));
     }
     Ok(out)
+}
+
+/// The units whose start limit a Sew upgrade or rollback must not hit.
+const START_LIMIT_UNITS: [&str; 2] = [UNIT_MIGRATE, UNIT_SEW];
+
+/// `systemctl reset-failed sew-migrate.service sew.service` before `sew
+/// upgrade` and `sew upgrade --rollback` (Sew report, 2026-10-19, every Sew
+/// release so far): `sew-migrate.service` keeps systemd's default start
+/// limit (5 starts in 10 s) and every `sew` start starts it again, so after
+/// an install that restarted sew ~5 times, an upgrade within 10 s hits
+/// `start-limit-hit`, Sew's own rollback fails the same way (exit 2,
+/// ROLLBACK FAILED) and chat is down until `systemctl reset-failed
+/// sew-migrate sew`. `reset-failed` clears both units' failed state and
+/// start counters; it never starts or stops anything.
+///
+/// Its exit is ignored only when systemd says the units are not loaded
+/// (nothing to reset); any other failure refuses before Sew runs. The
+/// answer's `resetFailed` (and the audit line) says which happened.
+fn reset_start_limits(ctx: &Ctx) -> HResult<J> {
+    let mut args = vec!["reset-failed".to_string()];
+    args.extend(START_LIMIT_UNITS.iter().map(|u| u.to_string()));
+    let out = ctx
+        .exec
+        .run(SYSTEMCTL, &args, None)
+        .map_err(|e| Fail::io(format!("{SYSTEMCTL} reset-failed: {}", e.kind_str())))?;
+    if out.status == 0 {
+        return Ok(json!({"units": START_LIMIT_UNITS, "result": "reset"}));
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    if units_not_loaded(&err) {
+        return Ok(json!({
+            "units": START_LIMIT_UNITS,
+            "result": "not_loaded",
+            "exit": out.status,
+            "stderrTail": tail_clean(&err, 400),
+        }));
+    }
+    Err(Fail::io(format!(
+        "{SYSTEMCTL} reset-failed {} exit {}: {}; Sew was not run",
+        START_LIMIT_UNITS.join(" "),
+        out.status,
+        tail_clean(&err, 400)
+    )))
+}
+
+/// systemd's words for "no such unit" on every line it printed (one line
+/// per unit it could not reset; the loaded ones are reset regardless).
+fn units_not_loaded(stderr: &str) -> bool {
+    let lines: Vec<&str> = stderr.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    !lines.is_empty() && lines.iter().all(|l| l.contains("not loaded") || l.contains("not found"))
 }
 
 /// Write the pin's `sew` member to [`SEW_STAGE_UPGRADE_BIN`], root 0700

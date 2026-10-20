@@ -307,6 +307,10 @@ fn audit(
                 line["sewReason"] = r.clone();
             }
         }
+        // upgrade / rollback: what `systemctl reset-failed` did first.
+        if let Some(r) = x.pointer("/resetFailed/result") {
+            line["resetFailed"] = r.clone();
+        }
     }
     // K2's Podman bundle: which build went in (or what came out).
     if let (Some(Verb::AppsPodmanInstall), Some(x)) = (verb, extra) {

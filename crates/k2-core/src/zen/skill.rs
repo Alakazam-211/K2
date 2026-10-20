@@ -687,8 +687,42 @@ Copy it with `k2 zen widget new my-diary --from k2:diary`; a built-in widget its
 never changes.\n\n\
 Files K2 owns here too: **never write grants.json** or `pins.json`.\n\n",
     );
+    s.push_str(&kit_section());
     s.push_str(&sources_section());
     s
+}
+
+/// 0.46.3 (Garden gaps): K2's widget kit, shipped as standard libraries.
+fn kit_section() -> String {
+    String::from(
+        "### K2's widget kit (`k2-thread`, `k2-help`)\n\n\
+Don't hand-build a Thread panel or help popovers: K2 ships both as libraries\n\
+(`requires.libs`), in K2's look, following the Garden's light/dark.\n\n\
+**A Thread panel** (`\"k2-thread@1\"`, caps `thread:read`, `thread:post`, `agents:read`):\n\n\
+```js\n\
+k2.connected.then(() => {\n\
+  const panel = K2Thread.mount(document.getElementById('thread'), {\n\
+    look: k2.config.look || 'chamfer',  // 'chamfer' (K2's Thread, cut corners, Garden colours)\n\
+                                        // or 'glass' (K2 Companion's round look and palette)\n\
+    address: k2.config.agent,           // 'handle::host'; or panel.open(address, label) later\n\
+  })\n\
+})\n\
+```\n\n\
+It has K2's Thread behaviour: bubbles with author and time, choice cards, Enter sends\n\
+(Shift+Enter is a new line; the text stays if K2 refuses), the working tab (state,\n\
+counters, clock, \"Sent\"), stick-to-bottom scrolling with a \"N new messages ↓\" pill,\n\
+a narrow layout under 480px, and attachments (file chips, `data:` images; pass\n\
+`onOpenFile` or `renderAttachment`). Add `marked` and `dompurify` for markdown bodies.\n\
+`panel.post(text)`, `panel.setLook(look)`, `panel.close(note)`, `panel.destroy()`.\n\
+Give its element a height (it fills it). Choose the look per placement with\n\
+`[widget.props.config] look = \"glass\"`.\n\n\
+**Help** (`\"k2-help@1\"`, no caps): **put explanations behind an ⓘ, not on the canvas.**\n\
+`el.appendChild(K2Help.tip('What this number means.', { label: 'Version spread' }))` adds\n\
+an ⓘ: a tooltip on hover or focus, pinned by a click, tap, Enter or Space; text over 160\n\
+characters opens a popover with a title and Close (`{title}`); Esc or a tap outside\n\
+closes it. In markup: `<button class=\"k2h-btn\" data-tip=\"…\">ⓘ</button>`. Give rows\n\
+you redraw a `key` so an open tip follows its new ⓘ.\n\n",
+    )
 }
 
 /// Garden v3 (contract-sources-v1 §6, §11.4): cards that read data sources.
@@ -1166,6 +1200,28 @@ mod tests {
         // the human to a review, a grant or a sending switch.
         for gone in ["click Review", "click **Review**", "K2 draws its own review card", "zen-grant.key", "widget revoke", "Sending is on", "human grants"] {
             assert!(!body.contains(gone), "skill v12 must not say {gone:?}");
+        }
+    }
+
+    #[test]
+    fn the_widget_kit_is_taught_and_shipped() {
+        let body = generate_k2_zen_skill();
+        for want in [
+            "\"k2-thread@1\"",
+            "\"k2-help@1\"",
+            "K2Thread.mount(",
+            "K2Help.tip(",
+            "'chamfer'",
+            "'glass'",
+            "put explanations behind an ⓘ, not on the canvas",
+        ] {
+            assert!(body.contains(want), "the k2-zen skill teaches the kit: {want:?}");
+        }
+        let m = stdlib::zen_lib_manifest();
+        for (id, global) in [("k2-thread", "K2Thread"), ("k2-help", "K2Help")] {
+            let l = m.libs.iter().find(|l| l.id == id).unwrap_or_else(|| panic!("{id} is in zen-lib.json"));
+            assert_eq!((l.version.as_str(), l.global.as_str(), l.source), ("1.0.0", global, stdlib::LibSource::Bundled), "{id}");
+            assert_eq!(l.license, "FSL-1.1-Apache-2.0", "{id} is K2's own code");
         }
     }
 

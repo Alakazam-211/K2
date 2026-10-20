@@ -33034,6 +33034,19 @@ THE WIDGET SDK (0.46.1, catalog 11)
   chart.js@4.5.1, echarts@6.1.0, d3@7.9.0). No CDN, no eval, no imports.
   Types: sdk/generated/k2.d.ts · docs/zen-contract.md · props: k2-zen skill
 
+THE WIDGET KIT (0.46.3): don't hand-build these, require them
+  "k2-thread@1"  K2Thread.mount(el, {look: 'chamfer' | 'glass', address})
+                 a Thread panel to one agent: bubbles, choice cards, Enter
+                 sends, the working tab, the new-messages pill, a narrow
+                 layout, attachments. chamfer = K2's Thread (cut corners,
+                 Garden colours); glass = K2 Companion's round look. Caps
+                 thread:read, thread:post (agents:read for names, counters).
+  "k2-help@1"    K2Help.tip(text, {label, key, title}) → an ⓘ: tooltip on
+                 hover/focus, pinned on click/tap/Enter, a popover past 160
+                 characters; Esc or a tap outside closes. Put explanations
+                 behind an ⓘ, not on the canvas.
+  Both follow the Garden's light/dark, never the computer's.
+
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
 }

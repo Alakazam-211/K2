@@ -109,6 +109,10 @@ zen_out="$("$K2" study zen)"
 for needle in "THE WIDGET DEV LOOP (keep your widget outside ~/.k2)" "k2 zen validate --dir ./board" "k2 zen widget preview --dir ./board" "never one of the person's" "k2 zen widget put board --dir ./board" "--from page.toml" "validate never signs (--widget --sign does)" "--strict keeps exit 2"; do
     assert_contains "study zen names $needle" "$zen_out" "$needle"
 done
+# 0.46.3: the widget kit (k2-thread, k2-help) instead of hand-built panels.
+for needle in "THE WIDGET KIT (0.46.3)" '"k2-thread@1"' "K2Thread.mount(el, {look: 'chamfer' | 'glass', address})" '"k2-help@1"' "K2Help.tip(text" "behind an ⓘ, not on the canvas"; do
+    assert_contains "study zen names $needle" "$zen_out" "$needle"
+done
 
 echo "== k2 study agent-hire (0.45.6 agent hire through the v1 API) =="
 ah_out="$("$K2" study agent-hire)"

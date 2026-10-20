@@ -180,7 +180,7 @@ fn show(who: &Who, params: &HashMap<String, String>) -> R<J> {
         "note": if enf {
             "Guarded: the App reaches only the allowed hosts, through its own proxy (DNS in the proxy). Private, local and metadata addresses and this box's own names are always refused."
         } else {
-            "This App runs on the process engine (preview, unwalled): it has the daemon's network and the list is not enforced. Deploy with --engine guarded to enforce it."
+            "This App runs on the unwalled process engine (the owner's dev opt-in): it has the daemon's network and the list is not enforced. Deploy with --engine guarded to enforce it."
         },
         "hosts": hosts,
         "pending": pending.iter().map(request_json).collect::<Vec<_>>(),

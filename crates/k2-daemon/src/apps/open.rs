@@ -120,7 +120,7 @@ pub fn ready() -> std::result::Result<(), String> {
         return Err("Apps run in a wall on Linux boxes only".into());
     }
     if !deploy::enabled() {
-        return Err("the App runtime is off on this box (Settings → K2 Server → Apps, or K2_APPS=1)".into());
+        return Err("Apps (beta) are off on this box (Settings → Apps → This server, or K2_APPS=1)".into());
     }
     let st = crate::root_helper::state();
     if !st.usable(k2_root_proto::version::APPS_MIN_PROTOCOL) {

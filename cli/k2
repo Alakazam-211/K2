@@ -6929,7 +6929,7 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Parse an App's JS/TS and run the leak lints (exit 1 on errors)
        k2 app <build|install|deploy|rollback|list|inspect|history|logs|errors|...>
 
-  Guests, roles, and tokens for apps on this box, and (preview) hosting
+  Guests, roles, and tokens for apps on this box, and (Apps beta) hosting
   server Apps: k2 app deploy (k2 app validate --help, k2 study app-deploys).
   A static UI is still k2 publish run --skin. Desktop binary updates are
   k2 update --app. See k2 study apps (leftover: k2 study skins).
@@ -7018,7 +7018,7 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
   k2 app token revoke <id>
 
 WHAT THIS IS
-  Users + roles + tokens + scopes (caps + rooms), and (preview) the App
+  Users + roles + tokens + scopes (caps + rooms), and (Apps beta) the App
   runtime: Seeds, deploys, rollback (k2 study app-deploys). Never grid.
 
 PER-APP LOGINS (0.45.5)
@@ -7032,7 +7032,7 @@ PER-APP LOGINS (0.45.5)
 HOST THE UI WITH k2 publish (k2 publish --help / k2 study apps)
   k2 publish run <label> --skin --port N
   Custom files: --skin <dir>. A server App (your own code with a port) is
-  k2 app install + k2 app deploy (preview; k2 study app-deploys).
+  k2 app install + k2 app deploy (Apps beta; k2 study app-deploys).
 
 Caps: thread:read (GET /cli/thread + overlay WS + find-only ensure-pinned-chat),
 thread:post (POST /cli/thread/post),
@@ -7128,8 +7128,8 @@ _app_validate_code() {
 
 # `k2 app validate` — ONE command for stage 0 and the App runtime (vs-live 2):
 #   a folder with manifest.json, or a Seed  -> POST /cli/app/validate
-#     (manifest, contract, the same oxc code pass, --types) when the runtime
-#     preview is on; with it off, a folder falls back to the code pass;
+#     (manifest, contract, the same oxc code pass, --types) when Apps (beta)
+#     are on; with them off, a folder falls back to the code pass;
 #   a plain folder (--dir or a path)        -> the code pass only;
 #   a published App name, or nothing       -> the code pass on its folder.
 cmd_app_validate() {
@@ -7160,9 +7160,9 @@ WHAT IT CHECKS (it never runs your code)
     request/event handlers, setInterval started in a handler with no clear,
     listeners added per request to long-lived targets, session stores with
     no expiry (express-session with no store, MemoryStore)
-  - a folder with manifest.json, or a Seed (App runtime preview: K2_APPS=1 or
-    Settings appsPreview): also manifest.json and the K2 contract (caps,
-    bindings, roles, requires). With the preview off a folder gets the code
+  - a folder with manifest.json, or a Seed (Apps (beta) on: Settings → Apps →
+    This server, on by default): also manifest.json and the K2 contract (caps,
+    bindings, roles, requires). With Apps off a folder gets the code
     checks only (said on stderr).
   Skipped: node_modules, dist, build, .next and other build/hidden folders,
   symlinks, files over 2 MB; anything skipped is listed.
@@ -7196,12 +7196,12 @@ EOF
         [ "${dir#/}" = "$dir" ] && abs="${PROJECT%/}/$dir"
         if [ -f "$abs/manifest.json" ]; then
             _app_validate_seed folder "$abs" "$types" "$as_json" && return 0
-            # 10 = the runtime preview is off: the code pass still runs.
+            # 10 = Apps (beta) are off: the code pass still runs.
             [ "$?" = 10 ] || exit 1
-            echo "note: the App runtime preview is off, so manifest.json and the contract were not checked; code checks only" >&2
+            echo "note: Apps (beta) are off on this server (Settings → Apps → This server), so manifest.json and the contract were not checked; code checks only" >&2
         fi
         if [ "$types" = 1 ]; then
-            echo "Error: --types needs a folder with manifest.json (or a Seed) and the App runtime preview on" >&2
+            echo "Error: --types needs a folder with manifest.json (or a Seed) and Apps (beta) on" >&2
             exit 2
         fi
         _app_validate_code "" "$dir" "$as_json"
@@ -7222,14 +7222,14 @@ EOF
 
 # ── App runtime (prd-k2-app-runtime-v1 stage 1) ─────────────────────
 # k2 app build/validate (S6), deploy/rollback/stop/start/restart/install
-# (S7), list/inspect/history/logs/errors/uninstall (S8). Preview only
-# (K2_APPS=1 or Settings appsPreview). Exit codes: 3 infra/permission,
+# (S7), list/inspect/history/logs/errors/uninstall (S8). Behind Apps (beta)
+# (Settings apps, on by default; K2_APPS=1 forces it). Exit codes: 3 infra/permission,
 # 2 bad usage or a pending state, 1 a failed check (validate errors, a
 # failed health gate), 0 ok.
 
 _app_rt_usage() {
     cat <<'EOF'
-k2 app — host Apps on this box (preview: K2_APPS=1 or Settings appsPreview)
+k2 app — host Apps on this box (Apps (beta): Settings → Apps → This server)
 
 Make and ship:
   k2 app validate <folder|seed> [--types] [--json]
@@ -7363,7 +7363,7 @@ The box (Linux):
 Exit codes: 0 live/ok, 1 a failed check or health gate, 2 usage or still
 pending (loop on k2 app deployment), 3 infra or permission (JSON with a code).
 
-Getting existing Apps ready for 0.46.1 (no preview flag): k2 app warnings,
+Getting existing Apps ready (not behind the Apps switch): k2 app warnings,
 clean-mode, key mint|revoke, keys, approvals, approve, deny, access
 (k2 app grace for the details).
 
@@ -7628,7 +7628,7 @@ _app_rt_abs() {
 }
 
 # App runtime S6: POST /cli/app/validate {folder|seed, types}. Returns 0 ok,
-# 1 errors in the report, 10 when the runtime preview is off (the caller
+# 1 errors in the report, 10 when Apps (beta) are off (the caller
 # decides); any other refusal prints its JSON and exits 2/3.
 _app_validate_seed() {
     local kind="$1" target="$2" types="$3" as_json="$4" body
@@ -8474,10 +8474,13 @@ _study_page_app_deploys() {
     cat <<'EOF'
 k2 study app-deploys — Deploying Apps
 
-PREVIEW. The App runtime is on only where the owner turned it on
-(K2_APPS=1 or Settings appsPreview), on K2's own boxes. Preview Apps run
-as the daemon's user with a clean environment; the walls (containers)
-come in a later 0.46 release. Don't put client data in a preview App.
+APPS (BETA). On by default; the owner turns them off or on in Settings →
+Apps → This server. Apps run walled, in a guarded container as the k2app
+user (Linux boxes, prepared: k2 app doctor, k2 app box prepare, k2 app
+engine install). New Apps start guarded. The unwalled process engine (App
+code as the daemon's user) is the owner's separate opt-in for dev
+machines (K2_APPS_PROCESS=1 or the appsProcessEngine setting); without it
+a deploy that needs it is refused.
 
 THE LOOP
   k2 app validate <folder> [--types]   manifest.json + the K2 contract
@@ -8895,7 +8898,7 @@ print(("revoked %s (shut at once)" % v["name"]) if v.get("revoked") else v.get("
 # ── 0.46.0 App grace (Rosson's cross-over plan, 2026-10-14) ─────────────
 # 0.46.0 and 0.46.1 remove nothing for existing services; 0.46.2 is the
 # cut-over (with k2 app adopt).
-# These verbs are not behind the runtime preview flag: they serve every
+# These verbs are not behind the Apps (beta) switch: they serve every
 # published --cmd service (and every runtime App).
 
 _app_grace_usage() {
@@ -20703,7 +20706,7 @@ subdomain  (Pro) hostname for a port that is ALREADY listening.
   Custom static files: --skin <dir> (workspace-relative). Labels `skin`,
   `meet`, `chat` and `mail` are reserved (box front doors: Apps, K2 Meet, K2 chat, K2 webmail).
   Off-platform custom domains are not created here.
-  k2 app is guests/roles/tokens, and (preview) hosts server Apps with
+  k2 app is guests/roles/tokens, and (Apps beta) hosts server Apps with
   deploys and rollback: k2 study app-deploys.
   Leftover: k2 skin.
 
@@ -29207,7 +29210,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   mail                Agent email; bodies untrusted; send is governed
   connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
   apps                App guests; k2skn_ prefix never grid
-  app-deploys         Host a server App: Seeds, deploys, rollback (preview)
+  app-deploys         Host a server App: Seeds, deploys, rollback (beta)
   app-api             An App's server calls: the SDK, every route, passes, refusals
   app-heartbeats      App heartbeats: routes, caps, wait reasons, contract
   app-tickets         App tickets: routes, live ticket_changed frames, contract

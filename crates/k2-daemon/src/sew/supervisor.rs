@@ -351,16 +351,27 @@ pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
         )),
         None => c.push(check("systemd", "fail", "systemctl --version unreadable", "Sew needs systemd 250 or newer")),
     }
+    // Exactly the major `sew install` is told (`pg_major`), never "any ≥ 16":
+    // K2's own PGDG 17 next to it must not satisfy this check.
     let pg = env.ops.pg_majors();
-    match pg.iter().rev().find(|m| **m >= 16) {
-        Some(m) => c.push(check("postgres", "ok", format!("PostgreSQL {m} binaries"), "")),
-        None => c.push(check(
+    let want = pin::SEW_PG_MAJOR;
+    if pg.contains(&want) {
+        c.push(check("postgres", "ok", format!("PostgreSQL {want} binaries (sew-db)"), ""));
+    } else {
+        c.push(check(
             "postgres",
             "fail",
-            if pg.is_empty() { "no PostgreSQL binaries under /usr/lib/postgresql".to_string() } else { format!("PostgreSQL {pg:?}") },
-            "install PostgreSQL 16 or newer server binaries as root (the postgresql-16 package; on Ubuntu 22.04 and \
-             Debian 12 it comes from apt.postgresql.org) without creating a second cluster; K2 never runs apt",
-        )),
+            if pg.is_empty() {
+                "no PostgreSQL server binaries under /usr/lib/postgresql".to_string()
+            } else {
+                format!("PostgreSQL {pg:?} found, not {want}")
+            },
+            format!(
+                "Sew needs the postgresql-{want} package (/usr/lib/postgresql/{want}/bin/postgres, initdb, pg_dump, \
+                 pg_restore): install it as root (on Ubuntu 22.04 and Debian 12 from apt.postgresql.org) without \
+                 creating a second cluster, and keep it installed while Sew is; K2 never runs apt"
+            ),
+        ));
     }
     let helper_ok = match helper_check(env) {
         Ok(()) => {

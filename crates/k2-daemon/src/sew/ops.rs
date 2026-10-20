@@ -327,7 +327,7 @@ impl SewOps for RealOps {
         for e in rd.flatten() {
             let Some(m) = e.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
             let bin = e.path().join("bin");
-            if ["postgres", "initdb", "pg_dump", "pg_restore"].iter().all(|b| bin.join(b).is_file()) {
+            if k2_root_proto::sew::SEW_PG_BINARIES.iter().all(|b| bin.join(b).is_file()) {
                 out.push(m);
             }
         }

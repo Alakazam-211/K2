@@ -545,6 +545,8 @@ fn install_pipes_the_key_on_stdin_only_and_hands_sew_the_daemon_uid() {
     assert_eq!(inputs["mgmt_allow_uids"], serde_json::json!([1001]));
     assert_eq!(inputs["provider"], "k2");
     assert_eq!(inputs["k2_jwks_url"], JWKS);
+    // 0.46.3: the PG major is pinned, never Sew's "highest under /usr/lib/postgresql".
+    assert_eq!(inputs["pg_major"], serde_json::json!(16));
     assert!(!seen.borrow()[0].contains(KEY), "the key never reaches the JSON file");
 
     let calls = sew_calls(&t);

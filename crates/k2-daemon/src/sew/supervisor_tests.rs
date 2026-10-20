@@ -224,6 +224,7 @@ fn preflight_hard_stops_refuse_before_any_effect() {
     let cases: Vec<(&str, Setup)> = vec![
         ("systemd", Box::new(|t: &T| *t.ops.systemd.lock().unwrap() = Some(249))),
         ("postgres", Box::new(|t: &T| *t.ops.pg.lock().unwrap() = vec![14, 15])),
+        ("postgres", Box::new(|t: &T| *t.ops.pg.lock().unwrap() = vec![17])),
         ("helper", Box::new(|t: &T| *t.ops.helper.lock().unwrap() = helper_ok(6, true, pinned().version))),
         ("helper", Box::new(|t: &T| *t.ops.helper.lock().unwrap() = helper_ok(7, false, pinned().version))),
         ("helper", Box::new(|t: &T| *t.ops.helper.lock().unwrap() = helper_ok(7, true, "0.0.1"))),
@@ -1672,4 +1673,33 @@ fn purge_types_back_sews_public_host_and_forgets_k2s_sew_records() {
     assert_eq!(r["purged"], true);
     let recs = t.ops.records.lock().unwrap();
     assert!(recs.get(SERVER_RECORD).is_none() && recs.get(JWKS_RECORD).is_none(), "{recs:?}");
+}
+
+// ── sew-db's PostgreSQL major is pinned (Sew ask, 2026-10-20) ────────────
+
+/// 0.46.3 installs PGDG 17 for K2's own databases. A box with only 17 must
+/// not pass Sew's preflight (Sew would be told pg_major 16 and fail, or
+/// without it silently take 17); 16 next to 17 passes; enable refuses
+/// before any effect.
+#[test]
+fn preflight_needs_exactly_sews_pg_major_not_any_newer() {
+    let t = t();
+    let pg_check = |t: &T| {
+        preflight(&t.env(), &t.req()).into_iter().find(|c| c["id"] == "postgres").expect("postgres check")
+    };
+    *t.ops.pg.lock().unwrap() = vec![17];
+    let c = pg_check(&t);
+    assert_eq!(c["status"], "fail", "{c}");
+    assert!(c["detail"].as_str().unwrap().contains("[17] found, not 16"), "{c}");
+    assert!(c["hint"].as_str().unwrap().contains("postgresql-16 package"), "{c}");
+    let f = match enable_begin(&t.env(), &t.req()) {
+        Err(f) => f,
+        Ok(_) => panic!("enable must refuse with only PostgreSQL 17"),
+    };
+    assert_eq!(f.code, "preflight_failed", "{}: {}", f.code, f.hint);
+    assert!(t.ops.effects().is_empty(), "{:?}", t.ops.effects());
+    *t.ops.pg.lock().unwrap() = vec![16, 17];
+    assert_eq!(pg_check(&t)["status"], "ok");
+    *t.ops.pg.lock().unwrap() = vec![];
+    assert!(pg_check(&t)["detail"].as_str().unwrap().contains("no PostgreSQL server binaries"));
 }

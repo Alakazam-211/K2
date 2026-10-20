@@ -453,7 +453,7 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   nothing). History: `k2 store export --widget <w> --at <YYYY-MM-DD>`.\n\
 - The example: `k2 zen guide example board-lite` (a sticky-note board in its data, and\n\
   the agent's `bin/board-lite` beside it).\n\
-- **The Kanban Garden** (`k2:kanban@3`, New Garden → Kanban) keeps its board in\n\
+- **The Kanban Garden** (`k2:kanban@4`, New Garden → Kanban) keeps its board in\n\
   `data:k2:kanban`, one board per Garden under `board/<garden id>/` (its **For agents**\n\
   button shows the exact prefix `<p>`): `<p>col/<id>` = `{name, order}`, `<p>card/<id>` =\n\
   `{title, note, col, order}` (`col` is a column's `<id>`, `note` is markdown, lower\n\
@@ -466,8 +466,11 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   counters and a clock). It wears K2 Companion's colours in light and dark; to follow\n\
   the Garden's theme instead, set `look = \"garden\"` under `[widget.props.config]`.\n\
   A message never moves a person who scrolled up; a \"new messages\" pill counts it.\n\
-  A Kanban Garden that syncs with K2's default moves to `@3`; an own copy keeps its board\n\
-  (`@1` or `@2`).\n\n",
+  It shows a message's files (chips, images as pictures; a click opens them full size),\n\
+  makes file paths in your workspace clickable, and takes files with its + button\n\
+  (they ride the message, workspace-relative, like K2's own Thread).\n\
+  A Kanban Garden that syncs with K2's default moves to `@4`; an own copy keeps its board\n\
+  (`@1`, `@2` or `@3`).\n\n",
     )
 }
 
@@ -1033,7 +1036,7 @@ mod tests {
         let s = generate_k2_zen_skill();
         for needle in [
             "cards (the Diary, the Kanban, start with the default, or start empty and ask you)",
-            "**The Kanban Garden** (`k2:kanban@3`, New Garden → Kanban)",
+            "**The Kanban Garden** (`k2:kanban@4`, New Garden → Kanban)",
             "`data:k2:kanban`, one board per Garden under `board/<garden id>/`",
             "`<p>card/<id>` =\n`{title, note, col, order}`",
             "k2 store put --widget k2:kanban <p>card/<new-id>",
@@ -1051,14 +1054,16 @@ mod tests {
     fn skill_documents_the_kanban_thread_panel() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 26, "k2:kanban@2 needs a new skill version");
         let s = generate_k2_zen_skill();
-        assert!(!s.contains("k2:kanban@1`, New Garden") && !s.contains("k2:kanban@2`, New Garden"), "New Garden makes @3");
+        for old in ["k2:kanban@1`, New Garden", "k2:kanban@2`, New Garden", "k2:kanban@3`, New Garden"] {
+            assert!(!s.contains(old), "New Garden makes @4, not {old}");
+        }
         for needle in [
             "Its **Thread** button opens a panel to talk to one agent beside the board",
             "your bubbles right, the agent's left",
             "Enter sends, Shift+Enter is a new line",
             "K2 Companion's colours in light and dark",
             "set `look = \"garden\"` under `[widget.props.config]`",
-            "an own copy keeps its board\n(`@1` or `@2`)",
+            "an own copy keeps its board\n(`@1`, `@2` or `@3`)",
         ] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
@@ -1070,7 +1075,22 @@ mod tests {
     fn skill_documents_the_kanban_3_scrolling() {
         assert!(crate::skills::version::SKILL_VERSION_ZEN >= 27, "k2:kanban@3 needs a new skill version");
         let s = generate_k2_zen_skill();
-        for needle in ["A message never moves a person who scrolled up; a \"new messages\" pill counts it.", "moves to `@3`"] {
+        for needle in ["A message never moves a person who scrolled up; a \"new messages\" pill counts it."] {
+            assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
+        }
+    }
+
+    /// v28: k2:kanban@4 (Thread parity, Rosson 2026-10-20, for 0.46.3): New
+    /// Garden makes @4, whose Thread panel has the Thread's files and links.
+    #[test]
+    fn skill_documents_the_kanban_4_files_and_links() {
+        assert!(crate::skills::version::SKILL_VERSION_ZEN >= 28, "k2:kanban@4 needs a new skill version");
+        let s = generate_k2_zen_skill();
+        for needle in [
+            "It shows a message's files (chips, images as pictures; a click opens them full size),",
+            "makes file paths in your workspace clickable, and takes files with its + button",
+            "moves to `@4`",
+        ] {
             assert!(s.contains(needle), "the k2-zen skill must say {needle:?}");
         }
     }

@@ -18,3 +18,8 @@ kanban-3.toml (template k2.kanban@3, widget k2:kanban@3, 0.46.3) is the
 same page on the Kanban whose Thread panel keeps a scrolled-up reader in
 place (a "new messages" pill) and a reader at the bottom pinned there; a
 synced Kanban Garden moves to it, an own copy keeps its board.
+kanban-4.toml (template k2.kanban@4, widget k2:kanban@4, 0.46.3 Thread
+parity) is the same page on the Kanban whose Thread panel has the Thread's
+files (chips, pictures), workspace file links, picked files on a post,
+mark-read, catch-up and paging back; a synced Kanban Garden moves to it, an
+own copy keeps its board.

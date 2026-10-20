@@ -23,6 +23,9 @@
 // markdown, Enter sends and Shift+Enter doesn't, the round Send, posts reach
 // the agent and its replies render, the working ear's state, counters and
 // clock, and K2 Companion's look by default (look = "garden" opts out).
+// @3 and @4 keep a scrolled-up reader in place; @4 (Thread parity) also
+// draws files and pictures, links workspace paths, takes picked files in
+// the message box, marks read, catches up and pages back.
 import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
@@ -44,7 +47,7 @@ const read = (p: string): string =>
   readFileSync(existsSync(resolve(DIR, p)) ? resolve(DIR, p) : resolve(WIDGETS, 'kanban-2', p), 'utf8')
 let HTML = read('index.html')
 let SCRIPTS = ['md.js', 'kanban.js', 'picker.js', 'dock.js'].map(read)
-function useVersion(dir: 'kanban-1' | 'kanban-2' | 'kanban-3'): void {
+function useVersion(dir: 'kanban-1' | 'kanban-2' | 'kanban-3' | 'kanban-4'): void {
   DIR = resolve(WIDGETS, dir)
   HTML = read('index.html')
   SCRIPTS = ['md.js', 'kanban.js', 'picker.js', 'dock.js'].map(read)
@@ -87,7 +90,16 @@ const ALL_CAPS = [
   'thread.subscribe',
   'thread.post',
   'canvas.setHitRegions',
+  // Thread parity (catalog v16): @4 uses them; @1–@3 never ask.
+  'thread.read',
+  'thread.markRead',
+  'thread.attachment',
+  'thread.open',
+  'thread.links',
+  'thread.pickFiles',
 ]
+/** What K2 before Thread parity answers `k2.can` for (no files, links, read). */
+const PRE_PARITY_CAPS = ALL_CAPS.filter((v) => !/^thread\.(read|markRead|attachment|open|links|pickFiles)$/.test(v))
 
 function fakeK2(
   opts: {
@@ -99,6 +111,14 @@ function fakeK2(
     postError?: string
     data?: Map<string, Stored>
     saves?: Map<string, Json>
+    /** thread.attachment thumb answers by `docId/n` (a missing key refuses). */
+    thumbs?: Record<string, { mime: string; base64: string }>
+    /** thread.links: which inputs lead into the workspace, input → rel. */
+    linkable?: Record<string, string>
+    /** thread.pickFiles answers, in turn. */
+    picks?: Array<{ files: Array<{ relPath: string; name: string }> }>
+    /** thread.read answers for afterSeq / beforeSeq reads. */
+    reads?: (opts: Record<string, unknown>) => unknown
   } = {},
 ) {
   const data = opts.data ?? new Map<string, Stored>()
@@ -110,7 +130,13 @@ function fakeK2(
   const saves = opts.saves ?? new Map<string, Json>()
   const saveSets: Array<[string, Json]> = []
   const agentSubs: Array<(rows: unknown[]) => void> = []
-  const posts: Array<[string, string]> = []
+  const posts: Array<[string, string] | [string, string, unknown]> = []
+  const attachmentCalls: Array<[string, string, number, unknown]> = []
+  const opens: Array<[string, unknown]> = []
+  const linkCalls: Array<[string, string[]]> = []
+  const pickCalls: string[] = []
+  const markReads: Array<[string, unknown]> = []
+  const reads: Array<[string, unknown]> = []
   const answers: Array<[string, string, string]> = []
   const threadSubs: Array<{ address: string; cb: (view: unknown) => void }> = []
   let nextSeq = 100
@@ -160,8 +186,8 @@ function fakeK2(
         threadSubs.push({ address, cb })
         return () => undefined
       },
-      post: async (to: string, text: string) => {
-        posts.push([to, text])
+      post: async (...args: [string, string] | [string, string, unknown]) => {
+        posts.push(args)
         if (opts.postError) throw new K2Error(opts.postError)
         nextSeq += 1
         return { id: `p${nextSeq}`, seq: nextSeq }
@@ -169,6 +195,38 @@ function fakeK2(
       answer: async (to: string, id: string, answer: string) => {
         answers.push([to, id, answer])
         return null
+      },
+      attachment: async (to: string, docId: string, n: number, o: unknown) => {
+        attachmentCalls.push([to, docId, n, o])
+        const t = opts.thumbs?.[`${docId}/${n}`]
+        if (!t) throw new K2Error('failed')
+        return { kind: 'image', mime: t.mime, base64: t.base64, width: 10, height: 10 }
+      },
+      open: async (to: string, target: unknown) => {
+        opens.push([to, target])
+        return { opened: true }
+      },
+      links: async (to: string, candidates: string[]) => {
+        linkCalls.push([to, candidates])
+        return {
+          links: candidates.map((input) => {
+            const rel = opts.linkable?.[input]
+            return rel ? { input, linkable: true, kind: 'file', rel } : { input, linkable: false }
+          }),
+        }
+      },
+      pickFiles: async (to: string) => {
+        pickCalls.push(to)
+        return opts.picks?.shift() ?? { files: [] }
+      },
+      markRead: async (to: string, o: unknown) => {
+        markReads.push([to, o])
+        return { changed: true, lastReadSeq: 0, lastSeq: 0, unread: 0 }
+      },
+      read: async (to: string, o: Record<string, unknown>) => {
+        reads.push([to, o])
+        if (!opts.reads) throw new K2Error('failed')
+        return opts.reads(o)
       },
     },
     store: {
@@ -234,6 +292,12 @@ function fakeK2(
     posts,
     answers,
     threadSubs,
+    attachmentCalls,
+    opens,
+    linkCalls,
+    pickCalls,
+    markReads,
+    reads,
     hitRegions,
     ready: () => ready,
     /** An agent (or another window) writes; the widget hears it live. */
@@ -340,7 +404,7 @@ async function started(f: Fake) {
   return m
 }
 
-describe.each(['kanban-1', 'kanban-2', 'kanban-3'] as const)('k2:kanban (%s)', (dir) => {
+describe.each(['kanban-1', 'kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban (%s)', (dir) => {
   beforeAll(() => useVersion(dir))
 
   it('is sealed-frame clean: no innerHTML, inline handlers, network or browser storage', () => {
@@ -782,9 +846,11 @@ function view(items: ViewItem[], turn: { state: string; since: number } | null =
 }
 
 /** A board with the Thread panel open on scout (saved per Garden). */
-async function openOnScout(o: { row?: Record<string, unknown>; postError?: string; config?: Record<string, unknown> } = {}) {
+async function openOnScout(
+  o: { row?: Record<string, unknown>; postError?: string; config?: Record<string, unknown>; k2?: Parameters<typeof fakeK2>[0] } = {},
+) {
   const saves = new Map<string, Json>([['dock/g-test0001', { open: true, agent: SCOUT }]])
-  const f = fakeK2({ data: THREE(), saves, postError: o.postError, config: o.config })
+  const f = fakeK2({ data: THREE(), saves, postError: o.postError, config: o.config, ...o.k2 })
   const m = await started(f)
   await until('agents read', () => f.agentSubs.length === 1)
   f.agentSubs[0]([{ address: SCOUT, label: 'scout', state: 'ok', working: false, needsYou: false, activity: 'idle', counts: null, ...o.row }])
@@ -793,7 +859,7 @@ async function openOnScout(o: { row?: Record<string, unknown>; postError?: strin
   return { f, m }
 }
 
-describe.each(['kanban-2', 'kanban-3'] as const)('k2:kanban Thread panel (%s; the K2 Thread look in K2 Companion colours)', (dir) => {
+describe.each(['kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban Thread panel (%s; the K2 Thread look in K2 Companion colours)', (dir) => {
   beforeAll(() => useVersion(dir))
 
   it('draws bubbles: yours right and the agent’s left, "author · time" under each, markdown inside, safely', async () => {
@@ -1047,8 +1113,8 @@ function layoutDock(m: Awaited<ReturnType<typeof started>>) {
 const lines = (n: number, o: { grown?: number } = {}): ViewItem[] =>
   Array.from({ length: n }, (_, i) => textItem(i + 1, i + 1 === o.grown ? `GROWN line ${i + 1}` : `line ${i + 1}`, { ago: 900 - i }))
 
-describe('k2:kanban@3 Thread panel scrolling (K2’s stick-to-bottom)', () => {
-  beforeAll(() => useVersion('kanban-3'))
+describe.each(['kanban-3', 'kanban-4'] as const)('k2:kanban Thread panel scrolling (%s; K2’s stick-to-bottom)', (dir) => {
+  beforeAll(() => useVersion(dir))
 
   it('a reader at the bottom stays there; one who scrolled up never moves, and a pill counts what came in', async () => {
     const { f, m } = await openOnScout()
@@ -1123,6 +1189,245 @@ describe('k2:kanban@3 Thread panel scrolling (K2’s stick-to-bottom)', () => {
     push([...lines(22), textItem(101, 'Take the Doing column', { mine: true })])
     expect(d.gap()).toBe(0)
     expect(pill.hidden).toBe(true)
+  })
+})
+
+// ── k2:kanban@4: Thread parity (Rosson 2026-10-20, for 0.46.3) ──────────
+// "app gateway and garden gateway both need the attachments and any other
+// systems to match parity with the new thread features." The panel draws a
+// message's files (chips with their state; images as pictures, only ever
+// through <img src="data:…">), links printed paths K2 says lead into the
+// workspace, takes files in the message box (K2's picker), marks the
+// Thread read at the newest message, catches up with a delta read and
+// pages back. On an older K2 (no such verbs) it is @3's panel.
+
+const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+function fileItem(seq: number, body: string, attachments: Array<Record<string, unknown>>, o: { mine?: boolean } = {}): ViewItem {
+  const it = textItem(seq, body, o)
+  it.doc.attachments = attachments
+  return it
+}
+
+describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, read state', () => {
+  beforeAll(() => useVersion('kanban-4'))
+
+  it('draws a message’s files: chips with their state, a hidden one without a name, pictures through <img> data: URLs only', async () => {
+    const { f, m } = await openOnScout({
+      k2: { thumbs: { 'm1/0': { mime: 'image/png', base64: PNG_B64 }, 'm1/4': { mime: 'text/html', base64: 'PHNjcmlwdD4=' } } },
+    })
+    f.threadSubs[0].cb(
+      view([
+        fileItem(1, 'Here are the files.', [
+          { kind: 'file', state: 'ok', name: 'shot.png', mime: 'image/png', size: 2048 },
+          { kind: 'file', state: 'changed', name: 'plan.md', size: 900, line: 4 },
+          { kind: 'file', state: 'gone', name: 'old.txt' },
+          { kind: 'file', state: 'hidden' },
+          { kind: 'file', state: 'ok', name: 'weird.svg', mime: 'image/svg+xml' },
+          { kind: 'file', state: 'ok', name: 'photo.heic' },
+        ]),
+        fileItem(2, '', [{ kind: 'file', state: 'ok', name: 'notes.txt', size: 12 }], { mine: true }),
+      ]),
+    )
+    const msg = m.$('.msg[data-msg-id="m1"]')
+    // Under the bubble, before "author · time".
+    expect([...msg.children].map((c) => c.className.split(' ')[0])).toEqual(['bubble', 'msg-files', 'meta'])
+    const files = [...msg.querySelectorAll<HTMLElement>('.msg-files > *')]
+    expect(files.map((n) => n.getAttribute('data-file-state'))).toEqual(['ok', 'changed', 'gone', 'hidden', 'ok', 'ok'])
+    expect(files[1].textContent).toBe('plan.md:4changed since sent')
+    expect(files[2].textContent).toBe('old.txtmoved or deleted')
+    expect((files[2] as HTMLButtonElement).disabled).toBe(true)
+    expect(files[3].textContent).toBe('A file (not shared with you)')
+    // Every image asks K2 for its 512 px thumbnail.
+    await until('thumbs asked', () => f.attachmentCalls.length === 3)
+    expect(f.attachmentCalls).toEqual([
+      [SCOUT, 'm1', 0, { mode: 'thumb', px: 512 }],
+      [SCOUT, 'm1', 4, { mode: 'thumb', px: 512 }],
+      [SCOUT, 'm1', 5, { mode: 'thumb', px: 512 }],
+    ])
+    await until('picture drawn', () => msg.querySelector('.file-thumb img') !== null)
+    const img = msg.querySelector<HTMLImageElement>('.file-thumb img')!
+    expect(img.getAttribute('src')).toBe(`data:image/png;base64,${PNG_B64}`)
+    expect(img.alt).toBe('shot.png')
+    // A thumbnail that isn't an image type, or none at all, falls back to the chip.
+    await until('fallbacks', () => msg.querySelectorAll('.file-thumb').length === 1)
+    expect([...msg.querySelectorAll('.file-chip')].map((n) => n.querySelector('.file-name')!.textContent)).toEqual([
+      'plan.md:4',
+      'old.txt',
+      'A file (not shared with you)',
+      'weird.svg',
+      'photo.heic',
+    ])
+    // Nothing a file holds is ever markup in the panel.
+    expect(msg.querySelector('script, svg, iframe, object')).toBeNull()
+
+    // A click opens it in K2 (by message and index; never a path).
+    ;(msg.querySelector('.file-thumb') as HTMLElement).click()
+    ;(files[1] as HTMLElement).click()
+    files[2].click()
+    await until('opened twice', () => f.opens.length === 2)
+    expect(f.opens).toEqual([
+      [SCOUT, { docId: 'm1', n: 0 }],
+      [SCOUT, { docId: 'm1', n: 1 }],
+    ])
+
+    // Files alone are a message: no empty bubble.
+    const alone = m.$('.msg[data-msg-id="m2"]')
+    expect([...alone.children].map((c) => c.className.split(' ')[0])).toEqual(['msg-files', 'meta'])
+  })
+
+  it('links printed paths K2 says lead into the workspace; a click opens the file at its line', async () => {
+    const { f, m } = await openOnScout({ k2: { linkable: { 'src/app.ts:12': 'src/app.ts', 'Cargo.toml': 'Cargo.toml' } } })
+    f.threadSubs[0].cb(
+      view([
+        textItem(
+          1,
+          'Changed src/app.ts:12 and `Cargo.toml`, not lib/gone.rs, see https://example.com/a/b.ts and and/or.\n\n```\nsrc/in/fence.ts\n```',
+          { ago: 60 },
+        ),
+      ]),
+    )
+    await until('links asked', () => f.linkCalls.length === 1)
+    // Path-shaped text only: never a URL, a fenced block or prose like and/or.
+    expect(f.linkCalls[0]).toEqual([SCOUT, ['src/app.ts:12', 'Cargo.toml', 'lib/gone.rs']])
+    await until('links drawn', () => m.doc.querySelectorAll('.file-link').length === 2)
+    const links = [...m.doc.querySelectorAll<HTMLElement>('.file-link')]
+    expect(links.map((l) => [l.textContent, l.getAttribute('role'), l.getAttribute('data-rel')])).toEqual([
+      ['src/app.ts:12', 'link', 'src/app.ts'],
+      ['Cargo.toml', 'link', 'Cargo.toml'],
+    ])
+    // Not in the workspace: plain text.
+    expect(m.doc.querySelector('.file-cand[data-cand="lib/gone.rs"]')!.classList.contains('file-link')).toBe(false)
+    links[0].click()
+    links[1].dispatchEvent(new m.win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await until('opened', () => f.opens.length === 2)
+    expect(f.opens).toEqual([
+      [SCOUT, { rel: 'src/app.ts', line: 12 }],
+      [SCOUT, { rel: 'Cargo.toml' }],
+    ])
+    // The same text again is answered from what K2 said: no second ask.
+    f.threadSubs[0].cb(view([textItem(1, 'Changed src/app.ts:12', { ago: 60 }), textItem(2, 'Also src/app.ts:12', { ago: 30 })]))
+    expect(m.doc.querySelectorAll('.file-link').length).toBe(2)
+    await tick()
+    expect(f.linkCalls).toHaveLength(1)
+  })
+
+  it('the message box takes files: + opens K2’s picker, chips wait (removable), and files alone send', async () => {
+    const { f, m } = await openOnScout({
+      k2: {
+        picks: [
+          { files: [{ relPath: 'shots/a.png', name: 'a.png' }, { relPath: '.k2/downloads/b.pdf', name: 'b.pdf' }] },
+          { files: [] },
+        ],
+      },
+    })
+    f.threadSubs[0].cb(view([]))
+    const plus = m.$<HTMLButtonElement>('.attach-round')
+    const send = m.$<HTMLButtonElement>('#dockSendBtn')
+    expect(plus.hidden).toBe(false)
+    expect(plus.getAttribute('aria-label')).toBe('Attach files')
+    expect(send.disabled).toBe(true)
+    plus.click()
+    await until('picked', () => m.doc.querySelectorAll('.compose-file').length === 2)
+    expect(f.pickCalls).toEqual([SCOUT])
+    expect([...m.doc.querySelectorAll('.compose-file .file-name')].map((n) => n.textContent)).toEqual(['a.png', 'b.pdf'])
+    expect(send.disabled).toBe(false)
+    // Remove one; a cancelled pick adds nothing.
+    m.$<HTMLButtonElement>('.compose-file[data-rel=".k2/downloads/b.pdf"] button').click()
+    expect(m.doc.querySelectorAll('.compose-file').length).toBe(1)
+    plus.click()
+    await until('second pick', () => f.pickCalls.length === 2)
+    await tick()
+    expect(m.doc.querySelectorAll('.compose-file').length).toBe(1)
+    // Files alone are a message.
+    send.click()
+    await until('posted', () => f.posts.length === 1)
+    expect(f.posts[0]).toEqual([SCOUT, '', { attachments: [{ relPath: 'shots/a.png' }] }])
+    await until('chips cleared', () => m.doc.querySelectorAll('.compose-file').length === 0)
+    // Text with no files is posted as before (two arguments).
+    m.type(m.$<HTMLTextAreaElement>('#dockText'), 'Thanks')
+    send.click()
+    await until('posted twice', () => f.posts.length === 2)
+    expect(f.posts[1]).toEqual([SCOUT, 'Thanks'])
+  })
+
+  it('marks the Thread read at the newest message while it is shown, once per newer message', async () => {
+    const { f, m } = await openOnScout()
+    f.threadSubs[0].cb(view([textItem(1, 'one'), textItem(2, 'two')]))
+    await until('read', () => f.markReads.length === 1)
+    expect(f.markReads[0]).toEqual([SCOUT, { seq: 2 }])
+    f.threadSubs[0].cb(view([textItem(1, 'one'), textItem(2, 'two')], { state: 'working', since: Date.now() }))
+    await tick()
+    expect(f.markReads).toHaveLength(1)
+    // The window hidden: nothing is read until it shows again.
+    let state = 'hidden'
+    Object.defineProperty(m.doc, 'visibilityState', { configurable: true, get: () => state })
+    f.threadSubs[0].cb(view([textItem(1, 'one'), textItem(2, 'two'), textItem(3, 'three')]))
+    await tick()
+    expect(f.markReads).toHaveLength(1)
+    state = 'visible'
+    m.doc.dispatchEvent(new m.win.Event('visibilitychange'))
+    await until('read again', () => f.markReads.length === 2)
+    expect(f.markReads[1]).toEqual([SCOUT, { seq: 3 }])
+  })
+
+  it('catches up with a delta when the window shows again: new items join, changed ones update, removed ones go', async () => {
+    const { f, m } = await openOnScout({
+      k2: {
+        reads: (o) =>
+          o.afterSeq === 3
+            ? {
+                items: [textItem(4, 'four, missed while away')],
+                hasMore: false,
+                changed: [textItem(2, 'two, edited')],
+                removed: [{ id: 'm1', seq: 1 }],
+              }
+            : { items: [], hasMore: false, changed: [], removed: [] },
+      },
+    })
+    f.threadSubs[0].cb(view([textItem(1, 'one'), textItem(2, 'two'), textItem(3, 'three')]))
+    m.doc.dispatchEvent(new m.win.Event('visibilitychange'))
+    await until('caught up', () => m.doc.querySelectorAll('#dockBody .msg').length === 3)
+    expect(f.reads[0]).toEqual([SCOUT, { afterSeq: 3 }])
+    expect([...m.doc.querySelectorAll('#dockBody .msg')].map((n) => n.querySelector('.body')!.textContent!.trim())).toEqual([
+      'two, edited',
+      'three',
+      'four, missed while away',
+    ])
+  })
+
+  it('scrolled to the top with earlier messages left, it loads them above without moving you or counting them as new', async () => {
+    const { f, m } = await openOnScout({
+      k2: { reads: (o) => (o.beforeSeq === 11 ? { items: lines(10), hasMore: false } : { items: [], hasMore: false }) },
+    })
+    const d = layoutDock(m)
+    const later = Array.from({ length: 10 }, (_, i) => textItem(i + 11, `line ${i + 11}`, { ago: 800 - i }))
+    f.threadSubs[0].cb({ ...view(later), hasMore: true })
+    const pill = m.$<HTMLButtonElement>('.dock-newer')
+    d.scrollTo(0)
+    await until('earlier read', () => f.reads.length === 1)
+    expect(f.reads[0]).toEqual([SCOUT, { beforeSeq: 11 }])
+    await until('earlier drawn', () => d.msgs().length === 20)
+    expect(d.msgs()[0].getAttribute('data-seq')).toBe('1')
+    // What you were reading (line 11) is still at the top of the view.
+    expect(d.firstVisible()).toEqual({ id: 'm11', at: 0 })
+    expect(pill.hidden).toBe(true)
+  })
+
+  it('on an older K2 it is @3’s panel: no picker, no links, no pictures, no reads', async () => {
+    const { f, m } = await openOnScout({ k2: { caps: PRE_PARITY_CAPS, linkable: { 'src/app.ts': 'src/app.ts' } } })
+    f.threadSubs[0].cb(
+      view([fileItem(1, 'See src/app.ts', [{ kind: 'file', state: 'ok', name: 'shot.png', mime: 'image/png' }])]),
+    )
+    expect(m.$('.attach-round').hidden).toBe(true)
+    expect(m.doc.querySelector('.file-thumb')).toBeNull()
+    const chip = m.$<HTMLButtonElement>('.file-chip')
+    expect(chip.disabled).toBe(true)
+    m.doc.dispatchEvent(new m.win.Event('visibilitychange'))
+    await tick()
+    await tick()
+    expect([f.attachmentCalls, f.linkCalls, f.markReads, f.reads, f.opens]).toEqual([[], [], [], [], []])
+    expect(m.doc.querySelector('.file-cand')).toBeNull()
   })
 })
 

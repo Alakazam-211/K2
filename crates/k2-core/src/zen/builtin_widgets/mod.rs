@@ -43,9 +43,14 @@ pub const KANBAN_WIDGET: &str = "k2:kanban@1";
 /// @3 (Rosson 2026-10-20, for 0.46.3): @2 with K2's stick-to-bottom in the
 /// Thread panel. A message arriving never moves a reader who scrolled up
 /// (WebKit reset @2's rebuilt list to the top); a "new messages" pill
-/// counts what came in below. `kanban-3.toml` moves the template; an own
+/// counts what came in below. `kanban-3.toml` moved the template; an own
 /// copy keeps the board it has.
-pub const KANBAN_WIDGET_LATEST: &str = "k2:kanban@3";
+/// @4 (Rosson 2026-10-20, Thread parity for 0.46.3): @3 with the Thread's
+/// files and links: attachment chips (ok / changed / gone / hidden), images
+/// drawn from K2's thumbnails, workspace file links, picked files riding a
+/// post, mark-read, delta catch-up and paging back. `kanban-4.toml` moves
+/// the template; an own copy keeps the board it has.
+pub const KANBAN_WIDGET_LATEST: &str = "k2:kanban@4";
 
 /// The prefix every built-in widget name starts with.
 pub const BUILTIN_PREFIX: &str = "k2:";
@@ -200,6 +205,25 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("dock.js", include_str!("kanban-3/dock.js")),
         ],
     },
+    // The Kanban's fourth version (0.46.3 Thread parity, Rosson 2026-10-20):
+    // @3 with the Thread panel's files (chips, pictures through <img> data:
+    // URLs), workspace file links, K2's picker in the message box,
+    // mark-read, delta catch-up and paging back, each behind `k2.can`. Only
+    // dock.js and kanban.css are new; the rest is @2's file, byte for byte.
+    // `kanban-3/` stays as shipped.
+    BuiltinWidget {
+        name: "kanban",
+        version: 4,
+        files: &[
+            ("manifest.json", include_str!("kanban-2/manifest.json")),
+            ("index.html", include_str!("kanban-2/index.html")),
+            ("kanban.css", include_str!("kanban-4/kanban.css")),
+            ("md.js", include_str!("kanban-2/md.js")),
+            ("kanban.js", include_str!("kanban-2/kanban.js")),
+            ("picker.js", include_str!("kanban-2/picker.js")),
+            ("dock.js", include_str!("kanban-4/dock.js")),
+        ],
+    },
     // The data-source cards' second version (0.46.1): several sources per
     // card (config.source + config.sources, merged by item key), "soft crit
     // 2/3", named lists, K2 Web's ops shapes, and a refused subscription
@@ -292,6 +316,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:money-alerts@2", "aff2ee34006f71436793145e1989623349a82b6d538beb34d51e94074b69a5c7"),
     ("k2:kanban@2", "8ac36405d18351d0bb52a8f71426dffb32ad99831bcfd9b7c87e4b017d0c7884"),
     ("k2:kanban@3", "e9aae003a07e3d4e17e39738b376aab6ab7556250cd3a6e662211521e8425682"),
+    ("k2:kanban@4", "81cff0f7ee199170f8531b0dcfcbdf4f39387810bcfc91ac0492f5d7fba2a3bf"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -717,12 +742,11 @@ mod tests {
     /// reader is scrolled up leaves them where they are (the list is patched,
     /// never rebuilt: WebKit put @2's rebuilt list back at the top) and a
     /// "new messages" pill counts it; at the bottom they stay pinned (K2's
-    /// stick-to-bottom). The bare `k2:kanban` is @3.
+    /// stick-to-bottom). @3 still resolves for own copies (the bare
+    /// `k2:kanban` is @4 since Thread parity).
     #[test]
     fn the_kanban_3_keeps_a_scrolled_up_reader_in_place() {
-        assert_eq!(KANBAN_WIDGET_LATEST, "k2:kanban@3");
-        assert_eq!(builtin_widget(&parse_widget_ref("k2:kanban").expect("parses")).map(|w| w.id()).as_deref(), Some(KANBAN_WIDGET_LATEST));
-        let w = builtin_widget(&parse_widget_ref(KANBAN_WIDGET_LATEST).expect("parses")).expect("k2:kanban@3 ships");
+        let w = builtin_widget(&parse_widget_ref("k2:kanban@3").expect("parses")).expect("k2:kanban@3 ships");
         clean_kanban(w);
         let two = builtin_widget(&parse_widget_ref("k2:kanban@2").expect("parses")).expect("k2:kanban@2 ships");
         // Everything but the panel's scrolling is @2's, byte for byte.
@@ -751,6 +775,72 @@ mod tests {
         let base = file(two, "kanban.css");
         for line in base.lines().filter(|l| !l.starts_with(".dock-foot") && !l.starts_with("/* Kanban (k2:kanban@2)")) {
             assert!(css.contains(line), "kanban.css lost @2's {line}");
+        }
+    }
+
+    /// k2:kanban@4 (Rosson 2026-10-20, Thread parity for 0.46.3): "app
+    /// gateway and garden gateway both need the attachments and any other
+    /// systems to match parity with the new thread features." @3's widget
+    /// with the Thread panel's files and links: chips with their state (a
+    /// hidden file has no name), images drawn only through an <img> with a
+    /// data: URL from K2's thumbnail, workspace file links, picked files
+    /// riding a post, mark-read, a delta catch-up and paging back, each
+    /// behind `k2.can`. The bare `k2:kanban` is @4.
+    #[test]
+    fn the_kanban_4_has_the_threads_files_and_links() {
+        assert_eq!(KANBAN_WIDGET_LATEST, "k2:kanban@4");
+        assert_eq!(builtin_widget(&parse_widget_ref("k2:kanban").expect("parses")).map(|w| w.id()).as_deref(), Some(KANBAN_WIDGET_LATEST));
+        let w = builtin_widget(&parse_widget_ref(KANBAN_WIDGET_LATEST).expect("parses")).expect("k2:kanban@4 ships");
+        clean_kanban(w);
+        let three = builtin_widget(&parse_widget_ref("k2:kanban@3").expect("parses")).expect("k2:kanban@3 ships");
+        // The board, the manifest (no new cap) and the page are @3's (@2's).
+        for f in ["manifest.json", "index.html", "md.js", "kanban.js", "picker.js"] {
+            assert_eq!(file(w, f), file(three, f), "{f} is @3's");
+        }
+        let js = file(w, "dock.js");
+        for needle in [
+            // Files: chips, the hidden placeholder, pictures via data: URLs.
+            "k2.thread.attachment(address, id, n, { mode: 'thumb', px: 512 })",
+            "'A file (not shared with you)'",
+            "'data:' + mime + ';base64,' + b64",
+            "IMAGE_MIME.test(mime)",
+            "el('img')",
+            "k2.thread.open(current.address, target)",
+            // Links, the picker, read state, catch-up, paging back.
+            "k2.thread.links(address, batch)",
+            "k2.thread.pickFiles(to)",
+            "{ attachments: files.map(",
+            "k2.thread.markRead(current.address, { seq: seq })",
+            "{ afterSeq: after }",
+            "{ beforeSeq: first }",
+            // Every new verb asks first (an older K2 gets @3's panel).
+            "k2.can('thread.attachment')",
+            "k2.can('thread.links')",
+            "k2.can('thread.pickFiles')",
+            "k2.can('thread.markRead')",
+            "k2.can('thread.read')",
+            // @3's scrolling stays.
+            "var STICK_PX = 32",
+            "keepAnchor(anchor)",
+            "known = seenNow",
+        ] {
+            assert!(js.contains(needle), "dock.js lost {needle}");
+        }
+        // Pictures never go in as markup or a blob from the frame's own code.
+        for bad in ["createObjectURL", "DOMParser", ".srcdoc", "image/svg+xml' +", "setAttribute('src'"] {
+            assert!(!js.contains(bad), "dock.js uses {bad}");
+        }
+        // The caches can't grow without end.
+        for bound in ["while (thumbKeys.length > THUMBS_MAX)", "if (++linkCount > 2000)"] {
+            assert!(js.contains(bound), "dock.js lost {bound}");
+        }
+        let css = file(w, "kanban.css");
+        for rule in [".msg-files {", ".file-chip {", ".file-thumb img {", ".file-link {", ".compose-files {", ".attach-round {"] {
+            assert!(css.contains(rule), "kanban.css has no {rule}");
+        }
+        // The rest of the look is @3's (its header comment aside).
+        for line in file(three, "kanban.css").lines().skip(2) {
+            assert!(css.contains(line), "kanban.css lost @3's {line}");
         }
     }
 

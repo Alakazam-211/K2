@@ -1934,13 +1934,22 @@ fn spawn_supervised(
                 }
             };
             loop {
-                // Take the current child to wait on it.
-                let mut child = match child_slot
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .take()
-                {
-                    Some(c) => c,
+                // Take the current child to wait on it, or spawn the next
+                // one. The `running` check and the spawn happen under the
+                // child-slot lock: `stop()` clears `running` and THEN takes
+                // that lock before it reaps, so a respawn is either finished
+                // before stop's reap (and reaped with it) or sees `running`
+                // false. Without it, a supervisor that passed the check just
+                // before a stop spawned one more frpc after the reap: a stray
+                // child, and its log lines landed in the NEXT tunnel's tail
+                // (a "healthy" tunnel with a dead run's error, ticket
+                // a56b93cc).
+                let mut slot = child_slot.lock().unwrap_or_else(|p| p.into_inner());
+                let mut child = match slot.take() {
+                    Some(c) => {
+                        drop(slot);
+                        c
+                    }
                     None => {
                         // No child to wait on. If we've been told to
                         // stop, exit; otherwise spawn one.
@@ -1977,10 +1986,12 @@ fn spawn_supervised(
                             &health,
                         ) {
                             Ok((c, stop)) => {
+                                drop(slot);
                                 tail_stop = stop;
                                 c
                             }
                             Err(e) => {
+                                drop(slot);
                                 crate::log_debug!("[tunnel] respawn failed: {e}");
                                 std::thread::sleep(backoff);
                                 backoff = (backoff * 2).min(max_backoff);

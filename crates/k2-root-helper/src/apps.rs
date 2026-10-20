@@ -1303,6 +1303,9 @@ pub(crate) fn apt_sim_refusal(sim: &str, listed: &[&str]) -> Option<String> {
     for line in sim.lines() {
         let mut w = line.split_whitespace();
         let (Some(op), Some(pkg)) = (w.next(), w.next()) else { continue };
+        // `Inst podman [5.4.2-1] (5.4.2-2 …)`: the installed version in
+        // brackets right after the name means an upgrade.
+        let upgrade = w.next().is_some_and(|t| t.starts_with('['));
         let name = pkg.split(':').next().unwrap_or(pkg);
         match op {
             "Remv" => {
@@ -1314,7 +1317,7 @@ pub(crate) fn apt_sim_refusal(sim: &str, listed: &[&str]) -> Option<String> {
             "Inst" if name == PODMAN_PACKAGE && !listed.contains(&PODMAN_PACKAGE) => {
                 return Some(format!(
                     "customer_podman: apt would {} podman ({}); K2 never upgrades the box's own Podman or adds one next to it (nothing changed)",
-                    if line.contains('[') { "upgrade" } else { "install" },
+                    if upgrade { "upgrade" } else { "install" },
                     line.trim()
                 ))
             }

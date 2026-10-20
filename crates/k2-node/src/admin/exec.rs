@@ -76,7 +76,7 @@ pub trait Platform: Send + Sync {
 /// systemd on Linux, launchd on macOS. Absolute program paths, clean env.
 pub struct SystemPlatform;
 
-fn run_fixed(program: &str, args: &[&str]) -> Result<(), String> {
+pub(crate) fn run_fixed(program: &str, args: &[&str]) -> Result<(), String> {
     let out = std::process::Command::new(program)
         .args(args)
         .env_clear()
@@ -162,6 +162,11 @@ pub enum LocalRequest {
     Update { cmd: SignedCommand, sig: String, size: u64 },
     Keys { keys: AdminKeys },
     Status,
+    /// The Linux job wall (0.46.3, [`super::jobs`]). Unsigned: only the
+    /// node user (or root) gets past the socket's peer check, and root
+    /// fixes everything that makes the wall. An older executor answers
+    /// `malformed`, and the node runs jobs without the wall.
+    Job { job: super::jobs::JobOp },
 }
 
 /// The executor's answer.
@@ -170,6 +175,7 @@ pub enum LocalRequest {
 pub enum LocalResponse {
     Result(AdminResult),
     Status(ExecStatus),
+    Job(super::jobs::JobAnswer),
 }
 
 /// `status` (unsigned, read-only; feeds health §10.1 "executor").
@@ -452,6 +458,8 @@ impl Executor {
                 self.platform.restart_unit(&unit).map_err(|e| AdminRefusal::new(code::FAILED, e))?;
                 Ok(json!({"restarted": unit}))
             }
+            "homes.private" => self.homes_private(args),
+            "wall.enable" => self.wall_enable(args),
             "policy.set" => super::policy::apply_set(&self.paths.layout(), args),
             "policy.narrow" => super::policy::apply_narrow(&self.paths.config_dir, args),
             "node.update" => {
@@ -565,6 +573,8 @@ impl Executor {
             LocalRequest::Command { cmd } => LocalResponse::Result(self.handle_command(cmd)),
             LocalRequest::Keys { keys } => LocalResponse::Result(self.handle_keys(keys)),
             LocalRequest::Update { cmd, sig, .. } => LocalResponse::Result(self.handle_update(cmd, sig, payload.unwrap_or(&[]))),
+            // fds (a job's pipes) come only through `serve_conn`.
+            LocalRequest::Job { job } => LocalResponse::Job(self.handle_job(job, Vec::new())),
         }
     }
 }

@@ -25,6 +25,11 @@ pub struct EnvInputs<'a> {
     pub job_home: &'a Path,
     pub job_tmp: &'a Path,
     pub target_dir: &'a Path,
+    /// Warm caches (`sccache/`, `cargo-home/` inside): the project's
+    /// `cache/<project_key>/` or, with no code, the job's own dir. Never
+    /// node-wide and never named by anything the submitter picks (V28/V29):
+    /// the project key is the controller's hash of its own workspace id.
+    pub cache_dir: &'a Path,
     pub job_id: &'a str,
     pub user: &'a str,
     pub extra: &'a BTreeMap<String, String>,
@@ -43,10 +48,13 @@ pub fn job_env(i: &EnvInputs<'_>) -> Result<Vec<(String, String)>, (String, Stri
     let mut env: Vec<(String, String)> = vec![
         ("HOME".into(), i.job_home.display().to_string()),
         ("PATH".into(), tool_path(i.tool_paths, &crate::util::base_path(i.node_home))),
-        ("CARGO_HOME".into(), tc.join("cargo").display().to_string()),
+        // The registry and git checkouts cargo downloads: per project, so
+        // one tenant can't plant a crate source another builds from. The
+        // rustup proxies stay in toolchains/cargo/bin (on PATH, read-only).
+        ("CARGO_HOME".into(), cache_paths(i.cache_dir).1.display().to_string()),
         ("RUSTUP_HOME".into(), tc.join("rustup").display().to_string()),
         ("CARGO_TARGET_DIR".into(), i.target_dir.display().to_string()),
-        ("SCCACHE_DIR".into(), i.node_home.join("cache/sccache").display().to_string()),
+        ("SCCACHE_DIR".into(), cache_paths(i.cache_dir).0.display().to_string()),
         ("TMPDIR".into(), i.job_tmp.display().to_string()),
         ("LANG".into(), lang.into()),
         ("CI".into(), "1".into()),
@@ -63,6 +71,11 @@ pub fn job_env(i: &EnvInputs<'_>) -> Result<Vec<(String, String)>, (String, Stri
         env.push((k.clone(), v.clone()));
     }
     Ok(env)
+}
+
+/// `(SCCACHE_DIR, CARGO_HOME)` inside a cache dir.
+pub fn cache_paths(cache_dir: &Path) -> (PathBuf, PathBuf) {
+    (cache_dir.join("sccache"), cache_dir.join("cargo-home"))
 }
 
 fn tool_path(first: &[PathBuf], base: &str) -> String {
@@ -204,11 +217,29 @@ impl JobDirs {
     }
 
     pub fn create(&self) -> Result<(), String> {
-        crate::util::mkdir_mode(&self.root, 0o700)?;
+        self.create_for(false)
+    }
+
+    /// `shared`: the Linux job wall, where the job runs as `k2job` with the
+    /// node's group. The root is 01770: the job may create files in its
+    /// cwd, but the sticky bit stops it renaming or replacing the node's
+    /// own entries there (its `log` journal, `src/`); the dirs it writes
+    /// are group-rwx (0770; still closed to everyone else).
+    pub fn create_for(&self, shared: bool) -> Result<(), String> {
+        crate::util::mkdir_mode(&self.root, if shared { 0o1770 } else { 0o700 })?;
         for d in [&self.home, &self.tmp] {
-            std::fs::create_dir_all(d).map_err(|e| format!("create {}: {e}", d.display()))?;
+            if shared {
+                crate::util::mkdir_mode(d, 0o770)?;
+            } else {
+                std::fs::create_dir_all(d).map_err(|e| format!("create {}: {e}", d.display()))?;
+            }
         }
         Ok(())
+    }
+
+    /// A job without code keeps its caches here (deleted with the job).
+    pub fn private_cache(&self) -> PathBuf {
+        self.root.join("cache")
     }
 }
 
@@ -218,7 +249,28 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     fn inputs<'a>(d: &'a Path, extra: &'a BTreeMap<String, String>) -> EnvInputs<'a> {
-        EnvInputs { node_home: d, job_home: d, job_tmp: d, target_dir: d, job_id: "j1", user: "k2node", extra, tool_paths: &[], tool_env: &[] }
+        EnvInputs { node_home: d, job_home: d, job_tmp: d, target_dir: d, cache_dir: d, job_id: "j1", user: "k2node", extra, tool_paths: &[], tool_env: &[] }
+    }
+
+    /// V28/V29: warm caches come from the cache dir the node picked (the
+    /// project key's), never a node-wide dir, and `--env` can't steer them.
+    #[test]
+    fn caches_follow_the_cache_dir_and_extras_cant_move_them() {
+        let home = PathBuf::from("/n");
+        let cache = PathBuf::from("/n/cache/0123456789abcdef");
+        let extra = BTreeMap::from([("SCCACHE_DIR".to_string(), "/tmp/evil".to_string())]);
+        let mut i = inputs(&home, &extra);
+        i.cache_dir = &cache;
+        assert_eq!(job_env(&i).unwrap_err().0, "env_node_reserved", "SCCACHE_DIR is the node's");
+        let none = BTreeMap::new();
+        let mut i = inputs(&home, &none);
+        i.cache_dir = &cache;
+        let env = job_env(&i).unwrap();
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone()).unwrap();
+        assert_eq!(get("SCCACHE_DIR"), "/n/cache/0123456789abcdef/sccache");
+        assert_eq!(get("CARGO_HOME"), "/n/cache/0123456789abcdef/cargo-home");
+        assert_eq!(get("RUSTUP_HOME"), "/n/toolchains/rustup");
+        assert!(!env.iter().any(|(_, v)| v == "/n/cache/sccache"), "no node-wide sccache any more");
     }
 
     #[test]

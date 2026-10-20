@@ -29,6 +29,7 @@ pub mod sysinfo;
 pub mod toolchain;
 pub mod url;
 pub mod util;
+pub mod wall;
 
 /// The product version this build reports (the daemon's; build.rs).
 pub const PRODUCT_VERSION: &str = env!("K2_PRODUCT_VERSION");

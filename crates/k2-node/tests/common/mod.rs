@@ -349,7 +349,12 @@ pub fn options(layout: Layout) -> NodeOptions {
 
 /// A node already enrolled and active at `fake`.
 pub async fn start_node(fake: &Fake, tag: &str, policy_extra: &str, tweak: impl FnOnce(&mut NodeOptions)) -> TestNode {
-    let dir = k2_node::util::temp_dir(tag);
+    start_node_in(fake, k2_node::util::temp_dir(tag), policy_extra, tweak).await
+}
+
+/// [`start_node`] with its home and config under `dir` (the Linux wall
+/// tests need a dir the job unit can see: not /tmp, /home or /root).
+pub async fn start_node_in(fake: &Fake, dir: PathBuf, policy_extra: &str, tweak: impl FnOnce(&mut NodeOptions)) -> TestNode {
     let layout = Layout::new(dir.join("home"), dir.join("config"));
     layout.ensure().unwrap();
     write_policy(&layout, policy_extra);

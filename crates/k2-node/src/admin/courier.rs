@@ -54,6 +54,7 @@ fn as_result(r: Result<LocalResponse, AdminRefusal>, cmd_id: &str, digest: &str)
     match r {
         Ok(LocalResponse::Result(r)) => r,
         Ok(LocalResponse::Status(_)) => AdminResult::refused(cmd_id, digest, &AdminRefusal::new(code::FAILED, "executor answered status")),
+        Ok(LocalResponse::Job(_)) => AdminResult::refused(cmd_id, digest, &AdminRefusal::new(code::FAILED, "executor answered a job op")),
         Err(e) => AdminResult::refused(cmd_id, digest, &e),
     }
 }

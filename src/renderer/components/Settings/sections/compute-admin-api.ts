@@ -71,6 +71,15 @@ export interface NodeHealthFacts {
   os?: { name: string; version: string; kernel: string; arch: string }
   executor?: { reachable: boolean; version?: string | null; remote_admin?: string | null; approval_key_fps?: string[]; auto_update?: string | null; last_update?: string | null }
   stuck_jobs?: { job_id: string; generation: number; quiet_secs: number }[]
+  /** The job wall (k2-node 0.46.3+; absent from older nodes). */
+  security?: {
+    /** `job_user` | `seatbelt` | `none`. */
+    wall: string
+    job_user?: string | null
+    network_none: boolean
+    open_homes?: string[]
+    notes?: string[]
+  } | null
 }
 
 export interface NodeUpdateState {
@@ -216,5 +225,13 @@ export function healthLines(f: NodeHealthFacts | null): string[] {
   if (typeof limit === 'number' && limit < 100) out.push(`CPU held to ${limit}% by heat`)
   if (f.executor && !f.executor.reachable) out.push("The admin executor isn't answering")
   for (const j of f.stuck_jobs ?? []) out.push(`Job ${j.job_id.slice(0, 8)} looks stuck (quiet ${Math.round(j.quiet_secs / 60)} min)`)
+  const sec = f.security
+  if (!sec) {
+    out.push('No job wall reported (k2-node before 0.46.3): jobs can read the node key')
+  } else {
+    if (sec.wall === 'job_user') out.push(`Jobs run walled as ${sec.job_user ?? 'the job user'}`)
+    else if (sec.wall === 'seatbelt') out.push('Jobs run under the Seatbelt wall')
+    for (const n of sec.notes ?? []) out.push(n)
+  }
   return out
 }

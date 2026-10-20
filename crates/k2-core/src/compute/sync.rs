@@ -366,6 +366,22 @@ mod tests {
         assert_eq!(project_key("w", None).len(), 16);
     }
 
+    /// V28/V29: the node names mirrors, warm targets and (0.46.3) sccache
+    /// and cargo caches by this key. Whatever id a workspace has, the key
+    /// is the server's hash: 16 hex, never a path, a node-wide name or a
+    /// value the id picks.
+    #[test]
+    fn a_workspace_id_cant_steer_the_cache_key() {
+        for id in ["../../state", "sccache", "cache", "0123456789abcdef", "t/other-tenant/ws", "", "w\0x"] {
+            let k = project_key(id, None);
+            assert_eq!(k.len(), 16, "{id:?}");
+            assert!(k.chars().all(|c| c.is_ascii_hexdigit()), "{id:?} → {k}");
+            assert_ne!(k, id, "an id that looks like a key isn't one");
+        }
+        // Same id, another remote: another cache.
+        assert_ne!(project_key("w", Some("https://github.com/a/b")), project_key("w", Some("https://github.com/a/c")));
+    }
+
     #[test]
     fn bundle_carries_have_to_commit_and_never_writes_into_the_repo() {
         let d = temp("bundle");

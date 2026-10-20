@@ -24,14 +24,15 @@ pub const TOOL_MISSING: &str = "tool_missing";
 pub const PARALLEL_FULL: &str = "parallel_full";
 pub const EXCLUSIVE_RUNNING: &str = "exclusive_running";
 pub const WAITING_FOR_IDLE: &str = "waiting_for_idle";
-/// The node's policy says `network = "none"`, which nothing enforces yet
-/// (no per-job network wall until the runtime's guarded tier). Rather than
-/// run jobs with full network under a policy that says none, the node
-/// takes no jobs, and new `none` settings are refused.
+/// The node's policy says `network = "none"` but this node can't enforce
+/// it: no job wall (an older k2-node, or the wall isn't set up). Rather
+/// than run jobs with full network under a policy that says none, the
+/// node takes no jobs. A walled node (k2-node 0.46.3+: the `k2job` unit on
+/// Linux, the Seatbelt profile on macOS) enforces it and takes jobs.
 pub const NETWORK_NONE_NOT_ENFORCED: &str = "network_none_not_enforced_yet";
 /// The one sentence every side shows for [`NETWORK_NONE_NOT_ENFORCED`].
 pub const NETWORK_NONE_MESSAGE: &str =
-    "network = none isn't enforced on this node yet; it arrives with the runtime's guarded tier (0.46.3)";
+    "network = none isn't enforced on this node: it needs k2-node 0.46.3+ with the job wall (sudo k2-node setup)";
 
 /// Every code above, for docs and tests.
 pub const ALL_CODES: &[&str] = &[
@@ -71,8 +72,11 @@ pub struct NodeView<'a> {
     pub exclusive_running: bool,
     pub free_cpu_millis: u64,
     pub free_mem_bytes: u64,
-    /// The policy says `network = "none"` (not enforced yet: no jobs).
+    /// The policy says `network = "none"`.
     pub network_none: bool,
+    /// This node walls jobs off the network (k2-node 0.46.3+ with the job
+    /// wall). `network_none` without it takes no jobs.
+    pub network_none_enforced: bool,
 }
 
 /// What a job asks for.
@@ -112,7 +116,7 @@ pub fn node_refusal(v: &NodeView<'_>) -> Option<Refusal> {
     if let Some(r) = control_refusal(v.control) {
         return Some(r);
     }
-    if v.network_none {
+    if v.network_none && !v.network_none_enforced {
         return Some(Refusal::new(NETWORK_NONE_NOT_ENFORCED, NETWORK_NONE_MESSAGE));
     }
     if let Some(r) = availability_refusal(v.unavailable) {
@@ -191,6 +195,7 @@ pub fn offer_refusal(o: &Offer, running: u32, exclusive_running: bool, ask: &Job
         free_mem_bytes: o.free.mem_bytes,
         // The node puts this in `o.refusal` (checked above).
         network_none: false,
+        network_none_enforced: false,
     };
     refusal(&v, ask)
 }
@@ -219,6 +224,7 @@ mod tests {
             free_cpu_millis: 8000,
             free_mem_bytes: 16 << 30,
             network_none: false,
+            network_none_enforced: false,
         }
     }
 
@@ -252,11 +258,12 @@ mod tests {
         assert_eq!(code(refusal(&v, &ask())).as_deref(), Some(FOREIGN_LOCK));
     }
 
-    /// `network = "none"` isn't enforced, so a node set to it takes no
-    /// job (never full network under a policy that says none); only the
-    /// owner's own control refusals come first.
+    /// A node without a job wall can't enforce `network = "none"`, so it
+    /// takes no job (never full network under a policy that says none);
+    /// only the owner's own control refusals come first. Old nodes keep
+    /// this behaviour: their view never sets `network_none_enforced`.
     #[test]
-    fn network_none_refuses_every_job_until_enforced() {
+    fn network_none_refuses_every_job_on_an_unwalled_node() {
         let t = tools();
         let mut v = view(&t, &[], &[]);
         v.network_none = true;
@@ -268,6 +275,17 @@ mod tests {
         v.control = Control::Paused;
         assert_eq!(code(refusal(&v, &ask())).as_deref(), Some(LOCAL_PAUSED));
         assert!(ALL_CODES.contains(&NETWORK_NONE_NOT_ENFORCED));
+    }
+
+    /// A walled node enforces `network = "none"` and takes the job.
+    #[test]
+    fn network_none_takes_jobs_on_a_walled_node() {
+        let t = tools();
+        let mut v = view(&t, &[], &[]);
+        v.network_none = true;
+        v.network_none_enforced = true;
+        assert_eq!(refusal(&v, &ask()), None);
+        assert_eq!(node_refusal(&v), None);
     }
 
     #[test]

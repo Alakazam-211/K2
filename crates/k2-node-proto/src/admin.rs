@@ -198,6 +198,12 @@ pub const VERBS: &[VerbSpec] = &[
     VerbSpec { name: "jobs.kill", base: Class::Operate, min_level: Level::Policy, runs: Runs::Node },
     // `full`, owner-approved
     VerbSpec { name: "unit.restart", base: Class::Privileged, min_level: Level::Full, runs: Runs::Executor },
+    // Make people's home folders on the node private (chmod o-rwx): root
+    // on the human's files, so always the owner's own approval (0.46.3).
+    VerbSpec { name: "homes.private", base: Class::Privileged, min_level: Level::Full, runs: Runs::Executor },
+    // Linux: create the `k2job` user and turn the job wall on (what setup
+    // does at the machine), for nodes updated remotely (0.46.3).
+    VerbSpec { name: "wall.enable", base: Class::Privileged, min_level: Level::Full, runs: Runs::Executor },
 ];
 
 pub fn verb(name: &str) -> Option<&'static VerbSpec> {

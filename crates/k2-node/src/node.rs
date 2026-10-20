@@ -31,6 +31,7 @@ use crate::runner::{self, JobDirs, RssSampler};
 use crate::slots::{Lease, Slots};
 use crate::status::Status;
 use crate::sync::{valid_sha, Git};
+use crate::wall::Wall;
 
 /// The product version (build.rs reads the daemon's), not the crate's.
 pub const NODE_VERSION: &str = crate::PRODUCT_VERSION;
@@ -59,6 +60,10 @@ pub struct NodeOptions {
     pub admin_socket: PathBuf,
     /// Send health facts (node admin §10). Off in tests.
     pub health: bool,
+    /// The job wall to use; `None` = detect at start ([`detect_wall`]).
+    pub wall: Option<Wall>,
+    /// How often a job unit's state is read (Linux wall).
+    pub unit_poll: Duration,
 }
 
 impl NodeOptions {
@@ -82,7 +87,37 @@ impl NodeOptions {
             facts: None,
             admin_socket: crate::admin::config::default_socket(),
             health: true,
+            wall: None,
+            unit_poll: Duration::from_millis(300),
         }
+    }
+}
+
+/// How this node walls its jobs (module `wall`). `--dev` (the node runs as
+/// a person, its home under theirs) never walls. macOS: Seatbelt when
+/// `sandbox-exec` is there. Linux: the executor's job user when it says
+/// it's set up; an older executor or no `k2job` means no wall.
+pub async fn detect_wall(dev: bool, admin_socket: &Path) -> Wall {
+    if dev {
+        return Wall::None { why: "--dev: jobs run as the person running k2-node".into() };
+    }
+    if cfg!(target_os = "macos") {
+        return if crate::wall::seatbelt_available() {
+            Wall::Seatbelt
+        } else {
+            Wall::None { why: format!("{} is missing", crate::wall::SANDBOX_EXEC) }
+        };
+    }
+    let sock = admin_socket.to_path_buf();
+    let r = tokio::task::spawn_blocking(move || {
+        crate::admin::server::job_request(&sock, &crate::admin::jobs::JobOp::Ready, &[], Duration::from_secs(10))
+    })
+    .await;
+    match r {
+        Ok(Ok(crate::admin::jobs::JobAnswer::Ready { job_user })) => Wall::JobUser { user: job_user },
+        Ok(Ok(other)) => Wall::None { why: format!("the executor answered {other:?}") },
+        Ok(Err(e)) => Wall::None { why: format!("{}: {}", e.code, e.message) },
+        Err(e) => Wall::None { why: format!("wall check: {e}") },
     }
 }
 
@@ -105,6 +140,71 @@ pub fn machine_facts(layout: &Layout) -> MachineFacts {
         has_battery: crate::sysinfo::power().0,
         is_macos: cfg!(target_os = "macos"),
     }
+}
+
+/// A job's stdout or stderr, read by the journal pumps.
+type OutPipe = Box<dyn tokio::io::AsyncRead + Unpin + Send>;
+
+/// A running job: our child (no wall / Seatbelt) or a unit (Linux wall).
+enum Proc {
+    Local { child: tokio::process::Child, pgid: i32, leaf: Option<Leaf> },
+    Unit { unit: String, last: Option<crate::admin::jobs::UnitStatus> },
+}
+
+impl Proc {
+    /// The process group (0 for a unit: the executor signals it).
+    fn pgid(&self) -> i32 {
+        match self {
+            Proc::Local { pgid, .. } => *pgid,
+            Proc::Unit { .. } => 0,
+        }
+    }
+
+    fn needs_rss_sampler(&self) -> bool {
+        matches!(self, Proc::Local { leaf: None, .. })
+    }
+
+    /// Was anything in the job OOM-killed? (V24.) Read before the leaf or
+    /// the unit goes away.
+    fn oom(&self) -> bool {
+        match self {
+            Proc::Local { leaf: Some(l), .. } => std::fs::read_to_string(l.dir.join("memory.events"))
+                .map(|t| crate::admin::jobs::parse_oom_kills(&t) > 0)
+                .unwrap_or(false),
+            Proc::Local { leaf: None, .. } => false,
+            Proc::Unit { last, .. } => last.as_ref().is_some_and(|s| s.oom()),
+        }
+    }
+
+    fn cleanup(&self) {
+        if let Proc::Local { leaf: Some(l), .. } = self {
+            l.remove();
+        }
+    }
+}
+
+/// The `mem_cap` detail: the cap and how to ask for more.
+pub fn mem_cap_detail(cap: u64) -> String {
+    format!("the job used more than its memory cap ({} MiB) and was killed; ask for more with --mem", cap >> 20)
+}
+
+/// Linux wall, before a job: the dirs it writes get the node's group
+/// (`k2job` runs with it). A warm target the node filled before the wall
+/// is shared once (marker); the code checkout every time (it's fresh).
+fn prepare_for_job_user(target: &Path, caches: &[&Path], src: Option<&Path>) -> Result<(), String> {
+    crate::wall::group_dir(target)?;
+    let mark = target.join(crate::wall::SHARED_MARK);
+    if !mark.exists() {
+        crate::wall::share_with_jobs(target)?;
+        std::fs::write(&mark, "").map_err(|e| format!("write {}: {e}", mark.display()))?;
+    }
+    for c in caches {
+        crate::wall::group_dir(c)?;
+    }
+    if let Some(s) = src {
+        crate::wall::share_with_jobs(s)?;
+    }
+    Ok(())
 }
 
 /// Why a running job is being stopped.
@@ -216,6 +316,8 @@ pub struct Node {
     smoke: Mutex<SmokeLock>,
     pub tools: Mutex<BTreeMap<String, String>>,
     cgroups: Option<Cgroups>,
+    /// The job wall (fixed for the process; the installer restarts us).
+    pub wall: Wall,
     pub hub: Hub,
     /// Wakes the session's log shipper.
     pub ship: Notify,
@@ -267,8 +369,28 @@ impl Node {
             crate::nlog!("job {j} gen {g}: interrupted by a node reboot");
         }
         // Same boot, new process: the old process's jobs can't be re-adopted.
-        for (j, g, pgid) in ledger.interrupt_open("node_restart", opts.clock.as_ref())? {
+        let interrupted = ledger.interrupt_open("node_restart", opts.clock.as_ref())?;
+        let wall = match &opts.wall {
+            Some(w) => w.clone(),
+            None => detect_wall(opts.dev, &opts.admin_socket).await,
+        };
+        crate::nlog!("job wall: {}{}", wall.label(), match &wall {
+            Wall::None { why } => format!(" ({why})"),
+            Wall::JobUser { user } => format!(" (jobs run as {user})"),
+            Wall::Seatbelt => String::new(),
+        });
+        for (j, g, pgid) in interrupted {
             crate::nlog!("job {j} gen {g}: interrupted by a k2-node restart");
+            // Under the Linux wall the job lives in its own unit: stop it.
+            if matches!(wall, Wall::JobUser { .. }) {
+                if let Some(unit) = crate::admin::jobs::unit_name(&format!("{j}-g{g}")) {
+                    let sock = opts.admin_socket.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        crate::admin::server::job_request(&sock, &crate::admin::jobs::JobOp::Release { unit }, &[], Duration::from_secs(60))
+                    })
+                    .await;
+                }
+            }
             // The node user can only signal its own processes, so a reused
             // pgid can only be another k2node process; never our own group,
             // and never in --dev (there the user is a human).
@@ -301,6 +423,7 @@ impl Node {
             smoke: Mutex::new(SmokeLock::default()),
             tools: Mutex::new(BTreeMap::new()),
             cgroups,
+            wall,
             hub: Hub::new(),
             ship: Notify::new(),
             offer_changed: Notify::new(),
@@ -323,7 +446,9 @@ impl Node {
             s.version = NODE_VERSION.to_string();
             s.protocol = PROTOCOL;
             s.node_fp = node.key.fingerprint();
-            s.caps_hard = node.cgroups.is_some();
+            s.caps_hard = node.caps_hard();
+            s.wall = node.wall.label().to_string();
+            s.network_none = node.wall.network_none();
             s.since = crate::util::now();
             s.notes = vec!["idle-based availability is not built yet; idle modes act like always / plugged_in".into()];
         }
@@ -334,6 +459,85 @@ impl Node {
     pub fn layout(&self) -> &Layout {
         &self.opts.layout
     }
+
+    /// Hard caps: a delegated cgroup leaf, or the job unit's `MemoryMax`.
+    pub fn caps_hard(&self) -> bool {
+        self.cgroups.is_some() || matches!(self.wall, Wall::JobUser { .. })
+    }
+
+    /// The offer's features: the build's plus what the wall gives.
+    pub fn features(&self) -> Vec<String> {
+        let mut f = node_features();
+        if self.wall.is_walled() {
+            f.push(k2_node_proto::frames::FEATURE_JOB_WALL.to_string());
+        }
+        if self.wall.network_none() {
+            f.push(k2_node_proto::frames::FEATURE_NETWORK_NONE.to_string());
+        }
+        f
+    }
+
+    /// What a Seatbelt profile closes (macOS): the node's own state, the
+    /// executor's, the owner's config, people's homes and the keychains.
+    pub fn seatbelt_deny(&self) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let l = self.layout();
+        let dirs = vec![
+            l.state(),
+            l.run(),
+            l.config.clone(),
+            crate::admin::config::default_state_dir(),
+            crate::wall::homes_root().to_path_buf(),
+            PathBuf::from("/Library/Keychains"),
+            PathBuf::from("/private/var/root"),
+        ];
+        (dirs, vec![self.opts.admin_socket.clone()])
+    }
+
+    /// One job-wall op on the executor (Linux), off the async runtime.
+    pub async fn job_op(&self, op: crate::admin::jobs::JobOp, fds: Vec<std::os::fd::OwnedFd>, timeout: Duration) -> Result<crate::admin::jobs::JobAnswer, String> {
+        let sock = self.opts.admin_socket.clone();
+        tokio::task::spawn_blocking(move || {
+            use std::os::fd::AsRawFd;
+            let raw: Vec<i32> = fds.iter().map(|f| f.as_raw_fd()).collect();
+            let r = crate::admin::server::job_request(&sock, &op, &raw, timeout);
+            drop(fds);
+            r
+        })
+        .await
+        .map_err(|e| format!("executor call: {e}"))?
+        .map_err(|e| format!("{}: {}", e.code, e.message))
+    }
+
+    async fn unit_status(&self, unit: &str) -> Option<crate::admin::jobs::UnitStatus> {
+        match self.job_op(crate::admin::jobs::JobOp::Status { unit: unit.to_string() }, vec![], Duration::from_secs(30)).await {
+            Ok(crate::admin::jobs::JobAnswer::Status(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Poll a job unit until its command is over.
+    async fn unit_wait_end(&self, unit: &str) -> crate::admin::jobs::UnitStatus {
+        loop {
+            if let Some(s) = self.unit_status(unit).await {
+                if s.ended() {
+                    return s;
+                }
+            }
+            tokio::time::sleep(self.opts.unit_poll).await;
+        }
+    }
+
+    /// Linux wall: have the executor give a job-written tree back to the
+    /// node user (blocking; admin `gc` and the slot sweep). No-op otherwise.
+    pub fn reclaim_blocking(&self, p: &Path) {
+        if matches!(self.wall, Wall::JobUser { .. }) && p.exists() {
+            let op = crate::admin::jobs::JobOp::Reclaim { path: p.to_path_buf() };
+            if let Err(e) = crate::admin::server::job_request(&self.opts.admin_socket, &op, &[], Duration::from_secs(600)) {
+                crate::nlog!("reclaim {}: {}: {}", p.display(), e.code, e.message);
+            }
+        }
+    }
+
 
     pub fn now(&self) -> i64 {
         self.opts.clock.now()
@@ -493,6 +697,7 @@ impl Node {
                     continue;
                 }
                 let bytes = du(&e.path());
+                self.reclaim_blocking(&e.path());
                 if std::fs::remove_dir_all(e.path()).is_ok() {
                     slots.forget(&project.path(), n);
                     out.push((e.path(), bytes));
@@ -539,6 +744,7 @@ impl Node {
             free_cpu_millis: cap_cpu.saturating_sub(used_cpu),
             free_mem_bytes: free_mem,
             network_none: l.policy.network == "none",
+            network_none_enforced: self.wall.network_none(),
         };
         let node_refusal = refusal::node_refusal(&view);
         let pin = self.pin.lock().unwrap().clone();
@@ -558,7 +764,7 @@ impl Node {
             control_by: l.control.by.clone(),
             control_at: l.control.at,
             availability: Availability { ok: l.unavailable.is_empty(), reasons: l.unavailable.clone() },
-            caps: Caps { cpu_millis: cap_cpu, mem_bytes: cap_mem, disk_budget_bytes: l.policy.disk_budget_bytes, hard: self.cgroups.is_some() },
+            caps: Caps { cpu_millis: cap_cpu, mem_bytes: cap_mem, disk_budget_bytes: l.policy.disk_budget_bytes, hard: self.caps_hard() },
             free: Free { cpu_millis: cap_cpu.saturating_sub(used_cpu), mem_bytes: free_mem, disk_free_bytes: disk_free },
             slots: self.slots.lock().unwrap().list(&self.layout().cache()),
             running,
@@ -570,7 +776,7 @@ impl Node {
             boot_id: self.opts.clock.boot_id(),
             ledger_id,
             node_version: NODE_VERSION.to_string(),
-            features: node_features(),
+            features: self.features(),
         };
         let mut last = self.last_offer.lock().unwrap();
         let same = last.as_ref().is_some_and(|p| {
@@ -694,6 +900,7 @@ impl Node {
             free_cpu_millis: cap_cpu.saturating_sub(used_cpu),
             free_mem_bytes: cap_mem.saturating_sub(used_mem),
             network_none: l.policy.network == "none",
+            network_none_enforced: self.wall.network_none(),
         };
         let ask = JobAsk {
             workspace_id: &a.plan.workspace_id,
@@ -923,7 +1130,8 @@ impl Node {
         let job = a.fence.job_id.clone();
         let gen = a.fence.generation;
         let dirs = JobDirs::new(self.layout().job_dir(&job, gen));
-        let mut journal = match dirs.create().and_then(|_| JournalWriter::create(&dirs.log, a.plan.limits.log_cap_bytes)) {
+        let unit_mode = matches!(self.wall, Wall::JobUser { .. });
+        let mut journal = match dirs.create_for(unit_mode).and_then(|_| JournalWriter::create(&dirs.log, a.plan.limits.log_cap_bytes)) {
             Ok(j) => j,
             Err(e) => {
                 self.finish_job(&a, None, JobState::Failed, Some("job_dir_failed"), Some(&e), None, None, None, None, None).await;
@@ -982,13 +1190,36 @@ impl Node {
         };
         let target = lease.as_ref().map(|l| l.dir.clone()).unwrap_or_else(|| dirs.private_target.clone());
         let _ = std::fs::create_dir_all(&target);
+        // Warm caches by the project key (the controller's hash of its own
+        // workspace id and remote; never a name the submitter picks), or
+        // the job's own dir when there's no code.
+        let cache_dir = match &a.plan.src {
+            Some(s) => self.layout().project_cache(&s.project_key),
+            None => dirs.private_cache(),
+        };
+        let (sccache, cargo_home) = runner::cache_paths(&cache_dir);
+        for d in [&sccache, &cargo_home] {
+            let _ = std::fs::create_dir_all(d);
+        }
+        if unit_mode {
+            // The job (k2job, the node's group) writes these.
+            let prep = (target.clone(), sccache.clone(), cargo_home.clone(), a.plan.src.is_some().then(|| dirs.src.clone()));
+            let r = tokio::task::spawn_blocking(move || prepare_for_job_user(&prep.0, &[&prep.1, &prep.2], prep.3.as_deref())).await;
+            if let Ok(Err(e)) | Err(e) = r.map_err(|e| e.to_string()) {
+                sys(&mut journal, &format!("preparing the job's folders: {e}"));
+            }
+        }
         let env = match runner::job_env(&runner::EnvInputs {
             node_home: &self.layout().home,
             job_home: &dirs.home,
             job_tmp: &dirs.tmp,
             target_dir: &target,
+            cache_dir: &cache_dir,
             job_id: &job,
-            user: &self.opts.user,
+            user: match &self.wall {
+                Wall::JobUser { user } => user,
+                _ => &self.opts.user,
+            },
             extra: &a.plan.env,
             tool_paths: &resolved.path_prepend,
             tool_env: &resolved.env,
@@ -1005,28 +1236,27 @@ impl Node {
             return;
         }
 
-        // Leaf + smoke lock + spawn.
-        let leaf: Option<Leaf> = self.cgroups.as_ref().and_then(|cg| {
-            cg.create_leaf(&format!("{job}-g{gen}"), a.plan.limits.cpu_millis, a.plan.limits.mem_bytes)
-                .map_err(|e| crate::nlog!("cgroup leaf for {job}: {e}"))
-                .ok()
-        });
+        // Smoke lock + spawn, behind the wall.
+        let network_none = self.local.lock().unwrap().policy.network == "none";
+        let mem_limit = a.plan.limits.mem_bytes.unwrap_or_else(|| self.local.lock().unwrap().policy.mem_cap_bytes);
         self.take_smoke_lock(&job);
-        let spawned = match runner::spawn(&a.plan.argv, &env, &cwd, leaf.as_ref()) {
+        let started = if unit_mode {
+            self.start_unit(&a, &dirs, &cwd, &env, vec![target.clone(), sccache.clone(), cargo_home.clone()], network_none, mem_limit).await
+        } else {
+            self.start_local(&a, &cwd, &env, network_none)
+        };
+        let (mut proc, out_pipe, err_pipe) = match started {
             Ok(s) => s,
             Err(e) => {
-                if let Some(l) = &leaf {
-                    l.remove();
-                }
                 sys(&mut journal, &e);
                 self.finish_job(&a, Some(&dirs), JobState::Failed, Some("spawn_failed"), Some(&e), src_ran, None, Some(journal), lease, None).await;
                 return;
             }
         };
-        let runner::Spawned { mut child, pgid } = spawned;
+        let pgid = proc.pgid();
         {
             let l = self.ledger.lock().unwrap();
-            let _ = l.set_running(&job, gen, pgid as u32, src_ran.as_ref(), self.now());
+            let _ = l.set_running(&job, gen, pgid.max(0) as u32, src_ran.as_ref(), self.now());
         }
         self.ship.notify_one();
 
@@ -1036,10 +1266,7 @@ impl Node {
         let t0 = std::time::Instant::now();
         let last_out = Arc::new(AtomicU64::new(0));
         let mut pumps = Vec::new();
-        for (pipe, stream) in [
-            (child.stdout.take().map(|p| Box::new(p) as Box<dyn tokio::io::AsyncRead + Unpin + Send>), k2_node_proto::frames::LogStream::Out),
-            (child.stderr.take().map(|p| Box::new(p) as Box<dyn tokio::io::AsyncRead + Unpin + Send>), k2_node_proto::frames::LogStream::Err),
-        ] {
+        for (pipe, stream) in [(out_pipe, k2_node_proto::frames::LogStream::Out), (err_pipe, k2_node_proto::frames::LogStream::Err)] {
             if let Some(mut pipe) = pipe {
                 let j = journal.clone();
                 let node = self.clone();
@@ -1063,11 +1290,9 @@ impl Node {
 
         // Wait: exit, stop, timeout, memory.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(a.plan.limits.max_secs.max(1));
-        let mem_cap = if leaf.is_none() {
-            Some(a.plan.limits.mem_bytes.unwrap_or_else(|| self.local.lock().unwrap().policy.mem_cap_bytes))
-        } else {
-            None
-        };
+        // Only a plain process without a cgroup leaf needs the RSS sampler
+        // (macOS); a leaf or a job unit has a hard `memory.max`.
+        let mem_cap = proc.needs_rss_sampler().then_some(mem_limit);
         let mut rss_tick = tokio::time::interval(self.opts.rss_every);
         rss_tick.tick().await;
         // Stall watch: no output for `stall_secs` ends the job (a hung test
@@ -1079,7 +1304,7 @@ impl Node {
         let mut status = None;
         loop {
             tokio::select! {
-                s = child.wait() => { status = s.ok(); break; }
+                s = self.proc_wait(&mut proc) => { status = s; break; }
                 r = stop.changed() => {
                     if r.is_ok() {
                         if let Some(s) = stop.borrow().clone() { ended_by = Some(s); break; }
@@ -1113,12 +1338,15 @@ impl Node {
                 let mut j = journal.lock().unwrap();
                 let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] stopping job: {}\n", s.reason).as_bytes());
             }
-            runner::stop_group(&mut child, pgid, leaf.as_ref(), self.opts.cancel_grace).await;
-            status = child.wait().await.ok();
+            self.proc_stop(&mut proc).await;
+            status = self.proc_after_stop(&mut proc).await;
         }
         let _ = self.ledger.lock().unwrap().set_state(&job, gen, JobState::Finishing, None, None);
         self.ship.notify_one();
-        runner::reap_group(pgid, leaf.as_ref());
+        // V24: an OOM kill is `mem_cap` on every platform (the leaf's or
+        // the unit's `memory.events`, or the unit's `oom-kill` result).
+        let oom = proc.oom();
+        self.proc_reap(&mut proc).await;
         for mut p in pumps {
             if tokio::time::timeout(Duration::from_secs(2), &mut p).await.is_err() {
                 // Something outside the group still holds the pipe.
@@ -1126,18 +1354,19 @@ impl Node {
                 let _ = p.await;
             }
         }
-        if let Some(l) = &leaf {
-            l.remove();
-        }
-        let exit = status.map(|s| {
-            use std::os::unix::process::ExitStatusExt;
-            ExitInfo { code: s.code(), signal: s.signal() }
-        });
+        proc.cleanup();
+        let exit = status;
         let mut journal = Arc::try_unwrap(journal).ok().map(|m| m.into_inner().unwrap_or_else(|e| e.into_inner()));
         let (state, reason) = match ended_by {
             Some(s) => (s.state, Some(s.reason)),
+            None if oom => (JobState::Failed, Some("mem_cap".to_string())),
             None => (JobState::Done, None),
         };
+        if reason.as_deref() == Some("mem_cap") {
+            if let Some(j) = journal.as_mut() {
+                let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {}\n", mem_cap_detail(mem_limit)).as_bytes());
+            }
+        }
         // Artifacts and test results: after the command (and its group)
         // are gone, before the warm slot goes back to the pool.
         let outputs = if a.plan.artifacts.is_empty() {
@@ -1164,8 +1393,128 @@ impl Node {
             }
             o
         };
-        let detail = (reason.as_deref() == Some("stalled")).then(|| format!("no output for {}s", a.plan.stall_secs.unwrap_or(0)));
+        let detail = match reason.as_deref() {
+            Some("stalled") => Some(format!("no output for {}s", a.plan.stall_secs.unwrap_or(0))),
+            Some("mem_cap") => Some(mem_cap_detail(mem_limit)),
+            _ => None,
+        };
         self.finish_job(&a, Some(&dirs), state, reason.as_deref(), detail.as_deref(), src_ran, exit, journal, lease, outputs).await;
+    }
+
+    /// A plain child process (no wall, or the Seatbelt profile around it).
+    fn start_local(&self, a: &Assign, cwd: &Path, env: &[(String, String)], network_none: bool) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>), String> {
+        if network_none && !self.wall.network_none() {
+            return Err(refusal::NETWORK_NONE_MESSAGE.to_string());
+        }
+        let key = format!("{}-g{}", a.fence.job_id, a.fence.generation);
+        let leaf: Option<Leaf> = self.cgroups.as_ref().and_then(|cg| {
+            cg.create_leaf(&key, a.plan.limits.cpu_millis, a.plan.limits.mem_bytes).map_err(|e| crate::nlog!("cgroup leaf for {key}: {e}")).ok()
+        });
+        let argv = match &self.wall {
+            Wall::Seatbelt => {
+                let (dirs, sockets) = self.seatbelt_deny();
+                crate::wall::seatbelt_argv(&crate::wall::seatbelt_profile(&dirs, &sockets, network_none), &a.plan.argv)
+            }
+            _ => a.plan.argv.clone(),
+        };
+        match runner::spawn(&argv, env, cwd, leaf.as_ref()) {
+            Ok(runner::Spawned { mut child, pgid }) => {
+                let out = child.stdout.take().map(|p| Box::new(p) as OutPipe);
+                let err = child.stderr.take().map(|p| Box::new(p) as OutPipe);
+                Ok((Proc::Local { child, pgid, leaf }, out, err))
+            }
+            Err(e) => {
+                if let Some(l) = &leaf {
+                    l.remove();
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Linux wall: the executor starts the job as the job user in its own
+    /// unit; we keep the read ends of its stdout/stderr pipes.
+    #[allow(clippy::too_many_arguments)]
+    async fn start_unit(
+        &self,
+        a: &Assign,
+        dirs: &JobDirs,
+        cwd: &Path,
+        env: &[(String, String)],
+        rw: Vec<PathBuf>,
+        network_none: bool,
+        mem_limit: u64,
+    ) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>), String> {
+        use crate::admin::jobs::{JobAnswer, JobOp, JobStart};
+        let key = format!("{}-g{}", a.fence.job_id, a.fence.generation);
+        crate::wall::write_exec_spec(&dirs.root, &crate::wall::ExecSpec { argv: a.plan.argv.clone(), env: env.to_vec(), cwd: cwd.to_path_buf() })?;
+        let (out_r, out_w) = std::io::pipe().map_err(|e| format!("pipe: {e}"))?;
+        let (err_r, err_w) = std::io::pipe().map_err(|e| format!("pipe: {e}"))?;
+        let start = JobStart {
+            key,
+            root: dirs.root.clone(),
+            rw,
+            network_none,
+            mem_bytes: Some(mem_limit),
+            cpu_millis: a.plan.limits.cpu_millis,
+            stop_grace_secs: self.opts.cancel_grace.as_secs().max(1),
+        };
+        // The write ends go to root (and the unit); ours close with the call.
+        let ans = self.job_op(JobOp::Start(start), vec![out_w.into(), err_w.into()], Duration::from_secs(60)).await;
+        let unit = match ans {
+            Ok(JobAnswer::Started { unit }) => unit,
+            Ok(JobAnswer::Refused(r)) => return Err(format!("the job wall refused to start it: {}: {}", r.code, r.message)),
+            Ok(other) => return Err(format!("unexpected executor answer: {other:?}")),
+            Err(e) => return Err(format!("couldn't start the job unit: {e}")),
+        };
+        let rx = |r: std::io::PipeReader| -> Option<OutPipe> {
+            tokio::net::unix::pipe::Receiver::from_owned_fd(std::os::fd::OwnedFd::from(r)).ok().map(|p| Box::new(p) as OutPipe)
+        };
+        Ok((Proc::Unit { unit, last: None }, rx(out_r), rx(err_r)))
+    }
+
+    /// The command ended: its exit (code or signal).
+    async fn proc_wait(&self, p: &mut Proc) -> Option<ExitInfo> {
+        match p {
+            Proc::Local { child, .. } => child.wait().await.ok().map(|s| {
+                use std::os::unix::process::ExitStatusExt;
+                ExitInfo { code: s.code(), signal: s.signal() }
+            }),
+            Proc::Unit { unit, last } => {
+                let s = self.unit_wait_end(unit).await;
+                let e = s.exit().map(|(code, signal)| ExitInfo { code, signal });
+                *last = Some(s);
+                e
+            }
+        }
+    }
+
+    /// SIGTERM everything, SIGKILL after the grace period.
+    async fn proc_stop(&self, p: &mut Proc) {
+        match p {
+            Proc::Local { child, pgid, leaf } => runner::stop_group(child, *pgid, leaf.as_ref(), self.opts.cancel_grace).await,
+            Proc::Unit { unit, .. } => {
+                let _ = self.job_op(crate::admin::jobs::JobOp::Stop { unit: unit.clone() }, vec![], Duration::from_secs(30)).await;
+            }
+        }
+    }
+
+    /// The exit after a stop (bounded: a unit we can't read ends anyway).
+    async fn proc_after_stop(&self, p: &mut Proc) -> Option<ExitInfo> {
+        let cap = self.opts.cancel_grace + Duration::from_secs(30);
+        tokio::time::timeout(cap, self.proc_wait(p)).await.ok().flatten()
+    }
+
+    /// After the command: nothing it started may live on.
+    async fn proc_reap(&self, p: &mut Proc) {
+        match p {
+            Proc::Local { pgid, leaf, .. } => runner::reap_group(*pgid, leaf.as_ref()),
+            Proc::Unit { unit, .. } => {
+                if let Err(e) = self.job_op(crate::admin::jobs::JobOp::Release { unit: unit.clone() }, vec![], Duration::from_secs(120)).await {
+                    crate::nlog!("release {unit}: {e}");
+                }
+            }
+        }
     }
 
     /// The job's toolchains. `Err((state, reason, detail))` ends the job.
@@ -1414,6 +1763,10 @@ impl Node {
             };
             let _ = ended;
             let dir = self.layout().job_dir(&r.job_id, r.generation);
+            if matches!(self.wall, Wall::JobUser { .. }) && dir.exists() {
+                // The job user's files come back to us before git and rm.
+                let _ = self.job_op(crate::admin::jobs::JobOp::Reclaim { path: dir.clone() }, vec![], Duration::from_secs(600)).await;
+            }
             if let (Some(g), Some(src)) = (&git, &r.plan.src) {
                 g.worktree_remove(&self.layout().mirror(&src.project_key), &dir.join("src")).await;
             }
@@ -1498,4 +1851,66 @@ fn du(p: &Path) -> u64 {
 
 pub fn journal_path(layout: &Layout, job_id: &str, generation: u32) -> PathBuf {
     layout.job_dir(job_id, generation).join("log")
+}
+
+#[cfg(test)]
+mod wall_tests {
+    use super::*;
+
+    /// V24 on an unwalled Linux node: the job's delegated cgroup leaf
+    /// counts an OOM kill in `memory.events`, and that's `mem_cap`.
+    #[tokio::test]
+    async fn a_leaf_oom_kill_reads_as_oom() {
+        let root = crate::util::temp_dir("leaf-oom");
+        let unit = root.join("system.slice/k2-node.service");
+        std::fs::create_dir_all(&unit).unwrap();
+        std::fs::write(unit.join("cgroup.subtree_control"), "").unwrap();
+        let cg = Cgroups::setup(&root, "/system.slice/k2-node.service", 1).unwrap();
+        let leaf = cg.create_leaf("j-g1", None, Some(1 << 20)).unwrap();
+        let child = tokio::process::Command::new("/usr/bin/true").spawn().unwrap();
+        std::fs::write(leaf.dir.join("memory.events"), "low 0\nhigh 0\nmax 3\noom 1\noom_kill 0\n").unwrap();
+        let p = Proc::Local { child, pgid: 0, leaf: Some(leaf) };
+        assert!(!p.oom(), "oom without a kill isn't a kill");
+        let Proc::Local { leaf: Some(l), .. } = &p else { unreachable!() };
+        std::fs::write(l.dir.join("memory.events"), "low 0\nhigh 0\nmax 9\noom 2\noom_kill 1\n").unwrap();
+        assert!(p.oom());
+        assert!(!p.needs_rss_sampler(), "a leaf has a hard memory.max");
+        let unit = Proc::Unit {
+            unit: "k2job-j-g1.service".into(),
+            last: Some(crate::admin::jobs::parse_show("LoadState=loaded\nActiveState=failed\nResult=oom-kill\n")),
+        };
+        assert!(unit.oom() && unit.pgid() == 0 && !unit.needs_rss_sampler());
+        assert!(mem_cap_detail(64 << 20).contains("64 MiB") && mem_cap_detail(64 << 20).contains("--mem"));
+    }
+
+    /// The offer says what the wall gives; an unwalled node says nothing.
+    #[tokio::test]
+    async fn features_follow_the_wall() {
+        for (wall, job_wall, net) in [
+            (Wall::None { why: "t".into() }, false, false),
+            (Wall::Seatbelt, true, true),
+            (Wall::JobUser { user: "k2job".into() }, true, true),
+        ] {
+            let d = crate::util::temp_dir("feat");
+            let mut o = NodeOptions::new(Layout::new(d.join("home"), d.join("cfg")));
+            o.dev = true;
+            o.health = false;
+            o.keep_awake = false;
+            o.use_cgroups = false;
+            o.wall = Some(wall.clone());
+            let n = Node::open(o).await.unwrap();
+            let f = n.features();
+            assert_eq!(f.iter().any(|x| x == k2_node_proto::frames::FEATURE_JOB_WALL), job_wall, "{wall:?}");
+            assert_eq!(f.iter().any(|x| x == k2_node_proto::frames::FEATURE_NETWORK_NONE), net, "{wall:?}");
+            assert_eq!(n.caps_hard(), matches!(wall, Wall::JobUser { .. }), "only the unit (or a leaf) is a hard cap");
+            let s = crate::status::read(&n.layout().status()).unwrap();
+            assert_eq!((s.wall.as_str(), s.network_none), (wall.label(), net));
+        }
+    }
+
+    #[tokio::test]
+    async fn dev_mode_never_walls() {
+        let w = detect_wall(true, Path::new("/nonexistent.sock")).await;
+        assert!(matches!(w, Wall::None { .. }), "{w:?}");
+    }
 }

@@ -25,6 +25,13 @@ pub struct Status {
     pub holding_lock: Option<String>,
     pub stale_locks: Vec<String>,
     pub caps_hard: bool,
+    /// The job wall: `job_user` | `seatbelt` | `none` (0.46.3).
+    #[serde(default)]
+    pub wall: String,
+    /// The node enforces `network = "none"` (the machine's K2 lets the
+    /// owner set it only then).
+    #[serde(default)]
+    pub network_none: bool,
     /// Shown while pending.
     pub sas: Option<String>,
     pub notes: Vec<String>,

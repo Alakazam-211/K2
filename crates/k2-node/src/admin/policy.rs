@@ -94,13 +94,27 @@ fn edit(l: &Layout, args: &Value, m: &MachineFacts) -> Result<Edit, AdminRefusal
     let new_text = toml::to_string(&table).map_err(|e| bad(format!("encode: {e}")))?;
     let new_file: PolicyFile = toml::from_str(&new_text).map_err(|e| bad(format!("policy not valid: {e}")))?;
     let new = Policy::resolve(&new_file, m).map_err(bad)?;
-    // Nothing enforces `network = "none"` yet: refuse to set it rather
-    // than let the policy claim a wall jobs don't have.
-    if changes.get("network").and_then(Value::as_str) == Some("none") {
+    // Without the job wall nothing enforces `network = "none"`: refuse it
+    // rather than let the policy claim a wall jobs don't have.
+    if changes.get("network").and_then(Value::as_str) == Some("none") && !network_none_ok(l) {
         use k2_node_proto::refusal::{NETWORK_NONE_MESSAGE, NETWORK_NONE_NOT_ENFORCED};
         return Err(AdminRefusal::new(NETWORK_NONE_NOT_ENFORCED, NETWORK_NONE_MESSAGE));
     }
     Ok(Edit { table, old, new })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests pin the answer (the real one depends on the machine).
+    pub static NETWORK_NONE_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+fn network_none_ok(l: &Layout) -> bool {
+    #[cfg(test)]
+    if let Some(v) = NETWORK_NONE_OVERRIDE.with(|c| c.get()) {
+        return v;
+    }
+    crate::wall::network_none_supported(&l.config)
 }
 
 fn avail_rank(a: &AvailabilityMode) -> u8 {
@@ -283,23 +297,36 @@ mod tests {
         assert_eq!(class(&l, &m, json!({"workspaces": null})), Class::Privileged);
     }
 
-    /// `network = "none"` isn't enforced yet: policy.set refuses it with
-    /// the stable code and leaves the file alone. A node whose file
-    /// already says none (hand-edited) may still go back to full, and
-    /// that counts as a widening.
+    /// Without the job wall `network = "none"` isn't enforced: policy.set
+    /// refuses it with the stable code and leaves the file alone. A node
+    /// whose file already says none (hand-edited) may still go back to
+    /// full, and that counts as a widening.
     #[test]
-    fn network_none_is_refused_until_enforced() {
+    fn network_none_is_refused_without_the_wall() {
+        NETWORK_NONE_OVERRIDE.with(|c| c.set(Some(false)));
         let (l, m) = rig();
         apply_set_with(&l, &json!({"mem_cap_gb": 6}), &m).unwrap();
         let before = std::fs::read_to_string(l.policy()).unwrap();
         let e = apply_set_with(&l, &json!({"network": "none"}), &m).unwrap_err();
         assert_eq!(e.code, "network_none_not_enforced_yet");
-        assert!(e.message.contains("isn't enforced on this node yet"), "{}", e.message);
+        assert!(e.message.contains("isn't enforced on this node"), "{}", e.message);
         assert!(classify_set(&l, &json!({"network": "none"})).is_err());
         assert_eq!(std::fs::read_to_string(l.policy()).unwrap(), before);
         std::fs::write(l.policy(), "network = \"none\"\n").unwrap();
         assert_eq!(class(&l, &m, json!({"network": "full"})), Class::Privileged);
         assert_eq!(class(&l, &m, json!({"mem_cap_gb": 6})), Class::Operate, "other edits still work on a none file");
+    }
+
+    /// A walled node takes `network = "none"`; full → none narrows (the
+    /// owner's approval isn't needed), none → full widens.
+    #[test]
+    fn network_none_is_a_narrowing_on_a_walled_node() {
+        NETWORK_NONE_OVERRIDE.with(|c| c.set(Some(true)));
+        let (l, m) = rig();
+        assert_eq!(class(&l, &m, json!({"network": "none"})), Class::Operate);
+        apply_set_with(&l, &json!({"network": "none"}), &m).unwrap();
+        assert_eq!(config::read_policy_file(&l.policy()).unwrap().network.as_deref(), Some("none"));
+        assert_eq!(class(&l, &m, json!({"network": "full"})), Class::Privileged);
     }
 
     #[test]

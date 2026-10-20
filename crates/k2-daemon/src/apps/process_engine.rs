@@ -161,6 +161,24 @@ fn signal_group(pid: i32, sig: i32) {
     }
 }
 
+/// The signal that ended one of our own children (`None`: still running,
+/// not ours, exited with a code, or not Unix). For the crash record; the
+/// exit code comes from `liveness`.
+pub fn exit_signal(deployment_id: &str) -> Option<i32> {
+    let mut c = children().lock().unwrap_or_else(|e| e.into_inner());
+    let st = c.get_mut(deployment_id)?.child.as_mut()?.try_wait().ok()??;
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        st.signal()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = st;
+        None
+    }
+}
+
 impl ProcessEngine {
     /// Reap our own child when it exited; `Some(code)` once it has.
     fn reap(&self, deployment_id: &str) -> Option<Option<i32>> {

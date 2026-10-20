@@ -450,12 +450,55 @@ pub fn begin(app: &AppRow, seed: &str, kind: &str, actor: &str, reason: Option<&
     Ok(dep)
 }
 
+/// How a running (or starting) instance ended.
+#[derive(Debug, Clone, Copy, Default)]
+struct Exit {
+    exited: bool,
+    code: Option<i32>,
+    signal: Option<i32>,
+}
+
+impl Exit {
+    /// Read before the instance is stopped (the signal is only known while
+    /// the engine still holds the child).
+    fn of(h: &RunHandle) -> Exit {
+        match engine_of(h).liveness(h) {
+            Liveness::Exited(code) => Exit { exited: true, code, signal: super::process_engine::exit_signal(&h.deployment_id) },
+            _ => Exit::default(),
+        }
+    }
+}
+
 fn pipeline_fail(app_id: &str, dep: &str, code: &str, msg: &str) {
+    pipeline_fail_exit(app_id, dep, code, msg, Exit::default());
+}
+
+fn pipeline_fail_exit(app_id: &str, dep: &str, code: &str, msg: &str, exit: Exit) {
     let _ = db(|c| store::set_result(c, dep, store::RESULT_FAILED, Some(&format!("{code}: {msg}"))));
     audit(app_id, "failed", "system", json!({ "deployment": dep, "code": code, "error": msg }));
     let no_live = with_rt(app_id, |rt| rt.live.is_none());
     if no_live {
         let _ = db(|c| store::set_state(c, app_id, store::STATE_FAILED, Some(msg)));
+    }
+    // The failure history, and the App's agent hears (0.46.3). A crash
+    // restart's own failure is a crash: `restart_outcome` records it.
+    if code == codes::APP_NOT_FOUND {
+        return;
+    }
+    if let Ok(Some(d)) = db(|c| store::get_deployment(c, dep)) {
+        if d.kind == store::KIND_RESTART && d.actor == "system" {
+            return;
+        }
+        super::failures::deploy_failed(&super::failures::DeployFail {
+            app_id,
+            deployment: dep,
+            deploy_kind: &d.kind,
+            actor: &d.actor,
+            code,
+            reason: msg,
+            exit_code: exit.code,
+            signal: exit.signal,
+        });
     }
 }
 
@@ -597,8 +640,9 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
         || !matches!(eng.liveness(&h), Liveness::Exited(_)),
     );
     if let Err(g) = healthy {
+        let exit = Exit::of(&h);
         let _ = eng.stop(&h, Duration::from_secs(2));
-        return pipeline_fail(app_id, dep, g.code, &g.message);
+        return pipeline_fail_exit(app_id, dep, g.code, &g.message, exit);
     }
     let inst = Instance {
         handle: h,
@@ -703,7 +747,8 @@ fn tick_app(app_id: &str, t: &Timings) {
         }
         return;
     };
-    let exited = matches!(engine_of(&live.handle).liveness(&live.handle), Liveness::Exited(_));
+    let exit = Exit::of(&live.handle);
+    let exited = exit.exited;
     // Health: every second in the watch window, every live_probe_secs after.
     let every = if watch.is_some() { Duration::from_secs(1) } else { Duration::from_secs(t.live_probe_secs.max(1)) };
     let due = t.live_probe_secs > 0 || watch.is_some();
@@ -726,10 +771,10 @@ fn tick_app(app_id: &str, t: &Timings) {
         let why = if exited { "exited" } else { "failed its health checks" };
         if let Some(w) = watch {
             if let Some(prev) = warm.filter(|p| !matches!(engine_of(&p.handle).liveness(&p.handle), Liveness::Exited(_))) {
-                return auto_rollback(app_id, &w, live, prev, why, t);
+                return auto_rollback(app_id, &w, live, prev, why, exit, t);
             }
         }
-        return crashed(app_id, live, why, t);
+        return crashed(app_id, live, why, exit, t);
     }
     if let Some(w) = watch {
         if Instant::now() >= w.until {
@@ -745,7 +790,7 @@ fn tick_app(app_id: &str, t: &Timings) {
     }
 }
 
-fn auto_rollback(app_id: &str, w: &Watch, bad: Instance, prev: Instance, why: &str, t: &Timings) {
+fn auto_rollback(app_id: &str, w: &Watch, bad: Instance, prev: Instance, why: &str, exit: Exit, t: &Timings) {
     let (_, bad_be) = router::switch(app_id, prev.handle.port);
     with_rt(app_id, |rt| {
         rt.live = Some(prev.clone());
@@ -775,6 +820,7 @@ fn auto_rollback(app_id: &str, w: &Watch, bad: Instance, prev: Instance, why: &s
         Ok(id)
     });
     audit(app_id, "auto_rollback", "system", json!({ "deployment": row.as_ref().ok(), "from": bad.seed, "to": prev.seed, "why": why }));
+    super::failures::rolled_back(app_id, &w.deployment_id, exit.exited, exit.code, exit.signal);
     super::surfaces::emit_deployed(app_id);
     if let Some(be) = bad_be {
         let d = bad.drain_secs;
@@ -797,9 +843,9 @@ fn auto_rollback(app_id: &str, w: &Watch, bad: Instance, prev: Instance, why: &s
     }
 }
 
-fn crashed(app_id: &str, inst: Instance, why: &str, t: &Timings) {
+fn crashed(app_id: &str, inst: Instance, why: &str, exit: Exit, t: &Timings) {
     router::clear(app_id);
-    let decision = with_rt(app_id, |rt| {
+    let (decision, restarts) = with_rt(app_id, |rt| {
         rt.live = None;
         rt.watch = None;
         rt.live_fails = 0;
@@ -808,7 +854,22 @@ fn crashed(app_id: &str, inst: Instance, why: &str, t: &Timings) {
         if let Decision::Restart { after_secs } = d {
             rt.next_restart_at = Some(now() + after_secs);
         }
-        d
+        (d, rt.backoff.recent_restarts())
+    });
+    // The failure history; the first crash in the breaker window wakes the
+    // App's agent, the rest fold into the crash-loop alert (0.46.3).
+    super::failures::crash(&super::failures::Crash {
+        app_id,
+        deployment: &inst.handle.deployment_id,
+        exited: exit.exited,
+        exit_code: exit.code,
+        signal: exit.signal,
+        restart_count: restarts as u32,
+        restart_in_secs: match decision {
+            Decision::Restart { after_secs } => Some(after_secs),
+            Decision::Breaker => None,
+        },
+        what: None,
     });
     let grace = Duration::from_secs(t.stop_grace_secs.min(5));
     let h = inst.handle.clone();
@@ -832,12 +893,23 @@ fn restart_outcome(app_id: &str, dep: &str) {
     if !failed || with_rt(app_id, |rt| rt.live.is_some()) {
         return;
     }
-    let decision = with_rt(app_id, |rt| {
+    let (decision, restarts) = with_rt(app_id, |rt| {
         let d = rt.backoff.on_crash(now());
         if let Decision::Restart { after_secs } = d {
             rt.next_restart_at = Some(now() + after_secs);
         }
-        d
+        (d, rt.backoff.recent_restarts())
+    });
+    super::failures::crash(&super::failures::Crash {
+        app_id,
+        deployment: dep,
+        restart_count: restarts as u32,
+        restart_in_secs: match decision {
+            Decision::Restart { after_secs } => Some(after_secs),
+            Decision::Breaker => None,
+        },
+        what: Some("failed the health gate when K2 restarted it"),
+        ..Default::default()
     });
     match decision {
         Decision::Restart { .. } => {
@@ -856,7 +928,7 @@ fn breaker(app_id: &str, why: &str) {
             &app.owner_workspace,
             &format!(
                 "[k2 apps] App {app_id} is crash-looping ({why}) and K2 stopped restarting it. \
-                 Read why: k2 app errors {app_id} ; fix and deploy, or k2 app start {app_id}"
+                 Read why: k2 app errors {app_id} --kind crash ; fix and deploy, or k2 app start {app_id}"
             ),
         );
     }
@@ -1021,6 +1093,7 @@ pub fn stop_app(app: &AppRow, actor: &str) -> Result<(), Fail> {
 /// Clear the crash-loop state (an owner `start` after `crashlooping`).
 pub fn reset_backoff(app_id: &str) {
     with_rt(app_id, |rt| rt.backoff.reset());
+    super::failures::clear_crash(app_id);
 }
 
 /// Forget an App's runtime state (uninstall; after `stop_app`).

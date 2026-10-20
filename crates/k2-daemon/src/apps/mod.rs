@@ -16,6 +16,7 @@ pub mod box_service_routes;
 pub mod engine_install;
 pub mod exception;
 pub mod exec;
+pub mod failures;
 pub mod gateway;
 pub mod grace;
 pub mod grants;

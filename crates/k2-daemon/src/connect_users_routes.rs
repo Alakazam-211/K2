@@ -27,12 +27,20 @@ use k2_core::connect_users;
 pub fn handle_list() -> CliResponse {
     match connect_users::list_users() {
         Ok(views) => {
+            // S32 K28: the login's never-reused id, so Admin Access can show
+            // the Sew state of its own `connect` chat grant (subjectId = id).
+            let ids: std::collections::HashMap<String, String> = connect_users::chat_member_facts()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(id, username, _)| (username, id))
+                .collect();
             // Re-key to camelCase wire shape (createdAt) for the client.
             let users: Vec<serde_json::Value> = views
                 .iter()
                 .map(|v| {
                     serde_json::json!({
                         "username": v.username,
+                        "id": ids.get(&v.username),
                         "createdAt": v.created_at.to_rfc3339(),
                         "disabled": v.disabled,
                         "role": v.role.as_wire(),
@@ -1218,6 +1226,10 @@ mod tests {
             assert_eq!(named["firstName"], "Anna");
             assert_eq!(named["lastName"], "Smith");
             assert_eq!(named["displayName"], "Anna Smith");
+            // S32 K28: each row carries the login's id (Admin Access joins
+            // `connect` chat grants on it).
+            assert_eq!(named["id"].as_str(), connect_users::user_uuid("named").unwrap().as_deref());
+            assert!(named["id"].as_str().is_some_and(|i| i.len() == 36), "{named}");
             let plain = row("plain");
             assert_eq!(plain["firstName"], serde_json::Value::Null);
             assert_eq!(plain["lastName"], serde_json::Value::Null);

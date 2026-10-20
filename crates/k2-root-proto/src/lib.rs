@@ -33,6 +33,9 @@
 //!   (prd-k2-node-admin-v1 §8.1: node updates are root-class code).
 //! - [`sew`]: Sew on K2 (protocol 7): the Sew pin table, Sew's fixed paths
 //!   and the stdin-JSON validators of the `engine sew` verbs.
+//! - [`pg_major`]: several Postgres majors side by side (protocol 9,
+//!   `namespaces.pgmajor`): version policy, port band, canned apt and
+//!   cluster files, and the parsers both sides share.
 
 pub mod apps;
 pub mod caller;
@@ -40,6 +43,7 @@ pub mod engine;
 pub mod keys;
 pub mod node_build;
 pub mod paths;
+pub mod pg_major;
 pub mod sew;
 pub mod podman;
 pub mod sig;

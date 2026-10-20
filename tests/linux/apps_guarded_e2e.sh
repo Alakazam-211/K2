@@ -750,7 +750,7 @@ echo "== the process exception's sandbox under real systemd (helper level) =="
 # Last: a stand-in replaces the engine binary (this VM is thrown away).
 hreq() { req helper "$1" >/tmp/h.json; jq_ "assert v['rc']==0, v" /tmp/h.json || fail "helper $1: $(cat /tmp/h.json)"; }
 hreq "apps ensure-process-user"
-hreq "apps nft apply 38600-38899 38900-38999 5432"
+hreq "apps nft apply 38600-38899 38900-38999 5432-5449"
 hreq "apps process-unit on"
 # A rename, not a write: the real engine is still running (ETXTBSY).
 cat >/usr/local/libexec/k2-app-engine.standin <<'SH'

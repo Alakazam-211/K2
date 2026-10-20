@@ -261,7 +261,7 @@ mod tests {
             &["apps", "delegate", "on"],
             &["apps", "io-cost", "on"],
             &["apps", "reserve-ports", "on"],
-            &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"],
             &["apps", "process-unit", "on"],
             &["apps", "packages", "install"],
             &["apps", "unprep"],

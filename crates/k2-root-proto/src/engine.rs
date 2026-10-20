@@ -1171,8 +1171,16 @@ mod tests {
         s.db_port = Some(5432);
         assert!(check_start(&s).is_ok());
         assert!(serde_json::to_string(&s).unwrap().contains("\"dbPort\":5432"));
+        // K2's Postgres band (0.46.3): a database on another major's
+        // cluster (5433…5449) is reachable through the door too.
         s.db_port = Some(5433);
+        assert!(check_start(&s).is_ok(), "the band the nft table admits");
+        s.db_port = Some(5449);
+        assert!(check_start(&s).is_ok());
+        s.db_port = Some(5450);
         assert_eq!(check_start(&s), Err("db port"), "only the range the nft table admits");
+        s.db_port = Some(5431);
+        assert_eq!(check_start(&s), Err("db port"));
         // With the door, nothing else of the App's may sit on 5432 inside.
         let mut s = relaxed();
         s.db_port = Some(5432);

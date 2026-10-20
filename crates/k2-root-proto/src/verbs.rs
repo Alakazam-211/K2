@@ -1623,7 +1623,7 @@ mod tests {
             &["apps", "delegate", "on"],
             &["apps", "io-cost", "on"],
             &["apps", "reserve-ports", "on"],
-            &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5449"],
             &["apps", "packages", "install"],
             &["apps", "packages", "install-youki"],
             &["apps", "runtime", "crun"],
@@ -1660,6 +1660,9 @@ mod tests {
             &["apps", "nft", "apply", "1024-2047", "38900-38999", "5432"],
             &["apps", "nft", "apply", "38600-38899", "6379", "5432"],
             &["apps", "nft", "apply", "38600-38899", "38900-38999", "5433"],
+            // The pre-0.46.3 single port is no longer the canonical band.
+            &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432"],
+            &["apps", "nft", "apply", "38600-38899", "38900-38999", "5432-5460"],
         ];
         for a in open {
             assert_eq!(Verb::parse(a).unwrap().class(), Class::Open, "{a:?}");

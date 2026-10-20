@@ -1427,7 +1427,7 @@ mod tests {
                 "apps linger on",
                 "apps reserve-ports on",
                 "apps io-cost on",
-                "apps nft apply 38600-38899 38900-38999 5432",
+                "apps nft apply 38600-38899 38900-38999 5432-5449",
                 "apps process-unit on",
                 "apps apparmor on",
                 "apps runtime crun",
@@ -1596,7 +1596,7 @@ mod tests {
         assert_eq!(
             p,
             vec![
-                "apps nft apply 38600-38899 38900-38999 5432",
+                "apps nft apply 38600-38899 38900-38999 5432-5449",
                 "apps reserve-ports on",
                 "apps io-cost on"
             ]
@@ -1605,7 +1605,7 @@ mod tests {
         s["reservedPorts"]["file"] = json!(false);
         s["ioCost"]["available"] = json!(false);
         let p: Vec<String> = reapply_plan(Some(&s)).iter().map(|a| a.join(" ")).collect();
-        assert_eq!(p, vec!["apps nft apply 38600-38899 38900-38999 5432"]);
+        assert_eq!(p, vec!["apps nft apply 38600-38899 38900-38999 5432-5449"]);
         // The k2-app profile not loaded after a boot: load it again; never
         // on a box whose LSM isn't AppArmor.
         let mut s = good_status();

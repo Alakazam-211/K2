@@ -107,7 +107,7 @@ inns nft delete table inet k2app
 systemctl restart k2-daemon.service
 wait_daemon
 for _ in $(seq 1 100); do inns nft list table inet k2app >/dev/null 2>&1 && break; sleep 0.2; done
-grep -q "chain k2app_v4" <<<"$(inns nft list table inet k2app)" || fail "the daemon did not re-apply the nft table at boot"
+grep -q "chain k2app_v5" <<<"$(inns nft list table inet k2app)" || fail "the daemon did not re-apply the nft table at boot"
 ok "daemon boot re-applied inet k2app"
 
 echo "== youki (opt-in) =="

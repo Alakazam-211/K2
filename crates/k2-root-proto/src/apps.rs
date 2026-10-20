@@ -119,9 +119,15 @@ pub fn proxy_port_for_gateway(gw: u16) -> Option<u16> {
     let p = PROXY_PORTS.lo as u32 + (gw - GATEWAY_PORTS.lo) as u32;
     (p <= PROXY_PORTS.hi as u32).then_some(p as u16)
 }
+/// K2's Postgres band (0.46.3, prd-pg17-and-db-upgrade-v1 V12/V38):
+/// several majors run side by side, the first on 5432 and each further one
+/// on the next free port up to 5449 ([`crate::pg_major::BAND`]). App UIDs
+/// reach the whole band on loopback (login is still by role and password,
+/// and a role has CONNECT on its own databases only), and no App gets a
+/// raw box-service forward into it.
 pub const DB_PORTS: PortRange = PortRange {
-    lo: 5_432,
-    hi: 5_432,
+    lo: crate::pg_major::BAND.0,
+    hi: crate::pg_major::BAND.1,
 };
 
 // ── box services (0.46.0): owner-approved forwards to host loopback ────
@@ -141,9 +147,10 @@ pub const BOX_ROUTER_LOOPBACK_PORT: u16 = 38_472;
 /// - below 1024: system services (ssh 22, mail, DNS 53, CUPS …);
 /// - K2's App range (38600–38999): every App's gateway link and egress
 ///   proxy, so no App reaches another App's doors;
-/// - Postgres (5432): an App's database has its own door (`k2 app db`,
-///   the 0.46.1 `db_raw` widening, scoped to the App's own role); a raw
-///   forward would hand it every database's login surface;
+/// - Postgres (K2's band 5432–5449, every major's cluster): an App's
+///   database has its own door (`k2 app db`, the 0.46.1 `db_raw` widening,
+///   scoped to the App's own role); a raw forward would hand it every
+///   database's login surface, including a kept rollback copy;
 /// - Caddy's admin API and the box router's loopback listener (the
 ///   daemon's own surfaces by another road).
 ///
@@ -157,7 +164,7 @@ pub fn box_port_refusal(p: u16) -> Option<&'static str> {
         return Some("K2's App range (every App's gateway link and egress proxy)");
     }
     if (DB_PORTS.lo..=DB_PORTS.hi).contains(&p) {
-        return Some("Postgres (an App reaches its own database through its database door, never a raw forward)");
+        return Some("Postgres (5432-5449, every major's cluster: an App reaches its own database through its database door, never a raw forward)");
     }
     if p == CADDY_ADMIN_PORT {
         return Some("Caddy's admin API");
@@ -200,8 +207,9 @@ pub const NFT_TABLE: &str = "k2app";
 /// reset) instead of dropped, so a held or revoked box service answers at
 /// once instead of stalling, and the per-App rules are checked before the
 /// established shortcut, so revoking a box service cuts its open
-/// connections too).
-pub const NFT_CHAIN: &str = "k2app_v4";
+/// connections too; v5, 0.46.3: Postgres is K2's band 5432–5449, so a box
+/// on v4 re-applies and Apps reach a database moved to another major).
+pub const NFT_CHAIN: &str = "k2app_v5";
 /// The per-App chain (`apps nft app`): one accept per App for its own
 /// gateway port, matched on the App's cgroup.
 pub const NFT_APPS_CHAIN: &str = "k2app_apps";
@@ -1527,15 +1535,20 @@ mod tests {
 
     #[test]
     fn box_ports_have_a_static_deny_list() {
-        for bad in [0u16, 22, 25, 53, 80, 443, 631, 1023, 5432, 2019, 38_472, 38_600, 38_601, 38_899, 38_900, 38_999] {
+        for bad in [0u16, 22, 25, 53, 80, 443, 631, 1023, 5432, 5433, 5449, 2019, 38_472, 38_600, 38_601, 38_899, 38_900, 38_999] {
             assert!(!box_port_ok(bad), "{bad} must be refused");
             assert!(box_port_refusal(bad).is_some());
         }
-        for ok in [1024u16, 3000, 7880, 8470, 8730, 38_599, 39_000, 65_535] {
+        for ok in [1024u16, 3000, 5431, 5450, 7880, 8470, 8730, 38_599, 39_000, 65_535] {
             assert!(box_port_ok(ok), "{ok} must be allowed");
         }
         assert!(box_port_refusal(22).unwrap().contains("ssh"));
-        assert!(box_port_refusal(5432).unwrap().contains("Postgres"));
+        // V12: the whole band, so a kept rollback copy on 5433 is never
+        // forwardable to an App.
+        for p in crate::pg_major::BAND.0..=crate::pg_major::BAND.1 {
+            assert!(box_port_refusal(p).unwrap().contains("Postgres"), "{p}");
+        }
+        assert_eq!((DB_PORTS.lo, DB_PORTS.hi), (5432, 5449));
         assert!(box_name_ok("sew-api") && box_name_ok("a") && box_name_ok("svc2"));
         for bad in ["", "Sew", "-x", "x-", "a--b", "a_b", "1x", &"a".repeat(33)] {
             assert!(!box_name_ok(bad), "{bad:?}");
@@ -1563,9 +1576,9 @@ mod tests {
         assert_eq!(cg[1].0, "k2apps.slice/k2app-process@nsi-skin.service");
         let rule = AppRule { cgroup: cg[0].0.clone(), level: cg[0].1, gw_port: 38_601, box_ports: vec![] };
         let r = nft_ruleset(997, Some(998), GATEWAY_PORTS, PROXY_PORTS, DB_PORTS, std::slice::from_ref(&rule));
-        assert!(r.contains("meta skuid 998 jump k2app_v4"), "process Apps' user gets the same chain");
+        assert!(r.contains("meta skuid 998 jump k2app_v5"), "process Apps' user gets the same chain");
         assert!(r.starts_with("table inet k2app\ndelete table inet k2app\n"));
-        assert!(r.contains("meta skuid 997 jump k2app_v4"));
+        assert!(r.contains("meta skuid 997 jump k2app_v5"));
         // No App reaches the whole gateway or proxy range: only its own
         // gateway and proxy ports, by cgroup (S15).
         assert!(!r.contains("38600-38899"), "{r}");
@@ -1573,7 +1586,8 @@ mod tests {
         assert!(r.contains(
             "socket cgroupv2 level 5 \"user.slice/user-997.slice/user@997.service/k2apps.slice/k2apps-nsi_skin.slice\" oifname \"lo\" tcp dport { 38601, 38901 } accept"
         ));
-        assert!(r.contains("oifname \"lo\" tcp dport 5432 accept"));
+        // V38: App UIDs reach every K2 cluster in the band on loopback.
+        assert!(r.contains("oifname \"lo\" tcp dport 5432-5449 accept"), "{r}");
         assert!(r.contains("fib daddr type local counter drop"));
         // v4: the per-App chain first (any state: a revoked box service is
         // cut mid-connection), then Postgres, then the reply side of
@@ -1581,7 +1595,7 @@ mod tests {
         // loopback port (refused at once, never a stall), the drops last.
         assert!(!r.contains("ct state established"), "no established shortcut ahead of the per-App rules: {r}");
         let jump = r.find("jump k2app_apps").unwrap();
-        let db = r.find("tcp dport 5432").unwrap();
+        let db = r.find("tcp dport 5432-5449").unwrap();
         let reply = r.find("ct direction reply accept").unwrap();
         let related = r.find("ct state related accept").unwrap();
         let reset = r.find("oifname \"lo\" meta l4proto tcp counter reject with tcp reset").unwrap();

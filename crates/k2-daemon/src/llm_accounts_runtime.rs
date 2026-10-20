@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use k2_core::llm_accounts::{self as wallet_core, state, store, wallet, Entry, Tool, WalletError};
-use k2_core::terminal::{AlacEvent, DaemonPtyConfig, DaemonPtySession, VisibleRow};
+use k2_core::terminal::{AlacEvent, DaemonPtyConfig, DaemonPtySession, ScanRow, VisibleRow};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -94,9 +94,14 @@ pub struct LoginView {
     pub mode: LoginMode,
     pub method: wallet::LoginMethod,
     pub state: String,
+    /// The whole sign-in URL (never cut; clients open and copy this).
     pub url: Option<String>,
+    /// The URL's host ("claude.ai"), for "Sign in at …".
+    pub url_host: Option<String>,
     pub code: Option<String>,
     pub error: Option<String>,
+    /// The visible terminal as logical lines (a long URL stays whole on
+    /// one line).
     pub screen: Vec<String>,
     pub started_at: i64,
     pub done: bool,
@@ -129,6 +134,7 @@ fn view_of(l: &Login, full: bool) -> LoginView {
         method: l.method,
         state: l.state.clone(),
         url: if full { l.url.clone() } else { None },
+        url_host: if full { l.url.as_deref().and_then(url_host) } else { None },
         code: if full { l.code.clone() } else { None },
         error: l.error.clone(),
         screen: if full { l.screen.clone() } else { Vec::new() },
@@ -173,19 +179,172 @@ pub fn running_for(account_id: &str) -> Option<String> {
 
 // ── Detection (pure; unit tested) ───────────────────────────────────
 
-/// The first sign-in URL in some text: https, not a localhost callback.
-pub fn find_url(text: &str) -> Option<String> {
-    for raw in text.split(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '<' || c == '>') {
-        let w = raw.trim_matches(|c: char| c == '(' || c == ')' || c == ',' || c == '.' || c == '`');
-        if let Some(pos) = w.find("https://") {
-            let u = &w[pos..];
-            if u.contains("localhost") || u.contains("127.0.0.1") || u.len() < 12 {
-                continue;
-            }
-            return Some(u.to_string());
+/// Columns of the login terminal. Wide enough that real sign-in URLs
+/// (Claude ~460, Codex browser ~700 characters) never wrap at all.
+pub const LOGIN_COLS: u16 = 1000;
+/// Rows of the login terminal.
+pub const LOGIN_ROWS: u16 = 40;
+/// Scrollback rows read above the screen each tick, so a URL that
+/// scrolled off before the watcher looked is still found.
+pub const LOGIN_HISTORY: usize = 200;
+
+/// Is this a usable sign-in URL? It must parse as https and its host
+/// must not be this machine (a local OAuth callback). Only the host is
+/// tested: a `redirect_uri=http://localhost…` query parameter is part
+/// of a real sign-in URL and must not drop it.
+pub fn sign_in_url_ok(u: &str) -> bool {
+    if !u.starts_with("https://") || u.len() < 12 {
+        return false;
+    }
+    match url::Url::parse(u) {
+        Ok(p) => p.scheme() == "https" && p.host().is_some() && !is_local_host(&p),
+        Err(_) => false,
+    }
+}
+
+fn is_local_host(u: &url::Url) -> bool {
+    match u.host() {
+        Some(url::Host::Domain(d)) => {
+            let d = d.trim_end_matches('.').to_ascii_lowercase();
+            d == "localhost" || d.ends_with(".localhost")
+        }
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback() || ip.is_unspecified(),
+        None => false,
+    }
+}
+
+/// Characters that may appear in a URL (RFC 3986 unreserved, reserved
+/// and `%`).
+fn is_url_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "-._~:/?#[]@!$&'()*+,;=%".contains(c)
+}
+
+/// Trim what surrounds a URL in prose, and nothing that belongs to it:
+/// a trailing `.` or `,`; a `)` or `]` only when it closes nothing in
+/// the URL; a `'` only when the URL was opened with one.
+fn trim_url(u: &str, quoted: bool) -> &str {
+    let mut s = u;
+    loop {
+        let before = s.len();
+        s = s.trim_end_matches(['.', ',']);
+        if s.ends_with(')') && s.matches(')').count() > s.matches('(').count() {
+            s = &s[..s.len() - 1];
+        }
+        if s.ends_with(']') && s.matches(']').count() > s.matches('[').count() {
+            s = &s[..s.len() - 1];
+        }
+        if quoted && s.ends_with('\'') {
+            s = &s[..s.len() - 1];
+        }
+        if s.len() == before {
+            return s;
         }
     }
-    None
+}
+
+/// Every sign-in URL in some text, in order: https, not a local
+/// callback, never shortened except for surrounding punctuation.
+pub fn url_candidates(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in text.split(|c: char| c.is_whitespace() || c == '"' || c == '<' || c == '>' || c == '`') {
+        let Some(pos) = raw.find("https://") else { continue };
+        let quoted = raw[..pos].ends_with('\'');
+        let tail = &raw[pos..];
+        let end = tail.find(|c: char| !is_url_char(c)).unwrap_or(tail.len());
+        let u = trim_url(&tail[..end], quoted);
+        if sign_in_url_ok(u) {
+            out.push(u.to_string());
+        }
+    }
+    out
+}
+
+/// The first sign-in URL in some text: https, not a localhost callback.
+pub fn find_url(text: &str) -> Option<String> {
+    url_candidates(text).into_iter().next()
+}
+
+/// The hosts a tool's sign-in page lives on (a host or any subdomain
+/// of it matches). A link on another host is only used when no
+/// vendor link is on screen.
+pub fn vendor_hosts(tool: Tool) -> &'static [&'static str] {
+    match tool {
+        Tool::Claude => &["claude.ai", "claude.com", "anthropic.com"],
+        Tool::Codex => &["auth.openai.com", "chatgpt.com", "openai.com"],
+        Tool::Grok => &["x.ai"],
+        Tool::Gemini => &["accounts.google.com"],
+    }
+}
+
+/// The host of a URL, for "Sign in at claude.ai".
+pub fn url_host(u: &str) -> Option<String> {
+    url::Url::parse(u).ok().and_then(|p| p.host_str().map(|h| h.to_string()))
+}
+
+fn host_is_vendor(tool: Tool, u: &url::Url) -> bool {
+    let Some(h) = u.host_str() else { return false };
+    let h = h.to_ascii_lowercase();
+    vendor_hosts(tool).iter().any(|d| h == *d || h.ends_with(&format!(".{d}")))
+}
+
+/// Does the URL look like a sign-in page (not a docs or status link)?
+fn looks_like_sign_in(u: &url::Url) -> bool {
+    let path = u.path().to_ascii_lowercase();
+    let path_hit = ["oauth", "authorize", "device", "login", "signin", "sign-in", "activate", "auth"]
+        .iter()
+        .any(|w| path.contains(w));
+    let query_hit = u.query_pairs().any(|(k, _)| {
+        matches!(k.as_ref(), "client_id" | "user_code" | "code_challenge" | "response_type" | "redirect_uri" | "state")
+    });
+    path_hit || query_hit
+}
+
+/// Does a query parameter send the browser back to this machine
+/// (`redirect_uri=http://localhost:1455/…`)? Such a link only finishes
+/// in a browser on the server itself.
+pub fn redirects_to_local(u: &str) -> bool {
+    let Ok(p) = url::Url::parse(u) else { return false };
+    p.query_pairs()
+        .any(|(_, v)| url::Url::parse(&v).map(|r| is_local_host(&r)).unwrap_or(false))
+}
+
+/// Where a sign-in URL was read from. Higher wins a tie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UrlSource {
+    /// Text on the terminal (may have been cut by layout).
+    Screen,
+    /// The BROWSER shim: the tool's own "open this URL" call, whole.
+    ShimFile,
+    /// An OSC 8 hyperlink target: whole, can't be cut by layout.
+    Osc8,
+}
+
+/// A candidate sign-in URL and where it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UrlCandidate {
+    pub url: String,
+    pub source: UrlSource,
+}
+
+/// Pick the sign-in URL deliberately, never "the first https link":
+/// 1. on another device, a link that sends the browser back to
+///    localhost can't finish, so any other link beats it;
+/// 2. a link on the tool's own sign-in hosts ([`vendor_hosts`]);
+/// 3. a link shaped like a sign-in (oauth/device path, client_id…);
+/// 4. the source: OSC 8 target > BROWSER shim > screen text;
+/// 5. the latest one (a tool that issues a new link prints it last).
+pub fn pick_url(tool: Tool, mode: LoginMode, cands: &[UrlCandidate]) -> Option<UrlCandidate> {
+    cands
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| {
+            let p = url::Url::parse(&c.url).ok()?;
+            let reachable = mode == LoginMode::ThisComputer || !redirects_to_local(&c.url);
+            Some(((reachable, host_is_vendor(tool, &p), looks_like_sign_in(&p), c.source, i), c))
+        })
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, c)| c.clone())
 }
 
 /// Rebuild logical lines from the visible rows. A row the terminal
@@ -208,12 +367,117 @@ pub fn logical_lines(rows: &[VisibleRow]) -> Vec<String> {
     out
 }
 
-/// The sign-in URL to hold after one read. The BROWSER-shim file wins
-/// whenever it has one (the tool handed the URL over whole). A screen
-/// read never shortens what we hold: a read that is a prefix of the
-/// stored URL (cut at a row edge, or partly scrolled) keeps the stored
-/// one; a longer read that extends it, or a different URL (the tool
-/// issued a new one), replaces it.
+/// Does the text so far end inside a URL (its last token is one)?
+fn ends_in_url(cur: &str) -> bool {
+    let last = cur.rsplit(char::is_whitespace).next().unwrap_or("");
+    last.find("https://").map(|p| last[p..].chars().all(is_url_char)).unwrap_or(false)
+}
+
+/// Is a row the rest of a URL the tool broke with its own newline at
+/// the terminal edge? One token of URL characters, nothing else, and
+/// not something that stands alone (a new link, a device code, a
+/// "Label:" prompt).
+fn is_url_continuation(row: &str) -> bool {
+    let s = row.trim();
+    !s.is_empty()
+        && s.chars().all(is_url_char)
+        && !s.starts_with("http://")
+        && !s.starts_with("https://")
+        && !s.ends_with(':')
+        && find_device_code(&format!("code {s}")).as_deref() != Some(s)
+}
+
+/// Logical lines from scan rows (screen and scrollback). Joins a
+/// terminal soft wrap (WRAPLINE) like [`logical_lines`], and also a
+/// HARD wrap: a CLI that breaks a long URL itself writes a newline at
+/// the last column, so alacritty sets no WRAPLINE. A row that fills
+/// every column and ends inside a URL is joined to the next row when
+/// that row is only the URL's continuation ([`is_url_continuation`]).
+/// A URL that ends exactly at the edge followed by ordinary text is
+/// not glued.
+pub fn scan_lines(rows: &[ScanRow], cols: usize) -> Vec<String> {
+    let mut out = Vec::with_capacity(rows.len());
+    let mut cur = String::new();
+    let mut continuing = false;
+    for (i, r) in rows.iter().enumerate() {
+        cur.push_str(if continuing { r.text.trim_start() } else { &r.text });
+        continuing = false;
+        if r.wrapped {
+            continue;
+        }
+        let at_edge = cols > 0 && r.text.chars().count() >= cols;
+        if at_edge && ends_in_url(&cur) {
+            if let Some(next) = rows.get(i + 1) {
+                if is_url_continuation(&next.text) {
+                    continuing = true;
+                    continue;
+                }
+            }
+        }
+        out.push(std::mem::take(&mut cur));
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// One read of the login terminal: the sign-in URL candidates from
+/// every source, the text to search for a code, and what to show.
+#[derive(Debug, Clone, Default)]
+pub struct LoginScan {
+    pub candidates: Vec<UrlCandidate>,
+    /// Screen + scrollback as logical lines (for the device code).
+    pub all_text: String,
+    /// The visible screen as logical lines (for the paste prompt).
+    pub screen_text: String,
+    /// The last 30 visible logical lines, trailing blanks dropped
+    /// ("Show terminal"; a long URL stays on one line).
+    pub screen: Vec<String>,
+}
+
+/// Read scan rows and the BROWSER-shim file's lines into candidates.
+pub fn scan_login(rows: &[ScanRow], cols: usize, shim_lines: &str) -> LoginScan {
+    let mut candidates: Vec<UrlCandidate> = Vec::new();
+    for r in rows {
+        for l in &r.links {
+            if sign_in_url_ok(l) && !candidates.iter().any(|c| c.url == *l) {
+                candidates.push(UrlCandidate { url: l.clone(), source: UrlSource::Osc8 });
+            }
+        }
+    }
+    // The shim gets the URL as one argument: take each line whole.
+    for line in shim_lines.lines() {
+        let u = line.trim();
+        if sign_in_url_ok(u) {
+            candidates.push(UrlCandidate { url: u.to_string(), source: UrlSource::ShimFile });
+        } else {
+            for u in url_candidates(u) {
+                candidates.push(UrlCandidate { url: u, source: UrlSource::ShimFile });
+            }
+        }
+    }
+    let all = scan_lines(rows, cols);
+    let all_text = all.join("\n");
+    for u in url_candidates(&all_text) {
+        candidates.push(UrlCandidate { url: u, source: UrlSource::Screen });
+    }
+    let first_visible = rows.iter().position(|r| r.visible).unwrap_or(rows.len());
+    let visible = scan_lines(&rows[first_visible..], cols);
+    let mut screen: Vec<String> = visible.iter().map(|l| l.trim_end().to_string()).collect();
+    while screen.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
+        screen.pop();
+    }
+    let start = screen.len().saturating_sub(30);
+    LoginScan { candidates, all_text, screen_text: visible.join("\n"), screen: screen[start..].to_vec() }
+}
+
+/// The sign-in URL to hold after one read. A whole URL (OSC 8 target or
+/// the BROWSER-shim file) wins whenever there is one. A screen read
+/// never shortens what we hold: a read that is a prefix of the stored
+/// URL (cut at a row edge, or partly scrolled) keeps the stored one; a
+/// longer read that extends it, or a different URL (the tool issued a
+/// new one), replaces it.
 pub fn next_url(stored: Option<&str>, from_file: Option<String>, from_screen: Option<String>) -> Option<String> {
     if from_file.is_some() {
         return from_file;
@@ -222,6 +486,16 @@ pub fn next_url(stored: Option<&str>, from_file: Option<String>, from_screen: Op
         (Some(old), Some(new)) if old.starts_with(new.as_str()) => Some(old.to_string()),
         (_, Some(new)) => Some(new),
         (old, None) => old.map(str::to_string),
+    }
+}
+
+/// [`next_url`] for a [`pick_url`] result: an OSC 8 or shim pick is
+/// whole and replaces what we hold; a screen pick never shortens it.
+pub fn next_url_from(stored: Option<&str>, picked: Option<UrlCandidate>) -> Option<String> {
+    match picked {
+        Some(c) if c.source == UrlSource::Screen => next_url(stored, None, Some(c.url)),
+        Some(c) => next_url(stored, Some(c.url), None),
+        None => next_url(stored, None, None),
     }
 }
 
@@ -372,8 +646,8 @@ pub fn start_login(
     }
     let cwd = if method == wallet::LoginMethod::TempHome { slot.clone() } else { dirs::home_dir().unwrap_or_else(|| slot.clone()) };
     let cfg = DaemonPtyConfig {
-        cols: 400,
-        rows: 40,
+        cols: LOGIN_COLS,
+        rows: LOGIN_ROWS,
         cwd: Some(cwd),
         program: Some(program),
         args,
@@ -538,33 +812,28 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
                     l.account_id.clone(),
                     l.new_entry,
                     l.prev_state.clone(),
+                    l.mode,
                 ),
             }
         };
-        let (pty, dir, elapsed, cancel_req, method, ticket, tool, account_id, new_entry, prev_state) = snap;
+        let (pty, dir, elapsed, cancel_req, method, ticket, tool, account_id, new_entry, prev_state, mode) = snap;
         let Some(pty) = pty else { return };
 
-        // Screen + detection.
-        // Detection reads logical lines: a URL longer than the row
-        // (Claude's is ~460 chars) soft-wraps, and reading row by row
-        // cut it at the first row's edge.
-        let rows = pty.visible_rows();
-        let text = logical_lines(&rows).join("\n");
-        let file_url = std::fs::read_to_string(dir.join("urls"))
-            .ok()
-            .and_then(|s| s.lines().rev().find_map(|l| find_url(l)));
-        let screen_url = find_url(&text);
-        let code = find_device_code(&text);
-        let paste = wants_pasted_code(&text);
-        let mut screen: Vec<String> = rows.into_iter().map(|r| r.text.trim_end().to_string()).collect();
-        while screen.last().map(|l| l.trim().is_empty()).unwrap_or(false) {
-            screen.pop();
-        }
-        let start = screen.len().saturating_sub(30);
-        let screen: Vec<String> = screen[start..].to_vec();
+        // Screen + detection. Every source is read each tick: OSC 8
+        // link targets and scrollback from the terminal (logical lines,
+        // soft and hard wraps joined), and the BROWSER-shim file (the
+        // tool's own "open this URL" call). `pick_url` chooses the
+        // sign-in link by vendor rules, never "the first https link".
+        let rows = pty.scan_rows(LOGIN_HISTORY);
+        let shim = std::fs::read_to_string(dir.join("urls")).unwrap_or_default();
+        let scan = scan_login(&rows, LOGIN_COLS as usize, &shim);
+        let picked = pick_url(tool, mode, &scan.candidates);
+        let code = find_device_code(&scan.all_text);
+        let paste = wants_pasted_code(&scan.screen_text);
+        let screen = scan.screen;
         if let Some((_, t)) = update(&id, |l| {
             l.screen = screen;
-            l.url = next_url(l.url.as_deref(), file_url, screen_url);
+            l.url = next_url_from(l.url.as_deref(), picked);
             if code.is_some() {
                 l.code = code.clone();
             }
@@ -1285,6 +1554,274 @@ mod tests {
         let file = "https://auth.example.test/from-file";
         assert_eq!(next_url(Some(CLAUDE_URL), Some(file.into()), Some(CLAUDE_URL.into())).as_deref(), Some(file));
         assert_eq!(next_url(None, Some(file.into()), None).as_deref(), Some(file));
+    }
+
+    // ── S1: the sign-in link is never cut (0.46.3) ─────────────────
+
+    /// Claude's automatic sign-in URL: the redirect goes back to the
+    /// CLI's localhost listener (what the BROWSER shim receives).
+    const CLAUDE_AUTO_URL: &str = "https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload+user%3Aplugins&code_challenge=hhX09VfGxZ4Oe_6zAToJMg0tIdpFMzGge4PW-yYvPLo&code_challenge_method=S256&state=ciSJq3Xk2mV7pL0aB9cD4eF6gH8iJ1kL2mN3oP4qR5s";
+
+    /// Codex's browser login (~700 chars), `redirect_uri` on localhost.
+    fn codex_browser_url() -> String {
+        format!(
+            "https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid%20profile%20email%20offline_access%20api.connectors.read%20api.connectors.invoke&code_challenge={}&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&state={}&originator=codex_cli_rs&allowed_workspace_id={}",
+            "Qm9zc29uLWNvZGUtY2hhbGxlbmdlLWZpeHR1cmUtMDQ2Mw".repeat(3),
+            "c3RhdGUtZml4dHVyZS1mb3ItdGhlLWNvZGV4LWxvZ2lu".repeat(4),
+            "ws-".to_string() + &"0123456789abcdef".repeat(6)
+        )
+    }
+
+    fn scan(cols: usize, bytes: &[u8], shim: &str) -> LoginScan {
+        let rows = k2_core::terminal::daemon_pty::scan_rows_from_bytes(cols, LOGIN_ROWS as usize, LOGIN_HISTORY, bytes);
+        scan_login(&rows, cols, shim)
+    }
+
+    fn picked(tool: Tool, mode: LoginMode, s: &LoginScan) -> UrlCandidate {
+        pick_url(tool, mode, &s.candidates).unwrap_or_else(|| panic!("no URL picked from {:?}", s.candidates))
+    }
+
+    /// The URL broken by the CLI's own newlines at the column edge (an
+    /// Ink/ratatui TUI): no WRAPLINE, no OSC 8.
+    fn hard_wrapped(prefix: &str, url: &str, cols: usize, after: &str) -> Vec<u8> {
+        let text: Vec<char> = format!("{prefix}{url}").chars().collect();
+        let rows: Vec<String> = text.chunks(cols).map(|c| c.iter().collect()).collect();
+        format!("{}\r\n{after}", rows.join("\r\n")).into_bytes()
+    }
+
+    #[test]
+    fn claude_osc8_target_wins_whole_at_80_120_400_and_1000_columns() {
+        for cols in [80usize, 120, 400, 1000] {
+            let s = scan(cols, &claude_login_bytes(CLAUDE_URL), "");
+            assert!(
+                s.candidates.iter().any(|c| c.source == UrlSource::Osc8 && c.url == CLAUDE_URL),
+                "{cols} cols: OSC 8 target missing: {:?}",
+                s.candidates
+            );
+            let p = picked(Tool::Claude, LoginMode::OtherDevice, &s);
+            assert_eq!(p.url, CLAUDE_URL, "{cols} cols");
+            assert_eq!(p.source, UrlSource::Osc8, "{cols} cols");
+            assert!(wants_pasted_code(&s.screen_text), "{cols} cols: paste prompt");
+            // "Show terminal" sends logical lines: the URL is whole on one line.
+            assert!(s.screen.iter().any(|l| l.ends_with(CLAUDE_URL)), "{cols} cols: screen {:?}", s.screen);
+        }
+    }
+
+    #[test]
+    fn hard_wrapped_url_is_joined_whole_at_80_and_120_columns() {
+        for cols in [80usize, 120] {
+            // URL on its own rows, and URL after a prefix on the same row.
+            for prefix in ["", "If the browser didn't open, visit: "] {
+                let bytes = hard_wrapped(prefix, CLAUDE_URL, cols, "Paste code here if prompted > ");
+                let rows = k2_core::terminal::daemon_pty::scan_rows_from_bytes(cols, 40, LOGIN_HISTORY, &bytes);
+                assert!(rows.iter().all(|r| !r.wrapped), "{cols}: fixture must be hard-wrapped (no WRAPLINE): {rows:?}");
+                // The bug: the old soft-wrap-only join cut it at the first row.
+                let visible: Vec<VisibleRow> =
+                    rows.iter().map(|r| VisibleRow { text: r.text.clone(), wrapped: r.wrapped }).collect();
+                let old = find_url(&logical_lines(&visible).join("\n")).expect("old path finds a cut URL");
+                assert!(old.len() < CLAUDE_URL.len(), "{cols}: fixture must cut on the old path");
+                let s = scan_login(&rows, cols, "");
+                let p = picked(Tool::Claude, LoginMode::OtherDevice, &s);
+                assert_eq!(p.url, CLAUDE_URL, "{cols} cols, prefix {prefix:?}");
+                assert_eq!(p.source, UrlSource::Screen);
+                assert!(wants_pasted_code(&s.screen_text));
+                assert!(s.screen.iter().any(|l| l.ends_with(CLAUDE_URL)), "{cols}: screen {:?}", s.screen);
+            }
+        }
+    }
+
+    #[test]
+    fn exact_edge_url_is_not_glued_to_text_or_a_device_code_on_the_scan_path() {
+        let prefix = "visit: ";
+        let url = "https://auth.example.test/device/abcdefghijklmnopqrstuvwxyz0123456789";
+        let cols = prefix.len() + url.len();
+        for after in ["EnterTheCodeBelow ABCD-1234\r\n", "ABCD-1234\r\n", "Code:\r\n", "https://other.example.test/x\r\n"] {
+            let s = scan(cols, format!("{prefix}{url}\r\n{after}").as_bytes(), "");
+            let screen: Vec<&str> = s.candidates.iter().filter(|c| c.source == UrlSource::Screen).map(|c| c.url.as_str()).collect();
+            assert_eq!(screen.first().copied(), Some(url), "after {after:?}: {screen:?}");
+        }
+    }
+
+    #[test]
+    fn redirect_uri_on_localhost_no_longer_drops_the_url() {
+        let codex = codex_browser_url();
+        assert!(codex.len() > 650, "fixture is ~700 chars: {}", codex.len());
+        assert_eq!(find_url(&format!("navigate to this URL:\n{codex}\n")).as_deref(), Some(codex.as_str()));
+        assert_eq!(find_url(CLAUDE_AUTO_URL).as_deref(), Some(CLAUDE_AUTO_URL));
+        assert!(redirects_to_local(&codex));
+        assert!(!redirects_to_local(CLAUDE_URL), "platform.claude.com callback is not local");
+        // A callback HOST is still skipped, however it is spelled.
+        for local in [
+            "https://localhost:1455/auth/callback?code=x",
+            "https://127.0.0.1:1455/auth/callback?code=x",
+            "https://[::1]:1455/auth/callback?code=x",
+            "https://app.localhost/cb",
+        ] {
+            assert_eq!(find_url(local), None, "{local}");
+        }
+    }
+
+    #[test]
+    fn codex_browser_login_via_shim_and_via_screen() {
+        let codex = codex_browser_url();
+        // Shim: the CLI's own BROWSER call, whole.
+        let s = scan(LOGIN_COLS as usize, b"Starting local login server on http://localhost:1455.\r\n", &format!("{codex}\n"));
+        let p = picked(Tool::Codex, LoginMode::ThisComputer, &s);
+        assert_eq!((p.url.as_str(), p.source), (codex.as_str(), UrlSource::ShimFile));
+        // Screen only (the browser didn't open), at the real login width
+        // and at 400 columns where it soft-wraps.
+        for cols in [LOGIN_COLS as usize, 400] {
+            let bytes = format!(
+                "Starting local login server on http://localhost:1455.\r\nIf your browser did not open, navigate to this URL to authenticate:\r\n\r\n{codex}\r\n"
+            );
+            let s = scan(cols, bytes.as_bytes(), "");
+            let p = picked(Tool::Codex, LoginMode::ThisComputer, &s);
+            assert_eq!(p.url, codex, "{cols} cols");
+        }
+    }
+
+    #[test]
+    fn on_another_device_a_link_back_to_localhost_loses_to_one_that_finishes_anywhere() {
+        // Claude handed the shim its automatic (localhost) URL and
+        // printed the manual one (platform.claude.com callback).
+        let s = scan(LOGIN_COLS as usize, &claude_login_bytes(CLAUDE_URL), &format!("{CLAUDE_AUTO_URL}\n"));
+        assert_eq!(picked(Tool::Claude, LoginMode::OtherDevice, &s).url, CLAUDE_URL);
+        // Same, with no OSC 8: the plain screen URL still beats the shim.
+        let plain = format!("If the browser didn't open, visit: {CLAUDE_URL}\r\nPaste code here if prompted > ");
+        let s = scan(LOGIN_COLS as usize, plain.as_bytes(), &format!("{CLAUDE_AUTO_URL}\n"));
+        assert_eq!(picked(Tool::Claude, LoginMode::OtherDevice, &s).url, CLAUDE_URL);
+    }
+
+    #[test]
+    fn codex_device_flow_url_and_code() {
+        let bytes = b"Welcome to Codex\r\nSee https://status.openai.com for outages.\r\n\r\nFollow these steps to sign in with ChatGPT using device code authorization:\r\n\r\n1. Open this link in your browser and sign in to your account\r\n   https://auth.openai.com/codex/device\r\n\r\n2. Enter this one-time code (expires in 15 minutes)\r\n   ABCD-12345\r\n";
+        let s = scan(LOGIN_COLS as usize, bytes, "");
+        assert_eq!(picked(Tool::Codex, LoginMode::OtherDevice, &s).url, "https://auth.openai.com/codex/device");
+        assert_eq!(find_device_code(&s.all_text).as_deref(), Some("ABCD-12345"));
+    }
+
+    #[test]
+    fn grok_device_url_with_user_code_beats_an_earlier_docs_link() {
+        let url = "https://accounts.x.ai/oauth2/device?user_code=QWER-TY12&client_id=grok-cli";
+        let bytes = format!(
+            "Grok CLI docs: https://docs.x.ai/docs/grok-cli/getting-started\r\nTo sign in, open {url}\r\nand confirm the code QWER-TY12\r\n"
+        );
+        let s = scan(LOGIN_COLS as usize, bytes.as_bytes(), "");
+        assert_eq!(s.candidates.first().map(|c| c.url.as_str()), Some("https://docs.x.ai/docs/grok-cli/getting-started"));
+        assert_eq!(picked(Tool::Grok, LoginMode::OtherDevice, &s).url, url);
+        assert_eq!(find_device_code(&s.all_text).as_deref(), Some("QWER-TY12"));
+    }
+
+    #[test]
+    fn two_links_on_screen_the_sign_in_link_is_picked_not_the_first() {
+        // A non-vendor link and a vendor docs link, both before the
+        // sign-in link.
+        let bytes = format!(
+            "Note: https://github.com/anthropics/claude-code/issues/1 is fixed.\r\nDocs: https://docs.anthropic.com/en/docs/claude-code/setup\r\nIf the browser didn't open, visit: {CLAUDE_URL}\r\nPaste code here if prompted > "
+        );
+        let s = scan(LOGIN_COLS as usize, bytes.as_bytes(), "");
+        assert!(s.candidates.len() >= 3, "{:?}", s.candidates);
+        assert_ne!(s.candidates[0].url, CLAUDE_URL, "fixture: the sign-in link is not first");
+        assert_eq!(picked(Tool::Claude, LoginMode::OtherDevice, &s).url, CLAUDE_URL);
+        // No vendor link at all: fall back to a sign-in-shaped link.
+        let s = scan(
+            LOGIN_COLS as usize,
+            b"Help: https://example.test/help\r\nOpen https://sso.example.test/oauth/authorize?client_id=x&state=y\r\n",
+            "",
+        );
+        assert_eq!(
+            picked(Tool::Claude, LoginMode::OtherDevice, &s).url,
+            "https://sso.example.test/oauth/authorize?client_id=x&state=y"
+        );
+    }
+
+    #[test]
+    fn a_2000_char_url_is_found_whole() {
+        let url = format!("https://claude.ai/oauth/authorize?code=true&state={}", "a1B2c3D4e5".repeat(195));
+        assert!(url.len() > 2000);
+        let s = scan(LOGIN_COLS as usize, format!("visit: {url}\r\n").as_bytes(), "");
+        assert_eq!(picked(Tool::Claude, LoginMode::OtherDevice, &s).url, url);
+        let s = scan(LOGIN_COLS as usize, &hard_wrapped("visit: ", &url, LOGIN_COLS as usize, "done\r\n"), "");
+        assert_eq!(picked(Tool::Claude, LoginMode::OtherDevice, &s).url, url);
+    }
+
+    #[test]
+    fn a_url_scrolled_off_the_screen_is_still_found() {
+        let mut bytes = format!("If the browser didn't open, visit: {CLAUDE_URL}\r\n").into_bytes();
+        for i in 0..(LOGIN_ROWS as usize + 20) {
+            bytes.extend_from_slice(format!("progress line {i}\r\n").as_bytes());
+        }
+        // The fixture really scrolled: the visible screen has no URL.
+        let visible = k2_core::terminal::daemon_pty::visible_rows_from_bytes(LOGIN_COLS as usize, LOGIN_ROWS as usize, &bytes);
+        assert_eq!(find_url(&logical_lines(&visible).join("\n")), None, "fixture must scroll the URL off");
+        let s = scan(LOGIN_COLS as usize, &bytes, "");
+        assert_eq!(picked(Tool::Claude, LoginMode::OtherDevice, &s).url, CLAUDE_URL);
+        // Shown terminal is the visible screen only.
+        assert!(s.screen.iter().all(|l| !l.contains("https://")), "{:?}", s.screen);
+        // And with OSC 8 (the target scrolls off with the text).
+        let mut b = claude_login_bytes(CLAUDE_URL);
+        b.extend_from_slice(b"\r\n");
+        for i in 0..(LOGIN_ROWS as usize + 20) {
+            b.extend_from_slice(format!("progress line {i}\r\n").as_bytes());
+        }
+        let p = picked(Tool::Claude, LoginMode::OtherDevice, &scan(LOGIN_COLS as usize, &b, ""));
+        assert_eq!((p.url.as_str(), p.source), (CLAUDE_URL, UrlSource::Osc8));
+    }
+
+    #[test]
+    fn punctuation_trimming_keeps_what_belongs_to_the_url() {
+        assert_eq!(find_url("go to (https://auth.example.test/device).").as_deref(), Some("https://auth.example.test/device"));
+        assert_eq!(find_url("see https://auth.example.test/a_(b) now").as_deref(), Some("https://auth.example.test/a_(b)"));
+        assert_eq!(find_url("open https://auth.example.test/it's?x=1, then").as_deref(), Some("https://auth.example.test/it's?x=1"));
+        assert_eq!(find_url("open 'https://auth.example.test/q?x=1' now").as_deref(), Some("https://auth.example.test/q?x=1"));
+        assert_eq!(find_url("[https://auth.example.test/d]").as_deref(), Some("https://auth.example.test/d"));
+        assert_eq!(find_url("`https://auth.example.test/d`").as_deref(), Some("https://auth.example.test/d"));
+    }
+
+    #[test]
+    fn whole_sources_replace_and_screen_reads_never_shorten() {
+        let cut = CLAUDE_URL[..300].to_string();
+        let screen = |u: &str| Some(UrlCandidate { url: u.to_string(), source: UrlSource::Screen });
+        let osc8 = |u: &str| Some(UrlCandidate { url: u.to_string(), source: UrlSource::Osc8 });
+        assert_eq!(next_url_from(Some(CLAUDE_URL), screen(&cut)).as_deref(), Some(CLAUDE_URL));
+        assert_eq!(next_url_from(Some(&cut), osc8(CLAUDE_URL)).as_deref(), Some(CLAUDE_URL));
+        assert_eq!(next_url_from(Some(CLAUDE_URL), None).as_deref(), Some(CLAUDE_URL));
+        assert_eq!(next_url_from(None, None), None);
+    }
+
+    #[test]
+    fn login_view_carries_the_url_host_only_for_who_may_see() {
+        assert_eq!(url_host(CLAUDE_URL).as_deref(), Some("claude.ai"));
+        assert_eq!(url_host(&codex_browser_url()).as_deref(), Some("auth.openai.com"));
+        let l = Login {
+            login_id: "login_t".into(),
+            account_id: "acc".into(),
+            tool: Tool::Claude,
+            label: "x".into(),
+            mode: LoginMode::OtherDevice,
+            method: wallet::LoginMethod::TempHome,
+            started_by: "me".into(),
+            started_at: 0,
+            started: Instant::now(),
+            finished: None,
+            pty: None,
+            dir: PathBuf::from("/nonexistent"),
+            state: "waiting_for_browser".into(),
+            url: Some(CLAUDE_URL.into()),
+            code: None,
+            error: None,
+            screen: vec![],
+            new_entry: false,
+            prev_state: String::new(),
+            ticket: None,
+            cancel: false,
+            offer_make_active: false,
+        };
+        let full = login_json(&view_of(&l, true));
+        assert_eq!(full["url"], CLAUDE_URL);
+        assert_eq!(full["urlHost"], "claude.ai");
+        let hidden = login_json(&view_of(&l, false));
+        assert!(hidden["url"].is_null() && hidden["urlHost"].is_null(), "{hidden}");
     }
 
     #[test]

@@ -190,7 +190,7 @@ fn ticked_cores_pre_approve_new_caps_and_an_unticked_core_is_held() {
     let (st, v) = deploy(&a, S_TF);
     assert!(is_held(st, &v), "{st} {v}");
     let hint = v["hint"].as_str().unwrap();
-    assert!(hint.starts_with("Tick Files for ") && hint.contains("--core files=on "), "{hint}");
+    assert!(hint.starts_with("Tick Files for ") && hint.contains("--core files=on, the owner"), "{hint}");
 
     // Both ticked: the first install records its set and goes on.
     set_cores(&f.ws_a, &["thread", "files"]);

@@ -1,0 +1,552 @@
+//! App-scoped Space membership (plan-sew-s30-s32 K31; Sew SW13, contracts
+//! rev 147).
+//!
+//! **The rule.** A Sew Space bound to a K2 App gets its members ONLY from
+//! that App's user grants: a person is a member of the App's Space while
+//! they hold an enabled `kind=app` grant for that App AND an enabled
+//! `chat` grant with scope `member` (their Sew account, S27). Nothing else
+//! adds anyone:
+//! - **No Connect-role auto-provision** (narrows K5, Rosson 2026-10-15):
+//!   a Connect Owner or Admin is server control (`k2 hostchat`), never an
+//!   App Space member by role. Connect logins can't hold `kind=app` grants
+//!   (`skin::create_plain_grant` refuses `subjectKind connect`), and the
+//!   desired set below reads `subject_kind = 'principal'` rows only.
+//! - The box owner (`k2:owner`) and agents are never added here either:
+//!   App Space adds are App users only. An App adds its own agents or
+//!   managers through `k2 chat` (S30) where it needs them.
+//! - Chat guests are left out: Sew admits a guest to a Space only through
+//!   a channel add (S19), so a mgmt add would answer `not_added: guest`.
+//!
+//! **Bindings.** `tool_app_spaces` records which Sew Space belongs to which
+//! App (one App per Space; an App may have several). K2 binds Sew's side
+//! too (`POST /mgmt/v1/spaces/bind`, once) from the daemon route before it
+//! writes the row here. Unbinding forgets the row; the members K2 added
+//! are then removed by the next plan (nobody's grant maps there any more).
+//!
+//! **Ledger.** Sew has no mgmt list of a Space's members, so K2 keeps what
+//! it asked for in `tool_app_space_members` (`pending_add` → `added`,
+//! `held`, `pending_remove` → row gone). [`plan`] diffs the desired set
+//! against it and enqueues outbox ops on the S27 worker (tool `chat`):
+//! `space_member_add` (after the person's own provisioning queue, so the
+//! add never races the provision) and `space_member_remove`, one person
+//! per row, subject key `space:<space id>:<external id>`.
+//!
+//! **HC2.** A member Sew lists in `skipped` (banned in that Space) or in
+//! `not_added` for a reason other than `not_provisioned` (deactivated,
+//! assistant, guest) is recorded `held` with the grant rev it was held
+//! under, and is not re-added until that rev changes. `not_provisioned`
+//! is retried with backoff (the person's provision is still queued).
+//!
+//! Tables live in `skin.db` (idempotent DDL like `tool_outbox`), so this
+//! needs no main-DB migration.
+
+use std::collections::{HashMap, HashSet};
+
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
+
+use super::sew_wire::{
+    self, ExternalId, SpaceMemberRemoveRequest, SpaceMembersAddRequest, SpaceMembersAddResponse,
+};
+use super::{outbox, Cause, NewOp, Op, CHAT_KIND};
+
+/// Ledger states.
+pub const PENDING_ADD: &str = "pending_add";
+pub const ADDED: &str = "added";
+pub const HELD: &str = "held";
+pub const PENDING_REMOVE: &str = "pending_remove";
+
+/// Outbox subject-key prefix for Space membership rows.
+pub const SUBJECT_PREFIX: &str = "space:";
+
+/// Idempotent DDL, called from `skin::open_db` beside `tool_outbox`.
+pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS tool_app_spaces (
+            app_id    TEXT NOT NULL,
+            space_id  TEXT NOT NULL,
+            bound_at  INTEGER NOT NULL,
+            bound_by  TEXT NOT NULL,
+            PRIMARY KEY (app_id, space_id)
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS tool_app_spaces_space
+            ON tool_app_spaces(space_id);
+         CREATE TABLE IF NOT EXISTS tool_app_space_members (
+            space_id    TEXT NOT NULL,
+            app_id      TEXT NOT NULL,
+            external_id TEXT NOT NULL,
+            state       TEXT NOT NULL
+                CHECK (state IN ('pending_add','added','held','pending_remove')),
+            grant_rev   TEXT,
+            why         TEXT,
+            updated_at  INTEGER NOT NULL,
+            PRIMARY KEY (space_id, external_id)
+         );",
+    )
+    .map_err(|e| format!("skin.db app spaces schema: {e}"))
+}
+
+pub fn subject_key(space_id: &str, ext: &ExternalId) -> String {
+    format!("{SUBJECT_PREFIX}{space_id}:{ext}")
+}
+
+/// One App ↔ Space binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Binding {
+    pub app_id: String,
+    pub space_id: String,
+    pub bound_at: i64,
+    /// Attribution only ("reported by K2").
+    pub bound_by: String,
+}
+
+/// Ledger counts for one Space.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Counts {
+    pub added: usize,
+    pub held: usize,
+    pub pending: usize,
+}
+
+/// Check an App id and a Space id before any write.
+pub fn check_ids(app_id: &str, space_id: &str) -> Result<(), String> {
+    if !sew_wire::is_app_id(app_id) {
+        return Err(format!(
+            "'{app_id}' is not an App id Sew takes (1–64 of [a-z0-9][a-z0-9._-]*)"
+        ));
+    }
+    if app_id == crate::skin::HOST_APP_ID {
+        return Err(
+            "the box login ('host') is not an App with its own Space: K2's default Space is not bound"
+                .into(),
+        );
+    }
+    if !sew_wire::is_sew_id(space_id) {
+        return Err(format!("'{space_id}' is not a Sew Space id"));
+    }
+    Ok(())
+}
+
+/// Record a binding. `Ok(false)` = it was already there (same App). A
+/// Space bound to another App is refused (`space_bound`).
+pub fn bind(
+    conn: &Connection,
+    app_id: &str,
+    space_id: &str,
+    actor: &str,
+    now: i64,
+) -> Result<bool, String> {
+    check_ids(app_id, space_id)?;
+    let other: Option<String> = conn
+        .query_row(
+            "SELECT app_id FROM tool_app_spaces WHERE space_id = ?1",
+            params![space_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("app spaces read: {e}"))?;
+    match other {
+        Some(a) if a == app_id => Ok(false),
+        Some(a) => Err(format!("space_bound: Space {space_id} belongs to App '{a}'")),
+        None => {
+            conn.execute(
+                "INSERT INTO tool_app_spaces (app_id, space_id, bound_at, bound_by) VALUES (?1, ?2, ?3, ?4)",
+                params![app_id, space_id, now, actor],
+            )
+            .map_err(|e| format!("app spaces insert: {e}"))?;
+            Ok(true)
+        }
+    }
+}
+
+/// Forget a binding. `Ok(false)` = there was none.
+pub fn unbind(conn: &Connection, app_id: &str, space_id: &str) -> Result<bool, String> {
+    let n = conn
+        .execute(
+            "DELETE FROM tool_app_spaces WHERE app_id = ?1 AND space_id = ?2",
+            params![app_id, space_id],
+        )
+        .map_err(|e| format!("app spaces delete: {e}"))?;
+    Ok(n > 0)
+}
+
+pub fn bindings(conn: &Connection) -> Result<Vec<Binding>, String> {
+    let mut stmt = conn
+        .prepare("SELECT app_id, space_id, bound_at, bound_by FROM tool_app_spaces ORDER BY app_id, space_id")
+        .map_err(|e| format!("app spaces list: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(Binding { app_id: r.get(0)?, space_id: r.get(1)?, bound_at: r.get(2)?, bound_by: r.get(3)? })
+        })
+        .map_err(|e| format!("app spaces list: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("app spaces row: {e}"))
+}
+
+pub fn counts(conn: &Connection, space_id: &str) -> Result<Counts, String> {
+    let mut stmt = conn
+        .prepare("SELECT state, COUNT(*) FROM tool_app_space_members WHERE space_id = ?1 GROUP BY state")
+        .map_err(|e| format!("app space counts: {e}"))?;
+    let rows = stmt
+        .query_map(params![space_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(|e| format!("app space counts: {e}"))?;
+    let mut c = Counts::default();
+    for row in rows {
+        let (state, n) = row.map_err(|e| format!("app space counts row: {e}"))?;
+        let n = n as usize;
+        match state.as_str() {
+            ADDED => c.added += n,
+            HELD => c.held += n,
+            _ => c.pending += n,
+        }
+    }
+    Ok(c)
+}
+
+/// One person who should be in one App's Space.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Wanted {
+    pub app_id: String,
+    pub space_id: String,
+    pub ext: ExternalId,
+    /// The App grant's id (the outbox row's `grant_id`).
+    pub app_grant_id: String,
+    /// `<app grant rev>|<chat grant rev>`: HC2's "until the grant changes".
+    pub rev: String,
+}
+
+/// The desired set: every binding × every principal with an enabled
+/// `kind=app` grant for that App AND an enabled `chat` member grant.
+/// Principals only — never a Connect login, the owner or an agent.
+pub fn build_desired(conn: &Connection) -> Result<Vec<Wanted>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT b.app_id, b.space_id, a.subject_id, a.id, a.scope, c.id, c.scope
+             FROM tool_app_spaces b
+             JOIN grants a ON a.kind = 'app' AND a.target_id = b.app_id
+                          AND a.subject_kind = 'principal' AND a.enabled = 1
+             JOIN grants c ON c.kind = 'chat' AND c.subject_kind = 'principal'
+                          AND c.subject_id = a.subject_id AND c.enabled = 1 AND c.scope = 'member'
+             ORDER BY b.space_id, a.subject_id",
+        )
+        .map_err(|e| format!("app space desired: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, Option<String>>(6)?,
+            ))
+        })
+        .map_err(|e| format!("app space desired: {e}"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (app_id, space_id, principal, app_gid, app_scope, chat_gid, chat_scope) =
+            row.map_err(|e| format!("app space desired row: {e}"))?;
+        // A principal id that is not a lower uuid can't be a Sew member
+        // (S27 refuses it at provision); leave it out rather than fail.
+        let Ok(ext) = ExternalId::parse(&format!("k2:principal:{principal}")) else {
+            continue;
+        };
+        out.push(Wanted {
+            app_id,
+            space_id,
+            ext,
+            rev: format!(
+                "{}:{}:1|{}:{}:1",
+                app_gid,
+                app_scope.unwrap_or_default(),
+                chat_gid,
+                chat_scope.unwrap_or_default()
+            ),
+            app_grant_id: app_gid,
+        });
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Clone)]
+struct LedgerRow {
+    app_id: String,
+    state: String,
+    rev: Option<String>,
+}
+
+fn ledger(conn: &Connection) -> Result<HashMap<(String, String), LedgerRow>, String> {
+    let mut stmt = conn
+        .prepare("SELECT space_id, external_id, app_id, state, grant_rev FROM tool_app_space_members")
+        .map_err(|e| format!("app space ledger: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
+                LedgerRow { app_id: r.get(2)?, state: r.get(3)?, rev: r.get(4)? },
+            ))
+        })
+        .map_err(|e| format!("app space ledger: {e}"))?;
+    rows.collect::<Result<HashMap<_, _>, _>>().map_err(|e| format!("app space ledger row: {e}"))
+}
+
+fn set_ledger(
+    conn: &Connection,
+    space_id: &str,
+    ext: &str,
+    app_id: &str,
+    state: &str,
+    rev: Option<&str>,
+    why: Option<&str>,
+    now: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO tool_app_space_members (space_id, app_id, external_id, state, grant_rev, why, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(space_id, external_id) DO UPDATE SET
+            app_id = excluded.app_id, state = excluded.state,
+            grant_rev = COALESCE(excluded.grant_rev, tool_app_space_members.grant_rev),
+            why = excluded.why, updated_at = excluded.updated_at",
+        params![space_id, app_id, ext, state, rev, why, now],
+    )
+    .map_err(|e| format!("app space ledger write: {e}"))?;
+    Ok(())
+}
+
+fn drop_ledger(conn: &Connection, space_id: &str, ext: &str) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM tool_app_space_members WHERE space_id = ?1 AND external_id = ?2",
+        params![space_id, ext],
+    )
+    .map_err(|e| format!("app space ledger delete: {e}"))?;
+    Ok(())
+}
+
+fn add_op(w: &Wanted, cause: Cause) -> Result<NewOp, String> {
+    let body = SpaceMembersAddRequest {
+        space_id: w.space_id.clone(),
+        app_id: Some(w.app_id.clone()),
+        external_ids: vec![w.ext.clone()],
+    };
+    Ok(NewOp {
+        tool: CHAT_KIND,
+        op: Op::SpaceMemberAdd,
+        subject_key: subject_key(&w.space_id, &w.ext),
+        payload: serde_json::to_value(&body).map_err(|e| format!("space add body: {e}"))?,
+        grant_id: Some(w.app_grant_id.clone()),
+        grant_rev: Some(w.rev.clone()),
+        cause,
+        // The person's own queue (provision) goes first.
+        after_subject: Some(w.ext.to_string()),
+    })
+}
+
+fn remove_op(space_id: &str, app_id: &str, ext: &ExternalId, cause: Cause) -> Result<NewOp, String> {
+    let body = SpaceMemberRemoveRequest {
+        space_id: space_id.to_string(),
+        app_id: Some(app_id.to_string()),
+        external_id: ext.clone(),
+    };
+    Ok(NewOp {
+        tool: CHAT_KIND,
+        op: Op::SpaceMemberRemove,
+        subject_key: subject_key(space_id, ext),
+        payload: serde_json::to_value(&body).map_err(|e| format!("space remove body: {e}"))?,
+        grant_id: None,
+        grant_rev: None,
+        cause,
+        after_subject: None,
+    })
+}
+
+/// What one [`plan`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Summary {
+    pub desired: usize,
+    pub adds: usize,
+    pub removes: usize,
+    pub held_kept: usize,
+    pub held_forgotten: usize,
+}
+
+/// Diff the desired set against the ledger, write the ledger changes and
+/// return the ops to enqueue. MUST run inside the caller's transaction
+/// (the caller enqueues the ops in it). `busy` = subject keys with an open
+/// (`pending`/`blocked`) outbox row.
+pub fn plan(
+    conn: &Connection,
+    busy: &HashSet<String>,
+    now: i64,
+) -> Result<(Vec<NewOp>, Summary), String> {
+    let desired = build_desired(conn)?;
+    let mut have = ledger(conn)?;
+    let mut ops = Vec::new();
+    let mut s = Summary { desired: desired.len(), ..Default::default() };
+    for w in &desired {
+        let ext = w.ext.to_string();
+        let key = (w.space_id.clone(), ext.clone());
+        let open = busy.contains(&subject_key(&w.space_id, &w.ext));
+        let enqueue = match have.remove(&key) {
+            None => true,
+            Some(l) => match l.state.as_str() {
+                ADDED => false,
+                // Queued already; re-queue only if its row is gone (an
+                // owner skip) so the person is not stuck.
+                PENDING_ADD => !open,
+                // The remove is queued: the add lands after it.
+                PENDING_REMOVE => true,
+                HELD => {
+                    let changed = l.rev.as_deref() != Some(w.rev.as_str());
+                    if !changed {
+                        s.held_kept += 1;
+                    }
+                    changed
+                }
+                _ => true,
+            },
+        };
+        if enqueue {
+            ops.push(add_op(w, Cause::Reconcile)?);
+            set_ledger(conn, &w.space_id, &ext, &w.app_id, PENDING_ADD, Some(&w.rev), None, now)?;
+            s.adds += 1;
+        }
+    }
+    // Everything left in the ledger is no longer wanted.
+    for ((space_id, ext_s), l) in have {
+        let Ok(ext) = ExternalId::parse(&ext_s) else {
+            drop_ledger(conn, &space_id, &ext_s)?;
+            continue;
+        };
+        let open = busy.contains(&subject_key(&space_id, &ext));
+        match l.state.as_str() {
+            HELD => {
+                drop_ledger(conn, &space_id, &ext_s)?;
+                s.held_forgotten += 1;
+            }
+            PENDING_REMOVE if open => {}
+            _ => {
+                ops.push(remove_op(&space_id, &l.app_id, &ext, Cause::Reconcile)?);
+                set_ledger(conn, &space_id, &ext_s, &l.app_id, PENDING_REMOVE, None, None, now)?;
+                s.removes += 1;
+            }
+        }
+    }
+    Ok((ops, s))
+}
+
+/// [`plan`] + enqueue, in one transaction (bind/unbind and tests; the
+/// reconcile sweep runs [`plan`] inside its own transaction).
+pub fn reconcile(conn: &Connection, actor: &str, now: i64) -> Result<Summary, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| format!("app space begin: {e}"))?;
+    let busy = outbox::busy_subjects(&tx, CHAT_KIND)?;
+    let (ops, s) = plan(&tx, &busy, now)?;
+    outbox::enqueue(&tx, &ops, actor, now)?;
+    tx.commit().map_err(|e| format!("app space commit: {e}"))?;
+    Ok(s)
+}
+
+/// How Sew answered one `space_member_add` row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddVerdict {
+    /// In the Space (`added` or `already`).
+    Added,
+    /// Not added, and K2 must not retry until the grant changes (HC2).
+    Held(String),
+    /// The person has no Sew account yet: retry later.
+    NotProvisioned,
+    /// The answer names neither outcome for this person.
+    Unknown(String),
+}
+
+/// Read a 2xx `spaces/members/add` answer for the one person the row sent.
+pub fn add_verdict(payload_raw: &str, body: &str) -> AddVerdict {
+    let sent: Option<SpaceMembersAddRequest> = serde_json::from_str(payload_raw).ok();
+    let Some(ext) = sent.and_then(|r| r.external_ids.into_iter().next()) else {
+        return AddVerdict::Unknown("the row's payload names no person".into());
+    };
+    let Ok(resp) = serde_json::from_str::<SpaceMembersAddResponse>(body) else {
+        return AddVerdict::Unknown("Sew's answer is not a members/add response".into());
+    };
+    if resp.added.iter().chain(resp.already.iter()).any(|m| m.external_id == ext) {
+        return AddVerdict::Added;
+    }
+    if let Some(n) = resp.not_added.iter().find(|n| n.external_id == ext) {
+        return if n.reason == sew_wire::NOT_ADDED_NOT_PROVISIONED {
+            AddVerdict::NotProvisioned
+        } else {
+            AddVerdict::Held(format!("not added: {}", n.reason))
+        };
+    }
+    if !resp.skipped.is_empty() {
+        return AddVerdict::Held("skipped: banned in this Space".into());
+    }
+    AddVerdict::Unknown(format!("Sew did not list {ext} in its answer"))
+}
+
+fn row_target(row: &outbox::OutboxRow) -> Option<(String, String, Option<String>)> {
+    let v: serde_json::Value = serde_json::from_str(&row.payload_raw).ok()?;
+    let space = v.get("space_id")?.as_str()?.to_string();
+    let app = v.get("app_id").and_then(|a| a.as_str()).map(str::to_string);
+    let ext = v
+        .get("external_id")
+        .or_else(|| v.get("external_ids").and_then(|a| a.get(0)))?
+        .as_str()?
+        .to_string();
+    Some((space, ext, app))
+}
+
+/// Move a `pending_add` ledger row on (and nothing else: a remove queued
+/// after this add has the newer wish).
+fn settle_add(
+    conn: &Connection,
+    space: &str,
+    ext: &str,
+    state: &str,
+    rev: Option<&str>,
+    why: Option<&str>,
+    now: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE tool_app_space_members
+            SET state = ?1, grant_rev = COALESCE(?2, grant_rev), why = ?3, updated_at = ?4
+          WHERE space_id = ?5 AND external_id = ?6 AND state = 'pending_add'",
+        params![state, rev, why, now, space, ext],
+    )
+    .map_err(|e| format!("app space ledger settle: {e}"))?;
+    Ok(())
+}
+
+/// The worker delivered row `id` (done): move the ledger on.
+pub fn after_done(conn: &Connection, id: &str, now: i64) -> Result<(), String> {
+    let Some(row) = outbox::get(conn, id)? else { return Ok(()) };
+    let Some((space, ext, _app)) = row_target(&row) else { return Ok(()) };
+    match Op::parse(&row.op) {
+        Some(Op::SpaceMemberAdd) => settle_add(conn, &space, &ext, ADDED, row.grant_rev.as_deref(), None, now),
+        Some(Op::SpaceMemberRemove) => {
+            // Only forget a person whose latest wish is still "out" (an
+            // add queued after this remove keeps its pending_add).
+            conn.execute(
+                "DELETE FROM tool_app_space_members
+                 WHERE space_id = ?1 AND external_id = ?2 AND state = 'pending_remove'",
+                params![space, ext],
+            )
+            .map_err(|e| format!("app space ledger delete: {e}"))?;
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The worker recorded row `id` held (HC2): the ledger keeps the person
+/// out until the grant rev changes.
+pub fn after_held(conn: &Connection, id: &str, why: &str, now: i64) -> Result<(), String> {
+    let Some(row) = outbox::get(conn, id)? else { return Ok(()) };
+    let Some((space, ext, _app)) = row_target(&row) else { return Ok(()) };
+    settle_add(conn, &space, &ext, HELD, row.grant_rev.as_deref(), Some(why), now)
+}
+
+#[cfg(test)]
+#[path = "app_space_tests.rs"]
+mod tests;

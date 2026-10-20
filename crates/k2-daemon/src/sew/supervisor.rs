@@ -947,6 +947,7 @@ pub fn k2_alarms(env: &Env, row: &Row, sew_status: Option<&Value>, now: i64) -> 
     if row.upgrade_progress.as_ref().and_then(|p| p.get("result")).and_then(Value::as_str) == Some("rollback_failed") {
         a.push("k2_upgrade_rollback_failed".into());
     }
+    a.extend(super::s32::k2_alarms(env, row));
     a
 }
 
@@ -1186,6 +1187,10 @@ pub fn spawn_background() {
                 k2_core::log_debug!("[sew] state → {s}");
             }
             super::voice::tick(&env);
+            // S32: new-bundle signal + off-box copy (K26/K27).
+            if let Some(r) = super::s32::ship_tick(&env) {
+                k2_core::log_debug!("[sew] ship tick: {r}");
+            }
         }
     });
 }

@@ -1022,6 +1022,11 @@ pub const ROUTES: &[Route] = &[
     // has "Manage Sew" on, pass through to the handler). Purge, the
     // recovery key and rotate-master drop-prev are person-only in the
     // handler (owner + a vault confirm).
+    // S32 K31: App ↔ Space bindings (read: any login; bind/unbind: the
+    // Manage Sew gate in the handler, Admin floor for logins).
+    get("/cli/sew/app-spaces", Member),
+    post("/cli/sew/app-spaces/bind", Admin),
+    post("/cli/sew/app-spaces/unbind", Admin),
     get("/cli/sew/backups", Member),
     get("/cli/sew/job", Member),
     // Sew chat-pass keys (S28 §10, K6): Owner/Admin people; the emergency
@@ -1048,15 +1053,21 @@ pub const ROUTES: &[Route] = &[
     // (no credential) pass the login gate to the handler's own checks.
     post("/cli/sew/pass", Member),
     get("/cli/sew/preflight", Member),
+    // S32 (K27): the app URL behind Open Sew as owner (Manage Sew).
+    post("/cli/sew/server/app-url", Admin),
     post("/cli/sew/server/backup", Admin),
     post("/cli/sew/server/config", Admin),
     post("/cli/sew/server/disable", Admin),
     post("/cli/sew/server/doctor", Admin),
     post("/cli/sew/server/enable", Admin),
+    // S32 (K27): Sew's keyring mirror (Manage Sew; never the vault).
+    post("/cli/sew/server/mirror", Admin),
     post("/cli/sew/server/recovery-key", Owner),
     post("/cli/sew/server/restore", Admin),
     post("/cli/sew/server/rollback", Admin),
     post("/cli/sew/server/rotate-master", Admin),
+    // S32 (K27): off-box backup copies (Manage Sew; `none` is audited).
+    post("/cli/sew/server/ship", Admin),
     post("/cli/sew/server/uninstall", Admin),
     post("/cli/sew/server/upgrade", Admin),
     get("/cli/sew/status", Member),

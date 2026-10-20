@@ -38,6 +38,7 @@
 //!   the main DB, so they cannot share the skin.db transaction: they call
 //!   [`kick_reconcile`] and the sweep fixes the drift.
 
+pub mod app_space;
 pub mod chat;
 pub mod outbox;
 pub mod reconcile;
@@ -83,6 +84,11 @@ pub enum Op {
     /// (`revoke:…`), so it never waits behind (or blocks) a member's
     /// provisioning queue.
     SewSessionRevoke,
+    /// K31: add one App user to that App's Sew Space
+    /// (`POST /mgmt/v1/spaces/members/add`, subject `space:<id>:<ext>`).
+    SpaceMemberAdd,
+    /// K31: remove one person from an App's Sew Space.
+    SpaceMemberRemove,
 }
 
 impl Op {
@@ -93,6 +99,8 @@ impl Op {
             Op::Deprovision => "deprovision",
             Op::OwnerSet => "owner_set",
             Op::SewSessionRevoke => "sew_session_revoke",
+            Op::SpaceMemberAdd => "space_member_add",
+            Op::SpaceMemberRemove => "space_member_remove",
         }
     }
 
@@ -103,19 +111,29 @@ impl Op {
             "deprovision" => Op::Deprovision,
             "owner_set" => Op::OwnerSet,
             "sew_session_revoke" => Op::SewSessionRevoke,
+            "space_member_add" => Op::SpaceMemberAdd,
+            "space_member_remove" => Op::SpaceMemberRemove,
             _ => return None,
         })
     }
 
     /// The ops the worker delivers. S28's session revoke joined in 0.46.1
-    /// (plan B7: "S28 adds its op to `Op::DELIVERED`").
-    pub const DELIVERED: [Op; 5] = [
+    /// (plan B7: "S28 adds its op to `Op::DELIVERED`"); K31's App Space
+    /// membership ops ride the same worker.
+    pub const DELIVERED: [Op; 7] = [
         Op::Provision,
         Op::Update,
         Op::Deprovision,
         Op::OwnerSet,
         Op::SewSessionRevoke,
+        Op::SpaceMemberAdd,
+        Op::SpaceMemberRemove,
     ];
+
+    /// K31's App Space membership ops.
+    pub fn is_space_op(self) -> bool {
+        matches!(self, Op::SpaceMemberAdd | Op::SpaceMemberRemove)
+    }
 
     pub fn delivered_by_s27(self) -> bool {
         Self::DELIVERED.contains(&self)
@@ -889,6 +907,18 @@ pub fn apply_reconcile(
         summary.orphans_removed = built.orphans.len();
         let mut ops = orphan_ops;
         ops.extend(planned.into_iter().map(|p| p.into_new_op(kind)));
+        // K31: App Space membership follows App grants (rev 147). After
+        // the member ops above, so a fresh member's provision queues first.
+        if kind == CHAT_KIND {
+            let (space_ops, space) = app_space::plan(&tx, &busy, now)?;
+            if !space_ops.is_empty() || space.held_forgotten > 0 {
+                crate::log_debug!(
+                    "[grant-hook] app spaces: {}",
+                    serde_json::to_value(&space).unwrap_or_default()
+                );
+            }
+            ops.extend(space_ops);
+        }
         let ids = outbox::enqueue(&tx, &ops, ACTOR_RECONCILE, now)?;
         let summary_json = serde_json::to_value(&summary).unwrap_or_default();
         outbox::set_target_reconcile(&tx, kind, Some(&summary_json), None, now)?;
@@ -902,6 +932,63 @@ pub fn apply_reconcile(
     })?;
     kick();
     Ok(summary)
+}
+
+// ── K31: App Space bindings ──────────────────────────────────────────
+
+/// One binding with its ledger counts (`GET /cli/sew/app-spaces`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSpaceView {
+    #[serde(flatten)]
+    pub binding: app_space::Binding,
+    pub members: app_space::Counts,
+}
+
+pub fn app_spaces() -> Result<Vec<AppSpaceView>, String> {
+    crate::skin::with_skin_conn(|conn| {
+        app_space::bindings(conn)?
+            .into_iter()
+            .map(|b| {
+                let members = app_space::counts(conn, &b.space_id)?;
+                Ok(AppSpaceView { binding: b, members })
+            })
+            .collect()
+    })
+}
+
+/// Record `app` ↔ `space` (Sew's side is bound first, by the caller) and
+/// plan the App's users into it. Returns whether the row is new and the
+/// plan summary.
+pub fn app_space_bind(
+    app_id: &str,
+    space_id: &str,
+    actor: &str,
+) -> Result<(bool, app_space::Summary), String> {
+    let now = outbox::now_secs();
+    let r = crate::skin::with_skin_conn(|conn| {
+        let created = app_space::bind(conn, app_id, space_id, actor, now)?;
+        let s = app_space::reconcile(conn, actor, now)?;
+        Ok((created, s))
+    })?;
+    kick();
+    Ok(r)
+}
+
+/// Forget `app` ↔ `space`; the members K2 added there are removed.
+pub fn app_space_unbind(
+    app_id: &str,
+    space_id: &str,
+    actor: &str,
+) -> Result<(bool, app_space::Summary), String> {
+    let now = outbox::now_secs();
+    let r = crate::skin::with_skin_conn(|conn| {
+        let gone = app_space::unbind(conn, app_id, space_id)?;
+        let s = app_space::reconcile(conn, actor, now)?;
+        Ok((gone, s))
+    })?;
+    kick();
+    Ok(r)
 }
 
 /// A new Sew install id: store it and re-provision the owner (the new
@@ -954,7 +1041,9 @@ pub fn due(kind: &str, limit: usize) -> Result<Vec<outbox::OutboxRow>, String> {
 pub fn record_done(id: &str, status: u16, result: &str) -> Result<(), String> {
     let now = outbox::now_secs();
     crate::skin::with_skin_conn(|conn| {
-        outbox::mark_done(conn, id, status as i64, Some(result), now)
+        outbox::mark_done(conn, id, status as i64, Some(result), now)?;
+        // K31: a delivered Space op moves the membership ledger on.
+        app_space::after_done(conn, id, now)
     })
 }
 
@@ -970,7 +1059,8 @@ pub fn record_held(id: &str, status: u16, result: &str, why: &str) -> Result<(),
     let now = outbox::now_secs();
     crate::log_debug!("[grant-hook] row {id} held: {why}");
     crate::skin::with_skin_conn(|conn| {
-        outbox::mark_held(conn, id, status as i64, Some(result), why, now)
+        outbox::mark_held(conn, id, status as i64, Some(result), why, now)?;
+        app_space::after_held(conn, id, why, now)
     })
 }
 

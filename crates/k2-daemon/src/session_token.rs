@@ -754,6 +754,14 @@ pub fn is_agent_verb(path: &str) -> bool {
         "/cli/sew/users/revoke",
         "/cli/sew/users/reactivate",
         "/cli/sew/users/role",
+        // S32 (K27, K31): app URL, off-box copies, keyring mirror, App
+        // Spaces. Manage Sew in the handler; the list is a read.
+        "/cli/sew/server/app-url",
+        "/cli/sew/server/ship",
+        "/cli/sew/server/mirror",
+        "/cli/sew/app-spaces",
+        "/cli/sew/app-spaces/bind",
+        "/cli/sew/app-spaces/unbind",
         "/cli/app/box",
         "/cli/app/box/prepare",
         "/cli/app/build",

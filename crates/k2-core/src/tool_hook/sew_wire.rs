@@ -550,6 +550,103 @@ impl AddMembersOutcome {
     }
 }
 
+// ── App Spaces over mgmt (`sew_proto::mgmt::spaces`, SW13) ───────────
+
+/// `POST`: bind a Space to an App, once (the same App again is a no-op).
+pub const MGMT_SPACES_BIND: &str = "/mgmt/v1/spaces/bind";
+/// `POST`: add principals to a Space (any Space, not only the default).
+pub const MGMT_SPACE_MEMBERS_ADD: &str = "/mgmt/v1/spaces/members/add";
+/// `POST`: remove one principal from a Space.
+pub const MGMT_SPACE_MEMBERS_REMOVE: &str = "/mgmt/v1/spaces/members/remove";
+/// Longest App id Sew takes, bytes.
+pub const APP_ID_MAX_BYTES: usize = 64;
+
+/// Sew's App id grammar: 1–64 bytes of `[a-z0-9][a-z0-9._-]*`.
+pub fn is_app_id(s: &str) -> bool {
+    let b = s.as_bytes();
+    (1..=APP_ID_MAX_BYTES).contains(&b.len())
+        && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit())
+        && b.iter().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(*c, b'.' | b'_' | b'-')
+        })
+}
+
+/// A Sew id as K2 stores it (`Id` is a string on the wire): 1–64 bytes of
+/// `[A-Za-z0-9_-]`. K2 never builds one; it only checks what it is given.
+pub fn is_sew_id(s: &str) -> bool {
+    (1..=64).contains(&s.len())
+        && s.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+}
+
+/// `MgmtSpaceBindRequest`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpaceBindRequest {
+    pub space_id: String,
+    pub app_id: String,
+}
+
+/// `MgmtSpaceMembersAddRequest` (1–100 distinct principals).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpaceMembersAddRequest {
+    pub space_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    pub external_ids: Vec<ExternalId>,
+}
+
+/// `MgmtSpaceMemberRemoveRequest`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpaceMemberRemoveRequest {
+    pub space_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    pub external_id: ExternalId,
+}
+
+/// `MgmtSpaceMemberRef`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpaceMemberRef {
+    pub external_id: ExternalId,
+    pub member_id: String,
+}
+
+/// `MgmtSpaceNotAdded` (`reason`: `not_provisioned` | `deactivated` |
+/// `assistant` | `guest`; read as a string so a newer reason still parses).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpaceNotAdded {
+    pub external_id: ExternalId,
+    pub reason: String,
+}
+
+/// `MgmtSpaceNotAddedReason::NotProvisioned`: the member has no Sew
+/// account yet (its provision is still queued). The only reason K2 retries.
+pub const NOT_ADDED_NOT_PROVISIONED: &str = "not_provisioned";
+
+/// `MgmtSpaceMembersAddResponse`, read leniently (every list defaults to
+/// empty; `skipped` = banned member ids, HC2).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpaceMembersAddResponse {
+    #[serde(default)]
+    pub added: Vec<SpaceMemberRef>,
+    #[serde(default)]
+    pub already: Vec<SpaceMemberRef>,
+    #[serde(default)]
+    pub skipped: Vec<String>,
+    #[serde(default)]
+    pub not_added: Vec<SpaceNotAdded>,
+}
+
+/// `MgmtSpaceMemberRemoveResponse`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpaceMemberRemoveResponse {
+    #[serde(default)]
+    pub removed: bool,
+}
+
 // ── errors (`sew_proto::error`) ──────────────────────────────────────
 
 /// `{"ok": false, "error": {code, hint, details}}`.

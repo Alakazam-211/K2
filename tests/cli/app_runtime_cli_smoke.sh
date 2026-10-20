@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # k2 app (App runtime stage 1, prd-k2-app-runtime-v1 S6–S9) — CLI smoke: a
-# sandbox daemon (temp HOME, K2_APPS=1, air-gapped) + this checkout's
+# sandbox daemon (temp HOME, K2_APPS=1 + K2_APPS_PROCESS=1 for the process engine, air-gapped) + this checkout's
 # cli/k2 on loopback. Fixture Apps are python3 HTTP servers.
 #
 # Covers: validate (ok and failing, exit 1); build prints a Seed; install;
@@ -59,7 +59,7 @@ mkdir -p "$DHOME" "$SANDBOX/tmp"
 echo "== sandbox daemon =="
 # Its own TMPDIR too: the daemon keeps runtime files (frpc.toml) there,
 # and its shutdown reaps strays matching that path.
-HOME="$DHOME" TMPDIR="$SANDBOX/tmp" K2_APPS=1 K2_AIRGAP=1 K2_APPS_WATCH_SECS=120 K2_APPS_DEPLOY_TIMEOUT_SECS=10 K2_APPS_DRAIN_SECS=2 K2_APPS_STOP_GRACE_SECS=2 \
+HOME="$DHOME" TMPDIR="$SANDBOX/tmp" K2_APPS=1 K2_APPS_PROCESS=1 K2_AIRGAP=1 K2_APPS_WATCH_SECS=120 K2_APPS_DEPLOY_TIMEOUT_SECS=10 K2_APPS_DRAIN_SECS=2 K2_APPS_STOP_GRACE_SECS=2 \
     "$DAEMON" > "$SANDBOX/daemon.log" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 150); do

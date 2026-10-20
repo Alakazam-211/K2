@@ -96,9 +96,13 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // K2 compute nodes preview (CN30): lets agents run programs on paired
     // machines once grants exist, so only the Owner turns it on.
     "computePreview",
-    // App runtime preview (prd-k2-app-runtime-v1 AR28): runs App code as
-    // the daemon user on the process engine, so only the Owner turns it on.
+    // Apps (beta) (prd-k2-app-runtime-v1 AR28): the App runtime switch.
+    // `appsPreview` is its 0.46.2-and-older name (an old client may still
+    // send it; `app_settings::update` maps it to `apps`).
+    "apps",
     "appsPreview",
+    // The unwalled process engine: App code as the daemon's user, no wall.
+    "appsProcessEngine",
     // Clone permissions (prd-clone-carries-threads-and-vault-v1 CL22): the
     // master switch for cloning agents to people's personal computers.
     "allowClonePersonalComputers",
@@ -292,7 +296,11 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
             // Connect toggle changes it. Env-var force-on still wins in enabled().
             k2_core::federation::set_enabled(merged.federation_enabled);
             k2_core::compute::set_enabled(merged.compute_preview);
-            k2_core::deploy::set_enabled(merged.apps_preview);
+            k2_core::deploy::set_enabled(merged.apps);
+            k2_core::deploy::set_process_engine(merged.apps_process_engine);
+            // The process engine turned off: what runs unwalled stops now,
+            // not at the next restart.
+            crate::apps::supervisor::spawn_stop_unwalled_if_off("owner");
             // 0.40.43 (1c): same deal for the public /v1 API switch — sync the
             // runtime mirror so misc_routes::api_enabled() (checked PER REQUEST
             // by the dispatcher's /v1 arm) flips the surface live, with no
@@ -340,7 +348,9 @@ pub fn handle_settings_reset(actor: SettingsActor) -> CliResponse {
             // Reset returns federation to its default (OFF) — sync it.
             k2_core::federation::set_enabled(defaults.federation_enabled);
             k2_core::compute::set_enabled(defaults.compute_preview);
-            k2_core::deploy::set_enabled(defaults.apps_preview);
+            k2_core::deploy::set_enabled(defaults.apps);
+            k2_core::deploy::set_process_engine(defaults.apps_process_engine);
+            crate::apps::supervisor::spawn_stop_unwalled_if_off("owner");
             // …and the /v1 API switch back to its default (OFF) too (1c).
             k2_core::app_settings::set_api_enabled(defaults.api_enabled);
             k2_core::airgap::set_setting_enabled(defaults.airgap);

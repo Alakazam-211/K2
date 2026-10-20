@@ -368,7 +368,19 @@ async fn async_main() {
     crate::compute_advertise::spawn();
     // Node admin: offline alerts and request expiry, headless (60 s).
     crate::compute_admin::spawn_watch();
-    k2_core::deploy::set_enabled(k2_core::app_settings::load().apps_preview);
+    // 0.46.3 (Apps on for real): a settings file from 0.46.2 or older gets
+    // `apps` once (a stored appsPreview false read as unset → on; an earlier
+    // preview opt-in carries over as the process engine).
+    match k2_core::app_settings::migrate_legacy_apps_switch() {
+        Ok(true) => k2_core::log_debug!("[apps] settings: appsPreview migrated to apps (Apps (beta) on)"),
+        Ok(false) => {}
+        Err(e) => k2_core::log_debug!("[apps] settings: appsPreview migration failed: {e}"),
+    }
+    {
+        let s = k2_core::app_settings::load();
+        k2_core::deploy::set_enabled(s.apps);
+        k2_core::deploy::set_process_engine(s.apps_process_engine);
+    }
     // S17 / AR18: in a delegated unit (box prep's cores slice), agent
     // sessions get their own memory budget beside the daemon.
     k2_core::agents_leaf::init();

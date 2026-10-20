@@ -91,6 +91,11 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
     .map_err(|e| format!("skin.db tool_outbox schema: {e}"))?;
     // A8: files made before `filled_at` existed. Ignore duplicate ALTER.
     let _ = conn.execute("ALTER TABLE tool_outbox ADD COLUMN filled_at INTEGER", []);
+    // 0.46.3: the last pass that changed something + a short per-pass
+    // history (the latest pass alone is almost always a no-op).
+    let _ = conn.execute("ALTER TABLE tool_targets ADD COLUMN last_change_at INTEGER", []);
+    let _ = conn.execute("ALTER TABLE tool_targets ADD COLUMN last_change TEXT", []);
+    let _ = conn.execute("ALTER TABLE tool_targets ADD COLUMN reconcile_history TEXT", []);
     Ok(())
 }
 
@@ -718,11 +723,29 @@ pub struct ToolTarget {
     pub last_error: Option<String>,
     pub last_reconcile_at: Option<i64>,
     pub last_reconcile: Option<serde_json::Value>,
+    /// The latest pass that provisioned, updated, deprovisioned or removed
+    /// an orphan (`None` until one does).
+    pub last_change_at: Option<i64>,
+    pub last_change: Option<serde_json::Value>,
+    /// The last [`RECONCILE_HISTORY`] passes, oldest first: the summary
+    /// plus `at`.
+    pub reconcile_history: Vec<serde_json::Value>,
     pub updated_at: i64,
 }
 
+/// Passes kept in `reconcile_history`.
+pub const RECONCILE_HISTORY: usize = 10;
+
+/// Did this reconcile pass change anything (not just look)?
+pub fn reconcile_changed(summary: &serde_json::Value) -> bool {
+    ["provisioned", "updated", "deprovisioned", "orphansRemoved"]
+        .iter()
+        .any(|k| summary.get(*k).and_then(|v| v.as_u64()).unwrap_or(0) > 0)
+}
+
 const TARGET_SELECT: &str = "SELECT kind, enabled, config, install_id, healthy, last_ok_at,
-        last_error, last_reconcile_at, last_reconcile, updated_at FROM tool_targets";
+        last_error, last_reconcile_at, last_reconcile, updated_at, last_change_at, last_change,
+        reconcile_history FROM tool_targets";
 
 fn map_target(r: &rusqlite::Row<'_>) -> rusqlite::Result<ToolTarget> {
     let config: String = r.get(2)?;
@@ -748,6 +771,14 @@ fn map_target(r: &rusqlite::Row<'_>) -> rusqlite::Result<ToolTarget> {
         last_reconcile_at: r.get(7)?,
         last_reconcile: last.and_then(|s| serde_json::from_str(&s).ok()),
         updated_at: r.get(9)?,
+        last_change_at: r.get(10)?,
+        last_change: r
+            .get::<_, Option<String>>(11)?
+            .and_then(|s| serde_json::from_str(&s).ok()),
+        reconcile_history: r
+            .get::<_, Option<String>>(12)?
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default(),
     })
 }
 
@@ -863,10 +894,33 @@ pub fn set_target_reconcile(
     now: i64,
 ) -> Result<(), String> {
     match summary {
-        Some(s) => conn.execute(
-            "UPDATE tool_targets SET last_reconcile_at = ?1, last_reconcile = ?2 WHERE kind = ?3",
-            params![now, s.to_string(), kind],
-        ),
+        Some(s) => {
+            let mut history = get_target(conn, kind)?
+                .map(|t| t.reconcile_history)
+                .unwrap_or_default();
+            let mut entry = s.clone();
+            if let Some(o) = entry.as_object_mut() {
+                o.insert("at".into(), serde_json::json!(now));
+            }
+            history.push(entry);
+            let drop = history.len().saturating_sub(RECONCILE_HISTORY);
+            history.drain(..drop);
+            let history = serde_json::Value::Array(history).to_string();
+            if reconcile_changed(s) {
+                conn.execute(
+                    "UPDATE tool_targets SET last_reconcile_at = ?1, last_reconcile = ?2,
+                        last_change_at = ?1, last_change = ?2, reconcile_history = ?3
+                     WHERE kind = ?4",
+                    params![now, s.to_string(), history, kind],
+                )
+            } else {
+                conn.execute(
+                    "UPDATE tool_targets SET last_reconcile_at = ?1, last_reconcile = ?2,
+                        reconcile_history = ?3 WHERE kind = ?4",
+                    params![now, s.to_string(), history, kind],
+                )
+            }
+        }
         None => conn.execute(
             "UPDATE tool_targets SET last_error = ?1 WHERE kind = ?2",
             params![error, kind],

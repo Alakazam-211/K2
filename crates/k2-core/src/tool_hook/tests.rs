@@ -1879,3 +1879,55 @@ fn a8_filled_mark_is_set_once_and_keeps_the_key() {
     record_filled(&owner.id, Some(&other)).unwrap();
     assert_eq!(payload(&row(&owner.id))["profile"]["title"], "Boss");
 }
+
+#[test]
+fn reconcile_keeps_the_last_change_and_a_short_history_past_no_op_passes() {
+    let _e = setup();
+    enable_chat();
+    let pass = |at: i64, s: serde_json::Value| {
+        skin::with_skin_conn(|conn| outbox::set_target_reconcile(conn, CHAT_KIND, Some(&s), None, at))
+            .expect("record pass")
+    };
+    let zero = serde_json::to_value(reconcile::Summary::default()).unwrap();
+    assert!(!outbox::reconcile_changed(&zero));
+    let t = get_target(CHAT_KIND).unwrap().unwrap();
+    assert!(t.last_change.is_none() && t.reconcile_history.is_empty());
+
+    let mut changed = zero.clone();
+    changed["provisioned"] = serde_json::json!(2);
+    changed["orphansRemoved"] = serde_json::json!(1);
+    assert!(outbox::reconcile_changed(&changed));
+    pass(1_000, changed.clone());
+    // Skips and ignores alone are not a change.
+    let mut looked = zero.clone();
+    looked["skippedBusy"] = serde_json::json!(3);
+    looked["ignoredLocal"] = serde_json::json!(1);
+    assert!(!outbox::reconcile_changed(&looked));
+    pass(2_000, looked.clone());
+    pass(3_000, zero.clone());
+
+    let t = get_target(CHAT_KIND).unwrap().unwrap();
+    assert_eq!(t.last_reconcile_at, Some(3_000), "the latest pass is still the latest");
+    assert_eq!(t.last_reconcile.as_ref(), Some(&zero));
+    assert_eq!(t.last_change_at, Some(1_000), "the last pass that changed something");
+    assert_eq!(t.last_change.as_ref().unwrap()["provisioned"], 2);
+    let ats: Vec<i64> = t.reconcile_history.iter().map(|h| h["at"].as_i64().unwrap()).collect();
+    assert_eq!(ats, vec![1_000, 2_000, 3_000], "oldest first, each pass stamped");
+    assert_eq!(t.reconcile_history[1]["skippedBusy"], 3);
+
+    // The history is bounded; the last change outlives it.
+    for i in 0..(outbox::RECONCILE_HISTORY as i64 + 5) {
+        pass(10_000 + i, zero.clone());
+    }
+    let t = get_target(CHAT_KIND).unwrap().unwrap();
+    assert_eq!(t.reconcile_history.len(), outbox::RECONCILE_HISTORY);
+    assert_eq!(
+        t.reconcile_history.last().unwrap()["at"].as_i64(),
+        Some(10_000 + outbox::RECONCILE_HISTORY as i64 + 4)
+    );
+    assert_eq!(t.last_change_at, Some(1_000));
+    // The wire shape the CLI reads.
+    let v = serde_json::to_value(&t).unwrap();
+    assert_eq!(v["lastChangeAt"], 1_000);
+    assert!(v["reconcileHistory"].is_array());
+}

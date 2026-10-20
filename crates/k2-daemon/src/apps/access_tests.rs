@@ -43,11 +43,26 @@ fn fx(tag: &str) -> Fx {
             conn.execute("INSERT INTO projects (id, name, path, handle) VALUES (?1, ?1, ?2, ?1)", params![ws, ws_path(ws)]).unwrap();
         }
         for (app, ws, iso) in [("jobs", &ws_a, "container"), ("other", &ws_b, "container"), ("plain", &ws_a, "process"), ("hum", &ws_b, "process")] {
+            // Each App has its service row (a held config change files
+            // against it).
+            let svc = k2_core::published_services::insert(
+                &conn,
+                ws,
+                app,
+                k2_core::published_services::CMD_APP_SENTINEL,
+                &format!("/tmp/k2-access-test/apps/{app}"),
+                0,
+                k2_core::published_services::EXPOSE_LOCAL,
+                k2_core::published_services::DESIRED_STOPPED,
+                k2_core::published_services::KIND_CMD,
+                "",
+            )
+            .unwrap();
             store::insert_app(
                 &conn,
                 &store::NewApp {
                     app_id: app,
-                    service_id: &format!("svc-{app}-{tag}"),
+                    service_id: &svc.id,
                     seed_id: None,
                     owner_workspace: ws,
                     isolation: iso,
@@ -319,6 +334,11 @@ fn switch_2_applies_its_own_widenings_and_switch_1_proposes_them() {
     let (st, v) = call("/cli/app/egress/add", &a, json!({"app": "jobs", "host": "api.stripe.com"}));
     assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
     let held_egress = v["request"]["id"].as_str().unwrap().to_string();
+    // Someone else's proposal (the owner token: egress hosts wait for the
+    // person) never rides along with the agent's own.
+    let (st, v) = call("/cli/app/egress/add", &Who::Owner, json!({"app": "jobs", "host": "owner.example.com"}));
+    assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
+    let owner_egress = v["request"]["id"].as_str().unwrap().to_string();
     let (st, v) = call("/cli/app/box-service/request", &a, json!({"app": "jobs", "name": "files-api", "hostPort": 9100}));
     assert_eq!((st, v["status"].as_str()), (202, Some("held")), "{v}");
     let (st, v) = grace("/cli/app/clean-mode", &a, json!({"app": "bff", "on": false}));
@@ -358,13 +378,15 @@ fn switch_2_applies_its_own_widenings_and_switch_1_proposes_them() {
     let conn = h.lock();
     let allowed: Vec<String> =
         k2_core::deploy::egress::policy(&conn, "jobs").unwrap().allowed.iter().map(k2_core::deploy::egress::HostSpec::display).collect();
-    assert_eq!(allowed, vec!["api.github.com:443"], "only switch 2's host is live; switch 1's waits");
-    let pending = reqs::get(&conn, &held_egress).unwrap().unwrap();
-    assert_eq!(pending.status, reqs::STATUS_PENDING);
+    // The agent's own pending proposal merged into its new ask and went
+    // live with it; the owner's waits for the person.
+    assert_eq!(allowed, vec!["api.github.com:443", "api.stripe.com:443"], "the agent's own hosts are live");
+    assert_eq!(reqs::get(&conn, &held_egress).unwrap().unwrap().status, reqs::STATUS_APPROVED);
+    assert_eq!(reqs::get(&conn, &owner_egress).unwrap().unwrap().status, reqs::STATUS_PENDING, "the owner's ask still waits");
     let services = k2_core::deploy::box_service::list(&conn, "jobs").unwrap();
     let status: Vec<(String, String)> = services.iter().map(|s| (s.name.clone(), s.status.clone())).collect();
     assert!(status.contains(&("media-api".into(), "allowed".into())), "{status:?}");
-    assert!(status.contains(&("files-api".into(), "pending".into())), "{status:?}");
+    assert!(status.contains(&("files-api".into(), "allowed".into())), "its own earlier proposal merged: {status:?}");
     let audit = k2_core::deploy::audit::list_for(&conn, k2_core::deploy::audit::SUBJECT_APP, "jobs", 50).unwrap();
     assert!(audit.iter().any(|r| r.event == "widening_self_applied"), "{audit:?}");
 }

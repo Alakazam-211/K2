@@ -523,8 +523,11 @@ fn prune_keeps_the_newest_bundles_only() {
     let mut left: Vec<String> = std::fs::read_dir(&d).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
     left.sort();
     assert_eq!(left.len(), 8);
-    assert_eq!(left[0], bundle_file("20260103T000000Z"));
-    assert!(left.contains(&"notes.txt".to_string()));
+    let bundles: Vec<&String> = left.iter().filter(|n| n.starts_with("sew-backup-")).collect();
+    assert_eq!(bundles.len(), SHIP_KEEP);
+    assert_eq!(*bundles[0], bundle_file("20260103T000000Z"), "the two oldest went");
+    assert_eq!(*bundles[6], bundle_file("20260109T000000Z"));
+    assert!(left.contains(&"notes.txt".to_string()), "other files stay");
 }
 
 #[cfg(unix)]

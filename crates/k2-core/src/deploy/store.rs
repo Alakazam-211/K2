@@ -162,6 +162,37 @@ pub const STATE_RUNNING: &str = "running";
 pub const STATE_STOPPED: &str = "stopped";
 pub const STATE_CRASHLOOPING: &str = "crashlooping";
 pub const STATE_FAILED: &str = "failed";
+/// Parked (0.46.3, prd-agent-app-permissions-v1 §6, Q8): stopped and held
+/// by the server's owner, with no maintaining workspace
+/// (`owner_workspace = ''`). It doesn't serve and doesn't restart; the
+/// owner hands it to a workspace (`k2 app unpark <app> --to <ws>`) or
+/// uninstalls it. A workspace removal's Apps (`--apps park`) and today's
+/// orphans (the boot sweep) land here.
+pub const STATE_PARKED: &str = "parked";
+
+/// The Apps a workspace maintains (its `owner_workspace`), by id.
+pub fn owned_app_ids(conn: &Connection, workspace: &str) -> rusqlite::Result<Vec<String>> {
+    let mut st = conn.prepare("SELECT app_id FROM apps WHERE owner_workspace = ?1 ORDER BY app_id")?;
+    let v = st.query_map(params![workspace], |r| r.get::<_, String>(0))?.collect::<Result<_, _>>()?;
+    Ok(v)
+}
+
+/// The last guard under every workspace removal (Q8): a workspace that
+/// still maintains Apps is never removed under them (the App would keep
+/// serving with no agent). The daemon's routes answer `409
+/// workspace_has_apps` with the three ways out before they get here.
+pub fn workspace_has_apps_error(conn: &Connection, workspace: &str) -> Result<(), String> {
+    let apps = owned_app_ids(conn, workspace).map_err(|e| format!("checking the workspace's Apps: {e}"))?;
+    if apps.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "workspace_has_apps: this workspace maintains {} ({}). Hand them over, uninstall or park them first: \
+         k2 app release <workspace> --apps handover:<other-workspace>|uninstall|park",
+        if apps.len() == 1 { "an App" } else { "Apps" },
+        apps.join(", ")
+    ))
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

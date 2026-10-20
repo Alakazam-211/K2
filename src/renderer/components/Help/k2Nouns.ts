@@ -44,6 +44,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         blurb: 'Overlay side channel with the human (not the PTY): text, choice cards, secret fields.',
         example: 'k2 thread sales "hello"',
       },
+      {
+        noun: 'chat',
+        blurb: 'Sew chat inside Spaces, as the agent: read, post, reply, DM; community admin with Manage Sew.',
+        example: 'k2 chat send hearth/general "deploy done"',
+      },
       { noun: 'read', blurb: "Peek at another agent's terminal before injecting.", example: 'k2 read sales --lines 40' },
       { noun: 'talk', blurb: 'Beta: read their screen first, then send, in one call.', example: 'k2 talk sales "ready?"' },
       { noun: 'terminal', blurb: 'Raw bytes into a terminal, or spawn one (advanced).' },

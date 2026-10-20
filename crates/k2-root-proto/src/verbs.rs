@@ -813,8 +813,15 @@ impl Verb {
         if args.is_empty() {
             return Err("empty argv");
         }
-        // 8 tokens, except `apps process caps` (6 + its device grants).
-        let max = if args.starts_with(&["apps", "process", "caps"]) { 6 + crate::apps::MAX_DEVICES } else { 8 };
+        // 8 tokens, except `apps process caps` (6 + its device grants) and
+        // `pg psql --cluster <M>` with every flag (9; protocol 9).
+        let max = if args.starts_with(&["apps", "process", "caps"]) {
+            6 + crate::apps::MAX_DEVICES
+        } else if args.starts_with(&["pg", "psql", "--cluster"]) {
+            9
+        } else {
+            8
+        };
         if args.len() > max || !args.iter().all(|a| token_ok(a)) {
             return Err(REFUSED);
         }
@@ -2245,6 +2252,9 @@ mod tests {
             &["pg", "psql", "--cluster", "17", "--cluster", "16", "-d", "ws_jobs"],
             &["pg", "psql", "--cluster", "17", "-d", "ws_jobs", "-p", "5433"],
             &["pg", "psql", "--cluster", "17", "-d", "ws_jobs", "-h", "/tmp"],
+            // 9 tokens only for `--cluster` with every flag; never 10.
+            &["pg", "psql", "--cluster", "17", "-d", "ws_jobs", "-v", "ON_ERROR_STOP=1", "-tA", "-t"],
+            &["pg", "psql", "-d", "ws_jobs", "-v", "ON_ERROR_STOP=1", "-t", "-A", "-d"],
         ];
         for r in rejects {
             assert!(Verb::parse(r).is_err(), "expected refusal: {r:?}");

@@ -202,7 +202,9 @@ fn pg_box() -> (T, W) {
                     w.sql.push((port, sql.clone()));
                     if sql.contains("FROM pg_authid") {
                         let rows = w.roles.get(&port).cloned().unwrap_or_default();
-                        let want: Vec<AuthRow> = rows.into_iter().filter(|r| sql.contains(&format!("'{}'", r.rolname))).collect();
+                        let mut want: Vec<AuthRow> = rows.into_iter().filter(|r| sql.contains(&format!("'{}'", r.rolname))).collect();
+                        // ORDER BY rolname, like the real read.
+                        want.sort_by(|a, b| a.rolname.cmp(&b.rolname));
                         return out(0, &serde_json::to_string(&want).unwrap());
                     }
                     if let Some(rest) = sql.split("WHERE datname = '").nth(1) {

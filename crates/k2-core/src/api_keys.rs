@@ -751,7 +751,7 @@ pub fn resolve_api_key(presented_raw: &str) -> Option<ApiPrincipal> {
                 cap_hire \
          FROM api_keys \
          WHERE key_hash = ?1 AND revoked_at IS NULL AND disabled_at IS NULL \
-           AND app_service_id IS NULL",
+           AND app_service_id IS NULL AND scope = 'owner'",
         rusqlite::params![key_hash],
         |row| {
             let id: String = row.get(0)?;
@@ -810,7 +810,7 @@ pub fn resolve_api_key_by_id(id: &str) -> Option<ApiPrincipal> {
                 cap_hire \
          FROM api_keys \
          WHERE id = ?1 AND revoked_at IS NULL AND disabled_at IS NULL \
-           AND app_service_id IS NULL",
+           AND app_service_id IS NULL AND scope = 'owner'",
         rusqlite::params![id],
         |row| {
             let id: String = row.get(0)?;
@@ -841,6 +841,53 @@ pub fn resolve_api_key_by_id(id: &str) -> Option<ApiPrincipal> {
                 },
             })
         },
+    )
+    .ok()
+}
+
+// ── Status keys (PRD boot-status-ghost §5.1) ─────────────────────────────
+
+/// The `scope` of a read-only status key (the fleet monitor's credential).
+pub const STATUS_SCOPE: &str = "status";
+
+/// Mint a read-only STATUS key: `scope = 'status'`, every `cap_*` 0, no
+/// workspace grant, no LLM credential. It authenticates exactly one thing,
+/// the full `/boot-status` body ([`resolve_status_key`]); every principal
+/// resolver ([`resolve_api_key`], [`resolve_api_key_by_id`]) filters on
+/// `scope = 'owner'`, so it can never open `/v1/*` or anything else.
+/// Returns `(id, raw_key)`; the raw key is shown once and never stored.
+pub fn create_status_key(label: &str) -> Result<(String, String), String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let raw = generate_raw_key();
+    let label_stored = Some(label.trim()).filter(|l| !l.is_empty());
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "INSERT INTO api_keys (id, key_hash, label, anthropic_api_key, scope, created_at, revoked_at, \
+         allowed_workspaces, cap_host_sessions, cap_canonical_message, cap_sandboxes, cap_db, cap_hire) \
+         VALUES (?1, ?2, ?3, NULL, ?4, ?5, NULL, NULL, 0, 0, 0, 0, 0)",
+        rusqlite::params![id, sha256_hex(&raw), label_stored, STATUS_SCOPE, now_secs()],
+    )
+    .map_err(|e| format!("DB insert failed: {e}"))?;
+    Ok((id, raw))
+}
+
+/// Does `presented_raw` name a live key that may read the full
+/// `/boot-status` body? True for a non-revoked, non-disabled ordinary key
+/// of scope `owner` or `status` (never an App key). Returns the key id.
+/// Used by `/boot-status` ONLY. Never logs the key.
+pub fn resolve_status_key(presented_raw: &str) -> Option<String> {
+    let presented = presented_raw.trim();
+    if presented.is_empty() || !presented.starts_with(API_KEY_PREFIX) {
+        return None;
+    }
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT id FROM api_keys WHERE key_hash = ?1 AND revoked_at IS NULL AND disabled_at IS NULL \
+           AND app_service_id IS NULL AND scope IN ('owner', 'status')",
+        rusqlite::params![sha256_hex(presented)],
+        |r| r.get::<_, String>(0),
     )
     .ok()
 }
@@ -1049,6 +1096,49 @@ mod tests {
         assert!(create_app_key("x", "host", "{}").is_err(), "never bound to the box login");
         assert!(revoke_api_key(&id).expect("revoke"));
         assert!(resolve_app_key(&raw).is_none(), "revoked keys stop at once");
+    }
+
+    /// PRD boot-status-ghost S2: a status key reads `/boot-status` only. It
+    /// is never a principal (raw or by id), it lists with scope `status`
+    /// and no doors, an owner key also passes the status check, an App key
+    /// never does, and disable/revoke stop it at once.
+    #[test]
+    fn status_key_is_boot_status_only_and_stops_on_disable_and_revoke() {
+        let (id, raw) = create_status_key("k2-watch").expect("mint status key");
+        assert!(raw.starts_with(API_KEY_PREFIX));
+        assert!(resolve_api_key(&raw).is_none(), "a status key is not a /v1 principal");
+        assert!(resolve_api_key_by_id(&id).is_none(), "nor by id (spawn-queue reload)");
+        assert_eq!(resolve_status_key(&raw).as_deref(), Some(id.as_str()));
+
+        let meta = list_api_keys().expect("list");
+        let row = meta.iter().find(|k| k.id == id).expect("status key is listed");
+        assert_eq!(row.scope, "status");
+        assert_eq!(row.label.as_deref(), Some("k2-watch"));
+        assert_eq!(
+            row.capabilities,
+            ApiCapabilities { host_sessions: false, canonical_message: false, sandboxes: false, db: false, hire: false },
+            "a status key opens no door",
+        );
+        assert!(row.allowed_workspaces.is_none());
+        assert!(!row.anthropic_key_set);
+
+        let (owner_id, owner_raw) = create_api_key("owner-key", None, None, None, None, None).expect("owner key");
+        assert_eq!(resolve_status_key(&owner_raw).as_deref(), Some(owner_id.as_str()), "owner keys read the full body too");
+        assert!(resolve_api_key(&owner_raw).is_some(), "the scope filter keeps owner keys working");
+
+        let svc = uuid::Uuid::new_v4().to_string();
+        let (_app_id, app_raw) = create_app_key("app", &svc, "{}").expect("app key");
+        assert!(resolve_status_key(&app_raw).is_none(), "an App key is never a status credential");
+        assert!(resolve_status_key("k2sk_nope").is_none());
+        assert!(resolve_status_key("").is_none());
+        assert!(resolve_status_key("not-a-key").is_none());
+
+        assert!(disable_api_key(&id).expect("disable"));
+        assert!(resolve_status_key(&raw).is_none(), "disabled stops at once");
+        assert!(enable_api_key(&id).expect("enable"));
+        assert!(resolve_status_key(&raw).is_some());
+        assert!(revoke_api_key(&id).expect("revoke"));
+        assert!(resolve_status_key(&raw).is_none(), "revoked stops at once");
     }
 
     /// Drain-time principal reload: resolve by durable id (not raw secret).

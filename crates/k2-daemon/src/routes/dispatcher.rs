@@ -1415,8 +1415,24 @@ async fn handle_one_request(
     match path.as_str() {
         "/ping" => {
             let _ = stream.read(&mut buf).await;
-            // Unauthenticated. Smallest liveness check.
-            super::http::send_response(&mut *stream, "200 OK", "text/plain; charset=utf-8", crate::BANNER).await;
+            // Unauthenticated. Smallest liveness check. PRD boot-status-ghost
+            // §2.4: a caller that would get the ghost `/boot-status` view
+            // gets `k2-daemon` with no version; loopback, authed callers
+            // and compat mode keep the banner.
+            let settings = k2_core::app_settings::load();
+            let view = crate::boot_status::view_for(
+                ingress,
+                super::http::extract_token(&query),
+                state.token.as_str(),
+                settings.boot_status_public(),
+            );
+            super::http::send_response(
+                &mut *stream,
+                "200 OK",
+                "text/plain; charset=utf-8",
+                crate::boot_status::ping_body(view),
+            )
+            .await;
         }
         "/health" => {
             // Unauthenticated liveness probe the behavior test suite
@@ -1434,119 +1450,33 @@ async fn handle_one_request(
         }
         "/boot-status" => {
             let _ = stream.read(&mut buf).await;
-            // 0.39.5: unauthenticated daemon-identity + readiness
-            // handshake. The renderer's ConnectionGate polls this to
-            // decide whether to mount the app against THIS daemon.
+            // 0.39.5: daemon-identity + readiness handshake. ConnectionGate
+            // polls it to decide whether to mount the app against THIS
+            // daemon; pre-0.39.5 daemons 404 it. See `crate::boot_status` +
+            // `[[project_daemon_handshake_contract]]`.
             //
-            // - `version`  — exact build string. The LocalPaired policy
-            //   (auto-update path) requires it to equal the app's bundled
-            //   version, so the renderer never binds to an OUTGOING old
-            //   daemon during an update.
-            // - `protocol` — daemon↔client API version K2 Connect
-            //   range-checks for remote daemons (decoupled from the
-            //   marketing version).
-            // - `phase`    — starting | migrating | ready (+ reserved
-            //   error). Clients treat anything but `ready` as not-ready.
-            // - `detail`   — free-text for the UI only; never parsed.
-            //
-            // Pre-0.39.5 daemons have no such route and return 404, so an
-            // outgoing old daemon fails the gate without special-casing.
-            // See `crate::boot_status` + `[[project_daemon_handshake_contract]]`.
-            let body = serde_json::json!({
-                "version": env!("CARGO_PKG_VERSION"),
-                "protocol": crate::boot_status::PROTOCOL,
-                "phase": crate::boot_status::phase_str(),
-                "detail": crate::boot_status::detail(),
-                // 0.40.48 connection resilience: per-PROCESS instance id.
-                // The renderer already health-polls this route; comparing
-                // `instanceId` across polls is how it detects a silent
-                // daemon restart (same subdomain, fresh process — e.g. a
-                // self-update) and forces a cold resync instead of
-                // trusting connection continuity. Additive + forward-
-                // compatible (PROTOCOL not bumped); older clients ignore
-                // it, older daemons omit it and clients fall back to the
-                // pre-0.40.48 heuristics. Safe on this UNAUTHENTICATED
-                // route: a random per-boot UUID carries no identity or
-                // fingerprintable state beyond "the process restarted",
-                // which /boot-status already implies via `phase`.
-                "instanceId": crate::boot_status::instance_id(),
-                // homes-sync-v1 (0.46.1): this BOX's stable id (first 16 hex
-                // of SHA-256 over its federation identity public key; the
-                // fingerprint is already public to every peer and `k2 fed
-                // pubkey`). Survives restarts, unlike `instanceId`. Home rows
-                // name agents `handle::<serverId>` so a laptop's `local` and
-                // a phone's `rosson.k2.dev` are the same server. `publicHost`
-                // is the tunnel host (`<sub>.k2.dev`) or null.
-                "serverId": crate::boot_status::server_id(),
-                "publicHost": crate::boot_status::public_host(),
-                // Home M5: features the version string cannot tell apart
-                // (main and the last release share it). Additive like
-                // `scopedHooks`; an older daemon omits it and clients read
-                // every key as unsupported. See `boot_status::features`.
-                "features": crate::boot_status::features(),
-                // 0.39.35: update SHAPE selector. "bundled-app" hosts update
-                // via the co-located Tauri app (Shape A); "standalone" hosts
-                // via the in-daemon binary swap (Shape B). The renderer reads
-                // this to vary copy; update/start routes on it server-side.
-                "installKind": crate::boot_status::install_kind(),
-                // Hosted web client Layer 0 (PRD §6.7 / §9.4): loader reads
-                // this unauthenticated field so a wall-OFF device still
-                // answers /boot-status (not "server dead") and can teach.
-                "webClient": {
-                    "enabled": k2_core::app_settings::load().web_client_enabled,
-                },
-                // COMPAT-58 (#58 Phase 1 / PR-A): advertise the scoped-hook
-                // capability so clients can FEATURE-DETECT it without an app
-                // version bump. `supported` = this daemon understands the
-                // scoped per-cell token superset; `enabled` = whether
-                // K2_HOOK_SCOPED is on for this process (default ON; opt out
-                // with 0/false/off). A daemon talking to an OLDER fleet peer
-                // that omits this field treats it as unsupported and stays on
-                // the owner-token/TCP path. PROTOCOL is intentionally NOT
-                // bumped: this is an additive, forward-compatible field.
-                "scopedHooks": {
-                    "supported": true,
-                    "enabled": crate::session_token::scoped_hooks_enabled(),
-                },
-                // Observability/Agent-Ops Phase E: advertise the read-only
-                // `/cli/ops/*` capability (overview + activity + stream) so
-                // the agent-ops pane can feature-detect it. Additive +
-                // forward-compatible like `scopedHooks` (PROTOCOL not bumped);
-                // an older peer omitting it reads as unsupported.
-                "ops": {
-                    "supported": true,
-                    "version": "1",
-                },
-                // F3 (prd-v1-api-completion §5 / Cloud PRD S3): the external
-                // `/v1` API capability — `{enabled, sandboxes:"microvm"|"none"}`
-                // — so dashboards/clients render the tier truthfully instead of
-                // probing for 404/409. Additive + forward-compatible like
-                // `scopedHooks` (PROTOCOL not bumped). Safe on this
-                // UNAUTHENTICATED route: both facts are already observable by
-                // probing `/v1/*` (surface-404 vs 401, spawn 409); no secrets.
-                "api": crate::misc_routes::api_capability(),
-                // Air-gap + LAN listen (prd-air-gap-and-lan-listen-v1): hide-UI
-                // only. A stale app can still POST; daemon refuse is authority.
-                // PROTOCOL not bumped (additive like webClient / scopedHooks).
-                "airgap": {
-                    "enabled": k2_core::airgap::enabled(),
-                    "baked": k2_core::airgap::baked(),
-                },
-                "listen": {
-                    "lan": k2_core::listen::lan_bound(),
-                },
-                // PRD connect-login-edge-only I6: advertise the tunnel
-                // password-login mode (edge|any|off) so clients can teach
-                // ("sign in through the web address") instead of probing.
-                // Unauthenticated + harmless: it names a policy, not a secret.
-                "connectLogin": {
-                    "ingress": k2_core::app_settings::load()
-                        .connect_login_ingress()
-                        .as_wire(),
-                },
-            })
-            .to_string();
-            super::http::send_response(&mut *stream, "200 OK", "application/json", &body).await;
+            // PRD boot-status-ghost (0.46.3): one route, three bodies.
+            // Loopback or a valid credential (owner token, agent passport,
+            // `k2sk_` owner/status key, unflagged Connect-login session,
+            // folded from Bearer / `?token=` / cookie) → `full` (today's
+            // body). Anyone else → `compat` (default) or `public` (ghost),
+            // always 200, never 401/403. Never cached.
+            let settings = k2_core::app_settings::load();
+            let view = crate::boot_status::view_for(
+                ingress,
+                super::http::extract_token(&query),
+                state.token.as_str(),
+                settings.boot_status_public(),
+            );
+            let body = crate::boot_status::body_for(view, &settings);
+            super::http::send_response_with_headers(
+                &mut *stream,
+                "200 OK",
+                "application/json",
+                &body,
+                crate::boot_status::VIEW_HEADERS,
+            )
+            .await;
         }
         // GET / and GET /account — the ONLY browser-facing HTML the daemon
         // serves: a tiny self-contained self-service account page for

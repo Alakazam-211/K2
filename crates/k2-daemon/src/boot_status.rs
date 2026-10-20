@@ -35,6 +35,237 @@ use std::sync::{OnceLock, RwLock};
 /// two are intentionally decoupled. Starts at 1.
 pub const PROTOCOL: u32 = 1;
 
+/// PRD boot-status-ghost §2.2: the OLDEST client↔daemon contract this
+/// daemon still serves. `[PROTOCOL_MIN, PROTOCOL]` is the "clients that can
+/// talk to me" range, readable before sign-in. Integers, not versions, so
+/// they never fingerprint a build.
+pub const PROTOCOL_MIN: u32 = 1;
+
+// ── Views (PRD boot-status-ghost §2) ───────────────────────────────────
+
+/// Which body `/boot-status` answers a caller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    /// No valid credential, non-loopback, `bootStatusPublic = ghost`:
+    /// phase + protocol range + instanceId only.
+    Public,
+    /// No valid credential, non-loopback, `bootStatusPublic = compat` (the
+    /// 0.46.3 default): the public view plus the five fields old phones and
+    /// desktops read without a token.
+    Compat,
+    /// Loopback, or any valid owner / passport / API or status key /
+    /// Connect-login session: today's body.
+    Full,
+}
+
+impl View {
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            View::Public => "public",
+            View::Compat => "compat",
+            View::Full => "full",
+        }
+    }
+}
+
+/// True when the token is 64 lowercase hex chars (a Connect-login session's
+/// shape). The format gate keeps a junk token from costing the session
+/// store's file reads.
+fn is_session_shaped(tok: &str) -> bool {
+    tok.len() == 64 && tok.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Does `tok` earn the full body? Cheapest check first, stop at the first
+/// hit (PRD §2.1): owner token → agent passport (`<sid>.<secret>`, in
+/// memory) → `k2sk_` owner/status key (one indexed SQLite query) → a live,
+/// unflagged Connect-login session (64 hex). A must-change-password session,
+/// an App/guest pass (`k2skn_`), an edge signature, a revoked/disabled key
+/// and anything else are NOT credentials here. Never argon2.
+pub(crate) fn credential_earns_full(tok: &str, owner_token: &str) -> bool {
+    let tok = tok.trim();
+    if tok.is_empty() {
+        return false;
+    }
+    if crate::routes::http::ct_eq_token(tok, owner_token) {
+        return true;
+    }
+    if tok.starts_with(k2_core::api_keys::API_KEY_PREFIX) {
+        return k2_core::api_keys::resolve_status_key(tok).is_some();
+    }
+    if tok.contains('.') {
+        return crate::session_token::validate_hook(tok).is_some();
+    }
+    if is_session_shaped(tok) {
+        return match k2_core::connect_users::validate_session(tok) {
+            Some(user) => !k2_core::connect_users::must_change_password(&user),
+            None => false,
+        };
+    }
+    false
+}
+
+/// Pick the view for one `/boot-status` (or `/ping`) request. `token` is
+/// the already-folded effective credential (Bearer > `?token=` > cookie,
+/// `routes::http::effective_auth_query`). Loopback (after
+/// `reclassify_proxied`) is always full; elsewhere a valid credential is
+/// full, and no / a bad credential gets the configured public view. Never
+/// 401/403.
+pub(crate) fn view_for(
+    ingress: crate::routes::dispatcher::Ingress,
+    token: Option<&str>,
+    owner_token: &str,
+    public: k2_core::app_settings::BootStatusPublic,
+) -> View {
+    if ingress == crate::routes::dispatcher::Ingress::Loopback {
+        return View::Full;
+    }
+    if token.is_some_and(|t| credential_earns_full(t, owner_token)) {
+        return View::Full;
+    }
+    match public {
+        k2_core::app_settings::BootStatusPublic::Compat => View::Compat,
+        k2_core::app_settings::BootStatusPublic::Ghost => View::Public,
+    }
+}
+
+/// Response header lines on every view: nothing between a client and the
+/// box may ever cache a full body and serve it to a public caller.
+pub(crate) const VIEW_HEADERS: &str = "Cache-Control: no-store\r\nVary: Authorization, Cookie\r\n";
+
+/// The ghost body, exact key order (§2.2). A struct (not `json!`) so the
+/// order is fixed whatever serde_json's map features are.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicBody<'a> {
+    view: &'static str,
+    phase: &'static str,
+    protocol: u32,
+    protocol_min: u32,
+    instance_id: &'a str,
+}
+
+#[derive(serde::Serialize)]
+struct AirgapEnabled {
+    enabled: bool,
+}
+
+/// The compat body: the public view plus `version`, `features`,
+/// `serverId`, `publicHost`, `airgap.enabled` (PRD Q9, B2).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompatBody<'a> {
+    view: &'static str,
+    phase: &'static str,
+    protocol: u32,
+    protocol_min: u32,
+    instance_id: &'a str,
+    version: &'static str,
+    features: Vec<&'static str>,
+    server_id: Option<String>,
+    public_host: Option<String>,
+    airgap: AirgapEnabled,
+}
+
+/// The `/boot-status` body for `view`. `settings` is the one settings read
+/// for this request.
+pub(crate) fn body_for(view: View, settings: &k2_core::app_settings::AppSettings) -> String {
+    match view {
+        View::Public => serde_json::to_string(&PublicBody {
+            view: View::Public.as_wire(),
+            phase: phase_str(),
+            protocol: PROTOCOL,
+            protocol_min: PROTOCOL_MIN,
+            instance_id: instance_id(),
+        })
+        .expect("serialize public boot-status"),
+        View::Compat => serde_json::to_string(&CompatBody {
+            view: View::Compat.as_wire(),
+            phase: phase_str(),
+            protocol: PROTOCOL,
+            protocol_min: PROTOCOL_MIN,
+            instance_id: instance_id(),
+            version: env!("CARGO_PKG_VERSION"),
+            features: features(),
+            server_id: server_id(),
+            public_host: public_host(),
+            airgap: AirgapEnabled { enabled: k2_core::airgap::enabled() },
+        })
+        .expect("serialize compat boot-status"),
+        View::Full => full_body(settings).to_string(),
+    }
+}
+
+/// The `/ping` body: the version banner, except a caller that would get the
+/// ghost `/boot-status` view gets `k2-daemon` with no version (§2.4).
+pub(crate) fn ping_body(view: View) -> &'static str {
+    match view {
+        View::Public => PING_GHOST,
+        View::Compat | View::Full => crate::BANNER,
+    }
+}
+
+/// The ghost `/ping` banner (no version).
+pub const PING_GHOST: &str = "k2-daemon";
+
+/// Today's full body plus `view: "full"` and `protocolMin` (nothing
+/// removed). Loopback and authed callers only.
+fn full_body(settings: &k2_core::app_settings::AppSettings) -> serde_json::Value {
+    serde_json::json!({
+        "view": View::Full.as_wire(),
+        "version": env!("CARGO_PKG_VERSION"),
+        // daemon↔client API range: `protocol` is the newest contract this
+        // daemon speaks, `protocolMin` the oldest it still serves.
+        "protocol": PROTOCOL,
+        "protocolMin": PROTOCOL_MIN,
+        // starting | migrating | ready (+ reserved error). Clients treat
+        // anything but `ready` as not-ready.
+        "phase": phase_str(),
+        // Free text for the UI only; never parsed.
+        "detail": detail(),
+        // 0.40.48 connection resilience: per-PROCESS instance id. Comparing
+        // it across polls is how a client detects a silent daemon restart
+        // (e.g. a self-update) and forces a cold resync.
+        "instanceId": instance_id(),
+        // homes-sync-v1 (0.46.1): this BOX's stable id; `publicHost` is the
+        // tunnel host (`<sub>.k2.dev`) or null.
+        "serverId": server_id(),
+        "publicHost": public_host(),
+        // Home M5: features the version string cannot tell apart. A client
+        // reads an absent key as unsupported. See `features`.
+        "features": features(),
+        // 0.39.35: update SHAPE selector ("bundled-app" | "standalone").
+        "installKind": install_kind(),
+        // Hosted web client Layer 0 (PRD §6.7 / §9.4).
+        "webClient": {
+            "enabled": settings.web_client_enabled,
+        },
+        // COMPAT-58: the scoped-hook capability (feature-detect, no bump).
+        "scopedHooks": {
+            "supported": true,
+            "enabled": crate::session_token::scoped_hooks_enabled(),
+        },
+        // Observability/Agent-Ops Phase E: read-only `/cli/ops/*`.
+        "ops": {
+            "supported": true,
+            "version": "1",
+        },
+        // F3: the external `/v1` API capability.
+        "api": crate::misc_routes::api_capability(),
+        // Air-gap + LAN listen: hide-UI only (the daemon refuse is authority).
+        "airgap": {
+            "enabled": k2_core::airgap::enabled(),
+            "baked": k2_core::airgap::baked(),
+        },
+        "listen": {
+            "lan": k2_core::listen::lan_bound(),
+        },
+        // PRD connect-login-edge-only I6: the tunnel password-login mode.
+        "connectLogin": {
+            "ingress": settings.connect_login_ingress().as_wire(),
+        },
+    })
+}
+
 /// homes-sync-v1: this box's stable `serverId` (the first 16 hex of the
 /// SHA-256 of its federation identity public key,
 /// `k2_core::federation::identity::server_id`). Unlike [`instance_id`] it
@@ -509,8 +740,16 @@ pub fn features() -> Vec<&'static str> {
     if k2_core::db::try_shared().is_some() {
         out.push(FEATURE_INBOX_CATCHUP);
     }
+    out.push(FEATURE_BOOT_STATUS_VIEWS);
     out
 }
+
+/// PRD boot-status-ghost: `/boot-status` answers `view` (public | compat |
+/// full) and `protocolMin`, reads a token (Bearer, `?token=`, cookie) for
+/// the full body, and accepts `scope: "status"` keys. A client that sent a
+/// token and sees this key with `view != "full"` knows its token was not
+/// accepted (stale session), not that the daemon is old.
+pub const FEATURE_BOOT_STATUS_VIEWS: &str = "boot-status-views-v1";
 
 #[cfg(test)]
 mod tests {
@@ -565,7 +804,8 @@ mod tests {
                 "push-previews-v1",
                 "thread-read-v1",
                 "homes-sync-v1",
-                "inbox-catchup-v1"
+                "inbox-catchup-v1",
+                "boot-status-views-v1"
             ]
         );
     }
@@ -606,6 +846,84 @@ mod tests {
         // Guards against an accidental bump — protocol changes are a
         // deliberate, breaking-contract decision.
         assert_eq!(PROTOCOL, 1);
+        assert_eq!(PROTOCOL_MIN, 1);
+        assert!(PROTOCOL_MIN <= PROTOCOL);
+    }
+
+    /// PRD boot-status-ghost §2.1: loopback is always full; elsewhere the
+    /// owner token is full and no / an empty / a junk token gets the
+    /// configured public view. (Sessions, passports and keys need the
+    /// stores; `tests/boot_status_views_integration.rs` covers each.)
+    #[test]
+    fn view_for_table_without_stores() {
+        use crate::routes::dispatcher::Ingress;
+        use k2_core::app_settings::BootStatusPublic::{Compat, Ghost};
+        const OWNER: &str = "owner-token-unit";
+        for mode in [Compat, Ghost] {
+            let stranger = if mode == Compat { View::Compat } else { View::Public };
+            for tok in [None, Some(""), Some("junk"), Some("owner-token-unit-but-longer")] {
+                assert_eq!(view_for(Ingress::Loopback, tok, OWNER, mode), View::Full, "loopback {tok:?}");
+                for ing in [Ingress::Lan, Ingress::Tunnel, Ingress::App] {
+                    assert_eq!(view_for(ing, tok, OWNER, mode), stranger, "{ing:?} {tok:?} {mode:?}");
+                }
+            }
+            for ing in [Ingress::Lan, Ingress::Tunnel, Ingress::App] {
+                assert_eq!(view_for(ing, Some(OWNER), OWNER, mode), View::Full, "{ing:?} owner");
+                assert_eq!(view_for(ing, Some(" owner-token-unit "), OWNER, mode), View::Full, "trimmed");
+            }
+        }
+        assert!(is_session_shaped(&"0a".repeat(32)));
+        assert!(!is_session_shaped(&"0A".repeat(32)), "uppercase is not a session");
+        assert!(!is_session_shaped(&"0a".repeat(31)));
+    }
+
+    /// The exact public bytes and the compat key order (§2.2), whatever
+    /// serde_json's map features are.
+    #[test]
+    fn public_and_compat_bodies_have_the_exact_shape() {
+        let s = k2_core::app_settings::AppSettings::default();
+        let public = body_for(View::Public, &s);
+        assert_eq!(
+            public,
+            format!(
+                r#"{{"view":"public","phase":"{}","protocol":1,"protocolMin":1,"instanceId":"{}"}}"#,
+                phase_str(),
+                instance_id()
+            )
+        );
+        let compat: serde_json::Value = serde_json::from_str(&body_for(View::Compat, &s)).unwrap();
+        let raw = body_for(View::Compat, &s);
+        let order: Vec<usize> = [
+            "\"view\"", "\"phase\"", "\"protocol\"", "\"protocolMin\"", "\"instanceId\"", "\"version\"",
+            "\"features\"", "\"serverId\"", "\"publicHost\"", "\"airgap\"",
+        ]
+        .iter()
+        .map(|k| raw.find(k).unwrap_or_else(|| panic!("{k} missing from {raw}")))
+        .collect();
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "compat key order: {raw}");
+        assert_eq!(compat.as_object().unwrap().len(), 10, "{raw}");
+        assert_eq!(compat["airgap"].as_object().unwrap().len(), 1, "only airgap.enabled: {raw}");
+        assert_eq!(compat["version"], env!("CARGO_PKG_VERSION"));
+
+        let full: serde_json::Value = serde_json::from_str(&body_for(View::Full, &s)).unwrap();
+        assert_eq!(full["view"], "full");
+        assert_eq!(full["protocolMin"], PROTOCOL_MIN);
+        for k in [
+            "version", "protocol", "phase", "detail", "instanceId", "serverId", "publicHost", "features",
+            "installKind", "webClient", "scopedHooks", "ops", "api", "airgap", "listen", "connectLogin",
+        ] {
+            assert!(full.get(k).is_some(), "full keeps {k}");
+        }
+        assert_eq!(full["webClient"]["enabled"], s.web_client_enabled);
+        assert_eq!(full["connectLogin"]["ingress"], "edge");
+    }
+
+    #[test]
+    fn ping_hides_the_version_only_from_ghost_strangers() {
+        assert_eq!(ping_body(View::Public), "k2-daemon");
+        assert!(!ping_body(View::Public).contains(env!("CARGO_PKG_VERSION")));
+        assert_eq!(ping_body(View::Compat), crate::BANNER);
+        assert_eq!(ping_body(View::Full), crate::BANNER);
     }
 
     #[test]

@@ -200,6 +200,54 @@ impl AppSettings {
     }
 }
 
+/// PRD boot-status-ghost §2.3 — what `/boot-status` tells a caller with no
+/// valid credential on a non-loopback ingress (tunnel, edge, front door,
+/// LAN). Loopback and authed callers always get the full body.
+///
+/// - `Compat` (the 0.46.3 default): phase, protocol range, instanceId plus
+///   the five fields old phones and desktops read without a token
+///   (`version`, `features`, `serverId`, `publicHost`, `airgap.enabled`).
+/// - `Ghost`: phase, protocol range and instanceId only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootStatusPublic {
+    Compat,
+    Ghost,
+}
+
+impl BootStatusPublic {
+    /// The default for a box that never set the key. 0.46.3 ships
+    /// `Compat`; the flip to `Ghost` (PRD Q1) changes only this line,
+    /// because an unset key stays absent on disk (never written back).
+    pub const DEFAULT: Self = Self::Compat;
+
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "compat" => Some(Self::Compat),
+            "ghost" => Some(Self::Ghost),
+            _ => None,
+        }
+    }
+
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::Compat => "compat",
+            Self::Ghost => "ghost",
+        }
+    }
+}
+
+impl AppSettings {
+    /// The effective public `/boot-status` mode. Unset → the release
+    /// default ([`BootStatusPublic::DEFAULT`]); an unknown on-disk string
+    /// (hand-edited; [`update`] rejects one) fails closed to `Ghost`.
+    pub fn boot_status_public(&self) -> BootStatusPublic {
+        match self.boot_status_public.as_deref() {
+            None => BootStatusPublic::DEFAULT,
+            Some(s) => BootStatusPublic::from_wire(s).unwrap_or(BootStatusPublic::Ghost),
+        }
+    }
+}
+
 /// 0.46.1 — the built-in completion chimes, synthesized in the renderer
 /// (`src/renderer/lib/completion-sound.ts`, which keeps the same list).
 /// The first is the default.
@@ -518,6 +566,13 @@ pub struct AppSettings {
     /// rejected by [`update`]. Wire name `connectLoginIngress`.
     #[serde(default = "default_connect_login_ingress")]
     pub connect_login_ingress: String,
+    /// PRD boot-status-ghost §2.3 — the public `/boot-status` view:
+    /// `"compat"` | `"ghost"`. `None` = never set → the release default
+    /// ([`BootStatusPublic::DEFAULT`]), kept absent on disk so a later
+    /// default flip reaches every box that never chose. Owner/Admin only
+    /// (`REMOTE_ACCESS_KEYS`). Wire name `bootStatusPublic`; `null` resets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_status_public: Option<String>,
     /// GH#8 — "Use local LLM to detect HITL" opt-in (Settings → General).
     /// Gates whether the `talk` CLI tool's `/cli/terminal/classify`
     /// detection step is allowed to run the bundled 1.5B model.
@@ -1092,6 +1147,7 @@ impl Default for AppSettings {
             web_client_enabled: true,
             agent_hooks: true,
             connect_login_ingress: default_connect_login_ingress(),
+            boot_status_public: None,
             use_llm_hitl_detection: false,
             completion_sound_enabled: true,
             completion_sound_volume: default_completion_sound_volume(),
@@ -1391,6 +1447,11 @@ pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
             "connectLoginIngress must be one of edge|any|off (got {:?})",
             merged.connect_login_ingress
         ));
+    }
+    if let Some(mode) = merged.boot_status_public.as_deref() {
+        if BootStatusPublic::from_wire(mode).is_none() {
+            return Err(format!("bootStatusPublic must be one of compat|ghost (got {mode:?})"));
+        }
     }
     if KeepAwakeMode::from_wire(&merged.keep_awake.mode).is_none() {
         return Err(format!(
@@ -1697,6 +1758,50 @@ mod tests {
         let after = reset().expect("reset");
         assert!(after.web_client_enabled);
         assert!(load().web_client_enabled);
+    }
+
+    /// PRD boot-status-ghost §2.3 — `bootStatusPublic` is unset (→ compat)
+    /// by default and stays ABSENT on disk across unrelated writes (so the
+    /// later default flip reaches every box that never chose); it
+    /// round-trips ghost/compat, `null` resets it, an unknown mode is
+    /// refused loudly, and a corrupt on-disk value reads as ghost.
+    #[test]
+    fn boot_status_public_defaults_compat_stays_unset_and_validates() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+
+        assert_eq!(BootStatusPublic::DEFAULT, BootStatusPublic::Compat, "0.46.3 ships compat");
+        assert_eq!(load().boot_status_public, None);
+        assert_eq!(load().boot_status_public(), BootStatusPublic::Compat);
+
+        // An unrelated write must not persist the default.
+        update(serde_json::json!({ "connectLoginIngress": "any" })).expect("unrelated write");
+        assert_eq!(load().boot_status_public, None, "default must not be written back");
+        let on_disk = serde_json::to_value(load()).expect("serialize");
+        assert!(on_disk.get("bootStatusPublic").is_none(), "absent on the wire when unset: {on_disk}");
+
+        let merged = update(serde_json::json!({ "bootStatusPublic": "ghost" })).expect("ghost");
+        assert_eq!(merged.boot_status_public(), BootStatusPublic::Ghost);
+        assert_eq!(load().boot_status_public(), BootStatusPublic::Ghost);
+        assert_eq!(serde_json::to_value(load()).unwrap()["bootStatusPublic"], "ghost");
+
+        let merged = update(serde_json::json!({ "bootStatusPublic": "compat" })).expect("compat");
+        assert_eq!(merged.boot_status_public, Some("compat".to_string()));
+
+        let err = update(serde_json::json!({ "bootStatusPublic": "invisible" }))
+            .expect_err("unknown mode must be rejected");
+        assert!(err.contains("compat|ghost"), "{err}");
+        assert_eq!(load().boot_status_public, Some("compat".to_string()), "rejected write must not persist");
+
+        let merged = update(serde_json::json!({ "bootStatusPublic": null })).expect("null resets");
+        assert_eq!(merged.boot_status_public, None);
+        assert_eq!(load().boot_status_public(), BootStatusPublic::DEFAULT);
+
+        // A corrupt on-disk value (bypassing update) fails closed to ghost.
+        let mut s = load();
+        s.boot_status_public = Some("garbage".to_string());
+        save(&s).expect("save raw");
+        assert_eq!(load().boot_status_public(), BootStatusPublic::Ghost);
     }
 
     /// PRD connect-login-edge-only S1 — `connectLoginIngress` defaults to

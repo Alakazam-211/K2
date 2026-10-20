@@ -1077,12 +1077,15 @@ pub fn agents_can_manage_skin_for_path(project_path: &str) -> bool {
 pub fn set_agents_can_manage_skin(project_path: &str, enable: bool) -> Result<(), String> {
     let db = crate::db::shared();
     let conn = db.lock();
-    // Turning the parent off turns the nested "…and publish open Apps" off
-    // too (prd-k2-app-runtime-v1 §5.11.1).
+    // This column is switch 1, "Build and run Apps" (0197,
+    // prd-agent-app-permissions-v1 §2). Turning it off turns the nested
+    // switch 2 ("…and manage them end to end") and the retired "…and
+    // publish open Apps" off too.
     let n = conn
         .execute(
             "UPDATE projects SET agents_can_manage_skin = ?1,
-                    agents_can_publish_open_apps = CASE WHEN ?1 = 0 THEN 0 ELSE agents_can_publish_open_apps END
+                    agents_can_publish_open_apps = CASE WHEN ?1 = 0 THEN 0 ELSE agents_can_publish_open_apps END,
+                    agents_can_manage_apps_full = CASE WHEN ?1 = 0 THEN 0 ELSE agents_can_manage_apps_full END
              WHERE path = ?2",
             rusqlite::params![if enable { 1i64 } else { 0i64 }, project_path],
         )
@@ -1126,6 +1129,58 @@ pub fn set_agents_can_publish_open_apps(project_id: &str, enable: bool) -> Resul
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Per-agent App permissions (0197, prd-agent-app-permissions-v1 §2): the
+/// two nested switches of a workspace's agent, `(build, full)`:
+/// switch 1 "Build and run Apps" (`agents_can_manage_skin`) and switch 2
+/// "…and manage them end to end" (`agents_can_manage_apps_full`, which only
+/// counts while switch 1 is on). Unknown workspace or a read error →
+/// `(false, false)` (fail closed). Keyed on the passport's workspace id.
+pub fn agents_app_switches(project_id: &str) -> (bool, bool) {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT agents_can_manage_skin, agents_can_manage_apps_full FROM projects WHERE id = ?1",
+        rusqlite::params![project_id],
+        |row| {
+            let build = row.get::<_, i64>(0)? == 1;
+            Ok((build, build && row.get::<_, i64>(1)? == 1))
+        },
+    )
+    .unwrap_or((false, false))
+}
+
+/// Persist switch 2 (`projects.agents_can_manage_apps_full`). Written only
+/// by `POST /cli/agent-access/set {toggle: "apps_manage_full"}` (the owner
+/// raises, an Admin lowers). Turning it on needs switch 1 on.
+pub fn set_agents_can_manage_apps_full(project_id: &str, enable: bool) -> Result<(), String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let parent: i64 = conn
+        .query_row("SELECT agents_can_manage_skin FROM projects WHERE id = ?1", rusqlite::params![project_id], |r| r.get(0))
+        .map_err(|_| format!("Project not found: {project_id}"))?;
+    if enable && parent != 1 {
+        return Err("turn on \"Build and run Apps\" first (k2 app access <ws> --build on)".to_string());
+    }
+    conn.execute(
+        "UPDATE projects SET agents_can_manage_apps_full = ?1 WHERE id = ?2",
+        rusqlite::params![if enable { 1i64 } else { 0i64 }, project_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// The pre-approved cores ticked for a workspace's agent (0197
+/// `projects.app_cores`; prd-agent-app-permissions-v1 §3). Unknown
+/// workspace or unreadable JSON → empty (fail closed).
+pub fn agents_app_cores(project_id: &str) -> Vec<String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT app_cores FROM projects WHERE id = ?1", rusqlite::params![project_id], |r| r.get::<_, String>(0))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+        .unwrap_or_default()
 }
 
 /// k2 sidecar v1 — "Allow hiring and managing agents"
@@ -2267,6 +2322,33 @@ mod tests {
         assert!(!agents_can_publish_open_apps(&pid), "and it stays off when the parent comes back");
         assert!(update_project_setting(&path, "agents_can_publish_open_apps", "1").is_err());
         assert!(!agents_can_publish_open_apps("no-such-workspace"));
+    }
+
+    /// 0197 — the two App switches: both off by default (Q3 = A); switch 2
+    /// needs switch 1; switch 1 off turns switch 2 off and it stays off
+    /// when switch 1 comes back; never through workspace/set; cores start
+    /// empty; unknown workspaces fail closed.
+    #[test]
+    fn app_switches_are_nested_and_default_off() {
+        let path = unique_path("agents-app-switches");
+        let pid = insert_project(&path);
+        assert_eq!(agents_app_switches(&pid), (false, false), "new workspace: both off");
+        assert!(agents_app_cores(&pid).is_empty(), "no cores");
+        let err = set_agents_can_manage_apps_full(&pid, true).expect_err("needs switch 1");
+        assert!(err.contains("Build and run Apps"), "{err}");
+        set_agents_can_manage_skin(&path, true).unwrap();
+        assert_eq!(agents_app_switches(&pid), (true, false));
+        set_agents_can_manage_apps_full(&pid, true).unwrap();
+        assert_eq!(agents_app_switches(&pid), (true, true));
+        set_agents_can_manage_skin(&path, false).unwrap();
+        assert_eq!(agents_app_switches(&pid), (false, false), "switch 1 off turns switch 2 off");
+        set_agents_can_manage_skin(&path, true).unwrap();
+        assert_eq!(agents_app_switches(&pid), (true, false), "and it stays off when switch 1 comes back");
+        set_agents_can_manage_apps_full(&pid, false).unwrap();
+        assert!(update_project_setting(&path, "agents_can_manage_apps_full", "1").is_err());
+        assert!(update_project_setting(&path, "app_cores", "[\"db\"]").is_err());
+        assert_eq!(agents_app_switches("no-such-workspace"), (false, false));
+        assert!(set_agents_can_manage_apps_full("no-such-workspace", false).is_err());
     }
 
     /// Column-only hosted-mail passport. Default OFF; unknown path

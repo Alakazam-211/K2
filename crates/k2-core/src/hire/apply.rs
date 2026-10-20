@@ -295,6 +295,11 @@ fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Ve
         if let Some(d) = r.db_access.as_deref() {
             steps::set_setting(&path_s, "db_agent_access", d)?;
         }
+        if let Some(on) = r.chat_manage {
+            // Dedicated writer (never workspace/set); the plan already
+            // refused an agent caller turning it on.
+            crate::workspace::settings::set_agents_can_manage_chat(&ws_id, on).map_err(HireError::internal)?;
+        }
         if let Some(n) = r.wiki_notes.as_ref() {
             steps::write_wiki_notes(&path_s, n)?;
         }
